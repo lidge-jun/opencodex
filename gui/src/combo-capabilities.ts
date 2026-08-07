@@ -1,14 +1,14 @@
 import type { ComboTarget } from "./combo-workspace-data";
 import type { ModelOption } from "./components/combo-workspace-types";
 
-/** Whether every complete target advertises image input. */
+/** Whether every selected target advertises image input (incomplete rows fail closed). */
 export function comboImagesSupported(targets: ComboTarget[], models: ModelOption[]): boolean {
-  const complete = targets.filter((target) => target.provider.trim() && target.model.trim());
-  if (complete.length === 0) return false;
-  return complete.every((target) => {
-    const model = models.find(
-      (row) => row.provider === target.provider.trim() && row.id === target.model.trim(),
-    );
+  if (targets.length === 0) return false;
+  return targets.every((target) => {
+    const provider = target.provider.trim();
+    const modelId = target.model.trim();
+    if (!provider || !modelId) return false;
+    const model = models.find((row) => row.provider === provider && row.id === modelId);
     return !!model?.inputModalities?.includes("image");
   });
 }

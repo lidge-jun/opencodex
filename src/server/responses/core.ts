@@ -1176,6 +1176,18 @@ export async function handleComboResponses(
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
+  // expandPreviousResponseInput leaves previous_response_id in place when state
+  // is missing (no failure marker). For image-disabled combos that would let a
+  // target resolve prior images out of band — reject unresolved continuations.
+  const unresolvedPrevious = typeof (body as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
+    && (body as { previous_response_id: string }).previous_response_id.trim().length > 0;
+  if (combo.imageInput === "disabled" && unresolvedPrevious) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
   }

@@ -254,7 +254,7 @@ describe("combo management API", () => {
         success: true,
         id: "zeta",
         model: "combo/zeta",
-        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: null, imageInput: "auto" },
+        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: null },
       });
       const updated = await comboApi(config, "PUT", "/api/combos", {
         id: "zeta",

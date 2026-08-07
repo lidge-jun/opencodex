@@ -66,6 +66,7 @@ function normalizedCombo(
     strategy: "failover",
     stickyLimit: 1,
     defaultEffort: "medium",
+    imageInput: "auto",
     alias: null,
     nativeAlias: false,
     displayName: null,

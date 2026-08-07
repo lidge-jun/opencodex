@@ -65,6 +65,16 @@ import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, C
 import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
+
+/** Management wire shape: omit default imageInput "auto" (persist/response sparse). */
+function sparseComboConfig<T extends { imageInput?: "auto" | "disabled" }>(combo: T): Omit<T, "imageInput"> & { imageInput?: "disabled" } {
+  const { imageInput, ...rest } = combo;
+  return {
+    ...rest,
+    ...(imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
+  };
+}
+
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -75,7 +85,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       return {
         id,
         model: comboPublicModelId(id, combo),
-        ...combo,
+        ...sparseComboConfig(combo),
       };
     }) });
   }
@@ -224,7 +234,8 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     }
     const catalogRefresh = await convergeCodexCatalog();
     if (shouldSyncClaudeAgentDefs) await syncClaudeAgentDefsBestEffort();
-    return jsonResponse({ success: true, id, model: newPublicModel, combo: stored, catalogRefresh });
+    // Wire shape matches persistence: omit default imageInput "auto".
+    return jsonResponse({ success: true, id, model: newPublicModel, combo: sparseComboConfig(stored), catalogRefresh });
   }
 
   if (url.pathname === "/api/combos" && req.method === "DELETE") {
