@@ -93,11 +93,23 @@ describe("Cursor per-model reasoning-effort suffix", () => {
   });
 
   test("grok-4.5 uses current tiers and sends Fast as a separate model parameter", () => {
+    // Regular Grok wire ids keep Cursor's live-discovery `cursor-` prefix (#1159/#1208).
     expect(modelIdFor("cursor/grok-4.5", "low")).toBe("cursor-grok-4.5-low");
     expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("cursor-grok-4.5-medium");
     expect(modelIdFor("cursor/grok-4.5", "high")).toBe("cursor-grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("cursor-grok-4.5-high");
     expect(modelIdFor("cursor/grok-4.5")).toBe("cursor-grok-4.5-high");
+    // Cursor Start / some plans reject -low; none/minimal clamp to medium.
+    expect(modelIdFor("cursor/grok-4.5", "none")).toBe("cursor-grok-4.5-medium");
+    expect(modelIdFor("cursor/grok-4.5", "minimal")).toBe("cursor-grok-4.5-medium");
+    expect(selectionFor("cursor/grok-4.5", "none")).toEqual({
+      modelId: "cursor-grok-4.5-medium",
+      parameters: undefined,
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "none")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "medium" }, { id: "fast", value: "true" }],
+    });
     expect(selectionFor("cursor/grok-4.5", "high")).toEqual({
       modelId: "cursor-grok-4.5-high",
       parameters: undefined,

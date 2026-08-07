@@ -23,6 +23,7 @@ import {
   isBareCodexShellBridgeTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import { extractCursorImageUrls } from "./images";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -161,7 +162,7 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "thinking":
       return part.thinking;
     case "image":
-      return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      return undefined;
     case "toolCall":
       // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
       // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into
@@ -194,15 +195,37 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
   switch (message.role) {
     case "user":
     case "developer":
-      return { role: message.role, content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        if (content.length === 0 && extractCursorImageUrls(message.content).length === 0) {
+          return undefined;
+        }
+        return { role: message.role, content };
+      }
     case "assistant":
-      return { role: "assistant", content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        return content.length > 0 ? { role: "assistant", content } : undefined;
+      }
     case "toolResult":
       return {
         role: "tool",
         content: toolResultToText(message),
       };
   }
+}
+
+/**
+ * Rebuild the text `messages` channel from prepared `rawMessages` so omission markers
+ * and JPEG-rewritten tool results stay visible to {@link activePromptText}.
+ */
+export function cursorRequestMessagesFromRaw(
+  messages: readonly OcxMessage[] | undefined,
+): CursorRequestMessage[] {
+  if (!messages?.length) return [];
+  return messages
+    .map(requestMessage)
+    .filter((message): message is CursorRequestMessage => !!message);
 }
 
 export function generatedCursorConversationId(): string {
@@ -255,9 +278,7 @@ export function createCursorRequest(
   parsed: OcxParsedRequest,
   options: CreateCursorRequestOptions = {},
 ): CursorRunRequest {
-  const messages = parsed.context.messages
-    .map(requestMessage)
-    .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0);
+  const messages = cursorRequestMessagesFromRaw(parsed.context.messages);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);

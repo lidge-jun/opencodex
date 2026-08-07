@@ -235,6 +235,67 @@ describe("Cursor adapter live transport", () => {
     expect(events.filter(event => event.type === "error")).toHaveLength(1);
   });
 
+  test("does not retry invalid_argument when multi_agent developer trails toolResult", async () => {
+    const seen: string[] = [];
+    let attempts = 0;
+    const adapter = createCursorAdapter({
+      ...provider,
+      apiKey: "cursor-token",
+    }, {
+      createTransport: () => ({
+        async *run(request) {
+          attempts += 1;
+          seen.push(request.conversationId);
+          throw Object.assign(
+            new Error("Cursor invalid request: Cursor Connect error invalid_argument: Error"),
+            { code: "invalid_argument" },
+          );
+        },
+        writeClient() {},
+      }),
+    });
+
+    const events: AdapterEvent[] = [];
+    const body: OcxParsedRequest = {
+      modelId: "cursor/gpt-5.6-sol",
+      context: {
+        messages: [
+          { role: "user", content: "read a file", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/gpt-5.6-sol",
+            timestamp: 2,
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", namespace: "mcp__fs", arguments: { path: "a.txt" } }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            toolNamespace: "mcp__fs",
+            content: "FILE CONTENTS HERE",
+            isError: false,
+            timestamp: 3,
+          },
+          {
+            role: "developer",
+            content: "<multi_agent_mode>Preferred sub-agent: model \"cursor/gpt-5.6-sol\"</multi_agent_mode>",
+            timestamp: 4,
+          },
+        ],
+      },
+      stream: false,
+      options: { reasoning: "xhigh" },
+      _cursorConversationId: "cursor_corrupt_desktop",
+    };
+
+    await adapter.runTurn?.(body, { headers: new Headers() }, event => events.push(event));
+
+    expect(attempts).toBe(1);
+    expect(seen).toEqual(["cursor_corrupt_desktop"]);
+    expect(body._cursorConversationId).toBe("cursor_corrupt_desktop");
+    expect(events.filter(event => event.type === "error")).toHaveLength(1);
+  });
+
   test("retries external-model invalid_argument on plain-user continuations too", async () => {
     const seen: string[] = [];
     let attempts = 0;

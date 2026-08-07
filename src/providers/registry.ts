@@ -8,6 +8,7 @@ import {
   ALIBABA_CODING_BASE_URL_CHOICES, ALIBABA_CODING_INTL_BASE_URL,
 } from "./base-url-choices";
 import {
+  CURSOR_NO_VISION_MODELS,
   CURSOR_STATIC_MODELS,
   cursorModelContextWindows,
   cursorModelIds,
@@ -865,17 +866,16 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelContextWindows: cursorModelContextWindows(CURSOR_STATIC_MODELS),
     modelInputModalities: cursorModelInputModalities(CURSOR_STATIC_MODELS),
     modelReasoningEfforts: cursorModelReasoningEfforts(CURSOR_STATIC_MODELS),
+    // Blind Cursor models (Auto routers, Composer, GLM-5.2) go through the vision sidecar;
+    // multimodal hosts (Claude/Gemini/GPT/Kimi/Grok) take native SelectedImage. Catalog still
+    // advertises image for noVision members so Codex can attach (sidecar option B).
+    noVisionModels: [...CURSOR_NO_VISION_MODELS],
     // Kimi K3 documents `max` as its API default, and its Cursor ladder has no `medium`
     // rung — so applyReasoningLevels' medium->high->first fallback would settle the catalog
     // default on `high`, the picker would send `high` explicitly, and the request builder's
     // no-effort fallback to `kimi-k3-max` would never be reached. Mirrors the other K3
     // routes (kimi, kimi-code, opencode-go).
     modelDefaultReasoningEfforts: { "kimi-k3": "max" },
-    // Cursor's wire protocol never forwards image parts (request-builder emits an unsupported-
-    // content marker), so the vision sidecar covers ALL cursor models regardless of what the
-    // upstream model could natively do. Live-discovered models outside the static list fall back
-    // to the same marker until they appear here.
-    noVisionModels: cursorModelIds(CURSOR_STATIC_MODELS),
   },
   {
     id: "xai",

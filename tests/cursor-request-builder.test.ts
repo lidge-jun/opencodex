@@ -180,7 +180,7 @@ describe("Cursor request builder", () => {
     ]);
   });
 
-  test("uses an explicit image placeholder for unsupported image parts", () => {
+  test("omits image parts from text while preserving other content", () => {
     const request = createCursorRequest({
       ...base,
       context: {
@@ -198,8 +198,78 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.messages[0]?.content).toContain("see");
-    expect(request.messages[0]?.content).toContain("image input unsupported");
-    expect(request.messages[0]?.content).toContain("high");
+    expect(request.messages[0]?.content).not.toContain("image input unsupported");
+    expect(request.messages[0]?.content).not.toContain("data:image/png");
+  });
+
+  test("preserves image-only user turns as empty-string active messages", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([{ role: "user", content: "" }]);
+    expect(request.rawMessages?.length).toBe(1);
+  });
+
+  test("preserves image-only active user turn after assistant reply", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            model: "cursor/composer-2.5",
+            content: [{ type: "text", text: "ack" }],
+            timestamp: 2,
+          },
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,def", detail: "high" }],
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([
+      { role: "user", content: "" },
+      { role: "assistant", content: "ack" },
+      { role: "user", content: "" },
+    ]);
+    expect(request.messages.at(-1)?.role).toBe("user");
+  });
+
+  test("omits assistant messages that carry only tool calls", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          { role: "user", content: "read it", timestamp: 1 },
+          {
+            role: "assistant",
+            model: "cursor/composer-2.5",
+            content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
+            timestamp: 2,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([{ role: "user", content: "read it" }]);
   });
 
   test("preserves Responses tools and tool choice for Cursor request context", () => {

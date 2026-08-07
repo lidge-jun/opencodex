@@ -28,6 +28,11 @@ import {
   encodeCursorRunRequest,
   prepareCursorRunRequest,
 } from "../src/adapters/cursor/protobuf-request";
+import {
+  CURSOR_VISION_MCP_IMAGE_OMITTED,
+  CURSOR_VISION_PROMOTE_NUDGE,
+  MAX_CURSOR_IMAGE_DECODE_BYTES,
+} from "../src/adapters/cursor/images";
 import { estimateTokens } from "../src/lib/token-estimate";
 import {
   AgentClientMessageSchema,
@@ -36,6 +41,7 @@ import {
   GetBlobArgsSchema,
   KvServerMessageSchema,
   SetBlobArgsSchema,
+  UserMessageSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 
 beforeEach(() => {
@@ -114,6 +120,37 @@ function actionText(bytes: Uint8Array): string | undefined {
   return action?.case === "userMessageAction" ? action.value.userMessage?.text : undefined;
 }
 
+function activeUserMessage(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  const action = run?.action?.action;
+  return action?.case === "userMessageAction" ? action.value.userMessage : undefined;
+}
+
+function activeSelectedImages(bytes: Uint8Array) {
+  return activeUserMessage(bytes)?.selectedContext?.selectedImages;
+}
+
+function conversationToolCallSteps(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  return (run?.conversationState?.turns ?? []).flatMap(turnId => {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") return [];
+    return turn.turn.value.steps.map(stepId => fromBinary(ConversationStepSchema, blobData(stepId)));
+  }).filter(step => step.message.case === "toolCall");
+}
+
+function nativeTurnUserMessages(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  return (run?.conversationState?.turns ?? []).map(turnId => {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") return undefined;
+    return fromBinary(UserMessageSchema, blobData(turn.turn.value.userMessage));
+  }).filter((message): message is NonNullable<typeof message> => message !== undefined);
+}
+
 /** The `toolName`s advertised in the top-level AgentRunRequest.mcp_tools channel (undefined when unset). */
 function mcpToolNames(bytes: Uint8Array): string[] | undefined {
   const msg = fromBinary(AgentClientMessageSchema, bytes);
@@ -153,6 +190,185 @@ describe("Cursor blob handshake", () => {
     // wire-compatible (the earlier crash was a wrong-shape assignment, since corrected).
     expect(run?.mcpTools?.mcpTools.length).toBe(1);
     expect(run?.mcpTools?.mcpTools[0]?.toolName).toBe("mcp__fs__read_file");
+  });
+
+  test("encodeCursorRunRequest attaches selectedContext with blobId image refs on the active user turn", () => {
+    // Native cursor-agent converts SelectedImage.data → sha256 blobId and serves
+    // bytes via getBlobArgs. Inline data on the run request is ignored for vision.
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const expectedBlobId = new Uint8Array(createHash("sha256").update(imageBytes).digest());
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "see this" }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "img-uuid-1",
+      }],
+    });
+
+    expect(actionText(bytes)).toBe("see this");
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("img-uuid-1");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.path).toBe("attachment-img-uuid-1.png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    const withData = images?.[0]?.dataOrBlobId.value as { blobId: Uint8Array; data: Uint8Array };
+    expect(Array.from(withData.blobId)).toEqual(Array.from(expectedBlobId));
+    expect(Array.from(withData.data)).toEqual(Array.from(imageBytes));
+    expect(Array.from(blobData(expectedBlobId))).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest always sends empty selectedContext and mode=1 on text-only turns", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.text).toBe("hi");
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
+    expect(userMessage?.selectedContext?.selectedImages.length).toBe(0);
+  });
+
+  test("encodeCursorRunRequest keeps selectedContext only on the active user turn", () => {
+    const activeImageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "active turn" }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "old turn" },
+            { type: "image", imageUrl: "data:image/png;base64,old", detail: "auto" },
+          ],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        { role: "user", content: "active turn", timestamp: 3 },
+      ],
+      selectedImages: [{
+        data: activeImageBytes,
+        mimeType: "image/png",
+        uuid: "active-img",
+      }],
+    });
+
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; selectedContext?: unknown }>;
+    expect(roots.some(root => root.selectedContext !== undefined)).toBe(false);
+
+    const historicalUser = nativeTurnUserMessages(bytes)[0];
+    expect(historicalUser?.text).toBe("old turn");
+    expect(historicalUser?.mode).toBe(1);
+    expect(historicalUser?.selectedContext).toBeDefined();
+    expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
+
+    const activeMessage = activeUserMessage(bytes);
+    expect(activeMessage?.mode).toBe(1);
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("active-img");
+    expect(images?.[0]?.path).toBe("attachment-active-img.png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    const activeWithData = images?.[0]?.dataOrBlobId.value as { blobId: Uint8Array; data: Uint8Array };
+    expect(Array.from(blobData(activeWithData.blobId))).toEqual(Array.from(activeImageBytes));
+    expect(Array.from(activeWithData.data)).toEqual(Array.from(activeImageBytes));
+  });
+
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "" }],
+      rawMessages: [{
+        role: "user",
+        content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+        timestamp: 1,
+      }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "image-only",
+      }],
+    });
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    expect(actionText(bytes)).toBe("");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("image-only");
+    expect(images?.[0]?.path).toBe("attachment-image-only.png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    const imageOnlyWithData = images?.[0]?.dataOrBlobId.value as { blobId: Uint8Array; data: Uint8Array };
+    expect(Array.from(blobData(imageOnlyWithData.blobId))).toEqual(Array.from(imageBytes));
+    expect(Array.from(imageOnlyWithData.data)).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns after assistant reply", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: [],
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "ack" },
+        { role: "user", content: "" },
+      ],
+      rawMessages: [
+        { role: "user", content: "first", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+          timestamp: 3,
+        },
+      ],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "follow-up-image",
+      }],
+    });
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    expect(actionText(bytes)).toBe("");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("follow-up-image");
+    expect(images?.[0]?.path).toBe("attachment-follow-up-image.png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    const followUpWithData = images?.[0]?.dataOrBlobId.value as { blobId: Uint8Array; data: Uint8Array };
+    expect(Array.from(blobData(followUpWithData.blobId))).toEqual(Array.from(imageBytes));
+    expect(Array.from(followUpWithData.data)).toEqual(Array.from(imageBytes));
   });
 
   test("caps external root replay while preserving system and newest history", () => {
@@ -619,6 +835,411 @@ describe("Cursor blob handshake", () => {
 
     expect(run?.action?.action.case).toBe("resumeAction");
   });
+
+  test("forwards view_image tool-result data URLs as McpImageContent", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe the image", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.length).toBe(2);
+    expect(content[0]?.content.case).toBe("text");
+    expect(content[1]?.content.case).toBe("image");
+    if (content[1]?.content.case !== "image") throw new Error("expected image");
+    expect(content[1].content.value.mimeType).toBe("image/png");
+    expect(Array.from(content[1].content.value.data)).toEqual(Array.from(imageBytes));
+  });
+
+  test("omits oversize tool-result data URLs from McpImageContent via shared decoder", () => {
+    resetCursorBlobStateForTests();
+    const huge = Buffer.alloc(MAX_CURSOR_IMAGE_DECODE_BYTES + 1024, 0x41);
+    const imageUrl = `data:image/png;base64,${huge.toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.every(item => item.content.case !== "image")).toBe(true);
+    expect(content.some(item => item.content.case === "text" && item.content.value.text === "image loaded")).toBe(true);
+  });
+
+  test("forwards grok-4.5 view_image tool-result data URLs as McpImageContent", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      rawMessages: [
+        { role: "user", content: "describe the image", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [
+            { type: "text", text: "image loaded" },
+            { type: "image", imageUrl, detail: "auto" },
+          ],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.length).toBe(2);
+    expect(content[0]?.content.case).toBe("text");
+    expect(content[1]?.content.case).toBe("image");
+    if (content[1]?.content.case !== "image") throw new Error("expected image");
+    expect(content[1].content.value.mimeType).toBe("image/png");
+    expect(Array.from(content[1].content.value.data)).toEqual(Array.from(imageBytes));
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(run?.conversationState?.turns[0] ?? new Uint8Array()));
+    expect(turn.turn.case).toBe("agentConversationTurn");
+    const steps = turn.turn.case === "agentConversationTurn" ? turn.turn.value.steps : [];
+    expect(steps).toHaveLength(1);
+    const step = fromBinary(ConversationStepSchema, blobData(steps[0] ?? new Uint8Array()));
+    expect(step.message.case).toBe("toolCall");
+    expect(step.message.case === "toolCall" && step.message.value.tool.case).toBe("mcpToolCall");
+    expect(run?.action?.action.case).toBe("resumeAction");
+  });
+
+  test("promotes grok-4.5 view_image images onto userMessageAction SelectedImage", () => {
+    resetCursorBlobStateForTests();
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      selectedImages: [{ uuid: "from-view", mimeType: "image/png", data: imageBytes }],
+      rawMessages: [
+        { role: "user", content: "describe the image", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`, detail: "auto" }],
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("from-view");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    expect(actionText(bytes)).toBe(CURSOR_VISION_PROMOTE_NUDGE);
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    expect(content.every(item => item.content.case !== "image")).toBe(true);
+    expect(content.some(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    )).toBe(true);
+  });
+
+  test("promotes view_image SelectedImage when multi_agent developer trails the toolResult", () => {
+    // Mirrors Desktop: injectDeveloperMessage appends after view_image output.
+    resetCursorBlobStateForTests();
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const collab = "<multi_agent_mode>Preferred sub-agent: model \"cursor/grok-4.5\", reasoning_effort \"high\"</multi_agent_mode>";
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_view\nname: view_image\nis_error: false\noutput:" }],
+      selectedImages: [{ uuid: "from-view", mimeType: "image/png", data: imageBytes }],
+      rawMessages: [
+        { role: "user", content: "What is in this image? Do not guess.", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`, detail: "high" }],
+          isError: false,
+          timestamp: 3,
+        },
+        { role: "developer", content: collab, timestamp: 4 },
+      ],
+    });
+
+    expect(activeSelectedImages(bytes)?.length).toBe(1);
+    expect(actionText(bytes)).toBe(CURSOR_VISION_PROMOTE_NUDGE);
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall") throw new Error("expected toolCall");
+    expect(tool.value.tool.case).toBe("mcpToolCall");
+    if (tool.value.tool.case !== "mcpToolCall") throw new Error("expected mcpToolCall");
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    expect(result.result.value.content.every(item => item.content.case !== "image")).toBe(true);
+    expect(result.result.value.content.some(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    )).toBe(true);
+  });
+
+  test("image-only user attach keeps empty action text", () => {
+    resetCursorBlobStateForTests();
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "" }],
+      selectedImages: [{ uuid: "attach", mimeType: "image/png", data: imageBytes }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}` }],
+          timestamp: 1,
+        },
+      ],
+    });
+    expect(activeSelectedImages(bytes)?.length).toBe(1);
+    expect(actionText(bytes)).toBe("");
+  });
+
+  test("promotes two trailing view_image toolResults onto SelectedImage", () => {
+    resetCursorBlobStateForTests();
+    const a = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const b = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 11]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]" }],
+      selectedImages: [
+        { uuid: "from-a", mimeType: "image/png", data: a },
+        { uuid: "from-b", mimeType: "image/png", data: b },
+      ],
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [
+            { type: "toolCall", id: "call_a", name: "view_image", arguments: { path: "/tmp/a.png" } },
+            { type: "toolCall", id: "call_b", name: "view_image", arguments: { path: "/tmp/b.png" } },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_a",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(a).toString("base64")}` }],
+          isError: false,
+          timestamp: 3,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_b",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl: `data:image/png;base64,${Buffer.from(b).toString("base64")}` }],
+          isError: false,
+          timestamp: 4,
+        },
+      ],
+    });
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(2);
+    expect(actionText(bytes)).toBe(CURSOR_VISION_PROMOTE_NUDGE);
+  });
+
+  test("MCP omit on promote only hits call ids that were SelectedImage-promoted", () => {
+    resetCursorBlobStateForTests();
+    // 13 trailing image toolResults; SelectedImage only carries the newest 12 uuids.
+    // The oldest call must keep McpImageContent (not text-omitted).
+    const stub = (n: number) => new Uint8Array([137, 80, 78, 71, 13, 10, 26, n & 0xff]);
+    const toolCalls = Array.from({ length: 13 }, (_, i) => ({
+      type: "toolCall" as const,
+      id: `call_${i}`,
+      name: "view_image",
+      arguments: { path: `/tmp/${i}.png` },
+    }));
+    const toolResults = Array.from({ length: 13 }, (_, i) => ({
+      role: "toolResult" as const,
+      toolCallId: `call_${i}`,
+      toolName: "view_image",
+      content: [{
+        type: "image" as const,
+        imageUrl: `data:image/png;base64,${Buffer.from(stub(i)).toString("base64")}`,
+      }],
+      isError: false,
+      timestamp: i + 3,
+    }));
+    const selectedImages = Array.from({ length: 12 }, (_, i) => ({
+      uuid: `keep-${i + 1}`,
+      mimeType: "image/png",
+      data: stub(i + 1),
+    }));
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]" }],
+      selectedImages,
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: toolCalls,
+        },
+        ...toolResults,
+      ],
+    });
+
+    expect(activeSelectedImages(bytes)?.length).toBe(12);
+    const toolSteps = conversationToolCallSteps(bytes);
+    expect(toolSteps.length).toBe(13);
+
+    const byCallId = new Map<string, ReturnType<typeof conversationToolCallSteps>[number]>();
+    for (const step of toolSteps) {
+      if (step.message.case !== "toolCall") continue;
+      if (step.message.value.tool.case !== "mcpToolCall") continue;
+      byCallId.set(step.message.value.tool.value.args?.toolCallId ?? "", step);
+    }
+
+    const oldest = byCallId.get("call_0");
+    expect(oldest).toBeDefined();
+    if (oldest?.message.case !== "toolCall" || oldest.message.value.tool.case !== "mcpToolCall") {
+      throw new Error("expected mcp toolCall");
+    }
+    const oldestResult = oldest.message.value.tool.value.result;
+    expect(oldestResult?.result.case).toBe("success");
+    if (oldestResult?.result.case !== "success") throw new Error("expected success");
+    expect(oldestResult.result.value.content.some(item => item.content.case === "image")).toBe(true);
+
+    const newest = byCallId.get("call_12");
+    expect(newest).toBeDefined();
+    if (newest?.message.case !== "toolCall" || newest.message.value.tool.case !== "mcpToolCall") {
+      throw new Error("expected mcp toolCall");
+    }
+    const newestResult = newest.message.value.tool.value.result;
+    expect(newestResult?.result.case).toBe("success");
+    if (newestResult?.result.case !== "success") throw new Error("expected success");
+    expect(newestResult.result.value.content.every(item => item.content.case !== "image")).toBe(true);
+    expect(newestResult.result.value.content.some(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    )).toBe(true);
+  });
 });
 
 describe("Cursor AgentRunRequest.mcp_tools channel", () => {
@@ -650,7 +1271,7 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
     expect(mcpToolNames(bytes)).toEqual(["exec_command"]);
   });
 
-  test("leaves mcp_tools unset when tools are empty", () => {
+  test("sends empty mcp_tools wrapper when tools are empty", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "gpt-5.6-luna-high",
       conversationId: "c1",
@@ -658,10 +1279,14 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
       messages: [{ role: "user", content: "hi" }],
       tools: [],
     });
-    expect(mcpToolNames(bytes)).toBeUndefined();
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.mcpTools).toBeDefined();
+    expect(run?.mcpTools?.mcpTools.length).toBe(0);
+    expect(mcpToolNames(bytes)).toEqual([]);
   });
 
-  test("leaves mcp_tools unset when toolChoice is none", () => {
+  test("sends empty mcp_tools wrapper when toolChoice is none", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "gpt-5.6-luna-high",
       conversationId: "c1",
@@ -670,7 +1295,11 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
       toolChoice: "none",
       tools: [{ name: "js", namespace: "mcp__node_repl", description: "Run JS", parameters: {} }],
     });
-    expect(mcpToolNames(bytes)).toBeUndefined();
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.mcpTools).toBeDefined();
+    expect(run?.mcpTools?.mcpTools.length).toBe(0);
+    expect(mcpToolNames(bytes)).toEqual([]);
   });
 });
 

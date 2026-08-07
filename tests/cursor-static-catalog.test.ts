@@ -111,5 +111,12 @@ describe("Cursor static Codex catalog", () => {
       ]);
     expect(entries.find(item => item.slug === "cursor/glm-5.2")?.supported_reasoning_levels)
       .toMatchObject([{ effort: "high" }, { effort: "max" }, { effort: "ultra" }]);
+
+    for (const modelId of ["auto", "composer-2.5", "gpt-5.5", "gemini-3-pro"]) {
+      expect(
+        entries.find(item => item.slug === `cursor/${modelId}`)?.input_modalities,
+        `cursor/${modelId} should advertise image input`,
+      ).toEqual(["text", "image"]);
+    }
   });
 });
