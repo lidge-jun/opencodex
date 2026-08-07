@@ -126,7 +126,12 @@ function rewriteLegacyOpenAiCostKeys(costs: Record<string, ProviderCostOverlay> 
   const rewritten: Record<string, ProviderCostOverlay> = {};
   if (costs) {
     for (const [key, value] of Object.entries(costs)) {
-      rewritten[rewriteLegacyOpenAiSelectedId(key)] = value;
+      const canonicalKey = rewriteLegacyOpenAiSelectedId(key);
+      // A bare <model> key always wins over its openai-multi/<model> equivalent
+      // inside the same row, regardless of JSON property order.
+      if (key === canonicalKey || !Object.hasOwn(rewritten, canonicalKey)) {
+        rewritten[canonicalKey] = value;
+      }
     }
   }
   return rewritten;
