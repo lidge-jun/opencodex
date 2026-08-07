@@ -221,6 +221,7 @@ export interface ProviderRegistryEntry {
   promptCacheKey?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  requiresReasoningPlaceholderModels?: string[];
   reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -243,7 +244,7 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
 >;
 
@@ -1984,6 +1985,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
+    // MiniMax-M3 low effort maps to thinking disabled, so a legitimate tool
+    // round can carry no reasoning at all; only replay real recorded text,
+    // never a fabricated placeholder (chatgpt-codex-connector P2 on #1205).
+    requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
@@ -1996,6 +2001,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
+    requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",

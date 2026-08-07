@@ -347,14 +347,17 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // recorded under every call id — join unique texts only.
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
-          } else {
+          } else if (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)) {
             // Fallback (extends #950, closes #1193): the replay cache is
             // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
             // long sessions, and some tool rounds carry no recorded reasoning
             // at all. DeepSeek thinking mode rejects ANY tool_call assistant
             // message missing reasoning_content with HTTP 400, so inject a
             // minimal placeholder rather than emit a bare continuation the
-            // upstream will reject.
+            // upstream will reject. Scoped to requiresReasoningPlaceholderModels
+            // (defaulting to the preserve list): preserve-listed providers with
+            // toggleable thinking (MiniMax low effort) opt out with `[]` so
+            // non-thinking histories are never given a fabricated placeholder.
             reasoningContent = " ";
           }
         }
@@ -426,9 +429,11 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // tool_call continuation on a thinking-mode provider — inject a
           // placeholder when the replay cache missed (the bounded cache can
           // always miss on long sessions), or DeepSeek thinking mode 400s.
+          // `||` (not `??`): the cache never stores empty strings, but treat a
+          // falsy hit as a miss so the placeholder still fires.
           const orphanReasoning =
             cachedReasoning
-            ?? (modelInList(provider.preserveReasoningContentModels, parsed.modelId) ? " " : undefined);
+            || (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId) ? " " : undefined);
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),

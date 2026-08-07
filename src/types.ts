@@ -1324,6 +1324,14 @@ export interface OcxProviderConfig {
   /** Model ids that expect prior assistant `reasoning_content` to be preserved in chat history. */
   preserveReasoningContentModels?: string[];
   /**
+   * Model ids whose upstream hard-rejects a tool_call continuation missing
+   * `reasoning_content` (DeepSeek thinking mode: HTTP 400). When the replay
+   * cache misses, the adapter injects a minimal placeholder for these models.
+   * Defaults to `preserveReasoningContentModels` when unset; set `[]` to opt
+   * out explicitly (e.g. MiniMax, where low effort disables thinking).
+   */
+  requiresReasoningPlaceholderModels?: string[];
+  /**
    * Opt-in same-target 429 retry policy. Codex itself never retries 429 (it retries 5xx only,
    * openai/codex#30471), and single-key pools have no failover, so the proxy waits and replays
    * the identical request on the same key before any failover. Pre-stream only: a 429 arrives

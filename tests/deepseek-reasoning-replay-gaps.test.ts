@@ -187,6 +187,41 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     expect(assistant!["reasoning_content"]).toBeUndefined();
   });
 
+  test("P2 guard: preserve-listed providers with toggleable thinking opt out of the placeholder (MiniMax)", () => {
+    // MiniMax-M3 low effort maps to thinking disabled, so a legitimate tool
+    // round can carry no reasoning; the registry seeds
+    // requiresReasoningPlaceholderModels: [] for minimax so a cache miss never
+    // fabricates one (chatgpt-codex-connector P2 on #1205). Real recorded
+    // reasoning still replays via preserveReasoningContentModels.
+    const minimaxWire = (input: unknown[]) => {
+      const parsed = parseRequest({ model: "minimax/MiniMax-M3", input, stream: true });
+      const config: OcxConfig = {
+        port: 10100,
+        defaultProvider: "minimax",
+        providers: {
+          minimax: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.minimax.io/v1",
+            apiKey: "key",
+          },
+        },
+      };
+      const route = routeModel(config, parsed.modelId);
+      parsed.modelId = route.modelId;
+      const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as OcxParsedRequest);
+      return JSON.parse(req.body as string) as { messages: Array<Record<string, unknown>> };
+    };
+    // Cache miss on the orphan-repair path: no fabricated placeholder.
+    const miss = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()]).messages);
+    expect(miss).toBeDefined();
+    expect(miss!["reasoning_content"]).toBeUndefined();
+    // Cache hit on the same path: the recorded reasoning still replays.
+    rememberReasoningForCall("call_1", REASONING);
+    const hit = toolCallAssistant(minimaxWire([userMessage(), functionCallOutputItem()]).messages);
+    expect(hit).toBeDefined();
+    expect(hit!["reasoning_content"]).toBe(REASONING);
+  });
+
   test("documented non-bug: opaque encrypted-only reasoning degrades to the placeholder, not invented plaintext", () => {
     // Native (non-ocxr1) encrypted reasoning has no readable text; the parser
     // deliberately degrades instead of inventing replayable plaintext. On a

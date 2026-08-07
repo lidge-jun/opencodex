@@ -726,6 +726,7 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "noPenaltyModels",
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
+  "requiresReasoningPlaceholderModels",
 ];
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
