@@ -274,7 +274,7 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
     t, settings, settingsSaving, toggleCodexAutoStart,
-    sidecar, sidecarSaving, sidecarModels, models, saveSidecar,
+    sidecar, sidecarSaving, sidecarModels, visionSidecarModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
 
@@ -318,8 +318,34 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           <div className="dash-sidecar-card__row">
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
             <Select
+              value={sidecar?.vision.backend ?? "auto"}
+              options={[
+                { value: "auto", label: t("dash.backendAuto") },
+                { value: "openai", label: t("dash.backendOpenAI") },
+                { value: "anthropic", label: t("dash.backendAnthropic") },
+                { value: "chat", label: t("dash.backendChat") },
+              ]}
+              onChange={backend => {
+                const target = backend === "auto" ? null : backend as "openai" | "anthropic" | "chat";
+                const current = sidecar?.vision.model ?? "";
+                const currentBackend = sidecarBackendForModel(models, current);
+                const currentOption = visionSidecarModels.find(option => option.value === current);
+                const compatible = target === null
+                  ? visionSidecarModels.find(option => sidecarBackendForModel(models, option.value) === "openai")
+                  : currentOption && currentBackend === target
+                    ? currentOption
+                    : visionSidecarModels.find(option => sidecarBackendForModel(models, option.value) === target);
+                void saveSidecar({ vision: {
+                  backend: target,
+                  ...(compatible?.value ? { model: compatible.value } : {}),
+                } });
+              }}
+              disabled={!sidecar || sidecarSaving}
+              label={t("dash.sidecarBackend")}
+            />
+            <Select
               value={sidecar?.vision.model ?? "gpt-5.6-luna"}
-              options={sidecarModels}
+              options={visionSidecarModels}
               onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}

@@ -3,6 +3,7 @@ import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProvid
 import { modelInList } from "../types";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
+import { describeImageChat } from "./describe-chat";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { getAccountSet } from "../oauth/store";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
@@ -176,11 +177,54 @@ export function findAnthropicVisionProvider(config: OcxConfig): AnthropicVisionP
   return undefined;
 }
 
+/** Find the chat-adapter or google-adapter provider for `model` with usable auth. */
+function findChatVisionProvider(config: OcxConfig, model: string): { provider: OcxProviderConfig; providerName: string; model: string } | undefined {
+  let providerName = "";
+  let bareModel = model;
+  if (model.includes("/")) {
+    const sep = model.indexOf("/");
+    providerName = model.slice(0, sep);
+    bareModel = model.slice(sep + 1);
+  }
+  const isChatLike = (p: OcxProviderConfig) => p.adapter === "openai-chat" || p.adapter === "google";
+  const hasAuth = (p: OcxProviderConfig) => {
+    if (p.apiKey ?? p.apiKeyPool?.[0]?.key) return true;
+    if (p.authMode === "oauth") return true;
+    return false;
+  };
+  if (providerName) {
+    const provider = config.providers[providerName];
+    if (provider && provider.disabled !== true && isChatLike(provider) && hasAuth(provider)) {
+      return { provider, providerName, model: bareModel };
+    }
+    return undefined;
+  }
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (provider.disabled === true) continue;
+    if (!isChatLike(provider)) continue;
+    if (!hasAuth(provider)) continue;
+    const models = provider.models ?? [];
+    const defaultModel = provider.defaultModel;
+    if (bareModel === defaultModel || models.includes(bareModel) || models.some(m => m.endsWith("/" + bareModel) || m === bareModel)) {
+      return { provider, providerName: name, model: bareModel };
+    }
+  }
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (provider.disabled === true) continue;
+    if (!isChatLike(provider)) continue;
+    if (!hasAuth(provider)) continue;
+    if (provider.liveModels === true) {
+      return { provider, providerName: name, model: bareModel };
+    }
+  }
+  return undefined;
+}
+
 export function resolveVisionBackend(
-  explicit: "openai" | "anthropic" | undefined,
+  explicit: "openai" | "anthropic" | "chat" | undefined,
   anthropicSidecar: AnthropicVisionProvider | undefined,
-): "openai" | "anthropic" {
-  if (explicit === "openai" || explicit === "anthropic") return explicit;
+): "openai" | "anthropic" | "chat" {
+  if (explicit === "openai" || explicit === "anthropic" || explicit === "chat") return explicit;
   return anthropicSidecar ? "anthropic" : "openai";
 }
 
@@ -212,9 +256,10 @@ export function shouldResolveOpenAiVisionSidecar(
 }
 
 export interface VisionPlan {
-  backend: "openai" | "anthropic";
+  backend: "openai" | "anthropic" | "chat";
   forwardSidecar?: ResolvedOpenAiForwardSidecar;
   anthropicSidecar?: AnthropicVisionProvider;
+  chatSidecar?: { provider: OcxProviderConfig; providerName: string; model: string };
   settings: VisionSettings;
   maxDescriptionsPerTurn: number;
 }
@@ -239,6 +284,18 @@ export function planVisionSidecar(
   const anthropicSidecar = findAnthropicVisionProvider(config);
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
   const maxDescriptionsPerTurn = resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn);
+
+  if (backend === "chat") {
+    const model = cfg.model ?? "";
+    const chatProvider = findChatVisionProvider(config, model);
+    if (!chatProvider) return undefined;
+    return {
+      backend,
+      chatSidecar: { provider: chatProvider.provider, providerName: chatProvider.providerName, model: chatProvider.model },
+      settings: { model: resolveOpenAiVisionModel(config), timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+      maxDescriptionsPerTurn,
+    };
+  }
 
   if (backend === "anthropic") {
     if (!anthropicSidecar) return undefined;
@@ -389,6 +446,20 @@ async function executeDescription(
       sidecar.provider,
       plan.settings,
       abortSignal,
+    );
+  }
+  if (plan.backend === "chat") {
+    const sidecar = plan.chatSidecar;
+    if (!sidecar) return { text: "", error: "chat vision sidecar is unavailable" };
+    return describeImageChat(
+      job.imageUrl,
+      job.detail,
+      job.contextText,
+      sidecar.provider,
+      sidecar.providerName,
+      { model: sidecar.model, timeoutMs: plan.settings.timeoutMs, detail: job.detail },
+      abortSignal,
+      recordSidecarOutcome,
     );
   }
   if (!plan.forwardSidecar) return { text: "", error: "OpenAI vision sidecar is unavailable" };

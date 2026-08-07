@@ -4,7 +4,7 @@
  * copy-paste shell block is directly unit-testable (tests/claude-manual-env.test.ts).
  */
 
-export type SidecarBackend = "openai" | "anthropic";
+export type SidecarBackend = "openai" | "anthropic" | "chat";
 export interface SidecarOverride { backend?: SidecarBackend; model?: string }
 
 export interface ClaudeManualEnvState {

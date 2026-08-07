@@ -19,7 +19,7 @@ const CLAUDE_USAGE = `Usage:
       [--compact-window <tokens|default>] [--inject-agents <on|off>]
       [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|->]
-      [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]`;
+      [--vision-model <id|->] [--vision-backend <openai|anthropic|chat|->] [--json]`;
 
 const GROK_USAGE = `Usage:
   ocx grok [status] [--json]
