@@ -180,6 +180,32 @@ describe("modelCosts config persistence and registry refresh", () => {
     expect(activeUserCostOverlays()).toHaveLength(0);
   });
 
+  test("an unchanged save still refreshes the overlay registry (cooperating CLI write)", () => {
+    // Simulate a cooperating CLI process that wrote the overlay to disk without
+    // this process ever seeing it (the ocx login key-provider notify scenario):
+    // the bytes match, so persistConfigUnlocked's early-return path must still
+    // refresh the registry, otherwise Logs/Usage keep catalog prices.
+    const bytes = JSON.stringify({
+      port: 12345,
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: VALID_COSTS,
+        },
+      },
+    }, null, 2) + "\n";
+    writeFileSync(getConfigPath(), bytes);
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+    expect(activeUserCostOverlays()).toHaveLength(0);
+
+    const config = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    const versionBefore = userCostOverlayVersion();
+    saveConfig(config);
+    expect(activeUserCostOverlays()).toHaveLength(2);
+    expect(userCostOverlayVersion()).toBeGreaterThan(versionBefore);
+  });
+
   test("reloading an unchanged config does not bump the overlay version", () => {
     const config = {
       port: 12345,

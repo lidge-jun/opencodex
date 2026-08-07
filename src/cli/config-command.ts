@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
-import { getConfigPath, readConfigDiagnostics, saveConfig, validateConfigCandidate } from "../config";
+import { getConfigPath, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
 import { normalizeVisionReasoningForModel } from "../vision/reasoning";
@@ -20,6 +20,9 @@ const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 function redact(value: unknown, key = ""): unknown {
   if (SECRET_KEYS.test(key) && typeof value === "string") return value ? "********" : value;
+  // modelCosts rows are keyed by model id; a pasted API key in a key position
+  // must not be echoed back by config show/get (values are already redacted).
+  if (key === "modelCosts") return sanitizeModelCostsForDisplay(value);
   if (Array.isArray(value)) return value.map(item => redact(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [childKey, redact(child, childKey)]));
