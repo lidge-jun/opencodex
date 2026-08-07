@@ -75,6 +75,7 @@ import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
+import { MAX_COST4_RATE } from "./usage/expected-prices";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
@@ -727,8 +728,8 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
     const rates = entry as Record<string, unknown>;
     for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
       const rate = rates[key];
-      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0) {
-        return `${field}.${safeModelId}.${key} must be a non-negative finite number (USD per 1M tokens)`;
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > MAX_COST4_RATE) {
+        return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
       }
     }
   }
@@ -2778,6 +2779,10 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   }
+  // The reconciliation may have adopted a providers.<name>.modelCosts edit made
+  // by a cooperating process while the OAuth login was pending; keep the overlay
+  // registry (and the usage-cache overlay version) in sync with the live config.
+  refreshUserCostOverlays(config);
 }
 
 /** The literal file, with no schema merge or default injection. */

@@ -62,6 +62,18 @@ describe("providerModelCostsConfigError", () => {
       .toContain('modelCosts."m".cacheWrite');
   });
 
+  test("rates above the safe bound are rejected", () => {
+    const error = providerModelCostsConfigError({
+      m: { input: 1e308, output: 1, cacheRead: 0, cacheWrite: 0 },
+    });
+    expect(error).toContain('modelCosts."m".input');
+    expect(error).toContain("at most 1000000");
+    // The boundary itself is accepted.
+    expect(providerModelCostsConfigError({
+      m: { input: 1_000_000, output: 1, cacheRead: 0, cacheWrite: 0 },
+    })).toBeNull();
+  });
+
   test("modelCosts validation errors redact secret-shaped model ids", () => {
     const error = providerModelCostsConfigError({
       "sk-abcdef1234567890": { input: 1, output: 1, cacheRead: 0, cacheWrite: "0" },
@@ -222,6 +234,22 @@ describe("modelCosts config persistence and registry refresh", () => {
     expect(rows[0].cost4).toEqual(VALID_COSTS["deepseek-v4-flash"]);
     expect(Object.keys(rows[0].cost4).sort()).toEqual(["cacheRead", "cacheWrite", "input", "output"]);
   });
+
+  test("overlay registry skips rows whose rates exceed the safe bound", () => {
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          modelCosts: {
+            "overflow-model": { input: 1e308, output: 1, cacheRead: 0, cacheWrite: 0 },
+            "deepseek-v4-flash": VALID_COSTS["deepseek-v4-flash"],
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+    const rows = activeUserCostOverlays().map(row => row.modelId);
+    expect(rows).toContain("deepseek-v4-flash");
+    expect(rows).not.toContain("overflow-model");
+  });
 });
 
 describe("modelCosts management validation and DTO", () => {
@@ -323,5 +351,26 @@ describe("modelCosts management validation and DTO", () => {
     // Dropped entirely — distinct secret-shaped rows must not collapse into a
     // single placeholder key in the dashboard DTO.
     expect(keys).not.toContain("[REDACTED]");
+  });
+
+  test("safeConfigDTO drops modelCosts rows whose rates exceed the safe bound", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      providers: {
+        blsc: {
+          ...providerBase,
+          modelCosts: {
+            "deepseek-v4-flash": VALID_COSTS["deepseek-v4-flash"],
+            "overflow-model": { input: 1e308, output: 1, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      },
+    }));
+    const dto = safeConfigDTO(loadConfig()) as {
+      providers: Record<string, { modelCosts?: Record<string, unknown> }>;
+    };
+    const keys = Object.keys(dto.providers.blsc.modelCosts ?? {});
+    expect(keys).toContain("deepseek-v4-flash");
+    expect(keys).not.toContain("overflow-model");
   });
 });

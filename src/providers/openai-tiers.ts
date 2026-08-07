@@ -1,5 +1,6 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { OPENAI_PROVIDER_TIER_VERSION } from "../types";
+import { MAX_COST4_RATE } from "../usage/expected-prices";
 
 export const OPENAI_CODEX_PROVIDER_ID = "openai";
 export const LEGACY_OPENAI_MULTI_PROVIDER_ID = "openai-multi";
@@ -98,7 +99,10 @@ function validLegacyOverlayCosts(value: unknown): boolean {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
     const rates = entry as Record<string, unknown>;
     return (["input", "output", "cacheRead", "cacheWrite"] as const)
-      .every(key => typeof rates[key] === "number" && Number.isFinite(rates[key]) && (rates[key] as number) >= 0);
+      .every(key => typeof rates[key] === "number"
+        && Number.isFinite(rates[key])
+        && (rates[key] as number) >= 0
+        && (rates[key] as number) <= MAX_COST4_RATE);
   });
 }
 
