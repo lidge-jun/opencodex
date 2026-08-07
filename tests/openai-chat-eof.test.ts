@@ -311,10 +311,9 @@ describe("openai-chat SSE data-field framing (#1170)", () => {
   });
 
   test("unspaced data:[DONE] sentinel terminates the stream", async () => {
-    const response = new Response([
-      'data:{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n',
-      "data:[DONE]\n\n",
-    ].join(""));
+    // Sentinel only: a preceding answer frame would let the finish_reason EOF fallback emit
+    // `done` even if unspaced [DONE] handling were broken, so this test must not carry one.
+    const response = new Response("data:[DONE]\n\n");
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
     expect(events.at(-1)?.type).toBe("done");
     expect(events.some(e => e.type === "error")).toBe(false);
