@@ -658,7 +658,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.reason.usage_unsupported": "Этот провайдер не сообщает данные об использовании.",
   "logs.detail.reason.output_missing": "Положительное число выходных токенов не было сообщено.",
   "logs.detail.reason.invalid_duration": "Длительность запроса некорректна.",
-  "logs.detail.reason.price_unmatched": "Подходящая цена в каталоге jawcode не найдена.",
+  "logs.detail.reason.price_unmatched": "Подходящая цена не найдена.",
   "logs.detail.reason.invalid_cache_breakdown": "Детализация кэш-токенов противоречит общему числу входных токенов.",
   "logs.detail.reason.invalid_usage": "В данных использования есть некорректное значение токенов.",
   "logs.detail.reason.combo_attempt_unavailable": "Не удалось рассчитать стоимость как минимум одной попытки комбо.",
