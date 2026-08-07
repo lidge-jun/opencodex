@@ -174,6 +174,13 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [customFormModalities, setCustomFormModalities] = useState<string[]>(["text"]);
   const [customSaving, setCustomSaving] = useState(false);
   const [customError, setCustomError] = useState("");
+  const [contextModalProvider, setContextModalProvider] = useState<string | null>(null);
+  const [contextModalModels, setContextModalModels] = useState<string[]>([]);
+  const [contextModelId, setContextModelId] = useState("");
+  const [contextDefaultDraft, setContextDefaultDraft] = useState("");
+  const [contextModelDraft, setContextModelDraft] = useState("");
+  const [contextSaving, setContextSaving] = useState(false);
+  const [contextError, setContextError] = useState("");
   const [hoveredModel, setHoveredModel] = useState<{ namespaced: string; rect: DOMRect } | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(null);
@@ -342,6 +349,82 @@ export default function Models({ apiBase }: { apiBase: string }) {
    */
   const catalogCountReady = models.length > 0 || catalogState.data !== undefined;
 
+  const openContextSettings = (group: ProviderModelGroup<ModelRow>) => {
+    const modelIds = [...new Set([
+      ...group.rows.map(model => model.id),
+      ...group.configuredModels,
+    ])].sort();
+    const modelId = modelIds[0] ?? "";
+    setContextModalProvider(group.provider);
+    setContextModalModels(modelIds);
+    setContextModelId(modelId);
+    setContextDefaultDraft(group.contextWindow ? String(group.contextWindow) : "");
+    setContextModelDraft(modelId && group.modelContextWindows?.[modelId]
+      ? String(group.modelContextWindows[modelId])
+      : "");
+    setContextError("");
+  };
+
+  const selectContextModel = (modelId: string) => {
+    const group = groups.find(candidate => candidate.provider === contextModalProvider);
+    setContextModelId(modelId);
+    setContextModelDraft(group?.modelContextWindows?.[modelId]
+      ? String(group.modelContextWindows[modelId])
+      : "");
+  };
+
+  const parseContextWindowDraft = (raw: string): number | null | undefined => {
+    const normalized = raw.replace(/[_,\s]/g, "");
+    if (!normalized) return null;
+    const value = Number(normalized);
+    return Number.isFinite(value) && Number.isInteger(value) && value > 0
+      ? value
+      : undefined;
+  };
+
+  const saveContextSettings = async () => {
+    if (!contextModalProvider) return;
+    const providerWindow = parseContextWindowDraft(contextDefaultDraft);
+    const modelWindow = parseContextWindowDraft(contextModelDraft);
+    if (providerWindow === undefined || modelWindow === undefined) {
+      setContextError(t("models.contextInvalid"));
+      return;
+    }
+    const group = groups.find(candidate => candidate.provider === contextModalProvider);
+    if (!group) {
+      setContextError(t("models.contextSaveFailed"));
+      return;
+    }
+
+    setContextSaving(true);
+    setContextError("");
+    try {
+      const body: Record<string, unknown> = { contextWindow: providerWindow };
+      if (contextModelId) {
+        body.modelContextWindows = { [contextModelId]: modelWindow };
+      }
+      const response = await fetch(
+        `${apiBase}/api/providers?name=${encodeURIComponent(contextModalProvider)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      await readJsonOrThrow(response, t("models.contextSaveFailed"));
+      const refreshed = await load(true);
+      if (!refreshed) {
+        setContextError(t("models.loadFail"));
+        return;
+      }
+      setContextModalProvider(null);
+      publishFeedback(true, t("models.contextSaved"));
+    } catch (error) {
+      setContextError(error instanceof Error ? error.message : t("models.contextSaveFailed"));
+    } finally {
+      setContextSaving(false);
+    }
+  };
 
   // One-shot default collapse. It stays an effect on `groups` so CACHED groups collapse
   // immediately on first paint, even when revalidation is slow or fails; moving it into
@@ -787,6 +870,14 @@ export default function Models({ apiBase }: { apiBase: string }) {
                <button
                  type="button"
                  className="btn btn-ghost btn-sm text-caption"
+                 onClick={() => openContextSettings(group)}
+                 aria-haspopup="dialog"
+               >{t("models.contextSettings")}</button>
+             )}
+             {!isNative && (
+               <button
+                 type="button"
+                 className="btn btn-ghost btn-sm text-caption"
                  onClick={(e) => {
                    e.stopPropagation();
                    setCustomModalMode("add");
@@ -1139,6 +1230,95 @@ export default function Models({ apiBase }: { apiBase: string }) {
             </div>
             <div className="modal-actions">
               <button type="button" className="btn btn-primary" onClick={() => setV2HelpOpen(false)}>{t("common.ok")}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contextModalProvider && (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("models.contextSettings")}
+          onClick={() => { if (!contextSaving) setContextModalProvider(null); }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !contextSaving) setContextModalProvider(null);
+          }}
+        >
+          <div className="modal-card" onClick={event => event.stopPropagation()}>
+            <div className="modal-head">
+              <h3>{t("models.contextSettingsTitle", {
+                provider: formatProviderDisplayName(contextModalProvider, t),
+              })}</h3>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setContextModalProvider(null)}
+                disabled={contextSaving}
+                aria-label={t("common.close")}
+              >&times;</button>
+            </div>
+
+            {contextError && <Notice tone="err">{contextError}</Notice>}
+            <p className="modal-desc leading-relaxed">{t("models.contextHint")}</p>
+
+            <div className="models-field-stack">
+              <label className="text-label models-field">
+                {t("models.contextDefault")}
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  value={contextDefaultDraft}
+                  onChange={event => setContextDefaultDraft(event.target.value)}
+                  disabled={contextSaving}
+                  placeholder={t("models.contextAutomatic")}
+                  autoFocus
+                />
+              </label>
+
+              {contextModalModels.length > 0 && (
+                <>
+                  <div className="text-label models-field">
+                    {t("models.contextModel")}
+                    <Select
+                      value={contextModelId}
+                      options={contextModalModels.map(model => ({ value: model, label: model }))}
+                      onChange={selectContextModel}
+                      disabled={contextSaving}
+                      label={t("models.contextModel")}
+                    />
+                  </div>
+                  <label className="text-label models-field">
+                    {t("models.contextModelOverride")}
+                    <input
+                      className="input"
+                      inputMode="numeric"
+                      value={contextModelDraft}
+                      onChange={event => setContextModelDraft(event.target.value)}
+                      disabled={contextSaving}
+                      placeholder={t("models.contextAutomatic")}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => setContextModalProvider(null)}
+                disabled={contextSaving}
+              >{t("common.cancel")}</button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => void saveContextSettings()}
+                disabled={contextSaving}
+              >
+                {contextSaving ? t("models.customSaving") : t("models.customApply")}
+              </button>
             </div>
           </div>
         </div>

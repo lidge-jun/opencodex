@@ -165,6 +165,42 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  // The Models page edits the catalog hints in place; keep them on the existing
+  // provider mutation path so validation, cache invalidation, and convergence stay unified (#1073).
+  if (Object.hasOwn(rawBody, "contextWindow")) {
+    const value = rawBody.contextWindow;
+    if (value === null) {
+      delete next.contextWindow;
+    } else if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0) {
+      next.contextWindow = value;
+    } else {
+      return { error: "contextWindow must be a positive finite integer or null" };
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelContextWindows")) {
+    const value = rawBody.modelContextWindows;
+    if (value === null) {
+      delete next.modelContextWindows;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelContextWindows must be a plain object or null" };
+      const windows: Record<string, number> = { ...(next.modelContextWindows ?? {}) };
+      for (const [model, window] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelContextWindows keys must be nonblank model ids" };
+        if (window === null) {
+          delete windows[model];
+          continue;
+        }
+        if (typeof window !== "number" || !Number.isFinite(window) || !Number.isInteger(window) || window <= 0) {
+          return { error: "modelContextWindows values must be positive finite integers or null" };
+        }
+        windows[model] = window;
+      }
+      if (Object.keys(windows).length > 0) next.modelContextWindows = windows;
+      else delete next.modelContextWindows;
+    }
+    touched = true;
+  }
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -249,6 +285,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       models: p.models ?? [],
+      contextWindow: p.contextWindow,
+      modelContextWindows: p.modelContextWindows,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,

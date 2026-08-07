@@ -1176,9 +1176,9 @@ export interface OcxProviderConfig {
    * full set so the user can pick). See devlog issue_052_provider-model-allowlist.
    */
   selectedModels?: string[];
-  /** Provider-wide Codex-visible context-window cap for routed catalog entries. */
+  /** Provider-wide fallback when context metadata is absent; otherwise caps the reported window. */
   contextWindow?: number;
-  /** Model-specific Codex-visible context-window caps. Values cap live metadata, never raise it. */
+  /** Per-model fallback when context metadata is absent; otherwise caps the reported window. */
   modelContextWindows?: Record<string, number>;
   /** Model-specific Codex catalog input modalities, e.g. ["text"] or ["text", "image"]. */
   modelInputModalities?: Record<string, string[]>;

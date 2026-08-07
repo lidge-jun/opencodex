@@ -116,6 +116,12 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let selected = ["gemini-pro", "gemini-flash"];
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  const contextBodies: Array<{
+    contextWindow: number | null;
+    modelContextWindows: Record<string, number | null>;
+  }> = [];
+  let providerContextWindow: number | undefined = 256_000;
+  let providerModelContextWindows: Record<string, number> = { "claude-opus": 64_000 };
   let failNext = false;
   let failCatalog = false;
   let modelFetches = 0;
@@ -142,8 +148,21 @@ test("Models page combines final visibility, atomic actions, discovery status, a
         name: provider,
         liveModels: true,
         models: ids,
+        contextWindow: providerContextWindow,
+        modelContextWindows: providerModelContextWindows,
         discovery: { status: "failed", reason: "http", httpStatus: 401 },
       }]);
+    }
+    if (url.includes("/api/providers?name=") && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body)) as (typeof contextBodies)[number];
+      contextBodies.push(body);
+      if (body.contextWindow === null) providerContextWindow = undefined;
+      else if (typeof body.contextWindow === "number") providerContextWindow = body.contextWindow;
+      for (const [model, value] of Object.entries(body.modelContextWindows ?? {})) {
+        if (value === null) delete providerModelContextWindows[model];
+        else providerModelContextWindows = { ...providerModelContextWindows, [model]: value };
+      }
+      return Response.json({ success: true });
     }
     if (url.endsWith("/api/selected-models")) return Response.json({ selected: { [provider]: selected }, available: { [provider]: ids } });
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
@@ -195,6 +214,32 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
     expect(container.textContent).not.toContain("Not selected");
+
+    await act(async () => buttonText("Context windows").click());
+    const contextDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const contextInputs = contextDialog.querySelectorAll<HTMLInputElement>("input");
+    expect([...contextInputs].map(input => input.value)).toEqual(["256000", "64000"]);
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        testWindow.HTMLInputElement.prototype,
+        "value",
+      )!.set!;
+      setValue.call(contextInputs[0]!, "350000");
+      contextInputs[0]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      setValue.call(contextInputs[1]!, "100000");
+      contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    const applyContext = [...contextDialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Apply")!;
+    await act(async () => {
+      applyContext.click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies.at(-1)).toEqual({
+      contextWindow: 350_000,
+      modelContextWindows: { "claude-opus": 100_000 },
+    });
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
 
     await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
     // The workspace Select portals its listbox to document.body, so the options are not inside

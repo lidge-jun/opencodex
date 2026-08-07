@@ -1973,6 +1973,92 @@ describe("provider management validation", () => {
     // Unknown-only bodies are rejected.
     expect((await patch("extra", { bogus: 1 }))?.status).toBe(400);
   });
+
+  test("provider management exposes and persists context-window hints for Models GUI (#1073)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+      providers: {
+        openai: { ...canonicalDirect },
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example.test/v1",
+          apiKey: "sk-existing",
+          models: ["wide", "narrow"],
+          contextWindow: 256_000,
+          modelContextWindows: { narrow: 64_000 },
+        },
+      },
+    };
+    saveConfig(liveConfig);
+
+    const request = async (method: "GET" | "PATCH", body?: unknown) => {
+      const req = new Request("http://127.0.0.1/api/providers?name=relay", {
+        method,
+        headers: body === undefined ? undefined : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+      });
+    };
+
+    const listed = await request("GET");
+    expect(listed?.status).toBe(200);
+    const rows = await listed!.json() as Array<{
+      name: string;
+      contextWindow?: number;
+      modelContextWindows?: Record<string, number>;
+    }>;
+    expect(rows.find(row => row.name === "relay")).toMatchObject({
+      contextWindow: 256_000,
+      modelContextWindows: { narrow: 64_000 },
+    });
+
+    const updated = await request("PATCH", {
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000 },
+    });
+    expect(updated?.status).toBe(200);
+    expect(liveConfig.providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+    expect(loadConfig().providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+
+    for (const invalid of [
+      { contextWindow: 0 },
+      { contextWindow: 1.5 },
+      { modelContextWindows: { "": 100_000 } },
+      { modelContextWindows: { wide: -1 } },
+    ]) {
+      expect((await request("PATCH", invalid))?.status).toBe(400);
+    }
+    expect(liveConfig.providers.relay).toMatchObject({
+      contextWindow: 350_000,
+      modelContextWindows: { wide: 350_000, narrow: 64_000 },
+    });
+
+    expect((await request("PATCH", { modelContextWindows: { wide: null } }))?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelContextWindows).toEqual({ narrow: 64_000 });
+
+    const cleared = await request("PATCH", {
+      contextWindow: null,
+      modelContextWindows: null,
+    });
+    expect(cleared?.status).toBe(200);
+    expect(liveConfig.providers.relay.contextWindow).toBeUndefined();
+    expect(liveConfig.providers.relay.modelContextWindows).toBeUndefined();
+  });
+
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

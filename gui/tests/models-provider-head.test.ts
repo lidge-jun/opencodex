@@ -30,3 +30,14 @@ test("Models workspace stacks via content-width container query before mobile dr
   // Mobile media rule retained for drawer layouts.
   expect(css).toContain("@media (max-width: 768px)");
 });
+
+test("Models exposes provider and per-model context-window controls (#1073)", async () => {
+  const page = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
+  const groups = await Bun.file(new URL("../src/models-groups.ts", import.meta.url)).text();
+
+  expect(groups).toContain("contextWindow?: number");
+  expect(groups).toContain("modelContextWindows?: Record<string, number>");
+  expect(page).toContain('t("models.contextSettings")');
+  expect(page).toContain("modelContextWindows");
+  expect(page).toMatch(/\/api\/providers\?name=.*method:\s*"PATCH"/s);
+});
