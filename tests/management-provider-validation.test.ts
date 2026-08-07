@@ -126,13 +126,15 @@ afterEach(() => {
 
 describe("provider management validation", () => {
   test("provider management rejects modelCosts rows with extra fields", () => {
-    expect(providerManagementConfigError("blsc", {
+    const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",
       baseUrl: "https://llmapi.blsc.cn",
       modelCosts: {
         "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0, apiKey: "sk-leak" },
       },
-    })).toContain("unexpected fields");
+    });
+    expect(error).toContain("unexpected fields");
+    expect(error).not.toContain("sk-leak");
     expect(providerManagementConfigError("blsc", {
       adapter: "openai-chat",
       baseUrl: "https://llmapi.blsc.cn",
