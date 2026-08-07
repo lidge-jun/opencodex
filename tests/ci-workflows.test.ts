@@ -39,6 +39,15 @@ function count(text: string, fragment: string): number {
   return text.split(fragment).length - 1;
 }
 
+/** Match an executable shell line, not a fragment that could appear in echo or a comment. */
+function hasExactShellCommand(run: string | undefined, expected: string): boolean {
+  return (run ?? "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith("#"))
+    .includes(expected);
+}
+
 function expectSecureLinuxKeyringBootstrap(workflow: string): void {
   const smokeStep = workflow
     .split("- name: OS keyring create/read/delete smoke")[1]
@@ -164,7 +173,9 @@ describe("GitHub Actions hardening", () => {
     // the runner's disk and the suite passes against a tree that no longer
     // exists in git.
     const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
-    expect(winSteps.some(step => step.run?.includes(`--shard=\${{ matrix.shard }}/${windowsShards.length}`))).toBe(true);
+    const windowsTestCommand = `bun test --isolate tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
+    expect(hasExactShellCommand(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
+    expect(winSteps.some(step => hasExactShellCommand(step.run, windowsTestCommand))).toBe(true);
     expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
       && step.run?.includes("git clean -xffd"))).toBe(true);
 
