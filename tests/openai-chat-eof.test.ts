@@ -301,12 +301,15 @@ describe("openai-chat SSE data-field framing (#1170)", () => {
   test("unspaced data:{...} frames with a final finish_reason and no [DONE] complete", async () => {
     const response = new Response([
       'data:{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n',
-      'data:{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data:{"id":"x","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n',
       'data:{"id":"x","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n',
     ].join(""));
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
     expect(events.find(e => e.type === "text_delta")).toMatchObject({ type: "text_delta", text: "hi" });
-    expect(events.at(-1)?.type).toBe("done");
+    // "length" maps to stopReason "max_tokens" ("stop" maps to none): the EOF fallback would
+    // emit done WITHOUT a stopReason, so this assertion only passes if the terminal
+    // finish_reason frame was actually parsed.
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "max_tokens" });
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
