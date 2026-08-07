@@ -210,6 +210,19 @@ describe("OpenAI provider option migration matrix", () => {
     expect(result.config.providers.openai.modelCosts).toEqual(multiCosts);
   });
 
+  test("legacy multi with an out-of-bound overlay rate collides", () => {
+    const input = cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": {
+          ...forward,
+          modelCosts: { "gpt-5.6": { input: 1e308, output: 1, cacheRead: 0.1, cacheWrite: 0 } },
+        },
+      },
+    });
+    expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
+  });
+
   test("merges provider context caps to the lower positive cap with path-only warning", () => {
     const result = projectOpenAiTierMigration(cfg({
       openaiProviderTierVersion: 1,

@@ -354,7 +354,10 @@ describe("modelCosts management validation and DTO", () => {
   });
 
   test("safeConfigDTO drops modelCosts rows whose rates exceed the safe bound", () => {
-    writeFileSync(getConfigPath(), JSON.stringify({
+    // In-memory config, bypassing loadConfig: the DTO gate itself (validRate)
+    // must drop the out-of-bound row — load-time sanitization would remove it
+    // before safeConfigDTO ever sees it.
+    const config = {
       port: 12345,
       providers: {
         blsc: {
@@ -365,8 +368,8 @@ describe("modelCosts management validation and DTO", () => {
           },
         },
       },
-    }));
-    const dto = safeConfigDTO(loadConfig()) as {
+    } as unknown as OcxConfig;
+    const dto = safeConfigDTO(config) as {
       providers: Record<string, { modelCosts?: Record<string, unknown> }>;
     };
     const keys = Object.keys(dto.providers.blsc.modelCosts ?? {});
