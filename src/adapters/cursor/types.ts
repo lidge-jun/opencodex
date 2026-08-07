@@ -17,10 +17,11 @@ export interface CursorRunRequest {
   conversationId: string;
   system: string[];
   messages: CursorRequestMessage[];
-  rawMessages?: OcxMessage[];
+  rawMessages?: readonly OcxMessage[];
   /**
-   * Images for the active user turn, inlined as SelectedImage.data under
-   * UserMessage.selected_context. History stays text-only.
+   * Images for the active user turn. Encoded as SelectedImage blobId refs under
+   * UserMessage.selected_context (bytes live in the request-scoped KV store for
+   * getBlobArgs hydration). History stays text-only.
    */
   selectedImages?: readonly ResolvedCursorImage[];
   tools?: OcxTool[];

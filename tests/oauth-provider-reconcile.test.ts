@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { loadConfig } from "../src/config";
 import { OAUTH_PROVIDERS, reconcileOAuthProviders, upsertOAuthProvider } from "../src/oauth";
 import { getCredential, saveCredential } from "../src/oauth/store";
-import type { OcxConfig } from "../src/types";
+import { CURSOR_NO_VISION_MODELS, cursorModelIds, CURSOR_STATIC_MODELS } from "../src/adapters/cursor/discovery";
+import { modelInList, type OcxConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
 const homes: string[] = [];
@@ -169,5 +170,33 @@ describe("OAuth provider reconciliation", () => {
     config.providers["google-antigravity"].authMode = undefined;
     upsertOAuthProvider(config, "google-antigravity");
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
+  });
+
+  test("heals a stale Cursor all-models noVisionModels stamp down to the curated list", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-cursor-novision-reconcile-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const preset = OAUTH_PROVIDERS.cursor.providerConfig;
+    const stale = cursorModelIds(CURSOR_STATIC_MODELS);
+    expect(stale.length).toBeGreaterThan((preset.noVisionModels ?? []).length);
+    const config = {
+      port: 10100,
+      defaultProvider: "cursor",
+      providers: {
+        cursor: {
+          ...structuredClone(preset),
+          authMode: "oauth",
+          noVisionModels: [...stale],
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(true);
+    expect(config.providers.cursor.noVisionModels).toEqual(preset.noVisionModels);
+    expect(config.providers.cursor.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
+    expect(config.providers.cursor.noVisionModels).not.toContain("grok-4.5");
+    expect(config.providers.cursor.noVisionModels).toContain("auto");
+    expect(modelInList(config.providers.cursor.noVisionModels, "composer-2.5")).toBe(true);
+    expect(reconcileOAuthProviders(config)).toBe(false);
   });
 });

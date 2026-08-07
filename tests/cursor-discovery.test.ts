@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   CURSOR_AUTO_WIRE_MODEL_ID,
   CURSOR_DEFAULT_CONTEXT_WINDOW,
+  CURSOR_NO_VISION_MODELS,
   CURSOR_ROUTER_MODEL_IDS,
   CURSOR_ROUTING_LEVELS,
   CURSOR_STATIC_MODELS,
@@ -131,6 +132,25 @@ describe("Cursor discovery metadata", () => {
     expect(inferCursorContextWindow("glm-5.2")).toBe(1_000_000);
     expect(inferCursorContextWindow("grok-4.3")).toBe(256_000);
     expect(inferCursorContextWindow("gpt-5.5")).toBe(272_000);
+  });
+
+  test("no-vision list is a curated subset of the static seed", () => {
+    const ids = new Set(cursorModelIds(CURSOR_STATIC_MODELS));
+    expect([...CURSOR_NO_VISION_MODELS]).toEqual([
+      ...CURSOR_ROUTER_MODEL_IDS,
+      "composer-*",
+      "glm-5.2",
+    ]);
+    for (const id of CURSOR_NO_VISION_MODELS) {
+      if (id.endsWith("*")) continue;
+      expect(ids.has(id), `${id} must be in the static Cursor seed`).toBe(true);
+    }
+    for (const id of ["composer-1", "composer-2.5", "composer-2.5-fast"]) {
+      expect(ids.has(id)).toBe(true);
+    }
+    for (const id of ["grok-4.5", "grok-4.5-fast", "gpt-5.5", "claude-sonnet-5", "kimi-k3", "gemini-3-pro"]) {
+      expect(CURSOR_NO_VISION_MODELS as readonly string[]).not.toContain(id);
+    }
   });
 
   test("input modalities are cloned per model", () => {

@@ -28,8 +28,11 @@ function activeSelectedImageBytes(bytes: Uint8Array): Uint8Array | undefined {
   const image = action?.case === "userMessageAction"
     ? action.value.userMessage?.selectedContext?.selectedImages[0]
     : undefined;
-  if (!image || image.dataOrBlobId.case !== "data") return undefined;
-  return image.dataOrBlobId.value;
+  if (!image) return undefined;
+  if (image.dataOrBlobId.case === "data") return image.dataOrBlobId.value;
+  if (image.dataOrBlobId.case === "blobId") return blobData(image.dataOrBlobId.value);
+  if (image.dataOrBlobId.case === "blobIdWithData") return image.dataOrBlobId.value.data;
+  return undefined;
 }
 
 function viewImageToolResultBytes(bytes: Uint8Array): Uint8Array | undefined {

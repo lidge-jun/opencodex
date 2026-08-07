@@ -203,13 +203,21 @@ export function resolveToolChoiceWireName(tools: readonly Pick<OcxTool, "namespa
 /**
  * Whether `modelId` is in a per-provider classification list (e.g. `noVisionModels`). Matches the full
  * id, OR — for Ollama-style ids — the family before the ":size" tag, so a `gpt-oss` entry covers
- * `gpt-oss:120b`/`gpt-oss:20b`. Colon-less ids (e.g. `grok-build-0.1`) still match exactly only.
+ * `gpt-oss:120b`/`gpt-oss:20b`. A trailing `*` entry matches a prefix (`composer-*` → `composer-2.5`).
+ * Colon-less ids without a prefix entry (e.g. `grok-build-0.1`) still match exactly only.
  */
 export function modelInList(list: string[] | undefined, modelId: string): boolean {
   if (!list || list.length === 0) return false;
   if (list.includes(modelId)) return true;
   const colon = modelId.indexOf(":");
-  return colon > 0 && list.includes(modelId.slice(0, colon));
+  if (colon > 0 && list.includes(modelId.slice(0, colon))) return true;
+  for (const entry of list) {
+    if (entry.length > 1 && entry.endsWith("*")) {
+      const prefix = entry.slice(0, -1);
+      if (prefix.length > 0 && modelId.startsWith(prefix)) return true;
+    }
+  }
+  return false;
 }
 
 export type OcxToolChoice =

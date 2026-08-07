@@ -13,7 +13,12 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
-import { buildSelectedContext } from "./images";
+import {
+  buildSelectedContext,
+  CURSOR_VISION_MCP_IMAGE_OMITTED,
+  CURSOR_VISION_PROMOTE_NUDGE,
+  extractTrailingToolResultImagePromotion,
+} from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import {
   AgentClientMessageSchema,
@@ -354,7 +359,10 @@ function syntheticToolCallFromResult(
   };
 }
 
-function toolResultContentItems(content: OcxToolResultMessage["content"]) {
+function toolResultContentItems(
+  content: OcxToolResultMessage["content"],
+  options?: { omitImages?: boolean },
+) {
   if (typeof content === "string") {
     return [create(McpToolResultContentItemSchema, {
       content: { case: "text", value: create(McpTextContentSchema, { text: content }) },
@@ -368,6 +376,11 @@ function toolResultContentItems(content: OcxToolResultMessage["content"]) {
       })];
     }
     if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
+      if (options?.omitImages) {
+        return [create(McpToolResultContentItemSchema, {
+          content: { case: "text", value: create(McpTextContentSchema, { text: CURSOR_VISION_MCP_IMAGE_OMITTED }) },
+        })];
+      }
       try {
         if (!part.imageUrl.toLowerCase().startsWith("data:")) return [];
         const comma = part.imageUrl.indexOf(",");
@@ -425,6 +438,7 @@ function toolCallStep(
   part: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
   requestScope: CursorBlobRequestScopeToken,
   result?: OcxToolResultMessage,
+  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
 ): Uint8Array {
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
@@ -443,7 +457,7 @@ function toolCallStep(
               providerIdentifier: OCX_RESPONSES_TOOL_PROVIDER,
               args,
             }),
-            ...(result ? { result: toolResultPart(result) } : {}),
+            ...(result ? { result: toolResultPart(result, options) } : {}),
           }),
         },
       }),
@@ -451,13 +465,18 @@ function toolCallStep(
   })), requestScope);
 }
 
-function toolResultPart(message: OcxToolResultMessage) {
+function toolResultPart(
+  message: OcxToolResultMessage,
+  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
+) {
+  const omitImages = options?.omitToolResultImageCallIds?.has(message.toolCallId) === true
+    && toolResultHasImage(message.content);
   return create(McpToolResultSchema, {
     result: {
       case: "success",
       value: create(McpSuccessSchema, {
         isError: message.isError,
-        content: toolResultContentItems(message.content),
+        content: toolResultContentItems(message.content, { omitImages }),
       }),
     },
   });
@@ -496,6 +515,7 @@ function conversationTurns(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,
   historyMessageStart = 0,
+  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
 ): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
@@ -508,7 +528,9 @@ function conversationTurns(
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
   const flush = () => {
     if (!current) return;
-    for (const part of pendingToolCalls.values()) current.steps.push(toolCallStep(part, requestScope));
+    for (const part of pendingToolCalls.values()) {
+      current.steps.push(toolCallStep(part, requestScope, undefined, options));
+    }
     turns.push(storeCursorBlob(toBinary(ConversationTurnStructureSchema, create(ConversationTurnStructureSchema, {
       turn: {
         case: "agentConversationTurn",
@@ -555,7 +577,7 @@ function conversationTurns(
       if (externalModel) {
         if (toolResultHasImage(message.content)) {
           const priorCall = pendingToolCalls.get(message.toolCallId) ?? syntheticToolCallFromResult(message);
-          current.steps.push(toolCallStep(priorCall, requestScope, message));
+          current.steps.push(toolCallStep(priorCall, requestScope, message, options));
           pendingToolCalls.delete(message.toolCallId);
           continue;
         }
@@ -571,7 +593,7 @@ function conversationTurns(
       }
       const priorCall = pendingToolCalls.get(message.toolCallId);
       if (priorCall) {
-        current.steps.push(toolCallStep(priorCall, requestScope, message));
+        current.steps.push(toolCallStep(priorCall, requestScope, message, options));
         pendingToolCalls.delete(message.toolCallId);
       } else {
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
@@ -588,7 +610,7 @@ function conversationTurns(
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
         text: contentText(message),
         messageId: crypto.randomUUID(),
-        selectedContext: buildSelectedContext(),
+        selectedContext: buildSelectedContext([], requestScope),
         mode: 1,
       })), requestScope),
       steps: [],
@@ -659,19 +681,26 @@ function buildPreparedCursorRunRequest(
     ? appendCursorGenericToolUseHint(request.tools, rawText)
     : rawText;
   // Tool-result-only turns resume the remembered Cursor conversation with results in history.
+  // Exception: image-bearing tool results (Codex view_image) must ride SelectedImage on a
+  // userMessageAction — McpImageContent inline bytes are not hydrated as vision for grok/etc.
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
   const selectedImages = request.selectedImages ?? [];
-  const actionCase = !lastRawIsToolResult && (selectedImages.length > 0 || text.trim().length > 0)
+  const promoteToolResultImages = lastRawIsToolResult && selectedImages.length > 0;
+  const omitToolResultImageCallIds = promoteToolResultImages
+    ? extractTrailingToolResultImagePromotion(request.rawMessages ?? []).promotedCallIds
+    : undefined;
+  const actionCase = selectedImages.length > 0 || (!lastRawIsToolResult && text.trim().length > 0)
     ? "userMessageAction"
     : "resumeAction";
-  const selectedContext = buildSelectedContext(selectedImages);
+  const actionText = promoteToolResultImages ? CURSOR_VISION_PROMOTE_NUDGE : text;
+  const selectedContext = buildSelectedContext(selectedImages, requestScope);
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {
           case: "userMessageAction",
           value: create(UserMessageActionSchema, {
             userMessage: create(UserMessageSchema, {
-              text,
+              text: actionText,
               messageId: crypto.randomUUID(),
               selectedContext,
               // OmniRoute / cursor-agent always send mode=1 on UserMessage.
@@ -689,7 +718,9 @@ function buildPreparedCursorRunRequest(
   });
   const rootPromptMessagesState = rootPromptMessages(request, requestScope);
   const rootPromptMessageIds = rootPromptMessagesState.ids;
-  const turnIds = conversationTurns(request, requestScope, rootPromptMessagesState.historyMessageStart);
+  const turnIds = conversationTurns(request, requestScope, rootPromptMessagesState.historyMessageStart, {
+    omitToolResultImageCallIds,
+  });
   // Hoisted out of the mcp_tools spread below so the estimate can read the same
   // filtered definitions the wire carries. Both helpers are pure.
   const visibleTools = cursorToolsForActivePrompt(request.tools, rawText, request.toolChoice);
@@ -774,7 +805,7 @@ function buildPreparedCursorRunRequest(
   // tools the payload dropped — the defect that blocked PR #376.
   const modelVisibleParts = [
     ...rootPromptMessagesState.serialized,
-    ...(actionCase === "userMessageAction" ? [text] : []),
+    ...(actionCase === "userMessageAction" ? [actionText] : []),
     ...mcpToolDefs.map(modelVisibleToolText),
   ];
   return {
