@@ -210,6 +210,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     await removeCredential(provider);
     reconcileLiveStateStores();
     clearLoginState(provider);
+    const { clearModelCache } = await import("../../codex/model-cache");
+    clearModelCache(provider);
     // Drop cached/last-good quota rows tied to the removed credential.
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
@@ -281,6 +283,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
     }
+    const { clearModelCache } = await import("../../codex/model-cache");
+    clearModelCache(provider);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
@@ -404,6 +408,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       clearAnthropicSessionAffinityForAccount(id);
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
+    const { clearModelCache } = await import("../../codex/model-cache");
+    clearModelCache(provider);
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);

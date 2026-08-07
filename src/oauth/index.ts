@@ -1003,11 +1003,13 @@ export async function runLogin(
   settleKiroTransaction(rawCred, true);
   if (provider !== "chatgpt") {
     try {
+      const { clearModelCache } = await import("../codex/model-cache");
+      clearModelCache(provider);
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
       clearProviderQuotaCache();
       clearAccountQuotaCache(provider);
     } catch {
-      // Quota module may be unavailable in tightly scoped unit tests.
+      // Optional state modules may be unavailable in tightly scoped unit tests.
     }
   }
   return cred;

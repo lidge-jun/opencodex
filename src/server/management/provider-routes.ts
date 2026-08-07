@@ -25,7 +25,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
-import { ProviderOutboundPolicyError, providerOutboundGet, providerRedirectError } from "../../lib/provider-outbound";
+import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
@@ -523,13 +523,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
-      const providerFetch = (prov as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
       const res = method === "POST"
-        ? await (providerFetch ?? globalThis.fetch)(modelsUrl, {
-          method,
+        ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project: snapshot!.projectId }),
-          redirect: "manual",
           signal: AbortSignal.timeout(8000),
         })
         : await providerOutboundGet(name, prov, modelsUrl, {

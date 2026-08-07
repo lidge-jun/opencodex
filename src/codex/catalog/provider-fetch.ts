@@ -49,6 +49,7 @@ import type { NormalizedComboConfig } from "../../combos/types";
 import {
   ProviderOutboundPolicyError,
   providerOutboundGet,
+  providerOutboundPost,
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
@@ -983,13 +984,10 @@ async function fetchProviderModelsWithAuth(
     };
   };
   try {
-    const providerFetch = (prov as OcxProviderConfig & { fetch?: typeof fetch }).fetch;
     const res = request.method === "POST"
-      ? await (providerFetch ?? globalThis.fetch)(url, {
-        method: "POST",
+      ? await providerOutboundPost(name, prov, url, {
         headers,
         body: JSON.stringify({ project: auth.oauthProjectId }),
-        redirect: "manual",
         signal: AbortSignal.timeout(8000),
       })
       : await providerOutboundGet(name, prov, url, {

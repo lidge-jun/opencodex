@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { clearModelCache, getStaleCached, setCached } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -45,6 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearModelCache("google-antigravity");
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
@@ -170,6 +172,31 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({ provider: "not-a-provider", accountId: "x" }),
       });
       expect(badProvider.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("switching an Antigravity account clears its account-scoped live-model cache", async () => {
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "antigravity-a",
+        accounts: [
+          { id: "antigravity-a", credential: { access: "a", refresh: "ra", expires: 9999999999999, projectId: "project-a" } },
+          { id: "antigravity-b", credential: { access: "b", refresh: "rb", expires: 9999999999999, projectId: "project-b" } },
+        ],
+      },
+    }), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      setCached("google-antigravity", [{ provider: "google-antigravity", id: "account-a-only-model" }]);
+      const response = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", accountId: "antigravity-b" }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(getStaleCached("google-antigravity")).toBeNull();
     } finally {
       await server.stop(true);
     }
