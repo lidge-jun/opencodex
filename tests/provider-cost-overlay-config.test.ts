@@ -82,6 +82,37 @@ describe("providerModelCostsConfigError", () => {
     expect(error).toContain("[REDACTED]");
   });
 
+  test("modelCosts rows with extra fields are rejected by the validator", () => {
+    const error = providerModelCostsConfigError({
+      m: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0, apiKey: "sk-leak" },
+    });
+    expect(error).toContain('modelCosts."m"');
+    expect(error).toContain("unexpected fields");
+    expect(error).toContain("apiKey");
+    expect(providerModelCostsConfigError(VALID_COSTS)).toBeNull();
+  });
+
+  test("loadConfig drops modelCosts rows with extra fields instead of persisting them", () => {
+    writeFileSync(getConfigPath(), JSON.stringify({
+      port: 12345,
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: {
+            "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+            "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0, apiKey: "sk-leak" },
+          },
+        },
+      },
+    }));
+    const config = loadConfig();
+    expect(config.providers.blsc.modelCosts).toEqual({
+      "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+    });
+    expect(activeUserCostOverlays()).toHaveLength(1);
+  });
+
   test("validateConfigCandidate redacts a token-shaped provider name in modelCosts schema errors", () => {
     const result = validateConfigCandidate({
       port: 12345,
@@ -288,7 +319,7 @@ describe("modelCosts management validation and DTO", () => {
     expect(dto.providers.blsc.modelCosts).toEqual(VALID_COSTS);
   });
 
-  test("safeConfigDTO serializes only the four rate fields of each modelCosts row", () => {
+  test("a nested secret under a malformed modelCosts row never reaches the dashboard DTO", () => {
     writeFileSync(getConfigPath(), JSON.stringify({
       port: 12345,
       providers: {
@@ -309,10 +340,10 @@ describe("modelCosts management validation and DTO", () => {
     const dto = safeConfigDTO(loadConfig()) as {
       providers: Record<string, { modelCosts?: Record<string, Record<string, unknown>> }>;
     };
-    expect(dto.providers.blsc.modelCosts).toEqual({
-      "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-    });
-    expect(dto.providers.blsc.modelCosts?.["deepseek-v4-flash"]?.apiKey).toBeUndefined();
+    // The malformed row (extra apiKey field) is rejected at load, so the DTO
+    // carries no overlay for it and the nested secret never serializes.
+    expect(dto.providers.blsc.modelCosts).toBeUndefined();
+    expect(JSON.stringify(dto)).not.toContain("sekret-value");
   });
 
   test("safeConfigDTO keeps a __proto__ model id as an own row", () => {
