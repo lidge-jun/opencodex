@@ -711,6 +711,8 @@ export function providerHeadersConfigError(headers: unknown): string | null {
  * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
  * Returns null when valid/absent, else a human-readable error.
  */
+const MODEL_COST_RATE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
 export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -726,11 +728,18 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
       return `${field}.${safeModelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
     }
     const rates = entry as Record<string, unknown>;
-    for (const key of ["input", "output", "cacheRead", "cacheWrite"]) {
+    for (const key of MODEL_COST_RATE_KEYS) {
       const rate = rates[key];
       if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > MAX_COST4_RATE) {
         return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
       }
+    }
+    // Reject unknown fields: a misplaced apiKey/apiKeyPool under a cost row
+    // would otherwise be persisted and echoed verbatim by display paths that
+    // mask only top-level provider secrets.
+    const extraKeys = Object.keys(rates).filter((key) => !(MODEL_COST_RATE_KEYS as readonly string[]).includes(key));
+    if (extraKeys.length > 0) {
+      return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, and cacheWrite are allowed (USD per 1M tokens)`;
     }
   }
   return null;
