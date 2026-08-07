@@ -243,6 +243,79 @@ describe("Cursor blob handshake", () => {
     expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(activeImageBytes));
   });
 
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "" }],
+      rawMessages: [{
+        role: "user",
+        content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+        timestamp: 1,
+      }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "image-only",
+      }],
+    });
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    expect(actionText(bytes)).toBe("");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("image-only");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("data");
+    expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns after assistant reply", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: [],
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "ack" },
+        { role: "user", content: "" },
+      ],
+      rawMessages: [
+        { role: "user", content: "first", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+          timestamp: 3,
+        },
+      ],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "follow-up-image",
+      }],
+    });
+
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    expect(actionText(bytes)).toBe("");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("follow-up-image");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("data");
+    expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(imageBytes));
+  });
+
   test("caps external root replay while preserving system and newest history", () => {
     const rawMessages = Array.from({ length: 210 }, (_, index) =>
       index % 2 === 0

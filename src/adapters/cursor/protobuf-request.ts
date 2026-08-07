@@ -581,10 +581,11 @@ function buildPreparedCursorRunRequest(
     : rawText;
   // Tool-result-only turns resume the remembered Cursor conversation with results in history.
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
-  const actionCase = !lastRawIsToolResult && text.trim().length > 0
+  const selectedImages = request.selectedImages ?? [];
+  const actionCase = !lastRawIsToolResult && (selectedImages.length > 0 || text.trim().length > 0)
     ? "userMessageAction"
     : "resumeAction";
-  const selectedContext = buildSelectedContext(request.selectedImages ?? []);
+  const selectedContext = buildSelectedContext(selectedImages);
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {
