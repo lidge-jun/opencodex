@@ -212,14 +212,17 @@ export async function resolveCursorImages(
 export function buildSelectedImages(images: readonly ResolvedCursorImage[]): SelectedImage[] {
   return images.map(image => create(SelectedImageSchema, {
     uuid: image.uuid,
-    path: "",
     mimeType: image.mimeType,
     dataOrBlobId: { case: "data", value: image.data },
   }));
 }
 
-export function buildSelectedContext(images: readonly ResolvedCursorImage[]): SelectedContext | undefined {
-  if (images.length === 0) return undefined;
+/**
+ * OmniRoute always sends `UserMessage.selected_context`, even when empty.
+ * Cursor accepts the request without it, but vision turns are more reliable
+ * when the placeholder matches cursor-agent's wire format.
+ */
+export function buildSelectedContext(images: readonly ResolvedCursorImage[] = []): SelectedContext {
   return create(SelectedContextSchema, {
     selectedImages: buildSelectedImages(images),
   });
