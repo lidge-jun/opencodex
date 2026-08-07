@@ -8,7 +8,8 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { configuredReasoningEfforts } from "../reasoning-effort";
-import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
+import { COMMAND_CODE_MODEL_REASONING_EFFORTS, commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
+import { decodeRoutedModelId } from "../providers/slug-codec";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
@@ -318,7 +319,18 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
   // reasoning effort because the official table is keyed by the canonical ids.
-  const canonicalId = COMMAND_CODE_MODEL_ALIASES[modelId] ?? modelId;
+  // omp and other OpenAI-compatible clients dial with the namespaced selector
+  // (command-code/deepseek-deepseek-v4-flash, inner "/" encoded as "-"), so
+  // decode it back against the official effort table before the lookup.
+  const aliased = COMMAND_CODE_MODEL_ALIASES[modelId] ?? modelId;
+  const knownIds = [...new Set([
+    ...Object.keys(COMMAND_CODE_MODEL_REASONING_EFFORTS),
+    ...Object.values(COMMAND_CODE_MODEL_ALIASES),
+  ])];
+  // Strip the provider prefix first: decodeRoutedModelId expects the encoded
+  // id portion (deepseek-deepseek-v4-flash), not the full command-code/ slug.
+  const encodedId = aliased.startsWith("command-code/") ? aliased.slice("command-code/".length) : aliased;
+  const canonicalId = decodeRoutedModelId(encodedId, knownIds);
   const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
   if (!supported) return undefined;
   // Command Code's official profiles describe xhigh and ultra as the CLI labels that map to
