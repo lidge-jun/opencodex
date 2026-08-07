@@ -40,4 +40,8 @@ test("Models exposes provider and per-model context-window controls (#1073)", as
   expect(page).toContain('t("models.contextSettings")');
   expect(page).toContain("modelContextWindows");
   expect(page).toMatch(/\/api\/providers\?name=.*method:\s*"PATCH"/s);
+  expect(page).toContain('className="models-context-fields"');
+
+  const css = await Bun.file(new URL("../src/styles-models-workspace.css", import.meta.url)).text();
+  expect(css).toMatch(/\.models-context-fields\s*\{[^}]*gap:\s*var\(--space-4\)/s);
 });

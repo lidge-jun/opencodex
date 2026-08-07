@@ -1263,7 +1263,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
             {contextError && <Notice tone="err">{contextError}</Notice>}
             <p className="modal-desc leading-relaxed">{t("models.contextHint")}</p>
 
-            <div className="models-field-stack">
+            <div className="models-context-fields">
               <label className="text-label models-field">
                 {t("models.contextDefault")}
                 <input

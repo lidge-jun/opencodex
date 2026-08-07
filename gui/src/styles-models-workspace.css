@@ -361,6 +361,12 @@
   margin-top: var(--space-3);
 }
 
+.models-context-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .models-field {
   display: flex;
   flex-direction: column;
