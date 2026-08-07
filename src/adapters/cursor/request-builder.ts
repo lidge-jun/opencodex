@@ -23,6 +23,7 @@ import {
   isBareCodexShellBridgeTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
+import { extractCursorImageUrls } from "./images";
 
 /** Probe-verified Cursor Connect boundaries, with byte headroom for the enclosing field. */
 export const CURSOR_TOOL_COUNT_LIMIT = 330;
@@ -194,9 +195,18 @@ function requestMessage(message: OcxMessage): CursorRequestMessage | undefined {
   switch (message.role) {
     case "user":
     case "developer":
-      return { role: message.role, content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        if (content.length === 0 && extractCursorImageUrls(message.content).length === 0) {
+          return undefined;
+        }
+        return { role: message.role, content };
+      }
     case "assistant":
-      return { role: "assistant", content: contentToText(message.content) };
+      {
+        const content = contentToText(message.content);
+        return content.length > 0 ? { role: "assistant", content } : undefined;
+      }
     case "toolResult":
       return {
         role: "tool",
@@ -257,7 +267,7 @@ export function createCursorRequest(
 ): CursorRunRequest {
   const messages = parsed.context.messages
     .map(requestMessage)
-    .filter((message): message is CursorRequestMessage => !!message && message.content.length > 0);
+    .filter((message): message is CursorRequestMessage => !!message);
   const activeText = [...messages].reverse().find(message => message.role === "user" || message.role === "developer")?.content ?? "";
   const visibleTools = cursorToolsForActivePrompt(parsed.context.tools, activeText, parsed.options.toolChoice);
   const budget = applyCursorToolBudget(visibleTools, parsed.options.toolChoice);

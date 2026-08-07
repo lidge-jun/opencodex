@@ -202,6 +202,57 @@ describe("Cursor request builder", () => {
     expect(request.messages[0]?.content).not.toContain("data:image/png");
   });
 
+  test("preserves image-only user turns as empty-string active messages", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([{ role: "user", content: "" }]);
+    expect(request.rawMessages?.length).toBe(1);
+  });
+
+  test("preserves image-only active user turn after assistant reply", () => {
+    const request = createCursorRequest({
+      ...base,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "high" }],
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            model: "cursor/composer-2.5",
+            content: [{ type: "text", text: "ack" }],
+            timestamp: 2,
+          },
+          {
+            role: "user",
+            content: [{ type: "image", imageUrl: "data:image/png;base64,def", detail: "high" }],
+            timestamp: 3,
+          },
+        ],
+      },
+    });
+
+    expect(request.messages).toEqual([
+      { role: "user", content: "" },
+      { role: "assistant", content: "ack" },
+      { role: "user", content: "" },
+    ]);
+    expect(request.messages.at(-1)?.role).toBe("user");
+  });
+
   test("preserves Responses tools and tool choice for Cursor request context", () => {
     const tool = {
       name: "read_file",
