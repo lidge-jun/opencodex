@@ -18,6 +18,7 @@ import {
   CURSOR_VISION_MCP_IMAGE_OMITTED,
   CURSOR_VISION_PROMOTE_NUDGE,
   cursorIsTrailingToolResultContinuation,
+  decodeCursorImageDataUrl,
   extractTrailingToolResultImagePromotion,
   stripTrailingTransparentDeveloperMessages,
 } from "./images";
@@ -385,14 +386,8 @@ function toolResultContentItems(
       }
       try {
         if (!part.imageUrl.toLowerCase().startsWith("data:")) return [];
-        const comma = part.imageUrl.indexOf(",");
-        if (comma < 0) return [];
-        const header = part.imageUrl.slice(5, comma);
-        const payload = part.imageUrl.slice(comma + 1).replace(/\s/g, "");
-        if (!/;base64/i.test(header) || payload.length === 0) return [];
-        const mimeType = (header.split(";")[0] || "").trim().toLowerCase() || "image/png";
-        if (!mimeType.startsWith("image/")) return [];
-        const data = Buffer.from(payload, "base64");
+        // Shared decoder enforces MAX_CURSOR_IMAGE_DECODE_BYTES and MIME validation.
+        const { data, mimeType } = decodeCursorImageDataUrl(part.imageUrl);
         if (data.byteLength === 0) return [];
         return [create(McpToolResultContentItemSchema, {
           content: {
