@@ -180,7 +180,7 @@ describe("Cursor request builder", () => {
     ]);
   });
 
-  test("uses an explicit image placeholder for unsupported image parts", () => {
+  test("omits image parts from text while preserving other content", () => {
     const request = createCursorRequest({
       ...base,
       context: {
@@ -198,8 +198,8 @@ describe("Cursor request builder", () => {
     });
 
     expect(request.messages[0]?.content).toContain("see");
-    expect(request.messages[0]?.content).toContain("image input unsupported");
-    expect(request.messages[0]?.content).toContain("high");
+    expect(request.messages[0]?.content).not.toContain("image input unsupported");
+    expect(request.messages[0]?.content).not.toContain("data:image/png");
   });
 
   test("preserves Responses tools and tool choice for Cursor request context", () => {

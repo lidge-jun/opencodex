@@ -161,7 +161,7 @@ function contentPartToText(part: OcxContentPart | OcxAssistantContentPart): stri
     case "thinking":
       return part.thinking;
     case "image":
-      return `[image input unsupported by Cursor adapter phase 3: ${part.detail ?? "auto"}]`;
+      return undefined;
     case "toolCall":
       // Cursor does not accept OpenAI Responses assistant tool-call parts as native history here.
       // Rendering them as visible "[tool_call]" text leaks synthetic protocol markers back into

@@ -114,6 +114,15 @@ function actionText(bytes: Uint8Array): string | undefined {
   return action?.case === "userMessageAction" ? action.value.userMessage?.text : undefined;
 }
 
+function activeSelectedImages(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  const action = run?.action?.action;
+  return action?.case === "userMessageAction"
+    ? action.value.userMessage?.selectedContext?.selectedImages
+    : undefined;
+}
+
 /** The `toolName`s advertised in the top-level AgentRunRequest.mcp_tools channel (undefined when unset). */
 function mcpToolNames(bytes: Uint8Array): string[] | undefined {
   const msg = fromBinary(AgentClientMessageSchema, bytes);
@@ -153,6 +162,29 @@ describe("Cursor blob handshake", () => {
     // wire-compatible (the earlier crash was a wrong-shape assignment, since corrected).
     expect(run?.mcpTools?.mcpTools.length).toBe(1);
     expect(run?.mcpTools?.mcpTools[0]?.toolName).toBe("mcp__fs__read_file");
+  });
+
+  test("encodeCursorRunRequest attaches selectedContext with inline image data on the active user turn", () => {
+    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "see this" }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "img-uuid-1",
+      }],
+    });
+
+    expect(actionText(bytes)).toBe("see this");
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("img-uuid-1");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("data");
+    expect(Array.from(images?.[0]?.dataOrBlobId.value ?? [])).toEqual(Array.from(imageBytes));
   });
 
   test("caps external root replay while preserving system and newest history", () => {
