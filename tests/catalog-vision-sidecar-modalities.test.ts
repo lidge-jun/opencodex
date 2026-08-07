@@ -3,9 +3,13 @@ import { applyProviderConfigHints, gatherRoutedModels } from "../src/codex/catal
 import { clearModelCache } from "../src/codex/model-cache";
 import type { OcxProviderConfig } from "../src/types";
 import { deriveComboCatalogModel } from "../src/codex/catalog";
+import { CURSOR_STATIC_MODELS } from "../src/adapters/cursor/discovery";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import { enrichProviderFromRegistry } from "../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import type { CatalogModel } from "../src/types";
+import { parseRequest } from "../src/responses/parser";
+import { routeModel } from "../src/router";
+import { planVisionSidecar } from "../src/vision";
 
 const base: OcxProviderConfig = {
   adapter: "openai-chat",
@@ -228,5 +232,59 @@ describe("vision-capable provider models feed combo modalities", () => {
     expect(prov.modelInputModalities?.["grok-4.5"]).toEqual(["text", "image"]);
     const hinted = applyProviderConfigHints("xai", prov, { provider: "xai", id: "grok-4.5" });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+});
+
+describe("Cursor native vision registry", () => {
+  test("Cursor models advertise image through modelInputModalities, not noVisionModels", () => {
+    const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
+    expect(cursor?.noVisionModels).toBeUndefined();
+    for (const model of ["auto", "composer-2.5", "gpt-5.5", "gemini-3-pro"]) {
+      expect(cursor?.modelInputModalities?.[model]).toEqual(["text", "image"]);
+      expect(cursor?.noVisionModels ?? []).not.toContain(model);
+    }
+    for (const model of CURSOR_STATIC_MODELS) {
+      expect(cursor?.modelInputModalities?.[model.id]).toEqual(["text", "image"]);
+    }
+  });
+
+  test("Cursor catalog hints do not force sidecar image augmentation", () => {
+    const cursor = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!);
+    const hinted = applyProviderConfigHints("cursor", cursor, {
+      id: "gpt-5.5",
+      provider: "cursor",
+      contextWindow: 272_000,
+      inputModalities: cursor.modelInputModalities?.["gpt-5.5"],
+    });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("Cursor image requests skip the vision sidecar", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "cursor",
+      providers: {
+        cursor: providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "cursor")!),
+      },
+    };
+    const route = routeModel(config, "cursor/auto");
+    const parsed = parseRequest({
+      model: "cursor/auto",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "What is in this screenshot?" },
+          { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+        ],
+      }],
+    });
+    expect(planVisionSidecar(config, route.provider, route.modelId, parsed, {
+      providerName: "openai",
+      provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" },
+      accountMode: "direct",
+      authContext: { kind: "main", accountId: null },
+      headers: new Headers({ authorization: "Bearer chatgpt" }),
+    })).toBeUndefined();
   });
 });
