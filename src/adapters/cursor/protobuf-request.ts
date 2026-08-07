@@ -17,7 +17,9 @@ import {
   buildSelectedContext,
   CURSOR_VISION_MCP_IMAGE_OMITTED,
   CURSOR_VISION_PROMOTE_NUDGE,
+  cursorIsTrailingToolResultContinuation,
   extractTrailingToolResultImagePromotion,
+  stripTrailingTransparentDeveloperMessages,
 } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import {
@@ -202,7 +204,7 @@ function rootPromptMessages(request: CursorRunRequest, requestScope: CursorBlobR
   }
 
   const externalModel = isCursorExternalWireModel(request.modelId);
-  const lastRawIsToolResult = messages.at(-1)?.role === "toolResult";
+  const lastRawIsToolResult = cursorIsTrailingToolResultContinuation(messages);
   const activeUserIndex = lastRawIsToolResult ? -1 : lastActionIndex(messages);
 
   for (let i = 0; i < messages.length; i++) {
@@ -521,7 +523,10 @@ function conversationTurns(
   if (!messages?.length) return [];
   const end = lastActionIndex(messages);
   const externalModel = isCursorExternalWireModel(request.modelId);
-  const historyEnd = messages.at(-1)?.role === "toolResult" ? messages.length : Math.max(0, end);
+  // Transparent developer suffixes stay out of turns; they are not toolResult history.
+  const historyEnd = cursorIsTrailingToolResultContinuation(messages)
+    ? stripTrailingTransparentDeveloperMessages(messages).length
+    : Math.max(0, end);
   const start = externalModel ? Math.max(0, historyMessageStart) : 0;
   const turns: Uint8Array[] = [];
   let current: { userMessage: Uint8Array; steps: Uint8Array[] } | undefined;
@@ -683,7 +688,7 @@ function buildPreparedCursorRunRequest(
   // Tool-result-only turns resume the remembered Cursor conversation with results in history.
   // Exception: image-bearing tool results (Codex view_image) must ride SelectedImage on a
   // userMessageAction — McpImageContent inline bytes are not hydrated as vision for grok/etc.
-  const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
+  const lastRawIsToolResult = cursorIsTrailingToolResultContinuation(request.rawMessages);
   const selectedImages = request.selectedImages ?? [];
   const promoteToolResultImages = lastRawIsToolResult && selectedImages.length > 0;
   const omitToolResultImageCallIds = promoteToolResultImages

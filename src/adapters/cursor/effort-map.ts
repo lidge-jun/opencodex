@@ -86,11 +86,19 @@ function codexEffortRank(reasoning: string | undefined): "low" | "medium" | "hig
 /**
  * The Cursor effort suffix to use for `baseModelId` given a Codex reasoning effort, or `undefined` when
  * the model takes no suffix (bare). Literal model tiers pass through; unknown efforts clamp by rank.
+ *
+ * Grok 4.5 special case: Codex `none`/`minimal` map to `medium`, not `low`. Cursor Start fixes Grok
+ * at medium and live Connect returns `not_found` for `grok-4.5-low` on some plans; explicit `low`
+ * still passes through for Pro accounts that expose it.
  */
 export function cursorEffortSuffix(baseModelId: string, reasoning: string | undefined): string | undefined {
   const tiers = CURSOR_MODEL_EFFORT_TIERS[baseModelId];
   if (!tiers || tiers.length === 0) return undefined;
   const requested = normalizeRequestedEffort(reasoning);
+  const isGrok45 = baseModelId === "grok-4.5" || baseModelId === "grok-4.5-fast";
+  if (isGrok45 && (requested === "none" || requested === "minimal") && tiers.includes("medium")) {
+    return "medium";
+  }
   if (requested && tiers.includes(requested)) return requested;
   switch (codexEffortRank(reasoning)) {
     case "low":

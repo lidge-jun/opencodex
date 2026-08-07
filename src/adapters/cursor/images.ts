@@ -40,6 +40,9 @@ export const CURSOR_VISION_MAX_EDGE = 2000;
 
 const CURSOR_VISION_JPEG_QUALITIES_DEFAULT = [85, 70, 55, 40] as const;
 const CURSOR_VISION_JPEG_QUALITIES_HIGH = [90, 80, 65, 50] as const;
+/** Stop shrinking below this longest edge when chasing the soft byte cap. */
+const CURSOR_VISION_SOFT_MIN_EDGE = 256;
+const CURSOR_VISION_SOFT_SHRINK = 0.85;
 
 const CURSOR_VISION_PASSTHROUGH_MIME = new Set([
   "image/jpeg",
@@ -326,12 +329,17 @@ export function cursorImageAttachmentPath(uuid: string, mimeType: string): strin
  * Re-encode toward a JPEG under the soft vision cap when Bun can decode the payload.
  * Unsupported MIME or undecodable bytes are omitted (fail-closed) except for tiny
  * undecodable PNG/JPEG/GIF/WebP stubs used in unit tests (pass-through under soft cap).
+ * After the quality ladder, edges shrink iteratively until the soft byte cap is met
+ * (or the min edge floor is hit) so large clipboard PNGs do not leave >softMax JPEGs
+ * that Cursor vision hallucinates on.
  */
 export async function prepareCursorImageForWire(
   image: ResolvedCursorImage,
 ): Promise<PrepareCursorImageOutcome> {
   const mime = image.mimeType.toLowerCase();
   const softMax = softMaxBytesForDetail(image.detail);
+  const qualities = jpegQualitiesForDetail(image.detail);
+  const lowestQuality = qualities[qualities.length - 1]!;
 
   if (!CURSOR_VISION_PASSTHROUGH_MIME.has(mime)) {
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
@@ -357,13 +365,17 @@ export async function prepareCursorImageForWire(
       targetH = Math.max(1, Math.round(height * scale));
     }
 
-    let best: Uint8Array | undefined;
-    for (const quality of jpegQualitiesForDetail(image.detail)) {
+    const encodeAt = async (w: number, h: number, quality: number): Promise<Uint8Array> => {
       let pipeline = new Bun.Image(image.data);
-      if (targetW > 0 && targetH > 0 && (targetW !== width || targetH !== height)) {
-        pipeline = pipeline.resize(targetW, targetH);
+      if (w > 0 && h > 0 && (w !== width || h !== height)) {
+        pipeline = pipeline.resize(w, h);
       }
-      const encoded = new Uint8Array(await pipeline.jpeg({ quality }).bytes());
+      return new Uint8Array(await pipeline.jpeg({ quality }).bytes());
+    };
+
+    let best: Uint8Array | undefined;
+    for (const quality of qualities) {
+      const encoded = await encodeAt(targetW, targetH, quality);
       if (!best || encoded.byteLength < best.byteLength) best = encoded;
       if (encoded.byteLength <= softMax) {
         return {
@@ -372,13 +384,42 @@ export async function prepareCursorImageForWire(
         };
       }
     }
-    if (best && best.byteLength < image.data.byteLength) {
+
+    // Quality ladder missed the soft cap — shrink edges until it fits or we hit the floor.
+    while (
+      best
+      && best.byteLength > softMax
+      && targetW > 0
+      && targetH > 0
+      && Math.max(targetW, targetH) > CURSOR_VISION_SOFT_MIN_EDGE
+    ) {
+      const nextW = Math.max(1, Math.round(targetW * CURSOR_VISION_SOFT_SHRINK));
+      const nextH = Math.max(1, Math.round(targetH * CURSOR_VISION_SOFT_SHRINK));
+      if (Math.max(nextW, nextH) < CURSOR_VISION_SOFT_MIN_EDGE) {
+        const scale = CURSOR_VISION_SOFT_MIN_EDGE / Math.max(targetW, targetH);
+        targetW = Math.max(1, Math.round(targetW * scale));
+        targetH = Math.max(1, Math.round(targetH * scale));
+      } else {
+        targetW = nextW;
+        targetH = nextH;
+      }
+      const encoded = await encodeAt(targetW, targetH, lowestQuality);
+      if (!best || encoded.byteLength < best.byteLength) best = encoded;
+      if (encoded.byteLength <= softMax) {
+        return {
+          status: "ready",
+          image: { ...image, data: encoded, mimeType: "image/jpeg" },
+        };
+      }
+      if (Math.max(targetW, targetH) <= CURSOR_VISION_SOFT_MIN_EDGE) break;
+    }
+
+    if (best) {
       return {
         status: "ready",
         image: { ...image, data: best, mimeType: "image/jpeg" },
       };
     }
-    // Decoded but could not shrink under soft max — still under wire hard cap check later.
     return { status: "ready", image };
   } catch {
     // Tiny undecodable stubs (unit wire tests) may still be referenced as blobIdWithData.
@@ -487,11 +528,12 @@ export function buildSelectedContext(
 export function extractTrailingToolResultImagePromotion(
   messages: readonly OcxMessage[],
 ): { parts: CursorImagePartRef[]; omittedOlder: number; promotedCallIds: Set<string> } {
-  let start = messages.length;
-  while (start > 0 && messages[start - 1]?.role === "toolResult") start -= 1;
+  const effective = stripTrailingTransparentDeveloperMessages(messages);
+  let start = effective.length;
+  while (start > 0 && effective[start - 1]?.role === "toolResult") start -= 1;
 
   const entries: Array<{ callId: string; part: CursorImagePartRef }> = [];
-  for (const message of messages.slice(start)) {
+  for (const message of effective.slice(start)) {
     if (message.role !== "toolResult") continue;
     for (const part of extractCursorImageParts(message.content)) {
       entries.push({ callId: message.toolCallId, part });
@@ -520,10 +562,43 @@ export function extractTrailingToolResultImageParts(
 }
 
 /**
+ * Trailing non-image developer messages (Codex Desktop multi-agent guidance) are
+ * transparent for Cursor vision / tool-continuation detection so `view_image`
+ * still promotes onto SelectedImage.
+ */
+export function isTransparentCursorVisionSuffix(message: OcxMessage): boolean {
+  if (message.role !== "developer") return false;
+  return extractCursorImageParts(message.content).length === 0;
+}
+
+/** Drop trailing transparent developers; returns the same array reference when unchanged. */
+export function stripTrailingTransparentDeveloperMessages(
+  messages: readonly OcxMessage[],
+): readonly OcxMessage[] {
+  let end = messages.length;
+  while (end > 0) {
+    const message = messages[end - 1];
+    if (!message || !isTransparentCursorVisionSuffix(message)) break;
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
+/** True when, ignoring transparent developer suffix, the active turn is a toolResult. */
+export function cursorIsTrailingToolResultContinuation(
+  messages: readonly OcxMessage[] | undefined,
+): boolean {
+  if (!messages?.length) return false;
+  return stripTrailingTransparentDeveloperMessages(messages).at(-1)?.role === "toolResult";
+}
+
+/**
  * Resolve images for the active Cursor turn.
  * - Trailing user/developer: attach images (SelectedImage).
  * - Trailing toolResult run (e.g. Codex `view_image`): same channel — McpImageContent
  *   alone is not consumed as vision for external Cursor models like grok-4.5.
+ * - Trailing non-image developer injections (multi_agent_mode) are stripped first so
+ *   Desktop collab guidance does not hide a view_image promotion.
  */
 export async function resolveActiveCursorImages(
   messages: readonly OcxMessage[] | undefined,
@@ -531,15 +606,16 @@ export async function resolveActiveCursorImages(
 ): Promise<ResolvedCursorImage[]> {
   if (!messages?.length) return [];
 
-  const last = messages.at(-1);
+  const effective = stripTrailingTransparentDeveloperMessages(messages);
+  const last = effective.at(-1);
   if (last?.role === "toolResult") {
-    const { parts } = extractTrailingToolResultImageParts(messages);
+    const { parts } = extractTrailingToolResultImageParts(effective);
     if (parts.length === 0) return [];
     return resolveCursorImageParts(parts, signal);
   }
 
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
+  for (let i = effective.length - 1; i >= 0; i--) {
+    const message = effective[i];
     if (!message) continue;
     if (message.role === "user" || message.role === "developer") {
       return resolveCursorImageParts(extractCursorImageParts(message.content), signal);
