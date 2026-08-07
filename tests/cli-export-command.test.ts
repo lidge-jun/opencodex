@@ -329,4 +329,19 @@ describe("export row filtering", () => {
     expect(models[0]!.namespaced).toBe("a/two");
     expect(models[0]!.inputModalities).toEqual(["text", "image"]);
   });
+
+  test("preserves reasoning metadata from /api/models rows", () => {
+    const [model] = exportModelsFromProxyRows([
+      {
+        provider: "command-code",
+        id: "deepseek/deepseek-v4-flash",
+        namespaced: "command-code/deepseek-deepseek-v4-flash",
+        disabled: false,
+        reasoningEfforts: ["high", "max"],
+        defaultReasoningEffort: "high",
+      },
+    ], config());
+    expect(model?.reasoningEfforts).toEqual(["high", "max"]);
+    expect(model?.defaultReasoningEffort).toBe("high");
+  });
 });

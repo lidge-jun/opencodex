@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
@@ -278,8 +280,22 @@ describe("omp", () => {
   });
 
   test("PI_CONFIG_DIR relocates the whole root, agent directory included", () => {
-    expect(ompConfigPath({ PI_CONFIG_DIR: "/srv/omp" }, "/home/u"))
-      .toBe(join("/srv/omp", "agent", "models.yml"));
+    expect(ompConfigPath({ PI_CONFIG_DIR: "custom-omp" }, "/home/u"))
+      .toBe(join("/home/u", "custom-omp", "agent", "models.yml"));
+  });
+
+  test("an existing models.yaml is honored when models.yml is absent", () => {
+    const home = join(tmpdir(), `ocx-omp-${crypto.randomUUID()}`);
+    const agent = join(home, ".omp", "agent");
+    mkdirSync(agent, { recursive: true });
+    writeFileSync(join(agent, "models.yaml"), "providers: {}\n", "utf8");
+    try {
+      expect(ompConfigPath({}, home)).toBe(join(agent, "models.yaml"));
+      writeFileSync(join(agent, "models.yml"), "providers: {}\n", "utf8");
+      expect(ompConfigPath({}, home)).toBe(join(agent, "models.yml"));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("PI_CODING_AGENT_DIR overrides the agent directory outright", () => {

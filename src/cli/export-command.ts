@@ -62,7 +62,11 @@ export interface ExportCommandDeps extends RuntimeApiDeps {
  * `/api/models` row plus the modality list Pi consumes. The launcher's row type predates
  * the Pi exporter and stops at the fields OpenCode needs.
  */
-type ExportProxyModelRow = OpencodeProxyModelRow & { inputModalities?: string[] };
+type ExportProxyModelRow = OpencodeProxyModelRow & {
+  inputModalities?: string[];
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+};
 
 /** Same authoritativeness rule the serializers apply, for the degraded-count line. */
 function hasContextLimit(model: ExportModel): boolean {
@@ -101,6 +105,9 @@ export function exportModelsFromProxyRows(
     if (entry.contextWindow !== undefined) model.contextWindow = entry.contextWindow;
     const input = modalities.get(entry.namespaced);
     if (input) model.inputModalities = input;
+    const source = rows.find(row => row.namespaced?.trim() === entry.namespaced && row.disabled !== true);
+    if (source?.reasoningEfforts) model.reasoningEfforts = [...source.reasoningEfforts];
+    if (source?.defaultReasoningEffort) model.defaultReasoningEffort = source.defaultReasoningEffort;
     return model;
   });
 }

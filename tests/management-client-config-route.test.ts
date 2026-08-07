@@ -183,6 +183,20 @@ describe("GET /api/client-config", () => {
     expect(provider.models.map(model => model.id)).toContain("a/m1");
   }, 15_000);
 
+  test("native model rows carry reasoning metadata into omp exports", async () => {
+    const rows = await modelRows(baseConfig());
+    const native = rows.find(row => row.native && (row.reasoningEfforts?.length ?? 0) > 0);
+    expect(native).toBeDefined();
+    const doc = buildClientConfig("omp", {
+      baseUrl: "http://127.0.0.1:10100/v1",
+      models: [toExportModel(native!)],
+      config: baseConfig(),
+    }) as OmpGeneratedConfig;
+    const exported = doc.providers[OPENCODE_PROVIDER_ID]!.models[0]!;
+    expect(exported.reasoning).toBe(true);
+    expect(exported.thinking?.efforts.length).toBeGreaterThan(0);
+  }, 15_000);
+
   test("counts describe the emitted document, including models without limits", async () => {
     const config = baseConfig();
     const opencode = await (await clientConfigApi(config, "?client=opencode")).json() as ClientConfigEnvelope;

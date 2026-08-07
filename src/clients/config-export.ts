@@ -345,13 +345,10 @@ export function gajaeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(gajaeHomeDir(env, home), "agent", "models.yml");
 }
 
-/**
- * omp's config root: `~/.omp` (legacy `PI_CONFIG_DIR`/`.pi` no longer used by
- * oh-my-pi 17.x; the agent directory moved to `~/.omp/agent`).
- */
+/** omp's config root, matching oh-my-pi's `path.join(homedir(), PI_CONFIG_DIR || ".omp")`. */
 export function ompHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   const override = env.PI_CONFIG_DIR?.trim();
-  return override && override.length > 0 ? override : join(home, ".omp");
+  return join(home, override && override.length > 0 ? override : ".omp");
 }
 
 /**
@@ -384,7 +381,11 @@ export function ompAgentDir(env: OpencodeLaunchEnv = process.env, home: string =
  * legacy `~/.pi/agent/models.json` the old Pi exporter targets.
  */
 export function ompConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(ompAgentDir(env, home), "models.yml");
+  const agentDir = ompAgentDir(env, home);
+  const yml = join(agentDir, "models.yml");
+  if (existsSync(yml)) return yml;
+  const yaml = join(agentDir, "models.yaml");
+  return existsSync(yaml) ? yaml : yml;
 }
 
 /**

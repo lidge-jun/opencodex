@@ -9,7 +9,13 @@
  * Bodies are unchanged from their previous home; only `export` was added.
  */
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import {
+  catalogModelSlug,
+  nativeDefaultReasoningEffort,
+  nativeModelRows,
+  nativeReasoningEfforts,
+  uniqueCatalogModelsForPublicList,
+} from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
@@ -41,14 +47,20 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.
-  const native: ManagementModelRow[] = nativeModelRows(config).map(row => ({
-    provider: "openai",
-    id: row.slug,
-    namespaced: row.slug,
-    disabled: row.disabled,
-    native: true,
-    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-  }));
+  const native: ManagementModelRow[] = nativeModelRows(config).map(row => {
+    const reasoningEfforts = nativeReasoningEfforts(row.slug);
+    const defaultReasoningEffort = nativeDefaultReasoningEffort(row.slug);
+    return {
+      provider: "openai",
+      id: row.slug,
+      namespaced: row.slug,
+      disabled: row.disabled,
+      native: true,
+      ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+      ...(reasoningEfforts.length > 0 ? { reasoningEfforts } : {}),
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    };
+  });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
     const namespaced = routedSlug(cm.provider, cm.modelId);
     return {
