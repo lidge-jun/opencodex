@@ -89,6 +89,7 @@ describe("providerModelCostsConfigError", () => {
     expect(error).toContain('modelCosts."m"');
     expect(error).toContain("unexpected fields");
     expect(error).toContain("apiKey");
+    expect(error).not.toContain("sk-leak");
     expect(providerModelCostsConfigError(VALID_COSTS)).toBeNull();
   });
 
