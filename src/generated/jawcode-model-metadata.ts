@@ -52,6 +52,8 @@ const DATA: Record<string, readonly Row[]> = {
   "zai": [["glm-4.5",131072,98304,"text",1,null,0,0,0,0],["glm-4.5-air",131072,98304,"text",1,null,0,0,0,0],["glm-4.5-flash",131072,98304,"text",1,null,0,0,0,0],["glm-4.5v",64000,16384,"text,image",1,null,0,0,0,0],["glm-4.6",204800,131072,"text",1,null,0,0,0,0],["glm-4.6v",128000,32768,"text,image",1,null,0,0,0,0],["glm-4.7",204800,131072,"text",1,null,0,0,0,0],["glm-4.7-flash",200000,131072,"text",1,null,0,0,0,0],["glm-4.7-flashx",200000,131072,"text",1,null,0.07,0.4,0.01,0],["glm-5",204800,131072,"text",1,null,0,0,0,0],["glm-5-turbo",200000,131072,"text",1,null,0,0,0,0],["glm-5.1",200000,131072,"text",1,null,0,0,0,0],["glm-5.2",1000000,131072,"text",1,null,0,0,0,0],["glm-5v-turbo",200000,131072,"text,image",1,null,0,0,0,0]],
 };
 
+export const JAWCODE_TABLE_FINGERPRINT = "da3da34ecaa44481f8fa98178c687b880c28d6fb0305fc0093f753a9bd4149d9";
+
 export function resolveJawcodeProvider(provider: string): string | undefined {
   return PROVIDER_ALIASES[provider];
 }

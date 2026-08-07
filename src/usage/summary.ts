@@ -3,6 +3,7 @@ import { canonicalAntigravityUsageModel } from "../providers/antigravity-models"
 import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
 import { estimateComboCost, estimateRequestCost, serviceTierContext } from "./cost";
+import type { RollupDayRow, RollupModelRow, RollupProviderRow, RollupSurfaceKey } from "./rollup";
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -90,6 +91,13 @@ export interface UsageSummary {
   providers: UsageProvider[];
 }
 
+export interface RollupContribution {
+  days: RollupDayRow[];
+  models: RollupModelRow[];
+  providers: RollupProviderRow[];
+  oldestTimestampMs: number | null;
+}
+
 const DAY_MS = 86_400_000;
 export const MAX_USAGE_MODEL_BREAKDOWN_ROWS = 256;
 
@@ -119,7 +127,7 @@ function rangeWindow(range: UsageRange, now: number): { since: number | null; da
   return { since: null, days: 0 };
 }
 
-function localDateKey(ts: number): string {
+export function localDateKey(ts: number): string {
   const d = new Date(ts);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -127,11 +135,39 @@ function localDateKey(ts: number): string {
   return `${y}-${m}-${day}`;
 }
 
-function dayCountForAllRange(entries: PersistedUsageEntry[], now: number): number {
-  if (entries.length === 0) return 1;
-  const oldest = entries.reduce((min, e) => Math.min(min, e.timestamp), entries[0].timestamp);
+function dayCountForAllRange(entries: PersistedUsageEntry[], now: number, rollupOldest: number | null = null): number {
+  const tailOldest = entries.length === 0
+    ? null
+    : entries.reduce((min, entry) => Math.min(min, entry.timestamp), entries[0].timestamp);
+  const oldest = tailOldest === null ? rollupOldest
+    : rollupOldest === null ? tailOldest
+      : Math.min(tailOldest, rollupOldest);
+  if (oldest === null) return 1;
   const days = Math.ceil((now - oldest) / DAY_MS) + 1;
   return Math.max(1, days);
+}
+
+function surfaceKeyMatches(surfaceKey: RollupSurfaceKey, surface: UsageSurface): boolean {
+  if (surface === "claude") return surfaceKey === "claude" || surfaceKey === "claude-desktop";
+  if (surface === "grok") return surfaceKey === "grok";
+  if (surface === "codex") return surfaceKey === "codex";
+  return true;
+}
+
+function localDayStart(date: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) return null;
+  const value = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
+  return Number.isNaN(value) ? null : value;
+}
+
+function rollupDateOverlapsRange(date: string, since: number | null, now: number): boolean {
+  if (since === null) return true;
+  const start = localDayStart(date);
+  if (start === null) return false;
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return start <= now && end.getTime() > since;
 }
 
 function blankTotals(): UsageSummaryTotals {
@@ -162,7 +198,7 @@ function isMeasuredStatus(status: UsageStatus): boolean {
   return status === "reported" || status === "estimated";
 }
 
-interface UsageAttribution {
+export interface UsageAttribution {
   requestId: string;
   provider: string;
   model: string;
@@ -178,7 +214,7 @@ interface UsageAttribution {
  * Google Antigravity collapses wire/compat/suffix ids to picker/call base models so
  * historical effort-variant logs merge with current base-model invocations.
  */
-function usageModelIdentity(
+export function usageModelIdentity(
   provider: string,
   model: string,
   resolvedModel?: string,
@@ -207,7 +243,7 @@ function antigravityUsageModel(provider: string, model: string): string {
   return canonicalAntigravityUsageModel(model);
 }
 
-function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
+export function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
   if (!entry.attempts?.length) {
     return [{
       requestId: entry.requestId,
@@ -228,7 +264,7 @@ function usageAttributions(entry: PersistedUsageEntry): UsageAttribution[] {
   }));
 }
 
-function foldAttributionStatuses(statuses: readonly UsageStatus[]): UsageStatus {
+export function foldAttributionStatuses(statuses: readonly UsageStatus[]): UsageStatus {
   if (statuses.length > 0 && statuses.every(status => status === "unsupported")) {
     return "unsupported";
   }
@@ -298,14 +334,23 @@ function addEstimatedCost(
   totals.estimatedCostUsd += estimate.cost.total;
 }
 
-function buildDayGrid(range: UsageRange, since: number | null, now: number, entries: PersistedUsageEntry[]): UsageDay[] {
+function buildDayGrid(
+  range: UsageRange,
+  since: number | null,
+  now: number,
+  entries: PersistedUsageEntry[],
+  rollupDays: readonly RollupDayRow[] = [],
+  rollupModels: readonly RollupModelRow[] = [],
+  rollupOldest: number | null = null,
+): UsageDay[] {
   const window = rangeWindow(range, now);
-  const days = range === "all" ? dayCountForAllRange(entries, now) : window.days;
+  const days = range === "all" ? dayCountForAllRange(entries, now, rollupOldest) : window.days;
   const grid = new Map<string, UsageDay>();
   // Per-day model breakdown accumulator, keyed by day then provider/model, so the 7d bar chart can
   // render a per-model stacked bar with a hover tooltip without a second pass over the entries.
   const dayModels = new Map<string, Map<string, UsageDayModel>>();
   const dayModelRequests = new Map<string, Set<string>>();
+  const dayModelSeedRequests = new Map<string, number>();
   const bumpDayModel = (dayKey: string, attribution: UsageAttribution): void => {
     let models = dayModels.get(dayKey);
     if (!models) { models = new Map(); dayModels.set(dayKey, models); }
@@ -320,13 +365,35 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     let requests = dayModelRequests.get(requestKey);
     if (!requests) { requests = new Set(); dayModelRequests.set(requestKey, requests); }
     requests.add(attribution.requestId);
-    m.requests = requests.size;
+    m.requests = (dayModelSeedRequests.get(requestKey) ?? 0) + requests.size;
     m.attemptCount += 1;
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
   for (let i = days - 1; i >= 0; i--) {
     const key = localDateKey(now - i * DAY_MS);
     grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
+  }
+  for (const row of rollupDays) {
+    const day = grid.get(row.date) ?? { date: row.date, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] };
+    day.requests += row.statusCounts.reported + row.statusCounts.unreported
+      + row.statusCounts.unsupported + row.statusCounts.estimated;
+    day.measuredRequests += row.statusCounts.reported + row.statusCounts.estimated;
+    day.reportedRequests += row.statusCounts.reported;
+    day.totalTokens += row.tokens.totalTokens;
+    grid.set(row.date, day);
+  }
+  for (const row of rollupModels) {
+    let models = dayModels.get(row.date);
+    if (!models) { models = new Map(); dayModels.set(row.date, models); }
+    const key = usageModelKey(row.provider, row.model);
+    const current = models.get(key) ?? {
+      model: row.model, provider: row.provider, requests: 0, attemptCount: 0, totalTokens: 0,
+    };
+    current.requests += row.requests;
+    current.attemptCount += row.attemptCount;
+    current.totalTokens += row.tokens.totalTokens;
+    models.set(key, current);
+    dayModelSeedRequests.set(`${row.date}\0${key}`, current.requests);
   }
   for (const entry of entries) {
     const key = localDateKey(entry.timestamp);
@@ -349,24 +416,57 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
       const sorted = [...models.values()].sort((a, b) => b.requests - a.requests);
       day.models = retainedBreakdownRows(sorted, overflow => {
         const requests = new Set<string>();
+        let seededRequests = 0;
         let attemptCount = 0;
         let totalTokens = 0;
         for (const model of overflow) {
           attemptCount += model.attemptCount;
           totalTokens += model.totalTokens;
           const requestKey = `${day.date}\0${usageModelKey(model.provider, model.model)}`;
+          seededRequests += dayModelSeedRequests.get(requestKey) ?? 0;
           for (const requestId of dayModelRequests.get(requestKey) ?? []) requests.add(requestId);
         }
-        return { model: "other", provider: "other", requests: requests.size, attemptCount, totalTokens };
+        return { model: "other", provider: "other", requests: seededRequests + requests.size, attemptCount, totalTokens };
       });
     }
   }
   return out;
 }
 
-function buildModels(entries: PersistedUsageEntry[], totalTokens: number): UsageModel[] {
+function buildModels(
+  entries: PersistedUsageEntry[],
+  totalTokens: number,
+  rollupRows: readonly RollupModelRow[] = [],
+): UsageModel[] {
   const byKey = new Map<string, UsageModel>();
   const statusesByKey = new Map<string, Map<string, UsageStatus[]>>();
+  const rollupByKey = new Map<string, { requests: number; measured: number; reported: number; estimated: number }>();
+  for (const row of rollupRows) {
+    const key = usageModelKey(row.provider, row.model);
+    const model = byKey.get(key) ?? {
+      provider: row.provider,
+      model: row.model,
+      ...(row.resolvedModel ? { resolvedModel: row.resolvedModel } : {}),
+      requests: 0, attemptCount: 0, measuredRequests: 0, reportedRequests: 0,
+      estimatedRequests: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, shareRatio: 0,
+    };
+    model.requests += row.requests;
+    model.attemptCount += row.attemptCount;
+    model.measuredRequests += row.foldedStatusCounts.reported + row.foldedStatusCounts.estimated;
+    model.reportedRequests += row.foldedStatusCounts.reported;
+    model.estimatedRequests += row.foldedStatusCounts.estimated;
+    model.totalTokens += row.tokens.totalTokens;
+    model.inputTokens += row.tokens.inputTokens;
+    model.outputTokens += row.tokens.outputTokens;
+    if (row.estimatedCostUsd !== 0) model.estimatedCostUsd = (model.estimatedCostUsd ?? 0) + row.estimatedCostUsd;
+    byKey.set(key, model);
+    const seed = rollupByKey.get(key) ?? { requests: 0, measured: 0, reported: 0, estimated: 0 };
+    seed.requests += row.requests;
+    seed.measured += row.foldedStatusCounts.reported + row.foldedStatusCounts.estimated;
+    seed.reported += row.foldedStatusCounts.reported;
+    seed.estimated += row.foldedStatusCounts.estimated;
+    rollupByKey.set(key, seed);
+  }
   for (const entry of entries) {
     for (const attribution of usageAttributions(entry)) {
       const providerKey = baseProviderLabel(attribution.provider);
@@ -405,7 +505,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   }
   for (const [key, model] of byKey) {
     const groups = statusesByKey.get(key) ?? new Map();
-    model.requests = groups.size;
+    model.requests += groups.size;
     for (const statuses of groups.values()) {
       const status = foldAttributionStatuses(statuses);
       if (isMeasuredStatus(status)) model.measuredRequests += 1;
@@ -442,6 +542,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   const sorted = models.sort((a, b) => b.requests - a.requests);
   return retainedBreakdownRows(sorted, overflow => {
     const statusesByRequest = new Map<string, UsageStatus[]>();
+    let seededRequests = 0;
     const other: UsageModel = {
       provider: "other",
       model: "other",
@@ -464,13 +565,20 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
         other.estimatedCostUsd = (other.estimatedCostUsd ?? 0) + model.estimatedCostUsd;
       }
       const key = usageModelKey(model.provider, model.model);
+      const seed = rollupByKey.get(key);
+      if (seed) {
+        seededRequests += seed.requests;
+        other.measuredRequests += seed.measured;
+        other.reportedRequests += seed.reported;
+        other.estimatedRequests += seed.estimated;
+      }
       for (const [requestId, statuses] of statusesByKey.get(key) ?? []) {
         const combined = statusesByRequest.get(requestId) ?? [];
         combined.push(...statuses);
         statusesByRequest.set(requestId, combined);
       }
     }
-    other.requests = statusesByRequest.size;
+    other.requests = seededRequests + statusesByRequest.size;
     for (const statuses of statusesByRequest.values()) {
       const status = foldAttributionStatuses(statuses);
       if (isMeasuredStatus(status)) other.measuredRequests += 1;
@@ -482,9 +590,27 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   });
 }
 
-function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): UsageProvider[] {
+function buildProviders(
+  entries: PersistedUsageEntry[],
+  totalTokens: number,
+  rollupRows: readonly RollupProviderRow[] = [],
+): UsageProvider[] {
   const byKey = new Map<string, UsageProvider>();
   const statusesByKey = new Map<string, Map<string, UsageStatus[]>>();
+  for (const row of rollupRows) {
+    const provider = byKey.get(row.provider) ?? {
+      provider: row.provider, requests: 0, attemptCount: 0, measuredRequests: 0,
+      reportedRequests: 0, estimatedRequests: 0, totalTokens: 0, shareRatio: 0,
+    };
+    provider.requests += row.requests;
+    provider.attemptCount += row.attemptCount;
+    provider.measuredRequests += row.foldedStatusCounts.reported + row.foldedStatusCounts.estimated;
+    provider.reportedRequests += row.foldedStatusCounts.reported;
+    provider.estimatedRequests += row.foldedStatusCounts.estimated;
+    provider.totalTokens += row.totalTokens;
+    if (row.estimatedCostUsd !== 0) provider.estimatedCostUsd = (provider.estimatedCostUsd ?? 0) + row.estimatedCostUsd;
+    byKey.set(row.provider, provider);
+  }
   for (const entry of entries) {
     for (const attribution of usageAttributions(entry)) {
       const providerKey = baseProviderLabel(attribution.provider);
@@ -515,7 +641,7 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
   }
   for (const [key, provider] of byKey) {
     const groups = statusesByKey.get(key) ?? new Map();
-    provider.requests = groups.size;
+    provider.requests += groups.size;
     for (const statuses of groups.values()) {
       const status = foldAttributionStatuses(statuses);
       if (isMeasuredStatus(status)) provider.measuredRequests += 1;
@@ -552,6 +678,7 @@ export function summarizeUsage(
   range: UsageRange,
   now: number,
   surface: UsageSurface = "all",
+  rollup?: RollupContribution,
 ): UsageSummary {
   const { since } = rangeWindow(range, now);
   const filteredEntries = entries.filter(entry => {
@@ -564,7 +691,34 @@ export function summarizeUsage(
     if (surface === "codex") return entry.surface === undefined;
     return true;
   });
+  const rollupDays = rollup?.days.filter(row =>
+    surfaceKeyMatches(row.surface, surface) && rollupDateOverlapsRange(row.date, since, now)) ?? [];
+  const rollupModels = rollup?.models.filter(row =>
+    surfaceKeyMatches(row.surface, surface) && rollupDateOverlapsRange(row.date, since, now)) ?? [];
+  const rollupProviders = rollup?.providers.filter(row =>
+    surfaceKeyMatches(row.surface, surface) && rollupDateOverlapsRange(row.date, since, now)) ?? [];
   const totals = blankTotals();
+  for (const row of rollupDays) {
+    totals.requests += row.statusCounts.reported + row.statusCounts.unreported
+      + row.statusCounts.unsupported + row.statusCounts.estimated;
+    totals.attemptCount += row.attemptCount;
+    totals.measuredRequests += row.statusCounts.reported + row.statusCounts.estimated;
+    totals.reportedRequests += row.statusCounts.reported;
+    totals.unreportedRequests += row.statusCounts.unreported;
+    totals.unsupportedRequests += row.statusCounts.unsupported;
+    totals.estimatedRequests += row.statusCounts.estimated;
+    totals.inputTokens += row.tokens.inputTokens;
+    totals.outputTokens += row.tokens.outputTokens;
+    totals.cachedInputTokens += row.tokens.cacheReadInputTokens;
+    totals.cacheReadInputTokens += row.tokens.cacheReadInputTokens;
+    totals.cacheCreationInputTokens += row.tokens.cacheCreationInputTokens;
+    totals.reasoningOutputTokens += row.tokens.reasoningOutputTokens;
+    totals.totalTokens += row.tokens.totalTokens;
+    totals.estimatedCostUsd += row.estimatedCostUsd;
+    totals.pricedRequests += row.pricedRequests;
+    totals.unpricedRequests += row.unpricedRequests;
+    totals.unmeteredRequests += row.unmeteredRequests;
+  }
   for (const entry of filteredEntries) {
     bumpStatus(totals, entry.usageStatus);
     totals.attemptCount += entry.attempts?.length ?? 1;
@@ -578,8 +732,11 @@ export function summarizeUsage(
     since,
     generatedAt: now,
     summary: totals,
-    days: buildDayGrid(range, since, now, filteredEntries),
-    models: buildModels(filteredEntries, totals.totalTokens),
-    providers: buildProviders(filteredEntries, totals.totalTokens),
+    days: buildDayGrid(
+      range, since, now, filteredEntries, rollupDays, rollupModels,
+      range === "all" ? rollup?.oldestTimestampMs ?? null : null,
+    ),
+    models: buildModels(filteredEntries, totals.totalTokens, rollupModels),
+    providers: buildProviders(filteredEntries, totals.totalTokens, rollupProviders),
   };
 }

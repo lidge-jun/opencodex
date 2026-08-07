@@ -55,6 +55,7 @@ import {
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
+import { ensureRollupCurrent, readRollupSnapshot } from "../../usage/rollup";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
@@ -191,23 +192,31 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     try {
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
-      const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
+      if (config.usageRollupEnabled !== false) void ensureRollupCurrent();
+      const rollup = config.usageRollupEnabled === false ? null : readRollupSnapshot();
+      const cutlineOffset = rollup?.cutlineOffset ?? 0;
+      const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}\0${cutlineOffset}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
       if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
-      const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
+      const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit, cutlineOffset);
       const revisionReadAt = Date.now();
       const summary = {
-        ...summarizeUsage(snapshot.entries, range, now, surface),
+        ...summarizeUsage(snapshot.entries, range, now, surface, rollup ? {
+          days: rollup.days,
+          models: rollup.models,
+          providers: rollup.providers,
+          oldestTimestampMs: rollup.oldestTimestampMs,
+        } : undefined),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
         entriesDropped: snapshot.entriesDropped,
       };
       setUsageSummaryCacheEntry(cacheKey, {
-        revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
+        revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}\0${cutlineOffset}`,
         expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
         revisionReadAt,
         summary,

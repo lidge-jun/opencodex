@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { deriveJawcodeAliases } from "../src/providers/derive";
 
@@ -55,6 +56,15 @@ const EXCLUDED_MODELS = new Set<string>([
 ]);
 const lines: string[] = [];
 
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function compactRow(values: unknown[]): unknown[] {
   while (values.length > 0 && values[values.length - 1] === undefined) values.pop();
   return values;
@@ -77,7 +87,7 @@ lines.push("");
 lines.push("const PROVIDER_ALIASES: Record<string, string> = " + JSON.stringify(PROVIDER_ALIASES, null, 2) + " as const;");
 lines.push("");
 lines.push("type Row = readonly [id: string, contextWindow?: number | null, maxTokens?: number | null, input?: string | null, reasoning?: 0 | 1 | null, wireModelId?: string | null, costInput?: number | null, costOutput?: number | null, costCacheRead?: number | null, costCacheWrite?: number | null];");
-lines.push("const DATA: Record<string, readonly Row[]> = {");
+const data: Record<string, unknown[][]> = {};
 
 for (const provider of allowedProviders) {
   const models = registry[provider] ?? {};
@@ -96,10 +106,19 @@ for (const provider of allowedProviders) {
       model.cost?.cacheRead,
       model.cost?.cacheWrite,
     ]));
-  lines.push(`  ${JSON.stringify(provider)}: ${JSON.stringify(rows)},`);
+  data[provider] = rows;
 }
 
+lines.push("const DATA: Record<string, readonly Row[]> = {");
+for (const provider of allowedProviders) {
+  lines.push(`  ${JSON.stringify(provider)}: ${JSON.stringify(data[provider])},`);
+}
 lines.push("};");
+lines.push("");
+const tableFingerprint = createHash("sha256")
+  .update(stableStringify({ DATA: data, PROVIDER_ALIASES }))
+  .digest("hex");
+lines.push(`export const JAWCODE_TABLE_FINGERPRINT = ${JSON.stringify(tableFingerprint)};`);
 lines.push("");
 lines.push("export function resolveJawcodeProvider(provider: string): string | undefined {");
 lines.push("  return PROVIDER_ALIASES[provider];");

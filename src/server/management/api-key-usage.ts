@@ -4,6 +4,7 @@ import {
   usageLogRevisionKey,
   type PersistedUsageEntry,
 } from "../../usage/log";
+import { readRollupSnapshot, type RollupKeyRow } from "../../usage/rollup";
 
 /**
  * Per-key usage as the API tab renders it.
@@ -57,6 +58,8 @@ export function rollupApiKeyUsage(
   entries: PersistedUsageEntry[],
   configuredIds: string[],
   now: number = Date.now(),
+  foldedKeys: readonly RollupKeyRow[] = [],
+  foldedAttributionSinceMs: number | null = null,
 ): ApiKeyUsageSnapshot {
   const duplicated = new Set<string>();
   const seen = new Set<string>();
@@ -66,8 +69,19 @@ export function rollupApiKeyUsage(
   }
 
   const totals = new Map<string, { requests7d: number; totalRequests: number; lastUsedAt?: string }>();
-  let attributionSince: number | undefined;
+  let attributionSince: number | undefined = foldedAttributionSinceMs ?? undefined;
   const cutoff = now - SEVEN_DAYS_MS;
+
+  for (const row of foldedKeys) {
+    if (row.admissionKind !== "configured" || !row.apiKeyId) continue;
+    const bucket = totals.get(row.apiKeyId) ?? { requests7d: 0, totalRequests: 0 };
+    bucket.totalRequests += row.requests;
+    if (row.lastUsedAtMs !== null) {
+      const iso = new Date(row.lastUsedAtMs).toISOString();
+      if (!bucket.lastUsedAt || iso > bucket.lastUsedAt) bucket.lastUsedAt = iso;
+    }
+    totals.set(row.apiKeyId, bucket);
+  }
 
   for (const entry of entries) {
     if (!entry.admissionKind) continue;
@@ -136,25 +150,29 @@ export function clearApiKeyUsageCacheForTests(): void {
  * `attributionSince`. Key management working matters more than usage numbers
  * being present, and the GUI already treats an absent field as "no data".
  */
-export async function readApiKeyUsageRollup(configuredIds: string[], maxReadBytes?: number): Promise<ApiKeyUsageSnapshot> {
+export async function readApiKeyUsageRollup(configuredIds: string[], maxReadBytes?: number, rollupEnabled = true): Promise<ApiKeyUsageSnapshot> {
   // JSON rather than a joined string: ids are only validated as non-empty
   // strings, so `["a\0b","c"]` and `["a","b\0c"]` join to the same value and one
   // config could be served the other's cached rollup.
-  const idsKey = JSON.stringify([configuredIds, maxReadBytes]);
+  const idsKey = JSON.stringify([configuredIds, maxReadBytes, rollupEnabled]);
   const now = Date.now();
   try {
-    const observedKey = `${usageLogRevisionKey(currentUsageLogRevision())}|${idsKey}`;
+    // Honor usageRollupEnabled the same way /api/usage does: a disabled rollup
+    // must not keep serving folded history from an orphaned sidecar.
+    const folded = rollupEnabled ? readRollupSnapshot() : null;
+    const cutlineOffset = folded?.cutlineOffset ?? 0;
+    const observedKey = `${usageLogRevisionKey(currentUsageLogRevision())}|${cutlineOffset}|${idsKey}`;
     if (rollupCache?.revisionKey === observedKey && now < rollupCache.expiresAt) {
       return rollupCache.snapshot;
     }
 
-    const snapshot = await readUsageSnapshotForManagement(maxReadBytes);
+    const snapshot = await readUsageSnapshotForManagement(maxReadBytes, cutlineOffset);
     const rolled = {
-      ...rollupApiKeyUsage(snapshot.entries, configuredIds, now),
+      ...rollupApiKeyUsage(snapshot.entries, configuredIds, now, folded?.keys, folded?.attributionSinceMs ?? null),
       ...(snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated ? { historyTruncated: true as const } : {}),
     };
     rollupCache = {
-      revisionKey: `${usageLogRevisionKey(snapshot.revision)}|${idsKey}`,
+      revisionKey: `${usageLogRevisionKey(snapshot.revision)}|${cutlineOffset}|${idsKey}`,
       expiresAt: now + ROLLUP_CACHE_TTL_MS,
       snapshot: rolled,
     };

@@ -1023,6 +1023,7 @@ const clientIntegrationsSchema = z.object({
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
+  usageRollupEnabled: z.boolean().default(true),
   appOwnedMemoryBudgetMb: z.number().int()
     .min(MIN_APP_OWNED_MEMORY_BUDGET_MB)
     .max(MAX_APP_OWNED_MEMORY_BUDGET_MB)
@@ -2717,6 +2718,7 @@ export function getDefaultConfig(): OcxConfig {
   return {
     port: 10100,
     managementUsageMaxReadBytes: 64 * 1024 * 1024,
+    usageRollupEnabled: true,
     appOwnedMemoryBudgetMb: DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES / (1024 * 1024),
     // Fresh/re-initialized configs are already written in the current three-tier
     // OpenAI shape. Mark them as such so startup does not mistake them for a

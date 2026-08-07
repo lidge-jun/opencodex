@@ -108,7 +108,7 @@ describe("GET /api/usage", () => {
 
   test("usage route cache preserves truncation metadata and invalidates when configured byte limit changes", async () => {
     writeFixture(Date.now());
-    saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+    saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256, usageRollupEnabled: false });
     const server = startServer(0);
     try {
       const first = await fetch(new URL("/api/usage?range=all", server.url)).then(response => response.json());
@@ -128,6 +128,7 @@ describe("GET /api/usage", () => {
 
   test("reuses only a compact summary for an unchanged revision", async () => {
     writeFixture(Date.now());
+    saveConfig({ ...baseConfig(), usageRollupEnabled: false });
     const server = startServer(0);
     try {
       const first = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());

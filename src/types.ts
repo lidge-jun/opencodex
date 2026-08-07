@@ -579,6 +579,8 @@ export interface OcxConfig {
   port: number;
   /** Maximum usage-log bytes read for one management snapshot. */
   managementUsageMaxReadBytes?: number;
+  /** Rebuild and merge the derived usage-history rollup cache. Defaults to true. */
+  usageRollupEnabled?: boolean;
   providers: Record<string, OcxProviderConfig>;
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */

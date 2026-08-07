@@ -320,7 +320,7 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
   return normalizeUsageEntry(entry);
 }
 
-function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
+export function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
@@ -523,13 +523,15 @@ async function readUsageEntriesFullCooperatively(
   path: string,
   signal: AbortSignal,
   maxReadBytes: number,
+  fromOffset: number,
 ): Promise<ManagementUsageSnapshot> {
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
     const stat = fstatSync(fd);
     const size = Number(stat.size);
-    const start = Math.max(0, size - maxReadBytes);
+    if (fromOffset > size) throw new Error("usage log changed while it was being read");
+    const start = Math.max(fromOffset, size - maxReadBytes);
     const chunks: Buffer[] = [];
     for (let position = start; position < size;) {
       if (signal.aborted) throw signal.reason;
@@ -540,7 +542,7 @@ async function readUsageEntriesFullCooperatively(
       position += length;
     }
     let bytes = Buffer.concat(chunks);
-    let truncatedPrefixBytes = start;
+    let truncatedPrefixBytes = Math.max(0, start - fromOffset);
     if (start > 0) {
       const preceding = readExactly(fd, 1, start - 1);
       if (preceding === null) throw new Error("usage log changed while it was being read");
@@ -574,7 +576,10 @@ async function readUsageEntriesFullCooperatively(
  * callers share work only when they observed the same exact file revision. Parsed rows
  * are returned to the request and never retained in module state.
  */
-export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES): Promise<{
+export async function readUsageSnapshotForManagement(
+  maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES,
+  fromOffset = 0,
+): Promise<{
   entries: PersistedUsageEntry[];
   revision: UsageLogRevision | null;
   truncatedPrefixBytes: number;
@@ -582,10 +587,11 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   entriesDropped: number;
 }> {
   if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes <= 0) throw new RangeError("management usage max read bytes must be positive");
+  if (!Number.isSafeInteger(fromOffset) || fromOffset < 0) throw new RangeError("management usage from offset must be non-negative");
   const path = usageLogPath();
   if (!existsSync(path)) return { entries: [], revision: null, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 };
   const observed = currentUsageLogRevision();
-  const key = `${usageLogRevisionKey(observed)}\0${maxReadBytes}`;
+  const key = `${usageLogRevisionKey(observed)}\0${maxReadBytes}\0${fromOffset}`;
   const existing = managementUsageReadInflight;
   if (existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
     const shared = await existing.promise;
@@ -593,7 +599,7 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   }
   existing?.abort.abort(new Error("management usage read superseded"));
   const abort = new AbortController();
-  const promise = readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes);
+  const promise = readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes, fromOffset);
   managementUsageReadInflight = { key, promise, startedAt: Date.now(), abort };
   try {
     const snapshot = await promise;
