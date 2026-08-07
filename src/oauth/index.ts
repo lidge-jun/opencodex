@@ -888,6 +888,12 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (existing?.commandCodeVersion !== undefined) {
     next.commandCodeVersion = existing.commandCodeVersion;
   }
+  // User-configured price overlays are operator data, not preset state; a
+  // re-login, add-account, or reauth must not silently drop them from the
+  // Logs/Usage estimates.
+  if (existing?.modelCosts !== undefined) {
+    next.modelCosts = existing.modelCosts;
+  }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
