@@ -15,7 +15,7 @@
  * Display-time estimation only — these rows never affect billing.
  */
 import type { OcxConfig, ProviderCostOverlay } from "../types";
-import type { ExpectedPriceOverlay } from "./expected-prices";
+import { MAX_COST4_RATE, type ExpectedPriceOverlay } from "./expected-prices";
 import { redactSecretString } from "../lib/redact";
 
 const EMPTY: readonly ExpectedPriceOverlay[] = [];
@@ -29,7 +29,10 @@ function validCost4(value: unknown): value is ProviderCostOverlay {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
   return (["input", "output", "cacheRead", "cacheWrite"] as const)
-    .every(key => typeof entry[key] === "number" && Number.isFinite(entry[key]) && entry[key] >= 0);
+    .every(key => typeof entry[key] === "number"
+      && Number.isFinite(entry[key])
+      && entry[key] >= 0
+      && entry[key] <= MAX_COST4_RATE);
 }
 
 /**

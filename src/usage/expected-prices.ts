@@ -18,6 +18,15 @@ export interface Cost4 {
   cacheWrite: number;
 }
 
+/**
+ * Upper bound for a user-configured USD-per-1M-token rate. Real prices are far
+ * below this (the most expensive published models cost a few hundred USD/M);
+ * the bound keeps `rate * tokens / 1e6` finite for any token count a usage log
+ * can plausibly hold, so an overlay cannot overflow the estimate to Infinity
+ * and serialize cost fields as null.
+ */
+export const MAX_COST4_RATE = 1_000_000;
+
 export type ExpectedPriceStatus = "verified" | "verified-derived" | "unverified";
 
 export interface ExpectedPriceOverlay {

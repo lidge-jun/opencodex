@@ -16,6 +16,7 @@ import {
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
+import { MAX_COST4_RATE } from "../usage/expected-prices";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
@@ -556,7 +557,7 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
 
 /** True when `value` is a non-negative finite USD-per-1M-token rate. */
 function validRate(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_COST4_RATE;
 }
 
 /**
