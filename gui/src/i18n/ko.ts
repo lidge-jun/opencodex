@@ -571,6 +571,7 @@ export const ko: Record<TKey, string> = {
   "sub.ultraModePreset": "프리셋 복원",
   "sub.ultraModeLoadFail": "울트라 모드 설정을 불러오지 못했습니다 — 프록시가 실행 중인가요?",
   "sub.ultraModeSaveFail": "울트라 모드 설정 저장에 실패했습니다",
+  "sub.ultraModeSaved": "울트라 모드가 저장되었습니다. 새 Codex 세션부터 적용됩니다.",
 
   // logs
   "logs.title": "요청 로그",

@@ -25,6 +25,8 @@ export interface SubagentDelegationSectionProps {
   ultraMode: UltraModeState;
   ultraSaving: boolean;
   onUltraModeSave: (patch: UltraModePatch) => void;
+  ultraLoadFailed: boolean;
+  onUltraModeRetry: () => void;
 }
 
 export default function SubagentDelegationSection({
@@ -39,12 +41,28 @@ export default function SubagentDelegationSection({
   ultraMode,
   ultraSaving,
   onUltraModeSave,
+  ultraLoadFailed,
+  onUltraModeRetry,
 }: SubagentDelegationSectionProps) {
   const t = useT();
-  const ultraOn = ultraMode.hintText !== null;
+  // A present empty/whitespace hint is an upstream override that suppresses the
+  // Proactive message, so it must render as OFF (and the toggle can install the
+  // preset). Only a nonblank hint is "on".
+  const ultraOn = (ultraMode.hintText ?? "").trim().length > 0;
 
   return (
     <div className="swi-delegation">
+      {ultraLoadFailed && (
+        <div className="swi-delegation-row">
+          <div className="setting-copy">
+            <div className="font-semibold">{t("sub.ultraMode")}</div>
+            <div className="muted setting-hint">{t("sub.ultraModeLoadFail")}</div>
+          </div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onUltraModeRetry}>
+            {t("common.retry")}
+          </button>
+        </div>
+      )}
       <div className="swi-delegation-row">
         <div className="setting-copy">
           <div className="font-semibold">{t("sub.delegation.model")}</div>
@@ -119,7 +137,9 @@ export default function SubagentDelegationSection({
           type="button"
           className={`switch ${ultraOn ? "on" : ""}`}
           onClick={() => onUltraModeSave({ multiAgentModeHintText: ultraOn ? null : ULTRA_MODE_PRESET })}
-          disabled={saving || ultraSaving || !ultraMode.multiAgentV2Enabled}
+          // Turning OFF (clear) is always safe, even when v2 is disabled — a stale
+          // hint would otherwise silently re-activate on the next v2 enable.
+          disabled={saving || ultraSaving || (!ultraOn && !ultraMode.multiAgentV2Enabled)}
           aria-label={t("sub.ultraMode")}
           aria-pressed={ultraOn}
         >

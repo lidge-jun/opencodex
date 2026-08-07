@@ -554,6 +554,7 @@ export const de: Record<TKey, string> = {
   "sub.ultraModePreset": "Voreinstellung wiederherstellen",
   "sub.ultraModeLoadFail": "Ultra-Modus-Einstellungen konnten nicht geladen werden — läuft der Proxy?",
   "sub.ultraModeSaveFail": "Ultra-Modus-Einstellungen konnten nicht gespeichert werden",
+  "sub.ultraModeSaved": "Ultra-Modus gespeichert. Gilt für neue Codex-Sitzungen.",
   "logs.title": "Anfrage-Protokolle",
   "logs.tabLogs": "Protokolle",
   "logs.tabDebug": "Diagnose",

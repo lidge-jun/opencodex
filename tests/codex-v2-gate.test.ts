@@ -318,6 +318,13 @@ describe("multi_agent_mode_hint_text reader/writer", () => {
     expect(setMultiAgentModeHintText(null, path)).toMatchObject({ ok: false });
     expect(readFileSync(path, "utf8")).toBe(before);
   });
+
+  test("reader decodes multi-line basic and literal TOML strings", () => {
+    const basic = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\nProactive\nmulti-line\n\"\"\"\n");
+    expect(getMultiAgentModeHintText(basic)).toBe("Proactive\nmulti-line\n");
+    const literal = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = '''\nLiteral\\path\n'''\n");
+    expect(getMultiAgentModeHintText(literal)).toBe("Literal\\path\n");
+  });
 });
 
 describe("thread-limit-preserving v1/v2 transition", () => {

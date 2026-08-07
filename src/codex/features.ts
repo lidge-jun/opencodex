@@ -31,11 +31,12 @@
  * `configPath` parameter without fighting the module-load-time const in paths.ts.
  */
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, expandUserPath } from "../config";
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
+import { resolveAndPersistCodexRuntime } from "./runtime";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
 export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
@@ -373,11 +374,26 @@ function encodeTomlBasicString(value: string): string {
  */
 function decodeTomlStringToken(token: string): string | null {
   if (token.length < 2) return null;
+  // Multi-line literal string: `'''...'''` verbatim (backslashes not special).
+  if (token.startsWith("'''")) {
+    return token.endsWith("'''") && token.length >= 6
+      ? token.slice(3, -3)
+      : null;
+  }
+  // Multi-line basic string: `"""..."""` with escapes.
+  if (token.startsWith('"""')) {
+    if (!token.endsWith('"""') || token.length < 6) return null;
+    return decodeBasicStringBody(token.slice(3, -3));
+  }
   if (token.startsWith("'")) {
     return token.endsWith("'") ? token.slice(1, -1) : null;
   }
   if (!token.startsWith('"') || !token.endsWith('"')) return null;
-  const body = token.slice(1, -1);
+  return decodeBasicStringBody(token.slice(1, -1));
+}
+
+/** Unescape the body of a TOML basic string (single- or multi-line). */
+function decodeBasicStringBody(body: string): string | null {
   let out = "";
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
@@ -421,6 +437,19 @@ function scanTomlValueEnd(text: string, start: number): number {
   while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
   const first = text[i];
   if (first === '"') {
+    // Multi-line basic string: `"""..."""`. The closing delimiter is a triple
+    // quote; a single or double quote inside the body does not end the token.
+    if (text[i + 1] === '"' && text[i + 2] === '"') {
+      i += 3;
+      while (i < text.length) {
+        if (text[i] === "\\") { i += 2; continue; }
+        if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+          return i + 3;
+        }
+        i++;
+      }
+      return text.length;
+    }
     i++;
     while (i < text.length) {
       if (text[i] === "\\") { i += 2; continue; }
@@ -430,6 +459,12 @@ function scanTomlValueEnd(text: string, start: number): number {
     return text.length;
   }
   if (first === "'") {
+    // Multi-line literal string: `'''...'''`.
+    if (text[i + 1] === "'" && text[i + 2] === "'") {
+      i += 3;
+      const close = text.indexOf("'''", i);
+      return close === -1 ? text.length : close + 3;
+    }
     const close = text.indexOf("'", i + 1);
     return close === -1 ? text.length : close + 1;
   }
@@ -748,7 +783,111 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
  * so the key spelling must match codex-rs exactly.
  */
 export function setMultiAgentModeHintText(value: string | null, configPath?: string): ConfigEditResult {
+  // The upstream `multi_agent_mode_hint_text` key is newer than the v2 config
+  // surface opencodex already manages; an older Codex build rejects the unknown
+  // member (`#[serde(deny_unknown_fields)]`) and fails to start. Probe the
+  // installed runtime binary for the key string and refuse the write when the
+  // binary provably lacks it. A probe that cannot run (missing binary,
+  // unreadable file) does not block: that is the test/hermetic path and the
+  // headless runtime fallback.
+  const probe = probeCodexSupportsModeHint();
+  if (probe === false) {
+    return {
+      ok: false,
+      error: "installed Codex does not support multi_agent_mode_hint_text; update Codex first",
+    };
+  }
   return setV2StringField("multi_agent_mode_hint_text", value, configPath);
+}
+
+/**
+ * True when the installed Codex runtime binary contains the
+ * `multi_agent_mode_hint_text` config key, false when it provably does not, and
+ * null when the probe could not run (missing binary, unreadable file).
+ */
+export function probeCodexSupportsModeHint(): boolean | null {
+  try {
+    const runtime = resolveAndPersistCodexRuntime({ env: process.env }).runtime;
+    const candidates = codexNativeBinaryCandidates(runtime.command);
+    let sawBinary = false;
+    for (const candidate of candidates) {
+      try {
+        if (!existsSync(candidate)) continue;
+        const buf = readFileSync(candidate);
+        sawBinary = true;
+        if (buf.includes(Buffer.from("multi_agent_mode_hint_text", "utf8"))) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    // At least one real binary was inspected and none contained the key.
+    return sawBinary ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Candidate native codex binaries to probe. The resolved `command` may be the
+ * opencodex shim or the npm JS wrapper (`codex.opencodex-real`), neither of
+ * which embeds the Rust config schema. The real binary ships under the
+ * platform package's `vendor/<triple>/bin/codex`; also try adjacent wrappers.
+ */
+function codexNativeBinaryCandidates(command: string): string[] {
+  const out: string[] = [command];
+  // The opencodex autostart shim (`codex`) forwards to `codex.opencodex-real`
+  // (the npm JS wrapper). Add the real wrapper's resolved native binary when it
+  // is discoverable on PATH, so probing the shim still reaches the Rust binary.
+  const pathDirs = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
+  for (const dir of pathDirs) {
+    const wrapper = join(dir, process.platform === "win32" ? "codex.opencodex-real.cmd" : "codex.opencodex-real");
+    if (existsSync(wrapper)) {
+      out.push(wrapper);
+      try {
+        const real = realpathSync(wrapper);
+        const pkgRoot = resolve(real, "..", "..");
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-darwin-x64", "vendor", "x86_64-apple-darwin", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-linux-arm64", "vendor", "aarch64-unknown-linux-musl", "bin", "codex"));
+      } catch {
+        // keep the wrapper as a candidate
+      }
+    }
+  }
+  const managedRoot = process.env.CODEX_MANAGED_PACKAGE_ROOT;
+  if (managedRoot) {
+    out.push(
+      join(managedRoot, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-darwin-x64", "vendor", "x86_64-apple-darwin", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-linux-arm64", "vendor", "aarch64-unknown-linux-musl", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"),
+      join(managedRoot, "node_modules", "@openai", "codex-win32-arm64", "vendor", "aarch64-pc-windows-msvc", "bin", "codex.exe"),
+    );
+  }
+  // Follow the resolved command to its real location. The opencodex shim and
+  // the npm JS wrapper resolve to `@openai/codex/bin/codex.js`; the native
+  // binary lives in the sibling platform package's vendor directory.
+  try {
+    const real = realpathSync(command);
+    const pkgRoot = resolve(real, "..", "..");
+    for (const [pkg, triple, exe] of [
+      ["codex-darwin-arm64", "aarch64-apple-darwin", "codex"],
+      ["codex-darwin-x64", "x86_64-apple-darwin", "codex"],
+      ["codex-linux-x64", "x86_64-unknown-linux-musl", "codex"],
+      ["codex-linux-arm64", "aarch64-unknown-linux-musl", "codex"],
+      ["codex-win32-x64", "x86_64-pc-windows-msvc", "codex.exe"],
+      ["codex-win32-arm64", "aarch64-pc-windows-msvc", "codex.exe"],
+    ] as const) {
+      out.push(join(pkgRoot, "node_modules", "@openai", pkg, "vendor", triple, "bin", exe));
+    }
+  } catch {
+    // leave the raw command as the only candidate
+  }
+  return out;
 }
 
 function editAgentsMaxThreads(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {

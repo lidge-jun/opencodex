@@ -48,6 +48,8 @@ export interface SubagentsWorkspaceProps {
     ultraMode: UltraModeState;
     ultraSaving: boolean;
     onUltraModeSave: (patch: UltraModePatch) => void;
+    ultraLoadFailed: boolean;
+    onUltraModeRetry: () => void;
   };
 }
 
@@ -230,6 +232,8 @@ export default function SubagentsWorkspace({
             ultraMode={delegation.ultraMode}
             ultraSaving={delegation.ultraSaving}
             onUltraModeSave={delegation.onUltraModeSave}
+            ultraLoadFailed={delegation.ultraLoadFailed}
+            onUltraModeRetry={delegation.onUltraModeRetry}
           />
         </section>
       </div>

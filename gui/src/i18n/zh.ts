@@ -564,6 +564,7 @@ export const zh: Record<TKey, string> = {
   "sub.ultraModePreset": "恢复预设",
   "sub.ultraModeLoadFail": "无法加载超级模式设置 — 代理是否在运行？",
   "sub.ultraModeSaveFail": "保存超级模式设置失败",
+  "sub.ultraModeSaved": "超级模式已保存。适用于新的 Codex 会话。",
 
   // logs
   "logs.title": "请求日志",

@@ -27,6 +27,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const delegation = useSubagentDelegation(apiBase);
   const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
   const [ultraSaving, setUltraSaving] = useState(false);
+  const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
 
   // Shared loader for /api/v2 state (multi-agent v2 flag + mode hint). Initial-load
   // failures surface sub.ultraModeLoadFail; refresh failures are rethrown so
@@ -36,6 +37,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return;
     if (signal?.aborted) return;
+    setUltraLoadFailed(false);
     setUltraMode({
       enabled: data.enabled ?? false,
       hintText: data.multiAgentModeHintText ?? null,
@@ -50,6 +52,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     })().catch(() => {
       if (!controller.signal.aborted) {
         setOk(false);
+        setUltraLoadFailed(true);
         setStatus(t("sub.ultraModeLoadFail"));
       }
     });
@@ -59,6 +62,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const saveUltraMode = async (patch: UltraModePatch) => {
     if (ultraSaving) return;
     setUltraSaving(true);
+    setStatus("");
     try {
       const res = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
@@ -67,6 +71,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       });
       await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
       await loadUltraMode();
+      setOk(true);
+      setStatus(t("sub.ultraModeSaved"));
     } catch (error) {
       setOk(false);
       setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
@@ -186,6 +192,8 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           ultraMode,
           ultraSaving,
           onUltraModeSave: patch => { void saveUltraMode(patch); },
+          ultraLoadFailed,
+          onUltraModeRetry: () => { void loadUltraMode().catch(() => { setOk(false); setUltraLoadFailed(true); setStatus(t("sub.ultraModeLoadFail")); }); },
         }}
       />
     </>

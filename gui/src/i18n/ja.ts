@@ -537,6 +537,7 @@ export const ja: Record<TKey, string> = {
   "sub.ultraModePreset": "プリセットを復元",
   "sub.ultraModeLoadFail": "ウルトラモード設定を読み込めませんでした — プロキシは実行中ですか？",
   "sub.ultraModeSaveFail": "ウルトラモード設定の保存に失敗しました",
+  "sub.ultraModeSaved": "ウルトラモードを保存しました。新しい Codex セッションから適用されます。",
 
   // logs
   "logs.title": "リクエストログ",

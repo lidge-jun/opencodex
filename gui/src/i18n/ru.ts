@@ -569,6 +569,7 @@ export const ru: Record<TKey, string> = {
   "sub.ultraModePreset": "Восстановить пресет",
   "sub.ultraModeLoadFail": "Не удалось загрузить настройки ультра-режима — работает ли прокси?",
   "sub.ultraModeSaveFail": "Не удалось сохранить настройки ультра-режима",
+  "sub.ultraModeSaved": "Ультра-режим сохранён. Применяется к новым сеансам Codex.",
 
   // logs
   "logs.title": "Журнал запросов",

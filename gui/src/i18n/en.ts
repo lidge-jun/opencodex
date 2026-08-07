@@ -575,6 +575,7 @@ export const en = {
   "sub.ultraModePreset": "Restore preset",
   "sub.ultraModeLoadFail": "Failed to load Ultra mode settings — is the proxy running?",
   "sub.ultraModeSaveFail": "Failed to save Ultra mode settings",
+  "sub.ultraModeSaved": "Ultra mode saved. Applies to new Codex sessions.",
   "sub.workspace.removeFromFeatured": "Remove {m} from featured",
   "sub.workspace.selectModel": "Select a model",
   "sub.workspace.selectModelDesc": "Pick a model from the list to see details and feature it for spawn_agent.",
