@@ -150,21 +150,20 @@ export function isCatalogProviderId(provider: string): boolean {
   return CATALOG_PROVIDER_IDS.has(provider.toLowerCase());
 }
 
-/** Distinguishable lowercase-dash slug for a provider id (command-code -> commandcode-auth). */
+/** Display-only slug for a provider id. Command Code's two ids share the short `cc` label. */
 export function providerDisplaySlug(provider: string): string {
-  if (provider === "command-code") return "commandcode-auth";
-  if (provider === "commandcode") return "commandcode-api";
+  if (provider === "command-code" || provider === "commandcode") return "cc";
   return provider;
 }
 
 /**
  * Rewrite a `provider/model` route to a clearly distinguishable slug. Command Code's two
- * config ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to
- * `commandcode-auth/...` and `commandcode-api/...` — the same lowercase-dash style the
- * opencode presets use (`opencode-free/mimo-v2.5`, `opencode-go/hy3`). Also collapse a
- * redundant `<provider>-<model>` prefix when the model id itself repeats the family
- * (`command-code/deepseek-deepseek-v4-flash` -> `commandcode-auth/deepseek-v4-flash`).
- * Every other provider keeps the raw route exactly as before.
+ * config ids differ by a single dash (`command-code` vs `commandcode`), and the full
+ * `commandcode-auth/...` / `commandcode-api/...` labels are long enough to truncate in the
+ * UI, so both are shortened to a display-only `cc/...` label. Also collapse a redundant
+ * `<provider>-<model>` prefix when the model id itself repeats the family
+ * (`command-code/deepseek-deepseek-v4-flash` -> `cc/deepseek-v4-flash`). Every other
+ * provider keeps the raw route exactly as before.
  */
 export function formatNamespacedModelId(namespaced: string, _t: TFn): string {
   const slash = namespaced.indexOf("/");
@@ -176,7 +175,7 @@ export function formatNamespacedModelId(namespaced: string, _t: TFn): string {
     // encoded as `<vendor>-<model>`; drop the duplicated `<vendor>-` prefix for display.
     const m = model.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
     if (m && model.startsWith(`${m[1]}-${m[1]}-`)) model = model.slice(m[1]!.length + 1);
-    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${model}`;
+    return `cc/${model}`;
   }
   return namespaced;
 }

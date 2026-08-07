@@ -756,9 +756,9 @@ describe("configured CatalogModel displayName -> catalog display_name", () => {
     const api = entries.find(e => e.slug === "commandcode/deepseek-deepseek-v4-pro");
 
     // Display-only relabel + redundant vendor-prefix drop: routing slugs stay untouched.
-    expect(auth?.display_name).toBe("commandcode-auth/deepseek-v4-flash");
+    expect(auth?.display_name).toBe("cc/deepseek-v4-flash");
     expect(auth?.slug).toBe("command-code/deepseek-deepseek-v4-flash");
-    expect(api?.display_name).toBe("commandcode-api/deepseek-v4-pro");
+    expect(api?.display_name).toBe("cc/deepseek-v4-pro");
     expect(api?.slug).toBe("commandcode/deepseek-deepseek-v4-pro");
   });
 

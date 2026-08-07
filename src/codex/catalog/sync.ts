@@ -202,10 +202,11 @@ export function isExactComboCatalogModel(
 
 /**
  * Friendly Codex-picker label for a routed `provider/model` slug. Command Code's two config
- * ids differ by a single dash (`command-code` vs `commandcode`), so relabel them to the
- * lowercase-dash style the opencode presets use: `commandcode-auth/x` and `commandcode-api/x`.
- * The model-id portion also carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`)
- * that is dropped for display. All other providers keep the raw slug exactly as before.
+ * ids differ by a single dash (`command-code` vs `commandcode`), and the full
+ * `commandcode-auth/x` / `commandcode-api/x` labels are long enough to truncate in the
+ * picker, so both are shortened to a display-only `cc/x` label. The model-id portion also
+ * carries a redundant `<vendor>-` prefix (`deepseek-deepseek-v4-flash`) that is dropped for
+ * display. All other providers keep the raw slug exactly as before.
  */
 function routedDisplayName(slug: string): string {
   const slash = slug.indexOf("/");
@@ -215,7 +216,7 @@ function routedDisplayName(slug: string): string {
   if (provider === "command-code" || provider === "commandcode") {
     const m = model.match(/^([a-z0-9]+)-([a-z0-9]+(?:-[a-z0-9]+)+)$/i);
     if (m && model.startsWith(`${m[1]}-${m[1]}-`)) model = model.slice(m[1]!.length + 1);
-    return `${provider === "command-code" ? "commandcode-auth" : "commandcode-api"}/${model}`;
+    return `cc/${model}`;
   }
   return slug;
 }

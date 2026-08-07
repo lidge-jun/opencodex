@@ -459,12 +459,12 @@ describe("provider-icons", () => {
   });
 
   test("namespaced model ids rewrite the Command Code provider prefix to a distinguishable slug", () => {
-    expect(formatNamespacedModelId("command-code/deepseek-v4-flash", englishT)).toBe("commandcode-auth/deepseek-v4-flash");
-    expect(formatNamespacedModelId("commandcode/deepseek-v4-flash", englishT)).toBe("commandcode-api/deepseek-v4-flash");
+    expect(formatNamespacedModelId("command-code/deepseek-v4-flash", englishT)).toBe("cc/deepseek-v4-flash");
+    expect(formatNamespacedModelId("commandcode/deepseek-v4-flash", englishT)).toBe("cc/deepseek-v4-flash");
     // Redundant vendor prefix in the encoded model id is dropped for display.
-    expect(formatNamespacedModelId("command-code/deepseek-deepseek-v4-flash", englishT)).toBe("commandcode-auth/deepseek-v4-flash");
-    expect(formatNamespacedModelId("commandcode/deepseek-deepseek-v4-pro", englishT)).toBe("commandcode-api/deepseek-v4-pro");
-    expect(formatNamespacedModelId("command-code/claude-fable-5", englishT)).toBe("commandcode-auth/claude-fable-5");
+    expect(formatNamespacedModelId("command-code/deepseek-deepseek-v4-flash", englishT)).toBe("cc/deepseek-v4-flash");
+    expect(formatNamespacedModelId("commandcode/deepseek-deepseek-v4-pro", englishT)).toBe("cc/deepseek-v4-pro");
+    expect(formatNamespacedModelId("command-code/claude-fable-5", englishT)).toBe("cc/claude-fable-5");
     // Other providers keep the raw route untouched.
     expect(formatNamespacedModelId("openai/gpt-5.5", englishT)).toBe("openai/gpt-5.5");
     expect(formatNamespacedModelId("my-custom/thing", englishT)).toBe("my-custom/thing");
