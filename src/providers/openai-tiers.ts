@@ -123,7 +123,9 @@ function rewriteLegacyOpenAiModelList(values: string[] | undefined): string[] | 
  * with the bare model id. Keys without the legacy prefix pass through.
  */
 function rewriteLegacyOpenAiCostKeys(costs: Record<string, ProviderCostOverlay> | undefined): Record<string, ProviderCostOverlay> {
-  const rewritten: Record<string, ProviderCostOverlay> = {};
+  // Null-prototype map so prototype-named model ids (e.g. "__proto__") are
+  // stored as own properties instead of invoking the inherited setter.
+  const rewritten = Object.create(null) as Record<string, ProviderCostOverlay>;
   if (costs) {
     for (const [key, value] of Object.entries(costs)) {
       const canonicalKey = rewriteLegacyOpenAiSelectedId(key);
