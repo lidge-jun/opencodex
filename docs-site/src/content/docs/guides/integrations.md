@@ -16,10 +16,11 @@ file, and removes it again. Seven clients work this way, each with a switch:
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
 
-Paths honor each client's own environment override where it has one, so a relocated
-`HERMES_HOME`, `KIMI_CODE_HOME`, `XDG_CONFIG_HOME`, `PI_CODING_AGENT_DIR`, `PI_CONFIG_DIR`
-or active `OMP_PROFILE` is followed rather than guessed at. The table lists each client's
-default; an override always wins.
+Paths honor each client's own environment override where it has one. For OMP,
+`OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
+uses `PI_CONFIG_DIR` as its root and ignores `PI_CODING_AGENT_DIR`; without a named profile,
+`PI_CODING_AGENT_DIR` wins. Relocated `HERMES_HOME`, `KIMI_CODE_HOME`, and `XDG_CONFIG_HOME`
+paths are likewise followed rather than guessed at. The table lists each client's default.
 
 OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
 file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state

@@ -174,7 +174,9 @@ const OMP_PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const OMP_WINDOWS_RESERVED_PROFILE_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
 
 function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
-  const raw = env.OMP_PROFILE?.trim() || env.PI_PROFILE?.trim();
+  // OMP_PROFILE wins by presence, even when explicitly empty; PI_PROFILE is
+  // only the legacy fallback when the canonical variable is undefined.
+  const raw = env.OMP_PROFILE !== undefined ? env.OMP_PROFILE : env.PI_PROFILE;
   const profile = raw?.trim();
   if (!profile || profile === "default") return undefined;
   if (

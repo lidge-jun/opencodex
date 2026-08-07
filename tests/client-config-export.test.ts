@@ -476,11 +476,13 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.omp.destination({ PI_CONFIG_DIR: "/srv/omp" } as NodeJS.ProcessEnv)).toBe(
       join("/srv/omp", "agent", "models.yml"),
     );
+    // OMP_PROFILE wins by presence, so an explicit blank selects the default
+    // profile instead of inheriting a legacy PI_PROFILE.
     expect(EXPORT_CLIENTS.omp.destination({
       OMP_PROFILE: "  ",
       PI_PROFILE: "legacy",
     } as NodeJS.ProcessEnv)).toBe(
-      join(homedir(), ".omp", "profiles", "legacy", "agent", "models.yml"),
+      join(homedir(), ".omp", "agent", "models.yml"),
     );
   });
 

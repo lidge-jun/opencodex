@@ -164,15 +164,15 @@ override, но файлы на диске никогда не меняются. 
 
 | Флаг | Действие |
 | --- | --- |
-| `--client <opencode\|pi>` | Обязателен. Выбирает клиентский диалект: keyed-объект `provider` у opencode или массив `providers` у Pi. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | Обязателен. Выбирает формат конфигурации клиента. |
 | `--json` | Печатать только JSON-конфиг в stdout, чтобы redirect сохранял побайтно точный вывод. Вся диагностика, включая заметку о записи через `--out`, идёт в stderr. |
 | `--out <path>` | Записать конфиг в `<path>`. Перезаписывать существующий файл не позволит. |
 | `--force` | Разрешить `--out` заменить существующий файл. |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
-ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
@@ -185,6 +185,10 @@ context limit'а (для них клиент применяет собствен
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | нет — блок несёт литерал `opencodex-loopback` |
 | `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | нет — loopback placeholder |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | нет — loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 
 opencode интерполирует `{env:OPENCODEX_OPENCODE_API_KEY}`. Сгенерированный opencodex экспорт для
 Pi не требует переменной окружения и несёт литеральную заглушку `opencodex-loopback`. Это значение

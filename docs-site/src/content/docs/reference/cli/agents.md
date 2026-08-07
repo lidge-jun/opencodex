@@ -158,14 +158,14 @@ models Codex can currently see.
 | Flag | Action |
 | --- | --- |
 | `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | Required. Selects the client config dialect. |
-| `--json` | Print only the generated config bytes on stdout, so a redirect captures byte-exact output. Every diagnostic, including the `--out` write note, goes to stderr. |
-| `--out <path>` | Write the config to `<path>`. Refuses to replace an existing file. |
+| `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
+| `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
-ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
@@ -177,7 +177,7 @@ client applies its own defaults for those).
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
-| `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE`, `PI_CONFIG_DIR`, and `PI_CODING_AGENT_DIR` are honored) | `omp-models.yaml` | none — loopback placeholder |
+| `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` wins over `PI_PROFILE`, even when empty; named profiles use `PI_CONFIG_DIR` and ignore `PI_CODING_AGENT_DIR`, while the default profile lets `PI_CODING_AGENT_DIR` win) | `omp-models.yaml` | none — loopback placeholder |
 | `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | none — loopback placeholder |

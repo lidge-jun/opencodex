@@ -133,15 +133,15 @@ Grok Build モデル フェンスを管理および適用します。
 
 |旗 |アクション |
 | --- | --- |
-| `--client <opencode\|pi>` |必須。クライアント言語を選択します: opencode のキー付き `provider` オブジェクトまたは Pi の `providers` 配列。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` |必須。クライアントの設定形式を選択します。 |
 | `--json` |構成 JSON のみを標準出力に出力するため、リダイレクトはバイト正確な出力をキャプチャします。 `--out` 書き込みメモを含むすべての診断は stderr に送られます。 |
 | `--out <path>` |設定を `<path>` に書き込みます。既存のファイルの置き換えを拒否します。 |
 | `--force` | `--out` が既存のファイルを置き換えることを許可します。 |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
-ocx export --client omp --json > omp-models.yml  # OMP models.yml provider block
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
@@ -152,6 +152,10 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `opencode` | `~/.config/opencode/opencode.json` (設定すると `XDG_CONFIG_HOME` が勝ち) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
 | `pi` | `~/.pi/agent/models.json` | `pi-models.json` | なし - ブロックにリテラル `opencodex-loopback` が入ります |
 | `omp` | `~/.omp/agent/models.yml` | `omp-models.yaml` | なし - loopback placeholder |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | なし - loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 
 opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex が生成する Pi のエクスポートには環境変数が不要で、リテラルのプレースホルダー `opencodex-loopback` が入ります。この値は必須です。Pi はモデル リストを構築する際に `apiKey` を解決し、既存の設定に未設定の環境変数参照がある場合はプロバイダー全体を隠すためです。ループバックでは、生成されたプレースホルダーをプロキシが検査することはありません。
 

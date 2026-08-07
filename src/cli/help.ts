@@ -176,8 +176,8 @@ const helpEntries: Record<string, HelpEntry> = {
     usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae> [--json] [--out <path>] [--force]",
     summary: "Print a client config (opencode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code) wired to the running proxy.",
     details: [
-      "--json prints only the generated config bytes on stdout, so it is safe to redirect to a file.",
-      "--out <path> writes the config there and refuses to replace an existing file without --force.",
+      "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
+      "--out <path> writes the native config there and refuses to replace an existing file without --force.",
       "The config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
     ],
