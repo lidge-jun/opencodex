@@ -43,6 +43,8 @@ export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends
   : never;
 
 const cache = new Map<string, CacheEntry>();
+let globalCacheGeneration = 0;
+const providerCacheGenerations = new Map<string, number>();
 let cacheBytes = 0;
 let oldestCachedProvider: string | undefined;
 let oldestCachedAt: number | null = null;
@@ -155,7 +157,28 @@ export function getStaleCached(provider: string): CatalogModel[] | null {
   return cache.get(provider)?.models ?? null;
 }
 
-export function setCached(provider: string, models: CatalogModel[], now = Date.now()): void {
+/** Capture the cache generation before an asynchronous provider discovery starts. */
+export function captureModelCacheGeneration(provider: string): string {
+  return `${globalCacheGeneration}:${providerCacheGenerations.get(provider) ?? 0}`;
+}
+
+/** Whether a discovery started under {@link captureModelCacheGeneration} may still write. */
+export function isModelCacheGenerationCurrent(provider: string, generation: string): boolean {
+  return generation === captureModelCacheGeneration(provider);
+}
+
+/**
+ * Store a live result unless the cache was cleared while that asynchronous discovery was running.
+ * The optional generation keeps existing direct cache writers unchanged while discovery callers can
+ * prevent a previous OAuth account from repopulating the current account's cache.
+ */
+export function setCached(
+  provider: string,
+  models: CatalogModel[],
+  now = Date.now(),
+  generation?: string,
+): boolean {
+  if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
@@ -166,16 +189,19 @@ export function setCached(provider: string, models: CatalogModel[], now = Date.n
     oldestCachedAt = now;
   }
   enforceAppOwnedMemoryBudget();
+  return true;
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
 export function clearModelCache(provider?: string): void {
   if (provider) {
+    providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
+    globalCacheGeneration += 1;
     cache.clear();
     cacheBytes = 0;
     oldestCachedProvider = undefined;
@@ -201,6 +227,7 @@ export function reconcileModelCacheProviders(
   }
   for (const provider of cache.keys()) {
     if (validProviders.has(provider)) continue;
+    providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
     deleteCachedProvider(provider);
     removedProviders.add(provider);
   }

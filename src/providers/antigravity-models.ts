@@ -4,7 +4,8 @@
 // CLI resolves labels against. The ids below separate CCA wire ids, collapsed picker entries,
 // and hidden compatibility aliases for saved selections. The CCA envelope's `model` field must
 // receive the wire id (for example "Gemini 3.1 Pro (High)" => gemini-pro-agent), while the
-// picker exposes collapsed base models with reasoning-effort routing.
+// picker exposes collapsed base models only when CCA returns every known tier; otherwise each
+// returned wire id remains visible so an unavailable tier cannot be selected.
 
 // ── Wire IDs (what CCA :fetchAvailableModels returns) ──
 const ANTIGRAVITY_WIRE_MODELS = [
@@ -26,6 +27,13 @@ const ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID: Record<string, string> = {
   "gemini-3.1-pro-low": "gemini-3.1-pro",
   "gemini-pro-agent": "gemini-3.1-pro",
 };
+
+const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.entries(
+  ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID,
+).reduce<Record<string, string[]>>((out, [wireId, pickerId]) => {
+  (out[pickerId] ??= []).push(wireId);
+  return out;
+}, {});
 
 // ── Effort ladders per collapsed base model ──
 // Gemini models: effort → wire model suffix (official agy UI pattern).
@@ -183,15 +191,23 @@ export function parseAntigravityAvailableModels(payload: unknown): AntigravityAv
     ids.push("gemini-3.1-flash-image");
   }
 
-  const out: AntigravityAvailableModel[] = [];
-  const seen = new Set<string>();
+  const available = new Map<string, Record<string, unknown>>();
   for (const wireId of ids) {
     const info = antigravityRecord(models[wireId]);
-    if (!info) continue;
-    const id = ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId] ?? wireId;
+    if (!info || available.has(wireId)) continue;
     // Legacy compatibility aliases are deliberately routed to newer wire ids for saved
     // selections. They are not safe as independently discovered picker rows.
     if (ANTIGRAVITY_MODEL_ALIASES[wireId] && ANTIGRAVITY_MODEL_ALIASES[wireId] !== wireId) continue;
+    available.set(wireId, info);
+  }
+
+  const out: AntigravityAvailableModel[] = [];
+  const seen = new Set<string>();
+  for (const [wireId, info] of available) {
+    const pickerId = ANTIGRAVITY_PICKER_MODEL_BY_WIRE_ID[wireId];
+    const completePickerSet = pickerId !== undefined
+      && ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL[pickerId]!.every(id => available.has(id));
+    const id = completePickerSet ? pickerId! : wireId;
     if (seen.has(id)) continue;
     seen.add(id);
     out.push({

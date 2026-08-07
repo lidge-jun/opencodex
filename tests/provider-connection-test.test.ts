@@ -137,7 +137,10 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       projectId: "test-project-id",
     });
     const config = baseConfig({
-      "google-antigravity": structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+      "google-antigravity": {
+        ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+        project: "configured-project",
+      },
     });
 
     const { body } = await probe(config, "google-antigravity");
@@ -147,7 +150,7 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
     expect(seen[0]?.init?.method).toBe("POST");
     expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
-    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "test-project-id" });
+    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
   });
 
   test("a fake key gets the upstream rejection, not a catalog-presence pass", async () => {

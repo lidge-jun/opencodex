@@ -516,7 +516,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
-    if (antigravity && !snapshot?.projectId) {
+    const project = prov.project ?? snapshot?.projectId;
+    if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
@@ -526,7 +527,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
-          body: JSON.stringify({ project: snapshot!.projectId }),
+          body: JSON.stringify({ project }),
           signal: AbortSignal.timeout(8000),
         })
         : await providerOutboundGet(name, prov, modelsUrl, {

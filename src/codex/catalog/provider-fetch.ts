@@ -7,10 +7,12 @@ import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readR
 import {
   clearModelCache,
   clearProviderDiscoveryStatus,
+  captureModelCacheGeneration,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
   isModelsFetchCoolingDown,
+  isModelCacheGenerationCurrent,
   markModelsFetchFailure,
   markProviderDiscoveryFailed,
   markProviderDiscoveryOk,
@@ -852,6 +854,10 @@ async function fetchProviderModelsWithAuth(
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
   ): ProviderModelsResult => ({ models, outcome: { provider: name, state } });
+  // Capture before any credential refresh or outbound await. OAuth account changes clear this
+  // generation, so a request started with the former account cannot later publish its result.
+  const cacheGeneration = captureModelCacheGeneration(name);
+  const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
   if (prov.authMode === "forward") return observed([], "authoritative"); // ChatGPT backend has no /models
   const seedVertexDefault = prov.adapter === "google"
     && prov.googleMode === "vertex"
@@ -920,12 +926,14 @@ async function fetchProviderModelsWithAuth(
       const available = filterCursorConfiguredModelsByLiveDiscovery(configured, liveResult.models);
       const result = available.length > 0 ? available : configured;
       // Count what discovery actually returned, not the configured rows we fall back to.
+      if (!setCached(name, result, Date.now(), cacheGeneration)) return observed(configured, "degraded");
       markProviderDiscoveryOk(name, liveResult.models.length);
-      setCached(name, result);
       return observed(result, "authoritative");
     }
-    markModelsFetchFailure(name);
-    markProviderDiscoveryFailed(name, { reason: "provider" });
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name);
+      markProviderDiscoveryFailed(name, { reason: "provider" });
+    }
     console.warn(
       `[opencodex] Cursor model discovery for "${name}" failed [${liveResult.error}]${liveResult.detail ? `: ${liveResult.detail}` : ""}; using stale/static catalog degradation.`,
     );
@@ -941,7 +949,9 @@ async function fetchProviderModelsWithAuth(
     // matching Cursor's !apiKey → configured degradation and fetch-failure fallback.
     return observed(configured, "degraded");
   }
-  if (effectiveGoogleMode(name, prov) === "cloud-code-assist" && !auth.oauthProjectId) return configured;
+  const cloudCodeAssist = effectiveGoogleMode(name, prov) === "cloud-code-assist";
+  const project = prov.project ?? auth.oauthProjectId;
+  if (cloudCodeAssist && !project) return observed(configured, "degraded");
   const fresh = getFreshCached(name, ttlMs);
   if (fresh) {
     return observed(
@@ -968,6 +978,9 @@ async function fetchProviderModelsWithAuth(
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
+    if (!isCurrentCacheGeneration()) {
+      return { models: failedDiscoveryConfigured, fallback: "configured", shouldLog: false };
+    }
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
@@ -987,7 +1000,7 @@ async function fetchProviderModelsWithAuth(
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
-        body: JSON.stringify({ project: auth.oauthProjectId }),
+        body: JSON.stringify({ project }),
         signal: AbortSignal.timeout(8000),
       })
       : await providerOutboundGet(name, prov, url, {
@@ -1032,17 +1045,17 @@ async function fetchProviderModelsWithAuth(
       }
       return observed(models, "degraded");
     }
-    const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist"
+    const antigravity = cloudCodeAssist
       ? parseAntigravityAvailableModels(bounded.value)
       : undefined;
-    if (effectiveGoogleMode(name, prov) === "cloud-code-assist" && !antigravity) {
+    if (cloudCodeAssist && !antigravity) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
       if (shouldLog) {
         console.warn(
           `[opencodex] Provider model discovery for "${name}" returned malformed CCA model data [status=${res.status}, contentType=${contentType}, urlClass=${urlClass}, fallback=${fallback}].`,
         );
       }
-      return models;
+      return observed(models, "degraded");
     }
     if (antigravity) {
       const live = antigravity.map(model => applyProviderConfigHints(name, prov, {
@@ -1054,9 +1067,9 @@ async function fetchProviderModelsWithAuth(
         ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
         ...(model.inputModalities ? { inputModalities: model.inputModalities } : {}),
       }, contextCap));
+      if (!setCached(name, live, Date.now(), cacheGeneration)) return observed(configured, "degraded");
       markProviderDiscoveryOk(name, live.length);
-      setCached(name, live);
-      return live;
+      return observed(live, "authoritative");
     }
     const extracted = extractProviderModelItems(bounded.value, discovery);
     if (!extracted.ok) {
@@ -1116,8 +1129,8 @@ async function fetchProviderModelsWithAuth(
       && !QUIET_AUTHORITATIVE_CATALOG_PROVIDERS.has(name)) {
       warnDroppedConfiguredIdsOnce(name, droppedConfiguredIds);
     }
+    if (!setCached(name, live, Date.now(), cacheGeneration)) return observed(configured, "degraded");
     markProviderDiscoveryOk(name, liveModelCount);
-    setCached(name, live);
     return observed(live, "authoritative");
   } catch (error) {
     if (error instanceof ProviderOutboundPolicyError) {

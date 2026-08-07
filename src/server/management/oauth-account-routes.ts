@@ -211,7 +211,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     reconcileLiveStateStores();
     clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");
+    const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    clearGatherRoutedModelsInflight();
     // Drop cached/last-good quota rows tied to the removed credential.
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
@@ -284,7 +286,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       resetAnthropicRoutingForManualSelection(body.accountId);
     }
     const { clearModelCache } = await import("../../codex/model-cache");
+    const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    clearGatherRoutedModelsInflight();
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
@@ -409,7 +413,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");
+    const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    clearGatherRoutedModelsInflight();
     const { clearProviderQuotaCache, clearAccountQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     clearAccountQuotaCache(provider);

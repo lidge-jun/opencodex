@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
-import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel } from "../src/providers/antigravity-models";
+import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -116,6 +116,26 @@ describe("antigravity CCA envelope", () => {
       const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, modelId));
       expect(JSON.parse(req.body).model).toBe(modelId);
     }
+  });
+
+  test("collapses a complete CCA Gemini tier set but retains partial sets as wire IDs", () => {
+    const payload = (modelIds: string[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual(["gemini-3.6-flash"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]);
   });
 
   test("throws when no project id is available", async () => {

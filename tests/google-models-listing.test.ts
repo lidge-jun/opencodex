@@ -107,6 +107,7 @@ describe("Antigravity live model discovery", () => {
         adapter: "google",
         authMode: "oauth",
         baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        project: "configured-project",
         liveModels: true,
         models: ["configured-only"],
       }));
@@ -116,16 +117,17 @@ describe("Antigravity live model discovery", () => {
       expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
       expect(seen[0]?.init?.method).toBe("POST");
       expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer access-token");
-      expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "project-id" });
+      expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
       expect(live.map(model => model.id).sort()).toEqual([
         "future-agent-model",
         "gemini-3.1-flash-image",
-        "gemini-3.6-flash",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-low",
       ]);
-      expect(live.find(model => model.id === "gemini-3.6-flash")).toMatchObject({
+      expect(live.find(model => model.id === "gemini-3.6-flash-low")).toMatchObject({
         contextWindow: 1_048_576,
         inputModalities: ["text", "image"],
-        reasoningEfforts: ["low", "medium", "high"],
+        reasoningEfforts: [],
       });
       expect(live.find(model => model.id === "future-agent-model")).toMatchObject({
         contextWindow: 333_333,
@@ -136,17 +138,20 @@ describe("Antigravity live model discovery", () => {
       expect(live.map(model => model.id)).not.toContain("non-agent-command-model");
 
       const catalog = buildCatalogEntries(null, [], live);
-      const flash = catalog.find(entry => entry.slug === "google-antigravity/gemini-3.6-flash");
+      const flashLow = catalog.find(entry => entry.slug === "google-antigravity/gemini-3.6-flash-low");
+      const flashHigh = catalog.find(entry => entry.slug === "google-antigravity/gemini-3.6-flash-high");
       const future = catalog.find(entry => entry.slug === "google-antigravity/future-agent-model");
-      expect(flash).toMatchObject({
+      expect(flashLow).toMatchObject({
         context_window: 1_048_576,
         max_context_window: 1_048_576,
         auto_compact_token_limit: 943_718,
         input_modalities: ["text", "image"],
-        default_reasoning_level: "medium",
       });
-      expect((flash?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
-        .toEqual(["low", "medium", "high", "max", "ultra"]);
+      expect(flashLow).not.toHaveProperty("default_reasoning_level");
+      expect(flashLow?.supported_reasoning_levels).toEqual([]);
+      expect(flashHigh).toBeDefined();
+      expect(catalog.map(entry => entry.slug)).not.toContain("google-antigravity/gemini-3.6-flash");
+      expect(catalog.map(entry => entry.slug)).not.toContain("google-antigravity/gemini-3.6-flash-medium");
       expect(future).toMatchObject({
         context_window: 333_333,
         max_context_window: 333_333,
