@@ -223,6 +223,58 @@ describe("route decision traces (RI-01)", () => {
     expect(trace.candidates.every(candidate => candidate.exclusions.length === MAX_EXCLUSIONS_PER_CANDIDATE)).toBe(true);
   });
 
+  test("normalization only inspects retained reasoning efforts", () => {
+    const reasoningEfforts = Array.from({ length: 1_000_000 }) as unknown[];
+    reasoningEfforts.fill("medium", 0, 8);
+    Object.defineProperty(reasoningEfforts, reasoningEfforts.length - 1, {
+      get: () => { throw new Error("reasoning effort outside the retained range was inspected"); },
+    });
+    const raw = {
+      version: 1,
+      decisionId: "abcdef012345",
+      createdAt: 1,
+      requestedModel: "a/m1",
+      routeKind: "policy",
+      requirements: [],
+      candidates: [{
+        provider: "a",
+        model: "m1",
+        eligible: true,
+        exclusions: [],
+        capability: { reasoningEfforts },
+      }],
+      selected: { candidateIndex: 0, provider: "a", model: "m1", reason: "policy" },
+    };
+
+    expect(normalizeRouteDecisionTrace(raw)?.candidates[0]?.capability?.reasoningEfforts)
+      .toEqual(Array.from({ length: 8 }, () => "medium"));
+  });
+
+  test("normalization rejects sparse retained reasoning efforts", () => {
+    const reasoningEfforts = Array(8) as unknown[];
+    reasoningEfforts[0] = "low";
+    reasoningEfforts[7] = "high";
+    const raw = {
+      version: 1,
+      decisionId: "abcdef012345",
+      createdAt: 1,
+      requestedModel: "a/m1",
+      routeKind: "policy",
+      requirements: [],
+      candidates: [{
+        provider: "a",
+        model: "m1",
+        eligible: true,
+        exclusions: [],
+        capability: { reasoningEfforts },
+      }],
+      selected: { candidateIndex: 0, provider: "a", model: "m1", reason: "policy" },
+    };
+
+    expect(normalizeRouteDecisionTrace(raw)?.candidates[0]?.capability?.reasoningEfforts)
+      .toBeUndefined();
+  });
+
   test("startup hydration reads trace-sized usage rows", () => {
     const trace = oversizedTrace();
     for (let index = 0; index < 20; index++) {

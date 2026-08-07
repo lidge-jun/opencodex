@@ -465,13 +465,20 @@ function parseCapability(raw: unknown, caps: ParseCaps): RouteCapabilityEvidence
   if (image !== undefined) out.image = image;
   const structuredOutput = unknownable(raw.structuredOutput);
   if (structuredOutput !== undefined) out.structuredOutput = structuredOutput;
-  if (Array.isArray(raw.reasoningEfforts)
-    && raw.reasoningEfforts.slice(0, 8).every((value): value is string => typeof value === "string")) {
-    if (raw.reasoningEfforts.some((value: unknown) => typeof value === "string"
+  const rawReasoningEfforts = Array.isArray(raw.reasoningEfforts)
+    ? raw.reasoningEfforts
+    : undefined;
+  const reasoningEfforts = rawReasoningEfforts
+    ? Array.from(
+      { length: Math.min(rawReasoningEfforts.length, 8) },
+      (_, index) => rawReasoningEfforts[index],
+    )
+    : undefined;
+  if (reasoningEfforts
+    && reasoningEfforts.every((value): value is string => typeof value === "string")) {
+    if (reasoningEfforts.some((value: unknown) => typeof value === "string"
       && value.length > MAX_TRACE_STRING)) caps.strings = true;
-    out.reasoningEfforts = raw.reasoningEfforts
-      .slice(0, 8)
-      .map(value => value.slice(0, MAX_TRACE_STRING));
+    out.reasoningEfforts = reasoningEfforts.map(value => value.slice(0, MAX_TRACE_STRING));
   }
   if (raw.serviceTier === "unknown") {
     out.serviceTier = "unknown";
