@@ -8,6 +8,7 @@ import {
   updateComboAliasDraft,
   validateComboDraft,
 } from "../combo-workspace-data";
+import { PUBLIC_MODEL_PREVIEW_PLACEHOLDER } from "../combo-public-model";
 import { IconChevron, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
 import { Notice } from "../ui";
@@ -273,7 +274,7 @@ export function DetailPanel({
                 {t("cws.field.aliasHint")}
               </p>
               <PublicModelPreview
-                model={draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…"}
+                model={draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : PUBLIC_MODEL_PREVIEW_PLACEHOLDER}
               />
             </div>
             <div className="cwi-field">

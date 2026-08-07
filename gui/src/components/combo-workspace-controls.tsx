@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { ComboEffort, ComboStrategy, ComboTarget } from "../combo-workspace-data";
+import { canCopyPublicModelId } from "../combo-public-model";
 import { COMBO_EFFORTS, newComboTarget } from "../combo-workspace-data";
 import { IconArrowDown, IconArrowUp, IconGrip, IconPlus, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
@@ -268,7 +269,7 @@ export function TargetEditor({
 export function PublicModelPreview({ model }: { model: string }) {
   const t = useT();
   const { outcomeFor, copy } = useCopyFeedback<string>();
-  const canCopy = model.trim().length > 0 && model !== "…";
+  const canCopy = canCopyPublicModelId(model);
   const outcome = outcomeFor(model);
   const copyLabel = outcome === "copied"
     ? t("cws.copiedPublicModel")
