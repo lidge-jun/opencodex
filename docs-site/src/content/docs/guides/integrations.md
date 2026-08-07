@@ -80,12 +80,15 @@ changed value and calling it success. You will see the file named and nothing on
 disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
-**Pi, OMP, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
-schemas has a place for the `x-opencodex-api-key` header that a non-loopback bind
-requires, so a generated config would simply be rejected — and writing one by hand does
-not help, because there is nowhere in the file to put the header either. Reaching a
-remote opencodex from these clients is not supported directly; give them loopback access
-instead, through an SSH tunnel or a local forwarder that adds the header.
+**Pi, Kimi Code and Gajae Code only work against a loopback bind.** Their config schemas
+have no place for the `x-opencodex-api-key` header that a non-loopback bind requires, so a
+generated config would simply be rejected. Give them loopback access instead, through an
+SSH tunnel or a local forwarder that adds the header.
+
+**The generated OMP integration is also deliberately loopback-only.** OMP does support
+provider-level headers, but this initial integration does not emit remote
+`x-opencodex-api-key` credential wiring. Manual remote OMP configuration is outside the
+managed integration for now.
 
 **Kimi Code cannot hold an environment reference,** so its config carries an
 `opencodex-loopback` placeholder rather than a key. No real credential is ever written

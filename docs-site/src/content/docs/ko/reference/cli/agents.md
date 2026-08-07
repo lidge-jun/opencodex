@@ -133,7 +133,7 @@ Grok Build model fence를 관리하고 적용합니다.
 
 ### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
-실행 중인 프록시에 연결된 client config를 출력합니다. opencode와 [Pi](/guides/pi/)는 environment variable이 아니라 각자의 JSON config에서 provider를 읽으므로, 이 명령은 `opencodex` provider block, 즉 base URL, model list, 그리고 client의 env reference를 직렬화해서 해당 파일에 병합할 수 있게 해줍니다.
+실행 중인 프록시에 연결할 client config를 출력합니다. 이 명령은 base URL, model list, 그리고 client에 따라 credential reference 또는 `opencodex-loopback` placeholder를 포함한 `opencodex` provider block을 선택한 client의 네이티브 형식으로 직렬화합니다.
 
 프록시는 실행 중이어야 합니다. 이 명령은 실제 포트를 확인하고, `/api/models`를 읽고, 현재 Codex가 볼 수 있는 model만 내보냅니다.
 

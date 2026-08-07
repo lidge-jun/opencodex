@@ -128,7 +128,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
-输出连接到正在运行代理的客户端配置。opencode 和 [Pi](/guides/pi/) 不是从环境变量，而是从各自的 JSON 配置中读取 providers，因此此命令会序列化 `opencodex` provider 块——基础 URL、模型列表以及客户端的环境引用——供你合并进那个文件。
+输出连接到正在运行代理的客户端配置。此命令会以所选客户端的原生格式序列化 `opencodex` provider 块，其中包含基础 URL、模型列表，以及该客户端适用的凭据引用或 `opencodex-loopback` 占位值。
 
 代理必须正在运行；该命令会解析其当前端口，读取 `/api/models`，并且只输出 Codex 当前可见的模型。
 
