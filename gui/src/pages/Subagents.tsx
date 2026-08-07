@@ -31,10 +31,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   // Shared loader for /api/v2 state (multi-agent v2 flag + mode hint). Initial-load
   // failures surface sub.ultraModeLoadFail; refresh failures are rethrown so
   // saveUltraMode can report them against the save action.
-  const loadUltraMode = useCallback(async () => {
-    const res = await fetch(`${apiBase}/api/v2`);
+  const loadUltraMode = useCallback(async (signal?: AbortSignal) => {
+    const res = await fetch(`${apiBase}/api/v2`, { signal });
     const data = await readJsonOrThrow<{ enabled?: boolean; multiAgentModeHintText?: string | null }>(res, t("sub.ultraModeLoadFail"));
     if (!data) return;
+    if (signal?.aborted) return;
     setUltraMode({
       enabled: data.enabled ?? false,
       hintText: data.multiAgentModeHintText ?? null,
@@ -43,16 +44,16 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   }, [apiBase, t]);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     void (async () => {
-      await loadUltraMode();
+      await loadUltraMode(controller.signal);
     })().catch(() => {
-      if (!cancelled) {
+      if (!controller.signal.aborted) {
         setOk(false);
         setStatus(t("sub.ultraModeLoadFail"));
       }
     });
-    return () => { cancelled = true; };
+    return () => { controller.abort(); };
   }, [loadUltraMode, t]);
 
   const saveUltraMode = async (patch: UltraModePatch) => {
