@@ -92,7 +92,7 @@ export function isPlausibleWorkerResultForTests(
   message: Record<string, unknown>,
   requestId: string,
   jobId: string,
-  target?: Pick<CodexHistoryJobRequest, "canonicalStateDbPath" | "canonicalBackupPath">,
+  target?: Pick<CodexHistoryJobRequest, "canonicalStateDbPath" | "canonicalBackupPath" | "operation">,
 ): boolean {
   return isPlausibleWorkerResult(message, requestId, jobId, target);
 }
@@ -109,7 +109,7 @@ function isPlausibleWorkerResult(
   message: Record<string, unknown>,
   requestId: string,
   jobId: string,
-  target?: Pick<CodexHistoryJobRequest, "canonicalStateDbPath" | "canonicalBackupPath">,
+  target?: Pick<CodexHistoryJobRequest, "canonicalStateDbPath" | "canonicalBackupPath" | "operation">,
 ): boolean {
   if (message.requestId !== requestId || message.jobId !== jobId) return false;
   switch (message.type) {
@@ -121,7 +121,8 @@ function isPlausibleWorkerResult(
       if (!target || !message.proof || typeof message.proof !== "object" || Array.isArray(message.proof)) return false;
       {
         const proof = message.proof as Record<string, unknown>;
-        return message.outcome === "converged"
+        return target.operation === "migrate-openai"
+          && message.outcome === "converged"
           && message.rows === 0
           && message.files === 0
           && proof.kind === "verified-noop"

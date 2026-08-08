@@ -1,4 +1,4 @@
-import { countPendingOpencodexHistory, migrateHistoryToOpenai } from "./history-provider";
+import { migrateHistoryToOpenai } from "./history-provider";
 import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "./history-job";
 
 /**
@@ -23,7 +23,6 @@ export interface HistoryMigrationGuardianHandle {
 }
 
 export interface HistoryMigrationGuardianDeps {
-  countFn?: typeof countPendingOpencodexHistory;
   migrateFn?: () => ReturnType<typeof migrateHistoryToOpenai>
     | Promise<ReturnType<typeof migrateHistoryToOpenai>>;
   log?: Pick<Console, "log">;
@@ -43,7 +42,6 @@ function defaultSchedule(fn: () => void, ms: number): { cancel(): void } {
 }
 
 export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps = {}): HistoryMigrationGuardianHandle {
-  const countFn = deps.countFn ?? countPendingOpencodexHistory;
   // The default migration goes through the history job, so the guardian's timer
   // thread never performs the transition itself. A background repair that races
   // an apply or a restore is exactly what H exists to order.
@@ -73,12 +71,8 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
     if (stopped) return;
     ticks++;
     try {
-      try {
-        countFn();
-      } catch {
-        // Advisory probe failures must not suppress the locked worker attempt.
-      }
-      // Locked probe or pending work: attempt one migration pass.
+      // The worker re-derives state under H on every pass; no pre-lock probe is
+      // allowed to stop or suppress this attempt.
       const result = await migrateFn();
       if (!result.failed) {
         const moved = result.rows + ((result as { ejectedRows?: number }).ejectedRows ?? 0);
@@ -98,7 +92,7 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
     }
     if (ticks >= maxTicks) {
       stopped = true;
-      log.log("⚠️ history-migration: Codex history DB stayed locked; legacy threads not yet migrated. Close the Codex app and run 'ocx sync' (or check 'ocx doctor').");
+      log.log("⚠️ history-migration: Could not verify that legacy threads were migrated; the history database may be busy, unavailable, or not yet ready. Run 'ocx sync' (or check 'ocx doctor').");
       return;
     }
     schedule();
