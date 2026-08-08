@@ -1394,6 +1394,40 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // llama-3.3-70b was deprecated by Cerebras on 2026-02-16. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "cerebras", label: "Cerebras", baseUrl: "https://api.cerebras.ai/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://cloud.cerebras.ai/platform/apikeys", defaultModel: "gpt-oss-120b" },
   {
+    // Primary sources checked 2026-08-08:
+    // - https://chutes.ai/pricing documents the shared llm.chutes.ai/v1 OpenAI-compatible
+    //   gateway, Bearer API keys, and chat completions. Its public
+    //   https://llm.chutes.ai/v1/models response supplies supported_features for filtering.
+    // - https://chutes.ai/terms identifies Chutes Global Corp as the platform operator, applies
+    //   to API consumers, and directs production/high-volume automated inference to PAYGO.
+    //   Maintainer: @olddonkey; no affiliation with Chutes.
+    id: "chutes",
+    label: "Chutes",
+    baseUrl: "https://llm.chutes.ai/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://chutes.ai/auth/start",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // The public model catalog cannot prove that a supplied Bearer key is valid.
+    apiKeyValidation: "unknown",
+    // Chutes documents tool calling, but not a provider-wide parallel tool-call contract.
+    parallelToolCalls: false,
+    // The live catalog reports reasoning support, but not a stable effort ladder.
+    reasoningEfforts: [],
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 256 * 1024,
+      maxModels: 128,
+      filter: {
+        // The shared LLM catalog also contains rows without native tool support. Codex needs a
+        // complete agent loop, so admit only rows whose live metadata advertises tools.
+        allOf: [{ path: ["supported_features"], containsAny: ["tools"] }],
+      },
+    },
+    note: "Shared OpenAI-compatible LLM gateway only; live discovery exposes tool-capable rows. User-deployed custom Chute endpoints and non-LLM APIs require a custom provider.",
+  },
+  {
     id: "deepinfra",
     label: "DeepInfra",
     baseUrl: "https://api.deepinfra.com/v1/openai",

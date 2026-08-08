@@ -144,7 +144,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 76 個含まれています。キー方式 64、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 79 個含まれています。キー方式 67、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -176,6 +176,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
@@ -220,6 +221,13 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 > `doubao-seed-2-1-pro-260628` で、静的カタログには現在の DeepSeek と GLM のテキストモデルも
 > 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
 > `deepseek-v4-pro` です。
+
+**Chutes の discovery:** `chutes` preset は Chutes の固定された共有 OpenAI 互換 LLM gateway を使います。
+公開 `/v1/models` catalog から `supported_features` が `tools` を示す行だけを残し、スラッシュを含む
+model id と安全な live metadata を保持します。discovery は 256 KiB と raw 128 行に制限されます。
+catalog は公開されているため、入力したキーの有効性は証明できませんが、chat request は設定済みの
+Bearer キーで認証されます。ユーザーが deploy した custom Chute host と LLM 以外の API は custom
+provider の範囲です。キーは [Chutes dashboard](https://chutes.ai/auth/start) で作成します。
 
 **DeepInfra の discovery:** キー方式の OpenAI Chat Completions プロバイダー `deepinfra` は、
 `openai-chat` アダプターと Bearer API キーを使います。registry が所有する DeepInfra のモデル一覧 URL から

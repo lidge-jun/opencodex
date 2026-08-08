@@ -154,7 +154,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 76 встроенными пресетами: 64 на основе ключей, восемь OAuth, три локальных и
+opencodex поставляется с 79 встроенными пресетами: 67 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -187,6 +187,7 @@ opencodex поставляется с 76 встроенными пресетам
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
@@ -238,6 +239,14 @@ Volcengine Agent Plan использует нативную конечную т�
 > `doubao-seed-2-1-pro-260628`; его статический каталог также включает актуальные текстовые модели
 > DeepSeek и GLM. Для Coding Plan модель по умолчанию — `ark-code-latest`, для Agent Plan —
 > `deepseek-v4-pro`.
+
+**Discovery для Chutes.** Пресет `chutes` использует фиксированный общий OpenAI-совместимый LLM
+gateway Chutes. Из публичного каталога `/v1/models` он оставляет только строки, где
+`supported_features` содержит `tools`, сохраняет нативные id со знаком `/` и безопасные live metadata,
+а также ограничивает discovery размером 256 KiB и 128 исходными строками. Публичный каталог не может
+подтвердить корректность введённого ключа, но chat-запросы всё равно аутентифицируются настроенным
+Bearer-ключом. Пользовательские Chute host и API не для LLM требуют custom provider. Ключ создаётся в
+[дашборде Chutes](https://chutes.ai/auth/start).
 
 **Discovery для DeepInfra.** `deepinfra` — провайдер OpenAI Chat Completions с аутентификацией по
 ключу; он использует адаптер `openai-chat` и Bearer API-ключ. Принадлежащий registry URL списка

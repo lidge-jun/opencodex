@@ -217,7 +217,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 76 built-in presets: 64 key-based, eight OAuth, three local, and one default
+opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -249,6 +249,7 @@ free-experimentation model.
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
@@ -306,6 +307,13 @@ Volcengine Agent Plan uses its native Responses endpoint through `openai-respons
 > calls may suspend the subscription or ban the account. Routing Codex or Claude Code through
 > opencodex is the documented use; pointing other automation at a plan key is not. The
 > pay-as-you-go `volcengine` route carries no such restriction.
+
+**Chutes discovery.** The `chutes` preset uses Chutes' fixed shared OpenAI-compatible LLM gateway.
+It reads the public `/v1/models` catalog, keeps only rows whose `supported_features` advertise
+`tools`, preserves slash-containing model ids and safe live metadata, and caps discovery at 256 KiB
+and 128 raw rows. Because that catalog is public, it cannot prove a supplied key is valid; chat
+requests still use the configured Bearer key. User-deployed custom Chute hosts and Chutes' non-LLM
+APIs remain custom-provider territory. Create a key from the [Chutes dashboard](https://chutes.ai/auth/start).
 
 **DeepInfra discovery.** The key-based `deepinfra` OpenAI Chat Completions provider uses the
 `openai-chat` adapter with a Bearer API key. Its registry-owned model-list URL keeps only rows tagged
@@ -506,4 +514,3 @@ Providers with a live probe: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, and any a6api-backed
 custom provider.
-
