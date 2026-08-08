@@ -1279,6 +1279,8 @@ describe("3-state multi-agent mode", () => {
         multiAgentMode: "default",
         exactComboSlugs: new Set(),
         accountSelectors: [],
+        suppressedBareNativeSlugs: new Set(),
+        disabledNativeAccountSlugs: new Set(),
         multiAgentV2Enabled: true,
       });
       const catalogModels = [{
