@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -383,20 +383,44 @@ describe("native-profile recovery journal storage", () => {
     expect((caught as NativeProfileError).code).toBe("VAULT_INVALID");
   });
 
-  test.skipIf(process.platform === "win32")("rejects a config FIFO without waiting for a writer", () => {
-    const store = context();
-    const configPath = join(store.codexHome, "config.toml");
-    execFileSync("mkfifo", [configPath]);
+  test.skipIf(process.platform === "win32")("rejects a vault replaced by a FIFO after layout validation", () => {
+    const base = mkdtempSync(join(tmpdir(), "ocx-native-profile-fifo-race-"));
+    roots.push(base);
+    const codexHome = join(base, "codex");
+    const configDir = join(base, "opencodex");
+    mkdirSync(codexHome, { mode: 0o700 });
+    mkdirSync(configDir, { mode: 0o700 });
     const moduleUrl = new URL("../src/codex/native-profile-store.ts", import.meta.url).href;
     const childSource = `
-      import { resolveNativeCredentialStoreMode } from ${JSON.stringify(moduleUrl)};
-      const raw = process.env.OCX_NATIVE_PROFILE_CONTEXT;
-      if (!raw) process.exit(90);
+      import { execFileSync } from "node:child_process";
+      import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+      import { readNativeProfileVault, resolveNativeProfileContext } from ${JSON.stringify(moduleUrl)};
+      const codexHome = process.env.OCX_NATIVE_PROFILE_CODEX_HOME;
+      const configDir = process.env.OCX_NATIVE_PROFILE_CONFIG_DIR;
+      if (!codexHome || !configDir) process.exit(90);
+      const store = resolveNativeProfileContext({ codexHome, configDir });
+      mkdirSync(store.rootDir, { recursive: true, mode: 0o700 });
+      writeFileSync(store.vaultPath, "{}\\n", { mode: 0o600 });
+      let replacedWithFifo = false;
+      store[Symbol.for("opencodex.native-profile-store.bounded-read-test-seam")] = {
+        beforeOpen(path) {
+          if (path !== store.vaultPath) process.exit(93);
+          unlinkSync(path);
+          execFileSync("mkfifo", [path]);
+          replacedWithFifo = lstatSync(path).isFIFO();
+        },
+      };
       try {
-        resolveNativeCredentialStoreMode(JSON.parse(raw));
+        readNativeProfileVault(store);
         process.exit(91);
       } catch (error) {
-        if (!error || typeof error !== "object" || !("code" in error) || error.code !== "UNSUPPORTED_AUTH_STORE") {
+        if (
+          !replacedWithFifo
+          || !error
+          || typeof error !== "object"
+          || !("code" in error)
+          || error.code !== "VAULT_INVALID"
+        ) {
           console.error(error);
           process.exit(92);
         }
@@ -404,17 +428,23 @@ describe("native-profile recovery journal storage", () => {
     `;
     const child = spawnSync(process.execPath, ["--eval", childSource], {
       encoding: "utf8",
-      env: { ...process.env, OCX_NATIVE_PROFILE_CONTEXT: JSON.stringify(store) },
+      env: {
+        ...process.env,
+        OCX_NATIVE_PROFILE_CODEX_HOME: codexHome,
+        OCX_NATIVE_PROFILE_CONFIG_DIR: configDir,
+      },
       timeout: 2_000,
     });
 
     if (child.error || child.signal !== null || child.status !== 0) {
       throw new Error([
-        "config FIFO probe did not terminate cleanly",
+        "vault FIFO replacement probe did not terminate cleanly",
         `status=${String(child.status)} signal=${String(child.signal)} error=${String(child.error)}`,
         `stderr=${child.stderr}`,
       ].join("\n"));
     }
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
     expect(child.status).toBe(0);
   });
 
