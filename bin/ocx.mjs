@@ -481,6 +481,10 @@ const launchContext = JSON.stringify({
 });
 const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",
+  // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
+  // console to inherit. Without this flag Windows allocates a visible console for
+  // the long-running Bun child, and closing that window kills the proxy (#1236).
+  windowsHide: true,
   env: {
     ...process.env,
     [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
