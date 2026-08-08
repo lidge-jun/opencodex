@@ -383,7 +383,7 @@ function readBounded(path: string, limit: number, testSeam?: BoundedReadTestSeam
     testSeam?.beforeOpen?.(path);
     const flags = process.platform === "win32"
       ? fsConstants.O_RDONLY
-      : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+      : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK;
     fd = openSync(path, flags);
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile() || opened.size > BigInt(limit)) throw new Error("invalid bounded file");

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -380,6 +381,41 @@ describe("native-profile recovery journal storage", () => {
 
     expect(caught).toBeInstanceOf(NativeProfileError);
     expect((caught as NativeProfileError).code).toBe("VAULT_INVALID");
+  });
+
+  test.skipIf(process.platform === "win32")("rejects a config FIFO without waiting for a writer", () => {
+    const store = context();
+    const configPath = join(store.codexHome, "config.toml");
+    execFileSync("mkfifo", [configPath]);
+    const moduleUrl = new URL("../src/codex/native-profile-store.ts", import.meta.url).href;
+    const childSource = `
+      import { resolveNativeCredentialStoreMode } from ${JSON.stringify(moduleUrl)};
+      const raw = process.env.OCX_NATIVE_PROFILE_CONTEXT;
+      if (!raw) process.exit(90);
+      try {
+        resolveNativeCredentialStoreMode(JSON.parse(raw));
+        process.exit(91);
+      } catch (error) {
+        if (!error || typeof error !== "object" || !("code" in error) || error.code !== "UNSUPPORTED_AUTH_STORE") {
+          console.error(error);
+          process.exit(92);
+        }
+      }
+    `;
+    const child = spawnSync(process.execPath, ["--eval", childSource], {
+      encoding: "utf8",
+      env: { ...process.env, OCX_NATIVE_PROFILE_CONTEXT: JSON.stringify(store) },
+      timeout: 2_000,
+    });
+
+    if (child.error || child.signal !== null || child.status !== 0) {
+      throw new Error([
+        "config FIFO probe did not terminate cleanly",
+        `status=${String(child.status)} signal=${String(child.signal)} error=${String(child.error)}`,
+        `stderr=${child.stderr}`,
+      ].join("\n"));
+    }
+    expect(child.status).toBe(0);
   });
 
   test("reads at most journal cap plus one when the opened journal grows after fstat", () => {
