@@ -274,6 +274,13 @@ describe("registry-owned provider model discovery", () => {
     })).toEqual({});
   });
 
+  test("preserves nested reasoning_parameters effort ladders from OpenAI-compatible catalogs", () => {
+    expect(catalogHintsFromModelsApiItem("example", {
+      id: "reasoning-model",
+      reasoning_parameters: { efforts: ["low", "high", "max"] },
+    })).toEqual({ reasoningEfforts: ["low", "high", "max"] });
+  });
+
   test("drops untrusted metadata tokens containing control characters", () => {
     expect(catalogHintsFromModelsApiItem("example", {
       id: "controlled",
