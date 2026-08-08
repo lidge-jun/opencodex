@@ -207,8 +207,12 @@ export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearc
  */
 function isLoopbackHost(hostname: string): boolean {
   const lower = hostname.toLowerCase();
+  const ipv4 = lower.split(".");
+  const ipv4Loopback = ipv4.length === 4
+    && ipv4[0] === "127"
+    && ipv4.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
   return lower === "localhost" || lower.endsWith(".localhost")
-    || lower === "127.0.0.1" || lower.startsWith("127.")
+    || ipv4Loopback
     || lower === "::1" || lower === "[::1]";
 }
 
