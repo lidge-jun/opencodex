@@ -1013,6 +1013,49 @@ describe("subagent model fallback chain", () => {
     expect(readCodexAgentModelFallback("empty_fallback", dir)).toEqual([]);
   });
 
+  test("scanCodexAgentRolesWithTomlModelFallback recognizes quoted model_fallback keys", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "quoted_key.toml"), [
+      "name = \"quoted_key\"",
+      "model = \"gpt-5.6-sol\"",
+      "\"model_fallback\" = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "literal_key.toml"), [
+      "name = \"literal_key\"",
+      "model = \"gpt-5.6-sol\"",
+      "'model_fallback' = []",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "literal_key",
+      "quoted_key",
+    ]);
+    expect(readCodexAgentModelFallback("quoted_key", dir)).toEqual(["kimi/k3"]);
+    expect(readCodexAgentModelFallback("literal_key", dir)).toEqual([]);
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback ignores model_fallback text inside strings", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "multiline_text.toml"), [
+      "name = \"multiline_text\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"",
+      "model_fallback = []",
+      "\"model_fallback\" = [\"kimi/k3\"]",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "single_line_text.toml"), [
+      "name = \"single_line_text\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"model_fallback = [\\\"kimi/k3\\\"]\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("multiline_text", dir)).toEqual([]);
+  });
+
   test("subagentFallbackGuidanceText renders configured chain", () => {
     expect(subagentFallbackGuidanceText(cfg())).toContain("gpt-5.6-sol");
     expect(subagentFallbackGuidanceText(cfg({ subagentModelFallback: undefined }))).toBe("");

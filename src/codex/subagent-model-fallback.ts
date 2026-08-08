@@ -547,33 +547,168 @@ export function subagentFallbackGuidanceText(config: OcxConfig): string {
   return ` Subagent model fallback chain (priority order): ${quoted}. When the primary model is quota-exhausted, opencodex rewrites thread_spawn requests to the next available model automatically.`;
 }
 
-const TOML_STRING_ARRAY = /^(model_fallback)\s*=\s*\[(.*)\]\s*$/s;
+const TOML_MODEL_FALLBACK_KEY = /^\s*(?:model_fallback|"model_fallback"|'model_fallback')\s*=/;
 
-function parseTomlStringArray(raw: string): string[] {
-  const matches = [...raw.matchAll(/"((?:\\.|[^"\\])*)"/g)];
-  return matches.map(match => match[1]!.replace(/\\"/g, "\""));
+type TomlModelFallbackField = { present: false; value: null } | { present: true; value: string[] | null };
+
+type TomlScanState = {
+  inMultilineString: '"""' | "'''" | null;
+  arrayDepth: number;
+};
+
+/** Track TOML strings, comments, and array brackets on one line. */
+function scanTomlLine(line: string, state: TomlScanState): void {
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (ch === "#") return;
+    if (ch === '"' || ch === "'") {
+      const delimiter = ch.repeat(3);
+      if (line.startsWith(delimiter, i)) {
+        const end = line.indexOf(delimiter, i + 3);
+        if (end === -1) {
+          state.inMultilineString = delimiter as '"""' | "'''";
+          return;
+        }
+        i = end + 3;
+        continue;
+      }
+      i++;
+      while (i < line.length) {
+        if (ch === '"' && line[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (line[i] === ch) break;
+        i++;
+      }
+      i++;
+      continue;
+    }
+    if (ch === "[") state.arrayDepth++;
+    else if (ch === "]") state.arrayDepth = Math.max(0, state.arrayDepth - 1);
+    i++;
+  }
 }
 
-function parseTomlModelFallback(content: string): string[] | null {
-  const match = content.match(/^\s*model_fallback\s*=\s*\[(.*?)\]\s*$/ms);
-  if (!match) return null;
-  return parseTomlStringArray(match[1] ?? "");
+/** Parse a TOML string starting at `start`; returns the decoded value and end offset. */
+function parseTomlStringAt(text: string, start: number): { value: string; end: number } | null {
+  const quote = text[start]!;
+  const delimiter = quote.repeat(3);
+  if (text.startsWith(delimiter, start)) {
+    const end = findTomlMultilineStringEnd(text, start + 3, quote);
+    if (end === -1) return null;
+    let value = text.slice(start + 3, end).trim();
+    if (quote === '"') value = value.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    return { value, end: end + 3 };
+  }
+  let i = start + 1;
+  let value = "";
+  while (i < text.length) {
+    const ch = text[i]!;
+    if (quote === '"' && ch === "\\") {
+      const next = text[i + 1];
+      if (next === '"' || next === "\\") {
+        value += next;
+        i += 2;
+        continue;
+      }
+    }
+    if (ch === quote) return { value, end: i + 1 };
+    value += ch;
+    i++;
+  }
+  return null;
+}
+
+function findTomlMultilineStringEnd(text: string, from: number, quote: string): number {
+  const delimiter = quote.repeat(3);
+  let index = text.indexOf(delimiter, from);
+  while (index !== -1) {
+    if (quote === "'") return index;
+    let backslashes = 0;
+    for (let j = index - 1; j >= 0 && text[j] === "\\"; j--) backslashes += 1;
+    if (backslashes % 2 === 0) return index;
+    index = text.indexOf(delimiter, index + 1);
+  }
+  return -1;
+}
+
+/** Parse a TOML string-array value; null when the value is not an array of strings. */
+function parseTomlStringArrayValue(text: string): string[] | null {
+  const values: string[] = [];
+  let i = 0;
+  const skipIgnored = () => {
+    while (i < text.length) {
+      const ch = text[i]!;
+      if (ch === "#") {
+        while (i < text.length && text[i] !== "\n") i += 1;
+        continue;
+      }
+      if (/\s/.test(ch) || ch === ",") {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+  };
+  skipIgnored();
+  if (text[i] !== "[") return null;
+  i += 1;
+  for (;;) {
+    skipIgnored();
+    if (i >= text.length) return null;
+    const ch = text[i]!;
+    if (ch === "]") return values;
+    if (ch === '"' || ch === "'") {
+      const parsed = parseTomlStringAt(text, i);
+      if (!parsed) return null;
+      values.push(parsed.value);
+      i = parsed.end;
+      continue;
+    }
+    return null;
+  }
+}
+
+/**
+ * TOML-aware, presence-aware parse of the `model_fallback` field. Quoted keys
+ * are recognized, and text inside strings (including multiline strings) is
+ * never treated as a key. `present` is true whenever the key exists, even when
+ * the value is not a readable string array; `value` is null in that case.
+ */
+function parseTomlModelFallbackField(content: string): TomlModelFallbackField {
+  const lines = content.split(/\r?\n/);
+  const state: TomlScanState = { inMultilineString: null, arrayDepth: 0 };
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (state.inMultilineString) {
+      const end = line.indexOf(state.inMultilineString);
+      if (end === -1) continue;
+      state.inMultilineString = null;
+      scanTomlLine(line.slice(end + 3), state);
+      continue;
+    }
+    if (state.arrayDepth === 0) {
+      const key = line.match(TOML_MODEL_FALLBACK_KEY);
+      if (key) {
+        const rest = `${line.slice(key[0].length)}\n${lines.slice(i + 1).join("\n")}`;
+        return { present: true, value: parseTomlStringArrayValue(rest) };
+      }
+    }
+    scanTomlLine(line, state);
+  }
+  return { present: false, value: null };
 }
 
 export function readAgentModelFallback(filePath: string): string[] | null {
   try {
     const content = readFileSync(filePath, "utf8");
-    const multiline = parseTomlModelFallback(content);
-    if (multiline) return multiline;
-    for (const line of content.split(/\r?\n/)) {
-      const match = line.match(TOML_STRING_ARRAY);
-      if (!match) continue;
-      return parseTomlStringArray(match[2] ?? "");
-    }
+    const parsed = parseTomlModelFallbackField(content);
+    return parsed.present ? parsed.value : null;
   } catch {
     return null;
   }
-  return null;
 }
 
 export function readCodexAgentModelFallback(role: string, codexHome = CODEX_HOME): string[] {
@@ -583,16 +718,18 @@ export function readCodexAgentModelFallback(role: string, codexHome = CODEX_HOME
 }
 
 /**
- * True when the role TOML carries a readable `model_fallback` key, even an
- * empty array. Presence is what matters for the doctor scan: Codex >= 0.146
- * rejects the field as unknown and skips the whole role regardless of its value.
+ * True when the role TOML carries a `model_fallback` key, even an empty array.
+ * Presence is what matters for the doctor scan: Codex >= 0.146 rejects the
+ * field as unknown and skips the whole role regardless of its value. Uses the
+ * same TOML-aware parse as the fallback-reading path, so quoted keys count and
+ * text inside string literals does not.
  */
 export function hasCodexAgentModelFallbackField(role: string, codexHome = CODEX_HOME): boolean {
   const file = join(codexHome, "agents", `${role}.toml`);
   if (!existsSync(file)) return false;
   try {
     const content = readFileSync(file, "utf8");
-    return /^\s*model_fallback\s*=/m.test(content);
+    return parseTomlModelFallbackField(content).present;
   } catch {
     return false;
   }
