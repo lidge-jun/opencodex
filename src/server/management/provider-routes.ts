@@ -615,13 +615,20 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
     delete config.providers[name];
+    const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
+    const droppedCustomModels = dropProviderCustomModels(config, name);
     setProviderContextCap(config, name, false);
     save(config);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);
     const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ success: true, ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}), catalogRefresh });
+    return jsonResponse({
+      success: true,
+      ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}),
+      ...(droppedCustomModels > 0 ? { droppedCustomModels } : {}),
+      catalogRefresh,
+    });
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "GET") {

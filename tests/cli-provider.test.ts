@@ -223,6 +223,45 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider remove drops that provider's custom models (#1273)", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        huggingface: { adapter: "openai-chat", baseUrl: "https://api.hf.test/v1", apiKey: "k" },
+      },
+      customModels: [
+        { id: "keep-1", provider: "openai", modelId: "kept-model" },
+        { id: "drop-1", provider: "huggingface", modelId: "DeepSeek-V4-Flash-0731" },
+      ],
+      // Seeded so the assertion below proves removal does not rewrite one-time
+      // ownership: an older binary must keep seeing the same legacy slugs.
+      customModelCatalogMigration: {
+        version: 1,
+        legacyOwnedSlugs: ["huggingface/DeepSeek-V4-Flash-0731", "openai/kept-model"],
+      },
+    });
+    try {
+      const result = runCli(["provider", "remove", "huggingface", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        action: "removed",
+        provider: "huggingface",
+        droppedCustomModels: 1,
+      });
+
+      const config = readConfig(dir);
+      expect(config.customModels).toEqual([
+        { id: "keep-1", provider: "openai", modelId: "kept-model" },
+      ]);
+      expect(config.customModelCatalogMigration).toEqual({
+        version: 1,
+        legacyOwnedSlugs: ["huggingface/DeepSeek-V4-Flash-0731", "openai/kept-model"],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("provider remove rejects default provider", () => {
     const { dir } = freshConfig();
     try {
