@@ -620,6 +620,104 @@ export function applyConfigHintsToCachedModels(name: string, prov: OcxProviderCo
   return models.map(model => applyProviderConfigHints(name, prov, model, contextCap));
 }
 
+
+/**
+ * Last-resort context window for combo member synthesis when discovery and
+ * provider config both omit one. Matches the catalog entry default in
+ * `normalizeRoutedCatalogEntry` so incomplete live rows still catalog.
+ */
+const COMBO_MEMBER_CONTEXT_FALLBACK = 128_000;
+
+/**
+ * Resolve a combo target to a catalog member for derivation.
+ * Prefer discovery metadata; when the target is missing from the gather map or
+ * lacks a positive contextWindow, synthesize from the (registry-enriched)
+ * provider config so combos remain catalogued when targets are configured but
+ * discovery metadata is incomplete. Disabled providers stay unresolved.
+ * When hints still omit contextWindow, prefer known maxInputTokens, else
+ * COMBO_MEMBER_CONTEXT_FALLBACK so a live row without ctx does not drop the
+ * whole combo from the public catalog.
+ */
+export function resolveComboCatalogMember(
+  target: { provider: string; model: string },
+  memberByKey: ReadonlyMap<string, CatalogModel>,
+  providers: ReadonlyMap<string, OcxProviderConfig>,
+  contextCap?: number,
+): CatalogModel | undefined {
+  const existing = memberByKey.get(targetKey(target));
+  const prov = providers.get(target.provider);
+  // Disabled providers never contribute members — even a complete discovery row
+  // is unusable for catalog derivation while the provider is off.
+  if (prov?.disabled === true) return undefined;
+
+  // Complete live/configured rows still honor providerContextCaps so a high
+  // discovery window cannot outrun an operator-configured cap.
+  if (
+    existing
+    && typeof existing.contextWindow === "number"
+    && existing.contextWindow > 0
+  ) {
+    const capped = applyProviderContextCap(existing.contextWindow, contextCap);
+    if (capped === undefined || capped === existing.contextWindow) return existing;
+    const maxInput = typeof existing.maxInputTokens === "number" && existing.maxInputTokens > 0
+      ? Math.min(existing.maxInputTokens, capped)
+      : capped;
+    return {
+      ...existing,
+      contextWindow: capped,
+      maxInputTokens: maxInput,
+      contextCap,
+      contextCapped: true as const,
+    };
+  }
+
+  const base: CatalogModel = existing ?? {
+    id: target.model,
+    provider: target.provider,
+  };
+  const hinted = prov
+    ? applyProviderConfigHints(target.provider, prov, base, contextCap)
+    : base;
+  const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
+    ? hinted.contextWindow
+    : undefined;
+  // Prefer a known positive maxInputTokens over inventing 128k when discovery
+  // advertised an input limit but no context window (common thin /models rows).
+  const knownMaxInput = typeof hinted.maxInputTokens === "number" && hinted.maxInputTokens > 0
+    ? hinted.maxInputTokens
+    : (typeof base.maxInputTokens === "number" && base.maxInputTokens > 0
+      ? base.maxInputTokens
+      : undefined);
+  const uncappedContext = hintedContext
+    ?? knownMaxInput
+    ?? (existing || prov ? COMBO_MEMBER_CONTEXT_FALLBACK : undefined);
+  if (uncappedContext === undefined) return undefined;
+  const usedFallback = hintedContext === undefined;
+  const cappedContext = applyProviderContextCap(uncappedContext, contextCap);
+  const contextWindow = cappedContext ?? uncappedContext;
+  const fallbackCapped = usedFallback
+    && contextCap !== undefined
+    && cappedContext !== undefined
+    && cappedContext !== uncappedContext;
+
+  const inputModalities = hinted.inputModalities ?? base.inputModalities ?? ["text"];
+  const reasoningEfforts = hinted.reasoningEfforts
+    ?? (prov ? configuredReasoningEfforts(prov, target.model) : undefined)
+    ?? base.reasoningEfforts;
+  const maxInputTokens = knownMaxInput !== undefined
+    ? Math.min(knownMaxInput, contextWindow)
+    : contextWindow;
+
+  return {
+    ...hinted,
+    inputModalities,
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    contextWindow,
+    maxInputTokens,
+    ...(fallbackCapped ? { contextCap, contextCapped: true as const } : {}),
+  };
+}
+
 export function isDatedVariantId(liveId: string, configuredId: string): boolean {
   if (!liveId.startsWith(`${configuredId}-`)) return false;
   return /^\d{8}$/.test(liveId.slice(configuredId.length + 1));
@@ -1319,11 +1417,19 @@ async function gatherRoutedModelsUncached(
       if (!memberByKey.has(key)) memberByKey.set(key, synthetic);
     }
   }
+  // Enriched (registry-hydrated) provider clones — shared by combo member synthesis and
+  // custom-model vision-sidecar inheritance so both see the same merged registry view.
+  const enrichedByName = new Map(activeProviders.map(provider => [provider.name, provider.provider]));
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
     const members = combo.targets
-      .map(target => memberByKey.get(targetKey(target)))
+      .map(target => resolveComboCatalogMember(
+        target,
+        memberByKey,
+        enrichedByName,
+        providerContextCap(config, target.provider),
+      ))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
     if (derived) all.push(derived);
@@ -1331,9 +1437,6 @@ async function gatherRoutedModelsUncached(
   }
   replaceLastComboCatalogOmissions(localOmissions);
   all.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
-  // Enriched (registry-hydrated) provider clones, keyed by name — the same view used above so
-  // custom rows get the same noVisionModels / inputModalities treatment as discovered rows.
-  const enrichedByName = new Map(activeProviders.map(provider => [provider.name, provider.provider]));
   // Provider-derived rows keyed by their Codex-facing slug: a custom override replaces the row
   // with the same slug below, so that row's provider capability metadata is the inheritance source.
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));

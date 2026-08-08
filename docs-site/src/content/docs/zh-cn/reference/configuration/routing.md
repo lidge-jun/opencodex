@@ -82,11 +82,12 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 
 即使某个 combo 不能被列出，它仍然可以直接路由。只有当所有目标都暴露出可以交集的能力时，`ocx sync`、`/v1/models` 和 Codex 选择器才会列出它：
 
-- 一个正的 `contextWindow`，来源可以是实时元数据、注册表提示，或提供方的
-  `modelContextWindows` / `contextWindow`；以及
+- 一个正的 `contextWindow`，来源可以是实时元数据、注册表提示、提供方的
+  `modelContextWindows` / `contextWindow`、成员行上已知的正 `maxInputTokens`，或者——当提供方已知且启用但所有来源仍未给出窗口时——
+  保守的 128,000 token 回退（若配置了 `providerContextCaps` 则会按上限夹紧）；以及
 - 非空的 `inputModalities` 交集，其中省略的成员值按 `["text"]` 处理。
 
-如果是一个没有上下文元数据的裸 relay id，或者目标之间的模态互不相交，combo 就会从
+目标位于已禁用提供方（即使有完整 discovery 行）、未知且无 discovery 行的提供方，或目标之间的模态互不相交时，combo 会从
 目录中移除。同步时会输出一条汇总警告，仪表板会将其标记为 **Needs attention**。
 补充上下文元数据、对齐模态，或者把目标模型切换为可发现且兼容的能力。
 

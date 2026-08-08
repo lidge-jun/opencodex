@@ -131,9 +131,14 @@ export function deriveComboCatalogModel(
   const inputModalities = intersectStrings(
     members.map(member => member.inputModalities ?? ["text"]),
   );
-  const reasoningEfforts = intersectStrings(
-    members.map(member => member.reasoningEfforts ?? []),
-  );
+  // Unknown ladders (`undefined`) are wildcards for catalog derivation — same
+  // boundary as the GUI picker. An explicit empty ladder still constrains.
+  const advertisedLadders = members
+    .map(member => member.reasoningEfforts)
+    .filter((ladder): ladder is string[] => ladder !== undefined);
+  const reasoningEfforts = advertisedLadders.length === 0
+    ? []
+    : intersectStrings(advertisedLadders);
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
   const maxInputTokens = Math.min(
     ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
