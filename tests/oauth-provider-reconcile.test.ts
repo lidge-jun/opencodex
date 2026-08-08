@@ -116,6 +116,34 @@ describe("OAuth provider reconciliation", () => {
     expect(config.providers["google-antigravity"].liveModels).toBe(false);
   });
 
+  test("preserves operator-owned static OAuth catalog fields", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          ...structuredClone(OAUTH_PROVIDERS["command-code"].providerConfig),
+          liveModels: false,
+          models: ["deepseek/deepseek-v4-flash", "xiaomi/mimo-v2.5-pro"],
+          modelContextWindows: {
+            "deepseek/deepseek-v4-flash": 1_000_000,
+            "xiaomi/mimo-v2.5-pro": 1_050_000,
+          },
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(false);
+    expect(config.providers["command-code"].models).toEqual([
+      "deepseek/deepseek-v4-flash",
+      "xiaomi/mimo-v2.5-pro",
+    ]);
+    expect(config.providers["command-code"].modelContextWindows).toEqual({
+      "deepseek/deepseek-v4-flash": 1_000_000,
+      "xiaomi/mimo-v2.5-pro": 1_050_000,
+    });
+  });
+
   test("preserves explicit Antigravity live discovery when authMode is omitted or non-OAuth", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-authmode-reconcile-"));
     homes.push(home);

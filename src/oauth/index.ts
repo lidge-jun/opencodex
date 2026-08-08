@@ -777,6 +777,11 @@ function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
   return true;
 }
 
+/** An explicit static catalog is operator-owned and must not be replaced by OAuth presets. */
+function isOperatorOwnedStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false;
+}
+
 export function reconcileOAuthProviders(config: OcxConfig): boolean {
   let changed = migrateLegacyAntigravityStaticCatalog(config);
   for (const [name, prov] of Object.entries(config.providers)) {
@@ -788,6 +793,7 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       changed = true;
     }
     if (!def || prov.authMode !== "oauth") continue;
+    if (isOperatorOwnedStaticCatalog(prov)) continue;
     const preset = def.providerConfig;
     for (const field of OAUTH_RECONCILE_FIELDS) {
       if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
