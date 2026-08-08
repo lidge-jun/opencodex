@@ -83,7 +83,23 @@ function readConfigText(configPath?: string): string | null {
   }
 }
 
-/** Body lines of a TOML table `[header]` up to (not including) the next table header. */
+/**
+ * Body lines of a TOML table `[header]` up to (not including) the next table header.
+ *
+ * The implementation body is deliberately unchanged by #1295 — only this comment
+ * is new. The scanner is line-based and string-unaware, so it ends the table at
+ * the first line matching `/^\s*\[/` even inside a multi-line value. Twenty call
+ * sites in this file consume its output, most of them by matching a regex
+ * against the returned text, so widening that text changes what they match. An
+ * earlier attempt at #1295 made this scanner string-aware and thereby gave
+ * `getAgentsEnabled`, `getAgentsMaxDepth`, and `getMaxConcurrentThreads` three
+ * new wrong answers.
+ *
+ * The readers that matter for #1295 use a real TOML parse instead (see
+ * `parsedTomlTable`). This stays as the fallback for documents that do not
+ * parse, and as the reader for the remaining call sites until they are migrated
+ * the same way.
+ */
 function tomlTableBody(content: string, header: string): string | null {
   const lines = content.split("\n");
   const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -116,6 +132,27 @@ export function isMultiAgentV2Enabled(configPath?: string): boolean {
 export function multiAgentV2EnabledFromConfigText(content: string | null): boolean {
   if (content === null) return false;
 
+  // Prefer a real parse. The hand-written table scanner below cannot distinguish
+  // an assignment from prose that looks like one — a `"""` value containing the
+  // line `enabled = true` reads as the key itself — and TOML has enough value
+  // shapes (multi-line arrays opening on the next line, escapes, comments) that
+  // each near-miss costs another special case (#1295).
+  //
+  // The scanner remains only for a document `Bun.TOML.parse` rejects. That is a
+  // statement about Bun's parser, not about Codex's — the two are separate
+  // implementations and no compatibility evidence is claimed here, so a document
+  // Bun rejects may still be one Codex loads. The fallback is therefore
+  // best-effort and inherits the ambiguity above. It exists because reporting a
+  // feature as disabled on account of an unreadable file presents a failure as
+  // a state.
+  const parsed = parsedTomlTable(content, "features");
+  if (parsed !== null) {
+    const table = plainTomlRecord(parsed.multi_agent_v2);
+    if (table !== null) return table.enabled === true;
+    if (typeof parsed.multi_agent_v2 === "boolean") return parsed.multi_agent_v2;
+    return false;
+  }
+
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
     const enabled = tomlBoolInBody(table, "enabled");
@@ -139,6 +176,30 @@ export function multiAgentV2EnabledFromConfigText(content: string | null): boole
   return false;
 }
 
+function plainTomlRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * A top-level table from a full TOML parse, or null when the document does not
+ * parse. A parsed document with no such table yields `{}` rather than null: that
+ * is a real answer ("no keys"), while null means "could not read, fall back".
+ */
+function parsedTomlTable(content: string, name: string): Record<string, unknown> | null {
+  const toml = (globalThis as { Bun?: { TOML?: { parse(input: string): unknown } } }).Bun?.TOML;
+  if (!toml) return null;
+  try {
+    const root = plainTomlRecord(toml.parse(content));
+    if (root === null) return null;
+    return plainTomlRecord(root[name]) ?? {};
+  } catch {
+    return null;
+  }
+}
+
+
 /**
  * TRUE when the codex `default_mode_request_user_input` feature is enabled in
  * config.toml — lets a Default-mode session pause and ask the user questions
@@ -150,6 +211,11 @@ export function multiAgentV2EnabledFromConfigText(content: string | null): boole
 export function isDefaultModeRequestUserInputEnabled(configPath?: string): boolean {
   const content = readConfigText(configPath);
   if (content === null) return false;
+  // Same reason as the v2 reader: a `"""` value whose prose contains
+  // `default_mode_request_user_input = true` is not an assignment, and a raw
+  // regex over the table body cannot tell the difference (#1295).
+  const parsed = parsedTomlTable(content, "features");
+  if (parsed !== null) return parsed[DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY] === true;
   const features = tomlTableBody(content, "features");
   if (features === null) return false;
   return tomlBoolInBody(features, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY) === true;
@@ -164,6 +230,8 @@ export function isDefaultModeRequestUserInputEnabled(configPath?: string): boole
 export function hasAgentsMaxThreads(configPath?: string): boolean {
   const content = readConfigText(configPath);
   if (content === null) return false;
+  const parsed = parsedTomlTable(content, "agents");
+  if (parsed !== null) return Object.hasOwn(parsed, "max_threads");
   const agents = tomlTableBody(content, "agents");
   if (agents === null) return false;
   return /^\s*max_threads\s*=/m.test(agents);
@@ -173,6 +241,11 @@ export function hasAgentsMaxThreads(configPath?: string): boolean {
 export function getAgentsMaxThreads(configPath?: string): number | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
+  const parsed = parsedTomlTable(content, "agents");
+  if (parsed !== null) {
+    const value = parsed.max_threads;
+    return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
+  }
   const agents = tomlTableBody(content, "agents");
   if (agents === null) return null;
   const m = agents.match(/^\s*max_threads\s*=\s*(\d+)\s*(?:#.*)?$/m);

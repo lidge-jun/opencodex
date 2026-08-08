@@ -126,6 +126,127 @@ describe("features.ts config reader", () => {
     expect(isMultiAgentV2Enabled(fixtureConfig("[features]\nmulti_agent = true\n"))).toBe(false);
   });
 
+  // #1295. Each hazard gets its own test: Bun stops a block at the first failing
+  // expectation, so bundling them would let a later assertion never run and
+  // still look covered by an ablation.
+
+  test("#1295: `enabled` after a multi-line basic string with a bracketed line", () => {
+    // The exact shape `codex features enable` produces — it appends `enabled` at
+    // the END of the table, so a body cut mid-literal drops precisely that key.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[some bracketed first line]\nmore prose\n"""\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: the same hazard with a literal ''' string", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      "[features.multi_agent_v2]\nhint = '''\n[literal bracketed]\n'''\nenabled = true\n",
+    ))).toBe(true);
+  });
+
+  test("#1295: key order does not decide the answer", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nenabled = true\nhint = """\n[bracketed]\n"""\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: prose inside a string is not an assignment", () => {
+    // The value contains the literal text `enabled = true`, and the table has no
+    // such key. Any reader that regex-matches raw body text answers `true` here.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[prose]\nenabled = true\n"""\n[other]\nvalue = 1\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: a delimiter inside a comment is not a delimiter", () => {
+    // Must not swallow [other] and read someone else's key.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\n# """\n[other]\nenabled = true\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: an escaped delimiter does not close a multi-line basic string", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n\\"""\n[bracketed prose]\n"""\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: a multi-line array's nested rows are not table headers", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = [\n  ["nested"],\n]\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: an array may open on the line after `=`", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint =\n[\n  ["nested"],\n]\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: `#` inside a string is content, not a comment", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = "# not a comment"\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: a header-shaped line inside a string is not the table", () => {
+    // This document has no real [features.multi_agent_v2] table at all.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[other]\nhint = """\n[features.multi_agent_v2]\nenabled = true\n"""\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: a following table's key is never read as this feature's", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[x]\n"""\n\n[other]\nenabled = true\n',
+    ))).toBe(false);
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.other]\nenabled = true\n\n[features.multi_agent_v2]\nhint = """\n[x]\n"""\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: an unparseable document still falls back to the scanner", () => {
+    // A rejected parse must not read as "feature disabled"; the hand-written
+    // scanner is the fallback so a malformed file degrades rather than lying.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nenabled = true\nbroken = "unterminated\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: the sibling feature readers do not read prose as an assignment", () => {
+    // These predate #1295 and had the same defect on `dev`: a `"""` value whose
+    // text happens to contain the key was read as the key itself. Fixed with the
+    // same parser-first treatment rather than left inconsistent with the v2
+    // reader that shares the file.
+    expect(isDefaultModeRequestUserInputEnabled(fixtureConfig(
+      '[features]\nhint = """\ndefault_mode_request_user_input = true\n"""\n',
+    ))).toBe(false);
+    expect(isDefaultModeRequestUserInputEnabled(fixtureConfig(
+      '[features]\ndefault_mode_request_user_input = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: [agents] max_threads is read from the parse, not from prose", () => {
+    expect(getAgentsMaxThreads(fixtureConfig(
+      '[agents]\nhint = """\nmax_threads = 7\n"""\n',
+    ))).toBe(null);
+    expect(hasAgentsMaxThreads(fixtureConfig(
+      '[agents]\nhint = """\nmax_threads = 7\n"""\n',
+    ))).toBe(false);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 7\n'))).toBe(7);
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 7\n'))).toBe(true);
+  });
+
+  test("#1295: presence and usability of [agents] max_threads are separate questions", () => {
+    // hasAgentsMaxThreads gates a codex-rs boot refusal — it must not miss a key
+    // that is present but unusable, while the getter correctly declines to return
+    // a value it cannot use. A false negative here is the dangerous direction.
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 0\n'))).toBe(true);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 0\n'))).toBe(null);
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = "seven"\n'))).toBe(true);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = "seven"\n'))).toBe(null);
+  });
+
   test("inline table form + absent file/key -> false", () => {
     expect(isMultiAgentV2Enabled(fixtureConfig("[features]\nmulti_agent_v2 = { enabled = true, tool_namespace = \"agents\" }\n"))).toBe(true);
     expect(isMultiAgentV2Enabled(fixtureConfig("model = \"gpt-5.5\"\n"))).toBe(false);
