@@ -18,7 +18,7 @@ description: Multi-agent surface, guidance при делегировании, pr
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Управляет только developer-guidance, написанным самим opencodex, для v1/v2; не меняет native default'ы агентов, tools, routing, roster'ы и effort cap'ы. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Разрешает записывать `injectionModel` и, при наличии, `injectionEffort` как native default'ы Codex при sync/restart. Требует `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Глобальные fallback-модели для порождённых child-turn'ов в порядке приоритета. |
-| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Модельные цепочки fallback по ключу запрошенной основной модели. Рекомендуемое место для per-role метаданных fallback: запись `model_fallback` в agent TOML Codex заставляет Codex 0.146+ пропустить роль (#1190). |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Модельные цепочки fallback по ключу запрошенной основной модели. Это поддерживаемое место для per-role метаданных fallback; поле `model_fallback` в `$CODEX_HOME/agents/*.toml` поддерживается только как legacy и заставляет Codex 0.146+ пропустить роль (#1190). |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Интервал кэша для availability probe. Значения ниже 1000 ms возвращаются к дефолту. |
 | `effortCap?` | `string` | — | Жёсткий потолок effort для qualifying v2 main-turn'ов и помеченных spawned-child turn'ов. Принимает `low`–`ultra`. |
 | `subagentEffortCap?` | `string` | — | Дополнительный потолок только для spawned-child turn'ов. Если применимы оба cap'а, выигрывает более низкий. |

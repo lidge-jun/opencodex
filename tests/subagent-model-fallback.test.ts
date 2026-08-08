@@ -987,7 +987,7 @@ describe("subagent model fallback chain", () => {
     expect(result?.to).toBe("alibaba-token-plan/qwen3.8-max");
   });
 
-  test("scanCodexAgentRolesWithTomlModelFallback reports only roles carrying the field", () => {
+  test("scanCodexAgentRolesWithTomlModelFallback reports roles carrying the field, including empty arrays", () => {
     const dir = codexHomeFixture();
     writeFileSync(join(dir, "agents", "with_fallback.toml"), [
       "name = \"with_fallback\"",
@@ -995,12 +995,22 @@ describe("subagent model fallback chain", () => {
       "model_fallback = [\"kimi/k3\"]",
       "",
     ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "empty_fallback.toml"), [
+      "name = \"empty_fallback\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = []",
+      "",
+    ].join("\n"), "utf8");
     writeFileSync(join(dir, "agents", "clean.toml"), [
       "name = \"clean\"",
       "model = \"gpt-5.6-sol\"",
       "",
     ].join("\n"), "utf8");
-    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual(["with_fallback"]);
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "empty_fallback",
+      "with_fallback",
+    ]);
+    expect(readCodexAgentModelFallback("empty_fallback", dir)).toEqual([]);
   });
 
   test("subagentFallbackGuidanceText renders configured chain", () => {

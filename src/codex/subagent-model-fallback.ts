@@ -583,14 +583,24 @@ export function readCodexAgentModelFallback(role: string, codexHome = CODEX_HOME
 }
 
 /**
- * Roles whose TOML still carries `model_fallback`. Codex >= 0.146 rejects the
- * entire role file as an unknown field (#1190), so these files are skipped by
- * the native runtime even though opencodex can still read them.
+ * True when the role TOML carries a readable `model_fallback` key, even an
+ * empty array. Presence is what matters for the doctor scan: Codex >= 0.146
+ * rejects the field as unknown and skips the whole role regardless of its value.
  */
+export function hasCodexAgentModelFallbackField(role: string, codexHome = CODEX_HOME): boolean {
+  const file = join(codexHome, "agents", `${role}.toml`);
+  if (!existsSync(file)) return false;
+  try {
+    const content = readFileSync(file, "utf8");
+    return /^\s*model_fallback\s*=/m.test(content);
+  } catch {
+    return false;
+  }
+}
+
+/** Roles whose TOML still carries `model_fallback`, including empty arrays. */
 export function scanCodexAgentRolesWithTomlModelFallback(codexHome = CODEX_HOME): string[] {
-  return listCodexAgentRoles(codexHome).filter(
-    role => readCodexAgentModelFallback(role, codexHome).length > 0,
-  );
+  return listCodexAgentRoles(codexHome).filter(role => hasCodexAgentModelFallbackField(role, codexHome));
 }
 
 export function listCodexAgentRoles(codexHome = CODEX_HOME): string[] {
