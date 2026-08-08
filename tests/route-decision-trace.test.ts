@@ -226,6 +226,7 @@ describe("route decision traces (RI-01)", () => {
   test("normalization only inspects retained reasoning efforts", () => {
     const reasoningEfforts = Array.from({ length: 1_000_000 }) as unknown[];
     reasoningEfforts.fill("medium", 0, 8);
+    reasoningEfforts[0] = "x".repeat(MAX_TRACE_STRING + 1);
     Object.defineProperty(reasoningEfforts, 8, {
       get: () => { throw new Error("reasoning effort outside the retained range was inspected"); },
     });
@@ -246,8 +247,12 @@ describe("route decision traces (RI-01)", () => {
       selected: { candidateIndex: 0, provider: "a", model: "m1", reason: "policy" },
     };
 
-    expect(normalizeRouteDecisionTrace(raw)?.candidates[0]?.capability?.reasoningEfforts)
-      .toEqual(Array.from({ length: 8 }, () => "medium"));
+    const normalized = normalizeRouteDecisionTrace(raw);
+    expect(normalized).not.toBeNull();
+    if (!normalized) throw new Error("trace normalization unexpectedly failed");
+    expect(normalized.candidates[0]?.capability?.reasoningEfforts)
+      .toEqual(["x".repeat(MAX_TRACE_STRING), ...Array.from({ length: 7 }, () => "medium")]);
+    expect(normalized.truncated?.strings).toBe(true);
   });
 
   test("normalization rejects sparse retained reasoning efforts", () => {
