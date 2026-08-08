@@ -157,11 +157,13 @@ describe("GET /api/usage", () => {
 
   test("usage route cache invalidates when the user cost overlay version changes", async () => {
     writeFixture(Date.now());
+    // Start from a known overlay version so a leftover entry from an earlier
+    // test cannot satisfy the first request. This must run BEFORE startServer:
+    // the server boot loads the config and refreshes the overlay registry, and
+    // the version has to be settled by the time the first request caches.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
     const server = startServer(0);
     try {
-      // Start from a known overlay version so a leftover entry from an earlier
-      // test cannot satisfy the first request.
-      refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
       const first = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
       const second = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
       expect(second.summary).toEqual(first.summary);

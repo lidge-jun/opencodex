@@ -15,10 +15,10 @@ import {
   resolveMetadataProvider,
 } from "../generated/model-metadata";
 import type { OcxUsage } from "../types";
-import { baseProviderLabel } from "../providers/label";
+import { baseProviderLabel, canonicalUsageProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
-import { activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
+import { activeConfiguredProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
 import {
   EXPECTED_PRICE_OVERLAYS,
   findExpectedPriceOverlay,
@@ -174,16 +174,21 @@ export function resolveMatchedPrice(
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
 ): MatchedPrice | null {
   // User-configured overlays are keyed by the EXACT configured provider name.
-  // Try them before collapsing pool/account log suffixes: a custom provider can
-  // legitimately end with a label-shaped suffix (e.g. blsc-pabcdef), and its own
-  // overlay would otherwise never match the collapsed base name.
+  // A provider that literally exists in config.providers keeps its own pricing
+  // namespace: a real custom provider can legitimately end with a label-shaped
+  // suffix (e.g. acme-pabcdef) and must not inherit the base provider's user
+  // overlay. Only NON-configured names (generated account log labels) collapse
+  // to their label base. chatgpt/openai-multi are the same OpenAI usage surface
+  // and always canonicalize to openai.
   const collapsed = baseProviderLabel(provider);
-  if (collapsed !== provider) {
+  if (collapsed !== provider && (canonicalUsageProviderLabel(provider) !== provider || !activeConfiguredProviders().has(provider))) {
     const exactUserOverlay = userOverlayMatch(provider, modelId, userOverlays);
     if (exactUserOverlay) return exactUserOverlay;
+    // Pool/account log suffixes (e.g. google-antigravity-p442fff) must collapse
+    // before the compiled/overlay lookup; configured providers keep their own
+    // namespace above.
+    provider = collapsed;
   }
-  // Pool/account log suffixes (e.g. google-antigravity-p442fff) must collapse before overlay lookup.
-  provider = collapsed;
   // Memoize by (provider, model): usage summaries iterate hundreds of thousands of
   // rows that share a handful of provider/model keys, so resolving each time would
   // dominate /api/usage latency (WP6 audit). The compiled overlays are static;

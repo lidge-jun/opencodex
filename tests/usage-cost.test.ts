@@ -768,6 +768,85 @@ describe("provider cost overlay (user-configured)", () => {
     expect(price?.sourceRef).toBe("config:providers.blsc-pabcdef.modelCosts[custom-model]");
   });
 
+  test("a configured provider with a label-shaped suffix never inherits the base provider's user overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+        "acme-pabcdef": { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+      },
+    } as unknown as OcxConfig);
+    // The literal provider exists in config.providers, so its pricing namespace
+    // stays isolated even though the name matches the account-label pattern:
+    // it must NOT price through acme's user overlay.
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")).toBeNull();
+    // The base provider itself still resolves through its own overlay.
+    expect(resolveMatchedPrice("acme", "acme-custom-model")).toMatchObject({
+      provider: "acme",
+      modelId: "acme-custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+  });
+
+  test("an all-zero overlay on a suffix-shaped configured provider falls through to compiled pricing, not the base provider's overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "claude-opus-4-6": USER_PRICE } },
+        "acme-pabcdef": {
+          modelCosts: { "claude-opus-4-6": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        },
+      },
+    } as unknown as OcxConfig);
+    const price = resolveMatchedPrice("acme-pabcdef", "claude-opus-4-6");
+    // The all-zero row falls through to compiled/catalog pricing — the
+    // documented fallback order — and never to acme's user-configured price.
+    expect(price).not.toBeNull();
+    expect(price?.provider).toBe("acme-pabcdef");
+    expect(price?.source).toBe("jawcode");
+    expect(price?.cost4).not.toEqual(USER_PRICE);
+    // The compiled model-level price for claude-opus-4-6 (anthropic vendor).
+    expect(price?.cost4).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
+  test("a generated account label (not a configured provider) still collapses to the base provider's overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+      },
+    } as unknown as OcxConfig);
+    // acme-pabcdef is NOT in config.providers here — it is a generated log
+    // label for an acme account, so collapsing to acme's overlay is intended.
+    const price = resolveMatchedPrice("acme-pabcdef", "acme-custom-model");
+    expect(price).toMatchObject({
+      provider: "acme",
+      modelId: "acme-custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+  });
+
+  test("configuring a provider invalidates its collapsed memo entry immediately", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+      },
+    } as unknown as OcxConfig);
+    // Not configured yet → generated label → collapses to acme (memoized).
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")?.source).toBe("user");
+    // The provider is now configured (without an overlay): namespace isolation
+    // must apply immediately — the resolver memo cannot keep serving the stale
+    // collapsed entry, even though no overlay row changed.
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+        "acme-pabcdef": { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+      },
+    } as unknown as OcxConfig);
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")).toBeNull();
+  });
+
   test("all-zero user overlay falls through to the expected overlay price", () => {
     const zero: ExpectedPriceOverlay[] = [{
       provider: "deepseek",

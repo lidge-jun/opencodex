@@ -10,7 +10,10 @@
  * counter, so the estimator's memo and the /api/usage summary cache skip stale
  * rows without cross-module invalidation. Refreshes with byte-identical rows
  * are no-ops: config is reloaded at many chokepoints and an unchanged reload
- * must not churn the version (see refreshUserCostOverlays).
+ * must not churn the version (see refreshUserCostOverlays). The configured
+ * provider-name set is part of the change identity: adding or removing a
+ * provider changes which names may collapse to a label base in the resolver,
+ * so it bumps the version even when no overlay row changed.
  *
  * Display-time estimation only — these rows never affect billing.
  */
@@ -22,6 +25,7 @@ const EMPTY: readonly ExpectedPriceOverlay[] = [];
 
 let active: readonly ExpectedPriceOverlay[] = EMPTY;
 let activeSignature = "";
+let activeConfigured = new Set<string>();
 let version = 0;
 
 /** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
@@ -83,10 +87,16 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   // unchanged, skipping the version bump and serving stale estimates. The
   // signature is process-local state and is never serialized to a response;
   // only the display `source` above is redacted.
-  const signature = JSON.stringify(rows);
+  // The configured provider-name set is part of the identity too: adding or
+  // removing a provider (even one without an overlay) changes which names are
+  // allowed to collapse to a label base, so the resolver memo and the
+  // /api/usage summary cache must be invalidated on that change as well.
+  const configuredNames = Object.keys(providers ?? {}).sort();
+  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}`;
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;
+  activeConfigured = new Set(configuredNames);
   version++;
 }
 
@@ -98,4 +108,9 @@ export function activeUserCostOverlays(): readonly ExpectedPriceOverlay[] {
 /** Monotonic version bumped on every refresh; used by the estimator memo key. */
 export function userCostOverlayVersion(): number {
   return version;
+}
+
+/** Configured provider names from the last refresh (pricing-namespace identity). */
+export function activeConfiguredProviders(): ReadonlySet<string> {
+  return activeConfigured;
 }
