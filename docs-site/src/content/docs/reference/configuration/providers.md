@@ -154,9 +154,11 @@ Before any text, reasoning, tool call, or other model output reaches the client,
 `server_is_overloaded` / `slow_down` model-capacity rejection (or the standard
 `Selected model is at capacity. Please try a different model.` response) tries each remaining
 eligible Pool account once. This exclusion is request-local: rejected capacity attempts do not write
-account cooldown, health, affinity, or active-selection state. If every account returns capacity, the first response
-is returned; the next request starts with a fresh eligible set. Direct mode and exact account
-selectors never use this rotation, and capacity after substantive output is never replayed.
+account cooldown or health. Thread affinity is not created or refreshed until a non-capacity response
+is accepted; after rotation, only the accepted account is bound. If every account returns capacity,
+the first response is returned and the next request starts with a fresh eligible set, without any new
+affinity from the rejected attempts. Direct mode and exact account selectors never use this rotation,
+and capacity after substantive output is never replayed.
 
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
 On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may

@@ -40,6 +40,7 @@ import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
+import { CODEX_MODEL_CAPACITY_MESSAGE } from "../src/server/responses/codex-capacity";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -148,11 +149,9 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
   });
 }
 
-const CAPACITY_MESSAGE = "Selected model is at capacity. Please try a different model.";
-
 function capacityErrorBody(
   code: "server_is_overloaded" | "slow_down" | undefined = undefined,
-  message = CAPACITY_MESSAGE,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
 ): string {
   return JSON.stringify({
     error: {
@@ -165,7 +164,7 @@ function capacityErrorBody(
 
 function capacityFailedSse(
   code: "server_is_overloaded" | "slow_down" | undefined = undefined,
-  message = CAPACITY_MESSAGE,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
 ): string {
   const error = {
     type: "server_error",
@@ -183,7 +182,7 @@ function capacityFailedSse(
 
 function capacityErrorSse(
   code: "server_is_overloaded" | "slow_down" | undefined = undefined,
-  message = CAPACITY_MESSAGE,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
 ): string {
   return [
     'event: response.created\ndata: {"type":"response.created","response":{"id":"capacity-attempt","status":"in_progress"}}\n\n',

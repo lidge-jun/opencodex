@@ -165,9 +165,10 @@ recovery may later select another eligible Pool account. Those recovery paths re
 usage-based switching is off. OpenCodex replays the conversation after an account change, but the
 provider-side prompt cache may be cold. Unknown providers or ids exit 1.
 Before substantive output, an upstream model-capacity rejection rotates through each eligible Pool
-account once without persisting a cooldown or changing the next request's eligible set. Exhaustion
-returns the first capacity error. Direct mode, exact account selectors, and failures after output do
-not rotate.
+account once without persisting a cooldown. A rejected account does not create or refresh thread
+affinity; only the account whose response is accepted becomes the thread binding. Exhaustion returns
+the first capacity error, and the next request starts with a fresh eligible set and no new affinity from
+the rejected attempts. Direct mode, exact account selectors, and failures after output do not rotate.
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
 On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
 rotate the request to another eligible Pool account. These failure transitions remain active with

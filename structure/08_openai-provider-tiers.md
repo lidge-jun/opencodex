@@ -26,9 +26,10 @@ independent quota without allowing fallbacks that share the exhausted quota.
 Model-capacity rejection is a different recovery class. Before substantive Responses output, exact
 structured `server_is_overloaded` / `slow_down` signals and the standard model-capacity sentence
 exclude the current account only for that request, then try each remaining eligible Pool account
-once. Rejected capacity attempts write no cooldown, health, affinity, or active-account state. Exhaustion returns the
-first rejection, and the next request starts with no capacity exclusions. Direct and exact-account
-routes never rotate, and a committed output event makes the attempt non-replayable.
+once. Rejected capacity attempts write no cooldown or health, and thread affinity is committed only
+for the account whose non-capacity response is accepted. Exhaustion returns the first rejection; the
+next request starts with no capacity exclusions and no new affinity from the rejected attempts. Direct
+and exact-account routes never rotate, and a committed output event makes the attempt non-replayable.
 
 `pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
