@@ -20,6 +20,7 @@ import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
+  comboDisabledModelSelectors,
   comboModelId,
   getCombo,
   listComboIds,
@@ -140,6 +141,14 @@ export function deriveComboCatalogModel(
     ? []
     : intersectStrings(advertisedLadders);
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
+  const limitingMembers = members.filter(member => member.contextWindow === contextWindow);
+  const hasLimitingContextCapMetadata = limitingMembers.some(
+    member => typeof member.contextCapped === "boolean",
+  );
+  // A combo is cap-limited only when every member defining its effective minimum was
+  // itself reduced by a provider cap. An uncapped member at the same minimum means the
+  // combo would have the same window even without the cap.
+  const contextCapped = limitingMembers.every(member => member.contextCapped === true);
   const maxInputTokens = Math.min(
     ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
   );
@@ -154,9 +163,12 @@ export function deriveComboCatalogModel(
     owned_by: COMBO_NAMESPACE,
     contextWindow,
     maxInputTokens,
+    ...(hasLimitingContextCapMetadata ? { contextCapped } : {}),
     inputModalities,
     reasoningEfforts,
     ...(combo.alias ? { alias: combo.alias } : {}),
+    ...(combo.nativeAlias ? { nativeAlias: true } : {}),
+    ...(combo.displayName ? { displayName: combo.displayName } : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
@@ -257,12 +269,15 @@ export function exactComboCatalogSlugs(
 ): Set<string> {
   const disabled = new Set(config.disabledModels ?? []);
   return new Set(listComboIds(config).flatMap(id => {
-    const alias = typeof config.combos?.[id]?.alias === "string"
-      ? config.combos[id]!.alias!.trim()
+    const raw = config.combos?.[id];
+    const alias = typeof raw?.alias === "string"
+      ? raw.alias.trim()
       : "";
     const canonical = comboModelId(id);
     const publicSlug = alias || canonical;
-    return disabled.has(publicSlug) || disabled.has(canonical) ? [] : [publicSlug];
+    const comboDisabled = comboDisabledModelSelectors(id, raw ?? {})
+      .some(selector => disabled.has(selector));
+    return comboDisabled ? [] : [publicSlug];
   }));
 }
 

@@ -3,7 +3,9 @@ title: Codex App 模型选择器
 description: opencodex 中的模型如何通过共享 Codex 目录出现在 Codex App、Codex CLI 和 Codex TUI 中。
 ---
 
-opencodex 不会修改 Codex App。它会写入 Codex CLI/TUI 已经使用的同一套 Codex 配置和模型目录。因为 Codex App 读取的是这份共享状态，路由模型可以像普通 Codex 目录条目一样出现在 App 的模型选择器中。
+opencodex 不会修改 Codex App。它会写入 Codex CLI/TUI 使用的同一套 Codex 配置和模型目录。
+app-server 会读取这份共享状态，但部分 Codex Desktop 版本还会在 renderer 中应用第二层远程
+allowlist，因此仍可能从选择器里删掉路由模型。
 
 OpenAI 条目有两种凭据通道：原生 Codex 登录，以及命名空间化的 `openai-apikey/<model>` API key 通道。仅在 Pool 与 Direct 之间切换 `codexAccountMode` 不会改变选择器 id。但当 `codexAccountPickerEnabled` 启用了账户限定的选择器行，且 `codexAccountNamespaces` 中有目标账户存在的 selector 时，opencodex 会为映射账户添加独立的 `<selector>/<native-openai-model>` 行，并在选择器中隐藏裸原生行。Selector 名称是用户自定义的公开标签，没有内置的账户角色含义。选择带 `selector` 的行只会使用映射账户，不会更改当前 Pool 账户；目标不可用时，请求会直接失败，不会切换到其他账户。详情请参阅[精确 Codex 账户选择器](/reference/configuration/routing/#exact-codex-account-selectors)。
 
@@ -27,6 +29,19 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 ```
 
 更早的 v1 三 provider 配置会自动迁移到这个支持单一选项的行。
+
+## Desktop 远程 allowlist 限制
+
+如果 `codex debug models` 和 app-server 的 `model/list` 都包含某个路由模型，但 Desktop
+没有显示它，根因通常是上游 [Codex #19694](https://github.com/openai/codex/issues/19694)。
+启用远程 `use_hidden_models` 后，Desktop 可能只保留 `available_models` 中的原生 id，甚至会
+重新显示 catalog 中已标记为 `hide` 的原生行。单纯刷新 catalog 或重启代理无法改变 renderer
+策略。
+
+对于等价的路由模型，opencodex 提供默认关闭的 native-alias combo 兼容模式：用明确的显示标签
+发布 allowlist 接受的裸 slug，并让该 slug 在规范 OpenAI 路由之前进入指定 combo。只要配置了
+native alias，已禁用的裸原生行就会从有效 catalog 中移除，避免 Desktop 无视隐藏状态将其复活。
+命令、禁用键语义和安全限制见 [Codex Desktop 原生 allowlist 兼容模式](/zh-cn/guides/combos/#codex-desktop-原生-allowlist-兼容模式)。
 
 ## 集成路径
 
@@ -71,6 +86,8 @@ visibility = "list"
   `disabledModels` 只会隐藏对应的 selector 行。
 - 裸原生 GPT id 是裸 slug。禁用后会隐藏裸行以及该模型的所有 account-selector 克隆行，
   同时保留目录条目以便之后重新启用。
+- 配置 native-alias combo 后，被该 combo 遮蔽的裸原生行会从 Models 页面移除且不再显示原生开关；
+  只有未被遮蔽的原生行保留开关，并可在重新启用时恢复原生 metadata。
 - 原生行来自受支持的静态集合，因此被禁用的原生模型仍会在仪表盘中可见，并且可以重新打开。
 
 可见性处理会在快照升级之后运行；每次切换后，管理 API 都会刷新目录，并强制让 Codex 的模型缓存失效。

@@ -65,8 +65,9 @@ ocx combo show main
   `team/daily-fast`;
 - не может быть `combo` и не может начинаться с `combo/`;
 - не может дублировать alias другой combo; и
-- не может быть «голым» нативным именем семейства OpenAI, начинающимся с `gpt-`, `o1-`, `o3-`,
-  `o4-` или `codex-`.
+- обычно не может быть «голым» нативным именем семейства OpenAI, начинающимся с `gpt-`, `o1-`,
+  `o3-`, `o4-` или `codex-`; единственное исключение — явный режим совместимости Desktop
+  `nativeAlias: true`.
 
 Даже если alias задан, каноническая форма `combo/<id>` всё равно разрешается. Канонический поиск
 выполняется раньше сопоставления alias, поэтому alias не может перехватить канонический id другой
@@ -220,10 +221,9 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` также принимает `--strategy`, `--sticky`, `--effort`, `--alias` и `--rename-from`. Чтобы
-очистить поле, используйте `-` в качестве значения для `--effort` или `--alias`. `create` и
-`update` — это alias для `set`; `delete` — alias для `remove`; те же подкоманды доступны и через
-`ocx route combo`.
+`set` также принимает `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
+`--display-name` и `--rename-from`. Для `--native-alias` нужны поддерживаемый сейчас bare native
+alias и непустой display name. `create` и `update` — alias для `set`, а `delete` — alias для `remove`.
 
 ### Management API
 
@@ -263,6 +263,8 @@ Combo хранятся в объекте верхнего уровня `combos`,
 | `stickyLimit` | No | `1` | Целое число от 1 до 100 успешных запросов на один выбор round-robin. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max` или `ultra`; применяется только когда вызывающая сторона не указала effort, а цель объявляет поддержку. |
 | `alias` | No | none | Необязательный обрезанный публичный id модели; используйте правила alias выше. Пустое значение хранится как отсутствие alias. |
+| `nativeAlias` | No | `false` | Явно разрешает поддерживаемому сейчас bare native alias перехватить приоритет routing/catalog только для неквалифицированного id. Bare `gpt-5.6-*` использует учётные данные Codex Pool/Direct; маршруты с квалификатором аккаунта сохраняют свою идентичность, а provider-qualified `openai-apikey/gpt-5.6-*` использует API-ключ и никогда не переходит на native alias. |
+| `displayName` | No | none | Метка только для отображения в catalog; обязательна при `nativeAlias: true`. |
 
 ## Устранение неполадок
 

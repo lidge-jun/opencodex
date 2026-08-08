@@ -53,7 +53,8 @@ ocx combo show main
 - `daily-fast`처럼 단독일 수도 있고, `team/daily-fast`처럼 `/`를 하나 포함할 수도 있습니다.
 - `combo`일 수 없고 `combo/`로 시작할 수도 없습니다.
 - 다른 콤보 alias와 중복될 수 없습니다.
-- `gpt-`, `o1-`, `o3-`, `o4-`, `codex-`로 시작하는 bare OpenAI 계열 이름일 수 없습니다.
+- 일반적으로 `gpt-`, `o1-`, `o3-`, `o4-`, `codex-`로 시작하는 bare OpenAI 계열 이름일 수
+  없습니다. 명시적 `nativeAlias: true` Desktop 호환 모드만 예외입니다.
 
 alias를 설정해도 정식 `combo/<id>` 형식은 계속 해석됩니다. 정식 조회가 alias 매칭보다 먼저 실행되므로, alias가 다른 콤보의 정식 ID를 가로챌 수는 없습니다.
 
@@ -174,7 +175,10 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--rename-from`도 받습니다. `--effort` 또는 `--alias` 값으로 `-`를 주면 해당 필드를 지울 수 있습니다. `create`와 `update`는 `set`의 별칭이고, `delete`는 `remove`의 별칭입니다. 같은 하위 명령은 `ocx route combo` 아래에서도 사용할 수 있습니다.
+`set`은 `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, `--display-name`,
+`--rename-from`도 받습니다. `--native-alias`에는 현재 지원되는 bare native alias와 비어 있지 않은 display name이 필요합니다. `--effort`, `--alias`,
+`--display-name`에 `-`를 지정하면 해당 값을 지울 수 있습니다. `create`와 `update`는 `set`의
+별칭이고 `delete`는 `remove`의 별칭입니다. 모든 combo 하위 명령은 `ocx route combo ...`에서도 사용할 수 있습니다.
 
 ### Management API
 
@@ -211,6 +215,8 @@ ocx combo remove <id> --yes
 | `stickyLimit` | 아니요 | `1` | round-robin 선택 한 번당 성공 요청 1에서 100회 사이의 정수입니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
+| `nativeAlias` | 아니요 | `false` | 현재 지원되는 bare native alias가 routing/catalog 우선권을 갖도록 명시적으로 허용합니다. |
+| `displayName` | 아니요 | 없음 | catalog 표시 전용 label입니다. `nativeAlias`가 true이면 필수입니다. |
 
 ## 문제 해결
 

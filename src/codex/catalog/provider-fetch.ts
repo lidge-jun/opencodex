@@ -69,7 +69,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -635,6 +635,12 @@ export function applyConfigHintsToCachedModels(name: string, prov: OcxProviderCo
  */
 const COMBO_MEMBER_CONTEXT_FALLBACK = 128_000;
 
+interface ComboCatalogMemberFallback {
+  readonly contextWindow?: number;
+  readonly inputModalities?: readonly string[];
+  readonly reasoningEfforts?: readonly string[];
+}
+
 /**
  * Resolve a combo target to a catalog member for derivation.
  * Prefer discovery metadata; when the target is missing from the gather map or
@@ -650,6 +656,7 @@ export function resolveComboCatalogMember(
   memberByKey: ReadonlyMap<string, CatalogModel>,
   providers: ReadonlyMap<string, OcxProviderConfig>,
   contextCap?: number,
+  fallback?: ComboCatalogMemberFallback,
 ): CatalogModel | undefined {
   const existing = memberByKey.get(targetKey(target));
   const prov = providers.get(target.provider);
@@ -657,25 +664,49 @@ export function resolveComboCatalogMember(
   // is unusable for catalog derivation while the provider is off.
   if (prov?.disabled === true) return undefined;
 
-  // Complete live/configured rows still honor providerContextCaps so a high
-  // discovery window cannot outrun an operator-configured cap.
+  const withFallbackMetadata = (member: CatalogModel): CatalogModel => {
+    if (!fallback) return member;
+    const contextWindow = typeof member.contextWindow === "number" && member.contextWindow > 0
+      ? member.contextWindow
+      : undefined;
+    const addMaxInput = contextWindow !== undefined
+      && !(typeof member.maxInputTokens === "number" && member.maxInputTokens > 0);
+    const addModalities = (!Array.isArray(member.inputModalities) || member.inputModalities.length === 0)
+      && fallback.inputModalities !== undefined;
+    const addReasoning = member.reasoningEfforts === undefined
+      && fallback.reasoningEfforts !== undefined;
+    if (!addMaxInput && !addModalities && !addReasoning) return member;
+    return {
+      ...member,
+      ...(addMaxInput ? { maxInputTokens: contextWindow } : {}),
+      ...(addModalities ? { inputModalities: [...fallback.inputModalities!] } : {}),
+      ...(addReasoning ? { reasoningEfforts: [...fallback.reasoningEfforts!] } : {}),
+    };
+  };
+
+  // Complete live/configured rows still honour providerContextCaps so a high
+  // discovery window cannot outrun an operator-configured cap. Native-alias
+  // fallback metadata may fill only capability gaps; it never raises an explicit
+  // discovered/configured context window.
   if (
     existing
     && typeof existing.contextWindow === "number"
     && existing.contextWindow > 0
   ) {
     const capped = applyProviderContextCap(existing.contextWindow, contextCap);
-    if (capped === undefined || capped === existing.contextWindow) return existing;
+    if (capped === undefined || capped === existing.contextWindow) {
+      return withFallbackMetadata(existing);
+    }
     const maxInput = typeof existing.maxInputTokens === "number" && existing.maxInputTokens > 0
       ? Math.min(existing.maxInputTokens, capped)
       : capped;
-    return {
+    return withFallbackMetadata({
       ...existing,
       contextWindow: capped,
       maxInputTokens: maxInput,
       contextCap,
       contextCapped: true as const,
-    };
+    });
   }
 
   const base: CatalogModel = existing ?? {
@@ -688,15 +719,17 @@ export function resolveComboCatalogMember(
   const hintedContext = typeof hinted.contextWindow === "number" && hinted.contextWindow > 0
     ? hinted.contextWindow
     : undefined;
-  // Prefer a known positive maxInputTokens over inventing 128k when discovery
-  // advertised an input limit but no context window (common thin /models rows).
   const knownMaxInput = typeof hinted.maxInputTokens === "number" && hinted.maxInputTokens > 0
     ? hinted.maxInputTokens
     : (typeof base.maxInputTokens === "number" && base.maxInputTokens > 0
       ? base.maxInputTokens
       : undefined);
+  // Real discovery/config values win. A native alias is the next fallback tier.
+  // The generic 128k/text synthesis from #1305 remains the final fallback.
+  const fallbackContext = existing || prov ? fallback?.contextWindow : undefined;
   const uncappedContext = hintedContext
     ?? knownMaxInput
+    ?? fallbackContext
     ?? (existing || prov ? COMBO_MEMBER_CONTEXT_FALLBACK : undefined);
   if (uncappedContext === undefined) return undefined;
   const usedFallback = hintedContext === undefined;
@@ -707,10 +740,14 @@ export function resolveComboCatalogMember(
     && cappedContext !== undefined
     && cappedContext !== uncappedContext;
 
-  const inputModalities = hinted.inputModalities ?? base.inputModalities ?? ["text"];
+  const inputModalities = hinted.inputModalities
+    ?? base.inputModalities
+    ?? (fallback?.inputModalities ? [...fallback.inputModalities] : undefined)
+    ?? ["text"];
   const reasoningEfforts = hinted.reasoningEfforts
     ?? (prov ? configuredReasoningEfforts(prov, target.model) : undefined)
-    ?? base.reasoningEfforts;
+    ?? base.reasoningEfforts
+    ?? (fallback?.reasoningEfforts ? [...fallback.reasoningEfforts] : undefined);
   const maxInputTokens = knownMaxInput !== undefined
     ? Math.min(knownMaxInput, contextWindow)
     : contextWindow;
@@ -1287,11 +1324,12 @@ export function filterCatalogVisibleModels(
     if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
   }
   return models.filter(m => {
+    const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {
       // Combo management stores the public alias, while canonical `combo/<id>` references
       // remain valid for backward compatibility through slugEquals below.
-      if (m.alias !== undefined && stored === catalogModelSlug(m)) return false;
+      if (m.alias !== undefined && stored === catalogModelSlug(m) && !nativeAlias) return false;
       if (slugEquals(stored, m.provider, m.id)) return false;
     }
     const allow = allowByProvider.get(m.provider);
@@ -1457,8 +1495,16 @@ async function gatherRoutedModelsUncached(
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
+    const requiredNativeComboTargets = new Set(listComboIds(config).flatMap(id => {
+      const combo = getCombo(config, id);
+      return combo?.targets.flatMap(target => (
+        target.provider === "openai" ? [target.model] : []
+      )) ?? [];
+    }));
     for (const slug of nativeOpenAiSlugs()) {
-      if (disabled.has(slug)) continue;
+      // A bare native disable key hides the native row, not a combo that targets it.
+      // Keep synthetic native metadata available to those combos.
+      if (disabled.has(slug) && !requiredNativeComboTargets.has(slug)) continue;
       const contextWindow = nativeOpenAiContextWindow(slug);
       if (contextWindow === undefined) continue;
       const synthetic: CatalogModel = {
@@ -1483,16 +1529,37 @@ async function gatherRoutedModelsUncached(
   for (const id of listComboIds(config)) {
     const combo = getCombo(config, id);
     if (!combo) continue;
+    const nativeContextWindow = combo.nativeAlias && combo.alias
+      ? nativeOpenAiContextWindow(combo.alias)
+      : undefined;
+    const nativeAliasFallback = combo.nativeAlias && combo.alias && nativeContextWindow !== undefined
+      ? {
+        contextWindow: nativeContextWindow,
+        inputModalities: nativeInputModalities(combo.alias),
+        reasoningEfforts: nativeReasoningEfforts(combo.alias),
+      }
+      : undefined;
     const members = combo.targets
       .map(target => resolveComboCatalogMember(
         target,
         memberByKey,
         enrichedByName,
         providerContextCap(config, target.provider),
+        nativeAliasFallback,
       ))
       .filter((member): member is CatalogModel => member !== undefined);
     const derived = deriveComboCatalogModel(id, combo, members);
-    if (derived) all.push(derived);
+    if (derived) {
+      const nativeDefault = combo.nativeAlias && combo.alias
+        ? nativeDefaultReasoningEffort(combo.alias)
+        : undefined;
+      if (combo.defaultEffort === null
+        && nativeDefault
+        && derived.reasoningEfforts?.includes(nativeDefault)) {
+        derived.defaultReasoningEffort = nativeDefault;
+      }
+      all.push(derived);
+    }
     else warnUncataloguedComboOnce(id, combo, members, localOmissions);
   }
   replaceLastComboCatalogOmissions(localOmissions);

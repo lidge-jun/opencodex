@@ -259,6 +259,28 @@ describe("headless GUI parity CLI", () => {
     });
   });
 
+  test("combo set forwards the explicit native-alias compatibility contract", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleComboCommand([
+      "set", "nova-sol",
+      "--targets", "Nova1/codex/gpt-5.6-sol",
+      "--alias", "gpt-5.6-sol",
+      "--native-alias",
+      "--display-name", "Nova1 - codex-gpt-5.6-sol",
+      "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests[0]?.body).toMatchObject({
+      id: "nova-sol",
+      combo: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+        targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
+      },
+    });
+  });
+
   test("agent effort and roster use the same live mutation routes as GUI", async () => {
     const runtime = fakeRuntime();
     expect(await handleAgentCommand(["effort", "set", "--main", "high", "--subagent", "medium", "--json"], runtime.deps)).toBe(0);

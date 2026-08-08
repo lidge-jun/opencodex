@@ -259,6 +259,49 @@ describe("atomic model visibility management", () => {
     expect(refreshes).toBe(4);
   });
 
+  test("native-alias toggles preserve the separate bare native disable key", async () => {
+    const config = loadConfig();
+    config.combos = {
+      nova: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+        targets: [{ provider: "google-antigravity", model: "gemini-3.1-pro" }],
+      },
+    };
+    config.disabledModels = ["gpt-5.6-sol", "gpt-5.5", "combo/nova", "other/keep"];
+    saveConfig(config);
+
+    expect((await put({
+      scope: "models",
+      provider: "combo",
+      targets: [{ id: "nova" }],
+      enabled: true,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual(["gpt-5.6-sol", "gpt-5.5", "other/keep"]);
+
+    expect((await put({
+      scope: "models",
+      provider: "combo",
+      targets: [{ id: "nova" }],
+      enabled: false,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual([
+      "gpt-5.6-sol", "gpt-5.5", "other/keep", "combo/nova",
+    ]);
+
+    const current = loadConfig();
+    const nativeTargets = nativeModelRows(current).map(row => ({ id: row.slug, native: true }));
+    expect(nativeTargets.some(target => target.id === "gpt-5.6-sol")).toBe(false);
+    expect((await put({
+      scope: "provider",
+      provider: "openai",
+      targets: nativeTargets,
+      enabled: true,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual(["gpt-5.6-sol", "other/keep", "combo/nova"]);
+  });
+
   test("uses raw allowlist ids, canonical routed slugs, and rejects invalid requests", async () => {
     await put({ scope: "models", provider: "google-antigravity", targets: [{ id: "vendor/model" }, { id: "vendor/model" }], enabled: true });
     expect(loadConfig().providers["google-antigravity"].selectedModels).toContain("vendor/model");
