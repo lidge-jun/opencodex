@@ -429,11 +429,17 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // tool_call continuation on a thinking-mode provider — inject a
           // placeholder when the replay cache missed (the bounded cache can
           // always miss on long sessions), or DeepSeek thinking mode 400s.
+          // Gate on the preserve list too: reasoning_content is only ever
+          // serialized for preserve-listed models, so a requires-only custom
+          // entry must not fabricate it on this path (P2 on #1205).
           // `||` (not `??`): the cache never stores empty strings, but treat a
           // falsy hit as a miss so the placeholder still fires.
           const orphanReasoning =
             cachedReasoning
-            || (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId) ? " " : undefined);
+            || (modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+              && modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)
+              ? " "
+              : undefined);
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),

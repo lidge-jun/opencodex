@@ -222,6 +222,36 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     expect(hit!["reasoning_content"]).toBe(REASONING);
   });
 
+  test("P2 guard: a requires-only custom model never gets a placeholder on the orphan path", () => {
+    // requiresReasoningPlaceholderModels narrows which preserve-listed models
+    // get a fabricated placeholder. A custom entry listing a model ONLY in the
+    // requires list (not in preserveReasoningContentModels) must behave like
+    // the main-assistant path, which never serializes reasoning_content for
+    // non-preserve models: the synthesized orphan tool_call stays bare
+    // (chatgpt-codex-connector P2 on #1205).
+    const parsed = parseRequest({ model: "custom-chat/plain-model", input: [userMessage(), functionCallOutputItem()], stream: true });
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "custom-chat",
+      providers: {
+        "custom-chat": {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid/v1",
+          apiKey: "key",
+          models: ["plain-model"],
+          requiresReasoningPlaceholderModels: ["plain-model"],
+        },
+      },
+    };
+    const route = routeModel(config, parsed.modelId);
+    parsed.modelId = route.modelId;
+    const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as OcxParsedRequest);
+    const { messages } = JSON.parse(req.body as string) as { messages: Array<Record<string, unknown>> };
+    const assistant = toolCallAssistant(messages);
+    expect(assistant).toBeDefined();
+    expect(assistant!["reasoning_content"]).toBeUndefined();
+  });
+
   test("documented non-bug: opaque encrypted-only reasoning degrades to the placeholder, not invented plaintext", () => {
     // Native (non-ocxr1) encrypted reasoning has no readable text; the parser
     // deliberately degrades instead of inventing replayable plaintext. On a

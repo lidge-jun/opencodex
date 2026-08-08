@@ -1711,6 +1711,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, true]),
     ),
     preserveReasoningContentModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    // GLM thinking is a binary toggle (low maps to disabled), so a legitimate
+    // tool round can carry no reasoning at all; never fabricate a placeholder
+    // for it, only replay real recorded text (P2 on #1205).
+    requiresReasoningPlaceholderModels: [],
     // No liveModels: GET /api/paas/v4/models has not been observed to answer on this host, and a
     // false live claim yields an empty picker at runtime. Flip it on once someone verifies it.
     note: "Domestic BigModel pay-as-you-go endpoint (open.bigmodel.cn)",
