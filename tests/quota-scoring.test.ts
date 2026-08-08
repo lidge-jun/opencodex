@@ -206,6 +206,7 @@ describe("quota-aware scoring (RI-07)", () => {
       },
     });
     const route = routeModel(cfg, "policy/quotaRoute");
+    expect(route.routeDecision!.candidates[0]!.accountRef).toBeUndefined();
     expect(route.routeDecision!.candidates[0]!.quota?.known).toBe(false);
     expect(route.routeDecision!.candidates[0]!.quota?.headroom).toBeUndefined();
   });
@@ -237,6 +238,7 @@ describe("quota-aware scoring (RI-07)", () => {
       },
     });
     const route = routeModel(cfg, "policy/quotaRoute");
+    expect(route.routeDecision!.candidates[0]!.accountRef).toBeUndefined();
     expect(route.routeDecision!.candidates[0]!.quota?.known).toBe(false);
     expect(route.routeDecision!.candidates[0]!.quota?.headroom).toBeUndefined();
   });

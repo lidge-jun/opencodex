@@ -159,10 +159,11 @@ remain unknown during policy evaluation because Pool selection, Direct caller id
 rotation, and thread affinity are resolved after the policy chooses a provider/model; a process-active
 account is not used as a substitute.
 Quota evidence never changes account selection, session affinity, cooldowns, or switching behavior —
-it only feeds policy scoring. To see quota-aware behavior in a dry-run, supply account refs through
-the dry-run/API candidate evidence: `candidates[].codexAccountId` (Codex pool, provider `openai`) or
-`candidates[].accountRef` (Anthropic) derives the matching cached account quota; an explicit
-`candidates[].quota` object is echoed as given.
+it only feeds policy scoring. To see quota-aware behavior in an API dry-run, supply account refs in
+the candidate evidence sent to `POST /api/routing-profiles/dry-run`:
+`candidates[].codexAccountId` (Codex pool, provider `openai`) or `candidates[].accountRef`
+(Anthropic) derives the matching cached account quota; an explicit `candidates[].quota` object is
+echoed as given. The CLI dry-run cannot supply these per-candidate account fields.
 
 ### Combos vs policy profiles
 
