@@ -143,7 +143,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 76개 들어 있습니다. 키 방식 64개, OAuth 8개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 79개 들어 있습니다. 키 방식 67개, OAuth 8개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -176,6 +176,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
 | Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
@@ -216,6 +217,13 @@ Volcengine Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 
 > 반환합니다. Agent Plan 게이트웨이에는 `/models` 리소스가 없습니다. 종량제 기본값은
 > `doubao-seed-2-1-pro-260628`이며 정적 카탈로그에는 현재 DeepSeek와 GLM 텍스트 모델도
 > 포함됩니다. Coding Plan의 기본값은 `ark-code-latest`, Agent Plan은 `deepseek-v4-pro`입니다.
+
+**Chutes 검색:** `chutes` 프리셋은 Chutes의 고정된 공유 OpenAI 호환 LLM gateway를 사용합니다.
+공개 `/v1/models` catalog에서 `supported_features`가 `tools`를 명시한 행만 유지하고, 슬래시가 포함된
+model id와 안전한 live metadata를 보존합니다. 검색은 256 KiB와 raw 128행으로 제한됩니다. 이 catalog는
+공개되어 있어 입력한 키의 유효성을 증명할 수 없지만, chat request는 설정된 Bearer 키로 인증됩니다.
+사용자가 배포한 custom Chute host와 LLM 이외의 API는 custom provider로 설정해야 합니다. 키는
+[Chutes dashboard](https://chutes.ai/auth/start)에서 생성합니다.
 
 **DeepInfra 검색:** 키 기반 OpenAI Chat Completions 제공자인 `deepinfra`는 `openai-chat` 어댑터와
 Bearer API 키를 사용합니다. registry가 소유하는 DeepInfra 모델 목록 URL에서 `chat` 태그가 있는 행만
