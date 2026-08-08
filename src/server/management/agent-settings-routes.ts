@@ -60,7 +60,7 @@ import { applySystemEnvToggle } from "../system-env";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels, fetchGrokCandidateModels, buildClaudeDesktopState } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
-import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
+import { readManagementJsonBody, readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 const GROK_APPLY_JOIN_MS = 120_000;
 export const GROK_APPLY_TERMINAL_MS = 10 * 60_000;
@@ -759,32 +759,22 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   }
   if (url.pathname === "/api/claude-desktop/apply" && req.method === "POST") {
     try {
-      const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
-      const desired = setIntegrationEnabled("claude-desktop", true);
-      if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
-      // Disk now says ON; the reused server snapshot must agree, or the native
-      // GET reports OFF and a later whole-snapshot save undoes this transition.
-      mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
-      // Disk now says ON; the reused server snapshot must agree, or the native
-      // GET reports OFF and a later whole-snapshot save undoes this transition.
       // #859: the CLI delegates here so the registry is built in the serving
       // process. Accept an optional mode; default stays static for back-compat.
       let mode: "static" | "hybrid" | "discovery" = "static";
-      const rawBody = await req.text();
       let parsed: unknown;
-      if (rawBody.trim()) {
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          return jsonResponse({ error: "invalid JSON body" }, 400);
-        }
-        const requested = (parsed as { mode?: unknown } | null)?.mode;
-        if (requested !== undefined) {
-          if (requested === "static" || requested === "hybrid" || requested === "discovery") {
-            mode = requested;
-          } else {
-            return jsonResponse({ error: "mode must be static, hybrid, or discovery" }, 400);
-          }
+      try {
+        parsed = await readOptionalManagementJsonBody(req);
+      } catch (error) {
+        rethrowManagementBodyTooLarge(error);
+        return jsonResponse({ error: "invalid JSON body" }, 400);
+      }
+      const requested = (parsed as { mode?: unknown } | null)?.mode;
+      if (requested !== undefined) {
+        if (requested === "static" || requested === "hybrid" || requested === "discovery") {
+          mode = requested;
+        } else {
+          return jsonResponse({ error: "mode must be static, hybrid, or discovery" }, 400);
         }
       }
       // #859: a delegated CLI apply carries the profile it just saved — the
@@ -800,6 +790,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
         }
       }
+      const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
+      const desired = setIntegrationEnabled("claude-desktop", true);
+      if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
+      // Disk now says ON; the reused server snapshot must agree, or the native
+      // GET reports OFF and a later whole-snapshot save undoes this transition.
+      mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
       const state = await buildClaudeDesktopState(config, profileOverride);
       // `setIntegrationEnabled` above wrote desired ON to DISK; it does not touch
       // this long-lived server snapshot. Saving the snapshot wholesale would carry
@@ -866,6 +862,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
       return jsonResponse({ ok: true, saved: true, applied: true, path: result.path, fingerprint: result.fingerprint });
     } catch (error) {
+      rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   }

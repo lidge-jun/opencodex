@@ -3,6 +3,7 @@ import {
   DecompressedBodyTooLargeError,
   decodeRequestBody,
   MAX_DECOMPRESSED_BODY_BYTES,
+  readBoundedJsonRequestBody,
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
@@ -126,6 +127,23 @@ describe("readJsonRequestBody", () => {
     expect(await response?.json()).toEqual({ error: "request body too large" });
   });
 
+  test("rejects oversized compressed wire bytes without a Content-Length before inflation", async () => {
+    const gzipMember = Bun.gzipSync(new TextEncoder().encode(" "));
+    const oversizedWireBody = new Uint8Array(gzipMember.byteLength * 100);
+    for (let index = 0; index < 100; index++) {
+      oversizedWireBody.set(gzipMember, index * gzipMember.byteLength);
+    }
+    expect(oversizedWireBody.byteLength).toBeGreaterThan(1024);
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      body: oversizedWireBody,
+    });
+    expect(req.headers.get("content-length")).toBeNull();
+    await expect(readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: {} }))
+      .rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
+  });
+
   test("parses an uncompressed request without touching arrayBuffer path", async () => {
     const req = new Request("http://localhost/v1/responses", {
       method: "POST",
@@ -151,6 +169,27 @@ describe("readJsonRequestBody", () => {
       body: Bun.gzipSync(PAYLOAD_BYTES),
     });
     expect(await readJsonRequestBody(req)).toEqual(PAYLOAD);
+  });
+
+  test("returns an explicit fallback only for an empty optional body", async () => {
+    const fallback = {};
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      body: Bun.gzipSync(new TextEncoder().encode("  \n")),
+    });
+    expect(await readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: fallback }))
+      .toBe(fallback);
+  });
+
+  test("does not turn malformed JSON into the optional-body fallback", async () => {
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    await expect(readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: {} }))
+      .rejects.toBeInstanceOf(SyntaxError);
   });
 
   test("surfaces UnsupportedContentEncodingError for unknown encodings", async () => {

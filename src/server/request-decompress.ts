@@ -90,12 +90,13 @@ export async function readBoundedJsonRequestBody(
   req: Request,
   maxBytes: number,
   budget?: TranslatorBudget,
+  options?: { emptyBodyFallback?: unknown },
 ): Promise<unknown> {
   const encoding = req.headers.get("content-encoding");
   const declaredLength = declaredBodyLength(req);
   // Reject an honest oversized declaration before req.arrayBuffer() can allocate it.
-  // Missing, malformed, or dishonest declarations remain covered by decodeRequestBody's
-  // post-read cap below.
+  // Missing, malformed, or dishonest declarations remain covered by the raw and decoded
+  // post-read caps below.
   if (declaredLength !== null && declaredLength > maxBytes) {
     throw new DecompressedBodyTooLargeError(declaredLength, maxBytes);
   }
@@ -108,6 +109,7 @@ export async function readBoundedJsonRequestBody(
   } finally {
     releaseReservation?.();
   }
+  assertBodySizeWithinLimit(raw, maxBytes);
   const releaseRaw = budget?.observeAcceptedRequestCopy(raw.byteLength);
   let releaseDecoded: (() => void) | undefined;
   let releaseText: (() => void) | undefined;
@@ -116,6 +118,9 @@ export async function readBoundedJsonRequestBody(
     releaseDecoded = decoded === raw ? undefined : budget?.observeAcceptedRequestCopy(decoded.byteLength);
     const text = new TextDecoder().decode(decoded);
     releaseText = budget?.observeAcceptedRequestCopy(new TextEncoder().encode(text).byteLength);
+    if (text.trim() === "" && options && "emptyBodyFallback" in options) {
+      return options.emptyBodyFallback;
+    }
     const parsed = JSON.parse(text);
     budget?.observeAcceptedRequestCopy(new TextEncoder().encode(JSON.stringify(parsed)).byteLength);
     return parsed;
