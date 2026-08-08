@@ -6,7 +6,7 @@ import {
   resolveCurrentWindowsPrincipalAsync,
   setAsyncWindowsPrincipalRunnerForTests,
   setWindowsPrincipalRunnerForTests,
-  windowsPrincipalPowerShellCommandForTests,
+  windowsPrincipalCommandForTests,
 } from "../src/lib/windows-user-principal";
 import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 
@@ -25,19 +25,10 @@ afterEach(() => {
 });
 
 describe("Windows effective ACL principal", () => {
-  test("builds a hidden non-interactive command from the trusted PowerShell path", () => {
-    const trusted = "C:\\trusted-system32\\WindowsPowerShell\\v1.0\\powershell.exe";
-    setTrustedWindowsElevationExecutablesForTests({ powershell: trusted });
-    expect(windowsPrincipalPowerShellCommandForTests()).toEqual([
-      trusted,
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-WindowStyle",
-      "Hidden",
-      "-Command",
-      "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    ]);
+  test("builds a hidden command from the trusted whoami path", () => {
+    const trusted = "C:\\trusted-system32\\whoami.exe";
+    setTrustedWindowsElevationExecutablesForTests({ whoami: trusted });
+    expect(windowsPrincipalCommandForTests()).toEqual([trusted, "/user"]);
   });
 
   test("the default trusted runner resolves the real token on Windows", () => {

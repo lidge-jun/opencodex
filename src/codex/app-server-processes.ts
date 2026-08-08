@@ -9,7 +9,15 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import { isProcessAlive, waitForExit } from "../lib/process-control";
+import {
+  currentWindowsAccount,
+  parseWmicCreationDate,
+  parseWmicListRecords,
+  resolveWmicExe,
+  wmicGetOwner,
+} from "../lib/windows-wmic";
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
@@ -306,17 +314,61 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
 
 /**
  * Windows snapshots scoped to the invoking user via Win32_Process GetOwner.
- * PowerShell is the sole path: WMIC lacks reliable owner data and is disabled on
- * many Windows 11 installs; returning unscoped rows would contradict the
- * current-user restart contract.
+ * WMIC is preferred when present (faster cold start, no .NET runtime) and the
+ * hidden PowerShell CIM enumeration is the fallback for hosts where WMIC is
+ * absent (a deprecated optional component on modern Windows 11 images). Both
+ * paths spawn with windowsHide: true — a console-less proxy presenting a child
+ * console window is the v2.11.0 popup bug this enumeration must not revive.
  *
- * CIM instance methods must use Invoke-CimMethod (direct .GetOwner() calls fail).
  * Candidates are pre-filtered to Codex basename / code-mode-host command lines
- * so we do not pay GetOwner per every process on the machine.
- * Exported for the Windows integration regression that exercises the real
- * PowerShell enumeration.
+ * so we do not pay GetOwner per every process on the machine. A candidate
+ * whose owner cannot be verified makes the whole enumeration incomplete; WMIC
+ * absence falls back rather than failing. Exported for the Windows
+ * integration regression.
  */
 export function listWindowsSnapshots(): ProcessSnapshot[] {
+  const wmic = resolveWmicExe();
+  return wmic ? listWindowsSnapshotsViaWmic(wmic) : listWindowsSnapshotsViaPowerShell();
+}
+
+function listWindowsSnapshotsViaWmic(wmic: string): ProcessSnapshot[] {
+  const me = currentWindowsAccount();
+  if (!me) throw new Error("windows_enum_incomplete");
+  const wql =
+    "(Name like 'codex%' or CommandLine like '%codex app-server%' or CommandLine like '%codex-code-mode-host%')";
+  // Top-level exec failure propagates (see listDarwinSnapshots note).
+  const output = execFileSync(
+    wmic,
+    ["process", "where", wql, "get", "ProcessId,CommandLine,CreationDate", "/format:list"],
+    { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true },
+  );
+  const out: ProcessSnapshot[] = [];
+  for (const record of parseWmicListRecords(output)) {
+    if (!record.commandLine) continue;
+    const commandLine = record.commandLine.replace(/\t/g, " ").trim();
+    // The WMIC helper's own CommandLine embeds the WQL literals ("codex
+    // app-server", "codex-code-mode-host"), so it matches the candidate
+    // pre-filter. Skip any process that is the WMIC executable itself.
+    if (commandLine.toLowerCase().includes(wmic.toLowerCase())) continue;
+    if (!isWindowsCodexCandidateCommandLine(commandLine)) continue;
+    const owner = wmicGetOwner(record.processId);
+    // A candidate whose owner could not be verified makes the whole
+    // enumeration incomplete — the staleness collector must not read the
+    // partial result as "nothing running".
+    if (!owner) throw new Error("windows_enum_incomplete");
+    const ownerName = `${owner.domain}\\${owner.user}`;
+    if (ownerName.toLowerCase() !== me.toLowerCase()) continue;
+    out.push({
+      pid: record.processId,
+      commandLine,
+      owner: ownerName,
+      startedAtMs: parseWmicCreationDate(record.creationDate) ?? undefined,
+    });
+  }
+  return out;
+}
+
+function listWindowsSnapshotsViaPowerShell(): ProcessSnapshot[] {
   const out: ProcessSnapshot[] = [];
   // Newlines keep -Command as a real script (space-joined statements need ';').
   // Double-quoted format string so `t expands to a real tab.
@@ -326,6 +378,7 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   // path with "opencodex".
   const basenameMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source);
   const codeModeMatch = powerShellSingleQuotedIgnoreCaseMatch(WINDOWS_CODEX_CODE_MODE_HOST_CANDIDATE_RE.source);
+  // CIM instance methods must use Invoke-CimMethod (direct .GetOwner() calls fail).
   const psCommand = [
     "$ErrorActionPreference='SilentlyContinue'",
     "$me=[System.Security.Principal.WindowsIdentity]::GetCurrent().Name",
@@ -346,7 +399,7 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "}",
   ].join("\n");
   // Top-level exec failure propagates (see listDarwinSnapshots note).
-  const output = execFileSync("powershell.exe", [
+  const output = execFileSync(resolveTrustedWindowsPowerShellExe(), [
     "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
     "-Command",
     psCommand,
@@ -456,8 +509,24 @@ function readDarwinProcStartMs(pid: number): number | null {
 
 /** Win32_Process.CreationDate → epoch ms, or null (Windows). */
 function readWindowsProcStartMs(pid: number): number | null {
+  const wmic = resolveWmicExe();
+  if (!wmic) return readWindowsProcStartMsViaPowerShell(pid);
   try {
-    const out = execFileSync("powershell.exe", [
+    const out = execFileSync(
+      wmic,
+      ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/format:list"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true },
+    );
+    const match = /^CreationDate=(.*)$/m.exec(out.replace(/\r/g, ""));
+    return parseWmicCreationDate(match?.[1]);
+  } catch {
+    return null;
+  }
+}
+
+function readWindowsProcStartMsViaPowerShell(pid: number): number | null {
+  try {
+    const out = execFileSync(resolveTrustedWindowsPowerShellExe(), [
       "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
       "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString("o")`,
@@ -503,7 +572,7 @@ export function readProcessStartMsBatch(
         const parsed = Date.parse(match[2]!.trim());
         if (Number.isSafeInteger(pid) && Number.isFinite(parsed)) byPid.set(pid, parsed);
       }
-      for (const pid of pids) out.set(pid, byPid.get(pid) ?? null);
+      for (const pid of pids) if (!out.has(pid)) out.set(pid, null);
       return out;
     } catch {
       for (const pid of pids) out.set(pid, null);
@@ -511,22 +580,24 @@ export function readProcessStartMsBatch(
     }
   }
   if (platform === "win32") {
+    const wmic = resolveWmicExe();
+    if (!wmic) {
+      for (const pid of pids) out.set(pid, null);
+      return out;
+    }
     try {
-      const filter = pids.map(pid => `ProcessId=${pid}`).join(" OR ");
-      const stdout = execFileSync("powershell.exe", [
-        "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
-        "-Command",
-        `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true });
-      const byPid = new Map<number, number>();
-      for (const line of stdout.split(/\r?\n/)) {
-        const tab = line.indexOf("\t");
-        if (tab <= 0) continue;
-        const pid = Number(line.slice(0, tab));
-        const parsed = Date.parse(line.slice(tab + 1).trim());
-        if (Number.isSafeInteger(pid) && Number.isFinite(parsed)) byPid.set(pid, parsed);
+      const filter = pids.map(pid => `ProcessId=${pid}`).join(" or ");
+      const stdout = execFileSync(
+        wmic,
+        ["process", "where", filter, "get", "ProcessId,CreationDate", "/format:list"],
+        { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true },
+      );
+      for (const record of parseWmicListRecords(stdout)) {
+        if (record.creationDate !== undefined) {
+          out.set(record.processId, parseWmicCreationDate(record.creationDate));
+        }
       }
-      for (const pid of pids) out.set(pid, byPid.get(pid) ?? null);
+      for (const pid of pids) if (!out.has(pid)) out.set(pid, null);
       return out;
     } catch {
       for (const pid of pids) out.set(pid, null);
