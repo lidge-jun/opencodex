@@ -170,4 +170,23 @@ describe("OAuth provider reconciliation", () => {
     upsertOAuthProvider(config, "google-antigravity");
     expect(config.providers["google-antigravity"].liveModels).toBe(true);
   });
+
+  test("preserves an explicit requiresReasoningPlaceholderModels opt-out on OAuth providers", () => {
+    // No OAuth preset seeds the new field, so reconcile must never delete an
+    // explicit `[]` opt-out on startup (chatgpt-codex-connector P2 on #1205).
+    const config = {
+      port: 10100,
+      defaultProvider: "kimi",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: {
+        kimi: {
+          ...structuredClone(OAUTH_PROVIDERS.kimi.providerConfig),
+          requiresReasoningPlaceholderModels: [],
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(false);
+    expect(config.providers.kimi.requiresReasoningPlaceholderModels).toEqual([]);
+  });
 });

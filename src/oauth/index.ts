@@ -740,6 +740,11 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
 ];
+// `requiresReasoningPlaceholderModels` is deliberately NOT reconciled here: no
+// OAuth preset seeds it, so the delete-when-preset-undefined branch would wipe
+// an explicit user opt-out (`[]`) on every startup. Registry seeds still reach
+// existing rows through enrichProviderFromRegistry, which is fill-only and
+// preserves explicit saved values.
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
 const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;

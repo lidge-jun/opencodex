@@ -36,6 +36,7 @@ export interface DerivedKeyLoginProvider {
   noPenaltyModels?: string[];
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  requiresReasoningPlaceholderModels?: string[];
   reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -154,6 +155,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+    ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
     ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
     ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -199,6 +201,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
       ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
       ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+      ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
       ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
       ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
       ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -345,6 +348,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
+  if (!prov.requiresReasoningPlaceholderModels && seed.requiresReasoningPlaceholderModels) prov.requiresReasoningPlaceholderModels = [...seed.requiresReasoningPlaceholderModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];
   if (!prov.thinkingToggleModels && seed.thinkingToggleModels) prov.thinkingToggleModels = [...seed.thinkingToggleModels];
   if (!prov.thinkingBudgetModels && seed.thinkingBudgetModels) prov.thinkingBudgetModels = [...seed.thinkingBudgetModels];

@@ -221,6 +221,7 @@ export interface ProviderRegistryEntry {
   promptCacheKey?: boolean;
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  requiresReasoningPlaceholderModels?: string[];
   reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -243,7 +244,7 @@ export type ProviderConfigSeed = Pick<
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
   | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames"
   | "googleMode" | "project" | "location" | "headers"
 >;
 
@@ -1721,6 +1722,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS.map(id => [id, true]),
     ),
     preserveReasoningContentModels: ZHIPU_BIGMODEL_THINKING_TOGGLE_MODELS,
+    // GLM thinking is a binary toggle (low maps to disabled), so a legitimate
+    // tool round can carry no reasoning at all; never fabricate a placeholder
+    // for it, only replay real recorded text (P2 on #1205).
+    requiresReasoningPlaceholderModels: [],
     // No liveModels: GET /api/paas/v4/models has not been observed to answer on this host, and a
     // false live claim yields an empty picker at runtime. Flip it on once someone verifies it.
     note: "Domestic BigModel pay-as-you-go endpoint (open.bigmodel.cn)",
@@ -1995,6 +2000,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
+    // MiniMax-M3 low effort maps to thinking disabled, so a legitimate tool
+    // round can carry no reasoning at all; only replay real recorded text,
+    // never a fabricated placeholder (chatgpt-codex-connector P2 on #1205).
+    requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "Subscription Key or API Key",
@@ -2007,6 +2016,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelDefaultReasoningEfforts: { "MiniMax-M3": "medium" },
     modelReasoningEffortMap: { "MiniMax-M3": MINIMAX_M3_REASONING_EFFORT_MAP },
     preserveReasoningContentModels: MINIMAX_MODELS,
+    requiresReasoningPlaceholderModels: [],
     reasoningSplitModels: MINIMAX_MODELS,
     thinkingToggleModels: ["MiniMax-M3"],
     jawcodeBundle: "minimax", metadataModelIdNormalize: "case-insensitive", note: "中国区 Subscription Key",

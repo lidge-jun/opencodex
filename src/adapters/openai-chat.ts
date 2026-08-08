@@ -347,6 +347,18 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
           // recorded under every call id — join unique texts only.
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
+          } else if (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)) {
+            // Fallback (extends #950, closes #1193): the replay cache is
+            // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
+            // long sessions, and some tool rounds carry no recorded reasoning
+            // at all. DeepSeek thinking mode rejects ANY tool_call assistant
+            // message missing reasoning_content with HTTP 400, so inject a
+            // minimal placeholder rather than emit a bare continuation the
+            // upstream will reject. Scoped to requiresReasoningPlaceholderModels
+            // (defaulting to the preserve list): preserve-listed providers with
+            // toggleable thinking (MiniMax low effort) opt out with `[]` so
+            // non-thinking histories are never given a fabricated placeholder.
+            reasoningContent = " ";
           }
         }
         if (reasoningContent.length > 0 && modelInList(provider.preserveReasoningContentModels, parsed.modelId)) {
@@ -413,10 +425,25 @@ function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderCon
             toolCallId && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
               ? peekReasoningForCall(toolCallId, replayCacheScope)
               : undefined;
+          // Same fallback as the main-assistant path: never emit a bare orphan
+          // tool_call continuation on a thinking-mode provider — inject a
+          // placeholder when the replay cache missed (the bounded cache can
+          // always miss on long sessions), or DeepSeek thinking mode 400s.
+          // Gate on the preserve list too: reasoning_content is only ever
+          // serialized for preserve-listed models, so a requires-only custom
+          // entry must not fabricate it on this path (P2 on #1205).
+          // `||` (not `??`): the cache never stores empty strings, but treat a
+          // falsy hit as a miss so the placeholder still fires.
+          const orphanReasoning =
+            cachedReasoning
+            || (modelInList(provider.preserveReasoningContentModels, parsed.modelId)
+              && modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)
+              ? " "
+              : undefined);
           out.push({
             role: "assistant",
             content: emptyAssistantContent(provider),
-            ...(cachedReasoning ? { reasoning_content: cachedReasoning } : {}),
+            ...(orphanReasoning ? { reasoning_content: orphanReasoning } : {}),
             tool_calls: [{
               id: toolCallId,
               type: "function",

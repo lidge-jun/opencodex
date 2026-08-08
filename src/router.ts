@@ -284,6 +284,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
   const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
+  const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
   const reasoningSplitModels = mergeStringArray(registryEntry.reasoningSplitModels, provider.reasoningSplitModels);
   const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
   const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
@@ -368,6 +369,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
+    ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
