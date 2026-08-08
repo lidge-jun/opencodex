@@ -2,7 +2,31 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { assessSponsoredSurface, isRestrictedPath } = require("./pr-sponsored-surface.cjs");
+const {
+  HEAD_SPECIFIC_APPROVAL_LABELS,
+  assessSponsoredSurface,
+  headSpecificApprovalLabelsForAction,
+  isRestrictedPath,
+} = require("./pr-sponsored-surface.cjs");
+
+describe("head-specific approvals", () => {
+  it("keeps the exact set of labels that must be invalidated by a new head", () => {
+    assert.deepEqual(HEAD_SPECIFIC_APPROVAL_LABELS, [
+      "test-exception-approved",
+      "suppression-approved",
+      "generated-change-approved",
+      "dependency-change-approved",
+      "maintainer-sponsored",
+    ]);
+  });
+
+  it("invalidates them only when a synchronize event changes the reviewed head", () => {
+    assert.equal(headSpecificApprovalLabelsForAction("synchronize"), HEAD_SPECIFIC_APPROVAL_LABELS);
+    for (const action of ["opened", "reopened", "labeled", "unlabeled"]) {
+      assert.deepEqual(headSpecificApprovalLabelsForAction(action), [], action);
+    }
+  });
+});
 
 describe("isRestrictedPath", () => {
   it("covers auth, workflow, release, and dependency surfaces", () => {

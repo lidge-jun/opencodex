@@ -50,7 +50,9 @@ A ready-for-review PR is the author's claim that the change is complete, underst
 - Authentication, workflow, release automation, and dependency-installation
   surfaces need a maintainer to sponsor the change (`maintainer-sponsored`)
   before merge. Those are the places where a bad merge is expensive and hard to
-  unwind, which is why they are the only pre-approved surfaces here.
+  unwind, which is why they are the only pre-approved surfaces here. Sponsorship
+  is bound to the reviewed commit: pushing another commit clears the label, and
+  a maintainer reapplies it only after reviewing the new head.
 - A PR that stalls with unresolved review feedback may be closed, with the reason
   stated. A closed PR can be reopened once the stated reason is resolved, or
   replaced with a clean one.

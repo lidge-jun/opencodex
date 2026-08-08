@@ -110,7 +110,9 @@ Authentication, credential handling, GitHub Actions workflows, release
 automation, and dependency installation need a maintainer to sponsor the change
 (`maintainer-sponsored`) before it merges. A bad merge on those surfaces is
 expensive and hard to unwind, which is why they are the only surfaces gated this
-way. Everything else is open.
+way. The sponsorship is bound to the reviewed commit. Pushing another commit
+clears the label, and a maintainer reapplies it only after reviewing the new
+head. Everything else is open.
 
 ## When a pull request is closed
 

@@ -43,7 +43,7 @@ jobs:
             const { assessHygiene } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
-            const { assessSponsoredSurface } = require(
+            const { assessSponsoredSurface, headSpecificApprovalLabelsForAction } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-sponsored-surface.cjs"),
             );
             const {
@@ -90,24 +90,14 @@ jobs:
             // Exception approvals are head-specific: a new commit invalidates
             // them, so a contributor cannot obtain one narrow exception and
             // then push unreviewed violations under the same label.
-            if (context.payload.action === "synchronize") {
-              for (const name of [
-                "test-exception-approved",
-                "suppression-approved",
-                "generated-change-approved",
-                "dependency-change-approved",
-              ]) {
-                if (labels.has(name)) {
-                  await github.rest.issues.removeLabel({
-                    owner, repo, issue_number: pull_number, name,
-                  });
-                  labels.delete(name);
-                }
+            for (const name of headSpecificApprovalLabelsForAction(context.payload.action)) {
+              if (labels.has(name)) {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: pull_number, name,
+                });
+                labels.delete(name);
               }
             }
-            // Sponsorship is head-independent: it is about which surfaces the
-            // change touches, not about the state of a particular revision, so
-            // it is NOT cleared by the synchronize sweep above.
             const failures = [
               ...assessHygiene({ files, labels: [...labels] }),
               ...assessSponsoredSurface({

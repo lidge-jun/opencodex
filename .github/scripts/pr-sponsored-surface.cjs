@@ -26,6 +26,14 @@ const RESTRICTED_PREFIXES = [
   "src/oauth/",
 ];
 
+const HEAD_SPECIFIC_APPROVAL_LABELS = [
+  "test-exception-approved",
+  "suppression-approved",
+  "generated-change-approved",
+  "dependency-change-approved",
+  "maintainer-sponsored",
+];
+
 const RESTRICTED_FILES = new Set([
   // Release and packaging automation executed by the release workflow.
   "scripts/release.ts",
@@ -63,6 +71,10 @@ function hasSponsorship(labels) {
   );
 }
 
+function headSpecificApprovalLabelsForAction(action) {
+  return action === "synchronize" ? HEAD_SPECIFIC_APPROVAL_LABELS : [];
+}
+
 /**
  * @returns {{ code: string, paths: string[] }[]} empty when the pull request may proceed
  */
@@ -80,8 +92,10 @@ function assessSponsoredSurface({
 }
 
 module.exports = {
+  HEAD_SPECIFIC_APPROVAL_LABELS,
   RESTRICTED_FILES,
   RESTRICTED_PREFIXES,
   assessSponsoredSurface,
+  headSpecificApprovalLabelsForAction,
   isRestrictedPath,
 };
