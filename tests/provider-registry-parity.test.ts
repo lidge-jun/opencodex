@@ -290,8 +290,9 @@ describe("provider registry parity", () => {
         "qwen3.7-max": ["text", "image"],
       },
       modelReasoningEfforts: {
-        "qwen3.8-max": ["low", "medium", "high", "xhigh", "max"],
+        "qwen3.8-max": ["low", "medium", "xhigh"],
       },
+      modelDefaultReasoningEfforts: { "qwen3.8-max": "xhigh" },
       modelContextWindows: {
         "qwen3.8-max": 983_616,
         "qwen3.7-max": 1_000_000,
@@ -300,8 +301,12 @@ describe("provider registry parity", () => {
       noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
+    expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
+      .toEqual(["qwen3.8-max"]);
     expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
-      .toContain("qwen3.8-max");
+      .not.toContain("qwen3.8-max");
+    expect(KEY_LOGIN_PROVIDERS["alibaba-token-plan"].thinkingBudgetModels)
+      .toContain("qwen3.7-max");
   });
 
   test("aggregator defaults and Neuralwatt seeds match the audited live catalogs", () => {

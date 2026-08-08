@@ -157,6 +157,11 @@ Codex context compaction 同样适用于路由模型。`server/responses/compact
 - 解析模型级和 provider 级 `reasoningEffortMap` override，用于自定义 wire 映射。
 - 对 `noReasoningModels` 中的模型完全移除 effort。
 
+Qwen3.8-Max 是旧版 Qwen3.x budget 契约之外、明确使用直接 effort 的例外。Alibaba Token
+Plan 把其上游支持等级记录为 `low`、`medium` 和 `xhigh`（默认值），并通过
+`reasoning_effort` 发送最终值；仅供 Codex 兼容的顶档在发送时会限制为 `xhigh`。运行时的
+注册表补全会修复仍把该模型归类为 `thinking_budget` 模型的旧版持久化预设元数据。
+
 ## 核心类型
 
 内部模型位于 `types.ts`：`OcxParsedRequest`、`OcxContext`、`OcxMessage` 联合类型、

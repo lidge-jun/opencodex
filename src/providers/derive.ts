@@ -109,6 +109,67 @@ function cloneNestedRecord(input: Record<string, Record<string, string>>): Recor
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
 }
 
+function omitFoldedModelKeys<T>(
+  record: Record<string, T> | undefined,
+  foldedModels: ReadonlySet<string>,
+): Record<string, T> | undefined {
+  if (!record) return undefined;
+  const next = Object.fromEntries(
+    Object.entries(record).filter(([model]) => !foldedModels.has(model.toLowerCase())),
+  ) as Record<string, T>;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/**
+ * Apply a registry-owned direct `reasoning_effort` contract after user/seed metadata is merged.
+ *
+ * Provider presets are persisted with capability metadata, so an existing config can retain an
+ * obsolete thinking-budget classification after the registry learns that a model has a native
+ * effort field. The registry opts only verified model contracts into this repair; providers that
+ * do not resolve through the matching registry entry keep their user-supplied classification.
+ */
+export function applyDirectReasoningEffortContracts(
+  entry: ProviderRegistryEntry,
+  prov: OcxProviderConfig,
+): void {
+  const models = entry.directReasoningEffortModels;
+  if (!models || models.length === 0) return;
+
+  const direct = new Set(models.map(model => model.toLowerCase()));
+  const keepNonDirect = (model: string): boolean => !direct.has(model.toLowerCase());
+
+  prov.thinkingBudgetModels = prov.thinkingBudgetModels?.filter(keepNonDirect);
+  prov.thinkingToggleModels = prov.thinkingToggleModels?.filter(keepNonDirect);
+  prov.modelReasoningEfforts = omitFoldedModelKeys(prov.modelReasoningEfforts, direct);
+  prov.modelDefaultReasoningEfforts = omitFoldedModelKeys(prov.modelDefaultReasoningEfforts, direct);
+  prov.modelReasoningEffortMap = omitFoldedModelKeys(prov.modelReasoningEffortMap, direct);
+
+  for (const model of models) {
+    const efforts = entry.modelReasoningEfforts?.[model];
+    if (efforts) {
+      prov.modelReasoningEfforts = {
+        ...(prov.modelReasoningEfforts ?? {}),
+        [model]: [...efforts],
+      };
+    }
+
+    const defaultEffort = entry.modelDefaultReasoningEfforts?.[model];
+    if (defaultEffort) {
+      prov.modelDefaultReasoningEfforts = {
+        ...(prov.modelDefaultReasoningEfforts ?? {}),
+        [model]: defaultEffort,
+      };
+    }
+
+    // An explicit empty model map masks any provider-wide aliases. Without it, a stale global
+    // mapping such as xhigh -> max would win before the verified direct ladder can clamp it.
+    prov.modelReasoningEffortMap = {
+      ...(prov.modelReasoningEffortMap ?? {}),
+      [model]: {},
+    };
+  }
+}
+
 /**
  * Build the provider config a registry entry contributes when a preset is materialized.
  * The registry auth kind is preserved verbatim (including `"local"`) so fail-closed gates
@@ -353,6 +414,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
+  applyDirectReasoningEffortContracts(entry, prov);
 }
 
 export function deriveFeaturedProviderIds(): string[] {
