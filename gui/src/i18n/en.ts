@@ -8,6 +8,10 @@
 export const en = {
   // sidebar / nav / common
   "nav.dashboard": "Dashboard",
+  "uptime.day": "d",
+  "uptime.hour": "h",
+  "uptime.minute": "m",
+  "uptime.second": "s",
   "nav.startup": "Startup",
   "nav.providers": "Providers",
   "nav.models": "Models",

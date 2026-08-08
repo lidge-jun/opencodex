@@ -9,6 +9,7 @@ const VISION_REASONING_LABELS = {
   zh: { low: "低", medium: "中", high: "高", xhigh: "极高", max: "最大" },
   ru: { low: "Низкий", medium: "Средний", high: "Высокий", xhigh: "Очень высокий", max: "Максимальный" },
   ja: { low: "低", medium: "中", high: "高", xhigh: "非常に高い", max: "最大" },
+  tr: { low: "Düşük", medium: "Orta", high: "Yüksek", xhigh: "Çok yüksek", max: "Maksimum" },
 } satisfies Record<Locale, Record<VisionReasoningLabelLevel, string>>;
 
 /** Localized display label for the wire-level vision reasoning value. */

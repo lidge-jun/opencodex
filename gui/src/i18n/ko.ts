@@ -6,6 +6,10 @@ import type { TKey } from "./en";
 export const ko: Record<TKey, string> = {
   // sidebar / nav / common
   "nav.dashboard": "대시보드",
+  "uptime.day": "일",
+  "uptime.hour": "시간",
+  "uptime.minute": "분",
+  "uptime.second": "초",
   "nav.startup": "시작 안전성",
   "nav.providers": "프로바이더",
   "nav.models": "모델",

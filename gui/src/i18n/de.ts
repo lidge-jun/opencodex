@@ -6,6 +6,10 @@ import type { TKey } from "./en";
  */
 export const de: Record<TKey, string> = {
   "nav.dashboard": "Übersicht",
+  "uptime.day": "T",
+  "uptime.hour": "Std",
+  "uptime.minute": "Min",
+  "uptime.second": "Sek",
   "nav.startup": "Startsicherheit",
   "nav.providers": "Anbieter",
   "nav.models": "Modelle",

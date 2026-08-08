@@ -6,6 +6,10 @@ import type { TKey } from "./en";
 export const ja: Record<TKey, string> = {
   // sidebar / nav / common
   "nav.dashboard": "ダッシュボード",
+  "uptime.day": "日",
+  "uptime.hour": "時間",
+  "uptime.minute": "分",
+  "uptime.second": "秒",
   "nav.startup": "起動安全性",
   "nav.providers": "プロバイダー",
   "nav.models": "モデル",

@@ -6,6 +6,10 @@ import type { TKey } from "./en";
 export const zh: Record<TKey, string> = {
   // sidebar / nav / common
   "nav.dashboard": "仪表盘",
+  "uptime.day": "天",
+  "uptime.hour": "小时",
+  "uptime.minute": "分钟",
+  "uptime.second": "秒",
   "nav.startup": "启动安全",
   "nav.providers": "提供方",
   "nav.models": "模型",

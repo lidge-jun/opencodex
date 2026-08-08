@@ -6,6 +6,10 @@ import type { TKey } from "./en";
 export const ru: Record<TKey, string> = {
   // sidebar / nav / common
   "nav.dashboard": "Дашборд",
+  "uptime.day": "д",
+  "uptime.hour": "ч",
+  "uptime.minute": "мин",
+  "uptime.second": "с",
   "nav.startup": "Безопасность запуска",
   "nav.providers": "Провайдеры",
   "nav.models": "Модели",

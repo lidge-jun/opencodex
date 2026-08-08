@@ -7,6 +7,7 @@ const UPTIME_UNITS: Record<Locale, { day: string; hour: string; minute: string; 
   zh: { day: "天", hour: "小时", minute: "分钟", second: "秒" },
   ru: { day: "д", hour: "ч", minute: "мин", second: "с" },
   ja: { day: "日", hour: "時間", minute: "分", second: "秒" },
+  tr: { day: " gün", hour: " saat", minute: " dk", second: " sn" },
 };
 
 export function formatUptime(seconds: number, locale: Locale): string {
