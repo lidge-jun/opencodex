@@ -66,45 +66,78 @@ function isPlaceholderOnlyValue(raw) {
  */
 function stripMediaTokens(text) {
   if (typeof text !== "string") return "";
-  // Indented code lines render as literal code in GitHub Markdown. Protect
-  // them first so neither the HTML nor the Markdown media stripper can
-  // remove example syntax; restore the lines afterwards.
+  // Fenced and indented code render literally in GitHub Markdown. Protect
+  // them first so neither media stripper can remove example syntax. The
+  // protector deliberately leaves indented children of an unindented HTML
+  // media block visible: those lines are HTML children, not Markdown code.
   const protectedText = protectIndentedCodeLines(text);
   const markdownStripped = stripMarkdownImages(stripHtmlMedia(protectedText.text));
   const referenceStripped = stripReferenceImages(markdownStripped);
-  return restoreIndentedCodeLines(referenceStripped, protectedText.lines);
+  return restoreIndentedCodeLines(referenceStripped, protectedText);
 }
 
 /**
- * Replace every indented code line (4+ leading spaces or a tab) with a
- * placeholder of equal length so media stripping cannot touch it. Returns the
- * masked text plus the original lines for restoration.
+ * Replace fenced code and indented code outside HTML media blocks with opaque
+ * tokens. Restoration is token-based rather than line-position-based because
+ * stripping a multiline media block may collapse or remove lines.
  */
 function protectIndentedCodeLines(text) {
   const lines = [];
+  let markerPrefix = "\u0000OCX_ISSUE_CODE_";
+  while (text.includes(markerPrefix)) markerPrefix += "_";
+  let mediaDepth = 0;
+  let fence = null;
+
+  const mask = (line) => {
+    const index = lines.push(line) - 1;
+    return `${markerPrefix}${index}\u0000`;
+  };
+
   const masked = text.split("\n").map((line) => {
-    if (/^(?: {4,}|\t)/.test(line)) {
-      lines.push(line);
-      return "\u0000" + line.replace(/[^\n]/g, " ").slice(1);
+    if (fence) {
+      const closing = new RegExp(`^ {0,3}${fence.char}{${fence.length},}[ \\t]*$`);
+      if (closing.test(line)) fence = null;
+      return mask(line);
     }
-    lines.push(null);
+
+    const fenceStart = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (fenceStart) {
+      fence = { char: fenceStart[1][0], length: fenceStart[1].length };
+      return mask(line);
+    }
+
+    // Four-space/tab lines inside an active unindented HTML media block are
+    // child markup or fallback text. Treating them as code would keep an
+    // otherwise media-only <picture>/<video> block alive.
+    if (mediaDepth === 0 && /^(?: {4,}|\t)/.test(line)) {
+      return mask(line);
+    }
+
+    mediaDepth = Math.max(0, mediaDepth + htmlMediaDepthDelta(line));
     return line;
   });
-  return { text: masked.join("\n"), lines };
+  return { text: masked.join("\n"), lines, markerPrefix };
 }
 
 /**
- * Restore masked indented-code lines from their original content. Placeholder
- * lines are identified by the leading \u0000 marker and matched positionally.
+ * Count opening/closing block-media tags on one line. Self-closing tags do not
+ * create a block. This small scanner is only for deciding whether indentation
+ * belongs to HTML; stripHtmlMedia remains the authority for removing media.
  */
-function restoreIndentedCodeLines(text, lines) {
-  const out = text.split("\n").map((line, i) => {
-    if (lines[i] !== null && line.startsWith("\u0000")) {
-      return lines[i];
-    }
-    return line;
-  });
-  return out.join("\n");
+function htmlMediaDepthDelta(line) {
+  let delta = 0;
+  for (const match of line.matchAll(/<(\/)?(picture|video|audio)\b[^>]*>/gi)) {
+    if (match[1]) delta -= 1;
+    else if (!/\/\s*>$/.test(match[0])) delta += 1;
+  }
+  return delta;
+}
+
+/** Restore protected code from ordered tokens, independent of line count. */
+function restoreIndentedCodeLines(text, protection) {
+  const escapedPrefix = protection.markerPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const token = new RegExp(`${escapedPrefix}(\\d+)\\u0000`, "g");
+  return text.replace(token, (_match, rawIndex) => protection.lines[Number(rawIndex)] ?? "");
 }
 
 /**
@@ -131,7 +164,9 @@ function stripHtmlMedia(text) {
         .replace(/<[^>]+>/g, " ")
         .replace(/[\s_*~`]+/g, " ")
         .trim();
-      return innerStripped.length === 0 ? " " : match;
+      // GitHub's generated placeholders remain empty even when wrapped as
+      // fallback text inside a media element. Real captions remain intact.
+      return innerStripped.length === 0 || isPlaceholderOnlyValue(innerStripped) ? " " : match;
     },
   );
   return s;
