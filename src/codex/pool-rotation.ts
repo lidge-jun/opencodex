@@ -210,6 +210,32 @@ export function peekRoundRobinAccount(
   return pickRoundRobinFromState(eligibleIds, stickyLimit, scratch, false);
 }
 
+/**
+ * Record the account whose response was actually accepted after a deferred pick.
+ * Completion order is authoritative: concurrent requests each contribute one
+ * smooth-weighted success for the account that served them.
+ */
+export function commitRoundRobinAccountSuccess(
+  poolKey: string,
+  eligibleIds: readonly string[],
+  accountId: string,
+  stickyLimit: number,
+): boolean {
+  if (!eligibleIds.includes(accountId)) return false;
+  const state = getOrCreateState(poolKey);
+  if (state.activeKey !== accountId) {
+    delete state.activeKey;
+    state.successes = 0;
+    const total = eligibleIds.length;
+    for (const id of eligibleIds) {
+      state.currentWeights.set(id, (state.currentWeights.get(id) ?? 0) + 1);
+    }
+    state.currentWeights.set(accountId, (state.currentWeights.get(accountId) ?? 0) - total);
+  }
+  notePoolRotationSuccess(poolKey, accountId, stickyLimit);
+  return true;
+}
+
 export function notePoolRotationSuccess(
   poolKey: string,
   accountId: string,

@@ -1,4 +1,5 @@
 import {
+  commitRoundRobinAccountSuccess,
   clearPoolRotationState,
   DEFAULT_ACCOUNT_PRIORITY,
   normalizeAccountPriority,
@@ -307,6 +308,13 @@ describe("pickRoundRobinAccount", () => {
     const peekAfter = peekRoundRobinAccount("codex", ids, 1);
     expect(peekAfter).not.toBe(picked);
     expect(pickRoundRobinAccount("codex", ids, 1)).toBe(peekAfter);
+  });
+
+  test("deferred commit advances from the accepted account, not a rejected preview", () => {
+    const ids = ["a", "b", "c"];
+    expect(peekRoundRobinAccount("codex", ids, 1)).toBe("a");
+    expect(commitRoundRobinAccountSuccess("codex", ["b", "c"], "b", 1)).toBe(true);
+    expect(peekRoundRobinAccount("codex", ids, 1)).toBe("c");
   });
 });
 

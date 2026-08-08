@@ -13,10 +13,12 @@ import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getEffectiveActiveCodexAccountId,
   getCodexUpstreamHealth,
   isCodexAccountSoftAvoided,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
+import { clearPoolRotationState, POOL_KEY_CODEX } from "../src/codex/pool-rotation";
 import { loadConfig, saveConfig } from "../src/config";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailure, upstreamHostHealthKey } from "../src/codex/upstream-host-health";
 import { deriveProviderPresets } from "../src/providers/derive";
@@ -40,6 +42,7 @@ import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
+import { CODEX_MODEL_CAPACITY_MESSAGE } from "../src/server/responses/codex-capacity";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -135,6 +138,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  clearAccountNeedsReauth("pool-c");
   clearAccountQuota();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
@@ -147,6 +151,50 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
   });
 }
 
+function capacityErrorBody(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
+): string {
+  return JSON.stringify({
+    error: {
+      type: "server_error",
+      ...(code ? { code } : {}),
+      message,
+    },
+  });
+}
+
+function capacityFailedSse(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
+): string {
+  const error = {
+    type: "server_error",
+    ...(code ? { code } : {}),
+    message,
+  };
+  return [
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"capacity-attempt","status":"in_progress"}}\n\n',
+    `event: response.failed\ndata: ${JSON.stringify({
+      type: "response.failed",
+      response: { status: "failed", error, last_error: error },
+    })}\n\n`,
+  ].join("");
+}
+
+function capacityErrorSse(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CODEX_MODEL_CAPACITY_MESSAGE,
+): string {
+  return [
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"capacity-attempt","status":"in_progress"}}\n\n',
+    `event: error\ndata: ${JSON.stringify({
+      type: "error",
+      error: { ...(code ? { code } : {}), message },
+    })}\n\n`,
+  ].join("");
+}
+
 type PoolRetryHarness = {
   config: OcxConfig;
   dispatches: string[];
@@ -156,6 +204,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    threadId?: string;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -183,6 +232,7 @@ async function startPoolRetryHarness(
   reply: (accountId: string, request: Request) => Response | Promise<Response>,
   options: {
     secondAccount?: boolean;
+    thirdAccount?: boolean;
     streamMode?: "legacy-tee" | "eager-relay";
     accountMode?: "direct" | "pool";
     activeAccountId?: string;
@@ -194,6 +244,8 @@ async function startPoolRetryHarness(
     pausedAccountIds?: string[];
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
+    accountPoolStrategy?: "quota" | "round-robin" | "fill-first";
+    accountPoolStickyLimit?: number;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -201,10 +253,12 @@ async function startPoolRetryHarness(
   process.env.OPENCODEX_HOME = TEST_DIR;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
+  clearPoolRotationState(POOL_KEY_CODEX);
   clearAccountQuota();
   clearRequestLogsForTests();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  clearAccountNeedsReauth("pool-c");
   // The registry is process-global and survives a harness teardown. WS-REBIND-01
   // asserts exact per-account socket counts, so a socket leaked by any earlier test
   // in this file shifts its snapshots and fails it in milliseconds — which reads as
@@ -225,6 +279,7 @@ async function startPoolRetryHarness(
   const redirectedFetch = globalThis.fetch;
 
   const secondAccount = options.secondAccount ?? true;
+  const thirdAccount = options.thirdAccount ?? false;
   const config = {
     port: 0,
     defaultProvider: "openai",
@@ -243,8 +298,13 @@ async function startPoolRetryHarness(
       ...(secondAccount
         ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
         : []),
+      ...(thirdAccount
+        ? [{ id: "pool-c", email: "pool-c@example.test", isMain: false, chatgptAccountId: "acct-pool-c" }]
+        : []),
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
+    ...(options.accountPoolStrategy ? { accountPoolStrategy: options.accountPoolStrategy } : {}),
+    ...(options.accountPoolStickyLimit ? { accountPoolStickyLimit: options.accountPoolStickyLimit } : {}),
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
@@ -272,6 +332,17 @@ async function startPoolRetryHarness(
     }
     updateAccountQuota("pool-b", 20);
   }
+  if (thirdAccount) {
+    if (!options.omitCredentialAccountIds?.includes("pool-c")) {
+      saveCodexAccountCredential("pool-c", {
+        accessToken: "pool-c-token",
+        refreshToken: "pool-c-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-c",
+      });
+    }
+    updateAccountQuota("pool-c", 30);
+  }
   for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
 
   const server = startServer(0);
@@ -289,11 +360,13 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      threadId,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
+        ...(threadId ? { "x-codex-parent-thread-id": threadId } : {}),
       },
       body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
       signal,
@@ -2257,6 +2330,220 @@ describe("server local API auth", () => {
       await stopPoolRetryHarness(harness);
     }
   }, { timeout: SERVER_BUDGET_MS });
+
+  test("capacity rejection rotates through every eligible pool account once", async () => {
+    const harness = await startPoolRetryHarness(accountId => {
+      if (accountId === "acct-pool-a") {
+        return new Response(capacityErrorBody(undefined), {
+          status: 502,
+          headers: { "content-type": "application/json", "x-capacity-attempt": "a" },
+        });
+      }
+      if (accountId === "acct-pool-b") {
+        return new Response(capacityErrorBody("server_is_overloaded", "busy"), {
+          status: 503,
+          headers: { "content-type": "application/json", "x-capacity-attempt": "b" },
+        });
+      }
+      return Response.json({ id: "capacity-rotation-success", status: "completed", output: [] });
+    }, { thirdAccount: true });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      const responseText = await response.text();
+      expect(responseText).toContain("capacity-rotation-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-c"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation skips an unavailable intermediate account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: "available-c", status: "completed", output: [] }), {
+      thirdAccount: true,
+      omitCredentialAccountIds: ["pool-b"],
+    });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("available-c");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-c"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation binds thread affinity only to the accepted account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: "accepted-b", status: "completed", output: [] }));
+    try {
+      const first = await harness.request({ threadId: "capacity-thread" });
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain("accepted-b");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+
+      const second = await harness.request({ threadId: "capacity-thread" });
+      expect(second.status).toBe(200);
+      expect(await second.text()).toContain("accepted-b");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation commits round-robin state only for the accepted account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: `accepted-${accountId}`, status: "completed", output: [] }), {
+      thirdAccount: true,
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+    });
+    try {
+      const first = await harness.request({ threadId: "rr-capacity-thread" });
+      expect(first.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getEffectiveActiveCodexAccountId(harness.config)).toBe("pool-b");
+
+      const sameThread = await harness.request({ threadId: "rr-capacity-thread" });
+      expect(sameThread.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+
+      const nextThread = await harness.request({ threadId: "rr-next-thread" });
+      expect(nextThread.status).toBe(200);
+      expect(harness.dispatches).toEqual([
+        "acct-pool-a",
+        "acct-pool-b",
+        "acct-pool-b",
+        "acct-pool-c",
+      ]);
+      expect(getEffectiveActiveCodexAccountId(harness.config)).toBe("pool-c");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity exhaustion preserves the first error and resets on the next request", async () => {
+    let requestOrdinal = 0;
+    const harness = await startPoolRetryHarness(accountId => {
+      if (accountId === "acct-pool-a") requestOrdinal += 1;
+      if (requestOrdinal === 2 && accountId === "acct-pool-a") {
+        return Response.json({ id: "fresh-request-success", status: "completed", output: [] });
+      }
+      const attempt = accountId === "acct-pool-a" ? "a" : "b";
+      return new Response(capacityErrorBody("slow_down", `capacity-${attempt}`), {
+        status: 502,
+        statusText: `Capacity ${attempt.toUpperCase()}`,
+        headers: { "content-type": "application/json", "x-capacity-attempt": attempt },
+      });
+    });
+    try {
+      const exhausted = await harness.request();
+      expect(exhausted.status).toBe(502);
+      expect(exhausted.headers.get("x-capacity-attempt")).toBe("a");
+      expect(await exhausted.text()).toContain("capacity-a");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+
+      const fresh = await harness.request();
+      expect(fresh.status).toBe(200);
+      const freshText = await fresh.text();
+      expect(freshText).toContain("fresh-request-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("SSE capacity failure rotates only before substantive output", async () => {
+    const preOutput = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorSse(undefined), {
+        headers: { "content-type": "text/event-stream" },
+      })
+      : new Response(
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"from-b","status":"completed","output":[]}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      ));
+    try {
+      const text = await (await preOutput.request({ stream: true })).text();
+      expect(preOutput.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(text).toContain('"id":"from-b"');
+      expect(text).not.toContain("capacity-attempt");
+    } finally {
+      await stopPoolRetryHarness(preOutput);
+    }
+
+    const postOutput = await startPoolRetryHarness(() => new Response([
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"committed","status":"in_progress"}}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"visible"}\n\n',
+      capacityFailedSse("server_is_overloaded", "busy"),
+    ].join(""), { headers: { "content-type": "text/event-stream" } }));
+    try {
+      const text = await (await postOutput.request({ stream: true })).text();
+      expect(postOutput.dispatches).toEqual(["acct-pool-a"]);
+      expect(text).toContain('"delta":"visible"');
+      expect(text).toContain("response.failed");
+    } finally {
+      await stopPoolRetryHarness(postOutput);
+    }
+  });
+
+  test("Direct mode never rotates a capacity rejection", async () => {
+    const harness = await startPoolRetryHarness(() => new Response(capacityErrorBody("server_is_overloaded"), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    }), { accountMode: "direct" });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(409);
+      expect(harness.dispatches).toEqual(["missing"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("exact account selector never rotates a capacity rejection", async () => {
+    const body = capacityErrorBody("server_is_overloaded");
+    const harness = await startPoolRetryHarness(() => new Response(body, {
+      status: 409,
+      headers: { "content-type": "application/json", "x-exact-response": "original" },
+    }), {
+      accountMode: "direct",
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+    });
+    try {
+      const response = await harness.request({
+        model: `side/${POOL_RETRY_MODEL}`,
+        callerBearer: false,
+      });
+      expect(response.status).toBe(409);
+      expect(response.headers.get("x-exact-response")).toBe("original");
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
 
   test("#584: pre-stream 429 retries once on another eligible pool account", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"

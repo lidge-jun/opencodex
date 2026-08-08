@@ -8,6 +8,7 @@ import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./accou
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
+  commitRoundRobinAccountSuccess,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
@@ -900,16 +901,25 @@ function bindThreadAffinity(
   pruneLruThreadAffinities();
 }
 
+type CodexAccountExclusion = string | ReadonlySet<string> | undefined;
+
+/** Match a single legacy exclusion or a request-local exclusion set. */
+function isExcludedCodexAccount(exclusion: CodexAccountExclusion, accountId: string): boolean {
+  return typeof exclusion === "string"
+    ? exclusion === accountId
+    : exclusion?.has(accountId) === true;
+}
+
 function getEligiblePoolAccounts(
   config: OcxConfig,
-  excludeId?: string,
+  exclusion?: CodexAccountExclusion,
   now = Date.now(),
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): readonly string[] {
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
-      && account.id !== excludeId
+      && !isExcludedCodexAccount(exclusion, account.id)
       && !isCodexAccountPaused(config, account.id)
       && !isAccountNeedsReauth(account.id))
     .filter(account => getCodexQuotaHealthSnapshot(account.id, quotaScope, now) === null)
@@ -919,7 +929,7 @@ function getEligiblePoolAccounts(
   // The main Codex account is not stored in config.codexAccounts; include it as a
   // first-class rotation candidate when its read-only token is usable (Option A).
   if (
-    excludeId !== MAIN_CODEX_ACCOUNT_ID
+    !isExcludedCodexAccount(exclusion, MAIN_CODEX_ACCOUNT_ID)
     && !isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)
     && !isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     && getCodexQuotaHealthSnapshot(MAIN_CODEX_ACCOUNT_ID, quotaScope, now) === null
@@ -1152,20 +1162,47 @@ export function pickAlternateCodexAccount(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
+  return pickAlternateCodexAccountExcluding(
+    config,
+    new Set([excludeId]),
+    excludeId,
+    now,
+    quotaScope,
+    selectionOptions,
+  );
+}
+
+/** Strategy-aware alternate that never revisits an account already tried by this request. */
+export function pickAlternateCodexAccountExcluding(
+  config: OcxConfig,
+  excludedIds: ReadonlySet<string>,
+  afterId: string,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+  commitRoundRobin = true,
+): string | null {
   const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
   // The exclusion is passed into eligibility rather than post-filtered off its
   // result: when the excluded account is the only healthy member of the top
   // tier, the tier walk must be free to descend instead of selecting that tier
   // and then handing back an empty list.
   if (strategy === "round-robin") {
-    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
+    const eligible = getEligiblePoolAccounts(config, excludedIds, now, quotaScope, selectionOptions);
+    const poolKey = codexPoolKeyForScope(quotaScope);
+    const stickyLimit = stickyLimitForConfig(config);
+    return commitRoundRobin
+      ? pickRoundRobinAccount(poolKey, eligible, stickyLimit)
+      : peekRoundRobinAccount(poolKey, eligible, stickyLimit);
   }
   if (strategy === "fill-first") {
-    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    return pickNextFillFirstCodexAccount(config, excludeId, eligible, now, selectionOptions);
+    const eligible = getEligiblePoolAccounts(config, excludedIds, now, quotaScope, selectionOptions);
+    return pickNextFillFirstCodexAccount(config, afterId, eligible, now, selectionOptions);
   }
-  return pickLowestUsageCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
+  return pickLowestUsageAmong(
+    config,
+    getEligiblePoolAccounts(config, excludedIds, now, quotaScope, selectionOptions),
+  );
 }
 
 /** Effective active: automatic runtime cursor, else operator/persisted selection. */
@@ -1463,6 +1500,80 @@ export function previewCodexAccountForRequest(
     return hasConfiguredPoolAccount(config, active, selectionOptions) ? active : null;
   }
   return active;
+}
+
+/** Preview Pool selection; expired-affinity cleanup matches live resolve. */
+export function previewCodexAccountForRequestDetailed(
+  threadId: string | null,
+  config: OcxConfig,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): CodexThreadResolution {
+  const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
+  if (entry && isThreadAffinityExpired(entry, now)) {
+    deleteThreadAffinity(threadId!, quotaScope);
+    return { status: "expired", accountId: entry.accountId };
+  }
+  const accountId = previewCodexAccountForRequest(threadId, config, now, quotaScope, selectionOptions);
+  return accountId ? { status: "selected", accountId } : { status: "none" };
+}
+
+/**
+ * Commit a deferred Pool selection exactly once, after its response is accepted.
+ * Capacity-rejected and unavailable attempts remain request-local exclusions.
+ */
+export function commitCodexAcceptedAccountSelection(
+  config: OcxConfig,
+  threadId: string | null,
+  accountId: string,
+  modelId: string | undefined,
+  excludedAccountIds: ReadonlySet<string>,
+  now = Date.now(),
+): void {
+  const quotaScope = codexQuotaScopeForModel(modelId);
+  if (!isCodexAccountSelectable(config, accountId, now, quotaScope)) return;
+  if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config);
+
+  const existingAffinity = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
+  const reusedAffinity = existingAffinity?.accountId === accountId
+    && !isThreadAffinityExpired(existingAffinity, now)
+    && isThreadAffinityGenerationLive(existingAffinity)
+    && !shouldFailover(config, accountId, now);
+
+  const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
+  if (reusedAffinity) {
+    existingAffinity.lastUsedAt = now;
+    if (strategy === "quota") {
+      const threshold = config.autoSwitchThreshold ?? 80;
+      const usage = threshold > 0
+        ? computeCodexUsageScore(getAccountQuota(accountId), getPoolAccountPlan(config, accountId))
+        : 0;
+      const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+      if (overThreshold || now - existingAffinity.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
+        existingAffinity.lastReevalAt = now;
+      }
+    }
+    return;
+  }
+
+  if (strategy === "round-robin") {
+    const eligible = getEligiblePoolAccounts(config, excludedAccountIds, now, quotaScope);
+    const committed = commitRoundRobinAccountSuccess(
+      codexPoolKeyForScope(quotaScope),
+      eligible,
+      accountId,
+      stickyLimitForConfig(config),
+    );
+    if (!committed) return;
+    if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, accountId);
+  } else if (strategy === "fill-first") {
+    if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, accountId);
+  } else if (!isIndependentCodexQuotaScope(quotaScope)) {
+    setActiveCodexAccount(config, accountId);
+  }
+
+  if (threadId) bindThreadAffinity(threadId, accountId, now, quotaScope);
 }
 
 export function resolveCodexAccountForThreadDetailed(

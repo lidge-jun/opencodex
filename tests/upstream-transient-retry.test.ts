@@ -44,6 +44,25 @@ describe("fetchWithTransientRetry", () => {
     expect(res.status).toBe(400);
   });
 
+  test("semantic gate can preserve a rebuilt transient response without retrying", async () => {
+    let calls = 0;
+    const rebuilt = new Response("capacity", { status: 502, headers: { "x-prepared": "yes" } });
+    const res = await fetchWithTransientRetry(async () => {
+      calls++;
+      return bodyResponse(502);
+    }, {
+      slowAttemptMs: 60_000,
+      prepareTransientRetry: async response => {
+        expect(response.status).toBe(502);
+        return { response: rebuilt, retry: false };
+      },
+    });
+    expect(calls).toBe(1);
+    expect(res).toBe(rebuilt);
+    expect(res.headers.get("x-prepared")).toBe("yes");
+    expect(await res.text()).toBe("capacity");
+  });
+
   test("honors Retry-After header for the backoff delay", async () => {
     let calls = 0;
     const started = Date.now();

@@ -21,6 +21,8 @@ import {
   tryAcquireCodexQuotaProbeLease,
   tryAcquireCodexQuotaScopeProbeLease,
   pickAlternateCodexAccount,
+  pickAlternateCodexAccountExcluding,
+  previewCodexAccountForRequestDetailed,
   resolveCodexAccountForThreadDetailed,
 } from "./routing";
 import type { CodexCooldownSource, CodexQuotaScope } from "./routing";
@@ -227,10 +229,14 @@ export function shouldMarkAccountNeedsReauthForCodexAuthFailure(cause: unknown):
 
 export interface ResolveCodexAuthContextOptions {
   excludeAccountId?: string;
+  /** Request-local exclusion set for bounded multi-account recovery. */
+  excludeAccountIds?: ReadonlySet<string>;
   /** Resolve exactly this account without consulting or mutating Pool selection. */
   accountId?: string;
   /** Final native model selected for this request, used to select its quota group. */
   modelId?: string;
+  /** Preview without selection-state writes until the upstream response is accepted. */
+  deferSelectionCommit?: boolean;
   /** Short reservation converted to turn ownership before native `__main__` token materialization. */
   beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
   /** Test-only native credential read seams. */
@@ -253,7 +259,9 @@ export async function resolveCodexAuthContext(
 ): Promise<CodexAuthContext> {
   const writerGeneration = captureConfigGeneration();
   const fixedAccountId = options.accountId;
-  if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
+  const hasExclusions = options.excludeAccountId !== undefined
+    || (options.excludeAccountIds?.size ?? 0) > 0;
+  if (fixedAccountId !== undefined && hasExclusions) {
     throw new Error("Codex auth context cannot select and exclude an account simultaneously");
   }
   // An explicit namespace binding is stronger than the provider's default mode. It must use the
@@ -284,19 +292,31 @@ export async function resolveCodexAuthContext(
     const threadId = headers.get("x-codex-parent-thread-id");
     const resolution = fixedAccountId !== undefined
       ? { status: "selected" as const, accountId: fixedAccountId }
-      : options.excludeAccountId
+      : hasExclusions
       ? (() => {
-          const selected = pickAlternateCodexAccount(
-            config,
-            options.excludeAccountId!,
-            Date.now(),
-            quotaScope,
-            selectionOptions,
-          );
+          const selected = options.excludeAccountIds
+            ? pickAlternateCodexAccountExcluding(
+              config,
+              options.excludeAccountIds,
+              [...options.excludeAccountIds].at(-1)!,
+              Date.now(),
+              quotaScope,
+              selectionOptions,
+              false,
+            )
+            : pickAlternateCodexAccount(
+              config,
+              options.excludeAccountId!,
+              Date.now(),
+              quotaScope,
+              selectionOptions,
+            );
           return selected
             ? { status: "selected" as const, accountId: selected }
             : { status: "none" as const };
         })()
+      : options.deferSelectionCommit
+      ? previewCodexAccountForRequestDetailed(threadId, config, Date.now(), quotaScope, selectionOptions)
       : resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), quotaScope, selectionOptions);
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
@@ -309,7 +329,7 @@ export async function resolveCodexAuthContext(
       // temporary fence rather than misclassifying that credential as invalid.
       // A configured pool retry/exclusion that finds no alternate preserves its
       // ordinary pool-auth failure instead of being mislabeled as a main fence.
-      if (nativeMainTrafficBlocked && !options.excludeAccountId) {
+      if (nativeMainTrafficBlocked && !hasExclusions) {
         throw new CodexMainProfileDrainingError();
       }
       throw new CodexPoolAuthenticationError();
