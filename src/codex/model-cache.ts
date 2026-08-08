@@ -42,6 +42,9 @@ export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends
     : never
   : never;
 
+/** Whether clearing cache rows also revokes in-flight discovery authority. */
+export type ModelCacheClearReason = "authority" | "eviction";
+
 const cache = new Map<string, CacheEntry>();
 let globalCacheGeneration = 0;
 const providerCacheGenerations = new Map<string, number>();
@@ -194,15 +197,21 @@ export function setCached(
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
-export function clearModelCache(provider?: string): void {
+export function clearModelCache(
+  provider?: string,
+  reason: ModelCacheClearReason = "authority",
+): void {
+  const revokesInFlightDiscovery = reason === "authority";
   if (provider) {
-    providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+    if (revokesInFlightDiscovery) {
+      providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+    }
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
-    globalCacheGeneration += 1;
+    if (revokesInFlightDiscovery) globalCacheGeneration += 1;
     cache.clear();
     cacheBytes = 0;
     oldestCachedProvider = undefined;

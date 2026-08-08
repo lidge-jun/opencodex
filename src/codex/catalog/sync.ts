@@ -466,7 +466,7 @@ export function resetCatalogRuntimeStateForTests(): void {
   comboUnrestorableShadowWarnings.clear();
   accountSelectorShadowCollisionWarnings.clear();
   clearLastComboCatalogOmissions();
-  clearModelCache();
+  clearModelCache(undefined, "eviction");
   clearGatherRoutedModelsInflight();
 }
 
