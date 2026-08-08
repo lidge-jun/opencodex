@@ -31,11 +31,12 @@
  * `configPath` parameter without fighting the module-load-time const in paths.ts.
  */
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, expandUserPath } from "../config";
 import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
+import { resolveAndPersistCodexRuntime } from "./runtime";
 
 /** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
 export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
@@ -378,11 +379,26 @@ function encodeTomlBasicString(value: string): string {
  */
 function decodeTomlStringToken(token: string): string | null {
   if (token.length < 2) return null;
+  // Multi-line literal string: `'''...'''` verbatim (backslashes not special).
+  if (token.startsWith("'''")) {
+    return token.endsWith("'''") && token.length >= 6
+      ? token.slice(3, -3)
+      : null;
+  }
+  // Multi-line basic string: `"""..."""` with escapes.
+  if (token.startsWith('"""')) {
+    if (!token.endsWith('"""') || token.length < 6) return null;
+    return decodeBasicStringBody(token.slice(3, -3));
+  }
   if (token.startsWith("'")) {
     return token.endsWith("'") ? token.slice(1, -1) : null;
   }
   if (!token.startsWith('"') || !token.endsWith('"')) return null;
-  const body = token.slice(1, -1);
+  return decodeBasicStringBody(token.slice(1, -1));
+}
+
+/** Unescape the body of a TOML basic string (single- or multi-line). */
+function decodeBasicStringBody(body: string): string | null {
   let out = "";
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
@@ -426,6 +442,19 @@ function scanTomlValueEnd(text: string, start: number): number {
   while (i < text.length && (text[i] === " " || text[i] === "\t")) i++;
   const first = text[i];
   if (first === '"') {
+    // Multi-line basic string: `"""..."""`. The closing delimiter is a triple
+    // quote; a single or double quote inside the body does not end the token.
+    if (text[i + 1] === '"' && text[i + 2] === '"') {
+      i += 3;
+      while (i < text.length) {
+        if (text[i] === "\\") { i += 2; continue; }
+        if (text[i] === '"' && text[i + 1] === '"' && text[i + 2] === '"') {
+          return i + 3;
+        }
+        i++;
+      }
+      return text.length;
+    }
     i++;
     while (i < text.length) {
       if (text[i] === "\\") { i += 2; continue; }
@@ -435,6 +464,12 @@ function scanTomlValueEnd(text: string, start: number): number {
     return text.length;
   }
   if (first === "'") {
+    // Multi-line literal string: `'''...'''`.
+    if (text[i + 1] === "'" && text[i + 2] === "'") {
+      i += 3;
+      const close = text.indexOf("'''", i);
+      return close === -1 ? text.length : close + 3;
+    }
     const close = text.indexOf("'", i + 1);
     return close === -1 ? text.length : close + 1;
   }
@@ -596,12 +631,19 @@ export function setAgentsMaxDepth(value: number | null, configPath?: string): Co
  * Reads both the dedicated-table and inline forms; dedicated wins, mirroring
  * `getMaxConcurrentThreads` precedence.
  */
-export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+/**
+ * Read a string-valued `features.multi_agent_v2` scalar (dedicated table or inline
+ * form; dedicated wins, mirroring `getMaxConcurrentThreads` precedence). Returns
+ * `null` when the key is absent or the config is unreadable. A present empty string
+ * round-trips faithfully — some upstream keys treat `""` and `null` differently.
+ */
+function getV2StringField(key: string, configPath?: string): string | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
-    const m = table.match(/^\s*subagent_developer_instructions\s*=\s*/m);
+    const keyRe = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*`, "m");
+    const m = table.match(keyRe);
     if (m) {
       const valueStart = m.index! + m[0].length;
       const token = table.slice(valueStart, scanTomlValueEnd(table, valueStart)).trim();
@@ -616,9 +658,22 @@ export function getSubagentDeveloperInstructions(configPath?: string): string | 
   const openIdx = m.index! + m[0].length - 1;
   const closeIdx = findInlineTableEnd(features, openIdx);
   if (closeIdx === -1) return null;
-  const entry = findInlineEntry(features, openIdx + 1, closeIdx, "subagent_developer_instructions");
+  const entry = findInlineEntry(features, openIdx + 1, closeIdx, key);
   if (!entry) return null;
   return decodeTomlStringToken(features.slice(entry.valueStart, entry.valueEnd).trim());
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function getSubagentDeveloperInstructions(configPath?: string): string | null {
+  return getV2StringField("subagent_developer_instructions", configPath);
+}
+
+/** Current `features.multi_agent_v2.multi_agent_mode_hint_text`, or null when unset. */
+export function getMultiAgentModeHintText(configPath?: string): string | null {
+  return getV2StringField("multi_agent_mode_hint_text", configPath);
 }
 
 /**
@@ -632,14 +687,24 @@ export function getSubagentDeveloperInstructions(configPath?: string): string | 
  * carries `#[serde(deny_unknown_fields)]`, so a misspelling is not ignored — it is
  * a hard config-parse failure for the user's Codex.
  */
-export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+function setV2StringField(key: string, value: string | null, configPath?: string): ConfigEditResult {
   const path = configPath ?? activeCodexConfigPath();
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const encoded = value === null ? null : encodeTomlBasicString(value);
 
+  // Multiline TOML strings ("""...""" / '''...''') span multiple lines and the
+  // single-line table editor cannot rewrite or remove them without corrupting
+  // the document (scanTomlValueEnd stops at the second quote). Refuse the edit
+  // rather than write invalid TOML; the user can convert the value to a single
+  // line first. Single-line literals and basic strings are unaffected.
+  const multilinePrefix = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*("""|''')`, "m");
+  if (multilinePrefix.test(content)) {
+    return { ok: false, error: `multi-line TOML string for ${key} is not editable; convert it to a single-line string first` };
+  }
+
   if (tomlTableBody(content, "features.multi_agent_v2") !== null) {
-    const next = editScalarInTable(content, "features.multi_agent_v2", "subagent_developer_instructions", encoded);
+    const next = editScalarInTable(content, "features.multi_agent_v2", key, encoded);
     if (next === content) return { ok: true, changed: false };
     atomicWriteFile(path, next);
     return { ok: true, changed: true };
@@ -660,7 +725,7 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
         const openIdx = inlineMatch[0].length - 1;
         const closeIdx = findInlineTableEnd(line, openIdx);
         if (closeIdx === -1) return { ok: false, error: "malformed multi_agent_v2 inline table" };
-        const entry = findInlineEntry(line, openIdx + 1, closeIdx, "subagent_developer_instructions");
+        const entry = findInlineEntry(line, openIdx + 1, closeIdx, key);
         if (encoded === null) {
           if (!entry) return { ok: true, changed: false };
           let start = entry.keyStart;
@@ -687,8 +752,8 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
           while (insertPos > openIdx + 1 && line[insertPos - 1] === " ") insertPos--;
           const hasEntries = line.slice(openIdx + 1, insertPos).trim().length > 0;
           const insertion = hasEntries
-            ? `, subagent_developer_instructions = ${encoded} `
-            : ` subagent_developer_instructions = ${encoded} `;
+            ? `, ${key} = ${encoded} `
+            : ` ${key} = ${encoded} `;
           lines[i] = line.slice(0, insertPos) + insertion + line.slice(closeIdx);
         }
         atomicWriteFile(path, applyEol(lines.join("\n"), eol));
@@ -697,7 +762,7 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
       const boolMatch = line.match(/^(\s*)multi_agent_v2\s*=\s*(true|false)(\s*(?:#.*)?)$/);
       if (boolMatch) {
         if (encoded === null) return { ok: true, changed: false };
-        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, subagent_developer_instructions = ${encoded} }${boolMatch[3]}`;
+        lines[i] = `${boolMatch[1]}multi_agent_v2 = { enabled = ${boolMatch[2]}, ${key} = ${encoded} }${boolMatch[3]}`;
         atomicWriteFile(path, applyEol(lines.join("\n"), eol));
         return { ok: true, changed: true };
       }
@@ -707,9 +772,127 @@ export function setSubagentDeveloperInstructions(value: string | null, configPat
   if (encoded === null) return { ok: true, changed: false };
   const suffix = content.endsWith("\n") || content.length === 0 ? "" : eol;
   const separator = content.length > 0 && !content.endsWith(`${eol}${eol}`) ? eol : "";
-  const tableText = `[features.multi_agent_v2]${eol}subagent_developer_instructions = ${encoded}${eol}`;
+  const tableText = `[features.multi_agent_v2]${eol}${key} = ${encoded}${eol}`;
   atomicWriteFile(path, `${content}${suffix}${separator}${tableText}`);
   return { ok: true, changed: true };
+}
+
+export function setSubagentDeveloperInstructions(value: string | null, configPath?: string): ConfigEditResult {
+  return setV2StringField("subagent_developer_instructions", value, configPath);
+}
+
+/**
+ * Persist `features.multi_agent_v2.multi_agent_mode_hint_text`, or remove the key
+ * when `value` is null. Same encoding coverage and upstream-name discipline as
+ * `setSubagentDeveloperInstructions`; the upstream struct rejects unknown fields,
+ * so the key spelling must match codex-rs exactly.
+ */
+export function setMultiAgentModeHintText(value: string | null, configPath?: string): ConfigEditResult {
+  // The upstream `multi_agent_mode_hint_text` key is newer than the v2 config
+  // surface opencodex already manages; an older Codex build rejects the unknown
+  // member (`#[serde(deny_unknown_fields)]`) and fails to start. Probe the
+  // installed runtime binary for the key string and refuse the write when the
+  // binary provably lacks it. A probe that cannot run (missing binary,
+  // unreadable file) does not block: that is the test/hermetic path and the
+  // headless runtime fallback.
+  const probe = probeCodexSupportsModeHint();
+  if (probe === false) {
+    return {
+      ok: false,
+      error: "installed Codex does not support multi_agent_mode_hint_text; update Codex first",
+    };
+  }
+  return setV2StringField("multi_agent_mode_hint_text", value, configPath);
+}
+
+/**
+ * True when the installed Codex runtime binary contains the
+ * `multi_agent_mode_hint_text` config key, false when it provably does not, and
+ * null when the probe could not run (missing binary, unreadable file).
+ */
+export function probeCodexSupportsModeHint(): boolean | null {
+  try {
+    const runtime = resolveAndPersistCodexRuntime({ env: process.env }).runtime;
+    const candidates = codexNativeBinaryCandidates(runtime.command);
+    let sawBinary = false;
+    for (const candidate of candidates) {
+      try {
+        if (!existsSync(candidate)) continue;
+        const buf = readFileSync(candidate);
+        sawBinary = true;
+        if (buf.includes(Buffer.from("multi_agent_mode_hint_text", "utf8"))) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    // At least one real binary was inspected and none contained the key.
+    return sawBinary ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Candidate native codex binaries to probe. The resolved `command` may be the
+ * opencodex shim or the npm JS wrapper (`codex.opencodex-real`), neither of
+ * which embeds the Rust config schema. The real binary ships under the
+ * platform package's `vendor/<triple>/bin/codex`; also try adjacent wrappers.
+ */
+function codexNativeBinaryCandidates(command: string): string[] {
+  const out: string[] = [command];
+  // The opencodex autostart shim (`codex`) forwards to `codex.opencodex-real`
+  // (the npm JS wrapper). Add the real wrapper's resolved native binary when it
+  // is discoverable on PATH, so probing the shim still reaches the Rust binary.
+  const pathDirs = (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":");
+  for (const dir of pathDirs) {
+    const wrapper = join(dir, process.platform === "win32" ? "codex.opencodex-real.cmd" : "codex.opencodex-real");
+    if (existsSync(wrapper)) {
+      out.push(wrapper);
+      try {
+        const real = realpathSync(wrapper);
+        const pkgRoot = resolve(real, "..", "..");
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-darwin-x64", "vendor", "x86_64-apple-darwin", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex"));
+        out.push(join(pkgRoot, "node_modules", "@openai", "codex-linux-arm64", "vendor", "aarch64-unknown-linux-musl", "bin", "codex"));
+      } catch {
+        // keep the wrapper as a candidate
+      }
+    }
+  }
+  const managedRoot = process.env.CODEX_MANAGED_PACKAGE_ROOT;
+  if (managedRoot) {
+    out.push(
+      join(managedRoot, "node_modules", "@openai", "codex-darwin-arm64", "vendor", "aarch64-apple-darwin", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-darwin-x64", "vendor", "x86_64-apple-darwin", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-linux-arm64", "vendor", "aarch64-unknown-linux-musl", "bin", "codex"),
+      join(managedRoot, "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe"),
+      join(managedRoot, "node_modules", "@openai", "codex-win32-arm64", "vendor", "aarch64-pc-windows-msvc", "bin", "codex.exe"),
+    );
+  }
+  // Follow the resolved command to its real location. The opencodex shim and
+  // the npm JS wrapper resolve to `@openai/codex/bin/codex.js`; the native
+  // binary lives in the sibling platform package's vendor directory.
+  try {
+    const real = realpathSync(command);
+    const pkgRoot = resolve(real, "..", "..");
+    for (const [pkg, triple, exe] of [
+      ["codex-darwin-arm64", "aarch64-apple-darwin", "codex"],
+      ["codex-darwin-x64", "x86_64-apple-darwin", "codex"],
+      ["codex-linux-x64", "x86_64-unknown-linux-musl", "codex"],
+      ["codex-linux-arm64", "aarch64-unknown-linux-musl", "codex"],
+      ["codex-win32-x64", "x86_64-pc-windows-msvc", "codex.exe"],
+      ["codex-win32-arm64", "aarch64-pc-windows-msvc", "codex.exe"],
+    ] as const) {
+      out.push(join(pkgRoot, "node_modules", "@openai", pkg, "vendor", triple, "bin", exe));
+    }
+  } catch {
+    // leave the raw command as the only candidate
+  }
+  return out;
 }
 
 function editAgentsMaxThreads(value: number | null, configPath?: string, migratedComment?: string): ConfigEditResult {

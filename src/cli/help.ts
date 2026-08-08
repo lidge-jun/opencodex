@@ -236,13 +236,14 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Stop the proxy and restart it (background). Equivalent to stop + ensure.",
   },
   v2: {
-    usage: "ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>",
+    usage: "ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>",
     summary: "Toggle the Codex multi_agent_v2 feature (multi-agent surface).",
     details: [
       "status                Show flag, multi-agent mode, and thread limit.",
       "on | off              Enable/disable multi_agent_v2 (catalog resyncs).",
       "mode <v1|default|v2>  Force all models to one surface, or respect upstream pins.",
       "threads <n>           Set max_concurrent_threads_per_session (integer >= 1).",
+      "mode-hint <text|--clear>  Set/clear the Proactive delegation hint (Ultra mode).",
       "Flips preserve the active thread limit while moving between v1/v2 modes.",
     ],
   },
@@ -303,7 +304,7 @@ Usage:
   ocx gui                     Open the opencodex dashboard
   ocx update [--tag <tag>]    Update opencodex (keeps preview installs on @preview)
   ocx restart                  Stop and restart the proxy
-  ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|threads)
+  ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|threads|mode-hint)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
   ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
   ocx provider <sub>          Providers, connectivity, quota, and selected models

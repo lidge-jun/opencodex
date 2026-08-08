@@ -577,6 +577,14 @@ export const ko: Record<TKey, string> = {
   "sub.workspace.selectModel": "모델 선택",
   "sub.workspace.selectModelDesc": "목록에서 모델을 선택하여 세부 정보를 확인하고 spawn_agent에 추천하세요.",
   "sub.workspace.selector": "공개 셀렉터",
+  "sub.ultraMode": "울트라 모드",
+  "sub.ultraModeHint": "모든 모델과 reasoning effort에서 Proactive 멀티에이전트 위임 정책을 켭니다 (reasoning effort 자체는 변경하지 않음). config.toml에 multi_agent_mode_hint_text를 기록합니다.",
+  "sub.ultraModeV2Required": "multi_agent_v2 기능이 필요합니다 — 먼저 ocx v2 on으로 켜세요.",
+  "sub.ultraModeText": "울트라 모드 위임 텍스트",
+  "sub.ultraModePreset": "프리셋 복원",
+  "sub.ultraModeLoadFail": "울트라 모드 설정을 불러오지 못했습니다 — 프록시가 실행 중인가요?",
+  "sub.ultraModeSaveFail": "울트라 모드 설정 저장에 실패했습니다",
+  "sub.ultraModeSaved": "울트라 모드가 저장되었습니다. 새 Codex 세션부터 적용됩니다.",
 
   // logs
   "logs.title": "요청 로그",
