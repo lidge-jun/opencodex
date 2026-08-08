@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -380,6 +381,71 @@ describe("native-profile recovery journal storage", () => {
 
     expect(caught).toBeInstanceOf(NativeProfileError);
     expect((caught as NativeProfileError).code).toBe("VAULT_INVALID");
+  });
+
+  test.skipIf(process.platform === "win32")("rejects a vault replaced by a FIFO after layout validation", () => {
+    const base = mkdtempSync(join(tmpdir(), "ocx-native-profile-fifo-race-"));
+    roots.push(base);
+    const codexHome = join(base, "codex");
+    const configDir = join(base, "opencodex");
+    mkdirSync(codexHome, { mode: 0o700 });
+    mkdirSync(configDir, { mode: 0o700 });
+    const moduleUrl = new URL("../src/codex/native-profile-store.ts", import.meta.url).href;
+    const childSource = `
+      import { execFileSync } from "node:child_process";
+      import { lstatSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+      import { readNativeProfileVault, resolveNativeProfileContext } from ${JSON.stringify(moduleUrl)};
+      const codexHome = process.env.OCX_NATIVE_PROFILE_CODEX_HOME;
+      const configDir = process.env.OCX_NATIVE_PROFILE_CONFIG_DIR;
+      if (!codexHome || !configDir) process.exit(90);
+      const store = resolveNativeProfileContext({ codexHome, configDir });
+      mkdirSync(store.rootDir, { recursive: true, mode: 0o700 });
+      writeFileSync(store.vaultPath, "{}\\n", { mode: 0o600 });
+      let replacedWithFifo = false;
+      store[Symbol.for("opencodex.native-profile-store.bounded-read-test-seam")] = {
+        beforeOpen(path) {
+          if (path !== store.vaultPath) process.exit(93);
+          unlinkSync(path);
+          execFileSync("mkfifo", [path]);
+          replacedWithFifo = lstatSync(path).isFIFO();
+        },
+      };
+      try {
+        readNativeProfileVault(store);
+        process.exit(91);
+      } catch (error) {
+        if (
+          !replacedWithFifo
+          || !error
+          || typeof error !== "object"
+          || !("code" in error)
+          || error.code !== "VAULT_INVALID"
+        ) {
+          console.error(error);
+          process.exit(92);
+        }
+      }
+    `;
+    const child = spawnSync(process.execPath, ["--eval", childSource], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OCX_NATIVE_PROFILE_CODEX_HOME: codexHome,
+        OCX_NATIVE_PROFILE_CONFIG_DIR: configDir,
+      },
+      timeout: 2_000,
+    });
+
+    if (child.error || child.signal !== null || child.status !== 0) {
+      throw new Error([
+        "vault FIFO replacement probe did not terminate cleanly",
+        `status=${String(child.status)} signal=${String(child.signal)} error=${String(child.error)}`,
+        `stderr=${child.stderr}`,
+      ].join("\n"));
+    }
+    expect(child.error).toBeUndefined();
+    expect(child.signal).toBeNull();
+    expect(child.status).toBe(0);
   });
 
   test("reads at most journal cap plus one when the opened journal grows after fstat", () => {
