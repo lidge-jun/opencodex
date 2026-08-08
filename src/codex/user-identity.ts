@@ -89,10 +89,10 @@ function resolveWindowsSid(): string {
  * popup bug), fast on the uncached hot path, and free of PATH trust questions.
  */
 type WindowsProfileLibraries = {
-  getCurrentProcess: () => Pointer;
-  closeHandle: (handle: number) => number;
-  openProcessToken: (process: Pointer, desiredAccess: number, tokenOut: Pointer) => number;
-  getUserProfileDirectoryW: (token: number, buffer: Pointer, size: Pointer) => number;
+  getCurrentProcess: () => number | bigint;
+  closeHandle: (handle: number | bigint) => number;
+  openProcessToken: (process: number | bigint, desiredAccess: number, tokenOut: Pointer) => number;
+  getUserProfileDirectoryW: (token: number | bigint, buffer: Pointer, size: Pointer) => number;
 };
 
 let windowsProfileLibrariesCache: WindowsProfileLibraries | null | undefined;
@@ -105,18 +105,20 @@ function loadWindowsProfileLibraries(): WindowsProfileLibraries | null {
   }
   try {
     const kernel32 = dlopen("kernel32.dll", {
-      GetCurrentProcess: { args: [], returns: "ptr" },
-      // Handles travel as pointer-sized integers.
+      // Windows HANDLE values are opaque 64-bit identifiers, not memory
+      // addresses — use u64 everywhere a HANDLE appears (Bun FFI "ptr" applies
+      // pointer-tagging logic that is inappropriate for handles).
+      GetCurrentProcess: { args: [], returns: "u64" },
       CloseHandle: { args: ["u64"], returns: "i32" },
     });
     const advapi32 = dlopen("advapi32.dll", {
-      OpenProcessToken: { args: ["ptr", "u32", "ptr"], returns: "i32" },
+      OpenProcessToken: { args: ["u64", "u32", "ptr"], returns: "i32" },
     });
     const userenv = dlopen("userenv.dll", {
       GetUserProfileDirectoryW: { args: ["u64", "ptr", "ptr"], returns: "i32" },
     });
     windowsProfileLibrariesCache = {
-      getCurrentProcess: () => kernel32.symbols.GetCurrentProcess() as Pointer,
+      getCurrentProcess: () => kernel32.symbols.GetCurrentProcess() as number | bigint,
       closeHandle: handle => kernel32.symbols.CloseHandle(handle) as number,
       openProcessToken: (process, desiredAccess, tokenOut) =>
         advapi32.symbols.OpenProcessToken(process, desiredAccess, tokenOut) as number,
@@ -134,7 +136,7 @@ function windowsProfileDirectory(): string {
   if (!libraries) {
     refuse("Windows profile resolution could not load system libraries.");
   }
-  let token = 0;
+  let token = 0n;
   let profile = "";
   try {
     const TOKEN_QUERY = 0x0008;
@@ -143,7 +145,7 @@ function windowsProfileDirectory(): string {
     if (opened === 0 || tokenOut[0] === 0n) {
       refuse("Windows profile resolution could not open the process token.");
     }
-    token = Number(tokenOut[0]);
+    token = tokenOut[0];
     // Profile paths fit MAX_PATH; retry once with the reported size otherwise.
     let buffer = new Uint16Array(512);
     let size = new Uint32Array([buffer.length]);
@@ -159,12 +161,13 @@ function windowsProfileDirectory(): string {
     }
     if (ok === 0) refuse("Windows profile resolution could not read the profile directory.");
     const length = buffer.indexOf(0);
-    profile = String.fromCharCode(...buffer.subarray(0, length < 0 ? buffer.length : length));
+    const slice = buffer.subarray(0, length < 0 ? buffer.length : length);
+    profile = new TextDecoder("utf-16le").decode(slice);
   } catch (cause) {
     if (cause instanceof CodexUserIdentityRefusal) throw cause;
     refuse("Windows profile resolution failed.", cause);
   } finally {
-    if (token !== 0) {
+    if (token !== 0n) {
       try { libraries.closeHandle(token); } catch { /* best-effort handle close */ }
     }
   }
