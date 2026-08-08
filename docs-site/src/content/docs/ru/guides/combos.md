@@ -222,8 +222,10 @@ ocx combo remove <id> --yes
 ```
 
 `set` также принимает `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
-`--display-name` и `--rename-from`. Для `--native-alias` нужны поддерживаемый сейчас bare native
-alias и непустой display name. `create` и `update` — alias для `set`, а `delete` — alias для `remove`.
+`--display-name` и `--rename-from`. Значение `-` у `--effort`, `--alias` или `--display-name`
+очищает соответствующее поле. Для `--native-alias` нужны поддерживаемый сейчас bare native
+alias и непустой display name. `create` и `update` — alias для `set`, а `delete` — alias для `remove`;
+те же подкоманды доступны через `ocx route combo`.
 
 ### Management API
 
