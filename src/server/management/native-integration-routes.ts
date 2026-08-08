@@ -3,16 +3,11 @@
  *
  * The six file clients live in `integration-routes.ts` and go through
  * `src/integrations/writer.ts`, which merges config fragments and journals every
- * write. These do not: Claude Code is a flag in our own config, and Grok owns a
- * fenced region of a file we do not otherwise write. Neither has a merged
- * fragment to own, so neither needs a snapshot, a journal row, or a restore
- * route — turning them back on is the undo.
- *
- * That conclusion cost eleven audit rounds; the reasoning is in
- * devlog/_fin/260803_integrations_toggle_all/, and 007 records why Codex and
- * Claude Desktop are NOT here: their state spans several artifacts and a live
- * database, so they need a durable operation record this module deliberately
- * does not have.
+ * write. These do not: Claude Code is a flag in our own config, Grok owns a
+ * fenced region of a file we do not otherwise write, and Claude Desktop owns
+ * an entry in its 3P config library. None has a merged fragment to own, so none
+ * needs a snapshot, a journal row, or a restore route — turning them back on is
+ * the undo.
  *
  * Design of record: devlog/_fin/260803_integrations_toggle_all/030 (routes),
  * 011 (Claude Code), 012 (Grok).
@@ -23,12 +18,16 @@ import { injectGrokConfig, stripGrokConfig, type GrokInjectModel } from "../../g
 import { inspectGrokConfig } from "../../grok/inspect";
 import { grokConfigPath } from "../../grok/status";
 import { assertNativeTeardownOwned } from "../../integrations/native/ownership-preflight";
+import { writeDesktop3pConfig, clearDesktop3pConfig } from "../../claude/desktop-3p";
+import { claudeDesktopConfigLibraryDir } from "../../claude/desktop-3p-paths";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { OcxConfig } from "../../types";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 
-export type NativeIntegrationClientId = "claude" | "grok" | "codex";
+export type NativeIntegrationClientId = "claude" | "grok" | "codex" | "claude-desktop";
 
 /** Every reason this module can decline, in one place (audit r3 #6). */
 export type NativeRefusalReason =
@@ -99,6 +98,31 @@ function claudeStatus(config: ManagementContext["config"], configPath: string): 
     installed: true,
     configPath,
     // Nothing can refuse this disable: no external file, no shared teardown.
+    disableBlocked: null,
+  };
+}
+
+/** Absent means ON: the proxy writes 3P files unless explicitly off (as with claudeCode). */
+function desktopEnabled(config: ManagementContext["config"]): boolean {
+  return config.claudeCode?.desktopEnabled !== false;
+}
+
+function desktopStatus(config: ManagementContext["config"]): NativeStatus {
+  const libraryPath = claudeDesktopConfigLibraryDir();
+  const metaPath = join(libraryPath, "_meta.json");
+  let state: NativeStatus["state"] = "absent";
+  if (existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(readFileSync(metaPath, "utf8"));
+      const entry = Array.isArray(meta.entries) ? meta.entries.find((e: { name?: string }) => e?.name === "opencodex") : undefined;
+      if (entry) state = "current";
+    } catch { /* unreadable metadata */ }
+  }
+  return {
+    clientId: "claude-desktop",
+    state: desktopEnabled(config) ? state : "absent",
+    installed: true,
+    configPath: metaPath,
     disableBlocked: null,
   };
 }
@@ -505,13 +529,134 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
   }
 }
 
+/**
+ * Single-flight guard for the Desktop toggle — same pattern as Grok and Codex.
+ * Serializes concurrent PUTs to the 3P config library so two overlapping calls
+ * cannot race on _meta.json or the profile JSON.
+ */
+let desktopToggleFlight: Promise<Response> | null = null;
+
+async function handleDesktopToggle(ctx: ManagementContext): Promise<Response> {
+  const { req, config, deps } = ctx;
+  if (desktopToggleFlight) {
+    return refusal(409, "claude-desktop", "config_busy",
+      "Another Claude Desktop change is already in flight. Nothing was written — try again in a moment.");
+  }
+  desktopToggleFlight = (async (): Promise<Response> => {
+    let body: { enabled?: unknown };
+    try {
+      body = await readManagementJsonBody(req);
+    } catch (error) {
+      rethrowManagementBodyTooLarge(error);
+      return jsonResponse({ error: "invalid JSON body" }, 400);
+    }
+    if (typeof body.enabled !== "boolean") {
+      return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    }
+    const enabled = body.enabled;
+
+    if (desktopEnabled(config) === enabled) {
+      return jsonResponse({
+        ok: true, clientId: "claude-desktop", changed: false,
+        state: enabled ? "current" : "absent",
+        message: enabled ? "Claude Desktop routing is already on" : "Claude Desktop routing is already off",
+      } satisfies NativeToggleEnvelope);
+    }
+
+    // Persist the decision before touching files, so a restart honours it.
+    const next = { ...(config.claudeCode ?? {}), desktopEnabled: enabled };
+    config.claudeCode = next;
+    const persist = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+    try {
+      persist(config);
+    } catch (error) {
+      if (isConfigLockError(error)) {
+        return isLockContention(error)
+          ? refusal(409, "claude-desktop", "config_busy",
+              "Another process is saving the configuration right now. Try again in a moment.")
+          : refusal(500, "claude-desktop", "write_failed",
+              `The configuration lock could not be acquired: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
+    }
+
+    if (enabled) {
+      // Enable: write the 3P profile files using the saved profile (if any).
+      const profile = config.claudeCode?.desktopProfile;
+      if (profile) {
+        const runtime = (deps.readRuntimePort ?? readRuntimePort)(process.pid);
+        const port = runtime?.port ?? config.port;
+        const { desktopVisibleNativeSlugs } = await import("../../codex/catalog");
+        const fetchModels = deps.fetchAllModels ?? defaultFetchAllModels;
+        const routed = filterCatalogVisibleModels(await fetchModels(config), config).map(model => ({
+          provider: model.provider,
+          id: model.id,
+          contextWindow: model.contextWindow,
+        }));
+        const result = writeDesktop3pConfig(
+          port,
+          desktopVisibleNativeSlugs(config),
+          routed,
+          config.apiKeys?.[0]?.key,
+          "static",
+          profile,
+        );
+        if (!result.written) {
+          return jsonResponse({
+            ok: true, clientId: "claude-desktop", changed: true,
+            state: "current",
+            message: `Claude Desktop routing enabled, but writing the 3P config failed: ${result.reason ?? "unknown error"}. The profile is saved and will be applied on retry.`,
+          } satisfies NativeToggleEnvelope);
+        }
+        // Persist applied fingerprint so the status bar shows "Applied" immediately.
+        if (result.fingerprint) {
+          config.claudeCode = { ...config.claudeCode, desktopProfile: { ...profile, appliedFingerprint: result.fingerprint, appliedAt: new Date().toISOString() } };
+          persist(config);
+        }
+      }
+      return jsonResponse({
+        ok: true, clientId: "claude-desktop", changed: true,
+        state: "current",
+        message: "Claude Desktop routing enabled.",
+      } satisfies NativeToggleEnvelope);
+    }
+
+    // Disable: remove the 3P files.
+    const result = clearDesktop3pConfig();
+    // Clear the applied fingerprint so the status bar no longer claims "Applied to Desktop".
+    if (config.claudeCode?.desktopProfile?.appliedFingerprint) {
+      config.claudeCode = {
+        ...config.claudeCode,
+        desktopProfile: { ...config.claudeCode.desktopProfile },
+      };
+      delete config.claudeCode.desktopProfile!.appliedFingerprint;
+      delete config.claudeCode.desktopProfile!.appliedAt;
+      persist(config);
+    }
+    // clearDesktop3pConfig reports failure details but never throws;
+    // a missing file is not an error — the user wanted it gone.
+    return jsonResponse({
+      ok: true, clientId: "claude-desktop", changed: true,
+      state: "absent",
+      message: result.cleared
+        ? "Claude Desktop routing disabled — the 3P config was removed."
+        : `Claude Desktop routing disabled, but clearing the 3P config did not complete: ${result.reason ?? "unknown error"}. You can remove the files manually from ${result.path}.`,
+    } satisfies NativeToggleEnvelope);
+  })();
+  try {
+    return await desktopToggleFlight;
+  } finally {
+    desktopToggleFlight = null;
+  }
+}
+
 export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
 
   if (url.pathname === "/api/native-integrations" && req.method === "GET") {
     const { getConfigPath } = await import("../../config");
     return jsonResponse({
-      clients: [claudeStatus(config, getConfigPath()), grokStatus()],
+      clients: [claudeStatus(config, getConfigPath()), desktopStatus(config), grokStatus()],
     } satisfies NativeStatusListEnvelope);
   }
 
@@ -581,6 +726,10 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
 
   if (url.pathname === "/api/native-integrations/codex" && req.method === "PUT") {
     return handleCodexToggle(ctx);
+  }
+
+  if (url.pathname === "/api/native-integrations/claude-desktop" && req.method === "PUT") {
+    return handleDesktopToggle(ctx);
   }
 
   return null;

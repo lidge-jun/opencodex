@@ -316,6 +316,7 @@ export async function loadClaudeCodeStatus(apiBase: string, signal?: AbortSignal
 
 export async function loadClaudeDesktopStatus(apiBase: string, signal?: AbortSignal) {
   const body = await readOptional<{
+    enabled?: unknown;
     applied?: unknown;
     stale?: unknown;
     activeProfile?: unknown;
@@ -323,6 +324,7 @@ export async function loadClaudeDesktopStatus(apiBase: string, signal?: AbortSig
   }>(fetch(`${apiBase}/api/claude-desktop/status`, { signal }));
   if (!body) return null;
   return {
+    enabled: body.enabled !== false,
     applied: body.applied === true,
     stale: body.stale === true,
     // Tri-state on purpose: `null` means undeterminable, which must not be

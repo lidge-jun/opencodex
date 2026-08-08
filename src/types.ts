@@ -464,6 +464,8 @@ export interface OcxClaudeCodeConfig {
   visionSidecar?: { backend?: "openai" | "anthropic"; model?: string };
   /** Persisted Claude Desktop four-family routing profile. */
   desktopProfile?: OcxClaudeDesktopProfile;
+  /** When false, opencodex removes its 3P config from Claude Desktop's library. Default: enabled. */
+  desktopEnabled?: boolean;
   /** Auto-reconcile Desktop 3P config when provider catalog changes. Default: enabled. */
   desktopAutoApply?: boolean;
   /**

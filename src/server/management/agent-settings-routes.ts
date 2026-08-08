@@ -662,7 +662,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     try {
       const state = await buildClaudeDesktopState(config);
       const runtimePort = Number(url.port) || config.port;
-      return jsonResponse({ ...state, port: runtimePort });
+      return jsonResponse({ ...state, port: runtimePort, enabled: config.claudeCode?.desktopEnabled !== false });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
@@ -809,6 +809,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         stale,
         activeProfile,
         health,
+        enabled: config.claudeCode?.desktopEnabled !== false,
       });
     } catch (error) {
       return jsonResponse({ error: error instanceof Error ? error.message : String(error) }, 400);

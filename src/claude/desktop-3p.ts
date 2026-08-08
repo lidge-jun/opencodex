@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
@@ -378,4 +378,44 @@ export function atomicReplaceDesktopConfig(
   if (existsSync(path)) copyFileSync(path, backupPath);
   writer(path, content);
   return existsSync(backupPath) ? { backupPath } : {};
+}
+
+/**
+ * Remove the opencodex entry from Claude Desktop's 3P config library.
+ *
+ * Deletes the UUID-named config JSON and strips the entry from _meta.json.
+ * Safe to call when the library directory or metadata does not exist — it
+ * returns `cleared: false` rather than throwing.
+ */
+export function clearDesktop3pConfig(): { cleared: boolean; path: string; reason?: string } {
+  const libraryPath = resolveDesktop3pConfigLibraryPath();
+  const metadataPath = join(libraryPath, "_meta.json");
+  const sentinel = join(libraryPath, "_meta.json");
+  try {
+    if (!existsSync(metadataPath)) {
+      return { cleared: false, path: sentinel, reason: "no metadata" };
+    }
+    const metadata = parseMetadata(metadataPath);
+    const entry = metadata.entries.find(e => e?.name === "opencodex" && typeof e.id === "string");
+    if (!entry || typeof entry.id !== "string") {
+      return { cleared: false, path: sentinel, reason: "no opencodex entry" };
+    }
+    const configPath = join(libraryPath, `${entry.id}.json`);
+    // Remove the config file — best-effort; a missing file is not a failure.
+    if (existsSync(configPath)) {
+      unlinkSync(configPath);
+    }
+    // Strip the entry from metadata.
+    const entries = metadata.entries.filter(e => e !== entry);
+    const nextMeta: Desktop3pMetadata = { ...metadata, entries };
+    // If Desktop is currently serving our profile, clear the appliedId too.
+    if (nextMeta.appliedId === entry.id) {
+      delete nextMeta.appliedId;
+    }
+    atomicWriteFile(metadataPath, JSON.stringify(nextMeta, null, 2) + "\n");
+    return { cleared: true, path: configPath };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { cleared: false, path: sentinel, reason };
+  }
 }

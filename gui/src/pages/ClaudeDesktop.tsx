@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import { LANE_PAGE, defaultCollapsedFamilies, laneView, rowStartsOpen } from "./claude-desktop-lane";
 import { makeCollapseStore, toggleInSet } from "./collapse-store";
 import { IconChevron } from "../icons";
-import { EmptyState, Notice } from "../ui";
+import { EmptyState, Notice, Switch } from "../ui";
 import { LOCALES, useI18n, type TFn, type TKey } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
@@ -60,6 +60,7 @@ interface DesktopResponse {
   models: DesktopModel[];
   rendered: unknown[];
   port: number;
+  enabled: boolean;
 }
 
 type PendingAction = "save" | "apply" | null;
@@ -164,6 +165,9 @@ export default function ClaudeDesktop({
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
   const [pending, setPending] = useState<PendingAction>(null);
+  const [desktopEnabled, setDesktopEnabled] = useState<boolean>(() => cached?.data?.enabled !== false);
+  const [connectionPending, setConnectionPending] = useState(false);
+  const connectionInFlight = useRef(false);
   // Lane density: search and paging are RENDER-ONLY. modelsByFamily and effectiveDefaults must
   // keep seeing every model — filtering the source arrays would silently change which model is
   // the effective default, turning a view filter into a data mutation.
@@ -195,6 +199,7 @@ export default function ClaudeDesktop({
     setProfile(normalized);
     setSavedProfile(cloneProfile(normalized));
     setDestinations(Object.fromEntries(payload.models.map(model => [model.route, normalized.assignments[model.route]?.family ?? "opus"])));
+    setDesktopEnabled(payload.enabled !== false);
     // Fold empty families on load, but only while the user has no stored preference.
     // Doing it here rather than per render means a later move or import can never
     // re-fold a section the user opened.
@@ -304,6 +309,39 @@ export default function ClaudeDesktop({
     setCollapsedFamilies(next);
   };
 
+  /**
+   * Immediate on/off toggle for the Desktop 3P config files.
+   * Waits for the response — writing to another program's config library is
+   * not something we should optimistically claim succeeded.
+   */
+  const toggleDesktop = async () => {
+    if (connectionInFlight.current) return;
+    connectionInFlight.current = true;
+    setConnectionPending(true);
+    setMessage(null);
+    const next = !desktopEnabled;
+    try {
+      const response = await fetch(`${apiBase}/api/native-integrations/claude-desktop`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const body = await readJsonOrThrow<{ ok?: boolean; message?: string; state?: string }>(response, t("claudeDesktop.toggleFailed"));
+      setDesktopEnabled(next);
+      if (body.message) {
+        setMessage({ tone: "ok", text: body.message });
+        setAnnouncement(body.message);
+      }
+      void desktopResource.refresh();
+      void statusResource.refresh();
+    } catch (error) {
+      setMessage({ tone: "err", text: error instanceof Error ? error.message : t("claudeDesktop.toggleFailed") });
+    } finally {
+      connectionInFlight.current = false;
+      setConnectionPending(false);
+    }
+  };
+
   const save = async (applyAfter: boolean) => {
     if (!profile || pending) return;
     setPending("save");
@@ -392,6 +430,15 @@ export default function ClaudeDesktop({
   return (
     <>
       {/* Title/subtitle live on Claude.tsx above the Code/Desktop strip. */}
+      <div className="claudecode-connection-head">
+        <span id="claude-desktop-connection-label">{t("claudeDesktop.enabledLabel")}</span>
+        <Switch
+          on={desktopEnabled}
+          onClick={() => void toggleDesktop()}
+          disabled={connectionPending}
+          label={t("claudeDesktop.toggleAria")}
+        />
+      </div>
       <div className="claude-desktop-toolbar">
         <div className="claude-profile-tools">
           <input ref={importRef} type="file" accept="application/json,.json" hidden onChange={event => void importProfile(event)} />
@@ -399,6 +446,10 @@ export default function ClaudeDesktop({
           <button type="button" className="btn btn-ghost btn-sm" onClick={exportProfile}>{t("claudeDesktop.exportJson")}</button>
         </div>
       </div>
+
+      {!desktopEnabled && (
+        <Notice tone="err">{t("claudeDesktop.disabledNotice")}</Notice>
+      )}
 
       {/* Always mount the bar (pending strut when status is still cold) so a late /status
           response cannot insert a full row under the title and shove the lanes down. */}
@@ -455,12 +506,14 @@ export default function ClaudeDesktop({
       <div className="claude-profile-bar">
         <span className={`claude-dirty${dirty ? " active" : ""}`}>{dirty ? t("claudeDesktop.unsaved") : t("claudeDesktop.upToDate")}</span>
         <div className="claude-save-actions">
-          <button type="button" className="btn btn-ghost" disabled={!dirty || pending !== null} onClick={() => void save(false)}>
+          <button type="button" className={`btn ${desktopEnabled ? "btn-ghost" : "btn-primary"}`} disabled={!dirty || pending !== null} onClick={() => void save(false)}>
             {pending === "save" ? t("claudeDesktop.saving") : t("common.save")}
           </button>
-          <button type="button" className="btn btn-primary" disabled={pending !== null} onClick={() => void save(true)}>
-            {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : t("claudeDesktop.saveApply")}
-          </button>
+          {desktopEnabled && (
+            <button type="button" className="btn btn-primary" disabled={pending !== null} onClick={() => void save(true)}>
+              {pending === "apply" ? t("claudeDesktop.applying") : pending === "save" ? t("claudeDesktop.saving") : t("claudeDesktop.saveApply")}
+            </button>
+          )}
         </div>
       </div>
 

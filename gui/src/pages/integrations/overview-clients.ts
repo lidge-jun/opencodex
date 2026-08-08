@@ -96,6 +96,7 @@ export interface ClaudeCodePayload {
   authMode?: string;
 }
 export interface ClaudeDesktopPayload {
+  enabled?: boolean;
   applied?: boolean;
   stale?: boolean;
   activeProfile?: boolean | null;
