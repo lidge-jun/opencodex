@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -7,6 +7,7 @@ import { ManagementRequest } from "./helpers/management-auth";
 import {
   appendUsageEntry,
   resetUsageReadCacheForTests,
+  usageLogPath,
   type PersistedUsageEntry,
 } from "../src/usage/log";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
@@ -221,6 +222,33 @@ describe("routing analytics (RI-03)", () => {
       }),
     );
     const result = await computeRoutingAnalytics({});
+    expect(result.cooldownTriggeringFailures).toBe(1);
+  });
+
+  test("ignores malformed attempts while preserving explicit 429 classification", async () => {
+    appendUsageEntry(entry("baseline", { timestamp: 1, status: 200, durationMs: 10 }));
+    const historicalRows = [
+      {
+        ...entry("missing-recovery-kinds", { timestamp: 2, status: 503, durationMs: 20 }),
+        attempts: [{ ordinal: 1 }],
+      },
+      {
+        ...entry("malformed-attempts", { timestamp: 3, status: 503, durationMs: 30 }),
+        attempts: { recoveryKinds: ["rate-limit-429"] },
+      },
+      {
+        ...entry("malformed-recovery-kinds", { timestamp: 4, status: 503, durationMs: 40 }),
+        attempts: [null, { recoveryKinds: "rate-limit-429" }, { recoveryKinds: [null, 42, "unknown"] }],
+      },
+      {
+        ...entry("malformed-429", { timestamp: 5, status: 429, durationMs: 50 }),
+        attempts: { recoveryKinds: ["unknown"] },
+      },
+    ];
+    appendFileSync(usageLogPath(), `${historicalRows.map(row => JSON.stringify(row)).join("\n")}\n`);
+
+    const result = await computeRoutingAnalytics({});
+    expect(result.totalRequests).toBe(5);
     expect(result.cooldownTriggeringFailures).toBe(1);
   });
 
