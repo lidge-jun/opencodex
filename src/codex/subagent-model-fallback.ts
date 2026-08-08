@@ -565,7 +565,7 @@ function scanTomlLine(line: string, state: TomlScanState): void {
     if (ch === '"' || ch === "'") {
       const delimiter = ch.repeat(3);
       if (line.startsWith(delimiter, i)) {
-        const end = line.indexOf(delimiter, i + 3);
+        const end = findTomlMultilineStringEnd(line, i + 3, ch);
         if (end === -1) {
           state.inMultilineString = delimiter as '"""' | "'''";
           return;
@@ -634,7 +634,7 @@ function findTomlMultilineStringEnd(text: string, from: number, quote: string): 
   return -1;
 }
 
-/** Parse a TOML string-array value; null when the value is not an array of strings. */
+/** Parse a TOML string-array value; null when the value is not a well-formed array of strings. */
 function parseTomlStringArrayValue(text: string): string[] | null {
   const values: string[] = [];
   let i = 0;
@@ -645,7 +645,7 @@ function parseTomlStringArrayValue(text: string): string[] | null {
         while (i < text.length && text[i] !== "\n") i += 1;
         continue;
       }
-      if (/\s/.test(ch) || ch === ",") {
+      if (/\s/.test(ch)) {
         i += 1;
         continue;
       }
@@ -655,16 +655,25 @@ function parseTomlStringArrayValue(text: string): string[] | null {
   skipIgnored();
   if (text[i] !== "[") return null;
   i += 1;
+  let expectValue = true;
   for (;;) {
     skipIgnored();
     if (i >= text.length) return null;
     const ch = text[i]!;
     if (ch === "]") return values;
+    if (ch === ",") {
+      if (expectValue) return null; // leading or doubled comma
+      expectValue = true;
+      i += 1;
+      continue;
+    }
     if (ch === '"' || ch === "'") {
+      if (!expectValue) return null; // adjacent strings must be comma-separated
       const parsed = parseTomlStringAt(text, i);
       if (!parsed) return null;
       values.push(parsed.value);
       i = parsed.end;
+      expectValue = false;
       continue;
     }
     return null;
@@ -683,7 +692,7 @@ function parseTomlModelFallbackField(content: string): TomlModelFallbackField {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     if (state.inMultilineString) {
-      const end = line.indexOf(state.inMultilineString);
+      const end = findTomlMultilineStringEnd(line, 0, state.inMultilineString[0]!);
       if (end === -1) continue;
       state.inMultilineString = null;
       scanTomlLine(line.slice(end + 3), state);

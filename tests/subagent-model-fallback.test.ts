@@ -1056,6 +1056,53 @@ describe("subagent model fallback chain", () => {
     expect(readCodexAgentModelFallback("multiline_text", dir)).toEqual([]);
   });
 
+  test("scanCodexAgentRolesWithTomlModelFallback handles escaped triple quotes inside multiline strings", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "escaped_open.toml"), [
+      "name = \"escaped_open\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"a\\\"\"\"",
+      "model_fallback = []",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "escaped_continuation.toml"), [
+      "name = \"escaped_continuation\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"",
+      "still inside \\\"\"\"",
+      "model_fallback = []",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("escaped_open", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("escaped_continuation", dir)).toEqual([]);
+  });
+
+  test("readCodexAgentModelFallback rejects string arrays without proper commas", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "missing_comma.toml"), [
+      "name = \"missing_comma\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\" \"alibaba-token-plan/qwen3.8-max\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "leading_comma.toml"), [
+      "name = \"leading_comma\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [, \"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    expect(readCodexAgentModelFallback("missing_comma", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("leading_comma", dir)).toEqual([]);
+    // Doctor still reports both: the field exists even when its value is malformed.
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "leading_comma",
+      "missing_comma",
+    ]);
+  });
+
   test("subagentFallbackGuidanceText renders configured chain", () => {
     expect(subagentFallbackGuidanceText(cfg())).toContain("gpt-5.6-sol");
     expect(subagentFallbackGuidanceText(cfg({ subagentModelFallback: undefined }))).toBe("");
