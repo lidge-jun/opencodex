@@ -287,6 +287,14 @@ dashboard UAC prompt or rerun `ocx service install` in an elevated PowerShell wi
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
 
+Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
+install, the command checks the current Codex routing and reports a warning instead of a green result
+when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables
+exist only in the current process while `config.proxy` is unset or unresolved, because Codex
+launchers and background services may not inherit that environment. These checks are read-only and
+never print proxy values; resolve the reported handoff and run `ocx doctor` before relying on
+autostart.
+
 If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
 backs up the stable new launcher and restores the shim before dispatch. A launcher that is still
 changing is left untouched and retried later. Repair failures warn without failing the requested

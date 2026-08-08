@@ -93,7 +93,10 @@ jobs:
     needs: resolve-pr
     if: needs.resolve-pr.outputs.pull-number != ''
     runs-on: ubuntu-latest
+    # The write job also reads the current head's aggregate check evidence.
+    # Job-scoped permissions replace, rather than extend, the workflow default.
     permissions:
+      checks: read
       contents: write
       pull-requests: write
     concurrency:
@@ -739,10 +742,8 @@ jobs:
                 // GitHub Actions' immutable App ID. Name alone is not evidence:
                 // any installed app can publish a check called `ci`.
                 const githubActionsAppId = 15368;
-                const checkRuns = [];
-                for await (const response of github.paginate.iterator(
-                  github.rest.checks.listForRef,
-                  {
+                const { data: checksData } =
+                  await github.rest.checks.listForRef({
                     owner,
                     repo,
                     ref: pr.head.sha,
@@ -750,12 +751,10 @@ jobs:
                     check_name: "ci",
                     filter: "latest",
                     per_page: 100
-                  }
-                )) {
-                  // Octokit's paginator normalizes `{ total_count, check_runs }`
-                  // into an array in `response.data` for every iterator page.
-                  checkRuns.push(...response.data);
-                }
+                  });
+                const checkRuns = Array.isArray(checksData.check_runs)
+                  ? checksData.check_runs
+                  : [];
                 const ciChecks = checkRuns.filter(
                   check =>
                     check.name === "ci" &&
@@ -763,9 +762,13 @@ jobs:
                 );
                 // The readiness claim requires positive CI evidence. A missing,
                 // pending, unsuccessful, foreign, or conflicting aggregate
-                // check must fail closed. `filter: latest` removes superseded
-                // rerun attempts; `every` still rejects ambiguous live results.
+                // check must fail closed. The exact app/name/latest query should
+                // be tiny; if GitHub reports more rows than this response holds,
+                // treat the truncated evidence as unreadable rather than paging
+                // through an endpoint whose filters already select the latest run.
                 ciGreen =
+                  Number.isSafeInteger(checksData.total_count) &&
+                  checksData.total_count === checkRuns.length &&
                   ciChecks.length > 0 &&
                   ciChecks.every(
                     check =>

@@ -12,10 +12,10 @@ import { saveCredential } from "../src/oauth/store";
 import {
   clearProviderQuotaCache,
   fetchProviderQuotaReports,
+  parseXaiCreditsResponse,
   setProviderQuotaBeforePublishForTests,
 } from "../src/providers/quota";
 import type { OcxConfig } from "../src/types";
-
 const originalFetch = globalThis.fetch;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const previousCodexHome = process.env.CODEX_HOME;
@@ -1862,6 +1862,147 @@ describe("fetchProviderQuotaReports", () => {
     expect(calls).toBe(2);
     release!();
     await nonForced;
+  });
+
+
+  test("parseXaiCreditsResponse maps weekly credits and rejects non-weekly periods", () => {
+    expect(parseXaiCreditsResponse({
+      config: {
+        creditUsagePercent: 57.4,
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-08-15T13:05:52.277209Z" },
+      },
+    })).toEqual({
+      percent: 57.4,
+      resetAt: Date.parse("2026-08-15T13:05:52.277209Z"),
+    });
+    expect(parseXaiCreditsResponse({
+      config: {
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-08-15T13:05:52.277209Z" },
+      },
+    })).toEqual({
+      percent: 0,
+      resetAt: Date.parse("2026-08-15T13:05:52.277209Z"),
+    });
+    expect(parseXaiCreditsResponse({
+      config: {
+        creditUsagePercent: 10,
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_MONTHLY", end: "2026-08-15T13:05:52.277209Z" },
+      },
+    })).toBeNull();
+  });
+
+  test("xAI OAuth quota prefers weekly credits and falls back to monthly when weekly fails", async () => {
+    await saveCredential("xai", {
+      access: "xai-access-secret",
+      refresh: "xai-refresh-secret",
+      expires: Date.now() + 3600_000,
+      accountId: "xai-user-1",
+    });
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = Object.fromEntries(new Headers(init?.headers).entries());
+      seen.push({ url, headers });
+      if (url === "https://cli-chat-proxy.grok.com/v1/billing?format=credits") {
+        return new Response(JSON.stringify({
+          config: {
+            creditUsagePercent: 31,
+            currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-08-15T00:00:00Z" },
+            raw_secret_should_not_escape: "xai-access-secret",
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url === "https://cli-chat-proxy.grok.com/v1/billing") {
+        return new Response(JSON.stringify({
+          config: {
+            monthlyLimit: { val: 10_000 },
+            used: { val: 2_500 },
+            billingPeriodEnd: "2026-08-31T00:00:00Z",
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+
+    const weekly = await fetchProviderQuotaReports({
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1" } },
+    } as OcxConfig, true);
+    expect(weekly.reports).toHaveLength(1);
+    expect(weekly.reports[0]?.source).toBe("xai:grok-billing-credits");
+    expect(weekly.reports[0]?.quota).toMatchObject({
+      weeklyPercent: 31,
+      weeklyResetAt: Date.parse("2026-08-15T00:00:00Z"),
+    });
+    expect(weekly.reports[0]?.quota.monthlyPercent).toBeUndefined();
+    const creditsCall = seen.find(row => row.url.endsWith("format=credits"));
+    expect(creditsCall?.headers.authorization).toBe("Bearer xai-access-secret");
+    expect(creditsCall?.headers["x-userid"]).toBe("xai-user-1");
+    expect(creditsCall?.headers["x-xai-token-auth"]).toBe("xai-grok-cli");
+    expect(creditsCall?.headers["x-authenticateresponse"]).toBe("authenticate-response");
+    expect(creditsCall?.headers["x-grok-client-version"]).toBeTruthy();
+    expect(JSON.stringify(weekly)).not.toContain("xai-access-secret");
+    expect(JSON.stringify(weekly)).not.toContain("xai-user-1");
+
+    // Weekly non-2xx falls back to monthly.
+    seen.length = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const headers = Object.fromEntries(new Headers(init?.headers).entries());
+      seen.push({ url, headers });
+      if (url.endsWith("format=credits")) {
+        return new Response("nope", { status: 503 });
+      }
+      if (url === "https://cli-chat-proxy.grok.com/v1/billing") {
+        return new Response(JSON.stringify({
+          config: {
+            monthlyLimit: { val: 10_000 },
+            used: { val: 2_500 },
+            billingPeriodEnd: "2026-08-31T00:00:00Z",
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const monthly = await fetchProviderQuotaReports({
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1" } },
+    } as OcxConfig, true);
+    expect(monthly.reports[0]?.source).toBe("xai:grok-billing");
+    expect(monthly.reports[0]?.quota.monthlyPercent).toBe(25);
+    expect(monthly.reports[0]?.quota.weeklyPercent).toBeUndefined();
+    expect(seen.some(row => row.url.endsWith("format=credits"))).toBe(true);
+    expect(seen.some(row => row.url === "https://cli-chat-proxy.grok.com/v1/billing")).toBe(true);
+  });
+
+  test("xAI OAuth quota skips weekly when identity is absent and keeps monthly", async () => {
+    await saveCredential("xai", {
+      access: "xai-access-secret",
+      refresh: "xai-refresh-secret",
+      expires: Date.now() + 3600_000,
+    });
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (url === "https://cli-chat-proxy.grok.com/v1/billing") {
+        return new Response(JSON.stringify({
+          config: {
+            monthlyLimit: { val: 10_000 },
+            used: { val: 2_500 },
+            billingPeriodEnd: "2026-08-31T00:00:00Z",
+          },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "xai",
+      providers: { xai: { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.x.ai/v1" } },
+    } as OcxConfig, true);
+    expect(seen.some(url => url.includes("format=credits"))).toBe(false);
+    expect(result.reports[0]?.source).toBe("xai:grok-billing");
+    expect(result.reports[0]?.quota.monthlyPercent).toBe(25);
   });
 
   test("interleaved configs keep independent inflight entries (A → B → A joins the first A)", async () => {

@@ -140,7 +140,10 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      ci: ${{ steps.filter.outputs.ci }}
+      # Downstream jobs consume only the value re-emitted by the validation
+      # step. A missing or malformed filter output must fail this job instead
+      # of silently making every expensive job skip.
+      ci: ${{ steps.scope.outputs.ci }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
     steps:
@@ -210,6 +213,23 @@ jobs:
               - 'README.md'
               - 'LICENSE'
               - 'scripts/prepare-package.ts'
+
+      - name: Assert the scope output is usable
+        id: scope
+        shell: bash
+        env:
+          CI_SCOPE: ${{ steps.filter.outputs.ci }}
+        run: |
+          set -euo pipefail
+          case "$CI_SCOPE" in
+            true|false)
+              printf 'ci=%s\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
 
   # The suite, split by file across four Linux runners.
   #

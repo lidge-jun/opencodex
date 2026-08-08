@@ -1160,11 +1160,16 @@ switch (command) {
     break;
   }
   case "codex-shim": {
-    const { codexShimStatus, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
+    const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
     switch (args[1]) {
       case "install": {
         const r = installCodexShim();
-        console.log(r.installed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
+        const warnings = diagnoseCodexShim().healthy
+          ? collectCodexShimReadinessWarnings()
+          : [];
+        console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
+        for (const warning of warnings) console.warn(`   ${warning}`);
         break;
       }
       case "status":

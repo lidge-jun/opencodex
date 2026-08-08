@@ -1072,6 +1072,69 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider deletion removes that provider's custom models (#1273)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "sk-secret-value",
+        },
+        removable: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.removable.test/v1",
+          apiKey: "sk-removable",
+        },
+      },
+      customModels: [
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+        { id: "drop-1", provider: "removable", modelId: "ghost-model" },
+      ],
+      // Seeded so the assertion below covers the real persistence path, not just
+      // the helper: `projectCustomModelCatalogMigration` runs inside the save and
+      // must carry this marker through a provider delete unchanged.
+      customModelCatalogMigration: {
+        version: 1,
+        legacyOwnedSlugs: ["removable/ghost-model", "test-openai/kept-model"],
+      },
+    } as unknown as Parameters<typeof saveConfig>[0]);
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=removable", server.url), {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ success: true, droppedCustomModels: 1 });
+
+      // The dashboard model page reads this route; a surviving row here is the
+      // ghost model users see pointing at a provider that no longer exists.
+      const customModels = await fetch(new URL("/api/custom-models", server.url));
+      expect(await customModels.json()).toEqual([
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+      ]);
+
+      const persisted = JSON.parse(readFileSync(join(TEST_DIR, "config.json"), "utf8")) as {
+        customModels?: unknown;
+        customModelCatalogMigration?: unknown;
+      };
+      expect(persisted.customModels).toEqual([
+        { id: "keep-1", provider: "test-openai", modelId: "kept-model" },
+      ]);
+      expect(persisted.customModelCatalogMigration).toEqual({
+        version: 1,
+        legacyOwnedSlugs: ["removable/ghost-model", "test-openai/kept-model"],
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("provider management switches the default and reassigns it when removed", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

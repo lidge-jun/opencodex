@@ -186,6 +186,8 @@ export type RunOptions = {
     conclusion: string | null;
     app?: { id: number } | null;
   }>>;
+  /** Optional filtered total for proving truncated check evidence fails closed. */
+  checkRunTotalCount?: number;
   /**
    * Review threads `pullRequestReviewThreads` (via GraphQL) reports for the PR.
    * Each entry is `{ isResolved, author }`; the harness wraps it into the
@@ -758,7 +760,9 @@ export async function runEnforcePrTarget(
       listForRef: (args: unknown) => {
         const page = Number((args as { page?: number })?.page ?? 1);
         return respond("checks.listForRef", args, {
-          total_count: checkRunPages.reduce((total, rows) => total + rows.length, 0),
+          total_count:
+            options.checkRunTotalCount ??
+            checkRunPages.reduce((total, rows) => total + rows.length, 0),
           check_runs: checkRunPages[page - 1] ?? [],
         });
       },

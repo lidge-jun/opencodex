@@ -476,4 +476,79 @@ describe("routing profiles (RI-04)", () => {
     expect(body.candidates?.[0]?.quota?.known).toBe(true);
     expect(body.candidates?.[0]?.quota?.headroom).toBeCloseTo(0.7, 2);
   });
+
+  test("API dry-run leaves an unbound Codex candidate quota unknown despite an active pool account", async () => {
+    updateAccountQuota("pool-a", 30, 1_800_000_000_000, 20, 1_900_000_000_000);
+    const config = baseConfig({
+      providers: {
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+      codexAccounts: [{ id: "pool-a", email: "pool-a@example.test", isMain: false }],
+      activeCodexAccountId: "pool-a",
+      routingProfiles: {
+        only: { candidates: [{ provider: "openai", model: "gpt-5.6" }] },
+      },
+    });
+    const req = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // No candidates[] override: the candidate is unbound, so the dry-run must
+      // not reach for the process-global active pool account. Policy evaluation
+      // runs before Pool/Direct identity and thread affinity resolve, so an
+      // account attached here can differ from the one that executes.
+      body: JSON.stringify({ profile: "only", evidence: {} }),
+    });
+    const response = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const body = await response!.json() as {
+      candidates?: Array<{ accountRef?: string; quota?: { known?: boolean; headroom?: number } }>;
+    };
+    expect(body.candidates?.[0]?.accountRef).toBeUndefined();
+    expect(body.candidates?.[0]?.quota?.known).toBe(false);
+    expect(body.candidates?.[0]?.quota?.headroom).toBeUndefined();
+  });
+
+  test("API dry-run leaves an unbound Anthropic candidate quota unknown despite an active account", async () => {
+    const { saveCredential, getAccountSet } = await import("../src/oauth/store");
+    const { setCachedProviderAccountQuotaForTests } = await import("../src/providers/quota");
+    await saveCredential("anthropic", {
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3_600_000,
+      accountId: "uuid-a",
+      email: "a@example.test",
+    });
+    const activeId = getAccountSet("anthropic")!.activeAccountId;
+    setCachedProviderAccountQuotaForTests("anthropic", activeId, {
+      fiveHourPercent: 40,
+      updatedAt: Date.now(),
+    });
+    const config = baseConfig({
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "oauth",
+          models: ["claude-sonnet-5"],
+        },
+      },
+      routingProfiles: {
+        only: { candidates: [{ provider: "anthropic", model: "claude-sonnet-5" }] },
+      },
+    });
+    const req = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profile: "only", evidence: {} }),
+    });
+    const response = await handleManagementAPI(req, new URL(req.url), config, { refreshCodexCatalog: async () => {} });
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const body = await response!.json() as {
+      candidates?: Array<{ accountRef?: string; quota?: { known?: boolean; headroom?: number } }>;
+    };
+    expect(body.candidates?.[0]?.accountRef).toBeUndefined();
+    expect(body.candidates?.[0]?.quota?.known).toBe(false);
+  });
 });

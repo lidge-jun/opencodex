@@ -314,6 +314,34 @@ describe("GitHub Actions hardening", () => {
     };
     expect([...(areaFilters.ci ?? [])].sort()).toEqual(ciPaths);
 
+    const changesJob = ci.jobs?.changes as {
+      outputs?: Record<string, string>;
+      steps?: Array<{
+        name?: string;
+        id?: string;
+        shell?: string;
+        env?: Record<string, string>;
+        run?: string;
+        with?: Record<string, string>;
+      }>;
+    } | undefined;
+    const scopeStep = changesJob?.steps?.find(
+      step => step.name === "Assert the scope output is usable",
+    );
+    expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
+    expect(scopeStep?.id).toBe("scope");
+    expect(scopeStep?.shell).toBe("bash");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
+    expect(scopeStep?.run).not.toContain("${{");
+    expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
+    expect(scopeStep?.run).toContain("true|false)");
+    expect(scopeStep?.run).toContain(`printf 'ci=%s\\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"`);
+    expect(scopeStep?.run).toContain("exit 1");
+    const filterIndex = changesJob?.steps?.findIndex(step => step.id === "filter") ?? -1;
+    const scopeIndex = changesJob?.steps?.findIndex(step => step.id === "scope") ?? -1;
+    expect(filterIndex).toBeGreaterThanOrEqual(0);
+    expect(scopeIndex).toBeGreaterThan(filterIndex);
+
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
     for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
@@ -875,8 +903,9 @@ describe("GitHub Actions hardening", () => {
     expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
     expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
 
-    // Exactly the scopes this gate needs. `pull-requests: write` covers title
-    // and comment updates. `contents: write` is required for the draft GraphQL
+    // Exactly the scopes this gate needs. `checks: read` covers the live
+    // current-head CI evidence lookup. `pull-requests: write` covers title and
+    // comment updates. `contents: write` is required for the draft GraphQL
     // mutations with GITHUB_TOKEN (#626: "Resource not accessible by integration"
     // when contents was unset). Asserting the whole object pins both presence
     // and the absence of anything broader (write-all, contents alone, …).
@@ -929,6 +958,7 @@ describe("GitHub Actions hardening", () => {
     ]);
     expect(job?.["runs-on"]).toBe("ubuntu-latest");
     expect(job?.permissions).toEqual({
+      checks: "read",
       contents: "write",
       "pull-requests": "write",
     });
@@ -1915,7 +1945,7 @@ describe("GitHub Actions hardening", () => {
       expect(readinessBody).toContain("GitHub CI is not green on the current head");
     });
 
-    test("a green ci check on a later checks page attests green", async () => {
+    test("a complete filtered trusted ci response attests green", async () => {
       const result = await run({
         pr: {
           base: { ref: "dev" },
@@ -1923,18 +1953,11 @@ describe("GitHub Actions hardening", () => {
           body: readinessChecklistBody(4),
         },
         maintainersFile: MAINTAINERS_FIXTURE,
-        checkRunPages: [
-          Array.from({ length: 100 }, (_, index) => ({
-            name: `decoy-${index}`,
-            status: "completed",
-            conclusion: "success",
-          })),
-          [{ name: "ci", status: "completed", conclusion: "success" }],
-        ],
+        checkRuns: [{ name: "ci", status: "completed", conclusion: "success" }],
+        checkRunTotalCount: 1,
       });
 
       expect(methodsOf(result)).toEqual(readsAllowedBase([
-        "checks.listForRef",
         "checks.listForRef",
         "graphql",
         "pulls.listReviews",
@@ -1956,6 +1979,25 @@ describe("GitHub Actions hardening", () => {
       const drafts = callsTo(result, "graphql") as [{ query: string }, { query: string }];
       expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
       expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+    });
+
+    test("a truncated filtered ci response cannot attest green", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        checkRuns: [{ name: "ci", status: "completed", conclusion: "success" }],
+        checkRunTotalCount: 2,
+      });
+
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(bodyUpdate.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(lastReadinessCommentBody(result)).toContain(
+        "GitHub CI is not green on the current head",
+      );
     });
 
     test("a foreign app check named ci cannot attest green", async () => {
