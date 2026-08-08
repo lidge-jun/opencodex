@@ -65,8 +65,10 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 스폰된 작업자에 대해 opencodex는 다음 우선순위를 적용합니다.
 
 1. 요청한 기본 모델
-2. 역할의 `$CODEX_HOME/agents/*.toml` 정의에 있는 `model_fallback` 목록
+2. opencodex 설정의 `subagentModelFallbackByModel`에 있는 모델별 체인 (요청한 기본 모델이 키)
 3. opencodex 설정의 전역 `subagentModelFallback` 목록
+
+역할별 폴백 체인은 `$CODEX_HOME/agents/*.toml`이 아니라 opencodex 설정에 두어야 합니다. Codex 0.146+는 에이전트 역할 파일을 엄격하게 역직렬화하며 `model_fallback`을 알 수 없는 필드로 거부해 역할 정의 전체를 건너뜁니다 (#1190). opencodex는 하위 호환성을 위해 TOML의 기존 `model_fallback` 줄을 계속 읽을 수 있지만, `ocx doctor`가 경고하며 Codex 자체는 해당 역할을 무시합니다.
 
 중복 모델 id는 첫 번째 출현을 유지한 채 제거합니다. 선택 과정에서 opencodex는 비활성화된 후보, 라우팅 불가 후보, 비활성화된 프로바이더가 받쳐주는 후보, unhealthy로 표시된 후보, cooldown 중인 후보, 사용할 수 있는 pooled Codex 계정이 없는 후보, 또는 설정된 quota 임계치를 넘는 후보를 건너뜁니다. 가용성 프로브는 기본값 60초인 `subagentModelFallbackPollMs` 동안 캐시됩니다.
 

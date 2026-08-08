@@ -17,6 +17,7 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | opencodex가 작성하는 v1/v2 개발자 안내만 제어합니다. 네이티브 에이전트 기본값, 도구, 라우팅, 로스터, 노력 상한은 바꾸지 않습니다. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | 동기화 또는 재시작 시 `injectionModel`과 선택적 `injectionEffort`를 Codex의 네이티브 기본값으로 기록하도록 선택합니다. `injectionModel`이 필요합니다. |
 | `subagentModelFallback?` | `string[]` | `[]` | 생성된 하위 턴에 적용되는 전역 대체 모델 우선순위 목록입니다. |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | 요청한 기본 모델 id를 키로 하는 모델별 대체 체인입니다. 역할별 대체 메타데이터의 지원 위치입니다. Codex agent TOML에 `model_fallback`을 쓰면 Codex 0.146+가 역할을 건너뜁니다 (#1190). |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 사용 가능성 검사 캐시 간격입니다. 1000 ms 미만의 값은 기본값으로 돌아갑니다. |
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
@@ -44,8 +45,13 @@ V1 안내는 `max` 또는 `ultra`에서만 선제 텍스트로 제공됩니다. 
 생성된 하위 작업의 대체 순서는 다음과 같습니다.
 
 1. 요청된 기본 모델
-2. `$CODEX_HOME/agents/*.toml`의 역할 수준 `model_fallback`
+2. `subagentModelFallbackByModel`의 모델별 체인 (기본 모델이 키)
 3. 전역 `subagentModelFallback` 항목
+
+역할별 폴백 체인은 opencodex 설정에 있어야 합니다. `model_fallback`을
+`$CODEX_HOME/agents/*.toml`에 쓰면 Codex 0.146+가 알 수 없는 필드로 역할 파일 전체를
+거부하고 역할을 건너뜁니다 (#1190). TOML의 기존 `model_fallback` 줄은 하위 호환성을 위해
+계속 읽히지만 `ocx doctor`가 이를 표시합니다.
 
 opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할당량 임계값에 걸린 후보를 건너뜁니다. 사용 가능성 스냅샷은 `subagentModelFallbackPollMs` 동안 캐시됩니다. 암호화된 하위 작업은 체인을 정규 네이티브 ChatGPT 대상으로만 제한할 수 있습니다. 어떤 대상도 암호화된 페이로드를 읽을 수 없으면, 읽을 수 없는 암호문을 다른 곳으로 라우팅하는 대신 요청이 실패합니다.
 
@@ -57,6 +63,9 @@ opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할�
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
   "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallbackByModel": {
+    "gpt-5.5": ["gpt-5.4-mini"]
+  },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

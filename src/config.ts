@@ -1070,6 +1070,12 @@ const configSchema = z.object({
   injectionModel: z.string().optional().catch(undefined),
   injectionEffort: z.string().optional().catch(undefined),
   syncCodexSubagentDefaults: z.boolean().optional().catch(undefined),
+  // Per-primary-model fallback chains. Values must be non-empty string arrays;
+  // malformed entries degrade to undefined rather than rejecting the whole config.
+  subagentModelFallbackByModel: z.record(
+    z.string(),
+    z.array(z.string().trim().min(1)).min(1),
+  ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   pausedCodexAccountIds: z.array(z.string().regex(/^[a-zA-Z0-9._-]{1,64}$/)).optional(),
   codexAccountNamespaces: codexAccountNamespacesSchema.optional(),

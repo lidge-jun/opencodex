@@ -65,8 +65,10 @@ v1 では、opencodex は、`max` または `ultra` の取り組みでアップ�
 生成されたワーカーの場合、opencodex は次の優先順位を構築します。
 
 1. 要求されたプライマリ モデル。
-2. `$CODEX_HOME/agents/*.toml` 定義からのロールの `model_fallback` リスト。
+2. opencodex 構成内の `subagentModelFallbackByModel` によるモデル単位のチェーン（要求されたプライマリ モデルがキー）。
 3. opencodex 構成内のグローバル `subagentModelFallback` リスト。
+
+ロール単位のフォールバックチェーンは、`$CODEX_HOME/agents/*.toml` ではなく opencodex 構成に置く必要があります。Codex 0.146+ はエージェントロールファイルを厳密に逆シリアル化し、`model_fallback` を未知フィールドとして拒否するため、ロール定義全体がスキップされます（#1190）。opencodex は後方互換性のために TOML 内のレガシー `model_fallback` 行を引き続き読み取れますが、`ocx doctor` が警告を出し、Codex 自体は影響を受けるロールを無視します。
 
 重複するモデル ID は、最初に出現したモデル ID を保持しながら削除されます。選択中、opencodex は、無効になっている、ルーティングできない、無効なプロバイダーによってサポートされている、異常とマークされている、クールダウン中、使用可能なプールされた Codex アカウントがない、または設定されたクォータしきい値を超えている候補をスキップします。可用性プローブは `subagentModelFallbackPollMs` に対してキャッシュされます (デフォルトでは 60 秒)。
 

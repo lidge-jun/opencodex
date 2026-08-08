@@ -606,6 +606,17 @@ export interface OcxConfig {
    */
   subagentModelFallback?: string[];
   /**
+   * Per-primary-model fallback chains for spawned sub-agents, keyed by the
+   * requested primary model id (bare native or "provider/model"). Entries for
+   * the matching key are consulted after the requested model and before the
+   * global `subagentModelFallback` list.
+   *
+   * This is the supported home for per-role fallback metadata: storing it as
+   * `model_fallback` inside `$CODEX_HOME/agents/*.toml` makes Codex >= 0.146
+   * reject the whole role file as an unknown field (#1190).
+   */
+  subagentModelFallbackByModel?: Record<string, string[]>;
+  /**
    * TTL (ms) for cached sub-agent model availability probes. Default 60_000.
    */
   subagentModelFallbackPollMs?: number;

@@ -18,6 +18,7 @@ routes, and limits delegated work.
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Per-primary-model fallback chains, keyed by the requested primary model id. This is the supported home for per-role fallback metadata; `model_fallback` inside Codex agent TOML makes Codex 0.146+ skip the role (#1190). |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
@@ -73,8 +74,13 @@ created Codex tasks and do not cause delegation by themselves.
 Spawned-child fallback order is:
 
 1. the requested primary model;
-2. role-level `model_fallback` from `$CODEX_HOME/agents/*.toml`; then
+2. per-model chains from `subagentModelFallbackByModel` (keyed by the primary model); then
 3. global `subagentModelFallback` entries.
+
+Per-role fallback chains must live in opencodex config. Writing `model_fallback` into
+`$CODEX_HOME/agents/*.toml` makes Codex 0.146+ reject the whole role file as an unknown
+field and skip the role (#1190). A legacy `model_fallback` line in the TOML is still
+read for backwards compatibility, but `ocx doctor` flags it.
 
 opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshold candidates. The
 availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks can restrict
@@ -89,6 +95,9 @@ fails instead of routing unreadable ciphertext elsewhere.
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
   "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallbackByModel": {
+    "gpt-5.5": ["gpt-5.4-mini"]
+  },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

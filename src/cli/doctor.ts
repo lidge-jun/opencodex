@@ -23,6 +23,7 @@ import { withNativeMainSharedClaim } from "../codex/native-main-claim";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
+import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
 import {
@@ -940,6 +941,15 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     for (const line of formatProjectCodexConfigWarningsForDoctor(projectWarnings)) {
       console.log(line);
     }
+  }
+
+  console.log("\nCodex agent role files");
+  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
+  if (tomlFallbackRoles.length === 0) {
+    console.log("  ok     no per-role model_fallback fields in $CODEX_HOME/agents/*.toml");
+  } else {
+    console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
+    console.log("        Codex >= 0.146 rejects that field as unknown and skips the whole role. Move the chains to opencodex config `subagentModelFallbackByModel` (keyed by primary model) and remove the field from the TOML files.");
   }
 
   const dual = collectWslDualInstall();

@@ -65,8 +65,10 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 对于生成出的工作器，opencodex 会按以下优先级构建顺序：
 
 1. 请求的主模型。
-2. 该角色在其 `$CODEX_HOME/agents/*.toml` 定义中的 `model_fallback` 列表。
+2. opencodex 配置中 `subagentModelFallbackByModel` 提供的 per-model 链，按请求的主模型做键。
 3. opencodex 配置中的全局 `subagentModelFallback` 列表。
+
+per-role fallback 链应该放在 opencodex 配置里，而不是 `$CODEX_HOME/agents/*.toml`。Codex 0.146+ 会严格反序列化 agent 角色文件，并把 `model_fallback` 当作未知字段拒绝，导致整个角色定义被跳过（#1190）。opencodex 为了向后兼容仍然能读取 TOML 里的旧版 `model_fallback`，但 `ocx doctor` 会给出警告，而且 Codex 本身会忽略受影响的角色。
 
 重复的模型 id 会在保留第一次出现的前提下移除。在选择过程中，opencodex 会跳过已禁用、不可路由、由已禁用 provider 支撑、标记为 unhealthy、处于 cooldown、没有可用 pooled Codex 账户，或者超出配置配额阈值的候选项。可用性探测会缓存 `subagentModelFallbackPollMs` 的时长，默认 60 秒。
 
