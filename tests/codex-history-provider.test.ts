@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setAfterNoopPendingCountForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
@@ -11,6 +11,12 @@ setHistoryDbBusyTimeoutForTests(250);
 // Windows CI runners also have slow filesystems: legitimate sqlite open/fsync cycles in this
 // file measure 5-7s there (vs <100ms locally), straddling bun's 5s default. Explicit headroom.
 setDefaultTimeout(30_000);
+
+const noopSnapshotArtifacts = new Set<string>();
+afterEach(() => {
+  for (const path of noopSnapshotArtifacts) rmSync(path, { recursive: true, force: true });
+  noopSnapshotArtifacts.clear();
+});
 
 /** Read the LAST session_meta payload, mirroring the app's last-writer-wins fold over rollout lines. */
 function latestSessionMetaPayload(path: string): Record<string, unknown> {
@@ -368,6 +374,8 @@ describe("Design B migration helpers", () => {
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, "state_5.sqlite");
     const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
     expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({
       kind: "unknown", reason: "database-absent",
       stateDbPresent: false, backupPresent: false,
@@ -395,6 +403,8 @@ describe("Design B migration helpers", () => {
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, "state_5.sqlite");
     const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
     const rolloutPath = join(dir, "rollout.jsonl");
     writeFileSync(backupPath, JSON.stringify({
       version: 1,
@@ -414,6 +424,8 @@ describe("Design B migration helpers", () => {
     mkdirSync(dir, { recursive: true });
     const dbPath = join(dir, "state_5.sqlite");
     const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
     const seed = new Database(dbPath);
     try {
       seed.exec(`

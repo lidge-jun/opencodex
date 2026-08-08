@@ -33,9 +33,9 @@ function classify(outcome: CodexHistoryJobOutcome, txId: string | null): CodexHi
         attempts: 1,
         nextRetryAt: null,
         txId,
-        // Mutation counts, not probe counts. The durable counts come from the
-        // final probe, which this path does not run — null rather than a
-        // manufactured zero.
+        // A zero is durable only when the worker proved the exact DB/manifest
+        // state while H was held. Without proof, keep the counts unknown. Keep
+        // `??`: `||` would discard a verified zero.
         pendingRows: outcome.proof?.pendingRows ?? null,
         backupEntries: outcome.proof?.backupEntries ?? null,
       };

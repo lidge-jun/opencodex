@@ -78,6 +78,7 @@ describe("the result validator", () => {
     const target = {
       canonicalStateDbPath: "/state/state_5.sqlite",
       canonicalBackupPath: "/state/state_5.sqlite.ocx-backup.json",
+      operation: "migrate-openai" as const,
     };
     const verifiedNoop = {
       requestId: "r", jobId: "j", type: "done", outcome: "converged", rows: 0, files: 0,
@@ -103,6 +104,9 @@ describe("the result validator", () => {
     )).toBe(false);
     expect(isPlausibleWorkerResultForTests({ ...verifiedNoop, outcome: "skipped" }, "r", "j", target)).toBe(false);
     expect(isPlausibleWorkerResultForTests(verifiedNoop, "r", "j")).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      verifiedNoop, "r", "j", { ...target, operation: "apply-opencodex" },
+    )).toBe(false);
   });
 
   test("blocked carries exactly its three reasons", async () => {
