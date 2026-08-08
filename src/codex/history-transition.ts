@@ -36,8 +36,8 @@ function classify(outcome: CodexHistoryJobOutcome, txId: string | null): CodexHi
         // Mutation counts, not probe counts. The durable counts come from the
         // final probe, which this path does not run — null rather than a
         // manufactured zero.
-        pendingRows: null,
-        backupEntries: null,
+        pendingRows: outcome.proof?.pendingRows ?? null,
+        backupEntries: outcome.proof?.backupEntries ?? null,
       };
     case "skipped":
       // The user opting out is a completed decision, not a failure — converged

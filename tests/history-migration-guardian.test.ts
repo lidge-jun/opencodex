@@ -34,13 +34,13 @@ describe("history migration guardian", () => {
     let migrations = 0;
     startHistoryMigrationGuardian({
       countFn: () => ({ pendingRows: 0, backupEntries: 0 }),
-      migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
+      migrateFn: () => { migrations++; return { rows: 0, files: 0, verifiedNoop: true }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
     });
 
     expect(await sched.runNext()).toBe(true);
-    expect(migrations).toBe(0); // no pending work — never touches the migrate path
+    expect(migrations).toBe(1); // the locked worker owns no-op authority
     expect(sched.size).toBe(0); // and never reschedules
   });
 
@@ -100,7 +100,7 @@ describe("history migration guardian", () => {
     expect(migrations).toBe(0);
   });
 
-  test("a locked count probe still attempts migration and keeps ticking until a clean re-count", async () => {
+  test("a locked count probe still attempts migration and stops on a worker-verified no-op", async () => {
     const sched = manualScheduler();
     let migrations = 0;
     let counts = 0;
@@ -112,14 +112,36 @@ describe("history migration guardian", () => {
           ? { pendingRows: 0, backupEntries: 0, failed: true as const }
           : { pendingRows: 0, backupEntries: 0 };
       },
-      migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
+      migrateFn: () => { migrations++; return { rows: 0, files: 0, verifiedNoop: true }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
     });
 
     expect(await sched.runNext()).toBe(true);
     expect(migrations).toBe(1);
-    expect(sched.size).toBe(0); // migration succeeded and re-count is clean → stop
+    expect(sched.size).toBe(0); // worker proof, not the advisory count, stops it
+  });
+
+  test("an advisory-clean count cannot turn an unverified zero-row result into success", async () => {
+    const sched = manualScheduler();
+    let attempts = 0;
+    startHistoryMigrationGuardian({
+      countFn: () => ({ pendingRows: 0, backupEntries: 0 }),
+      migrateFn: () => {
+        attempts++;
+        return attempts === 1
+          ? { rows: 0, files: 0, verifiedNoop: false }
+          : { rows: 0, files: 0, verifiedNoop: true };
+      },
+      log: silent,
+      scheduleFn: sched.scheduleFn,
+    });
+    expect(await sched.runNext()).toBe(true);
+    expect(attempts).toBe(1);
+    expect(sched.size).toBe(1);
+    expect(await sched.runNext()).toBe(true);
+    expect(attempts).toBe(2);
+    expect(sched.size).toBe(0);
   });
 
   test("does not stop on a zero-row 'success' while backup entries remain (missing-DB race)", async () => {

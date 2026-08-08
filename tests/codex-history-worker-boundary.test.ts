@@ -75,6 +75,34 @@ describe("the result validator", () => {
     expect(isPlausibleWorkerResultForTests(
       { requestId: "r", jobId: "OTHER", type: "done", outcome: "converged", rows: 3, files: 1 }, "r", "j",
     )).toBe(false);
+    const target = {
+      canonicalStateDbPath: "/state/state_5.sqlite",
+      canonicalBackupPath: "/state/state_5.sqlite.ocx-backup.json",
+    };
+    const verifiedNoop = {
+      requestId: "r", jobId: "j", type: "done", outcome: "converged", rows: 0, files: 0,
+      proof: {
+        kind: "verified-noop", pendingRows: 0, backupEntries: 0,
+        canonicalStateDbPath: target.canonicalStateDbPath, stateDbPresent: true,
+        canonicalBackupPath: target.canonicalBackupPath, backupPresent: false,
+      },
+    };
+    expect(isPlausibleWorkerResultForTests(verifiedNoop, "r", "j", target)).toBe(true);
+    expect(isPlausibleWorkerResultForTests(
+      { ...verifiedNoop, proof: { ...verifiedNoop.proof, canonicalStateDbPath: "/other/state.sqlite" } },
+      "r", "j", target,
+    )).toBe(false);
+    expect(isPlausibleWorkerResultForTests({ ...verifiedNoop, rows: 1 }, "r", "j", target)).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      { ...verifiedNoop, proof: { ...verifiedNoop.proof, canonicalBackupPath: "/other/backup.json" } },
+      "r", "j", target,
+    )).toBe(false);
+    expect(isPlausibleWorkerResultForTests(
+      { ...verifiedNoop, proof: { ...verifiedNoop.proof, pendingRows: 1 } },
+      "r", "j", target,
+    )).toBe(false);
+    expect(isPlausibleWorkerResultForTests({ ...verifiedNoop, outcome: "skipped" }, "r", "j", target)).toBe(false);
+    expect(isPlausibleWorkerResultForTests(verifiedNoop, "r", "j")).toBe(false);
   });
 
   test("blocked carries exactly its three reasons", async () => {
