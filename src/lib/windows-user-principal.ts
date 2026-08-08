@@ -18,13 +18,20 @@
  * timer only arms once `Bun.spawn` returns. Both are small in practice, but the
  * lookup is not bounded by the deadline to the microsecond. Tightening that
  * would mean passing an absolute deadline through the runner interface.
+ *
+ * The lookup runs `whoami /user` instead of `powershell.exe`. The original
+ * PowerShell path spawned without `windowsHide`, so every secret-file write
+ * from the console-less proxy presented a visible console window (the v2.11.0
+ * popup bug). `whoami.exe` keeps the popup fixed — it runs hidden via
+ * CREATE_NO_WINDOW (windowsHide) — while starting far faster than PowerShell
+ * 5.1 and reading the same effective-token SID. It is resolved from the
+ * trusted System32 directory, never from PATH.
  */
 
-import { resolveTrustedWindowsPowerShellExe } from "./windows-elevation";
+import { resolveTrustedWindowsWhoamiExe } from "./windows-elevation";
+import { parseWindowsSidFromWhoami, runWhoamiAsync, runWhoamiSync } from "./windows-whoami";
 
 const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
-const SID_EXPRESSION =
-  "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value";
 
 export interface WindowsPrincipalLookupResult {
   success: boolean;
@@ -41,69 +48,35 @@ export type AsyncWindowsPrincipalRunner = (
   timeoutMs: number,
 ) => Promise<WindowsPrincipalLookupResult>;
 
-const POWERSHELL_ARGS = [
-  "-NoLogo",
-  "-NoProfile",
-  "-NonInteractive",
-  "-WindowStyle",
-  "Hidden",
-  "-Command",
-  SID_EXPRESSION,
-] as const;
-
-function windowsPrincipalPowerShellCommand(): string[] {
-  return [resolveTrustedWindowsPowerShellExe(), ...POWERSHELL_ARGS];
+function windowsPrincipalWhoamiCommand(): string[] {
+  return [resolveTrustedWindowsWhoamiExe(), "/user"];
 }
 
 /** Test-only readback of the exact trusted executable and static arguments. */
-export function windowsPrincipalPowerShellCommandForTests(): string[] {
-  return windowsPrincipalPowerShellCommand();
+export function windowsPrincipalCommandForTests(): string[] {
+  return windowsPrincipalWhoamiCommand();
 }
 
 function defaultWindowsPrincipalRunner(timeoutMs: number): WindowsPrincipalLookupResult {
-  const result = Bun.spawnSync(windowsPrincipalPowerShellCommand(), {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    timeout: Math.max(1, timeoutMs),
-    windowsHide: true,
-  });
+  const result = runWhoamiSync(timeoutMs);
   return {
     success: result.success,
     exitCode: result.exitCode,
-    timedOut: result.exitedDueToTimeout ?? false,
-    stdout: result.stdout ? result.stdout.toString() : "",
+    timedOut: result.timedOut,
+    // stdout carries exactly the SID (principalFromResult validates it).
+    stdout: result.success ? parseWindowsSidFromWhoami(result.output) ?? "" : "",
   };
 }
 
 async function defaultAsyncWindowsPrincipalRunner(
   timeoutMs: number,
 ): Promise<WindowsPrincipalLookupResult> {
-  const proc = Bun.spawn(windowsPrincipalPowerShellCommand(), {
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-    windowsHide: true,
-  });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    try { proc.kill(); } catch { /* already exited */ }
-  }, Math.max(1, timeoutMs));
-  let exitCode: number | null = null;
-  try {
-    exitCode = await proc.exited;
-  } finally {
-    clearTimeout(timer);
-  }
-  const stdout = proc.stdout
-    ? await new Response(proc.stdout).text().catch(() => "")
-    : "";
+  const result = await runWhoamiAsync(timeoutMs);
   return {
-    success: !timedOut && exitCode === 0,
-    exitCode: timedOut ? null : exitCode,
-    timedOut,
-    stdout,
+    success: result.success,
+    exitCode: result.exitCode,
+    timedOut: result.timedOut,
+    stdout: result.success ? parseWindowsSidFromWhoami(result.output) ?? "" : "",
   };
 }
 

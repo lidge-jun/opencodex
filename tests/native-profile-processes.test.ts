@@ -1,50 +1,66 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   executeNativeProcess,
   probeNativeCodexProcesses,
   type NativeProcessExecutor,
 } from "../src/codex/native-profile-processes";
-import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 
-async function withTrustedWindowsPowerShell<T>(run: (powershell: string) => Promise<T>): Promise<T> {
-  const systemDirectory = mkdtempSync(join(tmpdir(), "ocx-system32-"));
-  const powershell = join(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
-  mkdirSync(dirname(powershell), { recursive: true });
-  writeFileSync(powershell, "");
-  setTrustedWindowsSystemDirectoryResolverForTests(() => systemDirectory);
+const TRUSTED_WMIC = "C:\\trusted-system32\\wbem\\WMIC.exe";
+const TRUSTED_POWERSHELL = "C:\\trusted-system32\\WindowsPowerShell\\v1.0\\powershell.exe";
+
+async function withTrustedWindowsWmic<T>(run: (wmic: string) => Promise<T>): Promise<T> {
+  setTrustedWindowsElevationExecutablesForTests({ wmic: TRUSTED_WMIC });
   try {
-    return await run(powershell);
+    return await run(TRUSTED_WMIC);
   } finally {
-    setTrustedWindowsSystemDirectoryResolverForTests(null);
-    rmSync(systemDirectory, { recursive: true, force: true });
+    setTrustedWindowsElevationExecutablesForTests(null);
+  }
+}
+
+async function withWindowsWmicAbsent<T>(run: (powershell: string) => Promise<T>): Promise<T> {
+  setTrustedWindowsElevationExecutablesForTests({ wmic: null, powershell: TRUSTED_POWERSHELL });
+  try {
+    return await run(TRUSTED_POWERSHELL);
+  } finally {
+    setTrustedWindowsElevationExecutablesForTests(null);
   }
 }
 
 describe("native profile process probe", () => {
-  test("uses the trusted PowerShell path with shell-free bounded execution", async () => {
+  test("uses WMIC with shell-free bounded execution and counts Codex processes", async () => {
     const calls: Parameters<NativeProcessExecutor>[] = [];
     const execFile: NativeProcessExecutor = async (file, args, options) => {
       calls.push([file, args, options]);
-      return "2\n";
+      // Real WMIC /format:list shape: keys in alphabetical order per block,
+      // blank lines between records (ProcessId CLOSES a record).
+      return [
+        "CommandLine=codex app-server --serve",
+        "Name=codex.exe",
+        "ProcessId=41",
+        "",
+        'CommandLine="C:\\tools\\codex.cmd" serve',
+        "Name=cmd.exe",
+        "ProcessId=42",
+        "",
+        "CommandLine=bun D:\\tools\\opencodex\\src\\cli\\index.ts start",
+        "Name=bun.exe",
+        "ProcessId=99",
+      ].join("\n");
     };
-    const script = [
-      "$ErrorActionPreference='Stop';",
-      "$self=$PID;",
-      "$items=Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $self -and ($_.Name -match '^(?i:codex)(?:\\.exe)?$' -or $_.CommandLine -match '(?i)(?:^|[\\\\/\"\\s])codex(?:\\.exe|\\.cmd)?(?:[\"\\s]|$)') };",
-      "@($items).Count",
-    ].join(" ");
-    await withTrustedWindowsPowerShell(async powershell => {
+    await withTrustedWindowsWmic(async wmic => {
       await expect(probeNativeCodexProcesses({
         platform: "win32",
         execFile,
+        pid: 99,
       })).resolves.toEqual({ status: "busy", count: 2 });
 
       expect(calls).toEqual([[
-        powershell,
-        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        wmic,
+        ["process", "where", "(Name like 'codex%' or CommandLine like '%codex%')", "get", "ProcessId,Name,CommandLine", "/format:list"],
         {
           encoding: "utf8",
           timeout: 12_000,
@@ -54,6 +70,47 @@ describe("native profile process probe", () => {
           killSignal: "SIGKILL",
         },
       ]]);
+    });
+  });
+
+  test("falls back to hidden PowerShell when WMIC is absent", async () => {
+    const calls: Parameters<NativeProcessExecutor>[] = [];
+    const execFile: NativeProcessExecutor = async (file, args, options) => {
+      calls.push([file, args, options]);
+      return "2";
+    };
+    await withWindowsWmicAbsent(async powershell => {
+      await expect(probeNativeCodexProcesses({
+        platform: "win32",
+        execFile,
+        pid: 99,
+      })).resolves.toEqual({ status: "busy", count: 2 });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]![0]).toBe(powershell);
+      expect(calls[0]![1].slice(0, 3)).toEqual(["-NoLogo", "-NoProfile", "-NonInteractive"]);
+      // The PowerShell host (its script text contains "codex") and the
+      // probing proxy pid are both excluded from the count.
+      const script = calls[0]![1].join(" ");
+      expect(script).toContain("$_.ProcessId -ne $self");
+      expect(script).toContain(" $_.ProcessId -ne 99 ");
+      expect(calls[0]![2].windowsHide).toBe(true);
+      expect(calls[0]![2].shell).toBe(false);
+    });
+  });
+
+  test("excludes its own pid on Windows", async () => {
+    const execFile: NativeProcessExecutor = async () => [
+      "CommandLine=codex app-server --serve",
+      "Name=codex.exe",
+      "ProcessId=100",
+    ].join("\n");
+    await withTrustedWindowsWmic(async () => {
+      await expect(probeNativeCodexProcesses({
+        platform: "win32",
+        execFile,
+        pid: 100,
+      })).resolves.toEqual({ status: "clear", count: 0 });
     });
   });
 
@@ -192,14 +249,15 @@ describe("native profile process probe", () => {
     })).rejects.toThrow();
   });
 
-  test("fails closed for non-decimal or unsafe Windows counts", async () => {
-    await withTrustedWindowsPowerShell(async () => {
-      for (const output of ["", " ", "-1", "1.0", "1e2", "0x10", "9007199254740992"]) {
+  test("fails closed for unparseable Windows process lists", async () => {
+    for (const output of ["", " ", "-1", "1.0", "garbage", "ProcessId=not-a-number", "ProcessId=9007199254740992"]) {
+      await withTrustedWindowsWmic(async () => {
         await expect(probeNativeCodexProcesses({
           platform: "win32",
           execFile: async () => output,
+          pid: 42,
         })).resolves.toEqual({ status: "unknown", count: 0 });
-      }
-    });
+      });
+    }
   });
 });

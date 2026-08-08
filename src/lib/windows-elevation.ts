@@ -168,7 +168,7 @@ export function assertTrustedSystemExecutableForTests(candidate: string, label: 
   return assertTrustedSystemExecutable(candidate, label);
 }
 
-type ElevationExeOverrides = { powershell?: string; schtasks?: string };
+type ElevationExeOverrides = { powershell?: string; schtasks?: string; whoami?: string; wmic?: string | null };
 let elevationExeOverridesForTests: ElevationExeOverrides | null = null;
 
 /**
@@ -202,6 +202,24 @@ export function resolveTrustedWindowsSchtasksExe(): string {
   }
   const candidate = join(resolveTrustedWindowsSystemDirectory(), "schtasks.exe");
   return assertTrustedSystemExecutable(candidate, "schtasks.exe");
+}
+
+/** Absolute path to System32\\whoami.exe from a trusted system directory. */
+export function resolveTrustedWindowsWhoamiExe(): string {
+  if (elevationExeOverridesForTests?.whoami) {
+    return elevationExeOverridesForTests.whoami;
+  }
+  const candidate = join(resolveTrustedWindowsSystemDirectory(), "whoami.exe");
+  return assertTrustedSystemExecutable(candidate, "whoami.exe");
+}
+
+/** Absolute path to System32\\wbem\\WMIC.exe from a trusted system directory, when present. */
+export function resolveTrustedWindowsWmicExe(): string | null {
+  // An explicit null override means "WMIC absent" for fallback-path tests.
+  const override = elevationExeOverridesForTests?.wmic;
+  if (override !== undefined) return override;
+  const candidate = join(resolveTrustedWindowsSystemDirectory(), "wbem", "WMIC.exe");
+  return existsSync(candidate) ? candidate : null;
 }
 
 /** Stable machine-readable marker for a denied `schtasks /create`. Crosses the CLI→proxy boundary. */

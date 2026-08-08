@@ -16,6 +16,10 @@ import {
   statSync,
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { dlopen, ptr, type Pointer } from "bun:ffi";
+
+import { resolveTrustedWindowsWhoamiExe } from "../lib/windows-elevation";
+import { parseWindowsSidFromWhoami } from "../lib/windows-whoami";
 
 import type {
   ResolveCodexCoordinatorDatabasePath,
@@ -43,36 +47,135 @@ function refuse(message: string, cause?: unknown): never {
   throw new CodexUserIdentityRefusal(message, cause === undefined ? undefined : { cause });
 }
 
-function powershellValue(expression: string): string {
+function whoamiValue(): string {
   let result: ReturnType<typeof Bun.spawnSync>;
   try {
-    result = Bun.spawnSync([
-      "powershell.exe",
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      expression,
-    ], {
+    result = Bun.spawnSync([resolveTrustedWindowsWhoamiExe(), "/user"], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      windowsHide: true,
     });
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
   }
   if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
-  const value = new TextDecoder().decode(result.stdout).trim();
-  if (!value) refuse("Windows effective-account lookup returned an empty value.");
-  return value;
+  const output = new TextDecoder().decode(result.stdout);
+  const sid = parseWindowsSidFromWhoami(output);
+  if (!sid) refuse("Windows effective-account lookup returned an invalid SID.");
+  return sid;
 }
 
 function resolveWindowsSid(): string {
-  const sid = powershellValue(
-    "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-  );
+  const sid = whoamiValue();
   if (!SID_PATTERN.test(sid)) refuse("Windows effective-account lookup returned an invalid SID.");
-  return sid.toUpperCase();
+  return sid;
+}
+
+/**
+ * Resolve LocalAppData from the effective TOKEN's profile directory
+ * (OpenProcessToken + GetUserProfileDirectoryW) and never from the
+ * environment: LOCALAPPDATA and USERPROFILE are writable by whatever launched
+ * us, and the coordinator namespace must not follow them. The known-folder
+ * APIs are not usable here — on hosts whose `User Shell Folders` registry
+ * value embeds `%USERPROFILE%` they expand the variable from the CALLER'S
+ * environment (verified: SHGetFolderPathW and SHGetKnownFolderPath both fail
+ * or follow a faked USERPROFILE, even with an explicit token), so they are
+ * neither environment-independent nor fail-consistent. The token profile
+ * directory is. Folder redirection is deliberately not honored: a redirected
+ * path is only reachable through those environment-shaped lookups.
+ *
+ * FFI instead of a PowerShell child keeps the lookup window-free (the v2.11.0
+ * popup bug), fast on the uncached hot path, and free of PATH trust questions.
+ */
+type WindowsProfileLibraries = {
+  getCurrentProcess: () => Pointer;
+  closeHandle: (handle: number) => number;
+  openProcessToken: (process: Pointer, desiredAccess: number, tokenOut: Pointer) => number;
+  getUserProfileDirectoryW: (token: number, buffer: Pointer, size: Pointer) => number;
+};
+
+let windowsProfileLibrariesCache: WindowsProfileLibraries | null | undefined;
+
+function loadWindowsProfileLibraries(): WindowsProfileLibraries | null {
+  if (windowsProfileLibrariesCache !== undefined) return windowsProfileLibrariesCache;
+  if (process.platform !== "win32") {
+    windowsProfileLibrariesCache = null;
+    return null;
+  }
+  try {
+    const kernel32 = dlopen("kernel32.dll", {
+      GetCurrentProcess: { args: [], returns: "ptr" },
+      // Handles travel as pointer-sized integers.
+      CloseHandle: { args: ["u64"], returns: "i32" },
+    });
+    const advapi32 = dlopen("advapi32.dll", {
+      OpenProcessToken: { args: ["ptr", "u32", "ptr"], returns: "i32" },
+    });
+    const userenv = dlopen("userenv.dll", {
+      GetUserProfileDirectoryW: { args: ["u64", "ptr", "ptr"], returns: "i32" },
+    });
+    windowsProfileLibrariesCache = {
+      getCurrentProcess: () => kernel32.symbols.GetCurrentProcess() as Pointer,
+      closeHandle: handle => kernel32.symbols.CloseHandle(handle) as number,
+      openProcessToken: (process, desiredAccess, tokenOut) =>
+        advapi32.symbols.OpenProcessToken(process, desiredAccess, tokenOut) as number,
+      getUserProfileDirectoryW: (token, buffer, size) =>
+        userenv.symbols.GetUserProfileDirectoryW(token, buffer, size) as number,
+    };
+  } catch {
+    windowsProfileLibrariesCache = null;
+  }
+  return windowsProfileLibrariesCache;
+}
+
+function windowsProfileDirectory(): string {
+  const libraries = loadWindowsProfileLibraries();
+  if (!libraries) {
+    refuse("Windows profile resolution could not load system libraries.");
+  }
+  let token = 0;
+  let profile = "";
+  try {
+    const TOKEN_QUERY = 0x0008;
+    const tokenOut = new BigUint64Array(1);
+    const opened = libraries.openProcessToken(libraries.getCurrentProcess(), TOKEN_QUERY, ptr(tokenOut));
+    if (opened === 0 || tokenOut[0] === 0n) {
+      refuse("Windows profile resolution could not open the process token.");
+    }
+    token = Number(tokenOut[0]);
+    // Profile paths fit MAX_PATH; retry once with the reported size otherwise.
+    let buffer = new Uint16Array(512);
+    let size = new Uint32Array([buffer.length]);
+    let ok = libraries.getUserProfileDirectoryW(token, ptr(buffer), ptr(size));
+    if (ok === 0) {
+      const required = size[0];
+      if (!Number.isSafeInteger(required) || required <= 0 || required > 32_768) {
+        refuse("Windows profile resolution reported an invalid profile directory size.");
+      }
+      buffer = new Uint16Array(required);
+      size = new Uint32Array([buffer.length]);
+      ok = libraries.getUserProfileDirectoryW(token, ptr(buffer), ptr(size));
+    }
+    if (ok === 0) refuse("Windows profile resolution could not read the profile directory.");
+    const length = buffer.indexOf(0);
+    profile = String.fromCharCode(...buffer.subarray(0, length < 0 ? buffer.length : length));
+  } catch (cause) {
+    if (cause instanceof CodexUserIdentityRefusal) throw cause;
+    refuse("Windows profile resolution failed.", cause);
+  } finally {
+    if (token !== 0) {
+      try { libraries.closeHandle(token); } catch { /* best-effort handle close */ }
+    }
+  }
+  if (!profile) refuse("Windows profile resolution returned an empty profile directory.");
+  return profile;
+}
+
+function localAppDataValue(): string {
+  const localAppData = join(windowsProfileDirectory(), "AppData", "Local");
+  if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
+  return localAppData;
 }
 
 export const resolveEffectiveUserIdentity: ResolveEffectiveUserIdentity = () => {
@@ -184,9 +287,7 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
   }
 
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  const localAppData = localAppDataValue();
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
   const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
   let entry;
@@ -216,14 +317,13 @@ export function probeCodexCoordinatorNamespace(identity: UserIdentity): Coordina
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
   if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
-  const localAppData = powershellValue(
-    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
-  );
+  const localAppData = localAppDataValue();
   if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
 
-  // The SID and known-folder values come from the effective token/.NET OS APIs,
-  // never USERPROFILE or LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at
-  // the stable-database open boundary where those checks can cover SQLite too.
+  // The SID comes from the effective token via whoami and the known-folder
+  // value from the token's profile directory — never USERPROFILE or
+  // LOCALAPPDATA. WP11 adds descriptor/reparse/ACL checks at the
+  // stable-database open boundary where those checks can cover SQLite too.
   const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
   try {
     mkdirSync(root, { recursive: true });

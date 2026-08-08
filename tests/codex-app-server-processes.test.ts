@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   warnIfStaleCodexAppServersAfterStartupWrite,
   WINDOWS_CODEX_BASENAME_CANDIDATE_RE,
 } from "../src/codex/app-server-processes";
+import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 
 describe("collectCodexAppServerCatalogState (#857)", () => {
   const APP_SERVER_CMD = "/usr/local/bin/codex app-server";
@@ -434,37 +435,55 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     join(import.meta.dir, "..", "src", "codex", "app-server-processes.ts"),
     "utf8",
   );
+  const wmicSource = readFileSync(
+    join(import.meta.dir, "..", "src", "lib", "windows-wmic.ts"),
+    "utf8",
+  );
 
-  test("PowerShell uses Invoke-CimMethod GetOwner and fails closed on ReturnValue", () => {
-    expect(processSource).toContain(
-      "Invoke-CimMethod -InputObject $_ -MethodName GetOwner -ErrorAction Stop",
-    );
-    expect(processSource).toContain("$o.ReturnValue -ne 0");
-    expect(processSource).toContain(".join(\"\\n\")");
-    expect(processSource).not.toMatch(/\$o=\$_\.GetOwner\(\)/);
-    // Shared candidate regex (optional closing quote after basename) drives -match.
-    expect(processSource).toContain("WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source");
-    expect(processSource).toContain("powerShellSingleQuotedIgnoreCaseMatch");
+  test("Windows enumeration is user-scoped, hidden, and fails closed", () => {
+    // WMIC is the primary enumeration path...
+    expect(processSource).toContain('"/format:list"');
+    expect(wmicSource).toContain("call getowner");
+    expect(processSource).toContain("wmicGetOwner");
+    // ...with a PowerShell CIM fallback for hosts where WMIC is absent. The
+    // fallback must use the trusted System32 executable (never a bare
+    // PATH-resolved "powershell.exe") and stay hidden — the v2.11.0 popup
+    // regression guard.
+    expect(processSource).not.toContain('"powershell.exe"');
+    expect(processSource).toContain("resolveTrustedWindowsPowerShellExe()");
+    expect(processSource).toContain("windows_enum_incomplete");
+    expect(processSource).toContain("isWindowsCodexCandidateCommandLine");
     expect(WINDOWS_CODEX_BASENAME_CANDIDATE_RE.source).toContain("['\"]?");
+    // Every Windows child spawned on this module's enumeration paths stays
+    // hidden (the POSIX `ps` sites do not need the flag).
+    const windowsSpawnSites = processSource
+      .match(/execFileSync\(\s*(wmic|resolveTrustedWindowsPowerShellExe\(\))/g)?.length ?? 0;
+    const hiddenSites = processSource.match(/windowsHide: true/g)?.length ?? 0;
+    expect(windowsSpawnSites).toBeGreaterThan(0);
+    expect(hiddenSites).toBeGreaterThanOrEqual(windowsSpawnSites);
   });
 
   test.skipIf(process.platform !== "win32")(
-    "listWindowsSnapshots returns a current-user Codex-shaped process via real PowerShell enumeration",
+    "listWindowsSnapshots returns a current-user Codex-shaped process via real WMIC enumeration",
     () => {
+      // The probe payload carries a UNIQUE marker. Matching and cleanup only
+      // ever use that marker: the real Codex app-server's CommandLine contains
+      // "codex app-server", so matching on that phrase would select (and kill)
+      // the user's actual Codex app-server. The marker makes that impossible.
+      const PROBE_MARKER = "ocx-test-probe-7e62";
       // Keep a live process whose CommandLine contains a Codex basename token.
+      // cmd.exe re-spawns a second cmd for the /c payload on some Windows
+      // builds, so match by CommandLine rather than by the spawn pid.
       const child = spawn(
-        "powershell.exe",
-        [
-          "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
-          "-Command",
-          "Start-Sleep -Seconds 45 # codex app-server integration-probe",
-        ],
+        "cmd.exe",
+        ["/d", "/c", `ping -n 45 127.0.0.1 >nul & rem ${PROBE_MARKER} codex app-server integration-probe`],
         { stdio: "ignore", windowsHide: true },
       );
+      let survivor: number | null = null;
       try {
         expect(child.pid).toBeGreaterThan(1);
         // Brief settle so Win32_Process can observe the child. A loaded Windows
-        // runner can also exhaust one CIM enumeration deadline, so tolerate one
+        // runner can also exhaust one enumeration deadline, so tolerate one
         // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
         // design) while keeping the production timeout unchanged.
         Bun.sleepSync(250);
@@ -476,22 +495,105 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
           }
         };
         let snapshots = enumerate() ?? [];
-        let match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        let match = snapshots.find(snapshot => snapshot.commandLine.includes(PROBE_MARKER));
         if (!match) {
           Bun.sleepSync(250);
           snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+          match = snapshots.find(snapshot => snapshot.commandLine.includes(PROBE_MARKER));
         }
         if (!match) {
           Bun.sleepSync(1_000);
           snapshots = enumerate() ?? [];
-          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+          match = snapshots.find(snapshot => snapshot.commandLine.includes(PROBE_MARKER));
         }
         expect(match).toBeDefined();
+        survivor = match!.pid;
         expect(match!.owner).toMatch(/\\/);
         expect(match!.commandLine.toLowerCase()).toContain("codex app-server");
+        expect(match!.commandLine).toContain(PROBE_MARKER);
         expect(snapshots.every(snapshot => (snapshot.owner?.trim().length ?? 0) > 0)).toBe(true);
       } finally {
+        try {
+          if (survivor) {
+            // Double-check the current CommandLine still carries the unique
+            // marker before taskkill. If the PID was recycled or the marker is
+            // gone, do NOT kill anything.
+            const verify = spawnSync(
+              "wmic",
+              ["process", "where", `ProcessId=${survivor}`, "get", "CommandLine", "/value"],
+              { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 5_000 },
+            );
+            const current = (verify.stdout ?? "").replace(/\r/g, "");
+            if (/^CommandLine=.*$/m.test(current) && current.includes(PROBE_MARKER)) {
+              spawnSync("taskkill", ["/F", "/PID", String(survivor)], { stdio: "ignore", windowsHide: true });
+            }
+          }
+        } catch {
+          /* already exited */
+        }
+        try {
+          child.kill();
+        } catch {
+          /* already exited */
+        }
+      }
+    },
+    { timeout: 35_000 },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "listWindowsSnapshots falls back to hidden PowerShell when WMIC is absent",
+    () => {
+      // Same unique-marker discipline as the WMIC integration test above: the
+      // real Codex app-server's CommandLine contains "codex app-server", so a
+      // probe must only ever be matched by its unique marker.
+      const PROBE_MARKER = "ocx-test-probe-psfallback-9d41";
+      const child = spawn(
+        "cmd.exe",
+        ["/d", "/c", `ping -n 45 127.0.0.1 >nul & rem ${PROBE_MARKER} codex app-server fallback-probe`],
+        { stdio: "ignore", windowsHide: true },
+      );
+      let survivor: number | null = null;
+      setTrustedWindowsElevationExecutablesForTests({ wmic: null });
+      try {
+        expect(child.pid).toBeGreaterThan(1);
+        Bun.sleepSync(250);
+        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
+          try {
+            return listWindowsSnapshots();
+          } catch {
+            return undefined; // transient CIM deadline on a contended runner
+          }
+        };
+        let snapshots = enumerate() ?? [];
+        let match = snapshots.find(snapshot => snapshot.commandLine.includes(PROBE_MARKER));
+        if (!match) {
+          Bun.sleepSync(500);
+          snapshots = enumerate() ?? [];
+          match = snapshots.find(snapshot => snapshot.commandLine.includes(PROBE_MARKER));
+        }
+        expect(match).toBeDefined();
+        survivor = match!.pid;
+        expect(match!.owner).toMatch(/\\/);
+        expect(match!.commandLine).toContain(PROBE_MARKER);
+        expect(snapshots.every(snapshot => (snapshot.owner?.trim().length ?? 0) > 0)).toBe(true);
+      } finally {
+        setTrustedWindowsElevationExecutablesForTests(null);
+        try {
+          if (survivor) {
+            const verify = spawnSync(
+              "wmic",
+              ["process", "where", `ProcessId=${survivor}`, "get", "CommandLine", "/value"],
+              { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true, timeout: 5_000 },
+            );
+            const current = (verify.stdout ?? "").replace(/\r/g, "");
+            if (/^CommandLine=.*$/m.test(current) && current.includes(PROBE_MARKER)) {
+              spawnSync("taskkill", ["/F", "/PID", String(survivor)], { stdio: "ignore", windowsHide: true });
+            }
+          }
+        } catch {
+          /* already exited */
+        }
         try {
           child.kill();
         } catch {
