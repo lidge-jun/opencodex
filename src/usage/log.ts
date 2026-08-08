@@ -420,6 +420,7 @@ export type UsageLogRevision = {
 
 let usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
 const MANAGEMENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
+const RECENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
 const MANAGEMENT_USAGE_READ_CHUNK_BYTES = 1024 * 1024;
 const MANAGEMENT_USAGE_MAX_ENTRIES = 500_000;
 const MANAGEMENT_USAGE_FLIGHT_STALE_MS = 30_000;
@@ -655,10 +656,10 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
     fd = openSync(path, "r");
     const size = fstatSync(fd).size;
     if (size <= 0) return [];
-    // Trace-sized rows (up to MAX_TRACE_BYTES, RI-01) need a larger per-row
-    // budget than the pre-trace ledger; keep expanding until the window covers
-    // the file start or the whole file so a restart never hydrates nothing.
-    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 20 * 1024));
+    // Trace-sized rows need a larger per-row budget than the pre-trace ledger,
+    // but startup hydration must never grow into an unbounded whole-file read.
+    const maxWindowBytes = Math.min(size, RECENT_USAGE_MAX_READ_BYTES);
+    let windowBytes = Math.min(maxWindowBytes, Math.max(64 * 1024, Math.ceil(limit) * 20 * 1024));
     while (true) {
       const start = Math.max(0, size - windowBytes);
       const buf = Buffer.alloc(size - start);
@@ -667,8 +668,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       if (start > 0) {
         const nl = text.indexOf("\n");
         if (nl < 0) {
-          if (start === 0) break;
-          windowBytes = Math.min(size, windowBytes * 4);
+          if (start === 0 || windowBytes >= maxWindowBytes) break;
+          windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
           continue;
         }
         text = text.slice(nl + 1);
@@ -678,9 +679,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       // or partial lines are filtered out during parsing and we always return the
       // most recent N valid rows (not N physical lines minus corrupt ones).
       const entries = parseUsageLines(lines);
-      if (entries.length >= limit || start === 0 || windowBytes >= size) return entries.slice(-limit);
-      if (windowBytes >= size) break;
-      windowBytes = Math.min(size, windowBytes * 4);
+      if (entries.length >= limit || start === 0 || windowBytes >= maxWindowBytes) return entries.slice(-limit);
+      windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
     }
     return [];
   } catch {
