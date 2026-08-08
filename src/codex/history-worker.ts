@@ -31,7 +31,11 @@ import {
   writeLegacyOpenaiHistoryRecovery,
   type HistoryWriteTarget,
 } from "./internal/history-writer";
-import type { CodexHistoryFailureReason } from "./history-provider";
+import {
+  snapshotCodexHistoryNoop,
+  type CodexHistoryFailureReason,
+  type CodexHistoryVerifiedNoopProof,
+} from "./history-provider";
 
 /**
  * The durable operation, mirrored into the request for diagnostics only.
@@ -65,7 +69,8 @@ export interface HistoryWorkerRunMessage {
 export type HistoryWorkerResult =
   | { readonly type: "done"; readonly requestId: string; readonly jobId: string;
       readonly outcome: "converged" | "skipped";
-      readonly rows: number; readonly files: number }
+      readonly rows: number; readonly files: number;
+      readonly proof?: CodexHistoryVerifiedNoopProof }
   | { readonly type: "blocked"; readonly requestId: string; readonly jobId: string;
       readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly type: "error"; readonly requestId: string; readonly jobId: string;
@@ -133,6 +138,10 @@ export function runHistoryUnitUnderLock(
       if (operation === "recover-legacy-openai") {
         return writeLegacyOpenaiHistoryRecovery(permit, target);
       }
+      if (operation === "migrate-openai") {
+        const proof = snapshotCodexHistoryNoop(message.canonicalStateDbPath, message.canonicalBackupPath);
+        if (proof.kind === "verified-noop") return { verifiedNoop: proof } as const;
+      }
       // apply-opencodex routes history to opencodex; migrate/restore return it to
       // native. The provider is derived from the operation, never from a caller.
       const provider = operation === "apply-opencodex" ? "opencodex" : "openai";
@@ -150,6 +159,17 @@ export function runHistoryUnitUnderLock(
       requestId,
       jobId,
       reason: message.expectedDesiredEnabled ? "desired_disabled" : "desired_enabled",
+    };
+  }
+  if ("verifiedNoop" in result) {
+    return {
+      type: "done",
+      requestId,
+      jobId,
+      outcome: "converged",
+      rows: 0,
+      files: 0,
+      proof: result.verifiedNoop,
     };
   }
   if (result.failed === true) {

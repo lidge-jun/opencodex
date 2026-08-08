@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
+import { historyBackupPathFor, setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
 import {
   isHistoryWorkerRunMessage,
   runHistoryUnitUnderLock,
@@ -64,7 +64,7 @@ function makeFixture(prefix: string): Fixture {
   return {
     codexHome,
     stateDb,
-    backup: join(codexHome, "history-backup.json"),
+    backup: historyBackupPathFor(stateDb),
     rollout,
     env: {
       ...Object.fromEntries(Object.entries(process.env)
@@ -146,6 +146,34 @@ test("the unit runs the real transition under H", () => {
   ).get();
   db.close();
   expect(row?.model_provider).toBe("openai");
+});
+
+test("migrate-openai returns a verified no-op only after entering H", () => {
+  const fixture = makeFixture("ocx-history-worker-noop-");
+  const db = new Database(fixture.stateDb);
+  db.run("UPDATE threads SET model_provider = 'openai', source = 'cli' WHERE id = 'thread-1'");
+  db.close();
+  const before = readFileSync(fixture.rollout, "utf8");
+
+  const result = runHistoryUnitUnderLock(runMessage(fixture, { operation: "migrate-openai" }));
+
+  expect(result).toMatchObject({
+    type: "done",
+    outcome: "converged",
+    rows: 0,
+    files: 0,
+    proof: {
+      kind: "verified-noop",
+      pendingRows: 0,
+      backupEntries: 0,
+      canonicalStateDbPath: fixture.stateDb,
+      stateDbPresent: true,
+      canonicalBackupPath: fixture.backup,
+      backupPresent: false,
+    },
+  });
+  expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+  expect(existsSync(fixture.backup)).toBe(false);
 });
 
 /**
