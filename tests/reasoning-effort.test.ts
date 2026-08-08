@@ -562,7 +562,7 @@ describe("thinking-toggle models (260707)", () => {
   });
 });
 
-describe("thinking-budget models (260709)", () => {
+describe("Qwen reasoning wire contracts", () => {
   const budgetProvider: OcxProviderConfig = {
     adapter: "openai-chat",
     baseUrl: "https://api.neuralwatt.com/v1",
@@ -628,7 +628,7 @@ describe("thinking-budget models (260709)", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
-  test("Alibaba Token Plan routes Qwen3.8 Max Preview with the Qwen thinking budget contract", () => {
+  test("Alibaba Token Plan repairs stale Qwen3.8 metadata and sends direct reasoning_effort", () => {
     const config = {
       port: 10100,
       defaultProvider: "alibaba-token-plan",
@@ -637,18 +637,44 @@ describe("thinking-budget models (260709)", () => {
           adapter: "openai-chat",
           baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
           apiKey: "k",
+          // Simulate a provider row persisted before Qwen3.8 documented its native effort field.
+          thinkingBudgetModels: ["QWEN3.8-MAX", "qwen3.7-max"],
+          modelReasoningEfforts: { "QWEN3.8-MAX": ["low", "medium", "high", "xhigh", "max"] },
+          modelDefaultReasoningEfforts: { "QWEN3.8-MAX": "medium" },
+          reasoningEffortMap: { xhigh: "max" },
+          modelReasoningEffortMap: { "QWEN3.8-MAX": { medium: "high" } },
         },
       },
     } as unknown as OcxConfig;
     const route = routeModel(config, "alibaba-token-plan/qwen3.8-max");
 
     expect(route.provider.modelInputModalities?.[route.modelId]).toEqual(["text", "image"]);
-    expect(route.provider.thinkingBudgetModels).toContain(route.modelId);
-    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(route.provider.thinkingBudgetModels).not.toContain(route.modelId);
+    expect(route.provider.thinkingBudgetModels).toContain("qwen3.7-max");
+    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["low", "medium", "xhigh"]);
+    expect(route.provider.modelReasoningEfforts?.["QWEN3.8-MAX"]).toBeUndefined();
+    expect(route.provider.modelDefaultReasoningEfforts?.[route.modelId]).toBe("xhigh");
+    expect(route.provider.modelDefaultReasoningEfforts?.["QWEN3.8-MAX"]).toBeUndefined();
+    expect(route.provider.modelReasoningEffortMap?.[route.modelId]).toEqual({});
+    expect(route.provider.modelReasoningEffortMap?.["QWEN3.8-MAX"]).toBeUndefined();
 
-    const body = buildBody(route.provider, route.modelId, { reasoning: "max", maxOutputTokens: 65536 });
-    expect(body).toMatchObject({ model: "qwen3.8-max", thinking_budget: 65536 });
-    expect(body).not.toHaveProperty("reasoning_effort");
+    const request = buildChatRequest(route.provider, route.modelId, { reasoning: "xhigh", maxOutputTokens: 65536 });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+    expect(body).toMatchObject({ model: "qwen3.8-max", reasoning_effort: "xhigh" });
+    expect(body).not.toHaveProperty("thinking_budget");
+    expect(request.reasoningLog).toEqual({
+      effectiveEffort: "xhigh",
+      wireField: "reasoning_effort",
+      wireValue: "xhigh",
+    });
+
+    // Codex may advertise its synthetic compatibility tops; neither may leak an unsupported value.
+    const maxBody = buildBody(route.provider, route.modelId, { reasoning: "max" });
+    expect(maxBody.reasoning_effort).toBe("xhigh");
+    expect(maxBody).not.toHaveProperty("thinking_budget");
+
+    // A client with the old, already-cached high rung degrades to the nearest lower real tier.
+    expect(buildBody(route.provider, route.modelId, { reasoning: "high" }).reasoning_effort).toBe("medium");
   });
 
   test("opencode-go Qwen models are no longer pinned to the Anthropic wire", () => {

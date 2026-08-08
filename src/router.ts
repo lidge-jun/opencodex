@@ -12,6 +12,7 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { applyDirectReasoningEffortContracts } from "./providers/derive";
 import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
@@ -300,7 +301,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   if (userBaseUrlIsResolved) warnIfBaseUrlDiscarded(providerName, userBaseUrl, baseUrl);
   assertProviderDestinationAllowed(providerName, { baseUrl, allowPrivateNetwork: provider.allowPrivateNetwork });
 
-  return {
+  const resolved: OcxProviderConfig = {
     ...provider,
     adapter: registryEntry.adapter,
     baseUrl,
@@ -372,6 +373,8 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
+  applyDirectReasoningEffortContracts(registryEntry, resolved);
+  return resolved;
 }
 
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {

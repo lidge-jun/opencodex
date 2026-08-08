@@ -11,7 +11,7 @@ import {
   matchBaseUrlChoice,
 } from "../src/providers/base-url-choices";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import { deriveProviderPresets } from "../src/providers/derive";
+import { deriveProviderPresets, enrichProviderFromRegistry } from "../src/providers/derive";
 
 const CHOICES = [...ALIBABA_INTL_BASE_URL_CHOICES];
 
@@ -56,7 +56,10 @@ describe("alibaba-token-plan-intl registry entry", () => {
 
   test("qwen3.8-max reasoning efforts", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan-intl");
-    expect(entry!.modelReasoningEfforts?.["qwen3.8-max"]).toEqual(["low", "high", "xhigh"]);
+    expect(entry!.modelReasoningEfforts?.["qwen3.8-max"]).toEqual(["low", "medium", "xhigh"]);
+    expect(entry!.directReasoningEffortModels).toEqual(["qwen3.8-max"]);
+    expect(entry!.thinkingBudgetModels).not.toContain("qwen3.8-max");
+    expect(entry!.thinkingBudgetModels).toContain("qwen3.7-max");
   });
 
   test("qwen3.8-max default reasoning effort is xhigh", () => {
@@ -86,12 +89,34 @@ describe("alibaba-token-plan-intl registry entry", () => {
     }
     // The intl entry additionally carries the effort ladder.
     const intl = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan-intl")!;
-    expect(intl.modelReasoningEfforts?.["qwen3.8-max"]).toEqual(["low", "high", "xhigh"]);
+    expect(intl.modelReasoningEfforts?.["qwen3.8-max"]).toEqual(["low", "medium", "xhigh"]);
     expect(intl.modelDefaultReasoningEfforts?.["qwen3.8-max"]).toBe("xhigh");
     // Only the Beijing entry defaults to this model; intl deliberately defaults to
     // qwen3.7-max. That predates this rename and is left alone — renaming an id is not
     // a licence to change which model a provider selects by default.
     expect(PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan")!.defaultModel).toBe("qwen3.8-max");
+  });
+
+  test("registry enrichment repairs a persisted pre-release Qwen3.8 contract", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: ALIBABA_INTL_TOKEN_PLAN_BASE_URL,
+      modelReasoningEfforts: { "QWEN3.8-MAX": ["low", "high", "xhigh"] },
+      modelDefaultReasoningEfforts: { "QWEN3.8-MAX": "high" },
+      reasoningEffortMap: { xhigh: "max" },
+      modelReasoningEffortMap: { "QWEN3.8-MAX": { medium: "high" } },
+      thinkingBudgetModels: ["QWEN3.8-MAX", "qwen3.7-max"],
+    };
+
+    enrichProviderFromRegistry("alibaba-token-plan-intl", provider);
+
+    expect(provider.modelReasoningEfforts["qwen3.8-max"]).toEqual(["low", "medium", "xhigh"]);
+    expect(provider.modelReasoningEfforts["QWEN3.8-MAX"]).toBeUndefined();
+    expect(provider.modelDefaultReasoningEfforts["qwen3.8-max"]).toBe("xhigh");
+    expect(provider.modelDefaultReasoningEfforts["QWEN3.8-MAX"]).toBeUndefined();
+    expect(provider.modelReasoningEffortMap?.["qwen3.8-max"]).toEqual({});
+    expect(provider.modelReasoningEffortMap?.["QWEN3.8-MAX"]).toBeUndefined();
+    expect(provider.thinkingBudgetModels).toEqual(["qwen3.7-max"]);
   });
 
   test("non-reasoning models are marked", () => {

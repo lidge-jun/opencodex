@@ -166,6 +166,12 @@ upstream providers may support only a smaller subset or require a real alias. Th
 - Resolves per-model and per-provider `reasoningEffortMap` overrides for custom wire mappings.
 - Drops the effort entirely for models listed in `noReasoningModels`.
 
+Qwen3.8-Max is an explicit direct-effort exception to the older Qwen3.x budget contract. Alibaba
+Token Plan records its upstream-supported ladder as `low`, `medium`, and `xhigh` (the default), and
+sends the effective value as `reasoning_effort`; Codex-only compatibility tops are clamped to
+`xhigh` on the wire. Runtime registry enrichment repairs older persisted preset metadata that still
+classifies this model as a `thinking_budget` model.
+
 ## Core types
 
 The internal model lives in `types.ts`: `OcxParsedRequest`, `OcxContext`, the `OcxMessage` union,
