@@ -93,7 +93,10 @@ jobs:
     needs: resolve-pr
     if: needs.resolve-pr.outputs.pull-number != ''
     runs-on: ubuntu-latest
+    # The write job also reads the current head's aggregate check evidence.
+    # Job-scoped permissions replace, rather than extend, the workflow default.
     permissions:
+      checks: read
       contents: write
       pull-requests: write
     concurrency:
@@ -734,26 +737,44 @@ jobs:
               !headDrifted &&
               failures.length === 0
             ) {
-              let ciGreen = true;
+              let ciGreen = false;
               try {
+                // GitHub Actions' immutable App ID. Name alone is not evidence:
+                // any installed app can publish a check called `ci`.
+                const githubActionsAppId = 15368;
                 const { data: checksData } =
                   await github.rest.checks.listForRef({
                     owner,
                     repo,
                     ref: pr.head.sha,
+                    app_id: githubActionsAppId,
+                    check_name: "ci",
+                    filter: "latest",
                     per_page: 100
                   });
-                const ciCheck = (checksData.check_runs ?? []).find(
-                  check => check.name === "ci"
+                const checkRuns = Array.isArray(checksData.check_runs)
+                  ? checksData.check_runs
+                  : [];
+                const ciChecks = checkRuns.filter(
+                  check =>
+                    check.name === "ci" &&
+                    check.app?.id === githubActionsAppId
                 );
-                // No `ci` check means no CI run exists for this head (for
-                // example a docs-only change): there is nothing to contradict
-                // the author's claim. A real `ci` check must be completed
-                // successfully.
+                // The readiness claim requires positive CI evidence. A missing,
+                // pending, unsuccessful, foreign, or conflicting aggregate
+                // check must fail closed. The exact app/name/latest query should
+                // be tiny; if GitHub reports more rows than this response holds,
+                // treat the truncated evidence as unreadable rather than paging
+                // through an endpoint whose filters already select the latest run.
                 ciGreen =
-                  ciCheck === undefined ||
-                  (ciCheck.status === "completed" &&
-                    ciCheck.conclusion === "success");
+                  Number.isSafeInteger(checksData.total_count) &&
+                  checksData.total_count === checkRuns.length &&
+                  ciChecks.length > 0 &&
+                  ciChecks.every(
+                    check =>
+                      check.status === "completed" &&
+                      check.conclusion === "success"
+                  );
               } catch (error) {
                 core.warning(
                   `Could not list checks for the readiness claim check: ${error.message}`

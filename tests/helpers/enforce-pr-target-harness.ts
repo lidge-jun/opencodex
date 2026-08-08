@@ -173,7 +173,21 @@ export type RunOptions = {
    * `ci` check so completed-checklist scenarios pass the claim check.
    * Pass a red/pending/missing set to exercise the claim-check reset paths.
    */
-  checkRuns?: Array<{ name: string; status: string; conclusion: string | null }>;
+  checkRuns?: Array<{
+    name: string;
+    status: string;
+    conclusion: string | null;
+    app?: { id: number } | null;
+  }>;
+  /** Page-keyed check-run fixtures for `checks.listForRef` pagination. */
+  checkRunPages?: Array<Array<{
+    name: string;
+    status: string;
+    conclusion: string | null;
+    app?: { id: number } | null;
+  }>>;
+  /** Optional filtered total for proving truncated check evidence fails closed. */
+  checkRunTotalCount?: number;
   /**
    * Review threads `pullRequestReviewThreads` (via GraphQL) reports for the PR.
    * Each entry is `{ isResolved, author }`; the harness wraps it into the
@@ -236,7 +250,7 @@ const DEFAULT_BODY = [
 
 /** The repo's documented "CI passed" check, green by default. */
 const DEFAULT_GREEN_CHECKS = [
-  { name: "ci", status: "completed", conclusion: "success" },
+  { name: "ci", status: "completed", conclusion: "success", app: { id: 15368 } },
 ];
 
 const DEFAULT_PR = {
@@ -616,6 +630,13 @@ export async function runEnforcePrTarget(
     (options.openPulls && options.openPulls.length > 0 ? [options.openPulls] : []);
   const associatedPullRequestPages: unknown[][] =
     options.associatedPullRequestPages ?? [options.associatedPullRequests ?? [pr]];
+  const checkRunPages = (options.checkRunPages ?? [options.checkRuns ?? DEFAULT_GREEN_CHECKS])
+    .map(page => page.map(check => ({
+      ...check,
+      // Existing fixtures model trusted GitHub Actions checks unless a test
+      // explicitly supplies another app or null to exercise provenance.
+      app: check.app === undefined ? { id: 15368 } : check.app,
+    })));
   const paginatePageCount = Math.max(
     pages.length,
     issueEventPages.length,
@@ -736,11 +757,15 @@ export async function runEnforcePrTarget(
       removeLabel: (args: unknown) => respond("issues.removeLabel", args, {}),
     },
     checks: {
-      listForRef: (args: unknown) =>
-        respond("checks.listForRef", args, {
-          total_count: (options.checkRuns ?? DEFAULT_GREEN_CHECKS).length,
-          check_runs: options.checkRuns ?? DEFAULT_GREEN_CHECKS,
-        }),
+      listForRef: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("checks.listForRef", args, {
+          total_count:
+            options.checkRunTotalCount ??
+            checkRunPages.reduce((total, rows) => total + rows.length, 0),
+          check_runs: checkRunPages[page - 1] ?? [],
+        });
+      },
     },
     repos: {
       getCollaboratorPermissionLevel: (args: unknown) =>
@@ -822,9 +847,13 @@ export async function runEnforcePrTarget(
     paginate = Object.assign(
       async (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => {
         const collected: unknown[] = [];
-        for (let page = 1; page <= paginatePageCount; page += 1) {
+        const pageCount = fn === rest.checks.listForRef ? checkRunPages.length : paginatePageCount;
+        for (let page = 1; page <= pageCount; page += 1) {
           const response = await fn({ ...(params as object), page });
-          collected.push(...response.data);
+          const rows = fn === rest.checks.listForRef
+            ? ((response.data as unknown as { check_runs?: unknown[] }).check_runs ?? [])
+            : response.data;
+          collected.push(...rows);
         }
         return collected;
       },
@@ -837,8 +866,19 @@ export async function runEnforcePrTarget(
          */
         iterator: (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => ({
           async *[Symbol.asyncIterator]() {
-            for (let page = 1; page <= paginatePageCount; page += 1) {
-              yield await fn({ ...(params as object), page });
+            const pageCount = fn === rest.checks.listForRef ? checkRunPages.length : paginatePageCount;
+            for (let page = 1; page <= pageCount; page += 1) {
+              const response = await fn({ ...(params as object), page });
+              if (fn !== rest.checks.listForRef) {
+                yield response;
+                continue;
+              }
+              // Match @octokit/plugin-paginate-rest: list envelopes such as
+              // `{ total_count, check_runs }` become array-valued page data.
+              yield {
+                ...response,
+                data: (response.data as unknown as { check_runs?: unknown[] }).check_runs ?? [],
+              };
             }
           },
         }),

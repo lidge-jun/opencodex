@@ -1,7 +1,10 @@
 name: Cross-platform CI
 
 on:
-  pull_request:
+  # Always create the aggregate `ci` check for pull requests. Expensive jobs
+  # apply the former path allowlist through the `changes` job below, so a
+  # docs-only PR receives explicit positive evidence instead of no check at all.
+  pull_request: {}
     # No base-branch filter on purpose. GitHub matches `branches:` against the
     # BASE ref, so `[main, dev]` silently excluded stacked child PRs — whose
     # base is another open PR's head branch, an intentional review workflow per
@@ -12,31 +15,14 @@ on:
     #
     # An allowlist cannot express "base is another PR's head" — stacked bases
     # carry contributor prefixes (`fix/`, `feat/`, `agent/`) as readily as
-    # `codex/`, and contributor stacks need CI most. `paths:` below is the real
-    # scope gate, same shape as issue-quality-tests.yml. Safe to widen here
+    # `codex/`, and contributor stacks need CI most. The `changes` job below is
+    # the real scope gate, using the same allowlist as the push trigger. Safe to
+    # widen here
     # because this workflow is `pull_request` (not `pull_request_target`),
     # declares `contents: read`, and reads no secrets.
     #
     # `push:` stays pinned to the integration lines: it gates the release path,
     # and this trigger already covers review.
-    paths:
-      - "src/**"
-      - "bin/**"
-      - "tests/**"
-      - "scripts/**"
-      - "gui/**"
-      - "assets/**"
-      - ".gitattributes"
-      - ".npmignore"
-      - "package.json"
-      - "bun.lock"
-      - "tsconfig.json"
-      - "README.md"
-      - "LICENSE"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
   push:
     branches: [main, preview, dev]
     paths:
@@ -77,8 +63,8 @@ jobs:
   # A hostile PR can delete the branch and hardcode the self-hosted labels into
   # `$GITHUB_OUTPUT`, and `runs-on` will honour it. That this job runs on
   # `ubuntu-latest` changes nothing — the untrusted part is its OUTPUT, not its
-  # host. `.github/workflows/ci.yml` is in this workflow's `pull_request.paths`,
-  # so such an edit triggers its own run.
+  # host. `.github/workflows/ci.yml` is in the `changes` job's `ci` filter, so
+  # such an edit triggers every expensive verification job.
   #
   # What actually keeps untrusted code off a self-hosted runner lives OUTSIDE
   # this file, where a PR cannot reach it: the fork-PR approval policy
@@ -154,6 +140,10 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      # Downstream jobs consume only the value re-emitted by the validation
+      # step. A missing or malformed filter output must fail this job instead
+      # of silently making every expensive job skip.
+      ci: ${{ steps.scope.outputs.ci }}
       gui: ${{ steps.filter.outputs.gui }}
       packaging: ${{ steps.filter.outputs.packaging }}
     steps:
@@ -180,6 +170,27 @@ jobs:
           # on this branch", which is the intent.
           base: ${{ github.ref }}
           filters: |
+            # Mirrors the push trigger's path allowlist. Pull requests always
+            # start the workflow so the aggregate check exists, while these
+            # paths decide whether the expensive test jobs need to run.
+            ci:
+              - 'src/**'
+              - 'bin/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'gui/**'
+              - 'assets/**'
+              - '.gitattributes'
+              - '.npmignore'
+              - 'package.json'
+              - 'bun.lock'
+              - 'tsconfig.json'
+              - 'README.md'
+              - 'LICENSE'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+              - '.github/workflows/enforce-pr-target.yml'
+              - '.github/workflows/stale-needs-info.yml'
             gui:
               - 'gui/**'
             # Everything that ends up inside `npm pack`, or that decides what
@@ -203,6 +214,23 @@ jobs:
               - 'LICENSE'
               - 'scripts/prepare-package.ts'
 
+      - name: Assert the scope output is usable
+        id: scope
+        shell: bash
+        env:
+          CI_SCOPE: ${{ steps.filter.outputs.ci }}
+        run: |
+          set -euo pipefail
+          case "$CI_SCOPE" in
+            true|false)
+              printf 'ci=%s\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+
   # The suite, split by file across four Linux runners.
   #
   # `bun test --shard=i/N` sorts test files by path and deals them round-robin,
@@ -218,6 +246,8 @@ jobs:
   # would eat what the sharding saves.
   test:
     name: test ${{ matrix.shard }}/4
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     # A quarter of the suite. A shard that needs longer than this is wedged, not
     # slow — the old 30-minute ceiling was margin for the Windows leg, which no
@@ -271,6 +301,8 @@ jobs:
   # failure is bounded to this job instead of poisoning a general test shard.
   storage-policy:
     name: storage policy
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -310,6 +342,7 @@ jobs:
   gates:
     name: gates
     needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -372,6 +405,8 @@ jobs:
   # platform-independent and already ran once above.
   platform-macos:
     name: macos
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: macos-latest
     # The unsharded control for the sharded Linux lane: the only place the whole
     # suite runs in one pool, so it is the place that catches what sharding
@@ -499,6 +534,8 @@ jobs:
   # keyring matrix leg may use the persistent self-hosted Windows runner.
   keyring-smoke:
     name: keyring ${{ matrix.name }}
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 8
     strategy:
@@ -616,12 +653,9 @@ jobs:
   # no branch protection configured today, so nothing has to be re-pointed — but
   # whoever enables it has one obvious check to require.
   #
-  # NOTE for that day: requiring this check also means dropping the
-  # workflow-level `paths:` filter above, or moving this job to an
-  # always-triggered workflow. A PR that touches only docs does not trigger this
-  # workflow at all, so no `ci` check would be created and the PR would sit
-  # pending forever. That is harmless while nothing is required and a trap
-  # afterwards.
+  # Pull requests always trigger this workflow. The `changes` job keeps
+  # expensive jobs scoped, but this aggregate still records explicit success
+  # when every producer is deliberately skipped for an out-of-scope docs change.
   #
   # `if: always()` is load-bearing. Without it, a failed or skipped dependency
   # skips this job too — and GitHub reports a skipped job as success, so the gate
