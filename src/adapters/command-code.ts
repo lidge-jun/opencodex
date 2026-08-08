@@ -21,6 +21,10 @@ const COMMAND_CODE_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "glm-5.2": "zai-org/GLM-5.2",
 };
 
+function canonicalCommandCodeModelId(modelId: string): string {
+  return Object.hasOwn(COMMAND_CODE_MODEL_ALIASES, modelId) ? COMMAND_CODE_MODEL_ALIASES[modelId]! : modelId;
+}
+
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
 function toolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
@@ -318,7 +322,7 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
   // reasoning effort because the official table is keyed by the canonical ids.
-  const canonicalId = COMMAND_CODE_MODEL_ALIASES[modelId] ?? modelId;
+  const canonicalId = canonicalCommandCodeModelId(modelId);
   const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
   if (!supported) return undefined;
   // Command Code's official profiles describe xhigh and ultra as the CLI labels that map to
@@ -347,7 +351,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         config: await commandCodeConfig(cwd), memory: "", taste: null, skills: null,
         permissionMode: "standard", mode: "agent",
         params: {
-          model: COMMAND_CODE_MODEL_ALIASES[parsed.modelId] ?? parsed.modelId,
+          model: canonicalCommandCodeModelId(parsed.modelId),
           messages: wireMessages(parsed.context.messages),
           tools: wireTools(tools),
           system,
