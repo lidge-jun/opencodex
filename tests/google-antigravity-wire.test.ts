@@ -156,6 +156,44 @@ describe("antigravity CCA envelope", () => {
     })).toBeNull();
   });
 
+  test("rejects malformed CCA agent-model containers and missing agent metadata", () => {
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{}],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: {} }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: {} }] }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+    })).toBeNull();
+  });
+
+  test("normalizes untrusted CCA model limits before publishing a catalog", () => {
+    const oversized = Array.from(
+      { length: MODEL_DISCOVERY_MAX_MODELS + 1 },
+      (_, index) => `model-${index}`,
+    );
+    const payload = {
+      models: Object.fromEntries(oversized.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds: oversized }] }],
+    };
+    for (const limit of [Number.NaN, Infinity, MODEL_DISCOVERY_MAX_MODELS + 1]) {
+      expect(parseAntigravityAvailableModels(payload, limit)).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: { "agent-model": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+      imageGenerationModelIds: ["gemini-3.1-flash-image"],
+    }, 1)).toBeNull();
+  });
+
   test("throws when no project id is available", async () => {
     const noProj = { ...provider, project: undefined } as OcxProviderConfig;
     await expect(createGoogleAdapter(noProj).buildRequest(parsed())).rejects.toThrow(/project id/);

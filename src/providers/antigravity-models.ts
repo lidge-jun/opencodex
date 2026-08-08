@@ -171,6 +171,9 @@ export function parseAntigravityAvailableModels(
   payload: unknown,
   maxModels = MODEL_DISCOVERY_MAX_MODELS,
 ): AntigravityAvailableModel[] | null {
+  const limit = Number.isSafeInteger(maxModels) && maxModels > 0
+    ? Math.min(maxModels, MODEL_DISCOVERY_MAX_MODELS)
+    : MODEL_DISCOVERY_MAX_MODELS;
   const body = antigravityRecord(payload);
   if (!body) return null;
   const models = antigravityRecord(body?.models);
@@ -180,12 +183,14 @@ export function parseAntigravityAvailableModels(
   const ids: string[] = [];
   for (const sort of sorts) {
     const groups = antigravityRecord(sort)?.groups;
-    if (!Array.isArray(groups)) continue;
+    if (!Array.isArray(groups)) return null;
     for (const group of groups) {
       const modelIds = antigravityRecord(group)?.modelIds;
-      if (!Array.isArray(modelIds)) continue;
+      if (!Array.isArray(modelIds)) return null;
       for (const id of modelIds) {
-        if (!isValidModelDiscoveryModelId(id) || ids.length >= maxModels) return null;
+        if (!isValidModelDiscoveryModelId(id)
+          || !antigravityRecord(models[id])
+          || ids.length >= limit) return null;
         ids.push(id);
       }
     }
@@ -194,7 +199,7 @@ export function parseAntigravityAvailableModels(
   // image generation in the discovery response.
   if (Array.isArray(body.imageGenerationModelIds)
     && body.imageGenerationModelIds.includes("gemini-3.1-flash-image")) {
-    if (ids.length >= maxModels) return null;
+    if (ids.length >= limit) return null;
     ids.push("gemini-3.1-flash-image");
   }
 

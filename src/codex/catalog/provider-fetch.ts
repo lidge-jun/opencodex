@@ -876,7 +876,7 @@ async function fetchProviderModelsWithAuth(
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? effectiveGoogleMode(name, prov) === "cloud-code-assist"
+    ? prov.authMode === "oauth" && effectiveGoogleMode(name, prov) === "cloud-code-assist"
       ? await getValidAccessTokenSnapshot(name)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,

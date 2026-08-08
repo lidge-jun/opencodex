@@ -204,6 +204,32 @@ describe("Antigravity live model discovery", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("uses the configured key for a custom CCA provider", async () => {
+    const seen: { headers: Record<string, string> }[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      return Response.json({
+        models: { "custom-agent-model": { maxTokens: 1_048_576 } },
+        agentModelSorts: [{ groups: [{ modelIds: ["custom-agent-model"] }] }],
+      });
+    }) as typeof fetch;
+
+    const models = await gatherRoutedModels(configWith("custom-cca", {
+      adapter: "google",
+      authMode: "key",
+      apiKey: "custom-cca-key",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      googleMode: "cloud-code-assist",
+      project: "configured-project",
+      liveModels: true,
+    }));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.headers.Authorization).toBe("Bearer custom-cca-key");
+    expect(models.filter(model => model.provider === "custom-cca").map(model => model.id))
+      .toEqual(["custom-agent-model"]);
+  });
 });
 
 describe("buildModelsRequest anthropic routing", () => {
