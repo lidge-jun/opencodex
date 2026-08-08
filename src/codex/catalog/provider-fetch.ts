@@ -923,7 +923,16 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       item.max_context_length,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
-  const rawReasoningEfforts = capabilityRecord?.reasoning_effort ?? item.reasoning_efforts;
+  // Some OpenAI-compatible catalogs expose the selectable ladder under
+  // `reasoning_parameters.efforts` instead of the older `reasoning_efforts` key.
+  // Treat both as model metadata: otherwise a valid upstream capability disappears
+  // before client exporters (including omp) can advertise it.
+  const reasoningParameters = plainRecord(item.reasoning_parameters)
+    ?? plainRecord(metadata?.reasoning_parameters)
+    ?? plainRecord(capabilityRecord?.reasoning_parameters);
+  const rawReasoningEfforts = capabilityRecord?.reasoning_effort
+    ?? item.reasoning_efforts
+    ?? reasoningParameters?.efforts;
   const listedReasoningEfforts = normalizedStringList(rawReasoningEfforts, 8, 24);
   const reasoningEfforts = listedReasoningEfforts
     ? sanitizeCodexReasoningEfforts(listedReasoningEfforts)
