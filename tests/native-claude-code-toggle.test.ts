@@ -117,6 +117,23 @@ test("a non-boolean enabled is rejected", async () => {
   expect(res!.status).toBe(400);
 });
 
+test("non-object bodies are rejected without mutating or saving", async () => {
+  for (const rawBody of ["null", "[]", "true", "1", '"yes"']) {
+    const config = baseConfig({ claudeCode: { enabled: true } });
+    const before = structuredClone(config);
+    const { response, saved } = dispatch(config, "/api/native-integrations/claude", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: rawBody,
+    });
+    const res = await response;
+    expect(res!.status).toBe(400);
+    expect(await res!.json()).toEqual({ error: "enabled must be a boolean" });
+    expect(config).toEqual(before);
+    expect(saved).toHaveLength(0);
+  }
+});
+
 test("genuine lock contention refuses 409 config_busy, a broken lock is a 500", async () => {
   /*
    * `ConfigMutationLockError` wraps EVERY acquisition failure behind one
@@ -201,25 +218,24 @@ test("a held REAL config transaction refuses 409 config_busy, and release lets a
         {},
       );
     };
-    const refused = await putReal(baseConfig({ claudeCode: { enabled: true } }));
+    const config = baseConfig({ claudeCode: { enabled: true } });
+    const refused = await putReal(config);
     expect(refused!.status).toBe(409);
     const refusedBody = await refused!.json() as { code: string; reason: string };
     expect(refusedBody.code).toBe("native_integration_refused");
     expect(refusedBody.reason).toBe("config_busy");
+    expect(config.claudeCode?.enabled).toBe(true);
 
     holder.exec("ROLLBACK");
     holder.close();
-    /*
-     * A FRESH config object, not the refused one (wp3 A-gate): the route
-     * mutates the in-memory config before persistence, so the refused object
-     * already reads disabled and would short-circuit at the idempotent guard
-     * without ever re-acquiring the lock.
-     */
-    const retry = await putReal(baseConfig({ claudeCode: { enabled: true } }));
+    // Retry the exact live object that saw the refusal. A failed save must
+    // restore it so the retry re-acquires the lock and persists the change.
+    const retry = await putReal(config);
     expect(retry!.status).toBe(200);
     const retryBody = await retry!.json() as { changed: boolean; state: string };
     expect(retryBody.changed).toBe(true);
     expect(retryBody.state).toBe("absent");
+    expect(config.claudeCode?.enabled).toBe(false);
   } finally {
     try { holder.exec("ROLLBACK"); } catch { /* already closed */ }
     try { holder.close(); } catch { /* already closed */ }
