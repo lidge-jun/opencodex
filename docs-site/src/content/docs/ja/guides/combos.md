@@ -53,8 +53,8 @@ ocx combo show main
 - `daily-fast` のように裸の場合もあれば、`team/daily-fast` のように `/` を 1 つ含む場合もあります。
 - `combo` にしたり、`combo/` で始めることはできません。
 - 別のコンボ エイリアスを複製することはできません。そして
-- `gpt-`、`o1-`、`o3-`、`o4-`、またはで始まる裸のネイティブ OpenAI ファミリ名は使用できません。
-`codex-`。
+- 通常、`gpt-`、`o1-`、`o3-`、`o4-`、または `codex-` で始まる bare native OpenAI
+  family 名は使用できません。明示的な `nativeAlias: true` Desktop 互換モードだけが例外です。
 
 エイリアスが設定されている場合でも、正規の `combo/<id>` 形式は解決されます。正規ルックアップはエイリアスの一致の前に実行されるため、エイリアスが別のコンボの正規 ID を引き継ぐことはできません。
 
@@ -175,7 +175,11 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、および `--rename-from` も受け入れます。そのフィールドをクリアするには、`--effort` または `--alias` の値として `-` を使用します。 `create` および `update` は、`set` のエイリアスです。 `delete` は `remove` のエイリアスです。同じサブコマンドが `ocx route combo` で使用できます。
+`set` は、`--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
+`--display-name`、および `--rename-from` も受け入れます。`--native-alias` には現在
+サポートされている bare native alias と空でない display name が必要です。`--effort`、`--alias`、
+`--display-name` に `-` を指定すると、その値をクリアできます。`create` および `update` は `set` の
+エイリアス、`delete` は `remove` のエイリアスです。すべてのコンボ サブコマンドは `ocx route combo ...` からも利用できます。
 
 ### 管理 API
 
@@ -212,6 +216,8 @@ ocx combo remove <id> --yes
 | `stickyLimit` |いいえ | `1` |ラウンドロビン選択ごとの成功したリクエストの数は 1 ～ 100 の整数です。 |
 | `defaultEffort` |いいえ | `null` | `low`、`medium`、`high`、`xhigh`、`max`、または `ultra`;呼び出し元が努力を省略し、ターゲットがサポートをアドバタイズした場合にのみ適用されます。 |
 | `alias` |いいえ |なし |オプションのトリミングされたパブリック モデル ID。上記のエイリアス ルールを使用します。空の値はエイリアスなしで保存されます。 |
+| `nativeAlias` |いいえ | `false` | 現在サポートされている bare native alias に routing/catalog の優先権を明示的に与えます。 |
+| `displayName` |いいえ |なし | catalog 表示専用ラベル。`nativeAlias` が true の場合は必須です。 |
 
 ## トラブルシューティング
 

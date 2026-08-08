@@ -179,6 +179,10 @@ describe("native main profile scoped server admission", () => {
         close() { upstreamCloses += 1; },
       },
     });
+    const waitUntil = async (condition: () => boolean): Promise<void> => {
+      const deadline = Date.now() + 2_000;
+      while (!condition() && Date.now() < deadline) await Bun.sleep(10);
+    };
     const liveProvider = (codexAccountMode: "direct" | "pool") => ({
       adapter: "openai-responses" as const,
       baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -232,8 +236,7 @@ describe("native main profile scoped server admission", () => {
       }, { once: true }));
       ws.close();
       await closed;
-      const deadline = Date.now() + 2_000;
-      while (getNativeMainProfileRequestCount() > 0 && Date.now() < deadline) await Bun.sleep(10);
+      await waitUntil(() => getNativeMainProfileRequestCount() === 0);
       return requestCountAtDownstreamClose;
     };
     const handshakeStatus = (server: ReturnType<typeof startServer>, path: string) => new Promise<number>((resolve, reject) => {
@@ -281,14 +284,15 @@ describe("native main profile scoped server admission", () => {
         {} as OcxConfig,
         { manager, drainTimeoutMs: 0 },
       );
-       expect(blocked?.status).toBe(409);
-       expect(switches).toBe(0);
-       // The proxy must still own native-main at the downstream close boundary,
-       // then release only after the mock authenticated upstream closes.
-       expect(await closeSocket(client)).toBe(1);
-       client = undefined;
-       expect(upstreamCloses).toBe(1);
-       expect(getNativeMainProfileRequestCount()).toBe(0);
+      expect(blocked?.status).toBe(409);
+      expect(switches).toBe(0);
+      // The proxy must still own native-main at the downstream close boundary,
+      // then release only after the mock authenticated upstream closes.
+      expect(await closeSocket(client)).toBe(1);
+      client = undefined;
+      await waitUntil(() => upstreamCloses >= 1);
+      expect(upstreamCloses).toBe(1);
+      expect(getNativeMainProfileRequestCount()).toBe(0);
       const afterClose = await handleNativeProfileAPI(
         switchRequest(),
         new URL("http://localhost/api/native-main-profiles/switch"),

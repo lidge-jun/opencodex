@@ -138,6 +138,79 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("codex-auto-review");  // legacy dropped
   });
 
+  test("native-alias suppression preserves authoritative metadata on account-qualified rows", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        {
+          ...nativeEntry("gpt-5.6-sol", 0),
+          display_name: "Original Sol",
+          comp_hash: "native-sol-hash",
+          base_instructions: "Native Sol instructions",
+          model_messages: { instructions_template: "Native Sol instructions" },
+          tool_mode: "code_mode_only",
+        },
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const config = {
+        port: 10100,
+        defaultProvider: "Nova1",
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            liveModels: false
+          },
+          Nova1: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            liveModels: false,
+            models: ["codex/gpt-5.6-sol"]
+          }
+        },
+        codexAccounts: [{ id: "stored-team-account", isMain: false }],
+        codexAccountNamespaces: { team: "stored-team-account" },
+        combos: {
+          "nova-sol": {
+            alias: "gpt-5.6-sol",
+            nativeAlias: true,
+            displayName: "Nova Sol",
+            targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }]
+          }
+        }
+      };
+      syncCatalogModels(config).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(r.status).toBe(0);
+
+    const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<{
+      slug: string;
+      display_name?: string;
+      comp_hash?: string;
+      base_instructions?: string;
+      model_messages?: { instructions_template?: string };
+      tool_mode?: string | null;
+      opencodex_catalog_kind?: string;
+    }>;
+    expect(rows.filter(row => row.slug === "gpt-5.6-sol")).toEqual([
+      expect.objectContaining({
+        display_name: "Nova Sol",
+        opencodex_catalog_kind: "combo-native-alias-v1",
+      }),
+    ]);
+    expect(rows.find(row => row.slug === "team/gpt-5.6-sol")).toMatchObject({
+      comp_hash: "native-sol-hash",
+      base_instructions: "Native Sol instructions",
+      model_messages: { instructions_template: "Native Sol instructions" },
+      tool_mode: "code_mode_only",
+      opencodex_catalog_kind: "account-selector-v1",
+    });
+  });
+
   test("providers absent from config preserve foreign routed entries without an outage warning", () => {
     const catalogPath = join(codexHome, "catalog.json");
     writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");

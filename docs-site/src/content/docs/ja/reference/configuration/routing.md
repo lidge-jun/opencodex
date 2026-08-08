@@ -46,7 +46,7 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 
 ## コンボ (`config.combos`)
 
-各コンボ キーは `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` に一致する ID です。これは常に `combo/<id>` として直接アドレス指定可能であり、1 つの `alias` を公開することもあります。エイリアスは一意である必要があり、`combo/` 名前空間を占有することはできず、`gpt-*`、`o1-*`、`o3-*`、`o4-*`、または `codex-*` などの予約されたベア ネイティブ ファミリを使用することはできません。
+各コンボ キーは `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` に一致する ID です。これは常に `combo/<id>` として直接アドレス指定可能であり、1 つの `alias` を公開することもあります。エイリアスは一意である必要があり、`combo/` 名前空間を占有することはできず、通常は `gpt-*`、`o1-*`、`o3-*`、`o4-*`、または `codex-*` などの予約された bare native family を使用できません。明示的な `nativeAlias: true` Desktop 互換契約だけが例外です。
 
 |キー |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
@@ -55,6 +55,8 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 | `stickyLimit?` | `number` | `1` |成功したリクエストは 1 つのラウンドロビン バッチに保持されます。範囲は 1 ～ 100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` |設定を解除する |呼び出し元が努力を省略し、選択されたターゲットが要求されたラングをアドバタイズする場合にのみ適用されます。 |
 | `alias?` | `string` | — |正規のピッカー スラグの代わりのオプションのパブリック モデル ID。 |
+| `nativeAlias?` | `boolean` | `false` | 現在サポートされている bare native id に限り、その未修飾 id で優先します。アカウント修飾およびプロバイダー修飾の OpenAI ルートは別のままです。 |
+| `displayName?` | `string` | — | catalog 表示専用ラベル。native alias では空でない値が必須です。 |
 
 ```json
 {

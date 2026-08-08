@@ -53,13 +53,40 @@ ocx combo show main
 - 可以是无斜杠形式，例如 `daily-fast`，也可以包含一个 `/`，例如 `team/daily-fast`；
 - 不能是 `combo` 或以 `combo/` 开头；
 - 不能与其他 combo 别名重复；并且
-- 不能是以 `gpt-`、`o1-`、`o3-`、`o4-` 或 `codex-` 开头的裸原生 OpenAI 系列名称。
+- 通常不能是以 `gpt-`、`o1-`、`o3-`、`o4-` 或 `codex-` 开头的裸原生 OpenAI 系列名称；
+  唯一例外是下方显式启用的 Desktop 兼容模式。
 
 即使设置了别名，规范的 `combo/<id>` 形式仍然可以解析。规范查找会先于别名匹配，因此别名不能抢占另一个 combo 的规范 id。
 
 :::note
 别名只会改变客户端请求的公开名称，不会改变 combo 存储的 id，也不会改变其背后的具体 provider/model 选择器。
 :::
+
+## Codex Desktop 原生 allowlist 兼容模式
+
+部分 Codex Desktop 版本会在 app-server 已经加载 `model_catalog_json` 后，再用远程
+`available_models` allowlist 过滤选择器。这会让普通的 `Nova1/...` 路由模型在 CLI 中可用，
+却不出现在 Desktop。可以显式让一个 combo 接管对应的裸原生 slug：
+
+```bash
+ocx combo set nova-sol \
+  --targets Nova1/codex/gpt-5.6-sol \
+  --alias gpt-5.6-sol \
+  --native-alias \
+  --display-name 'Nova1 - codex-gpt-5.6-sol'
+```
+
+该模式默认关闭，同时要求 `--native-alias` 和非空显示名称。alias 必须是当前 opencodex 版本
+明确支持的原生 model id；只有原生系列前缀还不够，因为移除 alias 时必须能恢复权威 metadata。
+如果路由目标的 discovery 只返回 model id，兼容行会从被接管的原生 id 补齐缺失的 context、
+modality 和 reasoning metadata；目标显式声明的限制仍然优先，因此不会抬高 context cap 或覆盖
+已经声明的能力。
+`gpt-5.6-sol` 请求会先解析到
+`combo/nova-sol`，catalog 中只保留一条带明确 Nova 标签的裸行。`combo/nova-sol` 用于禁用
+这个 combo；`disabledModels` 中裸的 `gpt-5.6-sol` 仍只表示原生 OpenAI 行，不会误禁 combo。
+配置任意 native alias 后，其他已禁用的裸原生行也会从有效 catalog 中移除，而不是仅标成
+`visibility: "hide"`，从而防止 Desktop 无视隐藏标记后把它们重新显示出来。账户限定的
+`main/gpt-5.6-sol` 仍是真实 OpenAI 路由。删除 combo 后，下次同步会恢复正常原生身份。
 
 ## 选择策略
 
@@ -174,7 +201,11 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias` 和 `--rename-from`。将 `--effort` 或 `--alias` 的值设为 `-` 可清除该字段。`create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过 `ocx route combo` 使用。
+`set` 也接受 `--strategy`、`--sticky`、`--effort`、`--alias`、`--native-alias`、
+`--display-name` 和 `--rename-from`。将 `--effort`、`--alias` 或 `--display-name` 的值设为
+`-` 可清除该字段。`--native-alias` 必须配合当前受支持的裸原生 alias 和非空显示名称使用。
+`create` 和 `update` 是 `set` 的别名；`delete` 是 `remove` 的别名；同样的子命令也可通过
+`ocx route combo` 使用。
 
 ### Management API
 
@@ -211,6 +242,8 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `stickyLimit` | 否 | `1` | 每次轮询选择可连续处理的成功请求数，范围为 1 到 100。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
+| `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级；绝不会根据 alias 自动推断。 |
+| `displayName` | 否 | 无 | 仅用于 catalog 展示的有界标签；`nativeAlias` 为 true 时必须非空。 |
 
 ## 故障排查
 

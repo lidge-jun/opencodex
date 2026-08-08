@@ -11,8 +11,8 @@ import {
   type CatalogSourceForGather,
   bundledCatalogCacheState,
   resolveCatalogSourceForGather,
-} from "./catalog/bundled";
-import {
+  } from "./catalog/bundled";
+  import {
   acceptCatalogGatherSourcePath,
   captureAndSealCatalogHomeSelection,
   captureCatalogGatherTargetIdentity,
@@ -20,32 +20,37 @@ import {
   readCatalogGatherSource,
   sealCatalogGatherEvidenceSession,
   type CatalogFilesystemEvidenceSession,
-} from "./catalog/filesystem-evidence";
-import {
+  } from "./catalog/filesystem-evidence";
+  import {
   CatalogGatherBusyError,
   createCatalogGatherAuthorityIdentity,
   filterCatalogVisibleModels,
   gatherRoutedModelsForCatalogGather,
   type CatalogGatherProviderAuthOutcome,
   type CatalogGatherProviderModelOutcome,
-} from "./catalog/provider-fetch";
-import {
+  } from "./catalog/provider-fetch";
+  import {
   catalogBackupPathFor,
   catalogHasRoutedEntries,
   findNativeTemplate,
   legacyCatalogBackupPath,
   parseCatalogJson,
   type RawCatalog,
-} from "./catalog/parsing";
-import {
+  type RawEntry,
+  } from "./catalog/parsing";
+  import {
   buildCatalogEntriesFromObservedState,
   CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   mergeCatalogEntriesFromObservedState,
+  mergeCatalogModelsWithNativeRecovery,
   orderForSubagents,
-} from "./catalog/sync";
-import { multiAgentV2EnabledFromConfigText } from "./features";
-import { exactComboCatalogSlugs } from "./catalog/aggregation";
-import {
+  } from "./catalog/sync";
+  import { multiAgentV2EnabledFromConfigText } from "./features";
+  import { exactComboCatalogSlugs } from "./catalog/aggregation";
+  import {
+  isNativeAliasCatalogEntry,
+  disabledNativeSlugs,
+  desktopAllowlistSuppressedNativeSlugs,
   NATIVE_OPENAI_MODELS,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
@@ -151,7 +156,8 @@ interface ReadonlyRawCatalogLike {
 }
 
 function hasRoutedEntries(catalog: ReadonlyRawCatalogLike): boolean {
-  return (catalog.models ?? []).some(entry => typeof entry.slug === "string" && entry.slug.includes("/"));
+  return (catalog.models ?? []).some(entry => typeof entry.slug === "string"
+    && (entry.slug.includes("/") || isNativeAliasCatalogEntry(entry as RawEntry)));
 }
 
 function processEvidence(source: CatalogSourceForGather): CatalogProcessLocalEvidence {
@@ -209,6 +215,7 @@ function prepareCatalog(
   baseline: ReadonlyMap<string, number>,
   baselineCatalogModels: readonly Readonly<Record<string, unknown>>[],
   degradedProviderNames: ReadonlySet<string>,
+  nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -218,13 +225,19 @@ function prepareCatalog(
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
+  const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const enabledProviders = Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const accountSelectors = shouldIncludeAccountBoundNativeOpenAi(config)
     ? visibleCodexAccountSelectors(config)
     : [];
-  const catalogModels = active?.models ?? catalog.models ?? [];
+  const disabledNative = disabledNativeSlugs(config);
+  const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
+    active?.models ?? catalog.models ?? [],
+    [catalog.models ?? [], ...nativeRecoverySources],
+  );
+  const catalogModels = nativeCatalogModels;
   const routedEntries = buildCatalogEntriesFromObservedState({
     template: template ? JSON.parse(JSON.stringify(template)) : null,
     gptSlugs: [],
@@ -234,6 +247,8 @@ function prepareCatalog(
     multiAgentMode,
     exactComboSlugs,
     accountSelectors,
+    suppressedBareNativeSlugs,
+    disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
   });
   const accountBoundEntries = accountSelectors.length === 0
@@ -247,6 +262,8 @@ function prepareCatalog(
       multiAgentMode,
       exactComboSlugs,
       accountSelectors,
+      suppressedBareNativeSlugs,
+      disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
@@ -276,6 +293,7 @@ function prepareCatalog(
     hasPhysicalComboProvider,
     includeNativeOpenAi,
     accountBoundEntries,
+    suppressedBareNativeSlugs,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
       warningPolicy: "suppress",
@@ -362,6 +380,10 @@ export async function gatherCodexCatalogCandidate(
       new Set(providerModelOutcomes
         .filter(outcome => outcome.state === "degraded")
         .map(outcome => outcome.provider)),
+      [
+        catalogFrom(keyedBackupBytes)?.models ?? [],
+        catalogFrom(legacyBackupBytes)?.models ?? [],
+      ],
     );
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCacheBytes = `${JSON.stringify({

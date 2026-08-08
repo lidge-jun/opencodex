@@ -3,9 +3,10 @@ title: Codex App 모델 선택기
 description: 공유 Codex 카탈로그를 통해 opencodex 모델이 Codex App, Codex CLI, Codex TUI에 표시되는 방식.
 ---
 
-opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI가 이미 쓰는 Codex 설정과 모델 카탈로그를
-같은 위치에 씁니다. Codex App도 이 공유 상태를 읽기 때문에, 라우팅된 모델이 일반 Codex 카탈로그
-항목처럼 App의 모델 선택기에 나타날 수 있습니다.
+opencodex는 Codex App을 직접 고치지 않습니다. Codex CLI/TUI와 같은 Codex 설정과 모델 카탈로그를
+씁니다. app-server는 이 공유 상태를 읽지만, 일부 Codex Desktop 릴리스는 renderer에서 추가 remote
+allowlist를 적용해 routed row를 picker에서 제거할 수 있습니다. 명시적 `nativeAlias: true` combo가
+이 업스트림 버그를 위한 호환 모드입니다.
 
 OpenAI 항목에는 네이티브 Codex 로그인과 네임스페이스가 붙은 `openai-apikey/<model>` API key
 경로라는 두 가지 credential 경로가 있습니다. `codexAccountMode`만 Pool과 Direct 사이에서 바꾸는 것은

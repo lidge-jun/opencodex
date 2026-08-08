@@ -116,10 +116,9 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   if (model.provider === COMBO_NAMESPACE) entry.owned_by = model.owned_by ?? COMBO_NAMESPACE;
   // displayName is DISPLAY-ONLY: it relabels the picker row but never touches the routing
   // slug, alias, or provider. deriveEntry already stamped the slug as display_name; a
-  // configured displayName overrides just the label. The `/` separator is rejected at every
-  // input boundary (CLI `ocx models add`, management API), so the catalog trusts its source.
-  // Combos carry no displayName, and natives never reach here (no CatalogModel), so genuine
-  // upstream marketing names and combo alias labels are preserved untouched.
+  // configured displayName overrides just the label. Custom-model inputs reject `/`; combos
+  // validate their bounded display label independently. Natives never reach here (no CatalogModel),
+  // so genuine upstream marketing names are preserved untouched.
   const displayName = typeof model.displayName === "string" ? model.displayName.trim() : "";
   if (displayName) entry.display_name = displayName;
   if (typeof model.contextWindow === "number" && model.contextWindow > 0) {

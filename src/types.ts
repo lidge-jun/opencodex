@@ -905,6 +905,13 @@ export interface OcxComboConfig {
    * mandated model id; exact-match requests route here before any provider resolution.
    */
   alias?: string;
+  /**
+   * Explicitly allow a bare OpenAI-native alias (for example `gpt-5.6-sol`) to
+   * be represented by this routed combo. Never inferred from `alias`.
+   */
+  nativeAlias?: boolean;
+  /** Display-only label for the public catalog row. Required for native aliases. */
+  displayName?: string;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";

@@ -79,11 +79,12 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
     const namespaced = catalogModelSlug(m);
     if (m.provider !== "combo" && customNamespaced.has(namespaced)) return null;
     const contextCap = providerContextCap(config, m.provider);
+    const nativeAlias = m.provider === "combo" && m.nativeAlias === true;
     return {
       ...m,
       namespaced,
       disabled: [...disabled].some(stored => (
-        stored === namespaced || slugEquals(stored, m.provider, m.id)
+        (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
       )),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
     };

@@ -55,7 +55,7 @@ stored account is missing are not advertised. Selector validation, collision rul
 Each combo key is an id matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. It is always directly addressable
 as `combo/<id>` and may also expose one `alias`. Aliases must be unique, cannot occupy the `combo/`
 namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`, `o3-*`, `o4-*`, or
-`codex-*`.
+`codex-*` unless `nativeAlias: true` explicitly enables the Desktop compatibility contract.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -64,6 +64,8 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | Applied only when the caller omits effort and the selected target advertises the requested rung. |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
+| `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
+| `displayName?` | `string` | — | Display-only catalog label, required and non-empty for a native alias. |
 
 ```json
 {

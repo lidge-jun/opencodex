@@ -49,7 +49,7 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 每个 combo 键都是一个符合 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` 的 id。它始终可以直接通过
 `combo/<id>` 访问，也可以额外暴露一个 `alias`。别名必须唯一，不能占用 `combo/`
 命名空间，也不能使用保留的原生裸系列，例如 `gpt-*`、`o1-*`、`o3-*`、`o4-*` 或
-`codex-*`。
+`codex-*`，除非通过 `nativeAlias: true` 显式启用 Desktop 兼容契约。
 
 | 键 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
@@ -58,6 +58,8 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |
+| `nativeAlias?` | `boolean` | `false` | 仅让当前受支持的裸原生 id 对该不带限定前缀的 id 优先；带账号或提供方限定的 OpenAI 路由仍是独立路由。 |
+| `displayName?` | `string` | — | 仅用于 catalog 展示的标签；native alias 必须提供非空值。 |
 
 ```json
 {

@@ -295,6 +295,67 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT round-trips an explicitly labeled native alias", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        combos: undefined,
+        disabledModels: ["gpt-5.6-sol"],
+      });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "nova-sol",
+        combo: {
+          ...VALID_COMBO,
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+        },
+      });
+
+      expect(response?.status).toBe(200);
+      expect(await responseJson(response)).toMatchObject({
+        id: "nova-sol",
+        model: "gpt-5.6-sol",
+        combo: {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - codex-gpt-5.6-sol",
+        },
+      });
+      expect(config.combos?.["nova-sol"]).toMatchObject({
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+      });
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos).toEqual([expect.objectContaining({
+        id: "nova-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+      })]);
+    });
+  });
+
+  test("PUT rejects a native alias without a displayName without mutating config", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const beforeMemory = structuredClone(config);
+      const beforeDisk = readFileSync(getConfigPath(), "utf8");
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "nova-sol",
+        combo: {
+          ...VALID_COMBO,
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+        },
+      });
+
+      expect(response?.status).toBe(400);
+      expect(config).toEqual(beforeMemory);
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(beforeDisk);
+    });
+  });
+
   test("PUT rejects aliases owned by a Codex account namespace without mutating config", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ codexAccountNamespaces: { side: "side-account-id" } });
@@ -453,6 +514,65 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT rename preserves native disables and migrates only the canonical native-alias selector", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({
+        disabledModels: ["gpt-5.6-sol", "combo/old", "gpt-5.5"],
+        subagentModels: ["gpt-5.6-sol", "combo/old"],
+        injectionModel: "gpt-5.6-sol",
+        shadowCallIntercept: { enabled: true, model: "gpt-5.6-sol" },
+        claudeCode: {
+          model: "gpt-5.6-sol",
+          smallFastModel: "gpt-5.6-sol",
+          tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/old" },
+          modelMap: { native: "gpt-5.6-sol", combo: "combo/old" },
+        },
+        combos: {
+          old: {
+            ...VALID_COMBO,
+            alias: "gpt-5.6-sol",
+            nativeAlias: true,
+            displayName: "Nova1 - Sol",
+          },
+        },
+      });
+      saveConfig(config);
+
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "new",
+        renameFrom: "old",
+        combo: {
+          ...VALID_COMBO,
+          alias: "gpt-5.6-terra",
+          nativeAlias: true,
+          displayName: "Nova1 - Terra",
+        },
+      });
+
+      expect(response?.status).toBe(200);
+      expect(config.disabledModels).toEqual(["gpt-5.6-sol", "combo/new", "gpt-5.5"]);
+      expect(config.subagentModels).toEqual(["gpt-5.6-sol", "combo/new"]);
+      expect(config.injectionModel).toBe("gpt-5.6-sol");
+      expect(config.shadowCallIntercept?.model).toBe("gpt-5.6-sol");
+      expect(config.claudeCode).toMatchObject({
+        model: "gpt-5.6-sol",
+        smallFastModel: "gpt-5.6-sol",
+        tierModels: { opus: "gpt-5.6-sol", sonnet: "combo/new" },
+        modelMap: { native: "gpt-5.6-sol", combo: "combo/new" },
+      });
+      expect(routeModel(config, "gpt-5.6-terra")).toMatchObject({
+        providerName: "a",
+        modelId: "m1",
+      });
+      expect(() => routeModel(config, "gpt-5.6-sol")).toThrow(
+        "requires the canonical openai provider",
+      );
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.disabledModels).toEqual(config.disabledModels);
+      expect(persisted.subagentModels).toEqual(config.subagentModels);
+    });
+  });
+
   test("PUT rename rejects missing sources and existing destinations without mutation", async () => {
     await withTempHome(async () => {
       const config = baseConfig({
@@ -523,7 +643,7 @@ describe("combo management API", () => {
         free: { ...VALID_COMBO, alias: "deepseek-v4-flash" },
       },
     });
-    config.providers.a!.liveModels = false;
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
     config.providers.a!.modelContextWindows = { m1: 128_000 };
 
     const response = await comboApi(config, "GET", "/api/models");
@@ -577,6 +697,41 @@ describe("combo management API", () => {
       custom?: boolean;
     }>;
     expect(customCollisionRows.filter(row => row.namespaced === "a/m1")).toEqual([
+      expect.objectContaining({ provider: "combo", id: "free", disabled: true }),
+    ]);
+  });
+
+  test("GET models exposes one native-alias row and uses only its canonical disable selector", async () => {
+    const config = baseConfig({
+      disabledModels: ["gpt-5.6-sol"],
+      combos: {
+        free: {
+          ...VALID_COMBO,
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - Sol",
+        },
+      },
+    });
+    for (const provider of Object.values(config.providers)) provider.liveModels = false;
+    config.providers.a!.modelContextWindows = { m1: 128_000 };
+
+    const response = await comboApi(config, "GET", "/api/models");
+    const rows = await response!.json() as Array<{
+      provider: string;
+      id: string;
+      namespaced: string;
+      disabled: boolean;
+      native?: boolean;
+    }>;
+    expect(rows.filter(row => row.namespaced === "gpt-5.6-sol")).toEqual([
+      expect.objectContaining({ provider: "combo", id: "free", disabled: false }),
+    ]);
+
+    config.disabledModels!.push("combo/free");
+    const disabledResponse = await comboApi(config, "GET", "/api/models");
+    const disabledRows = await disabledResponse!.json() as typeof rows;
+    expect(disabledRows.filter(row => row.namespaced === "gpt-5.6-sol")).toEqual([
       expect.objectContaining({ provider: "combo", id: "free", disabled: true }),
     ]);
   });

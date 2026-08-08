@@ -45,7 +45,7 @@ selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy g
 
 ## Combos (`config.combos`)
 
-각 combo 키는 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`에 맞는 id입니다. 항상 `combo/<id>`로 직접 접근할 수 있고, 추가로 하나의 `alias`를 노출할 수 있습니다. alias는 유일해야 하고 `combo/` 네임스페이스를 차지할 수 없으며, `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*` 같은 예약된 bare native family도 사용할 수 없습니다.
+각 combo 키는 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`에 맞는 id입니다. 항상 `combo/<id>`로 직접 접근할 수 있고, 추가로 하나의 `alias`를 노출할 수 있습니다. alias는 유일해야 하고 `combo/` 네임스페이스를 차지할 수 없으며, 일반적으로 `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*` 같은 예약된 bare native family를 사용할 수 없습니다. 명시적 `nativeAlias: true` Desktop 호환 계약만 예외입니다.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -54,6 +54,8 @@ selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy g
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 호출자가 effort를 생략했고 선택된 대상이 요청한 rung를 광고할 때만 적용됩니다. |
 | `alias?` | `string` | — | 정규화된 picker slug 대신 쓰는 선택적 공개 model id입니다. |
+| `nativeAlias?` | `boolean` | `false` | 현재 지원되는 bare native id가 해당 비수식 id에만 우선하도록 합니다. 계정 또는 프로바이더로 수식된 OpenAI route는 별도로 유지됩니다. |
+| `displayName?` | `string` | — | catalog 표시 전용 label이며 native alias에서는 비어 있지 않아야 합니다. |
 
 ```json
 {

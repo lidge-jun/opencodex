@@ -4,8 +4,8 @@ description: How opencodex models appear in Codex App, Codex CLI, and Codex TUI 
 ---
 
 opencodex does not patch Codex App. It writes the same Codex configuration and model catalog that
-Codex CLI/TUI already use. Because Codex App reads that shared state, routed models can appear in the
-App's model picker as normal Codex catalog entries.
+Codex CLI/TUI use. The app-server reads that shared state, but some Codex Desktop releases apply a
+second remote model allowlist in the renderer and can still remove routed rows from the picker.
 
 OpenAI entries use two credential routes: native Codex login and the namespaced
 `openai-apikey/<model>` API-key transport. Changing `codexAccountMode` between Pool and Direct by
@@ -48,6 +48,21 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 ```
 
 Earlier v1 three-provider configurations migrate automatically into the single option-aware row.
+
+## Desktop remote-allowlist limitation
+
+If `codex debug models` and app-server `model/list` contain a routed model but Desktop does not show
+it, check the upstream [Codex issue #19694](https://github.com/openai/codex/issues/19694). With the
+remote `use_hidden_models` policy active, Desktop can keep only ids in its native
+`available_models` list and can also display native rows whose catalog visibility is `hide`.
+Catalog refreshes and proxy restarts alone cannot change that renderer policy.
+
+For an equivalent routed model, opencodex provides an explicit, default-off native-alias combo mode.
+It publishes an allowlisted bare slug with an honest custom display label and routes that exact slug
+through the configured combo before canonical OpenAI routing. It also omits disabled bare native
+rows from the effective catalog while compatibility aliases exist, so Desktop cannot resurrect
+them by ignoring `visibility`. See [Codex Desktop native-allowlist compatibility](/guides/combos/#codex-desktop-native-allowlist-compatibility)
+for the command, disable-key semantics, and safety constraints.
 
 ## Integration path
 
@@ -107,8 +122,13 @@ the configuration manually:
 - Native GPT ids are bare slugs. Disabling one keeps its catalog entry but changes `visibility` to
   `hide`, preserving the exact entry for a later re-enable; it hides the bare row and every
   selector-qualified clone for that model from discovery.
-- Native rows come from the supported static set, so a disabled native model stays visible in the
-  dashboard and can be turned back on.
+- With at least one native-alias combo configured, disabled bare native rows are omitted rather than
+  retained hidden because affected Desktop releases ignore the hidden flag. A bare native slug
+  shadowed by a native alias is also omitted from the Models page, so it has no native switch there;
+  only unshadowed native rows remain switchable. Sync restores pristine native metadata when an
+  unshadowed disabled row is re-enabled.
+- Unshadowed native rows come from the supported static set, so a disabled unshadowed model stays
+  visible in the dashboard and can be turned back on.
 
 The visibility pass runs after snapshot upgrades, and the management API refreshes the catalog and
 forces Codex's model cache stale after a toggle.

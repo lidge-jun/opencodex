@@ -63,8 +63,8 @@ An optional alias gives the combo a different public model name. An alias:
 - may be bare, such as `daily-fast`, or contain one `/`, such as `team/daily-fast`;
 - cannot be `combo` or start with `combo/`;
 - cannot duplicate another combo alias; and
-- cannot be a bare native OpenAI-family name beginning with `gpt-`, `o1-`, `o3-`, `o4-`, or
-  `codex-`.
+- cannot normally be a bare native OpenAI-family name beginning with `gpt-`, `o1-`, `o3-`, `o4-`,
+  or `codex-`. The explicit Desktop compatibility mode below is the only exception.
 
 Even when an alias is set, the canonical `combo/<id>` form still resolves. Canonical lookup runs
 before alias matching, so an alias cannot take over another combo's canonical id.
@@ -72,6 +72,53 @@ before alias matching, so an alias cannot take over another combo's canonical id
 :::note
 Aliases change the public name clients request; they do not change the combo's stored id or the
 concrete provider/model selectors behind it.
+:::
+
+## Codex Desktop native-allowlist compatibility
+
+Some Codex Desktop releases apply a remote native-only `available_models` allowlist after the
+app-server has already loaded `model_catalog_json`. Normal routed ids such as
+`Nova1/codex-gpt-5.6-sol` are then usable by the CLI but absent from the Desktop picker. This is the
+upstream [Codex Desktop bug](https://github.com/openai/codex/issues/19694) tracked by
+[opencodex #241](https://github.com/lidge-jun/opencodex/issues/241).
+
+When you control an equivalent routed target, a combo can explicitly take over one native slug:
+
+```bash
+ocx combo set nova-sol \
+  --targets Nova1/codex/gpt-5.6-sol \
+  --alias gpt-5.6-sol \
+  --native-alias \
+  --display-name 'Nova1 - codex-gpt-5.6-sol'
+```
+
+This mode is deliberately opt-in and requires both `--native-alias` and a non-empty display label.
+The alias must be one of the native model ids supported by this opencodex release; a native-family
+prefix alone is not accepted because removal must be able to restore authoritative metadata.
+When the routed target's discovery response supplies only a model id, the compatibility row fills
+missing context, modality, and reasoning metadata from the native id it replaces. Explicit target
+limits still win, so this fallback never raises a context cap or overrides declared capabilities.
+It changes exact routing precedence: requests for `gpt-5.6-sol` resolve to `combo/nova-sol` before
+the canonical OpenAI native-family route. The catalog contains one bare row with the configured
+display label, not duplicate native and combo rows. Only the bare `gpt-5.6-sol` slug is captured.
+Account-qualified rows such as `main/gpt-5.6-sol` and provider-qualified rows such as
+`openai-apikey/gpt-5.6-sol` remain distinct OpenAI routes; the provider-qualified API-key route
+never falls through to the native alias.
+
+Visibility keys stay unambiguous:
+
+- `combo/nova-sol` hides the compatibility combo from discovery.
+- The bare `gpt-5.6-sol` entry in `disabledModels` continues to mean the dormant native OpenAI row;
+  it does not hide the combo that currently owns that public slug.
+- While at least one native alias is configured, disabled bare native rows are omitted from the
+  effective Codex catalog instead of retained as `visibility: "hide"`. This prevents Desktop's
+  allowlist from resurrecting rows it should not show. The Models page still lists unshadowed native
+  switches, and re-enabling one restores its preserved or current native metadata.
+
+:::caution
+A native alias intentionally takes over a first-party-looking model id. Use it only when the target
+is operationally equivalent and label the picker row honestly. Removing the combo restores normal
+native routing and catalog identity on the next sync.
 :::
 
 ## Choose a strategy
@@ -214,10 +261,11 @@ ocx combo set <id> --targets provider/model[:weight],...
 ocx combo remove <id> --yes
 ```
 
-`set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, and `--rename-from`. Use `-`
-as the value of `--effort` or `--alias` to clear that field. `create` and `update` are aliases for
-`set`; `delete` is an alias for `remove`; and the same subcommands are available under
-`ocx route combo`.
+`set` also accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
+`--display-name`, and `--rename-from`. Use `-` as the value of `--effort`, `--alias`, or
+`--display-name` to clear that field. `--native-alias` requires a currently supported bare native
+model alias and a non-empty display name. `create` and `update` are aliases for `set`; `delete` is an alias for
+`remove`; and the same subcommands are available under `ocx route combo`.
 
 ### Management API
 
@@ -257,6 +305,8 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
+| `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
+| `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |
 
 ## Troubleshooting
 

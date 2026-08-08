@@ -30,7 +30,7 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   return { values: raw as string[] };
 }
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
 import {
@@ -58,7 +58,7 @@ import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/ke
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { COMBO_NAMESPACE, comboModelId, comboPublicModelId, preservesPhysicalComboProvider } from "../../combos";
+import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -255,17 +255,16 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (targets.length === 0) return jsonResponse({ error: "model visibility targets required" }, 400);
 
     const knownComboSelectors = new Set(
-      Object.entries(config.combos ?? {}).flatMap(([id, combo]) => [
-        comboModelId(id),
-        comboPublicModelId(id, combo),
-      ]),
+      Object.entries(config.combos ?? {}).flatMap(([id, combo]) => (
+        comboDisabledModelSelectors(id, combo)
+      )),
     );
     const targetComboSelectors = new Map<string, Set<string>>();
     if (isVirtualComboNamespace) {
       for (const target of targets) {
         const combo = config.combos && Object.hasOwn(config.combos, target.id) ? config.combos[target.id] : undefined;
         if (!combo) return jsonResponse({ error: "invalid model visibility target" }, 400);
-        targetComboSelectors.set(target.id, new Set([comboModelId(target.id), comboPublicModelId(target.id, combo)]));
+        targetComboSelectors.set(target.id, new Set(comboDisabledModelSelectors(target.id, combo)));
       }
     }
     const matchesTarget = (stored: string, target: { id: string; native: boolean }) => target.native
@@ -284,8 +283,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
           const nativeIds = provider === "openai"
             ? disabledNativeSlugs({ disabledModels: disabled })
             : new Set<string>();
+          const nativeAliasSlugs = provider === "openai"
+            ? configuredNativeAliasSlugs(config)
+            : new Set<string>();
           disabled = disabled.filter(stored => (
             knownComboSelectors.has(stored)
+            || nativeAliasSlugs.has(stored)
             || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored))
           ));
         }

@@ -5,6 +5,7 @@ import {
   comboPublicModelId,
   draftEquals,
   intersectComboEfforts,
+  updateComboAliasDraft,
   validateComboDraft,
 } from "../combo-workspace-data";
 import { IconChevron, IconTrash } from "../icons";
@@ -80,7 +81,7 @@ export function DetailPanel({
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const dirty = !draftEquals(draft, baseline);
-  const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
+  const baselineSyncKey = `${baseline.id}:${baseline.alias ?? ""}:${baseline.nativeAlias}:${baseline.displayName ?? ""}:${baseline.strategy}:${baseline.stickyLimit}:${baseline.defaultEffort}:${baseline.targets.map((t) => `${t.provider}/${t.model}:${t.weight ?? 1}`).join(",")}`;
   const effortMap = useMemo(() => {
     const map = new Map<string, string[] | undefined>();
     for (const model of models) {
@@ -134,10 +135,12 @@ export function DetailPanel({
     setBusy(true);
     const trimmedId = draft.id.trim();
     const alias = draft.alias?.trim() || null;
+    const displayName = draft.displayName?.trim() || null;
     const item = {
       ...draft,
       id: trimmedId,
       alias,
+      displayName,
       model: comboPublicModelId(trimmedId, alias),
     };
     const renameFrom = !isCreate && trimmedId !== baseline.id ? baseline.id : undefined;
@@ -182,7 +185,7 @@ export function DetailPanel({
               <IconTrash width={14} height={14} /> {t("common.remove")}
             </button>
           )}
-          <button type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy} onClick={() => { void save(); }}>
+          <button id={isCreate ? "cwi-edit-create" : "cwi-edit-save"} type="button" className="btn btn-primary btn-sm" disabled={(!isCreate && !dirty) || busy} onClick={() => { void save(); }}>
             {busy ? t("common.saving") : t(isCreate ? "cws.create" : "common.save")}
           </button>
         </div>
@@ -261,14 +264,38 @@ export function DetailPanel({
                 value={draft.alias ?? ""}
                 placeholder={comboModelId(draft.id.trim() || "…")}
                 disabled={busy}
-                onChange={(e) => updateDraft((d) => ({
-                  ...d,
-                  alias: e.target.value.trim() ? e.target.value : null,
-                  model: comboPublicModelId(d.id, e.target.value),
-                }))}
+                onChange={(e) => updateDraft((d) => updateComboAliasDraft(d, e.target.value))}
               />
               <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t("cws.field.aliasHint")}
+              </p>
+            </div>
+            <div className="cwi-field">
+              <label htmlFor="cwi-edit-native-alias">
+                <input
+                  id="cwi-edit-native-alias"
+                  type="checkbox"
+                  checked={draft.nativeAlias}
+                  disabled={busy}
+                  onChange={(e) => updateDraft((d) => ({ ...d, nativeAlias: e.target.checked }))}
+                /> {t("cws.field.nativeAlias")}
+              </label>
+              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+                {t("cws.field.nativeAliasHint")}
+              </p>
+            </div>
+            <div className="cwi-field">
+              <label htmlFor="cwi-edit-display-name">{t("cws.field.displayName")}</label>
+              <input
+                id="cwi-edit-display-name"
+                className="input"
+                value={draft.displayName ?? ""}
+                maxLength={128}
+                disabled={busy}
+                onChange={(e) => updateDraft((d) => ({ ...d, displayName: e.target.value || null }))}
+              />
+              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+                {t("cws.field.displayNameHint")}
               </p>
             </div>
             <div className="cwi-field">

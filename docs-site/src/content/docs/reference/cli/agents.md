@@ -57,6 +57,13 @@ ocx combo list
 ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
 
+`set` accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--rename-from`, `--native-alias`, and
+`--display-name <label|->` (`-` clears the label). A native alias captures only one currently supported,
+unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool/Direct credentials.
+Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
+`openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
+Read the safety and visibility contract in the guide before enabling the compatibility pair.
+
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
 ## Observability and debug
