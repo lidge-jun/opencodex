@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
 import { setIntegrationEnabled } from "../src/codex/desired-state";
+import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 import type { ManagementApiDeps } from "../src/server/management/context";
 import type { OcxConfig } from "../src/types";
 
@@ -40,6 +41,35 @@ async function toggle(enabled: boolean, deps: ManagementApiDeps = {}) {
     body: JSON.stringify({ enabled }),
   }, deps);
   return { status: response!.status, body: await response!.json() as Record<string, unknown> };
+}
+
+function oversizedTrackedBody(): {
+  body: ReadableStream<Uint8Array>;
+  stats: { pulls: number; cancelled: number; sentinelPulled: boolean };
+} {
+  const sentinel = Uint8Array.of(0x7f);
+  const chunks = [
+    new Uint8Array(MANAGEMENT_JSON_BODY_MAX_BYTES / 2),
+    new Uint8Array(MANAGEMENT_JSON_BODY_MAX_BYTES / 2 + 1),
+    sentinel,
+  ];
+  const stats = { pulls: 0, cancelled: 0, sentinelPulled: false };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      stats.pulls += 1;
+      const chunk = chunks.shift();
+      if (!chunk) {
+        controller.close();
+        return;
+      }
+      if (chunk === sentinel) stats.sentinelPulled = true;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      stats.cancelled += 1;
+    },
+  }, { highWaterMark: 0 });
+  return { body, stats };
 }
 
 beforeEach(() => {
@@ -213,6 +243,40 @@ test("POST /apply enables from a stale OFF server snapshot instead of cancelling
   // Desired ON survives the profile/fingerprint saves that follow it.
   expect(persistedIntent()).toBeUndefined();
 });
+
+for (const [label, declaration] of [
+  ["missing Content-Length", undefined],
+  ["a lying low Content-Length", "1"],
+] as const) {
+  test(`POST /apply stops an oversized stream with ${label} before any mutation`, async () => {
+    const inputConfig = config();
+    const beforeInputConfig = structuredClone(inputConfig);
+    const beforePersistedConfig = readFileSync(join(root, "config.json"), "utf8");
+    const { body, stats } = oversizedTrackedBody();
+    let writes = 0;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (declaration !== undefined) headers["Content-Length"] = declaration;
+
+    const response = await dispatch("/api/claude-desktop/apply", {
+      method: "POST",
+      headers,
+      body,
+    }, {
+      writeDesktop3pConfig: () => {
+        writes += 1;
+        return { written: true, path: join(library, "unexpected.json"), fingerprint: "unexpected" };
+      },
+    }, inputConfig);
+
+    expect(response!.status).toBe(413);
+    expect(await response!.json()).toEqual({ error: "request body too large" });
+    expect(stats).toEqual({ pulls: 2, cancelled: 1, sentinelPulled: false });
+    expect(writes).toBe(0);
+    expect(inputConfig).toEqual(beforeInputConfig);
+    expect(readFileSync(join(root, "config.json"), "utf8")).toBe(beforePersistedConfig);
+    expect(existsSync(library)).toBe(false);
+  });
+}
 
 test("POST /apply leaves the reused server snapshot agreeing with disk", async () => {
   // Disk-only repair is not enough: the server reuses ONE config object per
