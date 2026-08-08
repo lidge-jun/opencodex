@@ -214,7 +214,7 @@ export async function readBoundedJsonRequestBody(
     releaseDecoded = decoded === raw ? undefined : budget?.observeAcceptedRequestCopy(decoded.byteLength);
     const text = new TextDecoder().decode(decoded);
     releaseText = budget?.observeAcceptedRequestCopy(new TextEncoder().encode(text).byteLength);
-    if (text.trim() === "" && options && "emptyBodyFallback" in options) {
+    if (options && "emptyBodyFallback" in options && text.trim() === "") {
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
