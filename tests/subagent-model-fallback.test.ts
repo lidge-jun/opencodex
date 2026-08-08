@@ -1094,12 +1094,28 @@ describe("subagent model fallback chain", () => {
       "model_fallback = [, \"kimi/k3\"]",
       "",
     ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "trailing_token.toml"), [
+      "name = \"trailing_token\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"] invalid",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "inline_comment.toml"), [
+      "name = \"inline_comment\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"] # keep",
+      "",
+    ].join("\n"), "utf8");
     expect(readCodexAgentModelFallback("missing_comma", dir)).toEqual([]);
     expect(readCodexAgentModelFallback("leading_comma", dir)).toEqual([]);
-    // Doctor still reports both: the field exists even when its value is malformed.
+    expect(readCodexAgentModelFallback("trailing_token", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("inline_comment", dir)).toEqual(["kimi/k3"]);
+    // Doctor reports every role carrying the field, even when its value is malformed.
     expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "inline_comment",
       "leading_comma",
       "missing_comma",
+      "trailing_token",
     ]);
   });
 

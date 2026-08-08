@@ -634,6 +634,18 @@ function findTomlMultilineStringEnd(text: string, from: number, quote: string): 
   return -1;
 }
 
+/** After an array close, only horizontal whitespace, an inline comment, or the line end is valid. */
+function isValidTomlArrayTail(text: string, from: number): boolean {
+  let i = from;
+  while (i < text.length && (text[i] === " " || text[i] === "\t")) i += 1;
+  if (i >= text.length || text[i] === "\n" || text[i] === "\r") return true;
+  if (text[i] === "#") {
+    while (i < text.length && text[i] !== "\n") i += 1;
+    return true;
+  }
+  return false;
+}
+
 /** Parse a TOML string-array value; null when the value is not a well-formed array of strings. */
 function parseTomlStringArrayValue(text: string): string[] | null {
   const values: string[] = [];
@@ -660,7 +672,10 @@ function parseTomlStringArrayValue(text: string): string[] | null {
     skipIgnored();
     if (i >= text.length) return null;
     const ch = text[i]!;
-    if (ch === "]") return values;
+    if (ch === "]") {
+      if (!isValidTomlArrayTail(text, i + 1)) return null;
+      return values;
+    }
     if (ch === ",") {
       if (expectValue) return null; // leading or doubled comma
       expectValue = true;
