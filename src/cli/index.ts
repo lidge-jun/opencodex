@@ -222,7 +222,6 @@ async function handleStart(options: { block?: boolean } = {}) {
   const serviceToken = loadServiceTokenFromFile(process.env);
   if (serviceToken) process.env.OPENCODEX_API_AUTH_TOKEN = serviceToken;
   const requestedPort = parsePortOption();
-  if (!currentExternalCodexModelProvider()) reconcileJournal();
   const existingPid = readPid();
   if (existingPid) {
     const live = await findLiveProxy();
@@ -232,6 +231,10 @@ async function handleStart(options: { block?: boolean } = {}) {
     }
     removePid(existingPid);
   }
+  // A losing concurrent start must not restore the active proxy's Codex config.
+  // Establish that the PID-file owner is stale before reconciling a dead journal;
+  // a healthy owner exits above without changing integration state (#1230).
+  if (!currentExternalCodexModelProvider()) reconcileJournal();
 
   // Interactive-only update prompt. Must run BEFORE we bind a port / write a
   // PID: choosing "Update now" installs globally and exits, so we never want a
