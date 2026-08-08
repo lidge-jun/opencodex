@@ -696,7 +696,7 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.enabled !== "boolean") {
+    if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
 

@@ -117,6 +117,17 @@ test("a non-boolean enabled is rejected", async () => {
   expect(res!.status).toBe(400);
 });
 
+test("a null body is rejected instead of crashing the route", async () => {
+  const { response } = dispatch(baseConfig(), "/api/native-integrations/claude", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  const res = await response;
+  expect(res!.status).toBe(400);
+  expect(await res!.json()).toEqual({ error: "enabled must be a boolean" });
+});
+
 test("genuine lock contention refuses 409 config_busy, a broken lock is a 500", async () => {
   /*
    * `ConfigMutationLockError` wraps EVERY acquisition failure behind one
