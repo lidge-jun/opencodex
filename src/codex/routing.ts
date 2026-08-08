@@ -900,6 +900,17 @@ function bindThreadAffinity(
   pruneLruThreadAffinities();
 }
 
+/** Commit affinity only after a routed response is accepted for relay. */
+export function bindCodexThreadAffinityForAcceptedResponse(
+  threadId: string | null,
+  accountId: string,
+  modelId: string | undefined,
+  now = Date.now(),
+): void {
+  if (!threadId) return;
+  bindThreadAffinity(threadId, accountId, now, codexQuotaScopeForModel(modelId));
+}
+
 type CodexAccountExclusion = string | ReadonlySet<string> | undefined;
 
 function isExcludedCodexAccount(exclusion: CodexAccountExclusion, accountId: string): boolean {
@@ -1065,6 +1076,7 @@ function pickUnboundStrategyAccount(
   commit: boolean,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  commitThreadAffinity = commit,
 ): string | null {
   const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
   if (strategy === "quota") return null;
@@ -1080,7 +1092,7 @@ function pickUnboundStrategyAccount(
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
     if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-    if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
+    if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, picked, now, quotaScope);
     notePoolRotationSuccess(poolKey, picked, limit);
     return picked;
   }
@@ -1090,7 +1102,7 @@ function pickUnboundStrategyAccount(
     if (!picked) return null;
     if (commit) {
       if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-      if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
+      if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, picked, now, quotaScope);
     }
     return picked;
   }
@@ -1506,6 +1518,7 @@ export function resolveCodexAccountForThreadDetailed(
   now = Date.now(),
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
+  commitThreadAffinity = true,
 ): CodexThreadResolution {
   // Retiring a spent manual pin is independent of affinity: an existing thread
   // keeps its account below, but the operator's tier ceiling must not silently
@@ -1526,7 +1539,7 @@ export function resolveCodexAccountForThreadDetailed(
       // (soft-avoid covers the first-hit case; this catches post-avoid residual streaks).
       && !shouldFailover(config, entry.accountId, now)
     ) {
-      entry.lastUsedAt = now;
+      if (commitThreadAffinity) entry.lastUsedAt = now;
       // Periodic quota re-eval: a long-lived bound thread must still switch when
       // it crosses autoSwitchThreshold and a strictly-cooler account exists.
       // Without this the reuse branch returns before applyQuotaAutoSwitch and the
@@ -1551,7 +1564,9 @@ export function resolveCodexAccountForThreadDetailed(
             const best = pickLowerUsageAccount(config, entry.accountId, usage, now, quotaScope, selectionOptions);
             if (best !== entry.accountId) {
               if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, best);
-              bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
+              if (commitThreadAffinity) {
+                bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
+              }
               return { status: "selected", accountId: best };
             }
           }
@@ -1562,7 +1577,15 @@ export function resolveCodexAccountForThreadDetailed(
     deleteThreadAffinity(threadId, quotaScope);
   }
 
-  const strategyPick = pickUnboundStrategyAccount(config, threadId, now, true, quotaScope, selectionOptions);
+  const strategyPick = pickUnboundStrategyAccount(
+    config,
+    threadId,
+    now,
+    true,
+    quotaScope,
+    selectionOptions,
+    commitThreadAffinity,
+  );
   if (strategyPick) return { status: "selected", accountId: strategyPick };
 
   let active = getEffectiveActiveCodexAccountId(config);
@@ -1610,7 +1633,7 @@ export function resolveCodexAccountForThreadDetailed(
       ? { status: "selected", accountId: active }
       : { status: "none" };
   }
-  if (threadId) bindThreadAffinity(threadId, active, now, quotaScope);
+  if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, active, now, quotaScope);
   return { status: "selected", accountId: active };
 }
 

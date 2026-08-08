@@ -234,6 +234,8 @@ export interface ResolveCodexAuthContextOptions {
   accountId?: string;
   /** Final native model selected for this request, used to select its quota group. */
   modelId?: string;
+  /** Delay thread-affinity writes until the upstream response is accepted for relay. */
+  deferThreadAffinityCommit?: boolean;
   /** Short reservation converted to turn ownership before native `__main__` token materialization. */
   beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
   /** Test-only native credential read seams. */
@@ -312,7 +314,14 @@ export async function resolveCodexAuthContext(
             ? { status: "selected" as const, accountId: selected }
             : { status: "none" as const };
         })()
-      : resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), quotaScope, selectionOptions);
+      : resolveCodexAccountForThreadDetailed(
+        threadId,
+        config,
+        Date.now(),
+        quotaScope,
+        selectionOptions,
+        options.deferThreadAffinityCommit !== true,
+      );
     if (resolution.status === "expired") throw new CodexThreadAffinityExpiredError(resolution.accountId);
     const selected = resolution.status === "selected" ? resolution.accountId : null;
     if (!selected) {

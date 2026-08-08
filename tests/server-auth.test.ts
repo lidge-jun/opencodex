@@ -203,6 +203,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    threadId?: string;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -353,11 +354,13 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      threadId,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
+        ...(threadId ? { "x-codex-parent-thread-id": threadId } : {}),
       },
       body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
       signal,
@@ -2368,6 +2371,29 @@ describe("server local API auth", () => {
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-c"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
       expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation binds thread affinity only to the accepted account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: "accepted-b", status: "completed", output: [] }));
+    try {
+      const first = await harness.request({ threadId: "capacity-thread" });
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain("accepted-b");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+
+      const second = await harness.request({ threadId: "capacity-thread" });
+      expect(second.status).toBe(200);
+      expect(await second.text()).toContain("accepted-b");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
     } finally {
       await stopPoolRetryHarness(harness);
     }
