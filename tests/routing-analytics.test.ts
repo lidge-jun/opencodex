@@ -225,7 +225,7 @@ describe("routing analytics (RI-03)", () => {
     expect(result.cooldownTriggeringFailures).toBe(1);
   });
 
-  test("ignores malformed attempts in historical failure rows", async () => {
+  test("ignores malformed attempts while preserving explicit 429 classification", async () => {
     appendUsageEntry(entry("baseline", { timestamp: 1, status: 200, durationMs: 10 }));
     const historicalRows = [
       {
@@ -240,12 +240,16 @@ describe("routing analytics (RI-03)", () => {
         ...entry("malformed-recovery-kinds", { timestamp: 4, status: 503, durationMs: 40 }),
         attempts: [null, { recoveryKinds: "rate-limit-429" }, { recoveryKinds: [null, 42, "unknown"] }],
       },
+      {
+        ...entry("malformed-429", { timestamp: 5, status: 429, durationMs: 50 }),
+        attempts: { recoveryKinds: ["unknown"] },
+      },
     ];
     appendFileSync(usageLogPath(), `${historicalRows.map(row => JSON.stringify(row)).join("\n")}\n`);
 
     const result = await computeRoutingAnalytics({});
-    expect(result.totalRequests).toBe(4);
-    expect(result.cooldownTriggeringFailures).toBe(0);
+    expect(result.totalRequests).toBe(5);
+    expect(result.cooldownTriggeringFailures).toBe(1);
   });
 
   test("routing analytics API returns 400 for invalid from/to/limit", async () => {
