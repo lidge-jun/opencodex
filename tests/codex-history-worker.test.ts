@@ -1,15 +1,21 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
+import { setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
 import {
   isHistoryWorkerRunMessage,
   runHistoryUnitUnderLock,
   type HistoryWorkerRunMessage,
 } from "../src/codex/history-worker";
+
+// A held write lock otherwise costs the full production 5s busy timeout per
+// attempt, tripping bun's 5s default per-test timeout.
+setHistoryDbBusyTimeoutForTests(250);
+setDefaultTimeout(30_000);
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: string[] = [];
@@ -191,3 +197,21 @@ test("a second holder of H makes the unit report blocked rather than wait", asyn
     expect(await holder.exited).toBe(0);
   }
 }, 30_000);
+
+/**
+ * The reason the parent can tell a false "app holds the DB" from a real one:
+ * a transition that survives retries reports WHY it failed, not a fixed code
+ * that reads as "locked" everywhere.
+ */
+test("a failed transition reports the failure reason, not a fixed lock claim", () => {
+  const fixture = makeFixture("ocx-history-worker-error-");
+  const holder = new Database(fixture.stateDb);
+  holder.exec("BEGIN IMMEDIATE");
+  try {
+    const result = runHistoryUnitUnderLock(runMessage(fixture, { operation: "recover-legacy-openai" }));
+    expect(result).toMatchObject({ type: "error", reason: "busy" });
+  } finally {
+    holder.exec("ROLLBACK");
+    holder.close();
+  }
+});

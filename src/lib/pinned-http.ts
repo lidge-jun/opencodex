@@ -3,7 +3,7 @@ import https from "node:https";
 
 export type PinnedAddress = { address: string; family: number };
 
-export interface PinnedHttpGetOptions {
+export interface PinnedHttpRequestOptions {
   headers?: HeadersInit;
   maxBytes?: number;
   idleTimeoutMs?: number;
@@ -11,15 +11,16 @@ export interface PinnedHttpGetOptions {
   context?: string;
 }
 
-/**
- * GET a URL through one previously validated address. The original hostname
- * remains authoritative for Host, SNI, and certificate verification.
- */
-export function pinnedHttpGet(
+/** @deprecated Use {@link PinnedHttpRequestOptions}. */
+export type PinnedHttpGetOptions = PinnedHttpRequestOptions;
+
+function pinnedHttpRequest(
   url: string,
   pinned: PinnedAddress,
+  method: "GET" | "POST",
+  body: string | undefined,
   signal?: AbortSignal,
-  options?: PinnedHttpGetOptions,
+  options?: PinnedHttpRequestOptions,
 ): Promise<Response> {
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -30,6 +31,9 @@ export function pinnedHttpGet(
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
+  if (body !== undefined && !headers.has("content-length")) {
+    headers.set("content-length", String(Buffer.byteLength(body)));
+  }
   const requestHeaders: Record<string, string> = {};
   headers.forEach((value, key) => { requestHeaders[key] = value; });
 
@@ -51,7 +55,7 @@ export function pinnedHttpGet(
       hostname: parsed.hostname,
       port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
       path: `${parsed.pathname}${parsed.search}`,
-      method: "GET",
+      method,
       headers: requestHeaders,
       ...(parsed.protocol === "https:"
         ? {
@@ -146,6 +150,33 @@ export function pinnedHttpGet(
       fail(error);
     });
     req.on("close", () => signal?.removeEventListener("abort", onAbort));
-    req.end();
+    req.end(body);
   });
+}
+
+/**
+ * GET a URL through one previously validated address. The original hostname
+ * remains authoritative for Host, SNI, and certificate verification.
+ */
+export function pinnedHttpGet(
+  url: string,
+  pinned: PinnedAddress,
+  signal?: AbortSignal,
+  options?: PinnedHttpRequestOptions,
+): Promise<Response> {
+  return pinnedHttpRequest(url, pinned, "GET", undefined, signal, options);
+}
+
+/**
+ * POST a string body through one previously validated address. The original
+ * hostname remains authoritative for Host, SNI, and certificate verification.
+ */
+export function pinnedHttpPost(
+  url: string,
+  pinned: PinnedAddress,
+  body: string,
+  signal?: AbortSignal,
+  options?: PinnedHttpRequestOptions,
+): Promise<Response> {
+  return pinnedHttpRequest(url, pinned, "POST", body, signal, options);
 }

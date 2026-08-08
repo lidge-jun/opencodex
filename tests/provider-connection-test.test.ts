@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { handleManagementAPI } from "../src/server/management-api";
 import { saveConfig } from "../src/config";
 import { OAUTH_PROVIDERS } from "../src/oauth";
+import { saveCredential } from "../src/oauth/store";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
 import { withRegistryDiscovery } from "./helpers/provider-registry-discovery";
@@ -104,13 +105,52 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       throw new Error("static Antigravity catalog must not probe upstream");
     }) as typeof fetch;
     const config = baseConfig({
-      "google-antigravity": structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+      "google-antigravity": {
+        ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+        liveModels: false,
+      },
     });
 
     const { body } = await probe(config, "google-antigravity");
 
     expect(body).toEqual({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     expect(fetches).toBe(0);
+  });
+
+  test("Google Antigravity probes its CCA agent-model RPC", async () => {
+    const seen: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), init });
+      return Response.json({
+        models: {
+          "any-agent-model": { maxTokens: 123_456 },
+          "not-an-agent-model": { maxTokens: 65_536 },
+        },
+        agentModelSorts: [{ groups: [{ modelIds: ["any-agent-model"] }] }],
+        tabModelIds: ["not-an-agent-model"],
+      });
+    }) as typeof fetch;
+    await saveCredential("google-antigravity", {
+      access: "test-access-token",
+      refresh: "test-refresh-token",
+      expires: Date.now() + 3_600_000,
+      projectId: "test-project-id",
+    });
+    const config = baseConfig({
+      "google-antigravity": {
+        ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+        project: "configured-project",
+      },
+    });
+
+    const { body } = await probe(config, "google-antigravity");
+
+    expect(body).toMatchObject({ ok: true, models: 1 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+    expect(seen[0]?.init?.method).toBe("POST");
+    expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer test-access-token");
+    expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
   });
 
   test("a fake key gets the upstream rejection, not a catalog-presence pass", async () => {

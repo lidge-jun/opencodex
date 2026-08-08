@@ -12,6 +12,7 @@ import { apiKeyTransportConfigError, hasOwnProvider, isValidProviderName, loadCo
 import { hasHelpFlag } from "./help";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
+import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
 import type { OcxProviderConfig } from "../types";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { syncModelsToCodex } from "../codex/sync";
@@ -302,6 +303,7 @@ function handleRemove(args: string[]): void {
   }
 
   delete config.providers[name];
+  const droppedCustomModels = dropProviderCustomModels(config, name);
   validateAndSave(config);
 
 
@@ -312,11 +314,16 @@ function handleRemove(args: string[]): void {
       remainingProviders: Object.keys(config.providers),
       defaultProvider: config.defaultProvider,
       needsSync: true,
+      ...(droppedCustomModels > 0 ? { droppedCustomModels } : {}),
     }, null, 2));
     return;
   }
 
   console.log(`✅ Provider "${name}" removed.`);
+  if (droppedCustomModels > 0) {
+    const plural = droppedCustomModels === 1 ? "model" : "models";
+    console.log(`   Also removed ${droppedCustomModels} custom ${plural} that belonged to it.`);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -105,7 +105,7 @@ for (const provider of allowedProviders) {
 lines.push("};");
 lines.push("");
 lines.push("export function resolveMetadataProvider(provider: string): string | undefined {");
-lines.push("  return PROVIDER_ALIASES[provider];");
+lines.push("  return PROVIDER_ALIASES[provider] ?? PROVIDER_ALIASES[provider.toLowerCase()];");
 lines.push("}");
 lines.push("");
 lines.push("export function getModelMetadata(provider: string, modelId: string): ModelMetadata | undefined {");

@@ -34,6 +34,7 @@ import {
   CodexUserIdentityRefusal,
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
+  samePathIdentity,
 } from "./user-identity";
 
 const COORDINATOR_SCHEMA_VERSION = 1;
@@ -440,7 +441,7 @@ export function openCodexCoordinatorTransaction(finalDatabasePath: string): Code
     const entry = lstatSync(finalDatabasePath);
     if (entry.isSymbolicLink() || !entry.isFile()
       || `${entry.dev}:${entry.ino}` !== initialIdentity
-      || realpathSync.native(finalDatabasePath) !== finalDatabasePath) {
+      || !samePathIdentity(realpathSync.native(finalDatabasePath), finalDatabasePath)) {
       throw new CodexUserIdentityRefusal("The coordinator database path was substituted.");
     }
   };

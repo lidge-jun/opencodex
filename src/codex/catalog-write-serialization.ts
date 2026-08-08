@@ -32,6 +32,7 @@ import {
   CodexUserIdentityRefusal,
   resolveCodexCatalogSerializationDatabasePath,
   resolveEffectiveUserIdentity,
+  samePathIdentity,
 } from "./user-identity";
 
 /**
@@ -180,7 +181,7 @@ export function withCatalogWriteSerialization<T>(
     }
     const opened = lstatSync(databasePath);
     if (opened.isSymbolicLink() || !opened.isFile()
-      || realpathSync.native(databasePath) !== databasePath) {
+      || !samePathIdentity(realpathSync.native(databasePath), databasePath)) {
       return { kind: "unavailable", reason: "unsafe-path" };
     }
 

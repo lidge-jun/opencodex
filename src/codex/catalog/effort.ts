@@ -35,7 +35,7 @@ import { readCatalog, readCodexCatalogPath } from "./parsing";
 import type { CatalogModel, RawEntry } from "./parsing";
 import { UPSTREAM_NATIVE_ENTRIES } from "./metadata";
 import { loadBundledCodexCatalog } from "./bundled";
-import type { BundledCatalogDeps } from "./bundled";
+import type { BundledCatalogDeps, ReadonlyRawCatalog } from "./bundled";
 import { deriveEntry } from "./sync";
 import {
   formatClampLogLines,
@@ -214,11 +214,13 @@ export function ensureUltraReasoningLevel(entry: RawEntry): void {
   entry.supported_reasoning_levels = levels;
 }
 
-export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): Set<string> | null {
-  const bundled = loadBundledCodexCatalog(deps);
-  if (!bundled) return null;
+/** Derive the installed Codex effort vocabulary from caller-observed bundled catalog bytes. */
+export function supportedCodexReasoningEffortsFromObservedCatalog(
+  catalog: ReadonlyRawCatalog | null,
+): ReadonlySet<string> | null {
+  if (!catalog) return null;
   const efforts = new Set<string>();
-  for (const model of bundled.models ?? []) {
+  for (const model of catalog.models ?? []) {
     if (typeof model.slug !== "string" || model.slug.includes("/")) continue;
     const levels = Array.isArray(model.supported_reasoning_levels) ? model.supported_reasoning_levels : [];
     for (const level of levels) {
@@ -228,6 +230,10 @@ export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): S
     if (typeof model.default_reasoning_level === "string") efforts.add(model.default_reasoning_level);
   }
   return efforts.size > 0 ? efforts : null;
+}
+
+export function codexSupportedReasoningEfforts(deps: BundledCatalogDeps = {}): ReadonlySet<string> | null {
+  return supportedCodexReasoningEffortsFromObservedCatalog(loadBundledCodexCatalog(deps));
 }
 
 export function clampedDefaultEffort(original: string, surviving: readonly string[]): string {
@@ -240,7 +246,10 @@ export function clampedDefaultEffort(original: string, surviving: readonly strin
   return (atOrBelow.at(-1) ?? ranked[0]!).effort;
 }
 
-export function clampEntryToCodexSupportedEfforts(entry: RawEntry, supported: Set<string> | null): void {
+export function clampEntryToCodexSupportedEfforts(
+  entry: RawEntry,
+  supported: ReadonlySet<string> | null,
+): void {
   if (!supported) return;
   const levels = Array.isArray(entry.supported_reasoning_levels)
     ? entry.supported_reasoning_levels as Array<{ effort?: string }>
@@ -263,12 +272,17 @@ export function clampEntryToCodexSupportedEfforts(entry: RawEntry, supported: Se
   }
 }
 
-export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: BundledCatalogDeps = {}): RawEntry[] {
-  const supported = codexSupportedReasoningEfforts(deps);
-  if (!supported) {
-    if (!deps.commandCandidates) persistEffortClamp(null, { configDir: deps.configDir });
-    return models;
-  }
+export interface ObservedCatalogEffortClamp {
+  readonly removedEfforts: readonly string[];
+  readonly affectedModels: readonly string[];
+}
+
+/** Apply an already-observed runtime ladder without probing, logging, or writing diagnostics. */
+export function clampCatalogModelsToObservedCodexSupport(
+  models: RawEntry[],
+  supported: ReadonlySet<string> | null,
+): ObservedCatalogEffortClamp {
+  if (!supported) return { removedEfforts: [], affectedModels: [] };
 
   const removed = new Set<string>();
   const affected: string[] = [];
@@ -300,6 +314,20 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
       if (typeof entry.slug === "string") affected.push(entry.slug);
     }
   }
+
+  return {
+    removedEfforts: [...removed].sort(),
+    affectedModels: affected,
+  };
+}
+
+export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: BundledCatalogDeps = {}): RawEntry[] {
+  const supported = codexSupportedReasoningEfforts(deps);
+  if (!supported) {
+    if (!deps.commandCandidates) persistEffortClamp(null, { configDir: deps.configDir });
+    return models;
+  }
+  const clamp = clampCatalogModelsToObservedCodexSupport(models, supported);
 
   let runtimePath = "codex";
   let runtimeVersion: string | null = null;
@@ -337,12 +365,12 @@ export function clampCatalogModelsToCodexSupport(models: RawEntry[], deps: Bundl
     }
   }
 
-  if (removed.size > 0) {
+  if (clamp.removedEfforts.length > 0) {
     const diagnostic: EffortClampDiagnostic = {
       runtimePath,
       runtimeVersion,
-      removedEfforts: [...removed].sort(),
-      affectedModels: affected,
+      removedEfforts: [...clamp.removedEfforts],
+      affectedModels: [...clamp.affectedModels],
     };
     for (const line of formatClampLogLines(diagnostic)) console.warn(line);
     if (!deps.commandCandidates) persistEffortClamp(diagnostic, { configDir: deps.configDir });

@@ -8,7 +8,18 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { buildCatalogEntries, mergeCatalogEntriesForSync, nativeEffortClamp, shouldApplyNativeEffortClamp, type MultiAgentMode } from "../src/codex/catalog";
+import {
+  buildCatalogEntries,
+  CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  mergeCatalogEntriesForSync,
+  nativeEffortClamp,
+  shouldApplyNativeEffortClamp,
+  type MultiAgentMode,
+} from "../src/codex/catalog";
+import {
+  buildCatalogEntriesFromObservedState,
+  mergeCatalogEntriesFromObservedState,
+} from "../src/codex/catalog/sync";
 import {
   getAgentsEnabled,
   getAgentsMaxDepth,
@@ -1133,6 +1144,89 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
 });
 
 describe("3-state multi-agent mode", () => {
+  test("observed catalog transforms ignore ambient V2 changes and leave evidence rows untouched", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    try {
+      const buildObserved = () => buildCatalogEntriesFromObservedState({
+        template: template(),
+        gptSlugs: ["gpt-5.5"],
+        goModels: [],
+        featured: [],
+        wsEnabled: false,
+        multiAgentMode: "default",
+        exactComboSlugs: new Set(),
+        accountSelectors: [],
+        multiAgentV2Enabled: true,
+      });
+      const catalogModels = [{
+        ...template(),
+        display_name: "GPT-5.5 observed",
+        supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+      }];
+      const routedEntries = [{
+        ...template(),
+        slug: "external/model",
+        display_name: "External model",
+        description: "Routed via opencodex → external (external).",
+        supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+      }];
+      const accountBoundEntries = [{
+        ...template(),
+        slug: "team/gpt-5.4",
+        display_name: "team / GPT-5.4",
+        opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+        service_tier: "fast",
+      }];
+      const originalCatalogModels = structuredClone(catalogModels);
+      const originalRoutedEntries = structuredClone(routedEntries);
+      const originalAccountBoundEntries = structuredClone(accountBoundEntries);
+      const mergeObserved = () => mergeCatalogEntriesFromObservedState({
+        catalogModels,
+        baselineCatalogModels: [],
+        routedEntries,
+        baseline: new Map([["gpt-5.5", 1]]),
+        featured: [],
+        wsEnabled: false,
+        template: template(),
+        disabledModels: new Set(),
+        selectedModelsByProvider: new Map(),
+        gatheredProviderNames: new Set(),
+        degradedProviderNames: new Set(),
+        legacyCustomModelSlugs: new Set(),
+        multiAgentMode: "default",
+        multiAgentV2Enabled: true,
+        exactComboSlugs: new Set(),
+        hasPhysicalComboProvider: false,
+        includeNativeOpenAi: true,
+        accountBoundEntries,
+        policy: {
+          nativeBackfillSlugs: ["gpt-5.5"],
+          unsupportedNativeEntries: "preserve",
+          warningPolicy: "suppress",
+        },
+      });
+
+      const builtBefore = buildObserved();
+      const mergedBefore = mergeObserved();
+      writeFileSync(path, "[features.multi_agent_v2]\nenabled = true\n");
+      const builtAfter = buildObserved();
+      const mergedAfter = mergeObserved();
+
+      expect(builtAfter).toEqual(builtBefore);
+      expect(mergedAfter).toEqual(mergedBefore);
+      expect(builtBefore.find(entry => entry.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
+      expect(mergedBefore.find(entry => entry.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
+      expect(catalogModels).toEqual(originalCatalogModels);
+      expect(routedEntries).toEqual(originalRoutedEntries);
+      expect(accountBoundEntries).toEqual(originalAccountBoundEntries);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
   test("mode v1: ALL entries get multi_agent_version = v1 (overrides upstream pins)", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "v1");
     for (const e of entries) {

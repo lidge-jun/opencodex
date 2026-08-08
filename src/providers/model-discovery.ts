@@ -1,5 +1,17 @@
 import type { OcxProviderConfig } from "../types";
 import {
+  isValidModelDiscoveryModelId,
+  MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH,
+  MODEL_DISCOVERY_MAX_MODELS,
+  MODEL_DISCOVERY_MAX_RESPONSE_BYTES,
+} from "./model-discovery-limits";
+export {
+  isValidModelDiscoveryModelId,
+  MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH,
+  MODEL_DISCOVERY_MAX_MODELS,
+  MODEL_DISCOVERY_MAX_RESPONSE_BYTES,
+} from "./model-discovery-limits";
+import {
   getProviderRegistryEntry,
   providerMatchesRegistryTransport,
   registryEntryForProviderDestination,
@@ -9,13 +21,8 @@ import {
   type ProviderModelDiscoverySpec,
 } from "./registry";
 
-/** Hard process-wide limits. Registry entries may lower, but never raise, these ceilings. */
-export const MODEL_DISCOVERY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
-export const MODEL_DISCOVERY_MAX_MODELS = 2_000;
-export const MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH = 1_024;
 const MODEL_DISCOVERY_MAX_FILTER_VALUES = 256;
 const MODEL_DISCOVERY_MAX_FILTER_STRING_LENGTH = 1_024;
-const MODEL_DISCOVERY_MODEL_ID_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 
 export interface ResolvedProviderModelDiscovery {
   spec?: ProviderModelDiscoverySpec;
@@ -343,16 +350,8 @@ export function extractProviderModelItems(
       return { ok: false, reason: "invalid_shape" };
     }
     const id = (raw as { id?: unknown }).id;
-    if (typeof id !== "string") return { ok: false, reason: "invalid_shape" };
-    const normalizedId = id.trim();
-    if (
-      !normalizedId
-      || normalizedId !== id
-      || normalizedId.length > MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH
-      || MODEL_DISCOVERY_MODEL_ID_CONTROL_CHARS.test(normalizedId)
-    ) {
-      return { ok: false, reason: "invalid_shape" };
-    }
+    if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape" };
+    const normalizedId = id;
     const item = raw as ProviderModelsApiItem;
     if (!providerModelMatchesDiscoveryFilter(item, discovery.spec?.filter) || seen.has(normalizedId)) continue;
     seen.add(normalizedId);

@@ -52,6 +52,9 @@ export function gracefulStopHost(hostname: string | undefined): string {
  */
 export type GracefulStopResult = boolean | "refused";
 
+/** A proxy declined shutdown because a service under another home owns it (HTTP 409). */
+export class ProxyOwnershipRefusedError extends Error {}
+
 /**
  * Ask a running proxy to stop itself via the management API (`POST /api/stop`), which
  * drains in-flight turns, restores native Codex, and cleans its pid/runtime files.
@@ -110,7 +113,7 @@ export async function stopProxy(pid: number): Promise<void> {
   if (graceful === "refused") {
     // The proxy refused on purpose (foreign service owns it). Forcing would strip shared
     // config while that service keeps the proxy alive.
-    throw new Error(
+    throw new ProxyOwnershipRefusedError(
       "The running proxy refused to stop: a service installed under a different "
       + "CODEX_HOME/OPENCODEX_HOME owns it. Run the stop from that home.",
     );

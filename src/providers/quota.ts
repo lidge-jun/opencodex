@@ -11,6 +11,7 @@ import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
+import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
@@ -44,6 +45,8 @@ const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
 const DEEPINFRA_BASE_URL = "https://api.deepinfra.com";
 const NEURALWATT_BASE_URL = "https://api.neuralwatt.com/v1";
+const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
+const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
 /** Keep a failed probe's previous row at most this long before dropping it. */
 const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
@@ -977,6 +980,65 @@ function centsValue(value: unknown): number | undefined {
   return rec ? toFiniteNumber(rec.val) : undefined;
 }
 
+/** Decode JWT payload `sub` for xAI weekly credits when the stored credential lacks accountId. */
+function xaiUserIdFromAccessToken(accessToken: string): string | undefined {
+  const parts = accessToken.split(".");
+  if (parts.length < 2 || !parts[1]) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.trim() ? payload.sub.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Grok Build weekly credits envelope:
+ * `{ config: { creditUsagePercent?, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end } } }`.
+ * Omitted percent is treated as 0 (proto3 default).
+ */
+export function parseXaiCreditsResponse(value: unknown): { percent: number; resetAt?: number } | null {
+  const body = asRecord(value);
+  const config = asRecord(body?.config);
+  if (!config) return null;
+  const period = asRecord(config.currentPeriod);
+  if (!period || period.type !== "USAGE_PERIOD_TYPE_WEEKLY") return null;
+  const resetAt = normalizeResetAt(period.end);
+  if (resetAt === undefined) return null;
+  if (config.creditUsagePercent !== undefined) {
+    const percent = normalizePercent(config.creditUsagePercent);
+    if (percent === undefined) return null;
+    return { percent, resetAt };
+  }
+  return { percent: 0, resetAt };
+}
+
+async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
+  try {
+    const response = await fetch(XAI_CREDITS_URL, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        [XAI_GROK_COMPATIBILITY.headers.tokenAuth]: "xai-grok-cli",
+        [XAI_GROK_COMPATIBILITY.headers.authenticateResponse]: "authenticate-response",
+        "x-userid": userId,
+        [XAI_GROK_COMPATIBILITY.headers.clientVersion]: XAI_GROK_CLIENT_VERSION,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const parsed = parseXaiCreditsResponse(await response.json().catch(() => null));
+    if (!parsed) return null;
+    return {
+      weeklyPercent: parsed.percent,
+      ...(parsed.resetAt !== undefined ? { weeklyResetAt: parsed.resetAt } : {}),
+      updatedAt: Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | null> {
   let accessToken: string;
   try {
@@ -984,25 +1046,37 @@ async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | nu
   } catch {
     return null;
   }
-  const response = await fetch("https://cli-chat-proxy.grok.com/v1/billing", {
-    headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
-  const config = asRecord(body?.config);
-  if (!config) return null;
-  const limitCents = centsValue(config.monthlyLimit);
-  const usedCents = centsValue(config.used);
-  if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
-  const percent = normalizePercent((usedCents / limitCents) * 100);
-  if (percent === undefined) return null;
-  const quota: ProviderQuota = {
-    monthlyPercent: percent,
-    monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
-    updatedAt: Date.now(),
-  };
-  return report(provider, "xai:grok-billing", quota);
+
+  // Prefer the SuperGrok weekly credits window that actually gates prompting (#1283).
+  const userId = getCredential("xai")?.accountId?.trim() || xaiUserIdFromAccessToken(accessToken);
+  if (userId) {
+    const weekly = await fetchXaiWeeklyCredits(accessToken, userId);
+    if (weekly) return report(provider, "xai:grok-billing-credits", weekly);
+  }
+
+  // Legacy monthly dollar pool — retained when weekly is unavailable.
+  try {
+    const response = await fetch(XAI_BILLING_URL, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const body = asRecord(await response.json().catch(() => null));
+    const config = asRecord(body?.config);
+    if (!config) return null;
+    const limitCents = centsValue(config.monthlyLimit);
+    const usedCents = centsValue(config.used);
+    if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
+    const percent = normalizePercent((usedCents / limitCents) * 100);
+    if (percent === undefined) return null;
+    return report(provider, "xai:grok-billing", {
+      monthlyPercent: percent,
+      monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
+      updatedAt: Date.now(),
+    });
+  } catch {
+    return null;
+  }
 }
 
 function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number } | null {

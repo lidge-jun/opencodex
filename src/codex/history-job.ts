@@ -17,6 +17,7 @@
  * Design record: devlog/_fin/260804_codex_write_substrate/020_history_isolation.md.
  */
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type {
@@ -135,13 +136,92 @@ export function deriveCodexHistoryOperation(intent: {
   return intent.legacyMode ? "apply-opencodex" : "migrate-openai";
 }
 
+/**
+ * The honest failure clause for one history job outcome.
+ *
+ * The caller adds its own framing ("sync SKIPPED", "could NOT be restored").
+ * The point of the surface argument is that a genuine lock keeps today's
+ * actionable wording, while every other reason stops blaming the Codex app:
+ * an unsafe-path refusal, an unavailable coordinator database, a permission
+ * denial, or a dead worker is a different problem with a different remedy.
+ */
+export function describeHistoryJobFailure(
+  outcome: CodexHistoryJobOutcome,
+  surface: "apply" | "restore" | "recover-legacy",
+  legacyMode = false,
+): string {
+  // Callers only invoke this after observing a failure flag, but that flag is
+  // derived from "not converged", which also covers "skipped". Naming those
+  // two kinds keeps a widened or miscast call site from printing `undefined`.
+  if (outcome.kind === "skipped") {
+    return "the history operation was skipped; no failure was recorded.";
+  }
+  if (outcome.kind === "converged") {
+    return "the history job reported no failure; run 'ocx doctor' if this is unexpected.";
+  }
+  // A busy database reaches here two ways: the lock itself was contended
+  // (blocked/busy), or the lock was acquired and the worker then found SQLite
+  // busy (failed with historyFailureReason "busy"). Both are the same user
+  // situation and deserve the same surface-specific guidance.
+  const busyText = surface === "apply"
+    ? legacyMode
+      ? "the history DB is locked (Codex app/IDE open?). Close it and rerun 'ocx start'."
+      : "the history DB is locked (Codex app/IDE open?). It is retried automatically (while the proxy runs and on every 'ocx start'); to force it now, close the Codex app and run 'ocx sync'."
+    : surface === "recover-legacy"
+      ? "the Codex history DB is locked (Codex app/IDE open?). Close it and rerun this command."
+      : "the Codex app appears to be holding the history database. Close Codex and run `ocx restore` again.";
+  if (outcome.kind === "blocked") {
+    if (outcome.reason === "busy") return busyText;
+    switch (outcome.reason) {
+      case "unsafe-path":
+        return "opencodex refused its history lock path (unsafe coordinator namespace); this is not a Codex app lock. Run 'ocx doctor' and check the opencodex runtime directory.";
+      case "database":
+        return "the history coordinator database is unavailable; this is not a Codex app lock. Run 'ocx doctor'.";
+      case "desired_disabled":
+        return "Codex integration is disabled, so the history operation was skipped.";
+      case "desired_enabled":
+        return "Codex integration is enabled, so the history operation was skipped.";
+    }
+  }
+  if (outcome.historyFailureReason === "busy") return busyText;
+  if (outcome.historyFailureReason === "permission") {
+    return "permission was denied while writing Codex history; this is not a Codex app lock. Run 'ocx doctor'.";
+  }
+  switch (outcome.reason) {
+    case "worker-error":
+      return `the history worker failed (${outcome.message}). Run 'ocx doctor'.`;
+    case "worker-died":
+      return "the history worker exited unexpectedly; this is not a Codex app lock. Run 'ocx doctor'.";
+    case "timeout":
+      return "the history worker timed out; this is not a Codex app lock. Run 'ocx doctor'.";
+  }
+}
+
+/**
+ * Worker exceptions travel into user-facing CLI output, and a raw filesystem
+ * error carries absolute paths — on every platform that includes the account
+ * name (`/Users/x`, `/home/x`, `C:\Users\x`). Folding the home directory to
+ * `~` keeps the diagnostic value and drops the identifier.
+ */
+function redactWorkerMessage(message: string): string {
+  const home = homedir();
+  if (home.length <= 1) return message;
+  // Windows spellings vary in case and separator; an exact match would leave
+  // the account name in the message.
+  if (process.platform === "win32") {
+    const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\\/g, "[\\\\/]");
+    return message.replace(new RegExp(escaped, "gi"), "~");
+  }
+  return message.split(home).join("~");
+}
+
 function classifyWorkerResult(result: HistoryWorkerResult): CodexHistoryJobOutcome {
   if (result.type === "blocked") return { kind: "blocked", reason: result.reason };
   if (result.type === "error") {
     return {
       kind: "failed",
       reason: "worker-error",
-      message: result.message,
+      message: redactWorkerMessage(result.message),
       ...(result.reason ? { historyFailureReason: result.reason } : {}),
     };
   }

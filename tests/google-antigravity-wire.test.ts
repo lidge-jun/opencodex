@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
-import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel } from "../src/providers/antigravity-models";
+import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
+import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -116,6 +117,81 @@ describe("antigravity CCA envelope", () => {
       const req = await createGoogleAdapter(provider).buildRequest(parsed("x", false, modelId));
       expect(JSON.parse(req.body).model).toBe(modelId);
     }
+  });
+
+  test("collapses a complete CCA Gemini tier set but retains partial sets as wire IDs", () => {
+    const payload = (modelIds: string[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual(["gemini-3.6-flash"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]);
+  });
+
+  test("rejects malformed and oversized CCA agent-model lists", () => {
+    const payload = (modelIds: unknown[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [String(id), { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    for (const invalidId of [" ", "bad\u0000id", "x".repeat(MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH + 1)]) {
+      expect(parseAntigravityAvailableModels(payload([invalidId]))).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{
+        modelIds: Array.from({ length: MODEL_DISCOVERY_MAX_MODELS + 1 }, (_, index) => `model-${index}`),
+      }] }],
+    })).toBeNull();
+  });
+
+  test("rejects malformed CCA agent-model containers and missing agent metadata", () => {
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{}],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: {} }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: {} }] }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+    })).toBeNull();
+  });
+
+  test("normalizes untrusted CCA model limits before publishing a catalog", () => {
+    const oversized = Array.from(
+      { length: MODEL_DISCOVERY_MAX_MODELS + 1 },
+      (_, index) => `model-${index}`,
+    );
+    const payload = {
+      models: Object.fromEntries(oversized.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds: oversized }] }],
+    };
+    for (const limit of [Number.NaN, Infinity, MODEL_DISCOVERY_MAX_MODELS + 1]) {
+      expect(parseAntigravityAvailableModels(payload, limit)).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: { "agent-model": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+      imageGenerationModelIds: ["gemini-3.1-flash-image"],
+    }, 1)).toBeNull();
   });
 
   test("throws when no project id is available", async () => {

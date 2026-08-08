@@ -583,8 +583,8 @@ export interface OcxConfig {
   defaultProvider: string;
   /** OpenAI provider-contract migration marker (v2 = single `openai` provider with account mode). */
   openaiProviderTierVersion?: 1 | 2;
-  /** One-time migration marker for Antigravity's static catalog default. */
-  googleAntigravityStaticCatalogVersion?: 1;
+  /** One-time migration marker for Antigravity's static-catalog defaults. */
+  googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
   /**
@@ -700,6 +700,12 @@ export interface OcxConfig {
   disabledModels?: string[];
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: OcxCustomModel[];
+  /**
+   * Internal, versioned evidence for reconciling custom-model deletions with
+   * pre-marker Codex catalog rows. Consumers must parse this defensively so a
+   * future state written by a newer binary survives older whole-config saves.
+   */
+  customModelCatalogMigration?: unknown;
   /**
    * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
    * commit messages, skill orchestration) to a user-chosen model. Default intercepted

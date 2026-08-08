@@ -153,15 +153,17 @@ CLI: `ocx route policy list [--json]`, `ocx route policy show <id> [--json]`, an
 Dry-run evaluates candidates without sending any upstream request.
 
 Quota evidence (`optimize.quota`, `require.minQuotaHeadroom`, `unknownEvidence.quota`) comes from
-the local Codex pool and Anthropic account quota caches, which are keyed by account. In **Pool** mode
-the canonical `openai` provider preserves its existing account selection, then reads quota for the
-selected account; **Direct** mode reads quota only from the current (caller/main) account. For other
-providers (e.g. Anthropic), runtime candidates use the provider's active account. Quota evidence
-never changes account selection, session affinity, cooldowns, or switching behavior — it only feeds
-policy scoring. To see quota-aware behavior in a dry-run, supply account refs through the dry-run/API
-candidate evidence: `candidates[].codexAccountId` (Codex pool, provider `openai`) or
-`candidates[].accountRef` (Anthropic) derives the matching cached account quota; an explicit
-`candidates[].quota` object is echoed as given.
+account-keyed Codex and Anthropic quota caches. A runtime candidate receives cached quota only when
+the evidence already identifies the account. Unbound canonical `openai` and Anthropic candidates
+remain unknown during policy evaluation because Pool selection, Direct caller identity, provider
+rotation, and thread affinity are resolved after the policy chooses a provider/model; a process-active
+account is not used as a substitute.
+Quota evidence never changes account selection, session affinity, cooldowns, or switching behavior —
+it only feeds policy scoring. To see quota-aware behavior in an API dry-run, supply account refs in
+the candidate evidence sent to `POST /api/routing-profiles/dry-run`:
+`candidates[].codexAccountId` (Codex pool, provider `openai`) or `candidates[].accountRef`
+(Anthropic) derives the matching cached account quota; an explicit `candidates[].quota` object is
+echoed as given. The CLI dry-run cannot supply these per-candidate account fields.
 
 ### Combos vs policy profiles
 
@@ -182,13 +184,16 @@ Per-request route-decision traces are recorded when a policy profile executes.
 A combo remains directly routable even when it cannot be listed. `ocx sync`, `/v1/models`, and the
 Codex picker list it only when every target exposes capabilities that can be intersected:
 
-- a positive `contextWindow`, from live metadata, registry hints, or provider
-  `modelContextWindows` / `contextWindow`; and
+- a positive `contextWindow`, from live metadata, registry hints, provider
+  `modelContextWindows` / `contextWindow`, a known positive `maxInputTokens` on the member row,
+  or — when the provider is known and enabled but every source still omits a window — a
+  conservative 128,000-token fallback (clamped by `providerContextCaps` when set); and
 - a non-empty `inputModalities` intersection, treating an omitted member value as `["text"]`.
 
-A bare relay id with no context metadata or targets with disjoint modalities removes the combo from
-the catalog. Sync emits a summary warning and the dashboard marks it **Needs attention**. Add context
-metadata, align modalities, or target models with discoverable compatible capabilities.
+A target on a disabled provider (even with a complete discovery row), on an unknown provider with
+no discovery row, or targets with disjoint modalities, removes the combo from the catalog. Sync
+emits a summary warning and the dashboard marks it **Needs attention**. Add context metadata,
+align modalities, or target models with discoverable compatible capabilities.
 
 ## Request history and routing analytics
 

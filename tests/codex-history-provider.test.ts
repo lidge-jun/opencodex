@@ -334,6 +334,22 @@ describe("history lock retry", () => {
     expect(calls).toBe(2);
   });
 
+  test("syncCodexHistoryProvider reports why the retry budget died", () => {
+    // A pending opencodex row makes the eject path actually write; with no rows
+    // the restore transaction never starts and nothing contends.
+    const fixture = makeFixture({ includeLegacy: true });
+    const holder = new Database(fixture.dbPath);
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      const result = syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath);
+      expect(result.failed).toBe(true);
+      expect(result.failureReason).toBe("busy");
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+  });
+
   test("withHistoryRetry rethrows hard errors immediately", () => {
     let calls = 0;
     expect(() =>

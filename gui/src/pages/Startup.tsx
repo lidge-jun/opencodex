@@ -81,7 +81,7 @@ export default function Startup({ apiBase }: { apiBase: string }) {
   const [trayBusy, setTrayBusy] = useState(false);
   const [trayError, setTrayError] = useState(false);
   const [installBusy, setInstallBusy] = useState<StartupInstallAction | null>(null);
-  const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string } | null>(null);
+  const [installResult, setInstallResult] = useState<{ kind: "success" | "error"; action: StartupInstallAction; repair?: boolean; detail?: string; forLocalRouting?: boolean } | null>(null);
   const [codexRuntimeWarning, setCodexRuntimeWarning] = useState<string | null>(() => cached?.warning ?? null);
   const [codexRuntimeFix, setCodexRuntimeFix] = useState<string | null>(() => cached?.fix ?? null);
   /** True while settings (runtime notice) are still in flight — reserves notice slot height. */
@@ -107,6 +107,29 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       const res = await fetch(`${apiBase}/api/startup-health`, { signal });
       if (!res.ok) throw new Error("fetch failed");
       const next = await res.json() as StartupHealthData;
+      // #1245: a failed install notice is a claim about ONE attempt, not about the
+      // current state. Once health independently shows that attempt's goal is met —
+      // the user may well have reached it another way — the notice contradicts what
+      // the same page is showing and must yield.
+      //
+      // Scoped per action deliberately. `status` is overall restart safety, so a
+      // machine protected by the service would otherwise erase a failed SHIM
+      // install, which is still true and still actionable. Each action clears only
+      // against the health field it was trying to change; restoring native routing
+      // retires both, since neither install is outstanding then.
+      setInstallResult(current => {
+        if (current?.kind !== "error") return current;
+        // Native routing retires an install that existed to protect a local
+        // routing dependency. It does not retire an optional shim a native
+        // machine can still install — that button is still on the page.
+        if (next.status === "native" && current.forLocalRouting === true) return null;
+        const satisfied = current.action === "install-service"
+          // serviceViable, not installed-and-running: a stale or conflicting
+          // service can be both while the page still reports it unhealthy.
+          ? next.serviceViable
+          : next.shimInstalled && next.shimHealthy;
+        return satisfied ? null : current;
+      });
       paintedRef.current = true;
       const prevCache = readSessionListCache<StartupPageCache>(cacheKey);
       writeSessionListCache(cacheKey, {
@@ -247,7 +270,11 @@ export default function Startup({ apiBase }: { apiBase: string }) {
       setInstallResult({ kind: "success", action, repair: opts?.repair === true });
       refresh();
     } catch (error) {
-      setInstallResult({ kind: "error", action, repair: opts?.repair === true, detail: error instanceof Error ? error.message : String(error) });
+      // #1245: remember whether this attempt was made while startup depended on
+      // local routing. A later switch to native retires an install that existed to
+      // protect that dependency, but says nothing about an optional shim a native
+      // machine can still choose to install.
+      setInstallResult({ kind: "error", action, repair: opts?.repair === true, detail: error instanceof Error ? error.message : String(error), forLocalRouting: data?.localRoutingDependency === true });
     } finally {
       setInstallBusy(null);
     }

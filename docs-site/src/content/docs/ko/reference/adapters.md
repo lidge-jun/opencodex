@@ -86,8 +86,8 @@ interface ProviderAdapter {
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.
-- Gemini가 tool-call id를 생략하면 합성합니다. Antigravity에서는 실제 `thoughtSignature` 값을
-  보존하고 재사용해 다음 턴에서도 reasoning 연속성을 유지합니다.
+- Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 실제
+  `thoughtSignature` 값을 보존하고 재사용해 tool-result 후속 턴에서도 reasoning 연속성을 유지합니다.
 
 ## `kiro`
 

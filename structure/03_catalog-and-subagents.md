@@ -25,7 +25,12 @@ On the default `opencodex-catalog.json` path, sync deliberately uses two catalog
 bundled catalog supplies a current native entry template, while the actual on-disk catalog supplies
 the rows being merged. This split is required because empty or partial provider discovery must
 preserve routed entries and genuine user-native rows from the file that will be overwritten; a
-bundled catalog never contains those rows.
+bundled catalog never contains those rows. Retained sync and evidence-bound convergence share an
+explicit observed-state merge policy and restore native priorities from the once-only pristine
+backup rather than from a catalog whose priorities may already have been rewritten. A configured
+custom catalog remains the native metadata/template authority even when a bundled-catalog memo is
+warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
+evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
 
 Codex App model picker visibility comes from this shared catalog, not from patching the App.
 
@@ -93,6 +98,8 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   the Codex catalog clones each supported native row per selector and hides the bare picker rows;
   bare ids remain routable and stay in raw `/v1/models` unless explicitly disabled. Missing stored
   account targets are not advertised, and private account ids never become catalog labels.
+  `codexAccountPickerEnabled: false` hides generated rows without deleting exact routing bindings;
+  an omitted flag preserves the established behavior of a nonempty hand-written selector map.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the

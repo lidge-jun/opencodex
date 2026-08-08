@@ -7,12 +7,14 @@ import {
   getConfigPath,
   getDefaultConfig,
   loadConfig,
+  mutatePersistedConfig,
   readConfigDiagnostics,
   reconcileLiveConfigFromDisk,
   saveConfig,
   saveConfigPreservingClaudeCode,
   validateConfigCandidate,
 } from "../src/config";
+import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog-migration";
 import { rateLimitRetryPolicyFor } from "../src/providers/key-failover";
 import type { OcxConfig } from "../src/types";
 
@@ -36,6 +38,17 @@ function diskConfig(): Record<string, unknown> {
   return JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, unknown>;
 }
 
+/** Seed the exact pre-version shape: custom models exist, but no migration cutover does. */
+function writePreVersionCustomConfig(patch: Record<string, unknown> = {}): void {
+  const current = diskConfig();
+  delete current.customModelCatalogMigration;
+  writeFileSync(getConfigPath(), JSON.stringify({
+    ...current,
+    customModels: [customModel("legacy-model")],
+    ...patch,
+  }, null, 2) + "\n");
+}
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-user-edits-"));
@@ -52,6 +65,108 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   rmSync(home, { recursive: true, force: true });
+});
+
+function customModel(modelId: string): NonNullable<OcxConfig["customModels"]>[number] {
+  return {
+    id: `custom-${modelId}`,
+    provider: "test",
+    modelId,
+    addedAt: "2026-08-08T00:00:00.000Z",
+  };
+}
+
+test("whole-config saves durably capture a pre-version custom-model slug", () => {
+  writePreVersionCustomConfig();
+  const withoutCustom = loadConfig();
+  delete withoutCustom.customModels;
+  saveConfig(withoutCustom);
+
+  expect(legacyCustomModelCatalogSlugs(withoutCustom)).toEqual(
+    new Set(["test/legacy-model"]),
+  );
+  expect(diskConfig().customModelCatalogMigration).toEqual({
+    version: 1,
+    legacyOwnedSlugs: ["test/legacy-model"],
+  });
+});
+
+test("guarded binding saves project legacy ownership back onto the live config", () => {
+  writePreVersionCustomConfig();
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  reconcileLiveConfigFromDisk(live, structuredClone(live));
+  delete live.customModels;
+  saveConfigPreservingClaudeCode(live);
+
+  expect(legacyCustomModelCatalogSlugs(live)).toEqual(new Set(["test/legacy-model"]));
+  expect(diskConfig().customModelCatalogMigration).toEqual({
+    version: 1,
+    legacyOwnedSlugs: ["test/legacy-model"],
+  });
+});
+
+test("field-scoped persisted mutations use the final disk snapshot for legacy ownership", () => {
+  writePreVersionCustomConfig();
+  const outcome = mutatePersistedConfig(config => {
+    delete config.customModels;
+    return { changed: true, value: "removed" };
+  });
+
+  expect(outcome).toEqual({ status: "committed", value: "removed" });
+  expect(legacyCustomModelCatalogSlugs(loadConfig())).toEqual(
+    new Set(["test/legacy-model"]),
+  );
+});
+
+test("post-version custom models never expand legacy ownership", () => {
+  const live = loadConfig();
+  live.customModels = [customModel("new-model")];
+  saveConfig(live);
+  expect(legacyCustomModelCatalogSlugs(live)).toEqual(new Set());
+
+  delete live.customModels;
+  saveConfig(live);
+  expect(legacyCustomModelCatalogSlugs(live)).toEqual(new Set());
+  expect(diskConfig().customModelCatalogMigration).toEqual({
+    version: 1,
+    legacyOwnedSlugs: [],
+  });
+});
+
+test("unrelated recoverable config damage does not hide pre-version ownership", () => {
+  writePreVersionCustomConfig({
+    providers: {
+      test: {
+        adapter: "openai-chat",
+        baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        retryOn429: { attempts: "bad" },
+      },
+    },
+  });
+  const live = loadConfig();
+  delete live.customModels;
+  saveConfig(live);
+
+  expect(legacyCustomModelCatalogSlugs(live)).toEqual(new Set(["test/legacy-model"]));
+});
+
+test("a future migration state survives an older save and grants no deletion authority", () => {
+  const futureState = { version: 2, opaque: { keep: true } };
+  writeDiskConfig({
+    customModels: [customModel("legacy-model")],
+    customModelCatalogMigration: futureState,
+  });
+  const live = loadConfig();
+  delete live.customModels;
+
+  saveConfig(live);
+
+  expect(diskConfig().customModelCatalogMigration).toEqual(futureState);
+  expect(loadConfig().providers.test).toBeDefined();
+  expect(legacyCustomModelCatalogSlugs(live)).toEqual(new Set());
 });
 
 test("a hand edit made while the service holds memory survives a guarded save", () => {
