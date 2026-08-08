@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
@@ -12,6 +13,7 @@ import {
   buildClientConfigText,
   isExportClientId,
   normalizeExportModels,
+  ompModelsConfigPath,
   type ExportContext,
   type ExportModel,
   type OpencodeGeneratedConfig,
@@ -72,6 +74,7 @@ function opencodeConfig(context: ExportContext = ctx()): OpencodeGeneratedConfig
 function piConfig(context: ExportContext = ctx()): PiGeneratedConfig {
   return buildClientConfig("pi", context) as PiGeneratedConfig;
 }
+
 
 describe("relocated OpenCode serializer (accept criterion 1)", () => {
   test("the moved builder reproduces the pre-refactor golden byte-for-byte", () => {
@@ -219,6 +222,23 @@ describe("Pi serializer (accept criterion 2)", () => {
   });
 });
 
+describe("OMP serializer", () => {
+  test("writes the full routed catalog in OMP's models.yml provider shape", () => {
+    const built = buildClientConfigText("omp", ctx());
+    expect(built.format).toBe("yaml");
+    const document = buildClientConfig("omp", ctx()) as PiGeneratedConfig;
+    expect(document.providers.opencodex!.models.map(model => model.id)).toEqual([
+      "anthropic/claude-opus-5",
+      "custom/no-context",
+      "gpt-5.6-luna",
+      "tiny/small-ctx",
+    ]);
+    expect(built.text).toContain("providers:");
+    expect(built.text).toContain("anthropic/claude-opus-5");
+    expect(built.text).toContain("apiKey: opencodex-loopback");
+  });
+});
+
 describe("no credential ever reaches the output (accept criterion 3)", () => {
   const LIVE_KEY = "ocx_live_do_not_serialize_0123456789";
 
@@ -280,8 +300,8 @@ describe("stable ordering (accept criterion 4)", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the six file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "hermes", "openclaw", "kimi", "gajae"]);
+  test("covers exactly the seven file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -426,6 +446,7 @@ describe("EXPORT_CLIENTS registry", () => {
   test("filenames name the destination file, not the product", () => {
     expect(EXPORT_CLIENTS.opencode.filename).toBe("opencode.json");
     expect(EXPORT_CLIENTS.pi.filename).toBe("pi-models.json");
+    expect(EXPORT_CLIENTS.omp.filename).toBe("omp-models.yaml");
     expect(EXPORT_CLIENTS.hermes.filename).toBe("hermes-config.yaml");
     expect(EXPORT_CLIENTS.openclaw.filename).toBe("openclaw.json5");
     expect(EXPORT_CLIENTS.kimi.filename).toBe("kimi-config.toml");
@@ -442,6 +463,41 @@ describe("EXPORT_CLIENTS registry", () => {
 
   test("the pi destination is the documented global models file", () => {
     expect(EXPORT_CLIENTS.pi.destination({} as NodeJS.ProcessEnv)).toBe(join(homedir(), ".pi", "agent", "models.json"));
+  });
+
+  test("the OMP destination follows its global agent directory and profile selectors", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-omp-destination-"));
+    try {
+      const defaultAgentDir = join(home, ".omp", "agent");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yml"));
+
+      mkdirSync(defaultAgentDir, { recursive: true });
+      writeFileSync(join(defaultAgentDir, "models.yaml"), "providers: {}\n");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yaml"));
+      writeFileSync(join(defaultAgentDir, "models.yml"), "providers: {}\n");
+      expect(ompModelsConfigPath({} as NodeJS.ProcessEnv, home)).toBe(join(defaultAgentDir, "models.yml"));
+
+      const configRoot = join(home, "custom-omp");
+      const profiled = { OMP_PROFILE: "work", PI_CONFIG_DIR: configRoot } as NodeJS.ProcessEnv;
+      expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(
+        join(configRoot, "profiles", "work", "agent", "models.yml"),
+      );
+      expect(EXPORT_CLIENTS.omp.destination(profiled)).toBe(ompModelsConfigPath(profiled));
+      expect(EXPORT_CLIENTS.omp.destination({ PI_CONFIG_DIR: configRoot } as NodeJS.ProcessEnv)).toBe(
+        join(configRoot, "agent", "models.yml"),
+      );
+      // OMP_PROFILE wins by presence, so an explicit blank selects the default
+      // profile instead of inheriting a legacy PI_PROFILE.
+      expect(EXPORT_CLIENTS.omp.destination({
+        OMP_PROFILE: "  ",
+        PI_PROFILE: "legacy",
+        PI_CONFIG_DIR: configRoot,
+      } as NodeJS.ProcessEnv)).toBe(
+        join(configRoot, "agent", "models.yml"),
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("apiKeyEnv and exportHint name the variable the config references", () => {

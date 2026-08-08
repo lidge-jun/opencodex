@@ -1,23 +1,28 @@
 ---
 title: Integrations
-description: Connect opencodex to OpenCode, Pi, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
 ---
 
 The **Integrations** tab writes opencodex's provider block into a client's own config
-file, and removes it again. Six clients work this way, each with a switch:
+file, and removes it again. Seven clients work this way, each with a switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
 | OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
-| Pi | `~/.pi/agent/models.json` | JSON | new sessions | `OPENCODEX_API_KEY` |
+| Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
+| OMP | `~/.omp/agent/models.yml` | YAML | after restarting OMP | loopback placeholder |
 | Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
 | OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
 
-Paths honor each client's own environment override where it has one, so a relocated
-`HERMES_HOME`, `KIMI_CODE_HOME` or `XDG_CONFIG_HOME` is followed rather than guessed
-at. The table lists each client's default; an override always wins.
+Paths honor each client's own environment override where it has one. For OMP,
+`OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
+uses `PI_CONFIG_DIR` as its root and ignores `PI_CODING_AGENT_DIR`; without a named profile,
+`PI_CODING_AGENT_DIR` wins. OMP supports provider-level headers, but this initial integration
+is deliberately loopback-only; remote `x-opencodex-api-key` wiring is deferred. Relocated
+`HERMES_HOME`, `KIMI_CODE_HOME`, and `XDG_CONFIG_HOME` paths are likewise followed rather than
+guessed at. The table lists each client's default.
 
 OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
 file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state
@@ -75,12 +80,15 @@ changed value and calling it success. You will see the file named and nothing on
 disk will have moved. Editing that file by hand still works; it is only our
 automatic rewrite that declines.
 
-**Pi, Kimi Code and Gajae Code only work against a loopback bind.** None of their config
-schemas has a place for the `x-opencodex-api-key` header that a non-loopback bind
-requires, so a generated config would simply be rejected — and writing one by hand does
-not help, because there is nowhere in the file to put the header either. Reaching a
-remote opencodex from these clients is not supported directly; give them loopback access
-instead, through an SSH tunnel or a local forwarder that adds the header.
+**Pi, Kimi Code and Gajae Code only work against a loopback bind.** Their config schemas
+have no place for the `x-opencodex-api-key` header that a non-loopback bind requires, so a
+generated config would simply be rejected. Give them loopback access instead, through an
+SSH tunnel or a local forwarder that adds the header.
+
+**The generated OMP integration is also deliberately loopback-only.** OMP does support
+provider-level headers, but this initial integration does not emit remote
+`x-opencodex-api-key` credential wiring. Manual remote OMP configuration is outside the
+managed integration for now.
 
 **Kimi Code cannot hold an environment reference,** so its config carries an
 `opencodex-loopback` placeholder rather than a key. No real credential is ever written

@@ -19,6 +19,7 @@ export type { FileIntegrationClientId };
 const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.semantics.opencode",
   pi: "integrations.semantics.pi",
+  omp: "integrations.semantics.omp",
   hermes: "integrations.semantics.hermes",
   openclaw: "integrations.semantics.openclaw",
   kimi: "integrations.semantics.kimi",
@@ -28,6 +29,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   opencode: "integrations.tab.opencode",
   pi: "integrations.tab.pi",
+  omp: "integrations.tab.omp",
   hermes: "integrations.tab.hermes",
   openclaw: "integrations.tab.openclaw",
   kimi: "integrations.tab.kimi",
