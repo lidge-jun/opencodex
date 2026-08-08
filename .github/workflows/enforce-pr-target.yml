@@ -734,26 +734,44 @@ jobs:
               !headDrifted &&
               failures.length === 0
             ) {
-              let ciGreen = true;
+              let ciGreen = false;
               try {
-                const { data: checksData } =
-                  await github.rest.checks.listForRef({
+                // GitHub Actions' immutable App ID. Name alone is not evidence:
+                // any installed app can publish a check called `ci`.
+                const githubActionsAppId = 15368;
+                const checkRuns = [];
+                for await (const response of github.paginate.iterator(
+                  github.rest.checks.listForRef,
+                  {
                     owner,
                     repo,
                     ref: pr.head.sha,
+                    app_id: githubActionsAppId,
+                    check_name: "ci",
+                    filter: "latest",
                     per_page: 100
-                  });
-                const ciCheck = (checksData.check_runs ?? []).find(
-                  check => check.name === "ci"
+                  }
+                )) {
+                  // Octokit's paginator normalizes `{ total_count, check_runs }`
+                  // into an array in `response.data` for every iterator page.
+                  checkRuns.push(...response.data);
+                }
+                const ciChecks = checkRuns.filter(
+                  check =>
+                    check.name === "ci" &&
+                    check.app?.id === githubActionsAppId
                 );
-                // No `ci` check means no CI run exists for this head (for
-                // example a docs-only change): there is nothing to contradict
-                // the author's claim. A real `ci` check must be completed
-                // successfully.
+                // The readiness claim requires positive CI evidence. A missing,
+                // pending, unsuccessful, foreign, or conflicting aggregate
+                // check must fail closed. `filter: latest` removes superseded
+                // rerun attempts; `every` still rejects ambiguous live results.
                 ciGreen =
-                  ciCheck === undefined ||
-                  (ciCheck.status === "completed" &&
-                    ciCheck.conclusion === "success");
+                  ciChecks.length > 0 &&
+                  ciChecks.every(
+                    check =>
+                      check.status === "completed" &&
+                      check.conclusion === "success"
+                  );
               } catch (error) {
                 core.warning(
                   `Could not list checks for the readiness claim check: ${error.message}`
