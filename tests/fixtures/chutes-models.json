@@ -26,6 +26,18 @@
       "confidential_compute": true
     },
     {
+      "id": "example/sparse-tool-model",
+      "object": "model",
+      "owned_by": "fixture",
+      "context_length": null,
+      "max_model_len": null,
+      "max_output_length": null,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supported_features": ["tools"],
+      "confidential_compute": true
+    },
+    {
       "id": "unsloth/Mistral-Nemo-Instruct-2407-TEE",
       "object": "model",
       "owned_by": "sglang",

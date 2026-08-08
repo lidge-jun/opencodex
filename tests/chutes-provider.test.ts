@@ -47,8 +47,6 @@ function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
         authMode: "key",
         apiKey: TEST_KEY,
         liveModels: true,
-        // Discovery stays fixture-only; this avoids platform-specific public-DNS classification.
-        allowPrivateNetwork: true,
         ...overrides,
       },
     },
@@ -143,11 +141,13 @@ describe("Chutes provider", () => {
     const config = withStubbedProviderFetch(providerConfig());
     const models = (await gatherRoutedModels(config)).filter(row => row.provider === "chutes");
     expect(models.map(row => row.id)).toEqual([
+      "example/sparse-tool-model",
       "moonshotai/Kimi-K2.6-TEE",
       "Qwen/Qwen3-32B-TEE",
     ]);
     const qwen = models.find(row => row.id === "Qwen/Qwen3-32B-TEE");
     const kimi = models.find(row => row.id === "moonshotai/Kimi-K2.6-TEE");
+    const sparse = models.find(row => row.id === "example/sparse-tool-model");
     expect(qwen).toMatchObject({
       owned_by: "sglang",
       contextWindow: 40_960,
@@ -162,6 +162,13 @@ describe("Chutes provider", () => {
       capabilities: ["json_mode", "structured_outputs", "tools", "reasoning"],
       reasoningEfforts: [],
     });
+    expect(sparse).toMatchObject({
+      owned_by: "fixture",
+      capabilities: ["tools"],
+      reasoningEfforts: [],
+    });
+    expect(sparse).not.toHaveProperty("contextWindow");
+    expect(sparse).not.toHaveProperty("inputModalities");
 
     for (const modelId of models.map(row => row.id)) {
       expect(routeModel(config, `chutes/${modelId}`).modelId).toBe(modelId);
@@ -207,6 +214,11 @@ describe("Chutes provider", () => {
       url: "https://custom.example/v1/models",
       headers: { Authorization: "Bearer custom-key" },
     });
+
+    const nearMissConfig = providerConfig({ baseUrl: "https://llm.chutes.ai/v2" });
+    expect(
+      resolveProviderModelDiscovery("chutes", nearMissConfig.providers.chutes!).spec,
+    ).toBeUndefined();
 
     const customAdapter = routeModel(providerConfig({
       adapter: "anthropic",
