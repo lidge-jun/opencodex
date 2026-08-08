@@ -20,16 +20,19 @@ export type CodexCapacityInspection =
   | { kind: "capacity"; response: Response }
   | { kind: "pass"; response: Response };
 
+/** Narrow an unknown JSON value to a non-array object. */
 function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
     : null;
 }
 
+/** Normalize only whitespace and case for the exact-message compatibility check. */
 function normalizeCapacityMessage(value: string): string {
   return value.trim().replace(/\s+/gu, " ").toLocaleLowerCase("en-US");
 }
 
+/** Match one structured capacity signal or the exact standard message. */
 function hasCapacitySignal(value: unknown): boolean {
   if (typeof value === "string") return CAPACITY_CODES.has(value.trim().toLocaleLowerCase("en-US"));
   const candidate = record(value);
@@ -62,6 +65,7 @@ export function isCodexCapacityPayload(payload: unknown): boolean {
   ].some(hasCapacitySignal);
 }
 
+/** Return whether a Responses envelope represents a terminal failure. */
 function isFailedDocument(payload: unknown): boolean {
   const root = record(payload);
   if (!root) return false;
@@ -72,6 +76,7 @@ function isFailedDocument(payload: unknown): boolean {
     || response?.status === "failed";
 }
 
+/** Parse an SSE data payload without treating malformed bytes as retryable. */
 function parsePayload(payload: string | null): unknown | undefined {
   if (!payload || payload === "[DONE]") return undefined;
   try {
@@ -81,6 +86,7 @@ function parsePayload(payload: string | null): unknown | undefined {
   }
 }
 
+/** Allow only lifecycle events that cannot expose model output. */
 function isSafePreOutputLifecycle(payload: unknown): boolean {
   const event = record(payload);
   if (!event) return false;
@@ -90,6 +96,7 @@ function isSafePreOutputLifecycle(payload: unknown): boolean {
     || event.type === "response.heartbeat";
 }
 
+/** Rebuild a response while preserving status and non-length headers. */
 function responseWithBody(response: Response, body: BodyInit | null): Response {
   const headers = new Headers(response.headers);
   headers.delete("content-length");
@@ -100,6 +107,7 @@ function responseWithBody(response: Response, body: BodyInit | null): Response {
   });
 }
 
+/** Replay inspected bytes before resuming the untouched upstream reader. */
 function replayBufferedThenReader(
   buffered: readonly Uint8Array[],
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -130,6 +138,7 @@ function replayBufferedThenReader(
   });
 }
 
+/** Return a committed attempt with every inspected byte restored. */
 function passWithBufferedBody(
   response: Response,
   buffered: readonly Uint8Array[],
@@ -142,6 +151,7 @@ function passWithBufferedBody(
   };
 }
 
+/** Inspect bounded lifecycle-only SSE frames until capacity or output commits the attempt. */
 async function inspectSseCapacityBeforeOutput(
   response: Response,
   signal?: AbortSignal,

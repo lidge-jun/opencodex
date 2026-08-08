@@ -8,6 +8,7 @@ import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./accou
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
   POOL_KEY_CODEX,
+  commitRoundRobinAccountSuccess,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
   notePoolRotationFailure,
@@ -900,19 +901,9 @@ function bindThreadAffinity(
   pruneLruThreadAffinities();
 }
 
-/** Commit affinity only after a routed response is accepted for relay. */
-export function bindCodexThreadAffinityForAcceptedResponse(
-  threadId: string | null,
-  accountId: string,
-  modelId: string | undefined,
-  now = Date.now(),
-): void {
-  if (!threadId) return;
-  bindThreadAffinity(threadId, accountId, now, codexQuotaScopeForModel(modelId));
-}
-
 type CodexAccountExclusion = string | ReadonlySet<string> | undefined;
 
+/** Match a single legacy exclusion or a request-local exclusion set. */
 function isExcludedCodexAccount(exclusion: CodexAccountExclusion, accountId: string): boolean {
   return typeof exclusion === "string"
     ? exclusion === accountId
@@ -1076,7 +1067,6 @@ function pickUnboundStrategyAccount(
   commit: boolean,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
-  commitThreadAffinity = commit,
 ): string | null {
   const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
   if (strategy === "quota") return null;
@@ -1092,7 +1082,7 @@ function pickUnboundStrategyAccount(
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
     if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-    if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, picked, now, quotaScope);
+    if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     notePoolRotationSuccess(poolKey, picked, limit);
     return picked;
   }
@@ -1102,7 +1092,7 @@ function pickUnboundStrategyAccount(
     if (!picked) return null;
     if (commit) {
       if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, picked);
-      if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, picked, now, quotaScope);
+      if (threadId) bindThreadAffinity(threadId, picked, now, quotaScope);
     }
     return picked;
   }
@@ -1512,13 +1502,86 @@ export function previewCodexAccountForRequest(
   return active;
 }
 
+/** Preview Pool selection; expired-affinity cleanup matches live resolve. */
+export function previewCodexAccountForRequestDetailed(
+  threadId: string | null,
+  config: OcxConfig,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): CodexThreadResolution {
+  const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
+  if (entry && isThreadAffinityExpired(entry, now)) {
+    deleteThreadAffinity(threadId!, quotaScope);
+    return { status: "expired", accountId: entry.accountId };
+  }
+  const accountId = previewCodexAccountForRequest(threadId, config, now, quotaScope, selectionOptions);
+  return accountId ? { status: "selected", accountId } : { status: "none" };
+}
+
+/**
+ * Commit a deferred Pool selection exactly once, after its response is accepted.
+ * Capacity-rejected and unavailable attempts remain request-local exclusions.
+ */
+export function commitCodexAcceptedAccountSelection(
+  config: OcxConfig,
+  threadId: string | null,
+  accountId: string,
+  modelId: string | undefined,
+  excludedAccountIds: ReadonlySet<string>,
+  now = Date.now(),
+): void {
+  const quotaScope = codexQuotaScopeForModel(modelId);
+  if (!isCodexAccountSelectable(config, accountId, now, quotaScope)) return;
+  if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config);
+
+  const existingAffinity = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
+  const reusedAffinity = existingAffinity?.accountId === accountId
+    && !isThreadAffinityExpired(existingAffinity, now)
+    && isThreadAffinityGenerationLive(existingAffinity)
+    && !shouldFailover(config, accountId, now);
+
+  const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
+  if (reusedAffinity) {
+    existingAffinity.lastUsedAt = now;
+    if (strategy === "quota") {
+      const threshold = config.autoSwitchThreshold ?? 80;
+      const usage = threshold > 0
+        ? computeCodexUsageScore(getAccountQuota(accountId), getPoolAccountPlan(config, accountId))
+        : 0;
+      const overThreshold = threshold > 0 && !isUnknownUsage(usage) && usage >= threshold;
+      if (overThreshold || now - existingAffinity.lastReevalAt >= CODEX_THREAD_AFFINITY_REEVAL_INTERVAL_MS) {
+        existingAffinity.lastReevalAt = now;
+      }
+    }
+    return;
+  }
+
+  if (strategy === "round-robin") {
+    const eligible = getEligiblePoolAccounts(config, excludedAccountIds, now, quotaScope);
+    const committed = commitRoundRobinAccountSuccess(
+      codexPoolKeyForScope(quotaScope),
+      eligible,
+      accountId,
+      stickyLimitForConfig(config),
+    );
+    if (!committed) return;
+    if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, accountId);
+  } else if (strategy === "fill-first") {
+    if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, accountId);
+  } else if (!isIndependentCodexQuotaScope(quotaScope)) {
+    setActiveCodexAccount(config, accountId);
+  }
+
+  if (threadId) bindThreadAffinity(threadId, accountId, now, quotaScope);
+}
+
 export function resolveCodexAccountForThreadDetailed(
   threadId: string | null,
   config: OcxConfig,
   now = Date.now(),
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
-  commitThreadAffinity = true,
 ): CodexThreadResolution {
   // Retiring a spent manual pin is independent of affinity: an existing thread
   // keeps its account below, but the operator's tier ceiling must not silently
@@ -1539,7 +1602,7 @@ export function resolveCodexAccountForThreadDetailed(
       // (soft-avoid covers the first-hit case; this catches post-avoid residual streaks).
       && !shouldFailover(config, entry.accountId, now)
     ) {
-      if (commitThreadAffinity) entry.lastUsedAt = now;
+      entry.lastUsedAt = now;
       // Periodic quota re-eval: a long-lived bound thread must still switch when
       // it crosses autoSwitchThreshold and a strictly-cooler account exists.
       // Without this the reuse branch returns before applyQuotaAutoSwitch and the
@@ -1564,9 +1627,7 @@ export function resolveCodexAccountForThreadDetailed(
             const best = pickLowerUsageAccount(config, entry.accountId, usage, now, quotaScope, selectionOptions);
             if (best !== entry.accountId) {
               if (!isIndependentCodexQuotaScope(quotaScope)) setActiveCodexAccount(config, best);
-              if (commitThreadAffinity) {
-                bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
-              }
+              bindThreadAffinity(threadId, best, now, quotaScope); // rebinds + resets clocks
               return { status: "selected", accountId: best };
             }
           }
@@ -1577,15 +1638,7 @@ export function resolveCodexAccountForThreadDetailed(
     deleteThreadAffinity(threadId, quotaScope);
   }
 
-  const strategyPick = pickUnboundStrategyAccount(
-    config,
-    threadId,
-    now,
-    true,
-    quotaScope,
-    selectionOptions,
-    commitThreadAffinity,
-  );
+  const strategyPick = pickUnboundStrategyAccount(config, threadId, now, true, quotaScope, selectionOptions);
   if (strategyPick) return { status: "selected", accountId: strategyPick };
 
   let active = getEffectiveActiveCodexAccountId(config);
@@ -1633,7 +1686,7 @@ export function resolveCodexAccountForThreadDetailed(
       ? { status: "selected", accountId: active }
       : { status: "none" };
   }
-  if (threadId && commitThreadAffinity) bindThreadAffinity(threadId, active, now, quotaScope);
+  if (threadId) bindThreadAffinity(threadId, active, now, quotaScope);
   return { status: "selected", accountId: active };
 }
 

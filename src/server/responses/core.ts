@@ -82,7 +82,7 @@ import {
   type CodexAuthContext,
 } from "../../codex/auth-context";
 import {
-  bindCodexThreadAffinityForAcceptedResponse,
+  commitCodexAcceptedAccountSelection,
   computeQuotaCooldown,
   formatCodexProviderForLog,
   previewCodexAccountForRequest,
@@ -855,7 +855,7 @@ async function resolveResponsesCodexAuth(
       authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
         accountId: route.codexAccountId,
         modelId: route.modelId,
-        deferThreadAffinityCommit: route.codexAccountMode === "pool"
+        deferSelectionCommit: route.codexAccountMode === "pool"
           && route.codexAccountId === undefined,
         beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
       });
@@ -2106,10 +2106,12 @@ async function handleResponsesInner(
         });
         upstreamResponse = inspected.response;
         if (inspected.kind !== "capacity") {
-          bindCodexThreadAffinityForAcceptedResponse(
+          commitCodexAcceptedAccountSelection(
+            config,
             req.headers.get("x-codex-parent-thread-id"),
             authCtx.accountId,
             route.modelId,
+            excludedAccountIds,
           );
           if (firstCapacityAttempt) {
             await firstCapacityAttempt.response.body?.cancel().catch(() => undefined);

@@ -13,10 +13,12 @@ import {
   CODEX_THREAD_AFFINITY_IDLE_TTL_MS,
   clearCodexUpstreamHealth,
   clearThreadAccountMap,
+  getEffectiveActiveCodexAccountId,
   getCodexUpstreamHealth,
   isCodexAccountSoftAvoided,
   recordCodexUpstreamOutcome,
 } from "../src/codex/routing";
+import { clearPoolRotationState, POOL_KEY_CODEX } from "../src/codex/pool-rotation";
 import { loadConfig, saveConfig } from "../src/config";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailure, upstreamHostHealthKey } from "../src/codex/upstream-host-health";
 import { deriveProviderPresets } from "../src/providers/derive";
@@ -242,6 +244,8 @@ async function startPoolRetryHarness(
     pausedAccountIds?: string[];
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
+    accountPoolStrategy?: "quota" | "round-robin" | "fill-first";
+    accountPoolStickyLimit?: number;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -249,6 +253,7 @@ async function startPoolRetryHarness(
   process.env.OPENCODEX_HOME = TEST_DIR;
   clearCodexUpstreamHealth();
   clearThreadAccountMap();
+  clearPoolRotationState(POOL_KEY_CODEX);
   clearAccountQuota();
   clearRequestLogsForTests();
   clearAccountNeedsReauth("pool-a");
@@ -298,6 +303,8 @@ async function startPoolRetryHarness(
         : []),
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
+    ...(options.accountPoolStrategy ? { accountPoolStrategy: options.accountPoolStrategy } : {}),
+    ...(options.accountPoolStickyLimit ? { accountPoolStickyLimit: options.accountPoolStickyLimit } : {}),
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
@@ -2393,6 +2400,41 @@ describe("server local API auth", () => {
       expect(await second.text()).toContain("accepted-b");
       expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
       expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation commits round-robin state only for the accepted account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: `accepted-${accountId}`, status: "completed", output: [] }), {
+      thirdAccount: true,
+      accountPoolStrategy: "round-robin",
+      accountPoolStickyLimit: 1,
+    });
+    try {
+      const first = await harness.request({ threadId: "rr-capacity-thread" });
+      expect(first.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getEffectiveActiveCodexAccountId(harness.config)).toBe("pool-b");
+
+      const sameThread = await harness.request({ threadId: "rr-capacity-thread" });
+      expect(sameThread.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+
+      const nextThread = await harness.request({ threadId: "rr-next-thread" });
+      expect(nextThread.status).toBe(200);
+      expect(harness.dispatches).toEqual([
+        "acct-pool-a",
+        "acct-pool-b",
+        "acct-pool-b",
+        "acct-pool-c",
+      ]);
+      expect(getEffectiveActiveCodexAccountId(harness.config)).toBe("pool-c");
     } finally {
       await stopPoolRetryHarness(harness);
     }
