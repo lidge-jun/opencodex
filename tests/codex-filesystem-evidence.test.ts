@@ -214,7 +214,7 @@ test("populated and scratch gather sessions perform zero filesystem writes", () 
   acceptCatalogGatherSourcePath(populated, "catalog-target-selection", configPath);
   readCatalogGatherSource(populated, "catalog-target-selection");
   acceptCatalogGatherSourcePath(populated, "active-catalog-merge", activePath);
-  expect(resolveCatalogSourceForGather(populated).kind).toBe("available");
+  expect(resolveCatalogSourceForGather(populated, "custom").kind).toBe("available");
   acceptCatalogGatherSourcePath(populated, "models-cache-fallback", join(codexHome, "missing-cache.json"));
   populated.readSource("models-cache-fallback");
   acceptCatalogGatherSourcePath(populated, "provider-auth-selection", authPath);

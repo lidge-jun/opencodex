@@ -112,12 +112,23 @@ describe("openai-chat adapter (#1170)", () => {
   });
 
   test("accepts an unspaced [DONE] sentinel", async () => {
-    const response = new Response([
-      'data:{"choices":[{"delta":{"content":"hi"}}]}\n\n',
-      "data:[DONE]\n\n",
-    ].join(""));
+    // Sentinel only: a preceding answer frame would let the finish-less EOF fallback emit
+    // `done` even if unspaced [DONE] handling were broken, so this test must not carry one.
+    const response = new Response("data:[DONE]\n\n");
     const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
     expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
+  });
+
+  test("a bare data: line is ignored, not reported as a malformed frame", async () => {
+    const response = new Response([
+      "data:\n\n",
+      'data:{"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n',
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.find(e => e.type === "text_delta")).toMatchObject({ type: "text_delta", text: "hi" });
+    expect(events.at(-1)?.type).toBe("done");
+    expect(events.some(e => e.type === "error")).toBe(false);
   });
 
   test("still handles the spaced form identically", async () => {

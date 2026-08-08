@@ -80,8 +80,8 @@ interface ProviderAdapter {
 
 - 系统提示词 → `systemInstruction`；消息 → `contents[]`（assistant → `model`）；工具 →
   `functionDeclarations`；data URL 图像 → `inline_data`。
-- Gemini 省略 tool-call id 时会合成 id。Antigravity 会保留并重放真实 `thoughtSignature`，使
-  reasoning continuity 延续到后续 turn。
+- Gemini 省略 tool-call id 时会合成 id。Vertex 与 Antigravity 会保留并重放真实
+  `thoughtSignature`，使 tool-result 后续 turn 保持 reasoning continuity。
 
 ## `kiro`
 

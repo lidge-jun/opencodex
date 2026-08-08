@@ -2373,7 +2373,8 @@ describe("provider management validation", () => {
       const initial = await fetch(new URL("/api/provider-context-caps", server.url));
       expect(await initial.json()).toMatchObject({ cap: 350_000, value: 350_000, caps: {} });
 
-      // Enable one provider, then change the global value: the enabled provider re-points.
+      // Enable one provider, then change the global value WITHOUT setAll: the enabled provider
+      // keeps its own value and only the shared default changes.
       await fetch(new URL("/api/provider-context-caps", server.url), {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -2385,7 +2386,7 @@ describe("provider management validation", () => {
         body: JSON.stringify({ value: 500_000 }),
       });
       expect(valued.status).toBe(200);
-      expect(await valued.json()).toMatchObject({ ok: true, value: 500_000, caps: { "test-openai": 500_000 } });
+      expect(await valued.json()).toMatchObject({ ok: true, value: 500_000, caps: { "test-openai": 350_000 } });
 
       // Enabling another provider now uses the current global value, not the constant.
       const enabledAfter = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2393,12 +2394,20 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ provider: "other", enabled: true }),
       });
-      expect(await enabledAfter.json()).toMatchObject({ caps: { "test-openai": 500_000, other: 500_000 } });
+      expect(await enabledAfter.json()).toMatchObject({ caps: { "test-openai": 350_000, other: 500_000 } });
 
-      // Catalog reflects the global value.
+      // Catalog reflects each provider's own cap, not the shared default.
       const models = await fetch(new URL("/api/models", server.url));
       const body = await models.json() as Array<{ id: string; contextWindow?: number; contextCap?: number }>;
-      expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 500_000, contextCap: 500_000 });
+      expect(body.find(m => m.id === "wide-model")).toMatchObject({ contextWindow: 350_000, contextCap: 350_000 });
+
+      // Changing the global value WITH setAll re-points every enabled provider.
+      const valuedAll = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 600_000, setAll: true }),
+      });
+      expect(await valuedAll.json()).toMatchObject({ ok: true, value: 600_000, caps: { "test-openai": 600_000, other: 600_000 } });
 
       // Set-all off clears every cap.
       const cleared = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2406,7 +2415,7 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ setAll: false }),
       });
-      expect(await cleared.json()).toMatchObject({ ok: true, value: 500_000, caps: {} });
+      expect(await cleared.json()).toMatchObject({ ok: true, value: 600_000, caps: {} });
 
       // Set-all on caps every provider at the current value.
       const all = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2414,7 +2423,29 @@ describe("provider management validation", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ setAll: true }),
       });
-      expect(await all.json()).toMatchObject({ ok: true, caps: { "test-openai": 500_000, other: 500_000 } });
+      expect(await all.json()).toMatchObject({ ok: true, caps: { "test-openai": 600_000, other: 600_000 } });
+
+      // Per-provider PUT with an explicit value touches only that provider.
+      const perProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 250_000 }),
+      });
+      expect(await perProvider.json()).toMatchObject({ ok: true, caps: { "test-openai": 250_000, other: 600_000 } });
+
+      // Enabling a provider with an explicit value uses that value, not the global default.
+      const perProviderDisable = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: false }),
+      });
+      expect(await perProviderDisable.json()).toMatchObject({ ok: true, caps: { other: 600_000 } });
+      const perProviderEnableValue = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 128_000 }),
+      });
+      expect(await perProviderEnableValue.json()).toMatchObject({ ok: true, caps: { "test-openai": 128_000, other: 600_000 } });
 
       // Invalid global value is rejected.
       const bad = await fetch(new URL("/api/provider-context-caps", server.url), {
@@ -2423,6 +2454,80 @@ describe("provider management validation", () => {
         body: JSON.stringify({ value: 0 }),
       });
       expect(bad.status).toBe(400);
+
+      // Invalid per-provider value is rejected before mutating config: the provider cap
+      // must not fall back to the global default.
+      const badPerProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 0 }),
+      });
+      expect(badPerProvider.status).toBe(400);
+      const afterBadPerProvider = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadPerProvider.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A non-boolean setAll accompanying a global value is rejected before mutating config.
+      const badSetAll = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 700_000, setAll: "yes" }),
+      });
+      expect(badSetAll.status).toBe(400);
+      const afterBadSetAll = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadSetAll.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A provider field with a wrongly-typed enabled must not fall through to the global
+      // value branch and change the global default.
+      const badEnabled = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: "yes", value: 700_000 }),
+      });
+      expect(badEnabled.status).toBe(400);
+      const afterBadEnabled = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterBadEnabled.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A provider update combined with setAll is rejected instead of silently ignoring setAll.
+      const mixedPayload = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, setAll: true }),
+      });
+      expect(mixedPayload.status).toBe(400);
+      const afterMixedPayload = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterMixedPayload.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A per-provider value that floors to zero (0.5) is rejected without mutating config:
+      // it must not silently fall back to the global default.
+      const floorZeroPerProvider = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "test-openai", enabled: true, value: 0.5 }),
+      });
+      expect(floorZeroPerProvider.status).toBe(400);
+      const afterFloorZeroPerProvider = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterFloorZeroPerProvider.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A global value that floors to zero is rejected the same way.
+      const floorZeroGlobal = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ value: 0.5 }),
+      });
+      expect(floorZeroGlobal.status).toBe(400);
+      const afterFloorZeroGlobal = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterFloorZeroGlobal.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
+
+      // A non-object body (valid JSON) is rejected with 400 instead of crashing on
+      // property access.
+      const nonObject = await fetch(new URL("/api/provider-context-caps", server.url), {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify([1, 2, 3]),
+      });
+      expect(nonObject.status).toBe(400);
+      const afterNonObject = await fetch(new URL("/api/provider-context-caps", server.url));
+      expect(await afterNonObject.json()).toMatchObject({ value: 600_000, caps: { "test-openai": 128_000, other: 600_000 } });
     } finally {
       await server.stop(true);
     }

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 
 import {
+  describeHistoryJobFailure,
   deriveCodexHistoryOperation,
   runCodexHistoryJob,
 } from "../src/codex/history-job";
@@ -80,6 +81,62 @@ test("the operation is derived from admitted intent, not chosen by a caller", ()
     .toBe("restore-openai");
 });
 
+test("the failure wording names the real reason instead of always blaming the Codex app", () => {
+  const busy = { kind: "blocked", reason: "busy" } as const;
+  expect(describeHistoryJobFailure(busy, "apply", false)).toContain("history DB is locked");
+  expect(describeHistoryJobFailure(busy, "apply", true)).toContain("Close it and rerun 'ocx start'");
+  expect(describeHistoryJobFailure(busy, "restore")).toContain("holding the history database");
+  expect(describeHistoryJobFailure(busy, "recover-legacy")).toContain("Close it and rerun this command");
+
+  // A busy SQLite database can also surface as a worker failure once the lock
+  // was already acquired; it must keep the same lock guidance, not degrade to
+  // a generic worker error.
+  const workerBusy = {
+    kind: "failed",
+    reason: "worker-error",
+    message: "database is locked",
+    historyFailureReason: "busy",
+  } as const;
+  expect(describeHistoryJobFailure(workerBusy, "apply", false)).toContain("history DB is locked");
+  expect(describeHistoryJobFailure(workerBusy, "apply", false)).toContain("retried automatically");
+  expect(describeHistoryJobFailure(workerBusy, "restore")).toContain("holding the history database");
+  expect(describeHistoryJobFailure(workerBusy, "recover-legacy")).toContain("locked");
+
+  const unsafe = { kind: "blocked", reason: "unsafe-path" } as const;
+  const unsafeText = describeHistoryJobFailure(unsafe, "apply");
+  expect(unsafeText).toContain("not a Codex app lock");
+  expect(unsafeText).toContain("'ocx doctor'");
+
+  const database = { kind: "blocked", reason: "database" } as const;
+  expect(describeHistoryJobFailure(database, "restore")).toContain("coordinator database is unavailable");
+
+  const permission = {
+    kind: "failed",
+    reason: "worker-error",
+    message: "history_transition_failed",
+    historyFailureReason: "permission",
+  } as const;
+  expect(describeHistoryJobFailure(permission, "apply")).toContain("permission was denied");
+  expect(describeHistoryJobFailure(permission, "apply")).toContain("'ocx doctor'");
+
+  const workerError = { kind: "failed", reason: "worker-error", message: "unable to open database file" } as const;
+  expect(describeHistoryJobFailure(workerError, "apply")).toContain("unable to open database file");
+  expect(describeHistoryJobFailure(workerError, "apply")).toContain("'ocx doctor'");
+
+  const died = { kind: "failed", reason: "worker-died", message: "history_worker_closed_early" } as const;
+  expect(describeHistoryJobFailure(died, "apply")).toContain("exited unexpectedly");
+
+  const timeout = { kind: "failed", reason: "timeout", message: "history_worker_timeout" } as const;
+  expect(describeHistoryJobFailure(timeout, "restore")).toContain("timed out");
+
+  // Callers flag failure as "not converged", which also covers these two
+  // kinds; the wording must name them rather than returning undefined.
+  const skipped = { kind: "skipped" } as const;
+  expect(describeHistoryJobFailure(skipped, "recover-legacy")).toContain("skipped");
+  const converged = { kind: "converged", rows: 0, files: 0 } as const;
+  expect(describeHistoryJobFailure(converged, "apply")).toContain("no failure");
+});
+
 test("skip resolves without spawning a thread and writes nothing", async () => {
   const fixture = makeFixture("ocx-history-job-skip-");
 
@@ -132,6 +189,24 @@ test("an overrun Worker returns a typed timeout rather than hanging", async () =
   expect(["converged", "failed"]).toContain(outcome.kind);
   if (outcome.kind === "failed") expect(outcome.reason).toBe("timeout");
   expect(Date.now() - started).toBeLessThan(20_000);
+}, 30_000);
+
+/**
+ * The false-lock regression (issue #1191) hid every non-busy failure behind
+ * "the Codex app is holding the DB". A hard error must reach the caller with
+ * its real message so the diagnosis is possible at all.
+ */
+test("a hard history error reaches the caller with its real message", async () => {
+  const fixture = makeFixture("ocx-history-job-hard-error-");
+  // A directory at the state-DB path cannot be opened as SQLite.
+  rmSync(fixture.canonicalStateDbPath, { force: true });
+  mkdirSync(fixture.canonicalStateDbPath);
+
+  const outcome = await runCodexHistoryJob({ ...fixture, operation: "recover-legacy-openai" });
+  expect(outcome.kind).toBe("failed");
+  if (outcome.kind === "failed") {
+    expect(outcome.message).toMatch(/unable to open|not a database|cannot open/i);
+  }
 }, 30_000);
 
 /**

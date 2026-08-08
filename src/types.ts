@@ -701,6 +701,12 @@ export interface OcxConfig {
   /** 사용자가 대시보드에서 직접 추가한 커스텀 모델 목록. */
   customModels?: OcxCustomModel[];
   /**
+   * Internal, versioned evidence for reconciling custom-model deletions with
+   * pre-marker Codex catalog rows. Consumers must parse this defensively so a
+   * future state written by a newer binary survives older whole-config saves.
+   */
+  customModelCatalogMigration?: unknown;
+  /**
    * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
    * commit messages, skill orchestration) to a user-chosen model. Default intercepted
    * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).

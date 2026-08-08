@@ -9,13 +9,21 @@ App's model picker as normal Codex catalog entries.
 
 OpenAI entries use two credential routes: native Codex login and the namespaced
 `openai-apikey/<model>` API-key transport. Changing `codexAccountMode` between Pool and Direct by
-itself does not change picker ids. When `codexAccountNamespaces` has eligible selectors whose
+itself does not change picker ids. When account-qualified picker rows are enabled by
+`codexAccountPickerEnabled` and `codexAccountNamespaces` has eligible selectors whose
 mapped accounts still exist, however,
 opencodex adds separate `<selector>/<native-openai-model>` rows for the mapped accounts and hides
 the bare native rows from the Codex picker. Selector labels are user-chosen public names with no
 built-in account-role meaning. Selecting a qualified row uses only its mapped account, does not
 change the active Pool account, and fails closed instead of switching accounts when the target is
 unavailable. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
+
+When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
+`codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
+backward compatibility. Set it to `false` to hide generated qualified rows and restore bare native
+rows in the picker without deleting mappings or disabling exact
+`<selector>/<native-openai-model>` routing.
+
 API GPT-5.6 entries use
 1,050,000 context / 922,000 max input, and `*-pro` picker ids resolve to the base wire model with
 `reasoning.mode: "pro"` while logs, usage, and picker state keep the virtual id.
@@ -72,8 +80,8 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (no eligible account selectors) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
-| Codex login (eligible account selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
+| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
+| Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus `cursor/grok-4.5` and `cursor/grok-4.5-fast` (500,000); live account discovery decides which remain visible. |
@@ -147,7 +155,7 @@ Codex sorts picker-visible catalog entries by ascending `priority` and advertise
 native ids or routed `provider/model` ids. Manually configured `subagentModels` also accepts
 account-qualified `<selector>/<native-openai-model>` ids, but the dashboard does not offer those
 exact ids; saving the page replaces the list with dashboard-visible choices. opencodex assigns low
-catalog priorities in the selected order; when account selectors are active, bare native selections
+catalog priorities in the selected order; when account-qualified picker rows are enabled, bare native selections
 expand into selector-qualified groups. Other models remain callable by exact id.
 
 The featured-model list is separate from the Dashboard's **Sub-agent delegation** selection. It

@@ -629,8 +629,12 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/provider-context-caps" && req.method === "PUT") {
-    let body: { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    let rawBody: unknown;
+    try { rawBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    // Reject non-object payloads (e.g. `{"provider": true}` or a bare array) before any
+    // property access, with the route's consistent 400 response.
+    if (!isPlainRecord(rawBody)) return jsonResponse({ error: "provider-context-caps body must be a plain object" }, 400);
+    const body = rawBody as { provider?: unknown; enabled?: unknown; value?: unknown; setAll?: unknown };
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     const { clearModelCache } = await import("../../codex/model-cache");
     const respond = (catalogRefresh: Awaited<ReturnType<typeof convergeCodexCatalog>>) => jsonResponse({
@@ -641,21 +645,78 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       catalogRefresh,
     });
 
-    // Branch 1: set the global cap value and re-point every enabled provider to it.
-    if (body.value !== undefined) {
-      if (typeof body.value !== "number" || !Number.isFinite(body.value) || body.value <= 0) {
+    // Reject malformed and mixed payloads before branch selection: `provider` and `enabled`
+    // must appear together with their expected types, and provider updates cannot be
+    // combined with `setAll` (which would otherwise be silently ignored).
+    const hasProviderFields = Object.hasOwn(body, "provider") || Object.hasOwn(body, "enabled");
+    if (hasProviderFields) {
+      if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
+        return jsonResponse({ error: "provider and enabled are required together" }, 400);
+      }
+      if (Object.hasOwn(body, "setAll")) {
+        return jsonResponse({ error: "setAll cannot be combined with provider updates" }, 400);
+      }
+    }
+
+    // Branch 1: per-provider toggle (checked first: a per-provider request may carry an
+    // explicit `value`, which must never fall through to the global-value branch). Enable
+    // writes the current global default unless an explicit per-provider value is supplied;
+    // that value is never copied to other providers.
+    if (typeof body.provider === "string" && typeof body.enabled === "boolean") {
+      const provider = body.provider.trim();
+      if (!isValidProviderName(provider)) {
+        return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
+      }
+      if (!hasOwnProvider(config.providers, provider)) {
+        return jsonResponse({ error: "unknown provider" }, 404);
+      }
+      // Validate a supplied per-provider value before mutating anything: it must be a
+      // finite number, and after flooring it must still be >= 1 — a value like 0.5 would
+      // otherwise floor to 0 and silently fall back to the global default.
+      if (body.value !== undefined && (typeof body.value !== "number" || !Number.isFinite(body.value))) {
         return jsonResponse({ error: "value must be a positive number" }, 400);
       }
-      const affected = Object.keys(providerContextCaps(config));
-      setGlobalContextCapValue(config, body.value);
+      const perProviderValue = typeof body.value === "number" ? Math.floor(body.value) : undefined;
+      if (perProviderValue !== undefined && perProviderValue < 1) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      setProviderContextCap(config, provider, body.enabled, perProviderValue);
       save(config);
       reconcileLiveStateStores();
-      for (const provider of affected) clearModelCache(provider);
+      clearModelCache(provider);
       const catalogRefresh = await convergeCodexCatalog();
       return respond(catalogRefresh);
     }
 
-    // Branch 2: enable/clear the cap for every provider at once.
+    // Branch 2: set the global cap value. When `setAll` accompanies it (dashboard "apply to
+    // every routed provider" toggle), re-point every enabled provider; otherwise keep each
+    // provider's own cap value and only change the default for future toggles.
+    if (body.value !== undefined) {
+      // Same normalization as the per-provider branch: floor before validating so a value
+      // that floors to zero is rejected rather than silently stored.
+      if (typeof body.value !== "number" || !Number.isFinite(body.value)) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      const normalizedValue = Math.floor(body.value);
+      if (normalizedValue < 1) {
+        return jsonResponse({ error: "value must be a positive number" }, 400);
+      }
+      if (body.setAll !== undefined && typeof body.setAll !== "boolean") {
+        return jsonResponse({ error: "setAll must be a boolean" }, 400);
+      }
+      const affected = Object.keys(providerContextCaps(config));
+      const applyToAll = body.setAll === true;
+      setGlobalContextCapValue(config, normalizedValue, applyToAll);
+      save(config);
+      reconcileLiveStateStores();
+      if (applyToAll) {
+        for (const provider of affected) clearModelCache(provider);
+      }
+      const catalogRefresh = await convergeCodexCatalog();
+      return respond(catalogRefresh);
+    }
+
+    // Branch 3: enable/clear the cap for every provider at once.
     if (body.setAll !== undefined) {
       if (typeof body.setAll !== "boolean") {
         return jsonResponse({ error: "setAll must be a boolean" }, 400);
@@ -670,23 +731,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return respond(catalogRefresh);
     }
 
-    // Branch 3: existing per-provider toggle (enable writes the current global value).
-    if (typeof body.provider !== "string" || typeof body.enabled !== "boolean") {
-      return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
-    }
-    const provider = body.provider.trim();
-    if (!isValidProviderName(provider)) {
-      return jsonResponse({ error: "provider name must use letters, numbers, dot, underscore, or hyphen and cannot be a reserved object key" }, 400);
-    }
-    if (!hasOwnProvider(config.providers, provider)) {
-      return jsonResponse({ error: "unknown provider" }, 404);
-    }
-    setProviderContextCap(config, provider, body.enabled);
-    save(config);
-    reconcileLiveStateStores();
-    clearModelCache(provider);
-    const catalogRefresh = await convergeCodexCatalog();
-    return respond(catalogRefresh);
+    // Unrecognized payload: reject rather than silently succeeding.
+    return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
   }
 
   // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a

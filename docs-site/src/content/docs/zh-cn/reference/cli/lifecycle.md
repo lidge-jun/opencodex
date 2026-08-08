@@ -178,6 +178,8 @@ ocx service uninstall
 
 在 PATH 上把基于脚本的 `codex` 启动器包装为一个轻量自启动脚本。真实的 `codex.exe` 目标会保持不变，以避免破坏精确的可执行文件调用。
 
+仅安装启动器并不能证明 Codex 请求会经过 OpenCodex。完成健康安装后，命令会检查当前 Codex 路由；当路由由外部配置、用户自有网关管理或无法验证时，会显示警告而不是绿色成功。若出站代理变量只存在于当前进程，而 `config.proxy` 未设置或无法解析，也会给出警告，因为 Codex 启动器和后台服务未必继承该环境。这些检查只读且绝不会打印代理值；在依赖自动启动前，请先处理提示的交接配置并运行 `ocx doctor`。
+
 如果已完成的外部 Codex 更新覆盖了已安装的 shim，下一次普通的 `ocx` 命令会先备份稳定的新启动器，再在分发前恢复 shim。仍在变动中的启动器会保持不动，并在稍后重试。修复失败只会警告，不会让所请求的命令失败；手动回退：`ocx codex-shim install`。将 `codexShimAutoRestore` 设为 `false`，或设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可在进程级别关闭自动恢复。
 
 | 子命令 | 操作 |

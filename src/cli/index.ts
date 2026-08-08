@@ -2,7 +2,11 @@
 import { spawn } from "node:child_process";
 import { currentExternalCodexModelProvider, restoreNativeCodex, restoreNativeCodexAsync, shouldInjectApiAuthHeader } from "../codex/inject";
 import { stripGrokConfig } from "../grok/inject";
-import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "../codex/history-job";
+import {
+  describeHistoryJobFailure,
+  resolveCodexHistoryJobTarget,
+  runCodexHistoryJob,
+} from "../codex/history-job";
 import { reconcileJournal } from "../codex/journal";
 import {
   codexAutoStartEnabled,
@@ -36,7 +40,7 @@ import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSele
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
 import { parseReadyArgs, runReady, type ReadyArgs } from "./ready";
-import { stopProxy } from "../lib/process-control";
+import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
 import { startupHealthSummary } from "../codex/autostart-health";
@@ -675,6 +679,10 @@ async function handleStop() {
       // exact teardown the refusal exists to prevent.
       const detail = err instanceof Error ? err.message : String(err);
       if (detail) console.error(`   ${detail}`);
+      if (err instanceof ProxyOwnershipRefusedError) {
+        ownershipBlocked = true;
+        console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+      }
     }
   } else {
     // Snapshot the stale on-disk state BEFORE the async probe: a concurrent `ocx start`
@@ -693,6 +701,10 @@ async function handleStop() {
         console.error(`❌ Failed to stop proxy (PID ${live.pid}).`);
         const detail = err instanceof Error ? err.message : String(err);
         if (detail) console.error(`   ${detail}`);
+        if (err instanceof ProxyOwnershipRefusedError) {
+          ownershipBlocked = true;
+          console.error("   Skipping shared teardown (native Codex restore, Grok config): the foreign proxy is still running.");
+        }
       }
     } else if (!stoppedService) {
       console.log("No running proxy found.");
@@ -899,7 +911,7 @@ async function handleRecoverHistory() {
     : { rows: 0, files: 0, failed: true as const };
   if (r.failed) {
     console.error(
-      "⚠️  Recovery SKIPPED: the Codex history DB is locked (Codex app/IDE open?). Close it and rerun this command.",
+      `⚠️  Recovery SKIPPED: ${describeHistoryJobFailure(outcome, "recover-legacy")}`,
     );
     process.exit(1);
   }
@@ -1148,11 +1160,16 @@ switch (command) {
     break;
   }
   case "codex-shim": {
-    const { codexShimStatus, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
+    const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
     switch (args[1]) {
       case "install": {
         const r = installCodexShim();
-        console.log(r.installed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
+        const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
+        const warnings = diagnoseCodexShim().healthy
+          ? collectCodexShimReadinessWarnings()
+          : [];
+        console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
+        for (const warning of warnings) console.warn(`   ${warning}`);
         break;
       }
       case "status":

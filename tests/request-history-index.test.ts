@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../src/server/management-api";
@@ -7,6 +16,7 @@ import { ManagementRequest } from "./helpers/management-auth";
 import {
   appendUsageEntry,
   resetUsageReadCacheForTests,
+  usageLogPath,
   type PersistedUsageEntry,
 } from "../src/usage/log";
 import {
@@ -14,7 +24,9 @@ import {
   queryRequestHistory,
   rebuildRequestHistoryIndex,
   requestHistoryRowById,
+  REQUEST_HISTORY_MAX_RECORD_BYTES,
   REQUEST_HISTORY_MAX_PAGE_SIZE,
+  REQUEST_HISTORY_READ_CHUNK_BYTES,
 } from "../src/routing/history/indexer";
 import { InvalidCursorError } from "../src/routing/history/cursor";
 import { HISTORY_DB_FILENAME } from "../src/routing/history/schema";
@@ -194,18 +206,50 @@ describe("request-history index (RI-02)", () => {
 
   test("partial final JSONL line is skipped until it completes", async () => {
     for (const row of seedRows(3)) appendUsageEntry(row);
+    const completeOffset = statSync(usageLogPath()).size;
     // Append a partial line without a trailing newline.
-    const { appendFileSync } = await import("node:fs");
-    const { usageLogPath } = await import("../src/usage/log");
     appendFileSync(usageLogPath(), '{"requestId":"req-partial","timestamp":', "utf-8");
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(3);
     expect(page.meta.indexedRows).toBe(3);
+    expect(page.meta.indexedOffset).toBe(completeOffset);
     // Completing the line makes it indexable on the next refresh.
     appendFileSync(usageLogPath(), '9999,"provider":"a","model":"m1","status":200,"durationMs":1,"usageStatus":"reported"}\n', "utf-8");
     const after = await queryRequestHistory({}, undefined, 10);
     expect(after.rows.length).toBe(4);
-    expect(after.rows.some(row => row.requestId === "req-partial")).toBe(true);
+    expect(after.rows.filter(row => row.requestId === "req-partial")).toHaveLength(1);
+    expect(after.meta.indexedOffset).toBe(statSync(usageLogPath()).size);
+  });
+
+  test("streaming refresh indexes a valid record that crosses a read chunk", async () => {
+    const large = entry("chunk-spanning", 9998, "a", "m1", {
+      apiKeyId: "x".repeat(REQUEST_HISTORY_READ_CHUNK_BYTES + 1024),
+    });
+    const line = `${JSON.stringify(large)}\n`;
+    expect(Buffer.byteLength(line)).toBeGreaterThan(REQUEST_HISTORY_READ_CHUNK_BYTES);
+    expect(Buffer.byteLength(line)).toBeLessThan(REQUEST_HISTORY_MAX_RECORD_BYTES);
+    appendFileSync(usageLogPath(), line, "utf-8");
+
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["chunk-spanning"]);
+    expect(page.meta.indexedOffset).toBe(statSync(usageLogPath()).size);
+  });
+
+  test("streaming refresh skips an oversized record without changing the canonical log", async () => {
+    const oversized = entry("oversized", 9998, "a", "m1", {
+      apiKeyId: "x".repeat(REQUEST_HISTORY_MAX_RECORD_BYTES + 1),
+    });
+    const oversizedLine = `${JSON.stringify(oversized)}\n`;
+    expect(Buffer.byteLength(oversizedLine)).toBeGreaterThan(REQUEST_HISTORY_MAX_RECORD_BYTES);
+    appendFileSync(usageLogPath(), oversizedLine, "utf-8");
+    appendUsageEntry(entry("after-oversized", 9999));
+    const canonical = readFileSync(usageLogPath());
+
+    const page = await queryRequestHistory({}, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["after-oversized"]);
+    expect(page.meta.indexedRows).toBe(1);
+    expect(page.meta.indexedOffset).toBe(canonical.byteLength);
+    expect(readFileSync(usageLogPath())).toEqual(canonical);
   });
 
   test("duplicate replay is ignored", async () => {

@@ -13,10 +13,11 @@ description: 提供者条目、身份验证、端点、模型目录、配额、�
 | `openaiProviderTierVersion?` | `2` | 由迁移设置 | 标记单一、可感知选项的 OpenAI 投影已完成。 |
 | `disabledModels?` | `string[]` | — | 从 Codex catalog 和 `/v1/models` 中隐藏、但不阻止直接 proxy 调用的 model。routed id 会从列表中移除。account-qualified native id 只隐藏对应 selector row；bare native GPT id 会隐藏 bare row 以及该 model 的所有 account-selector row。Models 页面只显示裸原生行和路由行；若只隐藏一个 selector-qualified 行，请直接设置此配置字段。 |
 | `providerContextCaps?` | `Record<string, number>` | `{}` | 按提供者设置、对 Codex 可见的上下文上限。上限只会降低已知的上下文窗口。 |
-| `contextCapValue?` | `number` | `350000` | 仪表板上下文上限控件使用的值；修改它会更新所有已启用的 `providerContextCaps` 条目。 |
+| `contextCapValue?` | `number` | `350000` | 仪表板上下文上限控件使用的默认值。仅当勾选“应用到所有已路由的提供方”时，修改它才会把值应用到所有已路由提供方（包括没有现有 `providerContextCaps` 条目的提供方）；否则每个提供方保留自己的上限。 |
 | `codexAccounts?` | `CodexAccount[]` | `[]` | 由 Codex Auth 管理的 ChatGPT/Codex 池账户元数据。密钥单独存放在 `codex-accounts.json` 中。 |
 | `pausedCodexAccountIds?` | `string[]` | `[]` | 在恢复之前从 Pool 选择中排除的账户，包括被暂停时的主 `__main__` 账户。 |
-| `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
+| `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。启用账户限定的选择器行后，target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
+| `codexAccountPickerEnabled?` | `boolean` | 映射为空时关闭 | 控制是否根据有效的 `codexAccountNamespaces` 映射生成账户限定的 Codex 选择器行。`true` 允许显示映射行。在非空映射中省略此字段时，为保持向后兼容会视为已启用；映射为空时则关闭。`false` 会隐藏生成行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。 |
 | `activeCodexAccountId?` | `string` | — | 为下一次请求手动选定的 Pool 账户。选择会清除线程亲和性；进行中的请求会保留捕获到的凭据。 |
 | `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都超过 `autoSwitchThreshold`、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估已绑定和未绑定任务；`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |

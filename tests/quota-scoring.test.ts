@@ -7,6 +7,7 @@ import { setCachedProviderAccountQuotaForTests, clearAccountQuotaCache } from ".
 import { quotaEvidenceForCandidate, quotaScore } from "../src/routing/quota";
 import { evaluatePolicyProfile, QUOTA_UNKNOWN_PENALTY_SCORE } from "../src/routing/evaluator";
 import { routeModel } from "../src/router";
+import { getAccountSet, saveCredential } from "../src/oauth/store";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
 import type { OcxConfig } from "../src/types";
 
@@ -195,7 +196,7 @@ describe("quota-aware scoring (RI-07)", () => {
     expect(penalized.candidates[0]!.score!.components.quota).toBe(QUOTA_UNKNOWN_PENALTY_SCORE);
   });
 
-  test("execution path passes the active codex account into quota evidence", async () => {
+  test("execution path does not invent Codex quota evidence from the active pool account", async () => {
     updateAccountQuota("pool-a", 30, 1_800_000_000_000, 20, 1_900_000_000_000);
     const cfg = config({
       codexAccounts: [{ id: "pool-a", email: "pool-a@example.test", isMain: false }],
@@ -205,8 +206,41 @@ describe("quota-aware scoring (RI-07)", () => {
       },
     });
     const route = routeModel(cfg, "policy/quotaRoute");
-    expect(route.routeDecision!.candidates[0]!.quota?.known).toBe(true);
-    expect(route.routeDecision!.candidates[0]!.quota?.headroom).toBeCloseTo(0.7, 2);
+    expect(route.routeDecision!.candidates[0]!.accountRef).toBeUndefined();
+    expect(route.routeDecision!.candidates[0]!.quota?.known).toBe(false);
+    expect(route.routeDecision!.candidates[0]!.quota?.headroom).toBeUndefined();
+  });
+
+  test("execution path does not invent Anthropic quota evidence from the active account", async () => {
+    await saveCredential("anthropic", {
+      access: "access-a",
+      refresh: "refresh-a",
+      expires: Date.now() + 3_600_000,
+      accountId: "uuid-a",
+      email: "a@example.test",
+    });
+    const activeId = getAccountSet("anthropic")!.activeAccountId;
+    setCachedProviderAccountQuotaForTests("anthropic", activeId, {
+      fiveHourPercent: 40,
+      updatedAt: Date.now(),
+    });
+    const cfg = config({
+      providers: {
+        anthropic: {
+          adapter: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+          authMode: "oauth",
+          models: ["claude-sonnet-5"],
+        },
+      },
+      routingProfiles: {
+        quotaRoute: { candidates: [{ provider: "anthropic", model: "claude-sonnet-5" }] },
+      },
+    });
+    const route = routeModel(cfg, "policy/quotaRoute");
+    expect(route.routeDecision!.candidates[0]!.accountRef).toBeUndefined();
+    expect(route.routeDecision!.candidates[0]!.quota?.known).toBe(false);
+    expect(route.routeDecision!.candidates[0]!.quota?.headroom).toBeUndefined();
   });
 
   test("exact account selectors and pool strategies remain authoritative", () => {

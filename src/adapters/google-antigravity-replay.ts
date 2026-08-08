@@ -2,14 +2,15 @@ import { createHash } from "node:crypto";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 /**
- * Antigravity (Cloud Code Assist) thoughtSignature reasoning-replay cache.
+ * Google-family thoughtSignature reasoning-replay cache.
  *
  * Gemini-3 interleaved thinking is stateless upstream: each model content part carries a
  * `thoughtSignature` that MUST be echoed back on the matching part in the next request, or the
  * upstream rejects the turn (HTTP 400). We observe signatures on the response stream, cache them
  * per `model + session`, and re-inject them into the outgoing `request.contents` on the next turn.
  *
- * Mirrors CLIProxyAPI `internal/runtime/executor/antigravity_reasoning_replay.go`. Gemini-only;
+ * Mirrors CLIProxyAPI `internal/runtime/executor/antigravity_reasoning_replay.go` and is also used
+ * by Vertex with a transport/project/location-prefixed model identity. Gemini-only;
  * Claude-on-Antigravity uses inline signature sanitization instead (see google-antigravity-wire).
  */
 

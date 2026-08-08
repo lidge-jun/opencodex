@@ -195,6 +195,23 @@ test("used process-local authority drift rejects before every catalog target wri
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
 });
 
+test("custom catalog runtime-support drift rejects before every catalog target write", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const customPath = join(codexHome, "custom-catalog.json");
+  writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "custom-catalog.json"\n');
+  writeFileSync(customPath, sourceCatalog("custom"));
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled-support")) as never);
+
+  const gathered = await candidate();
+  invalidateBundledCatalogCache();
+
+  expect(await commitCodexCatalogCandidate(gathered, 1_000))
+    .toEqual({ kind: "stale", reason: "process-local" });
+  expect(readFileSync(customPath, "utf8")).toBe(sourceCatalog("custom"));
+  expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+});
+
 test("catalog-only commit never creates the native pair or routing/history artifacts", async () => {
   const gathered = await candidate();
   expect((await commitCodexCatalogCandidate(gathered, 1_000)).kind).toBe("committed");

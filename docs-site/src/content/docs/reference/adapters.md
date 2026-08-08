@@ -90,8 +90,8 @@ of the HTTP retry loop.
 
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
-- Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
-  `thoughtSignature` values so reasoning continuity survives later turns.
+- Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
+  real `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.

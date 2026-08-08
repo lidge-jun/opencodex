@@ -22,8 +22,6 @@ import {
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
-import { getEffectiveActiveCodexAccountId } from "./codex/routing";
-import { getAccountSet } from "./oauth/store";
 import {
   buildRouteDecisionTrace,
   type RouteDecisionKind,
@@ -513,24 +511,6 @@ function routeModelInternal(
       quota: quotaEvidenceForCandidate({
         provider: candidate.provider,
         model: candidate.model,
-        ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
-          && providerCodexAccountMode(
-            OPENAI_CODEX_PROVIDER_ID,
-            config.providers[OPENAI_CODEX_PROVIDER_ID],
-          ) === "pool"
-          ? (() => {
-              const codexAccountId = getEffectiveActiveCodexAccountId(config);
-              return {
-                codexAccountId,
-                codexAccountPlan: codexAccountId
-                  ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
-                  : undefined,
-              };
-            })()
-          : {}),
-        accountRef: candidate.provider === "anthropic"
-          ? getAccountSet("anthropic")?.activeAccountId
-          : undefined,
       }),
       cost: costEvidenceForCandidate({
         provider: candidate.provider,

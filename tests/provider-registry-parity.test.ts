@@ -234,8 +234,8 @@ describe("provider registry parity", () => {
       baseUrl: "https://api.deepseek.com",
       defaultModel: "deepseek-v4-flash",
       modelContextWindows: {
-        "deepseek-v4-flash": 1_000_000,
-        "deepseek-v4-pro": 1_000_000,
+        "deepseek-v4-flash": 1_048_576,
+        "deepseek-v4-pro": 1_048_576,
       },
     });
 
@@ -761,6 +761,7 @@ describe("provider registry parity", () => {
       "google-antigravity": "google",
       "antigravity": "google",
       "gemini-antigravity": "google",
+      deepseek: "deepseek",
       moonshot: "moonshot",
       minimax: "minimax",
       "minimax-cn": "minimax",
@@ -769,6 +770,9 @@ describe("provider registry parity", () => {
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");
+    expect(resolveMetadataProvider("deepseek")).toBe("deepseek");
+    // User-saved provider keys can be title-cased ("DeepSeek"); alias lookup folds case.
+    expect(resolveMetadataProvider("DeepSeek")).toBe("deepseek");
   });
 
   test("legacy azure adapter spelling remains accepted", () => {

@@ -51,6 +51,13 @@ function resolveVertexApiKey(optKey?: string): string | undefined {
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;
 }
 
+/** Prefer Codex's stable opaque thread key; retain the existing deterministic fallback for clients
+ * that omit it. The replay store hashes this value and never retains the raw session identifier. */
+function vertexReplaySessionId(parsed: OcxParsedRequest): string {
+  const promptCacheKey = parsed.options.promptCacheKey?.trim();
+  return promptCacheKey || antigravitySessionId(parsed);
+}
+
 /**
  * Stable tool-call id for the Gemini wire `functionCall.id` / `functionResponse.id` fields.
  *
@@ -302,6 +309,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
   let antigravitySession: string | undefined;
+  // Vertex returns the same opaque Gemini thought signatures as CCA, but its replay namespace
+  // must stay transport-scoped: a signature minted by one Google backend must never be sent to
+  // another merely because the public model id and first prompt happen to match.
+  let vertexReplayModel: string | undefined;
+  let vertexReplaySession: string | undefined;
   let restoreGoogleToolName = (name: string): string => name;
   return {
     name: "google",
@@ -436,6 +448,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (provider.googleMode === "vertex") {
         const compiled = compileGoogleWireBody(body);
         restoreGoogleToolName = compiled.restoreToolName;
+        const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
+        const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
+        vertexReplayModel = `vertex:${vertexProject}:${vertexLocation}:${parsed.modelId}`;
+        vertexReplaySession = vertexReplaySessionId(parsed);
+        // Compile names before replay so the cache matches the exact provider-visible
+        // functionCall identity. This is the same bounded TTL/LRU store used by CCA, with the
+        // transport prefix above preventing cross-backend signature reuse (#1254).
+        if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
+          applyAntigravityReplay(
+            vertexReplayModel,
+            vertexReplaySession,
+            (compiled.body as { contents: unknown[] }).contents,
+          );
+        }
         // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
         const apiKey = resolveVertexApiKey(provider.apiKey);
         if (apiKey) {
@@ -497,13 +523,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         let emittedContentEvent = false;
 
-        let chunk: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          chunk = JSON.parse(payload);
+          parsed = JSON.parse(payload);
         } catch {
           yield { type: "error", message: "malformed upstream SSE data frame" };
           return "terminate";
         }
+        // `JSON.parse("null")` returns null rather than throwing, so the catch above cannot cover
+        // it and the `chunk.error` read below crashed the stream (see openai-chat.ts). Skip such a
+        // frame rather than terminating, for the reason given there: it is padding between real
+        // frames, not a broken stream. Deliberately returns BEFORE `sawAnyFrame`, so a stream made
+        // only of non-record frames still fails the terminal-signal check below instead of
+        // completing empty. An unparseable frame stays terminal.
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return "continue";
+        }
+        const chunk = parsed as Record<string, unknown>;
         sawAnyFrame = true;
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
@@ -511,9 +547,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const err = chunk.error as { message?: string } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
-          if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession
+          const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+          const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+          if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+            && replayModel && replaySession
             && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
-            clearAntigravityReplay(antigravityModel, antigravitySession);
+            clearAntigravityReplay(replayModel, replaySession);
           }
           yield { type: "error", message: err?.message ?? "upstream error" };
           return "terminate";
@@ -547,9 +586,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
 
         const parts = candidates[0].content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
-        // Antigravity reasoning-replay: record thoughtSignatures from the model parts for the next turn.
-        if (provider.googleMode === "cloud-code-assist" && parts && antigravityModel && antigravitySession) {
-          observeAntigravityReplay(antigravityModel, antigravitySession, parts as unknown[]);
+        // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
+        // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
+        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          && parts && replayModel && replaySession) {
+          observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
         if (parts) {
           for (const part of parts) {
@@ -764,9 +807,13 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       let toolCallsStarted = 0;
       const imageBudget = createImageBudget();
       if (candidates?.[0]?.content?.parts) {
-        // Non-streaming CCA: observe thoughtSignatures for the next turn, same as the stream path.
-        if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession) {
-          observeAntigravityReplay(antigravityModel, antigravitySession, candidates[0].content.parts as unknown[]);
+        // Non-streaming Google-family response: observe thought signatures for the next turn,
+        // using the same transport-scoped namespace as the streaming path.
+        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          && replayModel && replaySession) {
+          observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
           if (part.text) events.push({ type: "text_delta", text: part.text });

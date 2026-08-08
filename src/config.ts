@@ -29,6 +29,10 @@ import {
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
+import {
+  adoptCustomModelCatalogMigration,
+  projectCustomModelCatalogMigration,
+} from "./codex/custom-model-catalog-migration";
 import { parseAccountPriority } from "./codex/pool-rotation";
 import { COMBO_NAMESPACE, comboConfigIssues } from "./combos/types";
 import { routingProfileIssues } from "./routing/profile";
@@ -2381,7 +2385,9 @@ export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
-    if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
+    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), config);
+    if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+    adoptCustomModelCatalogMigration(config, projected);
   });
 }
 
@@ -2462,7 +2468,11 @@ export function mutatePersistedConfig<T>(
         continue;
       }
 
-      if (persistConfigUnlocked(confirmedConfig)) bumpGenerationForCooperatingConfigWrite();
+      const projected = projectCustomModelCatalogMigration(
+        commitBase.diagnostics.config,
+        confirmedConfig,
+      );
+      if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
       return { status: "committed", value: confirmed.value };
     }
     return { status: "unavailable", reason: "conflict" };
@@ -2700,9 +2710,9 @@ function readPersistedServerBinding(
 export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   withConfigMutationLockSync(() => {
     const bindingBaseline = persistedLiveServerBinding.get(config);
-    const onDisk = claudeCodeBaseline.has(config) || bindingBaseline
-      ? readRawConfigJson()
-      : undefined;
+    // One authoritative pre-write read feeds both the live-config reconciliation and
+    // custom-model deletion migration. A second read could observe different bytes.
+    const onDisk = readRawConfigJson();
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -2714,18 +2724,23 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
+    const projectedConfig = projectCustomModelCatalogMigration(
+      onDisk,
+      config,
+    );
     const persistedBinding = bindingBaseline && onDisk
       ? readPersistedServerBinding(onDisk, bindingBaseline)
       : bindingBaseline;
     if (persistedBinding) {
-      const persistedConfig: OcxConfig = { ...config, port: persistedBinding.port };
+      const persistedConfig: OcxConfig = { ...projectedConfig, port: persistedBinding.port };
       if (persistedBinding.hostname === undefined) delete persistedConfig.hostname;
       else persistedConfig.hostname = persistedBinding.hostname;
       if (persistConfigUnlocked(persistedConfig)) bumpGenerationForCooperatingConfigWrite();
       persistedLiveServerBinding.set(config, persistedBinding);
     } else {
-      if (persistConfigUnlocked(config)) bumpGenerationForCooperatingConfigWrite();
+      if (persistConfigUnlocked(projectedConfig)) bumpGenerationForCooperatingConfigWrite();
     }
+    adoptCustomModelCatalogMigration(config, projectedConfig);
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
     }

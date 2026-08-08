@@ -1299,11 +1299,22 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://platform.deepseek.com/api_keys",
-    // deepseek-chat/deepseek-reasoner are upstream-deprecated at 2026-07-24 15:59 UTC;
-    // kept until then. Evidence: devlog/_plan/260710_provider_hardening/002_research_cn.md.
+    // Route DeepSeek's own catalog bundle so routed rebuilds restore the official
+    // context window from the vendored model-metadata bundle instead of falling
+    // back to the 128k strict-fields default (scripts/model-metadata.source.json,
+    // verified 2026-08-08).
+    jawcodeBundle: "deepseek",
+    // deepseek-chat/deepseek-reasoner were deprecated upstream on 2026-07-24 15:59 UTC;
+    // official identifiers are now deepseek-v4-flash / deepseek-v4-pro. They stay in
+    // the list only as compatibility aliases so existing saved configs and requests
+    // keep validating and routing (they previously mapped to v4-flash; devlog
+    // _fin/260710_provider_hardening/002_research_cn.md). The current offerings are
+    // the V4 ids — defaultModel and the model-specific wiring above use them.
     models: ["deepseek-chat", "deepseek-reasoner", ...DEEPSEEK_THINKING_MODELS],
     defaultModel: "deepseek-v4-flash",
-    modelContextWindows: { "deepseek-v4-flash": 1_000_000, "deepseek-v4-pro": 1_000_000 },
+    // Official DeepSeek Codex setup (codex-deepseek-setup.sh) advertises 1,048,576
+    // for both V4 models; the older 1,000,000 figure was a rounded approximation.
+    modelContextWindows: { "deepseek-v4-flash": 1_048_576, "deepseek-v4-pro": 1_048_576 },
     // DeepSeek documents V4-Flash as a native Responses API model adapted for Codex. The
     // API id is `deepseek-v4-flash`; `DeepSeek-V4-Flash-0731` is a release/version label.
     modelWireDefaults: {

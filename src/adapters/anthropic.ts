@@ -984,13 +984,21 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         const payload = record.data.trim();
         if (!payload) continue;
 
-        let data: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          data = JSON.parse(payload) as Record<string, unknown>;
+          parsed = JSON.parse(payload);
         } catch {
           debugDroppedFrame("anthropic", payload);
           continue;
         }
+        // `JSON.parse("null")` returns null instead of throwing, so the catch above cannot cover
+        // it and the `data.type` read below crashed the stream. Drop a non-record frame the same
+        // way an unparseable one is dropped, so the message_stop check still governs the outcome.
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          debugDroppedFrame("anthropic", payload);
+          continue;
+        }
+        const data = parsed as Record<string, unknown>;
 
         switch (record.event || data.type) {
               case "message_start": {
