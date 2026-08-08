@@ -10,8 +10,10 @@ import {
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   retryOn429PolicyConfigError,
+  sanitizeModelCostsForDisplay,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
@@ -447,6 +449,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
     const canonicalCandidate = { ...raw };
     delete canonicalCandidate.responsesSnapshotRepair;
+    // modelCosts is a user-owned display overlay, not part of the canonical
+    // forward seed; it is validated separately below (providerModelCostsConfigError).
+    delete canonicalCandidate.modelCosts;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -470,6 +475,12 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
+  if (modelCostsError) {
+    // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
+    // it before it reaches the management API response (same rule as retryOn429 above).
+    return `provider ${JSON.stringify(redactSecretString(name))} ${modelCostsError}`;
   }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
@@ -544,6 +555,7 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
+/** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
@@ -583,6 +595,8 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
+    const modelCosts = sanitizeModelCostsForDisplay(provider.modelCosts);
+    if (modelCosts) dto.modelCosts = modelCosts;
     // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
     // still pointed at the same vendor route, and a usage restriction the user needs to see
     // must not disappear because the row was renamed. Prefer the same-name entry so an

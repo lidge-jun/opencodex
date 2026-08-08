@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { resetUsageReadCacheForTests, usageReadCacheStatsForTests } from "../src/usage/log";
 
@@ -150,6 +151,42 @@ describe("GET /api/usage", () => {
       expect(changed.summary.requests).toBe(first.summary.requests + 1);
       expect(usageReadCacheStatsForTests().fullReads).toBe(2);
     } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("usage route cache invalidates when the user cost overlay version changes", async () => {
+    writeFixture(Date.now());
+    // Start from a known overlay version so a leftover entry from an earlier
+    // test cannot satisfy the first request. This must run BEFORE startServer:
+    // the server boot loads the config and refreshes the overlay registry, and
+    // the version has to be settled by the time the first request caches.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+    const server = startServer(0);
+    try {
+      const first = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      const second = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(second.summary).toEqual(first.summary);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(1);
+      // A modelCosts save refreshes the overlay registry and bumps its version;
+      // the cached summary must not be reused even though the usage log is unchanged.
+      refreshUserCostOverlays({
+        providers: {
+          blsc: {
+            modelCosts: {
+              "deepseek-v4-flash": { input: 0.5, output: 2, cacheRead: 0.1, cacheWrite: 0.25 },
+            },
+          },
+        },
+      } as unknown as OcxConfig);
+      const changed = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(changed.summary.requests).toBe(first.summary.requests);
+      expect(usageReadCacheStatsForTests().fullReads).toBe(2);
+    } finally {
+      // This test installs a module-level blsc overlay; clear it even when an
+      // assertion or shutdown fails so later tests cannot resolve
+      // user-configured prices unexpectedly.
+      refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
       await server.stop(true);
     }
   });

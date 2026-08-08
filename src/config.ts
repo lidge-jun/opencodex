@@ -56,6 +56,7 @@ import {
   type OcxConfig,
   type OcxApiKeyEntry,
   type OcxProviderConfig,
+  type ProviderCostOverlay,
 } from "./types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./providers/openai-tiers";
 import {
@@ -66,6 +67,8 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
+import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
+import { MAX_COST4_RATE } from "./usage/expected-prices";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
   MAX_APP_OWNED_MEMORY_BUDGET_MB,
@@ -695,6 +698,73 @@ export function providerHeadersConfigError(headers: unknown): string | null {
   return null;
 }
 
+/**
+ * Validate `providers.<name>.modelCosts`: a plain object keyed by exact model
+ * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
+ * Returns null when valid/absent, else a human-readable error.
+ */
+const MODEL_COST_RATE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return `${field} must be a plain object keyed by model id`;
+  }
+  for (const [modelId, entry] of Object.entries(value)) {
+    if (!modelId.trim()) return `${field} keys must be nonblank model ids`;
+    // Redact secret-shaped model ids and JSON-escape control characters so a
+    // malformed write cannot echo a pasted key/secret back through the
+    // management API response.
+    const safeModelId = JSON.stringify(redactSecretString(modelId));
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return `${field}.${safeModelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
+    }
+    const rates = entry as Record<string, unknown>;
+    for (const key of MODEL_COST_RATE_KEYS) {
+      const rate = rates[key];
+      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > MAX_COST4_RATE) {
+        return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
+      }
+    }
+    // Reject unknown fields: a misplaced apiKey/apiKeyPool under a cost row
+    // would otherwise be persisted and echoed verbatim by display paths that
+    // mask only top-level provider secrets.
+    const extraKeys = Object.keys(rates).filter((key) => !(MODEL_COST_RATE_KEYS as readonly string[]).includes(key));
+    if (extraKeys.length > 0) {
+      return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, and cacheWrite are allowed (USD per 1M tokens)`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Serialize `providers.<name>.modelCosts` for display: copy ONLY the four
+ * numeric rate fields per model and DROP secret-shaped model ids, so a pasted
+ * API key in a key position cannot be echoed back by CLI/DTO display paths.
+ * The result uses a null prototype so "__proto__" remains an own row.
+ */
+export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, ProviderCostOverlay> | undefined {
+  if (!costs || typeof costs !== "object" || Array.isArray(costs)) return undefined;
+  const out = Object.create(null) as Record<string, ProviderCostOverlay>;
+  for (const [modelId, entry] of Object.entries(costs)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const rates = entry as Record<string, unknown>;
+    const input = rates.input;
+    const output = rates.output;
+    const cacheRead = rates.cacheRead;
+    const cacheWrite = rates.cacheWrite;
+    const valid = (rate: unknown): rate is number =>
+      typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate <= MAX_COST4_RATE;
+    if (valid(input) && valid(output) && valid(cacheRead) && valid(cacheWrite)) {
+      // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
+      // distinct rows cannot collapse into one placeholder key.
+      if (redactSecretString(modelId) !== modelId) continue;
+      out[modelId] = { input, output, cacheRead, cacheWrite };
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Keep the configured API-key header style scoped to Anthropic-compatible key auth. */
 export function apiKeyTransportConfigError(
   provider: Pick<OcxProviderConfig, "adapter" | "authMode" | "apiKeyTransport">,
@@ -1218,6 +1288,16 @@ const configSchema = z.object({
         message: headersError,
       });
     }
+    const modelCostsError = providerModelCostsConfigError((provider as { modelCosts?: unknown }).modelCosts);
+    if (modelCostsError) {
+      ctx.addIssue({
+        code: "custom",
+        // The provider key is caller-controlled and can be token-shaped; redact it
+        // before schemaDiagnosticsError serializes the path (ocx config validate/import).
+        path: ["providers", redactSecretString(name), "modelCosts"],
+        message: modelCostsError,
+      });
+    }
     const apiKeyTransportError = apiKeyTransportConfigError(provider as OcxProviderConfig);
     if (apiKeyTransportError) {
       ctx.addIssue({
@@ -1537,6 +1617,54 @@ export function retryOn429PolicyConfigError(policy: unknown): string | null {
 }
 
 /**
+ * Load-time degradation for `providers.<name>.modelCosts`, mirroring
+ * {@link sanitizeRetryOn429ForLoad}. A hand-edited malformed display-price row
+ * must not fail the whole config parse — that would back up config.json and
+ * fall back to defaults, dropping otherwise valid providers and the default
+ * route for a typo in a non-runtime display field. Invalid rows are dropped
+ * with a warning; strict rejection stays at the management/write boundary
+ * (providerManagementConfigError).
+ */
+function sanitizeModelCostsForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const providers = root.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    // Runs before schema validation, so the provider name is untrusted: redact
+    // secret-shaped names and JSON-escape control characters for the warning.
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    const costs = p.modelCosts;
+    if (costs === undefined) continue;
+    if (!costs || typeof costs !== "object" || Array.isArray(costs)) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts (${typeof costs}) is invalid — ignoring the overlay`);
+      continue;
+    }
+    const costsRecord = costs as Record<string, unknown>;
+    const hadEntries = Object.keys(costsRecord).length > 0;
+    let kept = 0;
+    for (const [modelId, entry] of Object.entries(costsRecord)) {
+      // Reuse the shared per-row shape contract so the load-time sanitizer
+      // cannot drift from the schema and the write boundary.
+      if (providerModelCostsConfigError({ [modelId]: entry }) === null) {
+        kept++;
+        continue;
+      }
+      delete costsRecord[modelId];
+      // Redact the model id: a hand-edit can place a secret in a key name.
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts.${JSON.stringify(redactSecretString(modelId))} is invalid — ignoring the row`);
+    }
+    if (hadEntries && kept === 0) {
+      delete p.modelCosts;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelCosts has no valid rows left — removing the overlay`);
+    }
+  }
+}
+
+/**
  * Companion to {@link warnDegradedStreamMode} for a blank persisted `hostname`. The bind
  * falls back to loopback, which is the safe direction but not what the file asked for —
  * say so once instead of silently ignoring the field.
@@ -1790,6 +1918,12 @@ function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig)
   }
 }
 
+/**
+ * Load and validate config.json into an OcxConfig. Missing or broken files fall
+ * back to defaults (invalid files are backed up first); a partially-invalid
+ * config is merged with defaults so providers and pool accounts survive. Also
+ * refreshes the user cost-overlay registry from the resulting config.
+ */
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
   const configPath = getConfigPath();
@@ -1797,12 +1931,13 @@ export function loadConfig(): OcxConfig {
   hardenExistingSecret(configPath);
   hardenExistingSecret(join(dir, "auth.json"));
   if (!existsSync(configPath)) {
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   }
   try {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);
@@ -1814,7 +1949,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
     // discarding it entirely, so pool accounts and providers survive a missing
@@ -1836,15 +1971,21 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
-      return normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed);
+      return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
-    return getDefaultConfig();
+    return withRefreshedCostOverlays(getDefaultConfig());
   }
+}
+
+/** Refresh the user cost-overlay registry from `config` and return it unchanged. */
+function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
+  refreshUserCostOverlays(config);
+  return config;
 }
 
 export type ConfigDiagnostics = {
@@ -2082,6 +2223,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);
@@ -2365,18 +2507,37 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
   }
 };
 
+/**
+ * Atomic config.json write WITHOUT the mutation lock; callers must hold
+ * `withConfigMutationLockSync`. Returns true when bytes changed. Refreshes the
+ * cost-overlay registry from the persisted config so runtime estimates follow
+ * every save path.
+ */
 function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
   const bytes = JSON.stringify(config, null, 2) + "\n";
+  let unchanged = false;
   try {
-    if (readFileSync(configPath, "utf8") === bytes) return false;
+    unchanged = readFileSync(configPath, "utf8") === bytes;
   } catch (error) {
     if (!isMissingPathError(error)) throw error;
   }
+  // Keep the runtime overlay registry in sync with EVERY persist path,
+  // including byte-identical saves: a cooperating CLI process may have written
+  // the same bytes (e.g. before a proxy notification), and Logs/Usage must
+  // adopt the overlay without waiting for a changed save or restart.
+  if (unchanged) {
+    refreshUserCostOverlays(config);
+    return false;
+  }
   atomicWriteFile(configPath, bytes);
+  // For changed saves, refresh only AFTER the write succeeded so a failed
+  // write cannot leave estimates reflecting configuration never persisted.
+  refreshUserCostOverlays(config);
   return true;
 }
 
+/** Persist `config` to config.json under the config-mutation lock. */
 export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
@@ -2645,6 +2806,10 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
   }
+  // The reconciliation may have adopted a providers.<name>.modelCosts edit made
+  // by a cooperating process while the OAuth login was pending; keep the overlay
+  // registry (and the usage-cache overlay version) in sync with the live config.
+  refreshUserCostOverlays(config);
 }
 
 /** The literal file, with no schema merge or default injection. */

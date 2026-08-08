@@ -47,7 +47,11 @@ type MetricUnavailableReason =
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable";
 
-type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay";
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -57,7 +61,7 @@ interface MatchedPriceInfo {
   provider: string;
   modelId: string;
   jawcodeProvider?: string;
-  source: "jawcode" | "expected";
+  source: "jawcode" | "expected" | "user";
   sourceRef?: string;
   verifiedAt?: string;
   status: "verified" | "verified-derived";
@@ -302,6 +306,7 @@ const ESTIMATE_REASON_KEYS = {
   usage_estimated: "logs.detail.estimate.usage_estimated",
   cache_detail_missing: "logs.detail.estimate.cache_detail_missing",
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
+  provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
 } as const satisfies Record<CostEstimateReason, string>;
 
 /**
@@ -318,10 +323,12 @@ const RECOVERY_KIND_KEYS = {
   "image-413": "logs.detail.attempt.recovery.image413",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
+/** Map a metric-unavailable reason to its i18n key. */
 function metricReasonKey(reason: MetricUnavailableReason) {
   return METRIC_REASON_KEYS[reason];
 }
 
+/** Map a cost-estimate reason to its i18n key. */
 function estimateReasonKey(reason: CostEstimateReason) {
   return ESTIMATE_REASON_KEYS[reason];
 }

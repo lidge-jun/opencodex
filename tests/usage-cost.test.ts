@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   calculateCost,
   estimateAttemptCost,
@@ -17,6 +17,12 @@ import {
   resolvePriorityMultiplier,
   type ExpectedPriceOverlay,
 } from "../src/usage/expected-prices";
+import {
+  activeUserCostOverlays,
+  refreshUserCostOverlays,
+  userCostOverlayVersion,
+} from "../src/usage/user-cost-overlays";
+import type { OcxConfig } from "../src/types";
 
 const RATE = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 
@@ -681,5 +687,287 @@ describe("long-context pricing tiers (#908)", () => {
       expect(tier.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(tier.thresholdInputTokens).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("provider cost overlay (user-configured)", () => {
+  const USER_PRICE = { input: 0.5, output: 2, cacheRead: 0.1, cacheWrite: 0.25 };
+  const USER_ROWS: ExpectedPriceOverlay[] = [{
+    provider: "deepseek",
+    modelId: "deepseek-chat",
+    cost4: USER_PRICE,
+    source: "config:providers.deepseek.modelCosts[deepseek-chat]",
+    verifiedAt: "user-configured",
+    status: "verified",
+  }];
+
+  afterEach(() => {
+    // The registry is module-level; reset it even when a test fails early so
+    // rows cannot leak into other files in a shared-process run.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  });
+
+  test("user overlay beats the jawcode price and reads verified (not estimated)", () => {
+    const price = resolveMatchedPrice("deepseek", "deepseek-chat", undefined, USER_ROWS);
+    expect(price).toMatchObject({
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+    expect(price?.sourceRef).toBe("config:providers.deepseek.modelCosts[deepseek-chat]");
+    expect(price?.verifiedAt).toBe("user-configured");
+    const estimate = estimateRequestCost({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      usage: { inputTokens: 1_000_000, outputTokens: 500_000 },
+      usageStatus: "reported",
+    }, undefined, USER_ROWS);
+    expect(estimate?.cost.total).toBeCloseTo(0.5 + 1.0, 9);
+    expect(estimate?.estimated).toBe(false);
+    expect(estimate?.price?.source).toBe("user");
+  });
+
+  test("custom provider names resolve only via the user overlay", () => {
+    // Fabricated model id: absent from the jawcode catalog, so only the user
+    // overlay can price it (deepseek-v4-flash itself would resolve through the
+    // model-level vendor fallback).
+    expect(resolveMatchedPrice("blsc", "blsc-test-model")).toBeNull();
+    const rows: ExpectedPriceOverlay[] = [{
+      provider: "blsc",
+      modelId: "blsc-test-model",
+      cost4: USER_PRICE,
+      source: "config:providers.blsc.modelCosts[blsc-test-model]",
+      verifiedAt: "user-configured",
+      status: "verified",
+    }];
+    const price = resolveMatchedPrice("blsc", "blsc-test-model", undefined, rows);
+    expect(price).toMatchObject({ provider: "blsc", modelId: "blsc-test-model", source: "user" });
+  });
+
+  test("user overlay matches an exact provider name ending with an account-label suffix", () => {
+    refreshUserCostOverlays({
+      providers: {
+        "blsc-pabcdef": {
+          modelCosts: { "custom-model": USER_PRICE },
+        },
+      },
+    } as unknown as OcxConfig);
+    // "pabcdef" matches the Codex account-log-label pattern, so the base label
+    // collapses to "blsc"; the exact provider name must still win for its own
+    // configured overlay.
+    const price = resolveMatchedPrice("blsc-pabcdef", "custom-model");
+    expect(price).toMatchObject({
+      provider: "blsc-pabcdef",
+      modelId: "custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+    expect(price?.sourceRef).toBe("config:providers.blsc-pabcdef.modelCosts[custom-model]");
+  });
+
+  test("a configured provider with a label-shaped suffix never inherits the base provider's user overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+        "acme-pabcdef": { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+      },
+    } as unknown as OcxConfig);
+    // The literal provider exists in config.providers, so its pricing namespace
+    // stays isolated even though the name matches the account-label pattern:
+    // it must NOT price through acme's user overlay.
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")).toBeNull();
+    // The base provider itself still resolves through its own overlay.
+    expect(resolveMatchedPrice("acme", "acme-custom-model")).toMatchObject({
+      provider: "acme",
+      modelId: "acme-custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+  });
+
+  test("an all-zero overlay on a suffix-shaped configured provider falls through to compiled pricing, not the base provider's overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "claude-opus-4-6": USER_PRICE } },
+        "acme-pabcdef": {
+          modelCosts: { "claude-opus-4-6": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        },
+      },
+    } as unknown as OcxConfig);
+    const price = resolveMatchedPrice("acme-pabcdef", "claude-opus-4-6");
+    // The all-zero row falls through to compiled/catalog pricing — the
+    // documented fallback order — and never to acme's user-configured price.
+    expect(price).not.toBeNull();
+    expect(price?.provider).toBe("acme-pabcdef");
+    expect(price?.source).toBe("jawcode");
+    expect(price?.cost4).not.toEqual(USER_PRICE);
+    // The compiled model-level price for claude-opus-4-6 (anthropic vendor).
+    expect(price?.cost4).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+  });
+
+  test("a generated account label (not a configured provider) still collapses to the base provider's overlay", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+      },
+    } as unknown as OcxConfig);
+    // acme-pabcdef is NOT in config.providers here — it is a generated log
+    // label for an acme account, so collapsing to acme's overlay is intended.
+    const price = resolveMatchedPrice("acme-pabcdef", "acme-custom-model");
+    expect(price).toMatchObject({
+      provider: "acme",
+      modelId: "acme-custom-model",
+      cost4: USER_PRICE,
+      source: "user",
+      status: "verified",
+    });
+  });
+
+  test("configuring a provider invalidates its collapsed memo entry immediately", () => {
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+      },
+    } as unknown as OcxConfig);
+    // Not configured yet → generated label → collapses to acme (memoized).
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")?.source).toBe("user");
+    // The provider is now configured (without an overlay): namespace isolation
+    // must apply immediately — the resolver memo cannot keep serving the stale
+    // collapsed entry, even though no overlay row changed.
+    refreshUserCostOverlays({
+      providers: {
+        acme: { modelCosts: { "acme-custom-model": USER_PRICE } },
+        "acme-pabcdef": { adapter: "openai-chat", baseUrl: "https://example.invalid" },
+      },
+    } as unknown as OcxConfig);
+    expect(resolveMatchedPrice("acme-pabcdef", "acme-custom-model")).toBeNull();
+  });
+
+  test("all-zero user overlay falls through to the expected overlay price", () => {
+    const zero: ExpectedPriceOverlay[] = [{
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+      cost4: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      source: "config:providers.deepseek.modelCosts[deepseek-chat]",
+      verifiedAt: "user-configured",
+      status: "verified",
+    }];
+    const price = resolveMatchedPrice("deepseek", "deepseek-chat", undefined, zero);
+    expect(price?.source).toBe("expected");
+    expect(price?.cost4.input).toBe(0.27);
+  });
+
+  test("combo fails closed when a user-priced attempt shares a combo with an unpriced one", () => {
+    const attempts = [
+      { ordinal: 1, provider: "deepseek", model: "deepseek-chat", usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 } },
+      { ordinal: 2, provider: "blsc", model: "unknown-model", usageStatus: "reported" as const, usage: { inputTokens: 100, outputTokens: 10 } },
+    ];
+    expect(estimateComboCost(attempts, undefined, undefined, USER_ROWS)).toBeNull();
+    const priced = [attempts[0]];
+    const combo = estimateComboCost(priced, undefined, undefined, USER_ROWS);
+    expect(combo?.attempts[0].price.source).toBe("user");
+    expect(combo?.attempts[0].cost.total).toBeCloseTo((0.5 * 100 + 2 * 10) / 1e6, 12);
+  });
+
+  test("registry refresh replaces rows, bumps the version, and invalidates the memo", () => {
+    const before = activeUserCostOverlays();
+    const versionBefore = userCostOverlayVersion();
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": USER_PRICE,
+            "overlay-test-model": USER_PRICE,
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+    expect(activeUserCostOverlays()).not.toBe(before);
+    expect(userCostOverlayVersion()).toBe(versionBefore + 1);
+    // Default lookup path (registry-backed, memoized) picks the configured price up.
+    const first = resolveMatchedPrice("blsc", "deepseek-v4-flash");
+    expect(first).toMatchObject({ source: "user", cost4: USER_PRICE });
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")?.source).toBe("user");
+    // A price change must not be served from the stale memo.
+    refreshUserCostOverlays({
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": { ...USER_PRICE, input: 0.99 },
+            "overlay-test-model": { ...USER_PRICE, input: 0.99 },
+          },
+        },
+      },
+    } as unknown as OcxConfig);
+    const second = resolveMatchedPrice("blsc", "deepseek-v4-flash");
+    expect(second?.cost4.input).toBe(0.99);
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")?.cost4.input).toBe(0.99);
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+    expect(resolveMatchedPrice("blsc", "overlay-test-model")).toBeNull();
+    // Without the overlay, deepseek-v4-flash falls back to its jawcode vendor price.
+    expect(resolveMatchedPrice("blsc", "deepseek-v4-flash")?.source).toBe("jawcode");
+  });
+
+  test("refresh with identical rows is a no-op for the version and memo", () => {
+    const config = {
+      providers: {
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.invalid",
+          modelCosts: {
+            "deepseek-v4-flash": USER_PRICE,
+          },
+        },
+      },
+    } as unknown as OcxConfig;
+    refreshUserCostOverlays(config);
+    const versionAfterFirst = userCostOverlayVersion();
+    const rowsAfterFirst = activeUserCostOverlays();
+    // Config reloads (server start, persist paths) pass the same rows again;
+    // they must not churn the version or replace the active array identity.
+    refreshUserCostOverlays(config);
+    expect(userCostOverlayVersion()).toBe(versionAfterFirst);
+    expect(activeUserCostOverlays()).toBe(rowsAfterFirst);
+    expect(resolveMatchedPrice("blsc", "deepseek-v4-flash")?.source).toBe("user");
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  });
+
+  test("registry redacts token-shaped ids in display source but keeps raw matching and change detection", () => {
+    const configWith = (provider: string, model: string) => ({
+      providers: { [provider]: { modelCosts: { [model]: USER_PRICE } } },
+    }) as unknown as OcxConfig;
+    refreshUserCostOverlays(configWith("sk-provider-123", "sk-model-456"));
+    const rows = activeUserCostOverlays();
+    expect(rows).toHaveLength(1);
+    // Matching fields stay raw so exact-name resolution still works.
+    expect(rows[0].provider).toBe("sk-provider-123");
+    expect(rows[0].modelId).toBe("sk-model-456");
+    // The display-only source redacts token-shaped ids.
+    expect(rows[0].source).not.toContain("sk-provider-123");
+    expect(rows[0].source).not.toContain("sk-model-456");
+    expect(rows[0].source).toContain("[REDACTED]");
+    expect(resolveMatchedPrice("sk-provider-123", "sk-model-456")?.source).toBe("user");
+    // Identical refresh stays a no-op.
+    const versionBefore = userCostOverlayVersion();
+    refreshUserCostOverlays(configWith("sk-provider-123", "sk-model-456"));
+    expect(userCostOverlayVersion()).toBe(versionBefore);
+    // A DIFFERENT secret-shaped id with the same rates must still bump: the
+    // change-detection signature compares raw matching fields, not the redacted
+    // display strings (both would otherwise collapse to "[REDACTED]").
+    refreshUserCostOverlays(configWith("sk-provider-789", "sk-model-456"));
+    expect(userCostOverlayVersion()).toBe(versionBefore + 1);
+    expect(activeUserCostOverlays()[0].provider).toBe("sk-provider-789");
+    // Leave the registry empty for the rest of the file.
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   });
 });
