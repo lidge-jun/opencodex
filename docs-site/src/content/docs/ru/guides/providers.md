@@ -154,7 +154,7 @@ OAuth-провайдеры, чьи учётные данные содержат 
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 77 встроенными пресетами: 65 на основе ключей, восемь OAuth, три локальных и
+opencodex поставляется с 78 встроенными пресетами: 66 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -198,6 +198,7 @@ opencodex поставляется с 77 встроенными пресетам
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -302,6 +303,14 @@ embedding-, transcription- и прочие media-model id исключаются
 ограничен 128 KiB и 128 исходными строками. Используется общий endpoint Project по умолчанию; URL с
 Project ID и dedicated deployment настраиваются как custom provider. API-ключ создаётся в
 [консоли Scaleway](https://console.scaleway.com/generative-api).
+
+**Discovery для Featherless.** Пресет проходит аутентификацию на фиксированном OpenAI-совместимом
+хосте и запрашивает только первые 100 популярных моделей, отфильтрованных по chat и текущему plan.
+Затем registry по принципу fail closed требует, чтобы каждая строка отдельно подтверждала доступность
+по plan, отсутствие Hugging Face gate и `features.tool_use: true`. Discovery ограничен 128 KiB и 100
+исходными строками, поэтому каталог из десятков тысяч моделей не загружается и не кэшируется целиком.
+Индивидуальные plan предназначены для interactive/prototype; произвольные приложения требуют Scale
+plan. Ключ создаётся в [дашборде Featherless](https://featherless.ai/account/api-keys).
 
 > **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),

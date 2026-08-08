@@ -886,7 +886,9 @@ function normalizedStringList(value: unknown, maxItems = 32, maxLength = 64): st
 function modelCapabilities(item: ProviderModelsApiItem): string[] | undefined {
   const metadata = plainRecord(item.metadata);
   const metadataCapabilities = metadata?.capabilities;
-  const capabilityRecord = plainRecord(metadataCapabilities) ?? plainRecord(item.capabilities);
+  const capabilityRecord = plainRecord(metadataCapabilities)
+    ?? plainRecord(item.capabilities)
+    ?? plainRecord(item.features);
   const out = new Set<string>();
   for (const list of [item.capabilities, item.features, item.supported_features, metadataCapabilities]) {
     for (const capability of normalizedStringList(list) ?? []) out.add(capability);
@@ -916,7 +918,9 @@ function modelInputModalities(
   capabilities: readonly string[] | undefined,
 ): string[] | undefined {
   const metadata = plainRecord(item.metadata);
-  const capabilityRecord = plainRecord(metadata?.capabilities) ?? plainRecord(item.capabilities);
+  const capabilityRecord = plainRecord(metadata?.capabilities)
+    ?? plainRecord(item.capabilities)
+    ?? plainRecord(item.features);
   const explicit = normalizedStringList(
     item.input_modalities
       ?? item.modalities
@@ -943,7 +947,9 @@ function modelInputModalities(
     if (inferred.length > 0) return [...new Set(inferred)];
   }
   if (capabilityRecord?.vision === false) return ["text"];
-  if (capabilityRecord?.vision === true || capabilities?.some(value => value === "vision" || value === "image-input")) {
+  if (capabilityRecord?.vision === true || capabilities?.some(value => (
+    value === "vision" || value === "image-input" || value === "image_input"
+  ))) {
     return ["text", "image"];
   }
   return undefined;

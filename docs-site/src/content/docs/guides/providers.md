@@ -217,7 +217,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 77 built-in presets: 65 key-based, eight OAuth, three local, and one default
+opencodex ships 78 built-in presets: 66 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -260,6 +260,7 @@ free-experimentation model.
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -367,6 +368,14 @@ transcription, and other media-model ids fail closed; discovery is capped at 128
 rows. It uses the default Project's shared endpoint; project-qualified URLs and dedicated
 deployments require a custom provider. Create an API key in the
 [Scaleway console](https://console.scaleway.com/generative-api).
+
+**Featherless discovery.** The preset authenticates against the fixed OpenAI-compatible host and
+requests only the first 100 popular models filtered upstream to chat and the current plan. Registry
+rules then fail closed unless each row independently reports plan availability, no Hugging Face
+gate, and `features.tool_use: true`. Discovery is capped at 128 KiB and 100 raw rows, so the service's
+tens-of-thousands-model catalog is never downloaded or cached in full. Featherless terms reserve
+individual plans for interactive/prototyping use; arbitrary applications require a Scale plan.
+Create a key in the [Featherless dashboard](https://featherless.ai/account/api-keys).
 
 > **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key

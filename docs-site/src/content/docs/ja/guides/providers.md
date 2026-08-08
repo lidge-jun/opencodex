@@ -144,7 +144,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 77 個含まれています。キー方式 65、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 78 個含まれています。キー方式 66、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -187,6 +187,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -278,6 +279,13 @@ allowlist の積集合だけを公開します。未知、Responses 専用、emb
 id は fail closed で除外し、discovery を 128 KiB と raw 128 行に制限します。default Project の共有
 endpoint を使用します。Project id 付き URL と dedicated deployment は custom provider で設定してください。
 API キーは [Scaleway console](https://console.scaleway.com/generative-api) で作成します。
+
+**Featherless の discovery:** 固定の OpenAI 互換ホストで認証し、chat と現在の plan に絞った人気順の
+先頭 100 model だけを取得します。各 row が plan で利用可能、Hugging Face gate なし、かつ
+`features.tool_use: true` と独立して報告しない限り fail closed で除外します。discovery は 128 KiB と
+raw 100 行が上限で、数万件の catalog 全体を download / cache しません。個人 plan は interactive / prototype
+用途に限られ、任意の application には Scale plan が必要です。キーは
+[Featherless dashboard](https://featherless.ai/account/api-keys) で作成します。
 
 > **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、

@@ -1673,6 +1673,50 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     note: "Shared Generative APIs Serverless Chat Completions only; project-qualified and dedicated deployment hosts require a custom provider.",
   },
+  {
+    // Primary sources checked 2026-08-08:
+    // - https://featherless.ai/docs/api-overview-and-common-options documents the fixed
+    //   OpenAI-compatible base URL, Bearer keys, and Chat Completions.
+    // - https://featherless.ai/docs/api-reference-models documents authenticated plan filtering,
+    //   chat capability filtering, popularity sorting, pagination, and per-row tool metadata.
+    // - https://featherless.ai/legal/terms-of-service identifies Featherless as a Delaware LLC,
+    //   covers developers building on its APIs, and reserves arbitrary applications for Scale
+    //   plans. Maintainer: @olddonkey; no affiliation with Featherless.
+    id: "featherless",
+    label: "Featherless AI",
+    baseUrl: "https://api.featherless.ai/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://featherless.ai/account/api-keys",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // Featherless documents tool calling, but not a provider-wide parallel tool-call contract.
+    parallelToolCalls: false,
+    // Reasoning controls use model-specific chat_template_kwargs, not OpenAI reasoning_effort.
+    reasoningEfforts: [],
+    modelDiscovery: {
+      path: "models",
+      query: {
+        available_on_current_plan: "true",
+        capabilities: "chat",
+        page: "1",
+        per_page: "100",
+        sort: "-popularity",
+      },
+      maxResponseBytes: 128 * 1024,
+      maxModels: 100,
+      filter: {
+        // Treat server-side filters as a size optimization, not an authority boundary. A row must
+        // independently prove plan availability, no separate Hugging Face gate, and tool support.
+        allOf: [
+          { path: ["available_on_current_plan"], equalsAny: [true] },
+          { path: ["is_gated"], equalsAny: [false] },
+          { path: ["features", "tool_use"], equalsAny: [true] },
+        ],
+      },
+    },
+    note: "Authenticated first page of popular chat models only; live discovery admits at most 100 plan-available, ungated rows whose metadata explicitly reports tool use.",
+  },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },

@@ -143,7 +143,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 77개 들어 있습니다. 키 방식 65개, OAuth 8개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 78개 들어 있습니다. 키 방식 66개, OAuth 8개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -187,6 +187,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -276,6 +277,13 @@ discovery를 256 KiB와 raw 행 256개로 제한합니다. agent 전용 및 dedi
 제외하고 discovery를 128 KiB와 raw 행 128개로 제한합니다. 기본 Project의 공유 endpoint를 사용합니다.
 Project ID가 포함된 URL과 dedicated deployment는 custom provider로 설정하세요. API 키는
 [Scaleway console](https://console.scaleway.com/generative-api)에서 생성합니다.
+
+**Featherless 검색:** 고정된 OpenAI 호환 호스트에서 인증하고, chat 및 현재 plan으로 필터링한 인기 모델의
+첫 100개만 요청합니다. 각 행이 plan 사용 가능, Hugging Face gate 없음, `features.tool_use: true`를
+독립적으로 보고하지 않으면 fail closed로 제외합니다. 검색은 128 KiB와 raw 100행으로 제한되어 수만 개의
+전체 catalog를 다운로드하거나 캐시하지 않습니다. 개인 plan은 interactive/prototype 용도로 제한되며 임의의
+application에는 Scale plan이 필요합니다. 키는
+[Featherless dashboard](https://featherless.ai/account/api-keys)에서 생성합니다.
 
 > **Baseten 범위:** 이 프리셋은 Baseten의 공유 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)만
 > 지원합니다. 로컬 사용에는 개인 [API 키](https://docs.baseten.co/organization/api-keys)를, 공유/프로덕션

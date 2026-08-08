@@ -132,7 +132,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 77 个预设：65 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 78 个预设：66 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -175,6 +175,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -256,6 +257,12 @@ Responses-only、embedding 和 media-generation 模型 id 会按 fail closed 原
 发现上限为 128 KiB 和 128 条原始记录。它使用默认 Project 的共享 endpoint；带 Project ID 的 URL 和
 dedicated deployment 需要配置为 custom provider。API 密钥可在
 [Scaleway 控制台](https://console.scaleway.com/generative-api) 创建。
+
+**Featherless 发现：**该预设在固定的 OpenAI 兼容主机上鉴权，只请求按 chat 和当前 plan 过滤后的热门
+模型第一页，最多 100 条。registry 随后按 fail closed 原则要求每条记录分别报告当前 plan 可用、无需
+Hugging Face gate，且 `features.tool_use: true`。发现上限为 128 KiB 和 100 条原始记录，因此不会下载或
+缓存包含数万模型的完整目录。个人 plan 仅适用于 interactive/prototype 用途；任意 application 需要使用
+Scale plan。密钥可在 [Featherless dashboard](https://featherless.ai/account/api-keys) 创建。
 
 > **Baseten 范围：**该预设仅覆盖 Baseten 的共享 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)。
 > 本地使用可选择个人 [API 密钥](https://docs.baseten.co/organization/api-keys)；共享或生产用途请使用具备
