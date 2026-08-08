@@ -32,6 +32,7 @@ import {
   CURSOR_VISION_MCP_IMAGE_OMITTED,
   CURSOR_VISION_PROMOTE_NUDGE,
   MAX_CURSOR_IMAGE_DECODE_BYTES,
+  MAX_CURSOR_IMAGES,
 } from "../src/adapters/cursor/images";
 import { estimateTokens } from "../src/lib/token-estimate";
 import {
@@ -52,6 +53,14 @@ afterEach(() => {
   setCursorBlobLimitsForTests();
   resetAppOwnedMemoryForTests();
 });
+
+/** Minimal valid 1×1 PNG for SelectedImage / MCP fixtures (not signature-only). */
+const PNG_1X1 = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
 
 function sha256(data: Uint8Array): Uint8Array {
   return new Uint8Array(createHash("sha256").update(data).digest());
@@ -195,7 +204,7 @@ describe("Cursor blob handshake", () => {
   test("encodeCursorRunRequest attaches selectedContext with blobId image refs on the active user turn", () => {
     // Native cursor-agent converts SelectedImage.data → sha256 blobId and serves
     // bytes via getBlobArgs. Inline data on the run request is ignored for vision.
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const expectedBlobId = new Uint8Array(createHash("sha256").update(imageBytes).digest());
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-opus-high",
@@ -241,7 +250,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("encodeCursorRunRequest keeps selectedContext only on the active user turn", () => {
-    const activeImageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const activeImageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
       conversationId: "c1",
@@ -293,7 +302,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "claude-4.6-opus-high",
       conversationId: "c1",
@@ -326,7 +335,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("encodeCursorRunRequest uses userMessageAction for image-only turns after assistant reply", () => {
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
       conversationId: "c1",
@@ -837,7 +846,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("forwards view_image tool-result data URLs as McpImageContent", () => {
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
     const bytes = encodeCursorRunRequest({
       modelId: "composer-2.5",
@@ -931,7 +940,7 @@ describe("Cursor blob handshake", () => {
   });
 
   test("forwards grok-4.5 view_image tool-result data URLs as McpImageContent", () => {
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const imageUrl = `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`;
     const bytes = encodeCursorRunRequest({
       modelId: "grok-4.5",
@@ -992,7 +1001,7 @@ describe("Cursor blob handshake", () => {
 
   test("promotes grok-4.5 view_image images onto userMessageAction SelectedImage", () => {
     resetCursorBlobStateForTests();
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "grok-4.5",
       conversationId: "c1",
@@ -1047,7 +1056,7 @@ describe("Cursor blob handshake", () => {
   test("promotes view_image SelectedImage when multi_agent developer trails the toolResult", () => {
     // Mirrors Desktop: injectDeveloperMessage appends after view_image output.
     resetCursorBlobStateForTests();
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const collab = "<multi_agent_mode>Preferred sub-agent: model \"cursor/grok-4.5\", reasoning_effort \"high\"</multi_agent_mode>";
     const bytes = encodeCursorRunRequest({
       modelId: "grok-4.5",
@@ -1095,7 +1104,7 @@ describe("Cursor blob handshake", () => {
 
   test("image-only user attach keeps empty action text", () => {
     resetCursorBlobStateForTests();
-    const imageBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const imageBytes = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "grok-4.5",
       conversationId: "c1",
@@ -1116,8 +1125,8 @@ describe("Cursor blob handshake", () => {
 
   test("promotes two trailing view_image toolResults onto SelectedImage", () => {
     resetCursorBlobStateForTests();
-    const a = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-    const b = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 11]);
+    const a = PNG_1X1;
+    const b = PNG_1X1;
     const bytes = encodeCursorRunRequest({
       modelId: "grok-4.5",
       conversationId: "c1",
@@ -1165,7 +1174,7 @@ describe("Cursor blob handshake", () => {
     resetCursorBlobStateForTests();
     // 13 trailing image toolResults; SelectedImage only carries the newest 12 uuids.
     // The oldest call must keep McpImageContent (not text-omitted).
-    const stub = (n: number) => new Uint8Array([137, 80, 78, 71, 13, 10, 26, n & 0xff]);
+    const stub = (_n: number) => PNG_1X1;
     const toolCalls = Array.from({ length: 13 }, (_, i) => ({
       type: "toolCall" as const,
       id: `call_${i}`,
@@ -1239,6 +1248,145 @@ describe("Cursor blob handshake", () => {
     expect(newestResult.result.value.content.some(item =>
       item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
     )).toBe(true);
+  });
+
+  test("one toolResult with >12 images promotes 12 and keeps overflow on MCP", () => {
+    resetCursorBlobStateForTests();
+    const imageUrl = `data:image/png;base64,${Buffer.from(PNG_1X1).toString("base64")}`;
+    const images = Array.from({ length: MAX_CURSOR_IMAGES + 2 }, () => ({
+      type: "image" as const,
+      imageUrl,
+    }));
+    const selectedImages = Array.from({ length: MAX_CURSOR_IMAGES }, (_, i) => ({
+      uuid: `p-${i}`,
+      mimeType: "image/png",
+      data: PNG_1X1,
+    }));
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "tool", content: "[tool_result]" }],
+      selectedImages,
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_many", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_many",
+          toolName: "view_image",
+          content: images,
+          isError: false,
+          timestamp: 3,
+        },
+      ],
+    });
+
+    expect(activeSelectedImages(bytes)?.length).toBe(MAX_CURSOR_IMAGES);
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall" || tool.value.tool.case !== "mcpToolCall") {
+      throw new Error("expected mcpToolCall");
+    }
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    const content = result.result.value.content;
+    const mcpImages = content.filter(item => item.content.case === "image");
+    const omitted = content.filter(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    );
+    // Oldest 2 overflow stay on MCP; newest 12 are SelectedImage-omitted.
+    expect(mcpImages.length).toBe(2);
+    expect(omitted.length).toBe(MAX_CURSOR_IMAGES);
+  });
+
+  test("prior view_image then new user turn drops historical McpImageContent", () => {
+    resetCursorBlobStateForTests();
+    const imageUrl = `data:image/png;base64,${Buffer.from(PNG_1X1).toString("base64")}`;
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "thanks" }],
+      rawMessages: [
+        { role: "user", content: "describe", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [{ type: "toolCall", id: "call_view", name: "view_image", arguments: { path: "/tmp/x.png" } }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_view",
+          toolName: "view_image",
+          content: [{ type: "image", imageUrl }],
+          isError: false,
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 4,
+          content: [{ type: "text", text: "a cat" }],
+        },
+        { role: "user", content: "thanks", timestamp: 5 },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.length).toBe(1);
+    const tool = toolCalls[0]?.message;
+    expect(tool?.case).toBe("toolCall");
+    if (tool?.case !== "toolCall" || tool.value.tool.case !== "mcpToolCall") {
+      throw new Error("expected mcpToolCall");
+    }
+    const result = tool.value.tool.value.result;
+    expect(result?.result.case).toBe("success");
+    if (result?.result.case !== "success") throw new Error("expected success");
+    expect(result.result.value.content.every(item => item.content.case !== "image")).toBe(true);
+    expect(result.result.value.content.some(item =>
+      item.content.case === "text" && item.content.value.text === CURSOR_VISION_MCP_IMAGE_OMITTED
+    )).toBe(true);
+  });
+
+  test("external assistant toolCall without result is dropped from historical turns", () => {
+    resetCursorBlobStateForTests();
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "continue" }],
+      rawMessages: [
+        { role: "user", content: "start", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/grok-4.5",
+          timestamp: 2,
+          content: [
+            { type: "text", text: "calling" },
+            { type: "toolCall", id: "call_orphan", name: "read_file", arguments: { path: "/tmp/x" } },
+          ],
+        },
+        { role: "user", content: "continue", timestamp: 3 },
+      ],
+    });
+
+    const toolCalls = conversationToolCallSteps(bytes);
+    expect(toolCalls.every(step => {
+      if (step.message.case !== "toolCall") return true;
+      if (step.message.value.tool.case !== "mcpToolCall") return true;
+      return step.message.value.tool.value.result !== undefined;
+    })).toBe(true);
+    expect(toolCalls.length).toBe(0);
   });
 });
 

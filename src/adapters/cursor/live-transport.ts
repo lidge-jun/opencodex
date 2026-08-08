@@ -13,7 +13,12 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
-import { prepareCursorRawMessages, resolveActiveCursorImages, cursorIsTrailingToolResultContinuation } from "./images";
+import {
+  createCursorImagePhaseSignal,
+  prepareCursorRawMessages,
+  resolveActiveCursorImages,
+  cursorIsTrailingToolResultContinuation,
+} from "./images";
 import { cursorRequestMessagesFromRaw } from "./request-builder";
 import {
   createCursorContextUsageTracker,
@@ -574,11 +579,19 @@ class LiveCursorTransport implements CursorTransport {
     // JPEG soft-cap rewrite for attach + view_image tool-result data URLs before encode.
     // Rebuild text messages from the prepared raw channel so omission markers replace
     // stale pre-rewrite content that activePromptText would otherwise prefer.
-    const rawMessages = await prepareCursorRawMessages(request.rawMessages);
+    // One shared deadline covers prepare + resolve so HTTPS hangs cannot stall the stream open.
+    const imagePhase = createCursorImagePhaseSignal(signal);
+    let rawMessages: typeof request.rawMessages;
+    let selectedImages: Awaited<ReturnType<typeof resolveActiveCursorImages>>;
+    try {
+      rawMessages = await prepareCursorRawMessages(request.rawMessages, imagePhase.signal);
+      selectedImages = await resolveActiveCursorImages(rawMessages, imagePhase.signal);
+    } finally {
+      imagePhase.cancel();
+    }
     const messages = rawMessages === request.rawMessages
       ? request.messages
       : cursorRequestMessagesFromRaw(rawMessages);
-    const selectedImages = await resolveActiveCursorImages(rawMessages, signal);
     const preparedRequest = { ...request, messages, rawMessages, selectedImages };
     // Build the payload once. The estimate is only worth deriving when there is no
     // carry-forward to fall back on — with a carry present it would never be used (#373).

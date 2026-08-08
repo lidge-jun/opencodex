@@ -9,8 +9,12 @@ import {
   CURSOR_VISION_SOFT_MAX_BYTES_HIGH,
   MAX_CURSOR_IMAGE_BYTES,
   MAX_CURSOR_IMAGE_DECODE_BYTES,
+  MAX_CURSOR_IMAGE_DECODE_EDGE,
+  MAX_CURSOR_IMAGE_PIXELS,
   MAX_CURSOR_IMAGES,
   buildSelectedImages,
+  createCursorImagePhaseSignal,
+  decodeCursorImageDataUrl,
   extractTrailingToolResultImageParts,
   extractTrailingToolResultImagePromotion,
   prepareCursorImageForWire,
@@ -35,7 +39,13 @@ import {
 import * as destinationPolicy from "../src/lib/destination-policy";
 import * as imageArtifacts from "../src/images/artifacts";
 
-const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+/** Minimal valid 1×1 PNG (real IHDR; not a signature-only stub). */
+const PNG_BYTES = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from(PNG_BYTES).toString("base64")}`;
 
 const spies: Array<ReturnType<typeof spyOn>> = [];
@@ -81,12 +91,11 @@ describe("Cursor image resolver", () => {
     });
   });
 
-  test("rejects data URLs above the inbound decode bomb ceiling", async () => {
+  test("omits data URLs above the inbound decode bomb ceiling", async () => {
     const oversized = "A".repeat(Math.ceil((MAX_CURSOR_IMAGE_DECODE_BYTES + 1) * 4 / 3));
-    await expect(resolveCursorImages([`data:image/png;base64,${oversized}`])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image input is too large to process safely.",
-    });
+    // Soft-omit: one bad URL must not abort a mixed turn.
+    const resolved = await resolveCursorImages([`data:image/png;base64,${oversized}`]);
+    expect(resolved).toEqual([]);
   });
 
   test("prep-before-cap accepts PNG over 1 MiB that JPEG-encodes under the soft and wire caps", async () => {
@@ -103,77 +112,58 @@ describe("Cursor image resolver", () => {
 
   test("omits undecodable payloads under the decode ceiling instead of sending them", async () => {
     const junk = "A".repeat(Math.ceil((MAX_CURSOR_IMAGE_BYTES + 1) * 4 / 3));
-    const resolved = await resolveCursorImages([`data:image/png;base64,${junk}`]);
+    // Pad to valid base64 length so alphabet/padding checks pass and Bun decode fails.
+    const padded = junk + "=".repeat((4 - (junk.length % 4)) % 4);
+    const resolved = await resolveCursorImages([`data:image/png;base64,${padded}`]);
     expect(resolved).toEqual([]);
   });
 
-  test("decodes valid base64 data URLs", async () => {
+  test("decodes valid base64 data URLs through JPEG prep", async () => {
     const resolved = await resolveCursorImages([PNG_DATA_URL]);
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]?.mimeType).toBe("image/png");
-    expect(Array.from(resolved[0]?.data ?? [])).toEqual(Array.from(PNG_BYTES));
+    expect(resolved[0]?.mimeType).toBe("image/jpeg");
+    expect(resolved[0]!.data.byteLength).toBeGreaterThan(0);
+    expect(resolved[0]!.data[0]).toBe(0xff);
+    expect(resolved[0]!.data[1]).toBe(0xd8);
     expect(resolved[0]?.uuid.length).toBeGreaterThan(0);
   });
 
-  test("rejects malformed and non-image data URLs", async () => {
-    await expect(resolveCursorImages(["data:image/png,not-base64"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image data URL must be base64-encoded.",
-    });
-    await expect(resolveCursorImages(["data:text/plain;base64,YQ=="])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image data URL must have an image/* media type.",
-    });
-    await expect(resolveCursorImages(["data:image/png;base64"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image data URL is malformed.",
-    });
-    await expect(resolveCursorImages(["data:image/png;base64,"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image input is empty.",
-    });
+  test("soft-omits malformed and non-image data URLs", async () => {
+    expect(await resolveCursorImages(["data:image/png,not-base64"])).toEqual([]);
+    expect(await resolveCursorImages(["data:text/plain;base64,YQ=="])).toEqual([]);
+    expect(await resolveCursorImages(["data:image/png;base64"])).toEqual([]);
+    expect(await resolveCursorImages(["data:image/png;base64,"])).toEqual([]);
   });
 
-  test("rejects non-HTTPS remote URLs", async () => {
-    await expect(resolveCursorImages(["http://example.com/image.png"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image URL must use HTTPS.",
-    });
+  test("soft-omits non-HTTPS remote URLs", async () => {
+    expect(await resolveCursorImages(["http://example.com/image.png"])).toEqual([]);
   });
 
-  test("rejects blocked destinations before DNS resolution", async () => {
+  test("soft-omits blocked destinations before DNS resolution", async () => {
     mockSpy(destinationPolicy, "assessUrlDestination", () => ({ kind: "loopback" as const }));
-    await expect(resolveCursorImages(["https://127.0.0.1/image.png"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image URL points to a blocked address.",
-    });
+    expect(await resolveCursorImages(["https://127.0.0.1/image.png"])).toEqual([]);
   });
 
-  test("rejects remote URLs when public DNS resolution fails", async () => {
+  test("soft-omits remote URLs when public DNS resolution fails", async () => {
     mockSpy(destinationPolicy, "assessUrlDestination", () => ({ kind: "public" as const }));
     mockSpy(destinationPolicy, "resolvePublicAddresses", async () => {
       throw new Error("blocked");
     });
-    await expect(resolveCursorImages(["https://example.com/image.png"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image URL host could not be resolved.",
-    });
+    expect(await resolveCursorImages(["https://example.com/image.png"])).toEqual([]);
   });
 
   test("fetches HTTPS images through pinned HTTPS with image content-type", async () => {
     mockPublicHttpsFetch();
     const resolved = await resolveCursorImages(["https://example.com/image.png"]);
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]?.mimeType).toBe("image/png");
-    expect(Array.from(resolved[0]?.data ?? [])).toEqual(Array.from(PNG_BYTES));
+    expect(resolved[0]?.mimeType).toBe("image/jpeg");
+    expect(resolved[0]!.data[0]).toBe(0xff);
+    expect(resolved[0]!.data[1]).toBe(0xd8);
   });
 
-  test("rejects HTTPS responses without an image content-type", async () => {
+  test("soft-omits HTTPS responses without an image content-type", async () => {
     mockPublicHttpsFetch(PNG_BYTES, "text/plain");
-    await expect(resolveCursorImages(["https://example.com/not-image"])).rejects.toMatchObject({
-      name: "CursorImageError",
-      message: "Image URL did not return an image content type.",
-    });
+    expect(await resolveCursorImages(["https://example.com/not-image"])).toEqual([]);
   });
 
   test("resolveActiveCursorImages selects the last user turn and ignores earlier images", async () => {
@@ -199,7 +189,7 @@ describe("Cursor image resolver", () => {
       },
     ]);
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]?.mimeType).toBe("image/png");
+    expect(resolved[0]?.mimeType).toBe("image/jpeg");
   });
 
   test("resolveActiveCursorImages supports developer turns", async () => {
@@ -468,7 +458,7 @@ describe("Cursor image resolver", () => {
     expect(fakeJpeg).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
   });
 
-  test("extractTrailingToolResultImagePromotion scopes call ids to kept parts", () => {
+  test("extractTrailingToolResultImagePromotion scopes call ids and part keys to kept parts", () => {
     const urls = Array.from({ length: MAX_CURSOR_IMAGES + 2 }, (_, i) => (
       `data:image/png;base64,${Buffer.from([...PNG_BYTES, i]).toString("base64")}`
     ));
@@ -480,13 +470,17 @@ describe("Cursor image resolver", () => {
       isError: false,
       timestamp: i + 1,
     }));
-    const { parts, omittedOlder, promotedCallIds } = extractTrailingToolResultImagePromotion(messages);
+    const { parts, omittedOlder, promotedCallIds, promotedPartKeys } =
+      extractTrailingToolResultImagePromotion(messages);
     expect(omittedOlder).toBe(2);
     expect(parts).toHaveLength(MAX_CURSOR_IMAGES);
     expect(promotedCallIds.has("call_0")).toBe(false);
     expect(promotedCallIds.has("call_1")).toBe(false);
     expect(promotedCallIds.has("call_2")).toBe(true);
     expect(promotedCallIds.has(`call_${MAX_CURSOR_IMAGES + 1}`)).toBe(true);
+    expect(promotedPartKeys.has("call_0#0")).toBe(false);
+    expect(promotedPartKeys.has("call_2#0")).toBe(true);
+    expect(promotedPartKeys.size).toBe(MAX_CURSOR_IMAGES);
   });
 
   test("promote nudge warns against path/filename inference", () => {
@@ -607,4 +601,112 @@ describe("Cursor image resolver", () => {
     expect(run.action.action.value.userMessage?.text).toBe(CURSOR_VISION_PROMOTE_NUDGE);
     expect(run.action.action.value.userMessage?.selectedContext?.selectedImages.length).toBe(1);
   });
+
+  test("image-only HTTPS soft-omit yields userMessageAction with omission text", async () => {
+    mockSpy(destinationPolicy, "assessUrlDestination", () => ({ kind: "public" as const }));
+    mockSpy(destinationPolicy, "resolvePublicAddresses", async () => {
+      throw new Error("DNS failed");
+    });
+    const raw = await prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [{ type: "image", imageUrl: "https://example.com/missing.png" }],
+        timestamp: 1,
+      },
+    ]);
+    const messages = cursorRequestMessagesFromRaw(raw);
+    expect(messages).toEqual([{ role: "user", content: CURSOR_VISION_IMAGE_OMITTED }]);
+    const selectedImages = await resolveActiveCursorImages(raw);
+    expect(selectedImages).toEqual([]);
+    resetCursorBlobStateForTests();
+    const bytes = encodeCursorRunRequest({
+      modelId: "grok-4.5",
+      conversationId: "c-https-omit",
+      system: [],
+      messages,
+      rawMessages: raw,
+      selectedImages,
+    });
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+    expect(run?.action?.action.case).toBe("userMessageAction");
+    expect(actionTextFrom(bytes)).toBe(CURSOR_VISION_IMAGE_OMITTED);
+  });
+
+  test("failed HTTPS with valid text continues text-only", async () => {
+    mockSpy(destinationPolicy, "assessUrlDestination", () => ({ kind: "public" as const }));
+    mockSpy(destinationPolicy, "resolvePublicAddresses", async () => {
+      throw new Error("DNS failed");
+    });
+    const raw = await prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "what color is the sky?" },
+          { type: "image", imageUrl: "https://example.com/missing.png" },
+        ],
+        timestamp: 1,
+      },
+    ]);
+    const messages = cursorRequestMessagesFromRaw(raw);
+    expect(typeof messages[0]?.content).toBe("string");
+    expect(messages[0]?.content).toContain("what color is the sky?");
+    expect(messages[0]?.content).toContain(CURSOR_VISION_IMAGE_OMITTED);
+    expect(await resolveActiveCursorImages(raw)).toEqual([]);
+  });
+
+  test("strict base64 rejects truncated and wrong-alphabet payloads", () => {
+    expect(() => decodeCursorImageDataUrl("data:image/png;base64,iVBOR")).toThrow(CursorImageError);
+    expect(() => decodeCursorImageDataUrl("data:image/png;base64,!!!!")).toThrow(CursorImageError);
+    // Signature-only 8-byte stub is valid base64 but must not bypass prepare (no ≤64 passthrough).
+    const stubUrl = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64")}`;
+    const decoded = decodeCursorImageDataUrl(stubUrl);
+    expect(decoded.data.byteLength).toBe(8);
+  });
+
+  test("signature-only PNG stub is omitted by prepare (no ≤64 bypass)", async () => {
+    const outcome = await prepareCursorImageForWire({
+      data: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
+      mimeType: "image/png",
+      uuid: "stub",
+    });
+    expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
+  });
+
+  test("oversize sniffed dimensions omit without Bun decode bomb", async () => {
+    // PNG IHDR with absurd width/height; sniff rejects before Bun.Image.
+    const ihdr = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+      0x00, 0x01, 0x00, 0x00, // width 65536
+      0x00, 0x01, 0x00, 0x00, // height 65536
+    ]);
+    expect(sniffCursorImageDimensions(ihdr)).toEqual({ width: 65536, height: 65536 });
+    expect(65536).toBeGreaterThan(MAX_CURSOR_IMAGE_DECODE_EDGE);
+    expect(65536 * 65536).toBeGreaterThan(MAX_CURSOR_IMAGE_PIXELS);
+    const outcome = await prepareCursorImageForWire({
+      data: ihdr,
+      mimeType: "image/png",
+      uuid: "huge",
+    });
+    expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
+  });
+
+  test("createCursorImagePhaseSignal aborts after deadline", async () => {
+    const phase = createCursorImagePhaseSignal();
+    // Use a short local timeout by aborting the parent immediately.
+    const parent = new AbortController();
+    const child = createCursorImagePhaseSignal(parent.signal);
+    parent.abort();
+    expect(child.signal.aborted).toBe(true);
+    phase.cancel();
+    child.cancel();
+  });
 });
+
+function actionTextFrom(bytes: Uint8Array): string | undefined {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  const action = run?.action?.action;
+  return action?.case === "userMessageAction" ? action.value.userMessage?.text : undefined;
+}

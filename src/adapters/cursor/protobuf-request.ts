@@ -18,6 +18,7 @@ import {
   CURSOR_VISION_MCP_IMAGE_OMITTED,
   CURSOR_VISION_PROMOTE_NUDGE,
   cursorIsTrailingToolResultContinuation,
+  cursorVisionImagePartKey,
   decodeCursorImageDataUrl,
   extractTrailingToolResultImagePromotion,
   stripTrailingTransparentDeveloperMessages,
@@ -362,9 +363,17 @@ function syntheticToolCallFromResult(
   };
 }
 
+type ToolResultImageOmitOptions = {
+  /** Omit every image part (historical toolResults outside the trailing promote window). */
+  omitAllImages?: boolean;
+  /** Per-part SelectedImage promotion omit (`callId#index`). */
+  omitImagePartKeys?: ReadonlySet<string>;
+  toolCallId?: string;
+};
+
 function toolResultContentItems(
   content: OcxToolResultMessage["content"],
-  options?: { omitImages?: boolean },
+  options?: ToolResultImageOmitOptions,
 ) {
   if (typeof content === "string") {
     return [create(McpToolResultContentItemSchema, {
@@ -372,6 +381,7 @@ function toolResultContentItems(
     })];
   }
 
+  let imagePartIndex = 0;
   const items = content.flatMap(part => {
     if (part.type === "text" && part.text.length > 0) {
       return [create(McpToolResultContentItemSchema, {
@@ -379,7 +389,14 @@ function toolResultContentItems(
       })];
     }
     if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
-      if (options?.omitImages) {
+      const partIndex = imagePartIndex;
+      imagePartIndex += 1;
+      const partKey = typeof options?.toolCallId === "string"
+        ? cursorVisionImagePartKey(options.toolCallId, partIndex)
+        : undefined;
+      const omitPart = options?.omitAllImages === true
+        || (partKey !== undefined && options?.omitImagePartKeys?.has(partKey) === true);
+      if (omitPart) {
         return [create(McpToolResultContentItemSchema, {
           content: { case: "text", value: create(McpTextContentSchema, { text: CURSOR_VISION_MCP_IMAGE_OMITTED }) },
         })];
@@ -431,11 +448,19 @@ function argBytes(value: unknown): Uint8Array {
   }
 }
 
+type ConversationTurnImageOptions = {
+  /** Per-part SelectedImage promotion omit keys (`callId#index`). */
+  omitToolResultImagePartKeys?: ReadonlySet<string>;
+  /** Drop McpImageContent for toolResults before this rawMessages index. */
+  trailingBlockStart?: number;
+  omitHistoricalMcpImagesOutsideTrailing?: boolean;
+};
+
 function toolCallStep(
   part: Extract<OcxAssistantContentPart, { type: "toolCall" }>,
   requestScope: CursorBlobRequestScopeToken,
   result?: OcxToolResultMessage,
-  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
+  options?: ToolResultImageOmitOptions,
 ): Uint8Array {
   const args: Record<string, Uint8Array> = {};
   for (const [key, value] of Object.entries(part.arguments ?? {})) args[key] = argBytes(value);
@@ -464,19 +489,43 @@ function toolCallStep(
 
 function toolResultPart(
   message: OcxToolResultMessage,
-  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
+  options?: ToolResultImageOmitOptions,
 ) {
-  const omitImages = options?.omitToolResultImageCallIds?.has(message.toolCallId) === true
-    && toolResultHasImage(message.content);
   return create(McpToolResultSchema, {
     result: {
       case: "success",
       value: create(McpSuccessSchema, {
         isError: message.isError,
-        content: toolResultContentItems(message.content, { omitImages }),
+        content: toolResultContentItems(message.content, {
+          omitAllImages: options?.omitAllImages,
+          omitImagePartKeys: options?.omitImagePartKeys,
+          toolCallId: message.toolCallId,
+        }),
       }),
     },
   });
+}
+
+function toolResultImageOmitForMessage(
+  message: OcxToolResultMessage,
+  absoluteIndex: number,
+  options?: ConversationTurnImageOptions,
+): ToolResultImageOmitOptions | undefined {
+  if (!toolResultHasImage(message.content)) return undefined;
+  const trailingStart = options?.trailingBlockStart;
+  const outsideTrailing = options?.omitHistoricalMcpImagesOutsideTrailing === true
+    && typeof trailingStart === "number"
+    && absoluteIndex < trailingStart;
+  if (outsideTrailing) {
+    return { omitAllImages: true, toolCallId: message.toolCallId };
+  }
+  if (options?.omitToolResultImagePartKeys && options.omitToolResultImagePartKeys.size > 0) {
+    return {
+      omitImagePartKeys: options.omitToolResultImagePartKeys,
+      toolCallId: message.toolCallId,
+    };
+  }
+  return { toolCallId: message.toolCallId };
 }
 
 function assistantStep(part: OcxAssistantContentPart, requestScope: CursorBlobRequestScopeToken): Uint8Array | undefined {
@@ -512,7 +561,7 @@ function conversationTurns(
   request: CursorRunRequest,
   requestScope: CursorBlobRequestScopeToken,
   historyMessageStart = 0,
-  options?: { omitToolResultImageCallIds?: ReadonlySet<string> },
+  options?: ConversationTurnImageOptions,
 ): Uint8Array[] {
   const messages = request.rawMessages;
   if (!messages?.length) return [];
@@ -528,8 +577,11 @@ function conversationTurns(
   const pendingToolCalls = new Map<string, Extract<OcxAssistantContentPart, { type: "toolCall" }>>();
   const flush = () => {
     if (!current) return;
-    for (const part of pendingToolCalls.values()) {
-      current.steps.push(toolCallStep(part, requestScope, undefined, options));
+    // External workers reject result-less historical mcpToolCall; drop unanswered calls.
+    if (!externalModel) {
+      for (const part of pendingToolCalls.values()) {
+        current.steps.push(toolCallStep(part, requestScope, undefined));
+      }
     }
     turns.push(storeCursorBlob(toBinary(ConversationTurnStructureSchema, create(ConversationTurnStructureSchema, {
       turn: {
@@ -541,7 +593,8 @@ function conversationTurns(
     pendingToolCalls.clear();
   };
 
-  for (const message of messages.slice(start, historyEnd)) {
+  for (let absoluteIndex = start; absoluteIndex < historyEnd; absoluteIndex++) {
+    const message = messages[absoluteIndex]!;
     if (message.role === "assistant") {
       if (!current) continue;
       for (const part of message.content) {
@@ -574,10 +627,11 @@ function conversationTurns(
     }
     if (message.role === "toolResult") {
       if (!current) continue;
+      const imageOmit = toolResultImageOmitForMessage(message, absoluteIndex, options);
       if (externalModel) {
         if (toolResultHasImage(message.content)) {
           const priorCall = pendingToolCalls.get(message.toolCallId) ?? syntheticToolCallFromResult(message);
-          current.steps.push(toolCallStep(priorCall, requestScope, message, options));
+          current.steps.push(toolCallStep(priorCall, requestScope, message, imageOmit));
           pendingToolCalls.delete(message.toolCallId);
           continue;
         }
@@ -593,7 +647,7 @@ function conversationTurns(
       }
       const priorCall = pendingToolCalls.get(message.toolCallId);
       if (priorCall) {
-        current.steps.push(toolCallStep(priorCall, requestScope, message, options));
+        current.steps.push(toolCallStep(priorCall, requestScope, message, imageOmit));
         pendingToolCalls.delete(message.toolCallId);
       } else {
         current.steps.push(storeCursorBlob(toBinary(ConversationStepSchema, create(ConversationStepSchema, {
@@ -686,9 +740,8 @@ function buildPreparedCursorRunRequest(
   const lastRawIsToolResult = cursorIsTrailingToolResultContinuation(request.rawMessages);
   const selectedImages = request.selectedImages ?? [];
   const promoteToolResultImages = lastRawIsToolResult && selectedImages.length > 0;
-  const omitToolResultImageCallIds = promoteToolResultImages
-    ? extractTrailingToolResultImagePromotion(request.rawMessages ?? []).promotedCallIds
-    : undefined;
+  const imagePromotion = extractTrailingToolResultImagePromotion(request.rawMessages ?? []);
+  // Image-only turns that soft-omit to CURSOR_VISION_IMAGE_OMITTED text must stay userMessageAction.
   const actionCase = selectedImages.length > 0 || (!lastRawIsToolResult && text.trim().length > 0)
     ? "userMessageAction"
     : "resumeAction";
@@ -719,7 +772,9 @@ function buildPreparedCursorRunRequest(
   const rootPromptMessagesState = rootPromptMessages(request, requestScope);
   const rootPromptMessageIds = rootPromptMessagesState.ids;
   const turnIds = conversationTurns(request, requestScope, rootPromptMessagesState.historyMessageStart, {
-    omitToolResultImageCallIds,
+    omitToolResultImagePartKeys: promoteToolResultImages ? imagePromotion.promotedPartKeys : undefined,
+    trailingBlockStart: imagePromotion.trailingBlockStart,
+    omitHistoricalMcpImagesOutsideTrailing: true,
   });
   // Hoisted out of the mcp_tools spread below so the estimate can read the same
   // filtered definitions the wire carries. Both helpers are pure.

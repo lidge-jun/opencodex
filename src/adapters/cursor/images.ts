@@ -38,6 +38,15 @@ export const CURSOR_VISION_SOFT_MAX_BYTES_HIGH = 256 * 1024;
 /** Longest edge after Cursor vision prep (Cursor staff guidance: ≤ 2000 px). */
 export const CURSOR_VISION_MAX_EDGE = 2000;
 
+/**
+ * Decode bomb: reject images whose sniffed longest edge exceeds this before Bun.Image.
+ * Separate from {@link CURSOR_VISION_MAX_EDGE} (output resize target).
+ */
+export const MAX_CURSOR_IMAGE_DECODE_EDGE = 8192;
+
+/** Decode bomb: reject images whose sniffed pixel count exceeds this before Bun.Image. */
+export const MAX_CURSOR_IMAGE_PIXELS = 25_000_000;
+
 const CURSOR_VISION_JPEG_QUALITIES_DEFAULT = [85, 70, 55, 40] as const;
 const CURSOR_VISION_JPEG_QUALITIES_HIGH = [90, 80, 65, 50] as const;
 /** Stop shrinking below this longest edge when chasing the soft byte cap. */
@@ -75,6 +84,38 @@ const IMAGE_FETCH_TIMEOUT_MS = (() => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 15_000;
 })();
 
+/** Aggregate deadline for prepare+resolve before the Cursor stream opens. */
+export const CURSOR_IMAGE_PHASE_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(process.env.CURSOR_IMAGE_PHASE_TIMEOUT_MS || "30000", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 30_000;
+})();
+
+/** Part key for per-image SelectedImage promotion omit (`callId` + image part index). */
+export function cursorVisionImagePartKey(callId: string, imagePartIndex: number): string {
+  return `${callId}#${imagePartIndex}`;
+}
+
+export function createCursorImagePhaseSignal(parent?: AbortSignal): {
+  signal: AbortSignal;
+  cancel: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CURSOR_IMAGE_PHASE_TIMEOUT_MS);
+  const cancel = () => {
+    clearTimeout(timer);
+  };
+  if (parent) {
+    if (parent.aborted) controller.abort();
+    else {
+      parent.addEventListener("abort", () => {
+        cancel();
+        controller.abort();
+      }, { once: true });
+    }
+  }
+  controller.signal.addEventListener("abort", cancel, { once: true });
+  return { signal: controller.signal, cancel };
+}
 export class CursorImageError extends Error {
   readonly status: number;
 
@@ -137,6 +178,13 @@ export function decodeCursorImageDataUrl(url: string): { data: Uint8Array; mimeT
   }
 
   const normalized = payload.replace(/\s/g, "");
+  if (normalized.length === 0) {
+    throw new CursorImageError("Image data URL contains invalid base64 data.");
+  }
+  // Reject lenient Buffer.from acceptances (wrong alphabet, bad padding, truncated groups).
+  if (normalized.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+    throw new CursorImageError("Image data URL contains invalid base64 data.");
+  }
   if (estimatedBase64DecodedBytes(normalized) > MAX_CURSOR_IMAGE_DECODE_BYTES) {
     throw new CursorImageError("Image input is too large to process safely.");
   }
@@ -147,7 +195,11 @@ export function decodeCursorImageDataUrl(url: string): { data: Uint8Array; mimeT
   } catch {
     throw new CursorImageError("Image data URL contains invalid base64 data.");
   }
-  if (normalized.length > 0 && data.byteLength === 0) {
+  if (data.byteLength === 0) {
+    throw new CursorImageError("Image data URL contains invalid base64 data.");
+  }
+  // Round-trip guard: Node/Bun can silently drop trailing garbage.
+  if (Buffer.from(data).toString("base64").replace(/=+$/, "") !== normalized.replace(/=+$/, "")) {
     throw new CursorImageError("Image data URL contains invalid base64 data.");
   }
   if (data.byteLength > MAX_CURSOR_IMAGE_DECODE_BYTES) {
@@ -281,24 +333,28 @@ export async function resolveCursorImages(
   for (let i = 0; i < imageUrls.length; i++) {
     const url = imageUrls[i];
     if (typeof url !== "string" || url.length === 0) {
-      throw new CursorImageError("Image URL is missing.");
+      // Soft-omit missing URLs rather than aborting a mixed turn.
+      continue;
     }
-    const resolved = url.toLowerCase().startsWith("data:")
-      ? decodeCursorImageDataUrl(url)
-      : await fetchHttpsImageBytes(url, signal);
-    if (resolved.data.byteLength === 0) {
-      throw new CursorImageError("Image input is empty.");
+    try {
+      const resolved = url.toLowerCase().startsWith("data:")
+        ? decodeCursorImageDataUrl(url)
+        : await fetchHttpsImageBytes(url, signal);
+      if (resolved.data.byteLength === 0) continue;
+      const outcome = await prepareCursorImageForWire({
+        data: resolved.data,
+        mimeType: resolved.mimeType,
+        uuid: randomUUID(),
+        ...(options?.details?.[i] ? { detail: options.details[i] } : {}),
+      });
+      if (outcome.status === "omitted") continue;
+      if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) continue;
+      out.push(outcome.image);
+    } catch (err) {
+      if (err instanceof CursorImageError) continue;
+      if (signal?.aborted) throw err;
+      continue;
     }
-    const outcome = await prepareCursorImageForWire({
-      data: resolved.data,
-      mimeType: resolved.mimeType,
-      uuid: randomUUID(),
-      ...(options?.details?.[i] ? { detail: options.details[i] } : {}),
-    });
-    if (outcome.status === "omitted") continue;
-    // Match prepareCursorImageDataUrl: drop the attachment rather than failing the turn.
-    if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) continue;
-    out.push(outcome.image);
   }
   return out;
 }
@@ -326,8 +382,7 @@ export function cursorImageAttachmentPath(uuid: string, mimeType: string): strin
 
 /**
  * Re-encode toward a JPEG under the soft vision cap when Bun can decode the payload.
- * Unsupported MIME or undecodable bytes are omitted (fail-closed) except for tiny
- * undecodable PNG/JPEG/GIF/WebP stubs used in unit tests (pass-through under soft cap).
+ * Unsupported MIME, oversize dimensions/pixels, or undecodable bytes are omitted (fail-closed).
  * After the quality ladder, edges shrink iteratively until the soft byte cap is met
  * (or the min edge floor is hit) so large clipboard PNGs do not leave >softMax JPEGs
  * that Cursor vision hallucinates on.
@@ -344,18 +399,43 @@ export async function prepareCursorImageForWire(
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 
+  // Peek headers before Bun.Image so huge compressed bombs fail closed cheaply.
+  const sniffed = sniffCursorImageDimensions(image.data);
+  if (sniffed) {
+    const edge = Math.max(sniffed.width, sniffed.height);
+    const pixels = sniffed.width * sniffed.height;
+    if (edge > MAX_CURSOR_IMAGE_DECODE_EDGE || pixels > MAX_CURSOR_IMAGE_PIXELS) {
+      return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
+    }
+  }
+
+  // Second-pass skip: already soft-capped JPEG from prepareCursorRawMessages.
+  const alreadySmallJpeg = (mime === "image/jpeg" || mime === "image/jpg")
+    && image.data.byteLength <= softMax
+    && image.data.byteLength >= 4
+    && image.data[0] === 0xff
+    && image.data[1] === 0xd8;
+  if (alreadySmallJpeg) {
+    return { status: "ready", image };
+  }
+
   try {
     // Force a full decode before accepting passthrough / encode (Anthropic-style validate).
-    // Includes already-small JPEGs — labeled JPEG under the soft cap must still decode.
     await new Bun.Image(image.data).resize(1, 1).jpeg({ quality: 1 }).toBuffer();
 
-    const alreadySmallJpeg = (mime === "image/jpeg" || mime === "image/jpg")
-      && image.data.byteLength <= softMax;
-    if (alreadySmallJpeg) return { status: "ready", image };
+    if ((mime === "image/jpeg" || mime === "image/jpg") && image.data.byteLength <= softMax) {
+      return { status: "ready", image };
+    }
 
     const meta = await new Bun.Image(image.data).metadata();
     const width = typeof meta.width === "number" ? meta.width : 0;
     const height = typeof meta.height === "number" ? meta.height : 0;
+    if (width > 0 && height > 0) {
+      const edge = Math.max(width, height);
+      if (edge > MAX_CURSOR_IMAGE_DECODE_EDGE || width * height > MAX_CURSOR_IMAGE_PIXELS) {
+        return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
+      }
+    }
     let targetW = width;
     let targetH = height;
     if (width > 0 && height > 0 && Math.max(width, height) > CURSOR_VISION_MAX_EDGE) {
@@ -421,10 +501,6 @@ export async function prepareCursorImageForWire(
     }
     return { status: "ready", image };
   } catch {
-    // Tiny undecodable stubs (unit wire tests) may still be referenced as blobIdWithData.
-    if (image.data.byteLength <= 64 && CURSOR_VISION_PASSTHROUGH_MIME.has(mime)) {
-      return { status: "ready", image };
-    }
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 }
@@ -526,21 +602,29 @@ export function buildSelectedContext(
 
 /**
  * Trailing toolResult image promotion: parts kept for SelectedImage (newest
- * {@link MAX_CURSOR_IMAGES}) and the call ids that own at least one kept part.
+ * {@link MAX_CURSOR_IMAGES}) and the part keys that were promoted.
  * Older overflow parts stay on MCP (not omitted) because they are not promoted.
  */
 export function extractTrailingToolResultImagePromotion(
   messages: readonly OcxMessage[],
-): { parts: CursorImagePartRef[]; omittedOlder: number; promotedCallIds: Set<string> } {
+): {
+  parts: CursorImagePartRef[];
+  omittedOlder: number;
+  promotedCallIds: Set<string>;
+  promotedPartKeys: Set<string>;
+  trailingBlockStart: number;
+} {
   const effective = stripTrailingTransparentDeveloperMessages(messages);
   let start = effective.length;
   while (start > 0 && effective[start - 1]?.role === "toolResult") start -= 1;
 
-  const entries: Array<{ callId: string; part: CursorImagePartRef }> = [];
+  const entries: Array<{ callId: string; partIndex: number; part: CursorImagePartRef }> = [];
   for (const message of effective.slice(start)) {
     if (message.role !== "toolResult") continue;
+    let imagePartIndex = 0;
     for (const part of extractCursorImageParts(message.content)) {
-      entries.push({ callId: message.toolCallId, part });
+      entries.push({ callId: message.toolCallId, partIndex: imagePartIndex, part });
+      imagePartIndex += 1;
     }
   }
 
@@ -551,6 +635,8 @@ export function extractTrailingToolResultImagePromotion(
     parts: kept.map(entry => entry.part),
     omittedOlder: Math.max(0, entries.length - kept.length),
     promotedCallIds: new Set(kept.map(entry => entry.callId)),
+    promotedPartKeys: new Set(kept.map(entry => cursorVisionImagePartKey(entry.callId, entry.partIndex))),
+    trailingBlockStart: start,
   };
 }
 
@@ -644,22 +730,29 @@ function imageDataUrlFromPrepared(image: ResolvedCursorImage): string {
 }
 
 /**
- * Re-encode a single `data:image/...;base64,...` URL through {@link prepareCursorImageForWire}.
- * Omitted images become a text-safe data URL skip (caller replaces the part).
+ * Re-encode a single image URL through {@link prepareCursorImageForWire}.
+ * HTTPS fetches soft-omit on failure. Omitted images become text (caller replaces the part).
  */
 export async function prepareCursorImageDataUrl(
   imageUrl: string,
   detail?: string,
+  signal?: AbortSignal,
 ): Promise<{ status: "ready"; imageUrl: string } | { status: "omitted"; reason: string }> {
-  if (!imageUrl.toLowerCase().startsWith("data:")) return { status: "ready", imageUrl };
   try {
-    const decoded = decodeCursorImageDataUrl(imageUrl);
-    if (decoded.data.byteLength === 0) {
+    const resolved = imageUrl.toLowerCase().startsWith("data:")
+      ? decodeCursorImageDataUrl(imageUrl)
+      : imageUrl.toLowerCase().startsWith("https:")
+        ? await fetchHttpsImageBytes(imageUrl, signal)
+        : null;
+    if (!resolved) {
+      return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
+    }
+    if (resolved.data.byteLength === 0) {
       return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
     }
     const outcome = await prepareCursorImageForWire({
-      data: decoded.data,
-      mimeType: decoded.mimeType,
+      data: resolved.data,
+      mimeType: resolved.mimeType,
       uuid: randomUUID(),
       ...(detail ? { detail } : {}),
     });
@@ -667,24 +760,30 @@ export async function prepareCursorImageDataUrl(
     if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) {
       return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
     }
-    if (outcome.image.data === decoded.data && outcome.image.mimeType === decoded.mimeType) {
+    if (
+      imageUrl.toLowerCase().startsWith("data:")
+      && outcome.image.data === resolved.data
+      && outcome.image.mimeType === resolved.mimeType
+    ) {
       return { status: "ready", imageUrl };
     }
     return { status: "ready", imageUrl: imageDataUrlFromPrepared(outcome.image) };
-  } catch {
+  } catch (err) {
+    if (signal?.aborted) throw err;
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 }
 
 async function prepareCursorContentParts(
   content: string | readonly OcxContentPart[],
+  signal?: AbortSignal,
 ): Promise<string | readonly OcxContentPart[]> {
   if (typeof content === "string" || !Array.isArray(content)) return content;
   let changed = false;
   const next: OcxContentPart[] = [];
   for (const part of content) {
     if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
-      const prepared = await prepareCursorImageDataUrl(part.imageUrl, part.detail);
+      const prepared = await prepareCursorImageDataUrl(part.imageUrl, part.detail, signal);
       if (prepared.status === "omitted") {
         changed = true;
         next.push({ type: "text", text: prepared.reason });
@@ -700,18 +799,20 @@ async function prepareCursorContentParts(
 }
 
 /**
- * Rewrite image data URLs in user/developer/toolResult messages (including `view_image`
- * tool outputs) through the JPEG soft-cap path before protobuf encode.
+ * Rewrite image URLs in user/developer/toolResult messages (including `view_image`
+ * tool outputs) through the JPEG soft-cap path before protobuf encode. HTTPS failures
+ * become {@link CURSOR_VISION_IMAGE_OMITTED} text so image-only turns stay userMessageAction.
  */
 export async function prepareCursorRawMessages(
   messages: readonly OcxMessage[] | undefined,
+  signal?: AbortSignal,
 ): Promise<readonly OcxMessage[] | undefined> {
   if (!messages?.length) return messages;
   let changed = false;
   const out: OcxMessage[] = [];
   for (const message of messages) {
     if (message.role === "user" || message.role === "developer" || message.role === "toolResult") {
-      const content = await prepareCursorContentParts(message.content);
+      const content = await prepareCursorContentParts(message.content, signal);
       if (content !== message.content) {
         changed = true;
         out.push({ ...message, content } as OcxMessage);

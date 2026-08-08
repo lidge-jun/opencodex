@@ -280,9 +280,9 @@ selection on every request. They remain available when live discovery omits `def
 ### Vision
 
 Native Cursor vision uses `SelectedImage` (JPEG soft-cap + `blobIdWithData`) for models that can see
-images natively — Claude, Gemini, GPT, Kimi, and Grok among them. `auto` and `composer-*` stay on
-the curated `noVisionModels` list and use the vision describe sidecar instead. Trailing
-`<multi_agent_mode>` developer injections (Codex Desktop collab guidance after `view_image`)
+images natively — Claude, Gemini, GPT, Kimi, and Grok among them. Auto, `composer-*`, and GLM
+(`glm-5.2`) stay on the curated `noVisionModels` list and use the vision describe sidecar instead.
+Trailing `<multi_agent_mode>` developer injections (Codex Desktop collab guidance after `view_image`)
 are transparent for SelectedImage promotion so the continuation still carries the image and
 promote nudge.
 
