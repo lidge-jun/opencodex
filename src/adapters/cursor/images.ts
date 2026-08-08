@@ -281,11 +281,49 @@ async function fetchHttpsImageBytes(url: string, signal?: AbortSignal): Promise<
     return { data, mimeType };
   } catch (error) {
     if (error instanceof CursorImageError) throw error;
+    // Preserve AbortError so the image-phase deadline is not soft-omitted as a fetch failure.
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
     throw new CursorImageError("Could not fetch the image URL.");
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
+}
+
+function throwIfImagePhaseAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  if (signal.reason instanceof Error) throw signal.reason;
+  const err = new Error("Cursor image phase aborted");
+  err.name = "AbortError";
+  throw err;
+}
+
+/** Magic-byte format sniff (independent of declared MIME). */
+export function sniffCursorImageFormat(
+  data: Uint8Array,
+): "png" | "jpeg" | "gif" | "webp" | undefined {
+  if (
+    data.byteLength >= 8
+    && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
+    && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a
+  ) {
+    return "png";
+  }
+  if (
+    data.byteLength >= 6
+    && data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x38
+  ) {
+    return "gif";
+  }
+  if (data.byteLength >= 4 && data[0] === 0xff && data[1] === 0xd8) return "jpeg";
+  if (
+    data.byteLength >= 12
+    && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50
+  ) {
+    return "webp";
+  }
+  return undefined;
 }
 
 /** Collect image URLs from one message's content parts, preserving order. */
@@ -331,6 +369,7 @@ export async function resolveCursorImages(
 
   const out: ResolvedCursorImage[] = [];
   for (let i = 0; i < imageUrls.length; i++) {
+    throwIfImagePhaseAborted(signal);
     const url = imageUrls[i];
     if (typeof url !== "string" || url.length === 0) {
       // Soft-omit missing URLs rather than aborting a mixed turn.
@@ -346,13 +385,13 @@ export async function resolveCursorImages(
         mimeType: resolved.mimeType,
         uuid: randomUUID(),
         ...(options?.details?.[i] ? { detail: options.details[i] } : {}),
-      });
+      }, signal);
       if (outcome.status === "omitted") continue;
       if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) continue;
       out.push(outcome.image);
     } catch (err) {
+      if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
       if (err instanceof CursorImageError) continue;
-      if (signal?.aborted) throw err;
       continue;
     }
   }
@@ -389,7 +428,9 @@ export function cursorImageAttachmentPath(uuid: string, mimeType: string): strin
  */
 export async function prepareCursorImageForWire(
   image: ResolvedCursorImage,
+  signal?: AbortSignal,
 ): Promise<PrepareCursorImageOutcome> {
+  throwIfImagePhaseAborted(signal);
   const mime = image.mimeType.toLowerCase();
   const softMax = softMaxBytesForDetail(image.detail);
   const qualities = jpegQualitiesForDetail(image.detail);
@@ -399,6 +440,7 @@ export async function prepareCursorImageForWire(
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 
+  const format = sniffCursorImageFormat(image.data);
   // Peek headers before Bun.Image so huge compressed bombs fail closed cheaply.
   const sniffed = sniffCursorImageDimensions(image.data);
   if (sniffed) {
@@ -409,24 +451,27 @@ export async function prepareCursorImageForWire(
     }
   }
 
-  // Second-pass skip: already soft-capped JPEG from prepareCursorRawMessages.
-  const alreadySmallJpeg = (mime === "image/jpeg" || mime === "image/jpg")
-    && image.data.byteLength <= softMax
-    && image.data.byteLength >= 4
-    && image.data[0] === 0xff
-    && image.data[1] === 0xd8;
+  // Second-pass skip: already soft-capped JPEG that has a real SOF (not SOI-only junk).
+  const declaredJpeg = mime === "image/jpeg" || mime === "image/jpg";
+  const alreadySmallJpeg = declaredJpeg
+    && format === "jpeg"
+    && sniffed !== undefined
+    && image.data.byteLength <= softMax;
   if (alreadySmallJpeg) {
     return { status: "ready", image };
   }
 
   try {
+    throwIfImagePhaseAborted(signal);
     // Force a full decode before accepting passthrough / encode (Anthropic-style validate).
     await new Bun.Image(image.data).resize(1, 1).jpeg({ quality: 1 }).toBuffer();
 
-    if ((mime === "image/jpeg" || mime === "image/jpg") && image.data.byteLength <= softMax) {
+    // Passthrough only when declared MIME matches actual JPEG magic (never PNG-as-JPEG).
+    if (declaredJpeg && format === "jpeg" && image.data.byteLength <= softMax) {
       return { status: "ready", image };
     }
 
+    throwIfImagePhaseAborted(signal);
     const meta = await new Bun.Image(image.data).metadata();
     const width = typeof meta.width === "number" ? meta.width : 0;
     const height = typeof meta.height === "number" ? meta.height : 0;
@@ -445,6 +490,7 @@ export async function prepareCursorImageForWire(
     }
 
     const encodeAt = async (w: number, h: number, quality: number): Promise<Uint8Array> => {
+      throwIfImagePhaseAborted(signal);
       let pipeline = new Bun.Image(image.data);
       if (w > 0 && h > 0 && (w !== width || h !== height)) {
         pipeline = pipeline.resize(w, h);
@@ -472,6 +518,7 @@ export async function prepareCursorImageForWire(
       && targetH > 0
       && Math.max(targetW, targetH) > CURSOR_VISION_SOFT_MIN_EDGE
     ) {
+      throwIfImagePhaseAborted(signal);
       const nextW = Math.max(1, Math.round(targetW * CURSOR_VISION_SOFT_SHRINK));
       const nextH = Math.max(1, Math.round(targetH * CURSOR_VISION_SOFT_SHRINK));
       if (Math.max(nextW, nextH) < CURSOR_VISION_SOFT_MIN_EDGE) {
@@ -499,14 +546,19 @@ export async function prepareCursorImageForWire(
         image: { ...image, data: best, mimeType: "image/jpeg" },
       };
     }
+    // Undeclared/mismatched magic with no encode result — omit rather than lie about MIME.
+    if (declaredJpeg && format !== "jpeg") {
+      return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
+    }
     return { status: "ready", image };
-  } catch {
+  } catch (err) {
+    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 }
 
 /**
- * Sniff PNG/JPEG/GIF dimensions from raw bytes when the header is present.
+ * Sniff PNG/JPEG/GIF/WebP dimensions from raw bytes when the header is present.
  * Best-effort only — unknown formats return undefined (dimension is optional).
  */
 export function sniffCursorImageDimensions(
@@ -530,6 +582,30 @@ export function sniffCursorImageDimensions(
     const width = data[6]! | (data[7]! << 8);
     const height = data[8]! | (data[9]! << 8);
     if (width > 0 && height > 0) return { width, height };
+  }
+  // WebP: RIFF....WEBP + VP8X / VP8 / VP8L (same layout as anthropic-image-guard).
+  if (
+    data.byteLength >= 30
+    && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46
+    && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50
+  ) {
+    const fourcc = String.fromCharCode(data[12]!, data[13]!, data[14]!, data[15]!);
+    if (fourcc === "VP8X") {
+      const width = 1 + (data[24]! | (data[25]! << 8) | (data[26]! << 16));
+      const height = 1 + (data[27]! | (data[28]! << 8) | (data[29]! << 16));
+      if (width > 0 && height > 0) return { width, height };
+    } else if (fourcc === "VP8 ") {
+      if (data[23] === 0x9d && data[24] === 0x01 && data[25] === 0x2a) {
+        const width = (data[26]! | (data[27]! << 8)) & 0x3fff;
+        const height = (data[28]! | (data[29]! << 8)) & 0x3fff;
+        if (width > 0 && height > 0) return { width, height };
+      }
+    } else if (fourcc === "VP8L" && data[20] === 0x2f) {
+      const raw = data[21]! | (data[22]! << 8) | (data[23]! << 16) | (data[24]! << 24);
+      const width = (raw & 0x3fff) + 1;
+      const height = ((raw >> 14) & 0x3fff) + 1;
+      if (width > 0 && height > 0) return { width, height };
+    }
   }
   // JPEG: scan for SOF0/SOF2 marker with dimensions
   if (data.byteLength >= 4 && data[0] === 0xff && data[1] === 0xd8) {
@@ -755,7 +831,7 @@ export async function prepareCursorImageDataUrl(
       mimeType: resolved.mimeType,
       uuid: randomUUID(),
       ...(detail ? { detail } : {}),
-    });
+    }, signal);
     if (outcome.status === "omitted") return outcome;
     if (outcome.image.data.byteLength > MAX_CURSOR_IMAGE_BYTES) {
       return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
@@ -769,7 +845,7 @@ export async function prepareCursorImageDataUrl(
     }
     return { status: "ready", imageUrl: imageDataUrlFromPrepared(outcome.image) };
   } catch (err) {
-    if (signal?.aborted) throw err;
+    if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
   }
 }
@@ -783,6 +859,7 @@ async function prepareCursorContentParts(
   const next: OcxContentPart[] = [];
   for (const part of content) {
     if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
+      throwIfImagePhaseAborted(signal);
       const prepared = await prepareCursorImageDataUrl(part.imageUrl, part.detail, signal);
       if (prepared.status === "omitted") {
         changed = true;
@@ -799,8 +876,29 @@ async function prepareCursorContentParts(
 }
 
 /**
- * Rewrite image URLs in user/developer/toolResult messages (including `view_image`
- * tool outputs) through the JPEG soft-cap path before protobuf encode. HTTPS failures
+ * First original-message index that still needs image prep for the active vision window.
+ * Historical messages before this index are left untouched (no HTTPS, no decode).
+ * Indices map 1:1 into `messages` because transparent developers are only stripped from the end.
+ */
+export function cursorVisionPrepareStartIndex(messages: readonly OcxMessage[]): number {
+  const effective = stripTrailingTransparentDeveloperMessages(messages);
+  if (effective.length === 0) return messages.length;
+  if (effective.at(-1)?.role === "toolResult") {
+    let start = effective.length;
+    while (start > 0 && effective[start - 1]?.role === "toolResult") start -= 1;
+    return start;
+  }
+  for (let i = effective.length - 1; i >= 0; i--) {
+    const role = effective[i]?.role;
+    if (role === "user" || role === "developer") return i;
+  }
+  return effective.length;
+}
+
+/**
+ * Rewrite image URLs in the active vision window (last user/developer, or trailing
+ * toolResult block) through the JPEG soft-cap path before protobuf encode. Historical
+ * messages are left by reference — encode already omits their MCP pixels. HTTPS failures
  * become {@link CURSOR_VISION_IMAGE_OMITTED} text so image-only turns stay userMessageAction.
  */
 export async function prepareCursorRawMessages(
@@ -808,10 +906,16 @@ export async function prepareCursorRawMessages(
   signal?: AbortSignal,
 ): Promise<readonly OcxMessage[] | undefined> {
   if (!messages?.length) return messages;
+  const prepareFrom = cursorVisionPrepareStartIndex(messages);
   let changed = false;
   const out: OcxMessage[] = [];
-  for (const message of messages) {
-    if (message.role === "user" || message.role === "developer" || message.role === "toolResult") {
+  for (let i = 0; i < messages.length; i++) {
+    throwIfImagePhaseAborted(signal);
+    const message = messages[i]!;
+    if (
+      i >= prepareFrom
+      && (message.role === "user" || message.role === "developer" || message.role === "toolResult")
+    ) {
       const content = await prepareCursorContentParts(message.content, signal);
       if (content !== message.content) {
         changed = true;

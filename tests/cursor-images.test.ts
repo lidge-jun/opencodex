@@ -14,6 +14,7 @@ import {
   MAX_CURSOR_IMAGES,
   buildSelectedImages,
   createCursorImagePhaseSignal,
+  cursorVisionPrepareStartIndex,
   decodeCursorImageDataUrl,
   extractTrailingToolResultImageParts,
   extractTrailingToolResultImagePromotion,
@@ -23,6 +24,7 @@ import {
   resolveActiveCursorImages,
   resolveCursorImages,
   sniffCursorImageDimensions,
+  sniffCursorImageFormat,
   stripTrailingTransparentDeveloperMessages,
 } from "../src/adapters/cursor/images";
 import {
@@ -701,6 +703,114 @@ describe("Cursor image resolver", () => {
     expect(child.signal.aborted).toBe(true);
     phase.cancel();
     child.cancel();
+  });
+
+  test("truncated FF D8 JPEG under soft cap is omitted (no SOI-only fast path)", async () => {
+    const truncated = new Uint8Array([0xff, 0xd8, 0x00, 0x00]);
+    expect(sniffCursorImageFormat(truncated)).toBe("jpeg");
+    expect(sniffCursorImageDimensions(truncated)).toBeUndefined();
+    const outcome = await prepareCursorImageForWire({
+      data: truncated,
+      mimeType: "image/jpeg",
+      uuid: "soi-only",
+    });
+    expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
+  });
+
+  test("PNG bytes labeled image/jpeg are re-encoded as JPEG, not passthrough", async () => {
+    const outcome = await prepareCursorImageForWire({
+      data: PNG_BYTES,
+      mimeType: "image/jpeg",
+      uuid: "mislabeled",
+    });
+    expect(outcome.status).toBe("ready");
+    if (outcome.status !== "ready") throw new Error("expected ready");
+    expect(outcome.image.mimeType).toBe("image/jpeg");
+    expect(outcome.image.data[0]).toBe(0xff);
+    expect(outcome.image.data[1]).toBe(0xd8);
+    expect(sniffCursorImageFormat(outcome.image.data)).toBe("jpeg");
+  });
+
+  test("oversized WebP VP8X header omits before Bun decode", async () => {
+    // RIFF....WEBP + VP8X with canvas size 65536x65536 (stored as size-1).
+    const webp = new Uint8Array(30);
+    webp.set([0x52, 0x49, 0x46, 0x46], 0); // RIFF
+    webp.set([0x57, 0x45, 0x42, 0x50], 8); // WEBP
+    webp.set([0x56, 0x50, 0x38, 0x58], 12); // VP8X
+    // width-1 / height-1 as 24-bit LE at 24..29 → 65535 → displayed 65536
+    webp[24] = 0xff;
+    webp[25] = 0xff;
+    webp[26] = 0x00;
+    webp[27] = 0xff;
+    webp[28] = 0xff;
+    webp[29] = 0x00;
+    expect(sniffCursorImageFormat(webp)).toBe("webp");
+    expect(sniffCursorImageDimensions(webp)).toEqual({ width: 65536, height: 65536 });
+    const outcome = await prepareCursorImageForWire({
+      data: webp,
+      mimeType: "image/webp",
+      uuid: "huge-webp",
+    });
+    expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
+  });
+
+  test("prepareCursorRawMessages skips historical HTTPS images on a later user turn", async () => {
+    let httpsFetches = 0;
+    mockSpy(destinationPolicy, "assessUrlDestination", () => ({ kind: "public" as const }));
+    mockSpy(destinationPolicy, "resolvePublicAddresses", async () => ({
+      addresses: [{ address: "93.184.216.34", family: 4 }],
+      hostname: "example.com",
+    }));
+    mockSpy(imageArtifacts, "pinnedHttpsGet", async () => {
+      httpsFetches += 1;
+      return new Response(PNG_BYTES, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+
+    const prepared = await prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [{ type: "image", imageUrl: "https://example.com/old.png" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        model: "cursor/grok-4.5",
+        content: [{ type: "text", text: "seen" }],
+        timestamp: 2,
+      },
+      { role: "user", content: "thanks, no image", timestamp: 3 },
+    ]);
+    expect(httpsFetches).toBe(0);
+    expect(prepared?.[0]).toEqual({
+      role: "user",
+      content: [{ type: "image", imageUrl: "https://example.com/old.png" }],
+      timestamp: 1,
+    });
+    expect(cursorVisionPrepareStartIndex(prepared ?? [])).toBe(2);
+  });
+
+  test("aborted image-phase signal stops further local prepare work", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(prepareCursorImageForWire({
+      data: PNG_BYTES,
+      mimeType: "image/png",
+      uuid: "aborted",
+    }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+
+    await expect(prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [
+          { type: "image", imageUrl: PNG_DATA_URL },
+          { type: "image", imageUrl: PNG_DATA_URL },
+        ],
+        timestamp: 1,
+      },
+    ], controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 
