@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, StrictMode, useReducer } from "react";
+import { act, StrictMode, useEffect, useReducer } from "react";
 import type { Root } from "react-dom/client";
 import {
   addCodexAccountUiReducer,
@@ -8,6 +8,7 @@ import {
 } from "../src/components/add-codex-account-reducer";
 import { useAddCodexAccountOAuth } from "../src/components/use-add-codex-account-oauth";
 import { LanguageProvider } from "../src/i18n/provider";
+import type { CodexAccountMutationCompletion } from "../src/codex-account-mutation";
 
 /**
  * StrictMode reauth latch + login-status single-flight / abort contracts for
@@ -95,27 +96,37 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-function Probe({ reauthAccountId }: { reauthAccountId: string }) {
+function Probe({
+  reauthAccountId,
+  onAdded = () => {},
+}: {
+  reauthAccountId: string;
+  onAdded?: (completion: CodexAccountMutationCompletion) => void;
+}) {
   const [ui, dispatch] = useReducer(
     addCodexAccountUiReducer,
     reauthAccountId,
     initialAddCodexAccountUiState,
   );
-  useAddCodexAccountOAuth({
+  const oauth = useAddCodexAccountOAuth({
     apiBase: "",
     reauthAccountId,
     ui,
     dispatch,
     t: ((key: string) => key) as never,
   });
+  useEffect(() => oauth.bindCallbacks(onAdded, () => {}), [oauth.bindCallbacks, onAdded]);
   return <div data-testid="oauth-probe" data-step={ui.step} />;
 }
 
-async function mountProbe(strict: boolean) {
+async function mountProbe(
+  strict: boolean,
+  onAdded?: (completion: CodexAccountMutationCompletion) => void,
+) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    const tree = <LanguageProvider><Probe reauthAccountId="acct-1" /></LanguageProvider>;
+    const tree = <LanguageProvider><Probe reauthAccountId="acct-1" onAdded={onAdded} /></LanguageProvider>;
     root.render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
@@ -158,3 +169,22 @@ test("slow login-status polls stay single-flight and abort on unmount", async ()
   const statusAfter = calls.filter((c) => c.path.includes("/api/codex-auth/login-status"));
   expect(statusAfter.length).toBe(1);
 }, { timeout: 20_000 });
+
+test("completed login forwards only the public catalog completion flag", async () => {
+  let completion: CodexAccountMutationCompletion | null = null;
+  await mountProbe(false, value => { completion = value; });
+  await act(async () => { await new Promise((r) => setTimeout(r, 2100)); });
+  expect(statusHolders.length).toBe(1);
+
+  await act(async () => {
+    statusHolders.shift()!.resolve(Response.json({
+      status: "done",
+      catalogRefreshPending: true,
+      privateDetail: "private-account-detail",
+    }));
+    await new Promise((r) => setTimeout(r, 40));
+  });
+
+  expect(completion).toEqual({ catalogRefreshPending: true });
+  expect(JSON.stringify(completion)).not.toContain("private-account-detail");
+}, { timeout: 10_000 });

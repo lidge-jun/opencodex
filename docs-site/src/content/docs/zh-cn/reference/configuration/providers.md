@@ -38,6 +38,12 @@ pool account id（不能是内部 `__main__`），或用 `"@main"` 表示 Codex 
 与 email 应保持私密，selector 才是公开名称。明确选择的行为和优先级见
 [路由配置](/zh-cn/reference/configuration/routing/)。
 
+Codex Auth 仪表盘控件只管理显式包含 `codexAccountPickerEnabled` 字段的映射。启用空的受管
+映射时会创建保护隐私的 selector；之后添加账号时，即使 picker 行处于隐藏状态，也会扩展该
+映射且不会重命名已有 selector。省略此字段的手写映射保持手动管理，绝不会自动扩展。删除账号
+会保留其映射，使精确路由在账号缺失时 fail closed；以后添加相同账号 id 时会恢复已有公开
+selector，而不是分配一个新名称。
+
 ## 保留的 OpenAI 提供者
 
 `openai` 和 `openai-apikey` 是固定的保留 id。`openai.codexAccountMode` 默认是 `"pool"`，会在主账户和新增账户之间选择；`"direct"` 只使用当前调用者/主登录态。API 只使用其配置的 API key 或 key 池。请使用裸模型名或 `openai-apikey/<model>`；不存在跨路由凭据回退。API 的 GPT-5.6 行携带 1,050,000 上下文 / 922,000 最大输入元数据，而 Pro 虚拟 id 会重写为基础线协议模型并带上 `reasoning.mode: "pro"`。

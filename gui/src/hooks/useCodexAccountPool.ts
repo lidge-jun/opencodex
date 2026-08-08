@@ -3,6 +3,10 @@ import { normalizeAccountPriority } from "../account-priority";
 import { extractAutoSwitchThresholdPayload } from "../codex-auto-switch";
 import type { AccountQuota } from "../codex-quota-utils";
 import { accountNeedsReauth } from "../oauth-health-display";
+import {
+  codexAccountMutationCompletion,
+  type CodexAccountMutationCompletion,
+} from "../codex-account-mutation";
 
 /**
  * Codex account pool DATA layer (WP3 / 030_account_state_lift.md).
@@ -87,7 +91,7 @@ export interface CodexAccountPoolController {
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
-  removeAccount(id: string): Promise<CodexAccountActionResult>;
+  removeAccount(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
   syncAfterAccountAdded(): Promise<CodexAccountActionResult>;
 
   pauseRefresh(): PauseToken;
@@ -492,8 +496,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         { method: "DELETE" },
       );
       if (!response.ok) return { ok: false, reason: "request" } as const;
+      const completion = codexAccountMutationCompletion(
+        await response.json().catch(() => ({})),
+      );
       await load();
-      return { ok: true } as const;
+      return { ok: true, ...completion } as const;
     } catch {
       return { ok: false, reason: "request" } as const;
     }

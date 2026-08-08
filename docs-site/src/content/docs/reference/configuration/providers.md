@@ -41,6 +41,13 @@ its namespace prefix, and configured pool ids or selector targets also cannot re
 raw account ids and emails private; the selector is the public name. See [Routing Configuration](/reference/configuration/routing/)
 for exact-selection behavior and precedence.
 
+The Codex Auth dashboard control owns maps that have an explicit `codexAccountPickerEnabled` field.
+Enabling an empty managed map creates privacy-safe selectors; later account additions extend that map
+even while picker rows are hidden, without renaming existing selectors. A hand-written map that omits
+the flag remains manual and is never auto-expanded. Deleting an account keeps its mapping so exact
+routes fail closed while it is missing; adding the same account id again restores the existing public
+selector instead of allocating a new one.
+
 ## Reserved OpenAI providers
 
 `openai` and `openai-apikey` are fixed reserved ids. `openai.codexAccountMode` is `"pool"` by default

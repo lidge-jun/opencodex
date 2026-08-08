@@ -17,8 +17,8 @@ Routing turns the model id sent by a client into one concrete provider and upstr
 
 opencodex resolves the requested model in this order:
 
-1. An explicit `policy/<id>` or configured routing-profile alias, executing the policy evaluator
-   and routing the selected candidate. An unknown profile id fails closed.
+1. A configured `policy/<id>` or routing-profile alias, executing the policy evaluator and routing
+   the selected candidate. An unresolved `policy/<id>` falls through to the later rules.
 2. A configured `<account-selector>/<native-openai-model>` namespace, routed through exactly the
    mapped stored Codex account. An invalid or unavailable exact target fails closed.
 3. A canonical `combo/<id>` or configured combo alias. Canonical ids win before alias matching.
@@ -49,6 +49,13 @@ eligible selector is configured, Codex catalogs hide bare native picker rows and
 routing and remain in raw `/v1/models` discovery unless explicitly disabled. Selectors whose mapped
 stored account is missing are not advertised. Selector validation, collision rules, and privacy guidance are documented in
 [Provider Configuration](/reference/configuration/providers/).
+
+The Codex Auth page exposes this picker behavior as an opt-in. Disabling it hides generated
+selector-qualified picker rows and restores the ordinary GPT rows, but it does not remove the
+mappings or change exact `<selector>/<model>` routing. Re-enabling therefore restores the same public
+labels. Account and setting mutations are persisted before a bounded catalog refresh; an `ocx sync`
+warning means only that the picker catalog still needs convergence, not that the routing change was
+lost.
 
 ## Combos (`config.combos`)
 

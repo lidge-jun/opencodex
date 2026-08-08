@@ -39,6 +39,11 @@ target도 selector로 재사용할 수 없습니다. raw account id와 email은 
 유지하고 selector를 공개 이름으로 사용하세요. 명시적 선택 동작과 우선순위는
 [라우팅 설정](/ko/reference/configuration/routing/)을 참고하십시오.
 
+Codex Auth dashboard가 관리하는 map에는 명시적인 `codexAccountPickerEnabled` field가 있습니다. 빈
+managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정 추가는 picker가 숨겨진 동안에도
+기존 label을 바꾸지 않고 map을 확장합니다. flag가 생략된 수동 map은 자동 확장되지 않습니다. 계정을
+삭제해도 mapping은 유지되며 같은 id를 다시 추가하면 새 selector 대신 기존 selector가 복원됩니다.
+
 ## 예약된 OpenAI 공급자
 
 `openai`와 `openai-apikey`는 고정 예약 id입니다. `openai.codexAccountMode`의 기본값은 `"pool"`이며, 메인 계정과 추가된 계정 전체에서 선택합니다. `"direct"`는 현재 호출자/메인 로그인만 사용합니다. API는 설정된 API 키 또는 키 풀만 사용합니다. 모델 이름만 쓰거나 `openai-apikey/<model>`을 사용하십시오. 다른 라우트의 자격 증명으로는 대체하지 않습니다. API GPT-5.6 행에는 1,050,000 컨텍스트 / 922,000 최대 입력 메타데이터가 들어가며, Pro 가상 id는 기본 와이어 모델로 다시 쓰면서 `reasoning.mode: "pro"`를 적용합니다.

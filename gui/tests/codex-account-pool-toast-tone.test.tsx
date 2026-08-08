@@ -170,6 +170,27 @@ test("a rejected selection order reports in the error tone", async () => {
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeNull();
 });
 
+test("a saved removal with pending catalog refresh renders a warning tone", async () => {
+  await mountPool(makeController({
+    removeAccount: async () => ({ ok: true, catalogRefreshPending: true }),
+  }));
+
+  const removeButton = [...host.querySelectorAll("button")].find(button =>
+    (button.getAttribute("aria-label") ?? "").includes("pool@example.test")
+    && (button.getAttribute("aria-label") ?? "").toLowerCase().includes("remove"),
+  );
+  expect(removeButton).toBeTruthy();
+  await act(async () => {
+    removeButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+
+  const warning = host.querySelector(".codex-auth-page-head__feedback.is-warn");
+  expect(warning?.textContent).toContain("ocx sync");
+  expect(warning?.textContent).not.toContain("pool@example.test");
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
+});
+
 test("a busy selection order write shows no toast at all", async () => {
   await mountPool(makeController({
     setAccountPriority: async () => ({ ok: false, reason: "busy" }),

@@ -224,7 +224,11 @@ quota-bar'ов дашборда.
 ### `ocx account login|reauth|code|cancel ...`
 
 Запускать browser-based или manual-code account-authentication из headless-shell. Для
-provider-specific формы команды используйте `ocx account --help`.
+provider-specific формы команды используйте `ocx account --help`. Если login аккаунта Codex
+сохранён, но обновление каталога моделей ещё не завершилось, human-readable вывод по-прежнему
+завершается успешно и печатает в stderr фиксированную рекомендацию `ocx sync`. С `--json` stdout
+остаётся пригодным для парсинга, а завершённый login-state содержит
+`catalogRefreshPending: true` без human-readable предупреждения.
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
@@ -237,9 +241,13 @@ provider-specific формы команды используйте `ocx account 
 Формы успеха и неудачи в `--json`:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` присутствует только при удалении аккаунтов Codex. Значение `true` означает,
+что удаление уже сохранено; human-readable вывод печатает в stderr общую рекомендацию `ocx sync` и
+по-прежнему завершается с кодом 0. Форматы удаления OAuth-аккаунтов и API-key не меняются.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

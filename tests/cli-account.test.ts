@@ -56,6 +56,8 @@ let codexAccounts: Array<Record<string, unknown>> = [];
 let oauthAccounts: Array<Record<string, unknown>> = [];
 let oauthActiveId: string | null = "acct_1";
 let oauthLoginStatus: Record<string, unknown> = { loggedIn: false };
+let codexLoginStatus: Record<string, unknown> = { status: "pending" };
+let codexDeleteCatalogRefreshPending = false;
 let keyEntries: Array<Record<string, unknown>> = [];
 let keyActiveId: string | null = "key_1";
 let logs: string[] = [];
@@ -139,7 +141,11 @@ async function mockManagementApi(req: Request): Promise<Response> {
     codexAccounts = codexAccounts.filter(account => account.id !== id);
     if (activeCodexAccountId === id) activeCodexAccountId = null;
     lastDeletedType = "codex";
-    return json({ ok: true });
+    return json({
+      ok: true,
+      catalogRefreshPending: codexDeleteCatalogRefreshPending,
+      internalError: "private-delete-detail",
+    });
   }
 
   if (req.method === "PUT" && url.pathname === "/api/codex-auth/accounts/alias") {
@@ -302,6 +308,10 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ ok: true, accepted: true });
   }
 
+  if (req.method === "GET" && url.pathname === "/api/codex-auth/login-status") {
+    return json(codexLoginStatus);
+  }
+
   if (req.method === "POST" && url.pathname === "/api/oauth/login/code") {
     return json({ ok: true, accepted: true });
   }
@@ -405,6 +415,8 @@ beforeEach(() => {
   ];
   oauthActiveId = "acct_1";
   oauthLoginStatus = { loggedIn: false };
+  codexLoginStatus = { status: "pending" };
+  codexDeleteCatalogRefreshPending = false;
   keyEntries = [{
     id: "key_1",
     label: "personal",
@@ -793,6 +805,30 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     )).toBe(true);
   });
 
+  test("pending Codex removal keeps success and prints generic recovery guidance", async () => {
+    codexDeleteCatalogRefreshPending = true;
+    const result = await run(["remove", "openai", "chatgpt_1", "--yes"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("auto (no pin");
+    expect(result.stderr).toContain("ocx sync");
+    expect(result.stderr).toContain("account change was saved");
+    expect(result.output).not.toContain("private-delete-detail");
+  });
+
+  test("JSON Codex removal retains the pending flag without a human warning", async () => {
+    codexDeleteCatalogRefreshPending = true;
+    const result = await run(["remove", "openai", "chatgpt_1", "--yes", "--json"]);
+
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      catalogRefreshPending: true,
+    }));
+    expect(result.stdout).not.toContain("private-delete-detail");
+    expect(result.stderr).toBe("");
+  });
+
   test("25: removing the active OAuth account reports the promoted account", async () => {
     const result = await run(["remove", "anthropic", "acct_1", "--yes"]);
 
@@ -1015,6 +1051,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       id: "chatgpt_1",
       removedActive: true,
       promotedActiveId: null,
+      catalogRefreshPending: false,
     });
 
     deleteFailure = { status: 500, error: "json delete failed" };
@@ -1558,6 +1595,42 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.code).toBe(2);
       expect(result.stderr).toContain("provider entry was not written");
       expect(result.stdout).not.toContain("Logged in to anthropic");
+    } finally {
+      sleepSpy.mockRestore();
+    }
+  });
+
+  test("pending Codex login keeps success and prints generic recovery guidance", async () => {
+    codexLoginStatus = {
+      status: "done",
+      catalogRefreshPending: true,
+      internalError: "private-login-detail",
+    };
+    const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
+    try {
+      const result = await run(["login", "openai"]);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Logged in.");
+      expect(result.stderr).toContain("ocx sync");
+      expect(result.output).not.toContain("private-login-detail");
+    } finally {
+      sleepSpy.mockRestore();
+    }
+  });
+
+  test("JSON Codex login retains the pending flag without a human warning", async () => {
+    codexLoginStatus = { status: "done", catalogRefreshPending: true };
+    const sleepSpy = spyOn(Bun, "sleep").mockImplementation(async () => {});
+    try {
+      const result = await run(["login", "openai", "--json"]);
+
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        status: "done",
+        catalogRefreshPending: true,
+      });
+      expect(result.stderr).toBe("");
     } finally {
       sleepSpy.mockRestore();
     }

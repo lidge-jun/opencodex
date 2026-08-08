@@ -8,6 +8,7 @@ import { invalidateCodexWebSocketsForAccount } from "./websocket-registry";
 import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from "./main-account-cache";
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
+import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
 import type { OcxConfig } from "../types";
 
 let observedMainChatgptAccountId: string | undefined;
@@ -70,7 +71,17 @@ export function resetMainCodexAccountIdentityTrackingForTests(): void {
   clearMainAccountCredentialPresence();
 }
 
-export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): void {
+/**
+ * Delete a stored account while retaining its selector binding.
+ * Returns true when a picker-visible row disappeared and the catalog must converge.
+ */
+export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): boolean {
+  const hadStoredAccount = (runtimeConfig.codexAccounts ?? [])
+    .some(account => !account.isMain && account.id === accountId);
+  const hadVisiblePickerBinding = hadStoredAccount
+    && codexAccountPickerEnabled(runtimeConfig)
+    && codexAccountNamespaceEntries(runtimeConfig)
+      .some(([, boundAccountId]) => boundAccountId === accountId);
   removeCodexAccountCredential(accountId);
   runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
     .filter(account => account.isMain || account.id !== accountId);
@@ -80,4 +91,5 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
   if (runtimeConfig.activeCodexAccountId === accountId) runtimeConfig.activeCodexAccountId = undefined;
   purgeCodexAccountRuntimeState(accountId);
   invalidateCodexWebSocketsForAccount(accountId);
+  return hadVisiblePickerBinding;
 }

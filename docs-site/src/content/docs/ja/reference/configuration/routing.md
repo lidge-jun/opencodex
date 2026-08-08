@@ -16,15 +16,16 @@ description: デフォルトのプロバイダーの選択、モデルの解決�
 
 opencodex は、要求されたモデルを次の順序で解決します。
 
-1. 設定済みの `<account-selector>/<native-openai-model>` namespace。対応する保存済み Codex アカウントだけに routing され、無効または利用不能な exact target は fail closed します。
-2. 正規の `combo/<id>` または構成されたコンボ エイリアス。正規 ID は、エイリアスが一致する前に優先されます。
-3. 構成されたプロバイダーを示すプレフィックスを持つ明示的な `<provider>/<model>` 名前空間。
-4. `gpt-*`、`o1-*`、`o3-*`、`o4-*` などのベア ネイティブ OpenAI ファミリ ID。
-正規対応の `openai` プロバイダー。
-5. プロバイダーの `defaultModel` と完全に一致します。
-6. 既知のプロバイダー ファミリ モデル プレフィックス。
-7. プロバイダーの構成された `models` リスト内の正確なモデル。
-8. `defaultProvider`、要求されたモデル ID を保持します。
+1. 設定済みの `policy/<id>` または routing-profile alias。policy evaluator を実行して選択した候補へ routing します。未解決の `policy/<id>` は後続のルールへフォールスルーします。
+2. 設定済みの `<account-selector>/<native-openai-model>` namespace。対応する保存済み Codex アカウントだけに routing され、無効または利用不能な exact target は fail closed します。
+3. 正規の `combo/<id>` または構成されたコンボ エイリアス。正規 ID は、エイリアスが一致する前に優先されます。
+4. 構成されたプロバイダーを示すプレフィックスを持つ明示的な `<provider>/<model>` 名前空間。
+5. `gpt-*`、`o1-*`、`o3-*`、`o4-*` などのベア ネイティブ OpenAI ファミリ ID。
+   正規対応の `openai` プロバイダー。
+6. プロバイダーの `defaultModel` と完全に一致します。
+7. 既知のプロバイダー ファミリ モデル プレフィックス。
+8. プロバイダーの構成された `models` リスト内の正確なモデル。
+9. `defaultProvider`、要求されたモデル ID を保持します。
 
 無効なプロバイダーは除外されます。無効なプロバイダーの明示的な名前空間は、フォールスルーではなく失敗します。プロバイダー エントリは、複数のプロバイダーに一致する可能性のあるルールの JSON 挿入順序でチェックされるため、ベア モデルがあいまいな可能性がある場合は明示的な名前空間を使用します。
 
@@ -43,6 +44,11 @@ selector の後には bare native OpenAI-family id だけを指定できます�
 限り通常の Pool / Direct routing を維持し、raw `/v1/models` にも残ります。対応する保存済み account
 が存在しない selector は表示されません。selector の検証、衝突規則、privacy guidance は
 [プロバイダーの構成](/reference/configuration/providers/)を参照してください。
+
+Codex Auth ページではこの picker 動作を opt-in できます。無効化すると selector-qualified row は非表示に
+なり通常の GPT row が戻りますが、mapping と exact `<selector>/<model>` routing は残るため、再有効化で
+同じ公開 label が復元されます。mutation は bounded catalog refresh より先に保存され、`ocx sync` warning は
+picker catalog の convergence だけが保留中で routing change は失われていないことを示します。
 
 ## コンボ (`config.combos`)
 

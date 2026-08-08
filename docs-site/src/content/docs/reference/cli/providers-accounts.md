@@ -228,7 +228,10 @@ unknown account id, or a value outside the accepted set exits 1. `--json` return
 ### `ocx account login|reauth|code|cancel ...`
 
 Run browser-based or manual-code account authentication from a headless shell. Use
-`ocx account --help` for the provider-specific command shape.
+`ocx account --help` for the provider-specific command shape. If a Codex account login is saved but
+its model-catalog refresh remains pending, human output still exits successfully and prints fixed
+`ocx sync` recovery guidance on stderr. `--json` keeps stdout parseable and carries
+`catalogRefreshPending: true` in the completed login state without the human warning.
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
@@ -240,9 +243,13 @@ account or reports none; API-key pools promote the first remaining key or report
 success and failure shapes are:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` is present on Codex removals only. When it is `true`, the account deletion is
+already saved; human output prints generic `ocx sync` recovery guidance on stderr and still exits 0.
+OAuth-account and API-key removal envelopes do not gain this field.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

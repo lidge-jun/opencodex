@@ -4,10 +4,9 @@ import ProviderDetails from "../components/provider-workspace/ProviderDetails";
 import type { WorkspaceProvider } from "../provider-workspace/catalog";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { oauthTosRisk } from "../oauth-tos-risk";
-import { ToastNotice } from "../ui";
+import { ToastNotice, type NoticeTone } from "../ui";
 import { IconPlus } from "../icons";
 import { useT } from "../i18n/shared";
-import { formatProviderDisplayName } from "../provider-icons";
 import { useProviderAccountPools } from "../hooks/useProviderAccountPools";
 import { useCodexAccountPool } from "../hooks/useCodexAccountPool";
 import { useJsonConfigEditor } from "../hooks/useJsonConfigEditor";
@@ -19,6 +18,7 @@ import { useProvidersCrud } from "./use-providers-crud";
 import { useProvidersFetch } from "./use-providers-fetch";
 import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
+import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export default function Providers({ apiBase }: { apiBase: string }) {
   const t = useT();
@@ -29,6 +29,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const [adding, setAdding] = useState(false);
   const [status, setStatus] = useState("");
   const [statusOk, setStatusOk] = useState(false);
+  const [statusTone, setStatusTone] = useState<NoticeTone>("err");
   /** Bumped on every notify so repeated identical success toasts restart the dismiss timer. */
   const [statusRevision, setStatusRevision] = useState(0);
   const [oauthProviders, setOauthProviders] = useState<string[]>([]);
@@ -56,13 +57,26 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const notify = useCallback((msg: string, ok: boolean = true) => {
     setStatus(msg);
     setStatusOk(ok);
+    setStatusTone(ok ? "ok" : "err");
     setStatusRevision(revision => revision + 1);
   }, []);
 
   const clearStatus = useCallback(() => {
     setStatus("");
     setStatusOk(false);
+    setStatusTone("err");
   }, []);
+
+  const notifyCodexCompletion = useCallback((completion: CodexAccountMutationCompletion) => {
+    if (completion.catalogRefreshPending) {
+      setStatus(t("codexAuth.catalogRefreshPending"));
+      setStatusOk(false);
+      setStatusTone("warn");
+      setStatusRevision(revision => revision + 1);
+      return;
+    }
+    notify(t("codexAuth.accountAdded"), true);
+  }, [notify, t]);
 
   useEffect(() => { aliveRef.current = true; return () => { aliveRef.current = false; }; }, []);
 
@@ -230,7 +244,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
           <h2>{t("nav.providers")}</h2>
         </div>
         {status
-          ? <ToastNotice tone="err" onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
+          ? <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
           : (
             <div className="providers-workspace providers-workspace--boot" aria-busy="true">
               <div className="providers-workspace-rail providers-workspace-rail--boot" aria-hidden="true" />
@@ -298,7 +312,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         </div>
       </div>
       {status && (
-        <ToastNotice tone={statusOk ? "ok" : "err"} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
+        <ToastNotice tone={statusTone} onDismiss={clearStatus} dismissLabel={t("common.close")}>{status}</ToastNotice>
       )}
       <ProviderWorkspaceShell
         onRemoveProvider={removeProvider}
@@ -409,9 +423,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
         onAccountManage={onAccountManage}
         onOpenAdd={fetchOauth}
         onCloseCodexLogin={() => setCodexLoginOpen(false)}
-        onCodexAdded={() => {
+        onCodexAdded={(completion) => {
           setCodexLoginOpen(false);
-          notify(t("prov.loginOk", { provider: formatProviderDisplayName("openai", t), cmd: "ocx sync" }), true);
+          notifyCodexCompletion(completion);
           void fetchConfig();
           void fetchOauth();
           void fetchProviderQuotas(true);

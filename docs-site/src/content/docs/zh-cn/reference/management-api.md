@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` | 返回已脱敏、对管理安全的配置 DTO | — |
 | `PUT /api/config` | 禁用的完整配置替换保护 | 405；请改用聚焦端点 |
-| `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式和应用拥有的内存预算 | 400 无效或空更新 |
+| `GET, PUT /api/settings` | 读取运行时/启动设置，或更新自动启动、流模式、应用拥有的内存预算和 `codexAccountPickerEnabled` | 400 无效、非对象或空更新 |
 | `GET /api/startup-health` | 读取缓存的服务/shim 启动健康状态 | — |
 | `POST /api/startup-action` | 安装或修复服务或 Codex shim | 400 无效动作；500 动作失败 |
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
@@ -197,11 +197,18 @@ Authorization: Bearer <admin-token>
 
 ### Codex 身份验证委托
 
+`GET /api/settings` 会返回实际生效的 `codexAccountPickerEnabled` 布尔值。包含该严格布尔值的
+`PUT` 在启用空映射时会初始化保护隐私的账号 selector；禁用或再次启用时会保留已有标签。配置
+会先持久化，仅当 picker 的实际可见性发生变化时才请求一次有界 catalog convergence。成功响应
+中的 `catalogRefreshPending` 为 `false` 表示目录提交已完成（或无需刷新）；为 `true` 表示设置已
+保存，但应通过 `POST /api/sync` 重试目录刷新。持久化或 selector 分配失败时会回滚内存设置，且
+不会运行 convergence。
+
 根管理分发器会将每个 `/api/codex-auth/*` 请求委托给 Codex 账户管理器。其路由如下：
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户 | 400 输入无效；手动导入可能被禁用 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户。成功的 POST/DELETE 响应包含 `catalogRefreshPending`。 | 400 输入无效；手动导入可能被禁用 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
@@ -216,9 +223,20 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |
-| `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态 | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
+| `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态。新账号流程完成时，仅在需要恢复时包含 `catalogRefreshPending: true`。 | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
+
+如果新账号的 config row 已保存但 credential setup 未能完成，manual POST 会返回 HTTP 500，OAuth
+`login-status` 会报告 `status: "error"`。两者都包含
+`code: "codex_credential_persistence_failed"`、`accountId`、`needsReauth: true`，并在需要时包含
+`catalogRefreshPending: true`；底层 storage error 详情不会暴露。account row 会保持已保存状态；再次
+创建账号前，请重新认证或删除该账号。
 
 此委托家族下的配置写入器或凭证刷新锁超时，会返回 HTTP 503，代码为 `CONFIG_MUTATION_LOCK_UNAVAILABLE`。客户端应稍后重试，而不是把该响应视为永久性的账户失败。
+
+账号创建和删除会在 catalog convergence 之前提交凭证/配置。目录尝试失败或推迟时，持久化的
+账号变更不会回滚，响应也不会暴露内部 provider、account、path 或 credential 详情；客户端只会
+收到完成状态布尔值。删除账号时会保留 selector 绑定，因此该账号缺失期间精确路由会 fail closed，
+而以后添加相同账号 id 时会恢复同一 selector。
 
 ## 如何选择客户端
 

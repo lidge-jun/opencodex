@@ -131,6 +131,18 @@ and other providers.
 - **Refresh quotas** re-reads account usage immediately so routing and the account cards use the same
   values.
 - Pool request logs use opaque labels such as `p3fa91c`, never account emails.
+- **Target a specific Codex account from the model picker** is an explicit opt-in. When enabled,
+  ordinary supported GPT picker rows are replaced by one entry per public account selector.
+  Choosing one locks that conversation to the mapped account: it does not rotate, fall back, or
+  change the active Pool account. The built-in Codex App login has its own selector; generated maps
+  normally use `main`, with a collision-safe suffix such as `main-2` when needed. Added accounts
+  receive stable, privacy-safe labels, and existing custom selector labels are preserved.
+  Existing conversations and saved model selections continue routing. Turning the setting off
+  hides generated picker entries without deleting accounts, selectors, or exact routes. Plain GPT
+  model ids continue to use the configured Pool or Direct behavior.
+- Account add, remove, and picker-setting changes are saved before the model catalog is refreshed.
+  If that bounded refresh cannot finish, the dashboard shows an amber success-with-recovery notice;
+  run `ocx sync` to retry. The account or setting change itself remains saved.
 
 The Providers overview separately summarizes Pool-mode usage as a display-only weighted capacity
 estimate, alongside the effective account's raw quota and the next capacity recovery. See
@@ -166,7 +178,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
+| `GET` / `PUT /api/settings` | Read settings or update Codex autostart, stream/memory settings, and account-targeting picker visibility. |
 | `GET` / `POST /api/github/star` | Read the `gh`-derived star state, or star the repository. The POST is refused with `403` `agent_consent_required` for agent-driven callers without a dashboard session. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |

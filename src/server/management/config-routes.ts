@@ -40,6 +40,11 @@ import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../provid
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import {
+  codexAccountPickerEnabled,
+  initializeDefaultCodexAccountNamespaces,
+} from "../../codex/account-namespaces";
+import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -76,7 +81,7 @@ import type { ManagementContext } from "./context";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(safeConfigDTO(config));
   }
@@ -131,6 +136,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hostname: config.hostname ?? "127.0.0.1",
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
+      codexAccountPickerEnabled: codexAccountPickerEnabled(config),
       startupHealth: await getCachedStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
@@ -207,16 +213,30 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // (a Windows service does not inherit shell env). A stream-shape
     // change applies to NEW turns only — the config object is shared by
     // reference with the request handlers, no restart needed.
-    let body: { codexAutoStart?: unknown; streamMode?: unknown; appOwnedMemoryBudgetMb?: unknown };
-    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    if (body.codexAutoStart === undefined && body.streamMode === undefined && body.appOwnedMemoryBudgetMb === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, or appOwnedMemoryBudgetMb" }, 400);
+    let parsedBody: unknown;
+    try { parsedBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(parsedBody)) return jsonResponse({ error: "settings body must be an object" }, 400);
+    const body = parsedBody as {
+      codexAutoStart?: unknown;
+      streamMode?: unknown;
+      appOwnedMemoryBudgetMb?: unknown;
+      codexAccountPickerEnabled?: unknown;
+    };
+    if (body.codexAutoStart === undefined
+      && body.streamMode === undefined
+      && body.appOwnedMemoryBudgetMb === undefined
+      && body.codexAccountPickerEnabled === undefined) {
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, or codexAccountPickerEnabled" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
     }
     if (body.streamMode !== undefined && !isStreamMode(body.streamMode)) {
       return jsonResponse({ error: "streamMode must be auto, legacy-tee, or eager-relay" }, 400);
+    }
+    if (body.codexAccountPickerEnabled !== undefined
+      && typeof body.codexAccountPickerEnabled !== "boolean") {
+      return jsonResponse({ error: "codexAccountPickerEnabled boolean is required" }, 400);
     }
     if (body.appOwnedMemoryBudgetMb !== undefined && (
       typeof body.appOwnedMemoryBudgetMb !== "number"
@@ -226,30 +246,76 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     )) {
       return jsonResponse({ error: `appOwnedMemoryBudgetMb must be an integer from ${MIN_APP_OWNED_MEMORY_BUDGET_MB} to ${MAX_APP_OWNED_MEMORY_BUDGET_MB}` }, 400);
     }
-    if (typeof body.codexAutoStart === "boolean") {
-      config.codexAutoStart = body.codexAutoStart;
-    }
-    if (body.streamMode !== undefined) {
-      if (body.streamMode === "auto") {
-        delete config.streamMode;
-      } else {
-        config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+    const previousSettings = {
+      codexAutoStart: config.codexAutoStart,
+      hasCodexAutoStart: Object.hasOwn(config, "codexAutoStart"),
+      streamMode: config.streamMode,
+      hasStreamMode: Object.hasOwn(config, "streamMode"),
+      appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb,
+      hasAppOwnedMemoryBudgetMb: Object.hasOwn(config, "appOwnedMemoryBudgetMb"),
+      codexAccountNamespaces: config.codexAccountNamespaces,
+      hasCodexAccountNamespaces: Object.hasOwn(config, "codexAccountNamespaces"),
+      codexAccountPickerEnabled: config.codexAccountPickerEnabled,
+      hasCodexAccountPickerEnabled: Object.hasOwn(config, "codexAccountPickerEnabled"),
+    };
+    const pickerWasEnabled = codexAccountPickerEnabled(config);
+    let pickerIsEnabled = pickerWasEnabled;
+    try {
+      if (typeof body.codexAutoStart === "boolean") {
+        config.codexAutoStart = body.codexAutoStart;
       }
+      if (body.streamMode !== undefined) {
+        if (body.streamMode === "auto") {
+          delete config.streamMode;
+        } else {
+          config.streamMode = body.streamMode as "legacy-tee" | "eager-relay";
+        }
+      }
+      if (typeof body.appOwnedMemoryBudgetMb === "number") {
+        config.appOwnedMemoryBudgetMb = body.appOwnedMemoryBudgetMb;
+      }
+      if (body.codexAccountPickerEnabled === true) {
+        config.codexAccountPickerEnabled = true;
+        initializeDefaultCodexAccountNamespaces(config);
+      } else if (body.codexAccountPickerEnabled === false) {
+        config.codexAccountPickerEnabled = false;
+      }
+      pickerIsEnabled = codexAccountPickerEnabled(config);
+      (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
+    } catch (error) {
+      if (previousSettings.hasCodexAutoStart) config.codexAutoStart = previousSettings.codexAutoStart;
+      else delete config.codexAutoStart;
+      if (previousSettings.hasStreamMode) config.streamMode = previousSettings.streamMode;
+      else delete config.streamMode;
+      if (previousSettings.hasAppOwnedMemoryBudgetMb) {
+        config.appOwnedMemoryBudgetMb = previousSettings.appOwnedMemoryBudgetMb;
+      } else delete config.appOwnedMemoryBudgetMb;
+      if (previousSettings.hasCodexAccountNamespaces) {
+        config.codexAccountNamespaces = previousSettings.codexAccountNamespaces;
+      } else delete config.codexAccountNamespaces;
+      if (previousSettings.hasCodexAccountPickerEnabled) {
+        config.codexAccountPickerEnabled = previousSettings.codexAccountPickerEnabled;
+      } else delete config.codexAccountPickerEnabled;
+      throw error;
     }
-    if (typeof body.appOwnedMemoryBudgetMb === "number") {
-      config.appOwnedMemoryBudgetMb = body.appOwnedMemoryBudgetMb;
-    }
-    saveConfigPreservingClaudeCode(config);
     if (typeof body.appOwnedMemoryBudgetMb === "number") {
       configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(body.appOwnedMemoryBudgetMb));
       enforceAppOwnedMemoryBudget();
     }
+    const catalogRefresh = pickerWasEnabled !== pickerIsEnabled
+      ? await convergeCodexCatalog()
+      : undefined;
+    const catalogRefreshPending = catalogRefresh
+      ? catalogRefreshIsPending(catalogRefresh)
+      : false;
     invalidateStartupHealthCache();
     return jsonResponse({
       ok: true,
       codexAutoStart: codexAutoStartEnabled(config),
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
+      codexAccountPickerEnabled: pickerIsEnabled,
+      catalogRefreshPending,
       startupHealth: await getCachedStartupHealth(config),
     });
   }

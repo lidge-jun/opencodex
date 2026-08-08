@@ -108,6 +108,15 @@ Codex タスクだけに適用され、このオプション自体が委任を�
   枠のうち最も高い使用率でスコア付けし、Go/Free プランは 30 日枠のみ使います。
 - **クォータ更新**はアカウント使用量を即座に再読み込みし、ルーティングと画面のアカウントカードが同じ値を見るようにします。
 - プールリクエストログにはメールの代わりに `p3fa91c` のような不透明なラベルを使います。
+- **モデルピッカーで使用する Codex アカウントを指定** は明示的な opt-in です。有効にすると、通常の
+  GPT picker 項目が公開 account selector ごとの項目に置き換わります。選択した会話はそのアカウントに
+  固定され、Pool のローテーションや fallback は行われず、active Pool account も変わりません。組み込みの
+  Codex App login には専用 selector があり、生成 map では通常 `main`、衝突時は `main-2` のような安全な
+  suffix が使われます。追加アカウントには安定した privacy-safe label が割り当てられます。
+  既存の会話と保存済みのモデル選択は引き続きルーティングされます。無効にしても account、selector、
+  exact route は削除されず、通常の GPT id は従来どおり Pool / Direct で動作します。
+- account の追加・削除と picker 設定は catalog refresh より先に保存されます。refresh が完了できない場合は
+  amber の回復案内が表示されます。変更自体は保存済みなので、`ocx sync` で refresh を再試行してください。
 
 Providers の概要は、Pool モードの使用状況を表示専用の重み付き容量推定値として別途まとめ、現在の
 有効アカウントの生のクォータと次の容量回復も併せて表示します。表示される項目、不完全な対象範囲の
@@ -119,7 +128,7 @@ GUI はプロキシの JSON 管理 API を使うシンクライアントです�
 
 | エンドポイント | 用途 |
  --- | --- |
-| `GET` / `PUT /api/settings` | 設定を読むか Codex 自動起動をオン/オフします。 |
+| `GET` / `PUT /api/settings` | 設定を読み、Codex 自動起動、stream/memory、account-targeting picker の表示を更新します。 |
 | `GET /api/startup-health` | 秘密情報を含まないルーティング、サービス、shim、再起動安全性診断を読み取ります。 |
 | `GET` / `POST /api/windows-tray` | Windows トレイの導入・表示状態を読み取り、`install`、`start`、`stop`、`uninstall` を実行します。 |
 | `POST /api/sync` | 共有モデルカタログを再構築し Codex モデルキャッシュを古い状態としてマークします。 |

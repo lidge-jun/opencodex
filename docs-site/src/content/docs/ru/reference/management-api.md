@@ -103,7 +103,7 @@ GUI-сессия в стиле loopback не выпускается.
 | --- | --- | --- |
 | `GET /api/config` | Вернуть redacted DTO конфигурации, безопасный для management API | — |
 | `PUT /api/config` | Отключённая защита от полной замены конфигурации | 405; используйте вместо этого узкие endpoint'ы |
-| `GET, PUT /api/settings` | Прочитать runtime/startup setting'и или обновить auto-start, stream mode и budget app-owned memory | 400 invalid or empty update |
+| `GET, PUT /api/settings` | Прочитать runtime/startup setting'и или обновить auto-start, stream mode, budget app-owned memory и `codexAccountPickerEnabled` | 400 invalid, non-object or empty update |
 | `GET /api/startup-health` | Прочитать кэшированное startup health службы/shim'а | — |
 | `POST /api/startup-action` | Установить или починить службу или Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
@@ -219,12 +219,18 @@ Management-аутентификация доказывает доступ к п�
 
 ### Делегирование аутентификации Codex
 
+`GET /api/settings` возвращает эффективный boolean `codexAccountPickerEnabled`. `PUT` этого strict
+boolean при включении пустой map создаёт privacy-safe selector'ы, сохраняет существующие labels,
+сначала записывает config и лишь затем один раз запускает bounded catalog convergence, если видимость
+picker изменилась. `catalogRefreshPending: true` в успешном ответе означает, что настройка сохранена,
+но catalog refresh нужно повторить через `POST /api/sync`.
+
 Корневой dispatcher management API делегирует каждый запрос `/api/codex-auth/*` менеджеру
 аккаунтов Codex. Его маршруты таковы:
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex. Успешные POST/DELETE включают `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
@@ -239,11 +245,24 @@ Management-аутентификация доказывает доступ к п�
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |
-| `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
+| `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта. Завершение нового аккаунта включает `catalogRefreshPending: true` только при необходимости восстановления. | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
+
+Если config row нового аккаунта сохранён, но credential setup не завершён, manual POST возвращает
+HTTP 500, а OAuth `login-status` сообщает `status: "error"`. Оба ответа содержат
+`code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true` и при необходимости
+`catalogRefreshPending: true`; детали storage error не раскрываются. Account row остаётся сохранённым:
+перед повторным созданием аккаунта выполните reauthentication или удалите его.
 
 Если внутри этого delegated family writer конфигурации или refresh credential'ов не получает lock
 в разумное время, возвращается HTTP 503 с кодом `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Клиенту нужно
 немного подождать и повторить запрос, а не трактовать это как постоянный сбой аккаунта.
+
+Создание и удаление аккаунта записывает credentials/config до catalog convergence. Сбой или
+отложенная попытка обновления каталога не откатывает сохранённое изменение аккаунта и не раскрывает
+в ответе внутренние сведения о provider, account, path или credentials: клиент получает только
+boolean завершения. При удалении аккаунта его selector binding сохраняется, поэтому exact routes
+fail closed, пока аккаунт отсутствует, а при повторном добавлении того же id восстанавливается тот же
+селектор.
 
 ## Как выбрать клиента
 

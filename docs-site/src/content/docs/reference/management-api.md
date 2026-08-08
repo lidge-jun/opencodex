@@ -102,7 +102,7 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 | --- | --- | --- |
 | `GET /api/config` | Return the redacted, management-safe configuration DTO | — |
 | `PUT /api/config` | Disabled full-config replacement guard | 405; use focused endpoints instead |
-| `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, and app-owned memory budget | 400 invalid or empty update |
+| `GET, PUT /api/settings` | Read runtime/startup settings or update auto-start, stream mode, app-owned memory budget, and `codexAccountPickerEnabled` | 400 invalid, non-object, or empty update |
 | `GET /api/startup-health` | Read cached service/shim startup health | — |
 | `POST /api/startup-action` | Install or repair the service or Codex shim | 400 invalid action; 500 action failure |
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
@@ -217,12 +217,21 @@ whether to star the repository.
 
 ### Codex authentication delegation
 
+`GET /api/settings` reports the effective `codexAccountPickerEnabled` boolean. A `PUT` containing
+that strict boolean initializes privacy-safe account selectors when enabling an empty map, preserves
+existing selector labels when disabling or re-enabling, persists first, and then requests one bounded
+catalog convergence only when effective picker visibility changed. The successful response includes
+`catalogRefreshPending`: `false` means the catalog commit completed (or no refresh was needed), while
+`true` means the setting was saved but `POST /api/sync` should be used to retry the catalog refresh.
+Persistence or selector-allocation failure rolls the in-memory settings back and does not run
+convergence.
+
 The root management dispatcher delegates every `/api/codex-auth/*` request to the Codex account
 manager. Its routes are:
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts. Successful POST/DELETE responses include `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
@@ -237,11 +246,23 @@ manager. Its routes are:
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
-| `GET /api/codex-auth/login-status` | Poll a flow or account login state | Unknown flows report `expired`; no active flow reports `idle` |
+| `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
+
+If a new account config row is saved but credential setup cannot finish, the manual POST returns
+HTTP 500 and OAuth `login-status` reports `status: "error"`. Both use
+`code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, and optional
+`catalogRefreshPending: true`; storage-error details are not exposed. The account row remains saved:
+reauthenticate or delete it before retrying account creation.
 
 Configuration-writer or credential-refresh lock timeouts under this delegated family return HTTP
 503 with code `CONFIG_MUTATION_LOCK_UNAVAILABLE`. Clients should retry shortly rather than treating
 that response as a permanent account failure.
+
+Account creation and deletion commit credentials/configuration before catalog convergence. A failed or
+deferred catalog attempt never rolls back the durable account mutation and never reflects internal
+provider, account, path, or credential details; clients receive only the completion boolean. Deleting
+an account retains its selector binding so exact routes fail closed while the account is absent and the
+same selector is restored if that account id is added again.
 
 ## Choosing a client
 

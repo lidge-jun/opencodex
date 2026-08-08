@@ -39,6 +39,11 @@ namespace 付き combo または routing-profile alias はその namespace prefi
 非公開のままにし、selector を公開名として使ってください。明示的な選択の動作と優先順位は
 [ルーティング構成](/reference/configuration/routing/)を参照してください。
 
+Codex Auth dashboard が管理する map には明示的な `codexAccountPickerEnabled` field があります。空の
+managed map を有効にすると privacy-safe selector が作られ、その後の account 追加は picker を非表示に
+している間も既存 label を変えずに map を拡張します。flag を省略した手書き map は自動拡張されません。
+account を削除しても mapping は保持され、同じ id を再追加すると新しい selector ではなく既存 selector が戻ります。
+
 ## 予約済み OpenAI プロバイダー
 
 `openai` および `openai-apikey` は固定予約 ID です。 `openai.codexAccountMode` はデフォルトでは `"pool"` で、メインアカウントと追加アカウント全体を選択します。 `"direct"` は、現在の呼び出し元/メイン ログインのみを使用します。 API は、設定された API キーまたはキー プールのみを使用します。ベア モデルまたは `openai-apikey/<model>` を使用します。クロスルート認証情報のフォールバックはありません。 API GPT-5.6 行は 1,050,000 コンテキスト / 最大 922,000 入力メタデータを伝送し、Pro 仮想 ID は `reasoning.mode: "pro"` を使用してベース ワイヤー モデルに書き換えられます。

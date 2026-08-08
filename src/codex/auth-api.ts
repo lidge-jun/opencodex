@@ -1,4 +1,10 @@
-import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfigPreservingClaudeCode } from "../config";
+import {
+  ConfigMutationLockError,
+  loadConfig,
+  mutatePersistedConfig,
+  saveConfigPreservingClaudeCode,
+  withConfigMutationLockSync,
+} from "../config";
 import { withCodexAccountLogLabel } from "./account-label";
 import {
   getCodexAccountCredential,
@@ -14,6 +20,14 @@ import {
   TokenRefreshError,
 } from "./account-store";
 import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  appendDefaultCodexAccountNamespace,
+  codexAccountPickerEnabled,
+} from "./account-namespaces";
+import {
+  catalogRefreshIsPending,
+  normalizeCatalogDisposition,
+} from "./catalog-refresh-status";
 import { isCodexAccountPaused, setCodexAccountPaused } from "./account-pause";
 import {
   clearCodexAccountPin,
@@ -85,7 +99,8 @@ export { clearMainAccountInfoCache } from "./main-account-cache";
 import { maskEmail } from "../lib/privacy";
 import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./warmup";
 export { maskEmail } from "../lib/privacy";
-import type { CodexAccount, OcxConfig } from "../types";
+import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types";
+import type { CatalogDisposition } from "./convergence-types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -131,10 +146,22 @@ function nativeMainProfileBusyResponse(): Response {
 }
 
 const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
+const CODEX_CREDENTIAL_PERSISTENCE_ERROR = "Account was saved, but credential setup did not complete. Reauthenticate or remove the account.";
+const CODEX_CREDENTIAL_PERSISTENCE_CODE = "codex_credential_persistence_failed";
 
 const MAX_CODEX_LOGIN_STATE_ROWS = 32;
 const CODEX_LOGIN_TERMINAL_TTL_MS = 300_000;
-interface CodexLoginStateRow { status: string; startedAt: number; accountId?: string; email?: string; error?: string; doneAt?: number }
+interface CodexLoginStateRow {
+  status: string;
+  startedAt: number;
+  accountId?: string;
+  email?: string;
+  error?: string;
+  code?: string;
+  needsReauth?: boolean;
+  catalogRefreshPending?: boolean;
+  doneAt?: number;
+}
 const codexAuthLoginState = new Map<string, CodexLoginStateRow>();
 export class CodexLoginStateBusyError extends ResourceAdmissionError {
   constructor() { super("codex_login_state_rows", MAX_CODEX_LOGIN_STATE_ROWS); this.name = "CodexLoginStateBusyError"; }
@@ -389,6 +416,100 @@ function saveRuntimeConfig(sourceConfig: OcxConfig, nextConfig: OcxConfig): void
     delete sourceConfig[key];
   }
   Object.assign(sourceConfig, nextConfig);
+}
+
+interface StagedNewCodexAccountState {
+  credential: CodexAccountCredentials;
+  validatedAt: number;
+}
+
+type PersistNewCodexAccountOutcome =
+  | { status: "committed"; pickerVisibilityChanged: boolean }
+  | { status: "publication-failed"; pickerVisibilityChanged: boolean };
+
+function codexCredentialPersistenceFailure(accountId: string, catalogRefreshPending: boolean) {
+  return {
+    error: CODEX_CREDENTIAL_PERSISTENCE_ERROR,
+    code: CODEX_CREDENTIAL_PERSISTENCE_CODE,
+    accountId,
+    needsReauth: true as const,
+    ...(catalogRefreshPending ? { catalogRefreshPending: true as const } : {}),
+  };
+}
+
+/** Persist config before publishing secret or runtime state under the shared mutation coordinator. */
+function persistNewCodexAccount(
+  sourceConfig: OcxConfig,
+  runtimeConfig: OcxConfig,
+  addedAccount: CodexAccount,
+  staged: StagedNewCodexAccountState,
+): PersistNewCodexAccountOutcome {
+  return withConfigMutationLockSync(() => {
+    const previousConfig = { ...runtimeConfig };
+    let pickerVisibilityChanged: boolean;
+    try {
+      const accounts = [...(runtimeConfig.codexAccounts ?? [])];
+      const retainedPickerBindingRestored = codexAccountPickerEnabled(runtimeConfig)
+        && Object.values(runtimeConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
+      accounts.push(addedAccount);
+      runtimeConfig.codexAccounts = accounts;
+
+      // Presence of the explicit flag distinguishes a dashboard-managed map from
+      // a hand-authored legacy map. Preserve manual maps exactly.
+      const tracksPickerNamespaces = runtimeConfig.codexAccountPickerEnabled !== undefined;
+      if (tracksPickerNamespaces && runtimeConfig.codexAccountNamespaces) {
+        runtimeConfig.codexAccountNamespaces = { ...runtimeConfig.codexAccountNamespaces };
+      }
+      const namespaceAdded = tracksPickerNamespaces
+        && appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
+      pickerVisibilityChanged = namespaceAdded || retainedPickerBindingRestored;
+      saveRuntimeConfig(sourceConfig, runtimeConfig);
+    } catch (error) {
+      for (const key of Object.keys(runtimeConfig) as Array<keyof OcxConfig>) {
+        delete runtimeConfig[key];
+      }
+      Object.assign(runtimeConfig, previousConfig);
+      throw error;
+    }
+
+    try {
+      saveCodexAccountCredential(addedAccount.id, staged.credential);
+      markCodexAccountValidated(addedAccount.id, staged.validatedAt);
+      clearAccountNeedsReauth(addedAccount.id);
+    } catch {
+      // Config is already durable. Return the failure outcome through the coordinator so its
+      // generation commit is not rolled back while config.json remains changed.
+      return { status: "publication-failed" as const, pickerVisibilityChanged };
+    }
+    return { status: "committed" as const, pickerVisibilityChanged };
+  });
+}
+
+/** Bounded catalog-convergence callback supplied by the management dispatcher. */
+export type CodexAuthCatalogConvergence = () => Promise<CatalogDisposition>;
+
+interface AccountNamespaceCatalogRefresh {
+  catalogRefreshPending: boolean;
+}
+
+/** Collapse post-persistence convergence into the one public recovery bit. */
+async function convergeAccountNamespaceCatalog(
+  config: OcxConfig,
+  changed: boolean,
+  convergeCodexCatalog?: CodexAuthCatalogConvergence,
+): Promise<AccountNamespaceCatalogRefresh> {
+  if (!changed || !codexAccountPickerEnabled(config)) {
+    return { catalogRefreshPending: false };
+  }
+  if (!convergeCodexCatalog) return { catalogRefreshPending: true };
+
+  try {
+    const catalogRefresh = normalizeCatalogDisposition(await convergeCodexCatalog());
+    if (!catalogRefresh) return { catalogRefreshPending: true };
+    return { catalogRefreshPending: catalogRefreshIsPending(catalogRefresh) };
+  } catch {
+    return { catalogRefreshPending: true };
+  }
 }
 
 async function mapWithConcurrency<T, R>(
@@ -1202,6 +1323,7 @@ export async function handleCodexAuthAPI(
   req: Request,
   url: URL,
   config: OcxConfig,
+  convergeCodexCatalog?: CodexAuthCatalogConvergence,
 ): Promise<Response | null> {
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
@@ -1240,20 +1362,38 @@ export async function handleCodexAuthAPI(
     const latestConfig = getRuntimeConfig(config);
     const commitConflict = codexAccountPersistenceConflict(latestConfig, body.id, "create");
     if (commitConflict) return jsonResponse({ error: commitConflict }, 400);
-    saveCodexAccountCredential(body.id, {
-      accessToken: body.accessToken,
-      refreshToken: body.refreshToken,
-      expiresAt: exp,
-      chatgptAccountId: derivedAccountId,
-    });
-    markCodexAccountValidated(body.id, warmup.validatedAt);
-    clearAccountNeedsReauth(body.id);
-    const accounts = latestConfig.codexAccounts ?? [];
-    accounts.push(withCodexAccountLogLabel({ id: body.id, email: body.email, plan: body.plan, isMain: false }, accounts));
-    latestConfig.codexAccounts = accounts;
-    saveRuntimeConfig(config, latestConfig);
+    const addedAccount = withCodexAccountLogLabel(
+      { id: body.id, email: body.email, plan: body.plan, isMain: false },
+      latestConfig.codexAccounts ?? [],
+    );
+    const persistence = persistNewCodexAccount(
+      config,
+      latestConfig,
+      addedAccount,
+      {
+        credential: {
+          accessToken: body.accessToken,
+          refreshToken: body.refreshToken,
+          expiresAt: exp,
+          chatgptAccountId: derivedAccountId,
+        },
+        validatedAt: warmup.validatedAt,
+      },
+    );
     reconcileLiveStateStores();
-    return jsonResponse({ ok: true });
+    if (persistence.status === "publication-failed") markAccountNeedsReauth(body.id);
+    const catalogRefresh = await convergeAccountNamespaceCatalog(
+      latestConfig,
+      persistence.pickerVisibilityChanged,
+      convergeCodexCatalog,
+    );
+    if (persistence.status === "publication-failed") {
+      return jsonResponse({
+        ok: false,
+        ...codexCredentialPersistenceFailure(body.id, catalogRefresh.catalogRefreshPending === true),
+      }, 500);
+    }
+    return jsonResponse({ ok: true, ...catalogRefresh });
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {
@@ -1265,10 +1405,15 @@ export async function handleCodexAuthAPI(
     if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
-    deleteCodexAccount(runtimeConfig, id);
+    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
     saveRuntimeConfig(config, runtimeConfig);
     reconcileLiveStateStores();
-    return jsonResponse({ ok: true });
+    const catalogRefresh = await convergeAccountNamespaceCatalog(
+      runtimeConfig,
+      pickerVisibilityChanged,
+      convergeCodexCatalog,
+    );
+    return jsonResponse({ ok: true, ...catalogRefresh });
   }
 
   if (url.pathname === "/api/codex-auth/accounts/alias" && req.method === "PUT") {
@@ -1761,6 +1906,8 @@ export async function handleCodexAuthAPI(
                 const latestConfig = getRuntimeConfig(config);
                 const accounts = latestConfig.codexAccounts ?? [];
                 const existingIdx = accounts.findIndex(account => account.id === accountId);
+                let pickerVisibilityChanged = false;
+                let newAccountPersistence: PersistNewCodexAccountOutcome | null = null;
                 const commitConflict = codexAccountPersistenceConflict(
                   latestConfig,
                   accountId,
@@ -1776,22 +1923,21 @@ export async function handleCodexAuthAPI(
                   break;
                 }
 
-                saveCodexAccountCredential(accountId, {
+                const credential: CodexAccountCredentials = {
                   accessToken: cred.access,
                   refreshToken: cred.refresh,
                   expiresAt: cred.expires,
                   chatgptAccountId: oauthAccountId,
-                });
-                // A successful reauthentication replaces the credential generation. Do not let a
-                // failed optional WHAM probe make the replacement inherit quota from the old record.
-                if (reauth) clearAccountQuota(accountId);
-                markCodexAccountValidated(accountId, warmup.validatedAt);
-                clearAccountNeedsReauth(accountId);
-                if (quota) {
-                  setAccountQuotaFromParsed(accountId, quota);
-                }
+                };
 
                 if (existingIdx >= 0) {
+                  saveCodexAccountCredential(accountId, credential);
+                  // A successful reauthentication replaces the credential generation. Do not let a
+                  // failed optional WHAM probe make the replacement inherit quota from the old record.
+                  if (reauth) clearAccountQuota(accountId);
+                  markCodexAccountValidated(accountId, warmup.validatedAt);
+                  clearAccountNeedsReauth(accountId);
+                  if (quota) setAccountQuotaFromParsed(accountId, quota);
                   // Keep the pool id stable; refresh display metadata after a successful login/reauth.
                   accounts[existingIdx] = withCodexAccountLogLabel({
                     ...accounts[existingIdx],
@@ -1802,13 +1948,49 @@ export async function handleCodexAuthAPI(
                   latestConfig.codexAccounts = accounts;
                   saveRuntimeConfig(config, latestConfig);
                 } else {
-                  accounts.push(withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts));
-                  latestConfig.codexAccounts = accounts;
-                  saveRuntimeConfig(config, latestConfig);
+                  const addedAccount = withCodexAccountLogLabel({ id: accountId, email, plan, isMain: false }, accounts);
+                  newAccountPersistence = persistNewCodexAccount(
+                    config,
+                    latestConfig,
+                    addedAccount,
+                    {
+                      credential,
+                      validatedAt: warmup.validatedAt,
+                    },
+                  );
+                  pickerVisibilityChanged = newAccountPersistence.pickerVisibilityChanged;
                 }
                 reconcileLiveStateStores();
-                setCodexLoginState(flowId, { status: "done", accountId, email, doneAt: Date.now() });
-                completed = true;
+                if (newAccountPersistence?.status === "publication-failed") {
+                  markAccountNeedsReauth(accountId);
+                }
+                // A new quota row is generation-gated by live account ownership. Reconcile the
+                // durable config owner first so a partial prior sweep cannot reject this write.
+                if (newAccountPersistence?.status === "committed" && quota) {
+                  setAccountQuotaFromParsed(accountId, quota);
+                }
+                const { catalogRefreshPending } = await convergeAccountNamespaceCatalog(
+                  latestConfig,
+                  pickerVisibilityChanged,
+                  convergeCodexCatalog,
+                );
+                if (newAccountPersistence?.status === "publication-failed") {
+                  setCodexLoginState(flowId, {
+                    status: "error",
+                    ...codexCredentialPersistenceFailure(accountId, catalogRefreshPending),
+                    doneAt: Date.now(),
+                  });
+                  completed = true;
+                } else {
+                  setCodexLoginState(flowId, {
+                    status: "done",
+                    accountId,
+                    email,
+                    ...(catalogRefreshPending ? { catalogRefreshPending: true } : {}),
+                    doneAt: Date.now(),
+                  });
+                  completed = true;
+                }
               }
               break;
             }
@@ -1894,7 +2076,13 @@ export async function handleCodexAuthAPI(
     const reauthStatus = url.searchParams.get("reauth") === "1";
     if (flowId) {
       const st = codexAuthLoginState.get(flowId);
-      if (!st && accountId && !reauthStatus && getCodexAccountCredential(accountId)) {
+      if (
+        !st
+        && accountId
+        && !reauthStatus
+        && !isAccountNeedsReauth(accountId)
+        && getCodexAccountCredential(accountId)
+      ) {
         return jsonResponse({ status: "done", accountId });
       }
       return jsonResponse(st ? { ...st, email: maskEmail(st.email) ?? undefined } : { status: "expired" });

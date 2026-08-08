@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` |編集された、管理上安全な構成 DTO を返します。 — |
 | `PUT /api/config` |フルコンフィグ置換ガードを無効にする | 405;代わりにフォーカスされたエンドポイントを使用してください。
-| `GET, PUT /api/settings` |ランタイム/起動設定の読み取り、または自動起動、ストリーム モード、アプリ所有のメモリ バジェットの更新 | 400 無効または空の更新 |
+| `GET, PUT /api/settings` |ランタイム/起動設定の読み取り、または自動起動、ストリーム モード、アプリ所有のメモリ バジェット、`codexAccountPickerEnabled` の更新 | 400 無効、object 以外、または空の更新 |
 | `GET /api/startup-health` |キャッシュされたサービス/シムの起動状態を読み取る | — |
 | `POST /api/startup-action` |サービスまたは Codex シムをインストールまたは修復する | 400 無効なアクション。 500 アクション失敗 |
 | `GET, POST /api/windows-tray` | Windows トレイの状態を読み取るか、インストール/起動/停止/アンインストールする | 400 のサポートされていないプラットフォーム/アクション。 500 操作失敗 |
@@ -197,11 +197,16 @@ Authorization: Bearer <admin-token>
 
 ### Codex認証の委任
 
+`GET /api/settings` は有効な `codexAccountPickerEnabled` boolean を返します。この strict boolean を
+`PUT` すると、空の map を有効化する場合は privacy-safe selector を初期化し、既存 label を保持したまま
+先に永続化し、有効な picker 表示が変わったときだけ bounded catalog convergence を 1 回要求します。
+成功応答の `catalogRefreshPending: true` は設定は保存済みだが `POST /api/sync` による再試行が必要という意味です。
+
 ルート管理ディスパッチャーは、すべての `/api/codex-auth/*` リクエストを Codex アカウント マネージャーに委任します。そのルートは次のとおりです。
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除 | 400 無効な入力。手動インポートは無効にすることができます。
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。成功した POST/DELETE は `catalogRefreshPending` を返します。 | 400 無効な入力。手動インポートは無効にすることができます。 |
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
@@ -216,9 +221,19 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
 | `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |
-| `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
+| `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。新規アカウント完了時は回復が必要な場合だけ `catalogRefreshPending: true` を含みます。 |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
+
+新規 account の config row は保存されたものの credential setup を完了できない場合、manual POST は
+HTTP 500 を返し、OAuth の `login-status` は `status: "error"` を報告します。どちらも
+`code: "codex_credential_persistence_failed"`、`accountId`、`needsReauth: true`、必要に応じて
+`catalogRefreshPending: true` を含み、storage error の詳細は公開しません。account row は保存済みなので、
+account 作成を再試行する前に再認証するか削除してください。
 
 この委任されたファミリーでの構成ライターまたは資格情報の更新ロックのタイムアウトは、コード `CONFIG_MUTATION_LOCK_UNAVAILABLE` の HTTP 503 を返します。クライアントは、その応答を永久的なアカウント障害として扱うのではなく、すぐに再試行する必要があります。
+
+アカウント作成と削除は catalog convergence より先に永続化されます。失敗または延期された catalog 処理は
+保存済み mutation をロールバックせず、内部 provider/account/path/credential detail も返しません。削除した
+account の selector binding は残るため、欠落中の exact route は fail closed し、同じ id の再追加で同じ selector が戻ります。
 
 ## クライアントの選択
 

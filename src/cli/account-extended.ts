@@ -17,6 +17,10 @@ import {
   type AccountDeps, type AccountStdin, type FamilyRows,
   type ProviderQuotaDto, type ProviderQuotaReportDto,
 } from "./account-api";
+import {
+  codexCatalogRefreshPending,
+  warnIfCodexCatalogRefreshPending,
+} from "./account-catalog-refresh";
 
 const MAIN_ID = "__main__";
 const AUTO_NOTE = "auto (no pin — lowest-usage account is selected per request)";
@@ -241,18 +245,28 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
   const response = await apiJson(deps, baseUrl, "DELETE", deletePath(classified.type, name, id));
   if (response.status === 0) return fail("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
   if (response.status !== 200) return fail(errorText(response.json, `failed to remove ${requestedId}`));
+  const catalogRefreshPending = classified.type === "codex"
+    && codexCatalogRefreshPending(response.json);
   const after = await fetchRows(deps, baseUrl, name, classified.type);
   if (after.networkDown || after.errorJson) {
     const detail = after.networkDown ? "proxy not reachable" : typeof after.errorJson?.error === "string" ? after.errorJson.error : "unknown error";
     return fail(`post-delete verification failed; delete may have succeeded: ${detail}`);
   }
   const removedActive = before.activeId === id;
-  const result = { ok: true, provider: name, id, removedActive, promotedActiveId: after.activeId };
+  const result = {
+    ok: true,
+    provider: name,
+    id,
+    removedActive,
+    promotedActiveId: after.activeId,
+    ...(classified.type === "codex" ? { catalogRefreshPending } : {}),
+  };
   if (wantsJson) console.log(JSON.stringify(result, null, 2));
   else if (classified.type === "codex" && removedActive && after.activeId === null) console.log(`openai: ${AUTO_NOTE}`);
   else if (classified.type === "oauth") console.log(after.rows.length ? `${name}: active account is now ${after.activeId}` : `${name}: no accounts remaining`);
   else if (classified.type === "api-key") console.log(after.rows.length ? `${name}: active key is now ${after.activeId}` : `${name}: no keys remaining`);
   else console.log(`${name}: removed account ${requestedId}`);
+  if (!wantsJson && catalogRefreshPending) warnIfCodexCatalogRefreshPending(response.json);
   return 0;
 }
 

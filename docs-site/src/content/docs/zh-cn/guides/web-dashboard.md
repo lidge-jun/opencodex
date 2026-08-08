@@ -99,6 +99,16 @@ Pool 模式会在主账号和已添加的 Codex 账号之间选择；Direct 只�
   评分；Go/Free 计划只使用 30d 窗口。
 - **Refresh quotas** 会立即重新读取账号 usage，使路由逻辑与页面上的账号卡片使用同一份数据。
 - 池账号的请求日志使用 `p3fa91c` 这类不透明标签，不会记录账号邮箱。
+- **从模型选择器指定 Codex 账号** 是一项显式选择加入的设置。启用后，普通 GPT picker 条目会
+  替换为每个公开账号 selector 对应的条目。选择其中一项会把该对话锁定到映射账号：不会轮换、
+  fallback，也不会更改活跃 Pool 账号。内置 Codex App 登录有自己的 selector；生成的 map 通常
+  使用 `main`，发生冲突时会使用 `main-2` 这类安全后缀。新增账号会获得稳定且保护隐私的标签，
+  已有自定义 selector 标签则会保留。现有对话和已保存的模型选择会
+  继续路由。关闭此设置只会隐藏生成的 picker 项，不会删除账号、selector 或精确路由；普通 GPT
+  model id 继续使用已配置的 Pool 或 Direct 行为。
+- 添加、删除账号或更改 picker 设置时，会先保存变更再刷新模型目录。如果有界刷新未完成，
+  仪表盘会显示琥珀色的“成功但需要恢复”提示；运行 `ocx sync` 即可重试。账号或设置变更本身
+  仍已保存。
 
 Providers 概览会单独汇总 Pool 模式的显示专用加权容量估算，并同时显示当前有效账户的原始配额和
 下一次容量恢复。可见字段、覆盖不完整的含义以及路由边界，请参阅
@@ -110,7 +120,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 
 | Endpoint | 用途 |
 | --- | --- |
-| `GET` / `PUT /api/settings` | 读取设置或切换 Codex 自动启动。 |
+| `GET` / `PUT /api/settings` | 读取设置，或更新 Codex 自动启动、流/内存设置以及账号定向 picker 的可见性。 |
 | `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |

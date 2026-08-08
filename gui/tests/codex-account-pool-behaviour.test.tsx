@@ -35,6 +35,7 @@ let activePinned = false;
 let activePinnedAccountId: string | null = null;
 let omitPinnedAccountId = false;
 let activeGetId: string | null = null;
+let deleteCatalogRefreshPending = false;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -62,6 +63,7 @@ beforeEach(() => {
   activePinnedAccountId = null;
   omitPinnedAccountId = false;
   activeGetId = null;
+  deleteCatalogRefreshPending = false;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -113,6 +115,16 @@ beforeEach(() => {
             pausedAccountIds: bulkPausedAccountIds,
             pausedCount: bulkPausedAccountIds.length,
             activeCodexAccountId: bulkResponseActiveId,
+          }),
+        } as unknown as Response;
+      }
+      if (path.startsWith("codex-auth/accounts") && init?.method === "DELETE") {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: true,
+            catalogRefreshPending: deleteCatalogRefreshPending,
+            privateDetail: "private-delete-detail",
           }),
         } as unknown as Response;
       }
@@ -202,6 +214,19 @@ test("the controller loads once on mount", async () => {
 test("an inert controller issues no requests at all", async () => {
   await mountController(false);
   expect(calls.length).toBe(0);
+});
+
+test("account removal returns only the public catalog completion flag", async () => {
+  deleteCatalogRefreshPending = true;
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.removeAccount("a1")).toEqual({
+      ok: true,
+      catalogRefreshPending: true,
+    });
+  });
+  expect(calls).toContain("DELETE codex-auth/accounts?id=a1");
 });
 
 test("pausing an account writes the persisted endpoint and updates shared state", async () => {

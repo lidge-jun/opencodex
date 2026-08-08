@@ -108,6 +108,15 @@ Dashboard의 **Sub-agent delegation** 선택기는 `injectionModel`과 선택적
   30일 창으로 분류합니다. 기간이 없는 기존 응답은 이전과 동일하게 주간 창으로 해석합니다.
 - **Refresh quotas**는 계정 사용량을 즉시 다시 읽어 라우팅과 화면의 계정 카드가 같은 값을 보게 합니다.
 - 풀 요청 로그에는 이메일 대신 `p3fa91c` 같은 불투명한 라벨을 사용합니다.
+- **모델 선택기에서 사용할 Codex 계정 지정**은 명시적 opt-in입니다. 활성화하면 일반 GPT picker 항목이
+  공개 account selector별 항목으로 대체됩니다. 선택한 대화는 해당 계정에 고정되며 Pool 순환이나
+  fallback이 일어나지 않고 active Pool account도 바뀌지 않습니다. 기본 Codex App 로그인에는 자체
+  selector가 있으며, 생성된 map에서는 보통 `main`, 충돌 시 `main-2` 같은 안전한 suffix를 사용합니다.
+  추가 계정에는 안정적인 privacy-safe label이 부여됩니다. 기존 대화와 저장된 모델 선택은 계속
+  라우팅됩니다. 비활성화해도 계정, selector, exact route는 삭제되지 않으며 일반 GPT id는 기존 Pool /
+  Direct 동작을 유지합니다.
+- 계정 추가·삭제와 picker 설정은 catalog refresh보다 먼저 저장됩니다. refresh가 끝나지 않으면 amber
+  복구 안내가 표시됩니다. 변경 자체는 저장되어 있으므로 `ocx sync`로 refresh를 다시 시도하십시오.
 
 Providers 개요는 Pool 모드 사용량을 표시 전용 가중 용량 추정치로 별도 요약하고, 현재 유효 계정의
 원본 quota와 다음 용량 회복도 함께 표시합니다. 표시 필드, 불완전한 범위의 의미, 라우팅 경계는
@@ -139,7 +148,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 
 | 엔드포인트 | 용도 |
 | --- | --- |
-| `GET` / `PUT /api/settings` | 설정을 읽거나 Codex 자동 시작을 켜고 끕니다. |
+| `GET` / `PUT /api/settings` | 설정을 읽고 Codex 자동 시작, stream/memory, account-targeting picker 표시를 업데이트합니다. |
 | `GET` / `POST /api/github/star` | `gh`로 확인한 스타 상태를 읽거나 저장소에 스타를 남깁니다. 대시보드 세션 없이 에이전트가 POST하면 `403` `agent_consent_required`로 거절합니다. |
 | `GET /api/startup-health` | 비밀값 없이 라우팅, 서비스, shim, 재부팅 안전성 진단을 읽습니다. |
 | `GET` / `POST /api/windows-tray` | Windows 트레이 설치 및 표시 상태를 읽거나 `install`, `start`, `stop`, `uninstall` 작업을 수행합니다. |

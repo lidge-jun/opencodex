@@ -7,13 +7,14 @@ import {
 import { AddCodexAccountPickStep } from "./add-codex-account-pick-step";
 import { AddCodexAccountWaitingStep } from "./add-codex-account-waiting-step";
 import { useAddCodexAccountOAuth } from "./use-add-codex-account-oauth";
+import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 
 export default function AddCodexAccountModal({
   apiBase, onClose, onAdded, reauthAccountId,
 }: {
   apiBase: string;
   onClose: () => void;
-  onAdded: () => void;
+  onAdded: (completion: CodexAccountMutationCompletion) => void;
   reauthAccountId?: string;
 }) {
   const t = useT();

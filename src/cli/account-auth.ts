@@ -1,3 +1,5 @@
+import { writeSync } from "node:fs";
+import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import {
   CliUsageError,
   printData,
@@ -11,7 +13,6 @@ import {
   type CliStdin,
   type RuntimeApiDeps,
 } from "./runtime-api";
-import { writeSync } from "node:fs";
 
 /**
  * Write the whole block to fd 1 synchronously (#1007). `console.log` can
@@ -127,6 +128,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<void> {
       );
       if (state.status === "done") {
         printData(state, wantsJson, [`Logged in${state.email ? ` as ${String(state.email)}` : ""}.`]);
+        if (!wantsJson) warnIfCodexCatalogRefreshPending(state);
         return;
       }
       if (state.status === "error" || state.status === "expired") {

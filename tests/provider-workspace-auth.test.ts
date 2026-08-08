@@ -120,10 +120,8 @@ describe("workspace account integration seam", () => {
     expect(page).toContain('notify(t("prov.logoutFail"');
     expect(page).toContain('notify(t("prov.accountRemoveFail"');
     expect(page).toContain("await fetchAccountSets([provider])");
-    // Upstream replaced the setToast state with showActionFeedback; the contract this
-    // pins is unchanged and slightly tighter — the failure path must surface
-    // codexAuth.removeFailed AND mark it as an error tone via the second argument.
-    expect(codexPool).toContain('showActionFeedback(t("codexAuth.removeFailed"), true)');
+    // The failure path must surface codexAuth.removeFailed and mark it as an error tone.
+    expect(codexPool).toContain('showActionFeedback(t("codexAuth.removeFailed"), "err")');
     expect(hook).toContain("pauseTokensRef");
   });
 

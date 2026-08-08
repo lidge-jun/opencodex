@@ -14,7 +14,10 @@ export function Switch({ on, onClick, disabled, label }: { on: boolean; onClick:
   );
 }
 
-export function Notice({ tone, children }: { tone: "ok" | "err" | "warn"; children: ReactNode }) {
+/** Shared presentation tone for success, degraded success, and failure notices. */
+export type NoticeTone = "ok" | "warn" | "err";
+
+export function Notice({ tone, children }: { tone: NoticeTone; children: ReactNode }) {
   // `warn` is degraded-but-not-failed: the action happened, something adjacent
   // did not. It must not render as the clean success the user did not get.
   const toneClass = tone === "ok" ? "notice-ok" : tone === "warn" ? "notice-warn" : "notice-err";
@@ -36,7 +39,7 @@ export function ToastNotice({
   onDismiss,
   dismissLabel,
 }: {
-  tone: "ok" | "err";
+  tone: NoticeTone;
   children: ReactNode;
   onDismiss?: () => void;
   /** Required whenever onDismiss is provided — pass t("common.close"). */
@@ -45,7 +48,7 @@ export function ToastNotice({
   return createPortal(
     <div className="toast-notice-host" role="presentation">
       <div
-        className={`toast-notice notice ${tone === "ok" ? "notice-ok" : "notice-err"}`}
+        className={`toast-notice notice ${tone === "ok" ? "notice-ok" : tone === "warn" ? "notice-warn" : "notice-err"}`}
         role="status"
         aria-live="polite"
       >
