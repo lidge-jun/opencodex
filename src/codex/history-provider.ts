@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
@@ -200,6 +200,49 @@ interface BackupManifest {
   entries: Record<string, BackupEntry>;
 }
 
+export interface CodexHistoryVerifiedNoopProof {
+  readonly kind: "verified-noop";
+  readonly pendingRows: 0;
+  readonly backupEntries: 0;
+  readonly canonicalStateDbPath: string;
+  readonly stateDbPresent: true;
+  readonly canonicalBackupPath: string;
+  readonly backupPresent: boolean;
+}
+
+export type CodexHistoryNoopSnapshot =
+  | CodexHistoryVerifiedNoopProof
+  | {
+      readonly kind: "work-pending";
+      readonly pendingRows: number;
+      readonly backupEntries: number;
+      readonly canonicalStateDbPath: string;
+      readonly stateDbPresent: boolean;
+      readonly canonicalBackupPath: string;
+      readonly backupPresent: boolean;
+    }
+  | {
+      readonly kind: "unknown";
+      readonly pendingRows: null;
+      readonly backupEntries: null;
+      readonly canonicalStateDbPath: string;
+      readonly stateDbPresent: boolean;
+      readonly canonicalBackupPath: string;
+      readonly backupPresent: boolean;
+      readonly reason: "backup-path" | "database-absent" | "manifest-read" | "manifest-schema" | "manifest-foreign" | "database-query" | "snapshot-race";
+    };
+
+type StrictBackupInspection =
+  | { readonly kind: "known"; readonly present: boolean; readonly entries: number; readonly fingerprint: string }
+  | { readonly kind: "unknown"; readonly present: boolean; readonly reason: "manifest-read" | "manifest-schema" | "manifest-foreign" };
+
+let afterNoopPendingCountForTests: (() => void) | undefined;
+
+/** Test seam: runs after the pending count and before stability validation. */
+export function setAfterNoopPendingCountForTests(hook: (() => void) | undefined): void {
+  afterNoopPendingCountForTests = hook;
+}
+
 interface NativeRestoreTarget {
   modelProvider: string;
   source: string;
@@ -210,6 +253,65 @@ function samePath(a: string, b: string): boolean {
   const left = resolve(a);
   const right = resolve(b);
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function inspectBackupForNoop(path: string, stateDbPath: string): StrictBackupInspection {
+  if (!existsSync(path)) return { kind: "known", present: false, entries: 0, fingerprint: "absent" };
+  let parsed: unknown;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "unknown", present: true, reason: "manifest-read" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  const manifest = parsed as Partial<BackupManifest>;
+  if (manifest.version !== 1 || typeof manifest.stateDbPath !== "string") {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  if (!samePath(manifest.stateDbPath, stateDbPath)) {
+    return { kind: "unknown", present: true, reason: "manifest-foreign" };
+  }
+  if (!manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)) {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  for (const [id, value] of Object.entries(manifest.entries)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "unknown", present: true, reason: "manifest-schema" };
+    }
+    const entry = value as Partial<BackupEntry>;
+    if (entry.id !== id
+      || typeof entry.rolloutPath !== "string"
+      || typeof entry.modelProvider !== "string"
+      || typeof entry.source !== "string"
+      || typeof entry.hasUserEvent !== "number") {
+      return { kind: "unknown", present: true, reason: "manifest-schema" };
+    }
+  }
+  return {
+    kind: "known",
+    present: true,
+    entries: Object.keys(manifest.entries).length,
+    fingerprint: createHash("sha256").update(raw).digest("hex"),
+  };
+}
+
+function historyFileIdentity(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+  } catch {
+    return null;
+  }
+}
+
+function readHistoryDataVersion(db: Database): number | null {
+  const row = db.query<{ data_version: number }, []>("PRAGMA data_version").get();
+  const value = row?.data_version;
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function readBackup(path: string, stateDbPath?: string): BackupManifest {
@@ -754,6 +856,81 @@ export function migrateHistoryToOpenai(
   if (openaiRestoreIsNoop(stateDbPath, backupPath)) return { rows: 0, files: 0 };
   const retried = withHistoryRetryResult(() => syncCodexHistoryProviderUnsafe("openai", stateDbPath, backupPath), opts);
   return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
+}
+
+/**
+ * Captures no-op evidence while the caller holds the history serialization
+ * lock H. This function does not acquire H itself. Unknown or foreign backup
+ * state is never collapsed into an empty manifest.
+ */
+export function snapshotCodexHistoryNoop(
+  stateDbPath: string,
+  backupPath: string,
+): CodexHistoryNoopSnapshot {
+  const canonicalStateDbPath = resolve(stateDbPath);
+  const canonicalBackupPath = resolve(backupPath);
+  const stateDbPresent = existsSync(stateDbPath);
+  const backupPresent = existsSync(backupPath);
+  const base = { canonicalStateDbPath, stateDbPresent, canonicalBackupPath, backupPresent };
+  if (!samePath(backupPath, historyBackupPathFor(stateDbPath))) {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "backup-path" };
+  }
+  const backup = inspectBackupForNoop(backupPath, stateDbPath);
+  if (backup.kind === "unknown") {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: backup.reason };
+  }
+  if (!stateDbPresent) {
+    return backup.entries > 0
+      ? { kind: "work-pending", pendingRows: 0, backupEntries: backup.entries, ...base }
+      : { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-absent" };
+  }
+  const stateDbIdentity = historyFileIdentity(stateDbPath);
+  if (stateDbIdentity === null) {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "snapshot-race" };
+  }
+  let monitor: Database | undefined;
+  try {
+    monitor = new Database(stateDbPath, { readonly: true });
+    monitor.exec("PRAGMA busy_timeout = 100");
+    const dataVersionBefore = readHistoryDataVersion(monitor);
+    if (dataVersionBefore === null) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    const pending = countPendingOpencodexHistory(stateDbPath, backupPath);
+    if (pending.failed) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    afterNoopPendingCountForTests?.();
+    const backupAfter = inspectBackupForNoop(backupPath, stateDbPath);
+    if (backupAfter.kind === "unknown") {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: backupAfter.reason };
+    }
+    const dataVersionAfter = readHistoryDataVersion(monitor);
+    if (dataVersionAfter === null) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    if (dataVersionAfter !== dataVersionBefore
+      || pending.backupEntries !== backup.entries
+      || backupAfter.entries !== backup.entries
+      || backupAfter.present !== backup.present
+      || backupAfter.fingerprint !== backup.fingerprint
+      || historyFileIdentity(stateDbPath) !== stateDbIdentity
+      || existsSync(stateDbPath) !== stateDbPresent
+      || existsSync(backupPath) !== backupPresent) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "snapshot-race" };
+    }
+    return pending.pendingRows === 0 && backup.entries === 0
+      ? { kind: "verified-noop", pendingRows: 0, backupEntries: 0, ...base, stateDbPresent: true }
+      : { kind: "work-pending", pendingRows: pending.pendingRows, backupEntries: backup.entries, ...base };
+  } catch {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+  } finally {
+    try {
+      monitor?.close();
+    } catch {
+      // Read-only monitor cleanup cannot make an uncertain snapshot authoritative.
+    }
+  }
 }
 
 export interface PendingHistoryCount {

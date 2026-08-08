@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 
 import { Database } from "bun:sqlite";
 
-import { setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
+import { historyBackupPathFor, setHistoryDbBusyTimeoutForTests } from "../src/codex/history-provider";
 import {
   isHistoryWorkerRunMessage,
   runHistoryUnitUnderLock,
@@ -19,9 +19,11 @@ setDefaultTimeout(30_000);
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: string[] = [];
+const backupArtifacts: string[] = [];
 
 afterEach(() => {
   for (const root of sandboxes.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const path of backupArtifacts.splice(0)) rmSync(path, { force: true });
 });
 
 interface Fixture {
@@ -146,6 +148,39 @@ test("the unit runs the real transition under H", () => {
   ).get();
   db.close();
   expect(row?.model_provider).toBe("openai");
+});
+
+test("migrate-openai returns a verified no-op only after entering H", () => {
+  const fixture = makeFixture("ocx-history-worker-noop-");
+  const backup = historyBackupPathFor(fixture.stateDb);
+  backupArtifacts.push(backup);
+  const db = new Database(fixture.stateDb);
+  db.run("UPDATE threads SET model_provider = 'openai', source = 'cli' WHERE id = 'thread-1'");
+  db.close();
+  const before = readFileSync(fixture.rollout, "utf8");
+
+  const result = runHistoryUnitUnderLock(runMessage(fixture, {
+    operation: "migrate-openai",
+    canonicalBackupPath: backup,
+  }));
+
+  expect(result).toMatchObject({
+    type: "done",
+    outcome: "converged",
+    rows: 0,
+    files: 0,
+    proof: {
+      kind: "verified-noop",
+      pendingRows: 0,
+      backupEntries: 0,
+      canonicalStateDbPath: fixture.stateDb,
+      stateDbPresent: true,
+      canonicalBackupPath: backup,
+      backupPresent: false,
+    },
+  });
+  expect(readFileSync(fixture.rollout, "utf8")).toBe(before);
+  expect(existsSync(backup)).toBe(false);
 });
 
 /**

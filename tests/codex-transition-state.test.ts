@@ -11,6 +11,8 @@ import {
   readCodexTransitionState,
   updateCodexHistoryTransition,
 } from "../src/codex/transition-state";
+import { resolveCodexHistoryTransition } from "../src/codex/history-transition";
+import { historyBackupPathFor } from "../src/codex/history-provider";
 import {
   resolveCodexCoordinatorDatabasePath,
   resolveEffectiveUserIdentity,
@@ -55,6 +57,50 @@ function transition(txId: string) {
     nextRetryAt: "2026-08-04T12:00:00.000Z",
   };
 }
+
+test("resolve persists zero counts only for a verified-noop proof", () => {
+  const started = beginCodexTransition(
+    { nativeGeneration: 0, currentTxId: null },
+    transition("tx-proof"),
+  );
+  expect(started.kind).toBe("updated");
+  resolveCodexHistoryTransition(
+    { nativeGeneration: 1, currentTxId: "tx-proof" },
+    {
+      kind: "converged", rows: 0, files: 0,
+      proof: {
+        kind: "verified-noop", pendingRows: 0, backupEntries: 0,
+        canonicalStateDbPath: join(codexHome, "state_5.sqlite"), stateDbPresent: true,
+        canonicalBackupPath: historyBackupPathFor(join(codexHome, "state_5.sqlite")), backupPresent: false,
+      },
+    },
+  );
+  const after = readCodexTransitionState();
+  expect(after.kind).toBe("ready");
+  if (after.kind === "ready") {
+    expect(after.state.history).toMatchObject({
+      status: "converged", txId: "tx-proof", pendingRows: 0, backupEntries: 0,
+    });
+  }
+});
+
+test("ordinary zero-mutation convergence keeps history counts unknown", () => {
+  const started = beginCodexTransition(
+    { nativeGeneration: 0, currentTxId: null },
+    transition("tx-ordinary"),
+  );
+  expect(started.kind).toBe("updated");
+  resolveCodexHistoryTransition(
+    { nativeGeneration: 1, currentTxId: "tx-ordinary" },
+    { kind: "converged", rows: 0, files: 0 },
+  );
+  const after = readCodexTransitionState();
+  expect(after.kind).toBe("ready");
+  if (after.kind === "ready") {
+    expect(after.state.history.pendingRows).toBeNull();
+    expect(after.state.history.backupEntries).toBeNull();
+  }
+});
 
 test("a missing database initializes only from clean integration and native state", () => {
   expect(readCodexTransitionState()).toEqual({
