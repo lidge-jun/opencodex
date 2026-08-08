@@ -76,6 +76,11 @@ export interface RequestHistoryPage {
 export const REQUEST_HISTORY_MAX_PAGE_SIZE = 100;
 export const REQUEST_HISTORY_DEFAULT_PAGE_SIZE = 50;
 export const REQUEST_HISTORY_INSERT_BATCH = 500;
+export const REQUEST_HISTORY_READ_CHUNK_BYTES = 64 * 1024;
+// The SQLite index is a disposable projection. Complete JSONL records above
+// this bound are omitted from the projection; the canonical usage.jsonl is
+// never truncated or rewritten by the indexer.
+export const REQUEST_HISTORY_MAX_RECORD_BYTES = 1024 * 1024;
 
 let db: Database | null = null;
 let dbPath = "";
@@ -190,24 +195,6 @@ INSERT OR IGNORE INTO requests (
   ?, ?, ?, ?, ?
 )`;
 
-function readCompleteTail(fd: number, fromOffset: number, size: number): { text: string; nextOffset: number } {
-  if (size <= fromOffset) return { text: "", nextOffset: fromOffset };
-  const length = size - fromOffset;
-  const buf = Buffer.allocUnsafe(length);
-  let offset = 0;
-  while (offset < length) {
-    const read = readSync(fd, buf, offset, length - offset, fromOffset + offset);
-    if (read === 0) throw new Error("usage log changed while indexing");
-    offset += read;
-  }
-  const newline = buf.lastIndexOf(0x0a);
-  if (newline < 0) return { text: "", nextOffset: fromOffset };
-  return {
-    text: buf.subarray(0, newline).toString("utf-8"),
-    nextOffset: fromOffset + newline + 1,
-  };
-}
-
 function parsedEntryFromLine(line: string): PersistedUsageEntry | null {
   if (!line.trim()) return null;
   try {
@@ -227,12 +214,11 @@ function parsedEntryFromLine(line: string): PersistedUsageEntry | null {
   return null;
 }
 
-function ingestText(dbHandle: Database, text: string): number {
-  if (!text) return 0;
-  const lines = text.split(/\r?\n/);
+function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number): number {
   let inserted = 0;
   let pending: Array<Array<string | number | null>> = [];
   const insert = dbHandle.prepare(ROW_INSERT);
+  let fd: number | undefined;
   try {
     const commitBatch = () => {
       dbHandle.transaction((rows: Array<Array<string | number | null>>) => {
@@ -243,29 +229,55 @@ function ingestText(dbHandle: Database, text: string): number {
       })(pending);
       pending = [];
     };
-    for (const line of lines) {
-      const entry = parsedEntryFromLine(line);
-      if (!entry) continue;
+    const ingestLine = (line: Buffer) => {
+      const entry = parsedEntryFromLine(line.toString("utf-8"));
+      if (!entry) return;
       pending.push(extractRow(entry));
       if (pending.length >= REQUEST_HISTORY_INSERT_BATCH) commitBatch();
-    }
-    if (pending.length > 0) commitBatch();
-  } finally {
-    // Windows file locks: an unterminated prepared statement keeps the DB
-    // file busy after close (verified on Bun 1.3.14). Finalize always.
-    insert.finalize();
-  }
-  return inserted;
-}
+    };
 
-function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number): number {
-  let fd: number | undefined;
-  try {
     fd = openSync(path, "r");
     const stat = fstatSync(fd);
-    const { text, nextOffset } = readCompleteTail(fd, fromOffset, Number(stat.size));
-    if (text.length === 0 && nextOffset === fromOffset) return 0;
-    const inserted = ingestText(dbHandle, text);
+    const size = Number(stat.size);
+    const readBuffer = Buffer.allocUnsafe(REQUEST_HISTORY_READ_CHUNK_BYTES);
+    let position = fromOffset;
+    let nextOffset = fromOffset;
+    let fragments: Buffer[] = [];
+    let fragmentBytes = 0;
+    let oversized = false;
+    while (position < size) {
+      const requested = Math.min(readBuffer.length, size - position);
+      const bytesRead = readSync(fd, readBuffer, 0, requested, position);
+      if (bytesRead === 0) throw new Error("usage log changed while indexing");
+      let lineStart = 0;
+      for (let index = 0; index < bytesRead; index++) {
+        if (readBuffer[index] !== 0x0a) continue;
+        const segment = readBuffer.subarray(lineStart, index);
+        if (!oversized && fragmentBytes + segment.length <= REQUEST_HISTORY_MAX_RECORD_BYTES) {
+          const line = fragments.length === 0
+            ? segment
+            : Buffer.concat([...fragments, segment], fragmentBytes + segment.length);
+          ingestLine(line);
+        }
+        fragments = [];
+        fragmentBytes = 0;
+        oversized = false;
+        lineStart = index + 1;
+        nextOffset = position + index + 1;
+      }
+      const remainder = readBuffer.subarray(lineStart, bytesRead);
+      if (!oversized && fragmentBytes + remainder.length <= REQUEST_HISTORY_MAX_RECORD_BYTES) {
+        // Copy because readBuffer is reused on the next iteration.
+        fragments.push(Buffer.from(remainder));
+        fragmentBytes += remainder.length;
+      } else if (remainder.length > 0) {
+        fragments = [];
+        fragmentBytes = 0;
+        oversized = true;
+      }
+      position += bytesRead;
+    }
+    if (pending.length > 0) commitBatch();
     const current = readIndexedMeta(dbHandle);
     setMeta(dbHandle, HISTORY_META_KEYS.indexedOffset, nextOffset);
     setMeta(dbHandle, HISTORY_META_KEYS.indexedRows, current.indexedRows + inserted);
@@ -275,6 +287,9 @@ function ingestSourceTail(dbHandle: Database, path: string, fromOffset: number):
     return inserted;
   } finally {
     if (fd !== undefined) closeSync(fd);
+    // Windows file locks: an unterminated prepared statement keeps the DB
+    // file busy after close (verified on Bun 1.3.14). Finalize always.
+    insert.finalize();
   }
 }
 

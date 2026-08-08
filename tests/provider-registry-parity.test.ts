@@ -234,8 +234,8 @@ describe("provider registry parity", () => {
       baseUrl: "https://api.deepseek.com",
       defaultModel: "deepseek-v4-flash",
       modelContextWindows: {
-        "deepseek-v4-flash": 1_000_000,
-        "deepseek-v4-pro": 1_000_000,
+        "deepseek-v4-flash": 1_048_576,
+        "deepseek-v4-pro": 1_048_576,
       },
     });
 
@@ -640,9 +640,9 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
-    expect(antigravityRegistry?.liveModels).toBe(false);
-    expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(false);
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.liveModels).toBe(false);
+    expect(antigravityRegistry?.liveModels).toBe(true);
+    expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(true);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.liveModels).toBe(true);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash");
     // Collapsed picker: base models only, no effort-suffix variants.
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.6-flash");
@@ -761,6 +761,7 @@ describe("provider registry parity", () => {
       "google-antigravity": "google",
       "antigravity": "google",
       "gemini-antigravity": "google",
+      deepseek: "deepseek",
       moonshot: "moonshot",
       minimax: "minimax",
       "minimax-cn": "minimax",
@@ -769,6 +770,9 @@ describe("provider registry parity", () => {
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");
+    expect(resolveMetadataProvider("deepseek")).toBe("deepseek");
+    // User-saved provider keys can be title-cased ("DeepSeek"); alias lookup folds case.
+    expect(resolveMetadataProvider("DeepSeek")).toBe("deepseek");
   });
 
   test("legacy azure adapter spelling remains accepted", () => {

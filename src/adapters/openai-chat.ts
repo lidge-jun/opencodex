@@ -951,6 +951,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const rawPayload = sseFieldValue(line, "data");
         if (rawPayload === null) return "continue";
         const payload = rawPayload.trim();
+        // A bare `data:` line carries nothing (heartbeat-style keep-alive on some gateways);
+        // it is not a malformed frame, just nothing to parse.
+        if (payload.length === 0) return "continue";
         if (payload === "[DONE]") {
           yield* flushToolCalls();
           const stopReason = stopReasonFor(finishReason);
@@ -958,13 +961,27 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           return "terminate";
         }
 
-        let chunk: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          chunk = JSON.parse(payload) as Record<string, unknown>;
+          parsed = JSON.parse(payload);
         } catch {
           yield { type: "error", message: "malformed upstream SSE data frame" };
           return "terminate";
         }
+        // Validate the shape instead of asserting it. `JSON.parse` yields a value, not necessarily
+        // an object — `JSON.parse("null")` returns null without throwing, so the catch above never
+        // sees it and the `chunk.error` read below crashed the stream mid-flight.
+        //
+        // Skip rather than terminate: `data: null` is emitted as a benign padding frame BETWEEN
+        // content deltas by real OpenAI-compatible routes (issue #1219), so failing here would
+        // discard the finish_reason chunk and [DONE] still in flight and turn a healthy response
+        // into a failed turn. Skipping cannot mask a genuinely broken stream — a stream carrying
+        // only such frames still sets neither finishReason nor sawUserFacingOutput and so trips
+        // the EOF truncation guard below. An unparseable frame stays terminal.
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return "continue";
+        }
+        const chunk = parsed as Record<string, unknown>;
 
         // A 200/OK chat-completions stream may carry an inline provider error envelope
         // instead of a clean [DONE]. Surface it as a terminal error so the bridge emits a

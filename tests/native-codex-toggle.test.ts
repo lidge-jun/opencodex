@@ -90,6 +90,13 @@ afterEach(() => {
 });
 
 describe("request validation", () => {
+  test("a null body is rejected before anything is written", async () => {
+    const result = await put(baseConfig(), null);
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({ error: "enabled must be a boolean" });
+    expect(persistedCodexIntent()).toBeUndefined();
+  });
+
   test("a non-boolean enabled is rejected before anything is written", async () => {
     const result = await put(baseConfig(), { enabled: "false" });
     expect(result.status).toBe(400);

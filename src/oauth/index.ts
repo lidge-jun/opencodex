@@ -13,6 +13,7 @@ import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity"
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
@@ -53,6 +54,8 @@ export interface OAuthAccessSnapshot {
   accountId: string;
   generation: string;
   accessToken: string;
+  /** Cloud Code Assist project selected during Antigravity login. */
+  projectId?: string;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
@@ -289,6 +292,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(cred.projectId ? { projectId: cred.projectId } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -628,15 +632,15 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
 }
 
 /**
- * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
+ * Provider-correct model-discovery request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
  * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` by default
  * (or `Authorization: Bearer` when `apiKeyTransport = "bearer"`), plus the OAuth beta for oauth
  * mode — not a bare Bearer. Google (ai-studio mode)
  * is the other special case: `x-goog-api-key` + `/v1beta/models`, returning `{ models: [...] }`.
  * The catalog authority gate intentionally degrades that non-OpenAI shape to stale/static data.
- * Everyone else uses the OpenAI-style `/models` + Bearer with a `{ data: [{ id, owned_by? }] }`
- * response.
+ * Antigravity uses its CCA `:fetchAvailableModels` RPC; everyone else uses the OpenAI-style
+ * `/models` + Bearer with a `{ data: [{ id, owned_by? }] }` response.
  */
 export interface ModelsRequestObservedAuth {
   readonly oauthApiBaseUrl?: string;
@@ -647,7 +651,7 @@ export function buildModelsRequest(
   apiKey: string | undefined,
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
-): { url: string; headers: Record<string, string> } {
+): { method?: "POST"; url: string; headers: Record<string, string> } {
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const copilotApiBaseUrl = observedAuth === undefined
     ? (providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined)
@@ -665,6 +669,17 @@ export function buildModelsRequest(
     effectiveProvider.baseUrl,
     defaultUrl,
   );
+  if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
+    headers.Accept = "application/json";
+    headers["Content-Type"] = "application/json";
+    headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return {
+      method: "POST",
+      url: discoveryUrl(`${effectiveProvider.baseUrl.replace(/\/+$/, "")}/v1internal:fetchAvailableModels`),
+      headers,
+    };
+  }
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
@@ -698,9 +713,7 @@ export function buildModelsRequest(
  *
  * Only touches providers that are registry-managed AND still `authMode: "oauth"`. Preset fields
  * are refreshed, while the registry's `liveModels` default is normally filled only when no value
- * is stored. Antigravity has one versioned exception below because its old GUI-generated `true`
- * cannot be distinguished from a hand-written pre-migration `true`. Persists + returns true when
- * anything changed.
+ * is stored. Persists + returns true when anything changed.
  */
 function cloneProviderField(value: unknown): unknown {
   if (Array.isArray(value)) return [...value];
@@ -729,7 +742,7 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
 ];
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
-const GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION = 1 as const;
+const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
 
 /** Only migrate the three-model experimental seed; an operator's later `liveModels: false` wins. */
 function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean {
@@ -738,10 +751,34 @@ function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean 
     && JSON.stringify(provider.models) === JSON.stringify(["deepseek-v4-flash", "kimi-k3", "glm-5.2"]);
 }
 
+function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false
+    && provider.adapter === "google"
+    && provider.baseUrl === "https://daily-cloudcode-pa.googleapis.com"
+    && provider.authMode === "oauth"
+    && provider.googleMode === "cloud-code-assist"
+    && provider.defaultModel === "gemini-3.6-flash"
+    && JSON.stringify(provider.models) === JSON.stringify([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "gemini-3.1-flash-image",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
+}
+
+/** Promote only the versioned canonical static seed; unmarked `liveModels: false` remains user intent. */
+function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
+  if (config.googleAntigravityStaticCatalogVersion !== 1) return false;
+  const provider = config.providers[GOOGLE_ANTIGRAVITY_PROVIDER];
+  if (provider && isLegacyAntigravityStaticCatalog(provider)) provider.liveModels = true;
+  config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION;
+  return true;
+}
+
 export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = false;
-  const migrateAntigravityStaticCatalog =
-    config.googleAntigravityStaticCatalogVersion !== GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
+  let changed = migrateLegacyAntigravityStaticCatalog(config);
   for (const [name, prov] of Object.entries(config.providers)) {
     const def = OAUTH_PROVIDERS[name];
     if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
@@ -750,21 +787,7 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       prov.liveModels = true;
       changed = true;
     }
-    // Normalize the canonical row before the OAuth-only reconciliation guard. The old GUI and a
-    // manual edit both persist the same bare `true`, with no source metadata, so every ambiguous
-    // pre-marker value is reset once. A deliberate live-discovery choice can be re-enabled after
-    // the marker and is then preserved. Do this before the guard so omitted/non-OAuth authMode
-    // rows do not get stamped without actually receiving the new static default.
-    if (name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog && prov.liveModels !== false) {
-      prov.liveModels = false;
-      changed = true;
-    }
-    // During the one-time Antigravity static-catalog migration, also refresh preset catalog
-    // fields when authMode is omitted or non-oauth. Otherwise liveModels flips to static while
-    // a stale models[] remains the published catalog forever.
-    const migrateAntigravityCatalogFields =
-      name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog;
-    if (!def || (prov.authMode !== "oauth" && !migrateAntigravityCatalogFields)) continue;
+    if (!def || prov.authMode !== "oauth") continue;
     const preset = def.providerConfig;
     for (const field of OAUTH_RECONCILE_FIELDS) {
       if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
@@ -775,9 +798,6 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       }
       changed = true;
     }
-    // Before this marker existed, the GUI materialized an omitted `liveModels` as `true` on any
-    // settings save. Since persisted values have no provenance, the pre-guard normalization above
-    // intentionally resets all pre-marker `true` values once. Later choices are version-bounded.
     if (prov.liveModels === undefined && preset.liveModels !== undefined) {
       prov.liveModels = preset.liveModels;
       changed = true;
@@ -790,10 +810,6 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       prov.defaultModel = preset.defaultModel;
       changed = true;
     }
-  }
-  if (migrateAntigravityStaticCatalog) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-    changed = true;
   }
   if (changed) saveConfig(config);
   return changed;
@@ -851,17 +867,14 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
+  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
-  // `liveModels` is a user-facing provider toggle. A registry default seeds new rows, but an
-  // explicit post-migration choice must survive re-login and the latest-config upsert. Old GUI
-  // saves and manual edits left identical pre-marker `true` values, so that ambiguous state is
-  // reset once; users who deliberately forced discovery can re-enable it after migration.
-  const preserveExistingLiveModels = provider !== GOOGLE_ANTIGRAVITY_PROVIDER
-    || config.googleAntigravityStaticCatalogVersion === GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  if (preserveExistingLiveModels && typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
+  // `liveModels` is a user-facing provider toggle. Preserve either explicit setting across login;
+  // Antigravity's CCA discovery now uses its real RPC, so legacy `true` remains a valid choice.
+  if (typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
     next.liveModels = existing.liveModels;
   }
   // The Command Code protocol-version pin is an operator compatibility control. A re-login,
@@ -893,9 +906,6 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     }
   }
   config.providers[provider] = next;
-  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  }
 }
 
 interface RunLoginDeps {
@@ -1023,11 +1033,15 @@ export async function runLogin(
   settleKiroTransaction(rawCred, true);
   if (provider !== "chatgpt") {
     try {
+      const { clearModelCache } = await import("../codex/model-cache");
+      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog");
+      clearModelCache(provider);
+      clearGatherRoutedModelsInflight();
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
       clearProviderQuotaCache();
       clearAccountQuotaCache(provider);
     } catch {
-      // Quota module may be unavailable in tightly scoped unit tests.
+      // Optional state modules may be unavailable in tightly scoped unit tests.
     }
   }
   return cred;

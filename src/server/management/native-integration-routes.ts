@@ -32,6 +32,13 @@ import type { ManagementContext } from "./context";
 
 export type NativeIntegrationClientId = "claude" | "grok" | "codex" | "claude-desktop";
 
+function isNativeToggleBody(body: unknown): body is { enabled: boolean } {
+  return typeof body === "object"
+    && body !== null
+    && !Array.isArray(body)
+    && typeof (body as { enabled?: unknown }).enabled === "boolean";
+}
+
 /** Every reason this module can decline, in one place (audit r3 #6). */
 export type NativeRefusalReason =
   | "not_installed"
@@ -289,14 +296,14 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       "Another Codex change is already in flight. Nothing was written — try again in a moment.");
   }
   codexToggleFlight = (async (): Promise<Response> => {
-    let body: { enabled?: unknown };
+    let body: unknown;
     try {
       body = await readManagementJsonBody(req);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.enabled !== "boolean") {
+    if (!isNativeToggleBody(body)) {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
     const enabled = body.enabled;
@@ -393,14 +400,14 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
       "Another Grok change is already in flight. Nothing was written — try again in a moment.");
   }
   grokToggleFlight = (async (): Promise<Response> => {
-    let body: { enabled?: unknown };
+    let body: unknown;
     try {
       body = await readManagementJsonBody(req);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.enabled !== "boolean") {
+    if (!isNativeToggleBody(body)) {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
     const enabled = body.enabled;
@@ -606,14 +613,14 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
       "Another Claude Desktop change is already in flight. Nothing was written — try again in a moment.");
   }
   claudeDesktopToggleFlight = (async (): Promise<Response> => {
-    let body: { enabled?: unknown };
+    let body: unknown;
     try {
       body = await readManagementJsonBody(ctx.req);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+    if (!isNativeToggleBody(body)) return jsonResponse({ error: "enabled must be a boolean" }, 400);
 
     const { setIntegrationEnabled } = await import("../../codex/desired-state");
     const persisted = setIntegrationEnabled("claude-desktop", body.enabled);
@@ -689,14 +696,14 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
   }
 
   if (url.pathname === "/api/native-integrations/claude" && req.method === "PUT") {
-    let body: { enabled?: unknown };
+    let body: unknown;
     try {
       body = await readManagementJsonBody(req);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       return jsonResponse({ error: "invalid JSON body" }, 400);
     }
-    if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.enabled !== "boolean") {
+    if (!isNativeToggleBody(body)) {
       return jsonResponse({ error: "enabled must be a boolean" }, 400);
     }
 
@@ -722,6 +729,8 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
      * subscription — a failure that surfaces nowhere near this route.
      */
     if (!next.authModeMigratedAt) next.authModeMigratedAt = new Date().toISOString();
+    const hadClaudeCode = Object.prototype.hasOwnProperty.call(config, "claudeCode");
+    const previousClaudeCode = config.claudeCode;
     config.claudeCode = next;
 
     /*
@@ -732,6 +741,11 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
     try {
       persist(config);
     } catch (error) {
+      // Persistence is the commit point. A failed lock acquisition must not
+      // leave the live server snapshot ahead of disk or make a retry look
+      // idempotent and skip the write entirely.
+      if (hadClaudeCode) config.claudeCode = previousClaudeCode;
+      else delete config.claudeCode;
       if (isConfigLockError(error)) {
         return isLockContention(error)
           ? refusal(409, "claude", "config_busy",

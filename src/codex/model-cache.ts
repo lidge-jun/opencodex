@@ -42,7 +42,12 @@ export type ProviderModelDiscoveryFailure = ProviderModelDiscoveryStatus extends
     : never
   : never;
 
+/** Whether clearing cache rows also revokes in-flight discovery authority. */
+export type ModelCacheClearReason = "authority" | "eviction";
+
 const cache = new Map<string, CacheEntry>();
+let globalCacheGeneration = 0;
+const providerCacheGenerations = new Map<string, number>();
 let cacheBytes = 0;
 let oldestCachedProvider: string | undefined;
 let oldestCachedAt: number | null = null;
@@ -155,7 +160,29 @@ export function getStaleCached(provider: string): CatalogModel[] | null {
   return cache.get(provider)?.models ?? null;
 }
 
-export function setCached(provider: string, models: CatalogModel[], now = Date.now()): void {
+/** Capture the cache generation before an asynchronous provider discovery starts. */
+export function captureModelCacheGeneration(provider: string): string {
+  if (!providerCacheGenerations.has(provider)) providerCacheGenerations.set(provider, 0);
+  return `${globalCacheGeneration}:${providerCacheGenerations.get(provider)!}`;
+}
+
+/** Whether a discovery started under {@link captureModelCacheGeneration} may still write. */
+export function isModelCacheGenerationCurrent(provider: string, generation: string): boolean {
+  return generation === captureModelCacheGeneration(provider);
+}
+
+/**
+ * Store a live result unless the cache was cleared while that asynchronous discovery was running.
+ * The optional generation keeps existing direct cache writers unchanged while discovery callers can
+ * prevent a previous OAuth account from repopulating the current account's cache.
+ */
+export function setCached(
+  provider: string,
+  models: CatalogModel[],
+  now = Date.now(),
+  generation?: string,
+): boolean {
+  if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
@@ -166,16 +193,25 @@ export function setCached(provider: string, models: CatalogModel[], now = Date.n
     oldestCachedAt = now;
   }
   enforceAppOwnedMemoryBudget();
+  return true;
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */
-export function clearModelCache(provider?: string): void {
+export function clearModelCache(
+  provider?: string,
+  reason: ModelCacheClearReason = "authority",
+): void {
+  const revokesInFlightDiscovery = reason === "authority";
   if (provider) {
+    if (revokesInFlightDiscovery) {
+      providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+    }
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);
     liveModelCounts.delete(provider);
   } else {
+    if (revokesInFlightDiscovery) globalCacheGeneration += 1;
     cache.clear();
     cacheBytes = 0;
     oldestCachedProvider = undefined;
@@ -192,16 +228,20 @@ export function reconcileModelCacheProviders(
 ): number {
   if (generation <= lastReconciledGeneration) return 0;
   const removedProviders = new Set<string>();
-  for (const store of [failureAt, discoveryStatus, liveModelCounts]) {
-    for (const provider of store.keys()) {
-      if (validProviders.has(provider)) continue;
-      store.delete(provider);
-      removedProviders.add(provider);
-    }
-  }
-  for (const provider of cache.keys()) {
+  const trackedProviders = new Set([
+    ...providerCacheGenerations.keys(),
+    ...failureAt.keys(),
+    ...discoveryStatus.keys(),
+    ...liveModelCounts.keys(),
+    ...cache.keys(),
+  ]);
+  for (const provider of trackedProviders) {
     if (validProviders.has(provider)) continue;
+    providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
     deleteCachedProvider(provider);
+    failureAt.delete(provider);
+    discoveryStatus.delete(provider);
+    liveModelCounts.delete(provider);
     removedProviders.add(provider);
   }
   lastReconciledGeneration = generation;

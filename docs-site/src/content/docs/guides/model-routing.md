@@ -85,9 +85,11 @@ Routing and catalog visibility are separate controls:
 - `provider.disabled: true` removes that provider from catalog discovery. Explicit
   `provider/model` requests fail, and `defaultModel` / `models[]` scans skip it.
 - `providerContextCaps` applies per-provider Codex-visible context caps. `contextCapValue` is the
-  shared dashboard value (350,000 by default), but it does nothing by itself until a provider is
-  present in `providerContextCaps`. Caps only lower a known context window; they never raise one or
-  change the upstream model's actual limit.
+  dashboard default (350,000 by default), but it does nothing by itself until a provider is
+  present in `providerContextCaps`. Changing the dashboard value re-points every enabled provider
+  only when "apply to every routed provider" is toggled on; otherwise each provider keeps its own
+  cap. Caps only lower a known context window; they never raise one or change the upstream model's
+  actual limit.
 
 ```json
 {

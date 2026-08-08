@@ -76,6 +76,13 @@ describe("Grok fence lifecycle wiring", () => {
     const detailEchoes = stopFn.match(/const detail = err instanceof Error \? err\.message : String\(err\);/g);
     expect(detailEchoes).toHaveLength(2);
     expect(stopFn.match(/if \(detail\) console\.error\(`   \$\{detail\}`\);/g)).toHaveLength(2);
+
+    // A proxy ownership refusal means a foreign service still owns the running proxy, so the
+    // shared teardown must be skipped at both call sites, exactly like the service-manager path.
+    const ownershipRefusals = stopFn.match(/err instanceof ProxyOwnershipRefusedError[\s\S]{0,200}?ownershipBlocked = true;/g);
+    expect(ownershipRefusals).toHaveLength(2);
+    expect(stopFn.match(/Skipping shared teardown \(native Codex restore, Grok config\): the foreign proxy is still running\./g)).toHaveLength(2);
+    expect(PROCESS_CONTROL_SOURCE).toContain("throw new ProxyOwnershipRefusedError(");
   });
 
   test("handleStop returns its outcome while both restart surfaces share the in-place lifecycle", () => {
@@ -177,6 +184,6 @@ describe("POST /api/stop teardown", () => {
     const killAt = stopProxyFn.indexOf("killProxy(pid)");
     expect(refusedAt).toBeGreaterThan(-1);
     expect(refusedAt).toBeLessThan(killAt);
-    expect(stopProxyFn).toContain("throw new Error(");
+    expect(stopProxyFn).toContain("throw new ProxyOwnershipRefusedError(");
   });
 });

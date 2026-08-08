@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -9,6 +9,8 @@ import {
   resolveCodexCatalogSerializationDatabasePath,
   resolveCodexHistorySerializationDatabasePath,
   resolveEffectiveUserIdentity,
+  probeCodexCoordinatorNamespace,
+  samePathIdentity,
 } from "../src/codex/user-identity";
 
 let codexHome = "";
@@ -65,6 +67,25 @@ async function runIdentityProbe(
 beforeEach(() => {
   previousHome = process.env.HOME;
   codexHome = mkdtempSync(join(tmpdir(), "ocx-user-identity-codex-home-"));
+});
+
+test("samePathIdentity is case-insensitive on Windows and exact elsewhere", () => {
+  const winPath = "C:\\Users\\Alice\\AppData\\Local\\OpenCodex\\Runtime\\v1\\S-1-5-21\\history-write-locks\\abc.sqlite";
+  expect(samePathIdentity(winPath, winPath.toLowerCase(), "win32")).toBe(true);
+  expect(samePathIdentity(winPath, winPath.toLowerCase(), "linux")).toBe(false);
+  expect(samePathIdentity(winPath, "D:\\Users\\Alice\\AppData\\Local\\OpenCodex\\Runtime\\v1\\S-1-5-21\\history-write-locks\\abc.sqlite", "win32")).toBe(false);
+  expect(samePathIdentity("/tmp/a/b.sqlite", "/tmp/a/b.sqlite", "linux")).toBe(true);
+  expect(samePathIdentity("/tmp/a/b.sqlite", "/tmp/A/b.sqlite", "linux")).toBe(false);
+});
+
+test("the coordinator namespace probe is read-only", () => {
+  if (process.platform === "win32") return;
+  // No real user has this uid, so the namespace cannot exist before or after.
+  const uid = 2_147_483_647;
+  const probe = probeCodexCoordinatorNamespace({ platform: "posix", uid });
+  expect(probe.status).toBe("missing");
+  const root = join(realpathSync.native("/tmp"), `opencodex-runtime-v1-${uid}`);
+  expect(existsSync(root)).toBe(false);
 });
 
 afterEach(() => {

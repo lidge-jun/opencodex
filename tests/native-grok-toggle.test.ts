@@ -146,6 +146,19 @@ test("GET reports not-installed when GROK_HOME is missing", async () => {
   expect(row.state).toBe("absent");
 });
 
+test("a null toggle body is rejected before the Grok config is touched", async () => {
+  writeConfig("# user only\n");
+  const before = readConfig();
+  const response = await dispatch(baseConfig(), "/api/native-integrations/grok", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  expect(response!.status).toBe(400);
+  expect(await response!.json()).toEqual({ error: "enabled must be a boolean" });
+  expect(readConfig()).toBe(before);
+});
+
 test("GET reports unsafe and blocks the switch on an orphaned marker", async () => {
   writeConfig(`# user\n${BEGIN}\n[model.ocx-a]\n`);
   const row = await get(baseConfig());

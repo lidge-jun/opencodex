@@ -109,6 +109,11 @@ function tomlBoolInBody(body: string, key: string): boolean | null {
  */
 export function isMultiAgentV2Enabled(configPath?: string): boolean {
   const content = readConfigText(configPath);
+  return multiAgentV2EnabledFromConfigText(content);
+}
+
+/** Parse `multi_agent_v2` from caller-owned config.toml text without consulting disk. */
+export function multiAgentV2EnabledFromConfigText(content: string | null): boolean {
   if (content === null) return false;
 
   const table = tomlTableBody(content, "features.multi_agent_v2");

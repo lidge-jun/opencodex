@@ -164,17 +164,15 @@ describe("opencodex config defaults", () => {
     writeConfig({
       port: 12345,
       defaultProvider: "custom",
-      googleAntigravityStaticCatalogVersion: 99,
+      googleAntigravityStaticCatalogVersion: 2,
       providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
     });
-    const degraded = loadConfig();
-    expect(degraded.googleAntigravityStaticCatalogVersion).toBeUndefined();
-    expect(degraded.providers.custom.baseUrl).toBe("https://example.test/v1");
+    expect(loadConfig().googleAntigravityStaticCatalogVersion).toBe(2);
     expect(backupNames()).toEqual([]);
 
     expect(validateConfigCandidate({
       ...getDefaultConfig(),
-      googleAntigravityStaticCatalogVersion: 99,
+      googleAntigravityStaticCatalogVersion: 3,
     })).toMatchObject({
       ok: false,
       error: expect.stringContaining("googleAntigravityStaticCatalogVersion"),

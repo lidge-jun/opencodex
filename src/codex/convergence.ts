@@ -2,11 +2,12 @@ import { join } from "node:path";
 
 import { getConfigDir, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
 import { COMBO_NAMESPACE } from "../combos";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { getAuthStorePath } from "../oauth/store";
 import type { OcxConfig } from "../types";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
+import { legacyCustomModelCatalogSlugs } from "./custom-model-catalog-migration";
 import {
+  type CatalogGatherPathKind,
   type CatalogSourceForGather,
   bundledCatalogCacheState,
   resolveCatalogSourceForGather,
@@ -26,6 +27,7 @@ import {
   filterCatalogVisibleModels,
   gatherRoutedModelsForCatalogGather,
   type CatalogGatherProviderAuthOutcome,
+  type CatalogGatherProviderModelOutcome,
 } from "./catalog/provider-fetch";
 import {
   catalogBackupPathFor,
@@ -36,11 +38,26 @@ import {
   type RawCatalog,
 } from "./catalog/parsing";
 import {
-  buildCatalogEntries,
+  buildCatalogEntriesFromObservedState,
+  CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+  mergeCatalogEntriesFromObservedState,
   orderForSubagents,
 } from "./catalog/sync";
+import { multiAgentV2EnabledFromConfigText } from "./features";
 import { exactComboCatalogSlugs } from "./catalog/aggregation";
-import { disabledNativeSlugs } from "./catalog/metadata";
+import {
+  NATIVE_OPENAI_MODELS,
+  shouldIncludeAccountBoundNativeOpenAi,
+  shouldIncludeNativeOpenAi,
+} from "./catalog/metadata";
+import {
+  trustedAccountBoundNativeCatalogSlug,
+  visibleCodexAccountSelectors,
+} from "./catalog/account-models";
+import {
+  clampCatalogModelsToObservedCodexSupport,
+  supportedCodexReasoningEffortsFromObservedCatalog,
+} from "./catalog/effort";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
@@ -119,6 +136,16 @@ function catalogBytes(catalog: RawCatalog): string {
   return `${JSON.stringify(catalog, null, 2)}\n`;
 }
 
+function nativePriorityBaseline(catalog: ReadonlyRawCatalogLike | null): Map<string, number> {
+  return new Map((catalog?.models ?? []).flatMap(entry => (
+    typeof entry.slug === "string"
+      && !entry.slug.includes("/")
+      && typeof entry.priority === "number"
+      ? [[entry.slug, entry.priority] as const]
+      : []
+  )));
+}
+
 interface ReadonlyRawCatalogLike {
   readonly models?: readonly Readonly<Record<string, unknown>>[];
 }
@@ -137,7 +164,14 @@ function processEvidence(source: CatalogSourceForGather): CatalogProcessLocalEvi
 function bindGatherPaths(
   session: CatalogFilesystemEvidenceSession,
   snapshot: CatalogAdmissionSnapshot,
-): Readonly<{ catalog: string; cache: string; keyedBackup: string; legacyBackup?: string }> {
+): Readonly<{
+  catalog: string;
+  cache: string;
+  keyedBackup: string;
+  legacyBackup?: string;
+  catalogKind: CatalogGatherPathKind;
+  multiAgentV2Enabled: boolean;
+}> {
   const catalog = targetPath(snapshot.targets.catalog);
   const cache = targetPath(snapshot.targets.cache);
   const keyedBackup = targetPath(snapshot.targets.catalogBackups[0]!);
@@ -146,7 +180,7 @@ function bindGatherPaths(
   const configPath = snapshot.sourceEvidence.required["catalog-target-selection"].logicalPath;
 
   acceptCatalogGatherSourcePath(session, "catalog-target-selection", configPath);
-  readCatalogGatherSource(session, "catalog-target-selection");
+  const configBytes = readCatalogGatherSource(session, "catalog-target-selection");
   acceptCatalogGatherSourcePath(session, "active-catalog-merge", catalog);
   acceptCatalogGatherSourcePath(session, "hashed-backup-fallback", keyedBackup);
   acceptCatalogGatherSourcePath(session, "legacy-backup-fallback", legacyBackup ?? legacyCatalogBackupPath());
@@ -154,7 +188,16 @@ function bindGatherPaths(
   acceptCatalogGatherSourcePath(session, "runtime-selection", codexRuntimeStatePath(getConfigDir()));
   acceptCatalogGatherSourcePath(session, "provider-auth-selection", getAuthStorePath());
   acceptCatalogGatherSourcePath(session, "native-catalog-selection", catalog);
-  return { catalog, cache, keyedBackup, ...(legacyBackup ? { legacyBackup } : {}) };
+  return {
+    catalog,
+    cache,
+    keyedBackup,
+    ...(legacyBackup ? { legacyBackup } : {}),
+    catalogKind: legacyBackup ? "default" : "custom",
+    multiAgentV2Enabled: multiAgentV2EnabledFromConfigText(
+      configBytes === null ? null : Buffer.from(configBytes).toString("utf8"),
+    ),
+  };
 }
 
 function prepareCatalog(
@@ -162,6 +205,10 @@ function prepareCatalog(
   source: Extract<CatalogSourceForGather, { kind: "available" }>,
   active: RawCatalog | null,
   routedModels: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>,
+  multiAgentV2Enabled: boolean,
+  baseline: ReadonlyMap<string, number>,
+  baselineCatalogModels: readonly Readonly<Record<string, unknown>>[],
+  degradedProviderNames: ReadonlySet<string>,
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -173,39 +220,74 @@ function prepareCatalog(
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const hasPhysicalComboProvider = Object.hasOwn(config.providers, COMBO_NAMESPACE);
   const enabledProviders = Object.entries(config.providers).filter(([, provider]) => provider.disabled !== true);
-  const includeNativeOpenAi = enabledProviders.length === 0 || enabledProviders.some(([name, provider]) => (
-    name === "openai" && isCanonicalOpenAiForwardProvider(provider)
-  ));
-  const disabledNative = disabledNativeSlugs(config);
-  const nativeSlugs = includeNativeOpenAi
-    ? [...new Set((active?.models ?? catalog.models ?? []).flatMap(entry => (
-        typeof entry.slug === "string" && !entry.slug.includes("/") && !disabledNative.has(entry.slug)
-          ? [entry.slug] : []
-      )))]
+  const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
+  const accountSelectors = shouldIncludeAccountBoundNativeOpenAi(config)
+    ? visibleCodexAccountSelectors(config)
     : [];
-  const entries = buildCatalogEntries(
-    template ? JSON.parse(JSON.stringify(template)) : null,
-    nativeSlugs, ordered, featured, websocketsEnabled(config), multiAgentMode, exactComboSlugs,
+  const catalogModels = active?.models ?? catalog.models ?? [];
+  const routedEntries = buildCatalogEntriesFromObservedState({
+    template: template ? JSON.parse(JSON.stringify(template)) : null,
+    gptSlugs: [],
+    goModels: ordered,
+    featured,
+    wsEnabled: websocketsEnabled(config),
+    multiAgentMode,
+    exactComboSlugs,
+    accountSelectors,
+    multiAgentV2Enabled,
+  });
+  const accountBoundEntries = accountSelectors.length === 0
+    ? []
+    : buildCatalogEntriesFromObservedState({
+      template: template ? JSON.parse(JSON.stringify(template)) : null,
+      gptSlugs: NATIVE_OPENAI_MODELS,
+      goModels: [],
+      featured,
+      wsEnabled: websocketsEnabled(config),
+      multiAgentMode,
+      exactComboSlugs,
+      accountSelectors,
+      multiAgentV2Enabled,
+    }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
+  const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
+  const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
+    enabledProviders.flatMap(([name, provider]) => (
+      Array.isArray(provider.selectedModels) && provider.selectedModels.length > 0
+        ? [[name, new Set(provider.selectedModels)] as const]
+        : []
+    )),
   );
-  if (entries.length === nativeSlugs.length) {
-    const configuredProviders = new Set(enabledProviders.map(([name]) => name));
-    const preserved = (active?.models ?? []).filter(entry => {
-      if (typeof entry.slug !== "string" || !entry.slug.includes("/")) return false;
-      const provider = entry.slug.slice(0, entry.slug.indexOf("/"));
-      const description = typeof entry.description === "string" ? entry.description : "";
-      return configuredProviders.has(provider) || !description.startsWith("Routed via opencodex → ");
-    });
-    entries.push(...preserved);
-  }
-  if (!hasPhysicalComboProvider) {
-    const exact = exactComboSlugs;
-    catalog.models = entries.filter(entry => (
-      typeof entry.slug !== "string" || !exact.has(entry.slug)
-      || (Array.isArray(entry.input_modalities) && entry.input_modalities.length > 0)
-    ));
-  } else {
-    catalog.models = entries;
-  }
+  const mergedModels = mergeCatalogEntriesFromObservedState({
+    catalogModels,
+    baselineCatalogModels,
+    routedEntries,
+    baseline,
+    featured,
+    wsEnabled: websocketsEnabled(config),
+    template,
+    disabledModels: new Set(config.disabledModels ?? []),
+    selectedModelsByProvider,
+    gatheredProviderNames,
+    degradedProviderNames,
+    legacyCustomModelSlugs: legacyCustomModelCatalogSlugs(config),
+    multiAgentMode,
+    multiAgentV2Enabled,
+    exactComboSlugs,
+    hasPhysicalComboProvider,
+    includeNativeOpenAi,
+    accountBoundEntries,
+    policy: {
+      ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+      warningPolicy: "suppress",
+    },
+  });
+  clampCatalogModelsToObservedCodexSupport(
+    mergedModels,
+    source.runtimeSupport.kind === "available"
+      ? supportedCodexReasoningEffortsFromObservedCatalog(source.runtimeSupport.catalog)
+      : null,
+  );
+  catalog.models = mergedModels;
   return catalog;
 }
 
@@ -220,7 +302,7 @@ export async function gatherCodexCatalogCandidate(
       return { kind: "disposition", disposition: { status: "skipped", reason: "stale", retryable: true } };
     }
     const paths = bindGatherPaths(session, snapshot);
-    const source = resolveCatalogSourceForGather(session);
+    const source = resolveCatalogSourceForGather(session, paths.catalogKind);
     if (source.kind === "catalog-unavailable") {
       return { kind: "disposition", disposition: { status: "skipped", reason: "catalog-unavailable", retryable: false } };
     }
@@ -234,10 +316,12 @@ export async function gatherCodexCatalogCandidate(
       readCatalogGatherSource(session, "native-catalog-selection");
     }
     const authOutcomes: CatalogGatherProviderAuthOutcome[] = [];
+    const providerModelOutcomes: CatalogGatherProviderModelOutcome[] = [];
     const discoveryPolicies: CatalogProviderDiscoveryPolicySnapshot[] = [];
     providerGatherStarted = true;
     const routedModels = await gatherRoutedModelsForCatalogGather(snapshot.config, session, {
       providerAuthOutcomes: authOutcomes,
+      providerModelOutcomes,
       discoveryPolicySnapshots: discoveryPolicies,
     });
     const processLocal = processEvidence(source);
@@ -255,7 +339,30 @@ export async function gatherCodexCatalogCandidate(
     }
 
     const active = catalogFrom(activeBytes);
-    const preparedCatalog = prepareCatalog(snapshot.config, source, active, routedModels);
+    // Retained sync restores native priorities from the once-only pristine backup. Convergence
+    // must use the same admitted evidence instead of treating its already-featured active catalog
+    // as the baseline, or feature A -> feature B -> none would retain stale priorities.
+    const backupCanAcceptPristineCatalog = keyedBackupBytes === null
+      || (paths.legacyBackup !== undefined && legacyBackupBytes === null);
+    const baselineCatalog = catalogFrom(keyedBackupBytes)
+      ?? catalogFrom(legacyBackupBytes)
+      ?? (backupCanAcceptPristineCatalog
+        ? (active && !catalogHasRoutedEntries(active)
+          ? active
+          : !hasRoutedEntries(source.catalog) ? source.catalog : null)
+        : null);
+    const preparedCatalog = prepareCatalog(
+      snapshot.config,
+      source,
+      active,
+      routedModels,
+      paths.multiAgentV2Enabled,
+      nativePriorityBaseline(baselineCatalog),
+      baselineCatalog?.models ?? [],
+      new Set(providerModelOutcomes
+        .filter(outcome => outcome.state === "degraded")
+        .map(outcome => outcome.provider)),
+    );
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
     const preparedCacheBytes = `${JSON.stringify({
       fetched_at: "2000-01-01T00:00:00Z",
@@ -266,8 +373,17 @@ export async function gatherCodexCatalogCandidate(
       ? Buffer.from(activeBytes!).toString("utf8")
       : !hasRoutedEntries(source.catalog) ? `${JSON.stringify(source.catalog, null, 2)}\n` : null;
     const notices = new Set<CatalogNotice>();
-    if (source.source !== "bundled-catalog-template") notices.add("fallback");
-    if (authOutcomes.some(outcome => outcome.state !== "available")) notices.add("provider-auth");
+    const sourceIsAuthoritative = paths.catalogKind === "default"
+      ? source.source === "bundled-catalog-template"
+      : source.source === "active-catalog-merge";
+    if (!sourceIsAuthoritative) notices.add("fallback");
+    const authDegradedProviders = new Set(authOutcomes
+      .filter(outcome => outcome.state !== "available")
+      .map(outcome => outcome.provider));
+    if (authDegradedProviders.size > 0) notices.add("provider-auth");
+    if (providerModelOutcomes.some(outcome => (
+      outcome.state === "degraded" && !authDegradedProviders.has(outcome.provider)
+    ))) notices.add("provider-network");
     const candidate = {} as CodexCatalogCandidate;
     candidateStates.set(candidate, {
       consumed: false,

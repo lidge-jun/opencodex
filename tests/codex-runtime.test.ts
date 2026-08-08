@@ -108,7 +108,7 @@ describe("observe-only Codex catalog gather caches", () => {
         kind: "runtime-unavailable",
         processLocal: { state: "unused" },
       });
-      expect(resolveCatalogSourceForGather(evidence)).toEqual({
+      expect(resolveCatalogSourceForGather(evidence, "default")).toEqual({
         kind: "catalog-unavailable",
         processLocal: {
           runtime: { state: "unused" },
@@ -163,8 +163,8 @@ describe("observe-only Codex catalog gather caches", () => {
       "runtime-selection": persistedRuntimeBytes(runtime.command, runtime.version),
     });
 
-    const first = resolveCatalogSourceForGather(evidence);
-    const second = resolveCatalogSourceForGather(evidence);
+    const first = resolveCatalogSourceForGather(evidence, "default");
+    const second = resolveCatalogSourceForGather(evidence, "default");
     expect(first.kind).toBe("available");
     expect(second.kind).toBe("available");
     if (first.kind !== "available" || second.kind !== "available") return;
@@ -181,6 +181,115 @@ describe("observe-only Codex catalog gather caches", () => {
     }).toThrow();
     expect(second.catalog.models?.[0]?.base_instructions).toBe("private");
     expect(second.catalog.models?.[0]?.supported_reasoning_levels).toHaveLength(1);
+  });
+
+  test("custom catalog content stays authoritative while bundled runtime support is observed", () => {
+    const runtime = { command: "/tmp/codex", version: "0.145.0", source: "environment" as const };
+    resetBundledCatalogCacheForTests();
+    setBundledCatalogCacheForTests(runtime, {
+      models: [{
+        slug: "gpt-5.5",
+        base_instructions: "bundled metadata",
+        supported_reasoning_levels: [{ effort: "xhigh", description: "xhigh" }],
+      }],
+    });
+    const cacheState = bundledCatalogCacheState();
+    const evidence = gatherEvidence({
+      "runtime-selection": persistedRuntimeBytes(runtime.command, runtime.version),
+      "active-catalog-merge": Buffer.from(JSON.stringify({
+        models: [{
+          slug: "gpt-5.5",
+          base_instructions: "custom metadata",
+          supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+        }],
+      })),
+    });
+
+    try {
+      const custom = resolveCatalogSourceForGather(evidence, "custom");
+      expect(custom.kind).toBe("available");
+      if (custom.kind !== "available") return;
+      expect(custom.source).toBe("active-catalog-merge");
+      expect(custom.catalog.models?.[0]?.base_instructions).toBe("custom metadata");
+      expect(custom.runtimeSupport.kind).toBe("available");
+      if (custom.runtimeSupport.kind === "available") {
+        expect(custom.runtimeSupport.catalog.models?.[0]?.base_instructions)
+          .toBe("bundled metadata");
+      }
+      expect(custom.processLocal).toEqual({
+        runtime: { state: "unused" },
+        bundledCatalog: {
+          state: "used",
+          epoch: cacheState.epoch,
+          valueIdentity: cacheState.valueIdentity,
+        },
+      });
+
+      const bundled = resolveCatalogSourceForGather(evidence, "default");
+      expect(bundled.kind).toBe("available");
+      if (bundled.kind === "available") {
+        expect(bundled.source).toBe("bundled-catalog-template");
+        expect(bundled.catalog.models?.[0]?.base_instructions).toBe("bundled metadata");
+      }
+    } finally {
+      resetBundledCatalogCacheForTests();
+    }
+  });
+
+  test("a routed-only active custom catalog stays authoritative over a native backup", () => {
+    const runtime = { command: "/tmp/codex", version: "0.145.0", source: "environment" as const };
+    resetBundledCatalogCacheForTests();
+    setBundledCatalogCacheForTests(runtime, {
+      models: [{
+        slug: "gpt-5.5",
+        base_instructions: "bundled runtime metadata",
+      }],
+    });
+    const evidence = gatherEvidence({
+      "runtime-selection": persistedRuntimeBytes(runtime.command, runtime.version),
+      "active-catalog-merge": Buffer.from(JSON.stringify({
+        root_marker: "active-custom",
+        models: [{
+          slug: "vendor/routed-only",
+          base_instructions: "active routed metadata",
+        }],
+      })),
+      "hashed-backup-fallback": Buffer.from(JSON.stringify({
+        root_marker: "stale-backup",
+        models: [{
+          slug: "gpt-5.5",
+          base_instructions: "backup native metadata",
+        }],
+      })),
+    });
+
+    try {
+      const source = resolveCatalogSourceForGather(evidence, "custom");
+      expect(source.kind).toBe("available");
+      if (source.kind !== "available") return;
+      expect(source.source).toBe("active-catalog-merge");
+      expect(source.catalog.root_marker).toBe("active-custom");
+      expect(source.catalog.models?.map(entry => entry.slug)).toEqual(["vendor/routed-only"]);
+      expect(source.runtimeSupport.kind).toBe("available");
+
+      const fallback = resolveCatalogSourceForGather(gatherEvidence({
+        "runtime-selection": persistedRuntimeBytes(runtime.command, runtime.version),
+        "hashed-backup-fallback": Buffer.from(JSON.stringify({
+          root_marker: "routed-backup",
+          models: [{
+            slug: "vendor/backup-only",
+            base_instructions: "routed backup metadata",
+          }],
+        })),
+      }), "custom");
+      expect(fallback.kind).toBe("available");
+      if (fallback.kind === "available") {
+        expect(fallback.source).toBe("hashed-backup-fallback");
+        expect(fallback.catalog.root_marker).toBe("routed-backup");
+      }
+    } finally {
+      resetBundledCatalogCacheForTests();
+    }
   });
 
   test("gather consumes a persisted runtime observation and observed disk fallback", () => {
@@ -201,11 +310,12 @@ describe("observe-only Codex catalog gather caches", () => {
       expect(runtime.processLocal).toEqual({ state: "unused" });
     }
 
-    const source = resolveCatalogSourceForGather(evidence);
+    const source = resolveCatalogSourceForGather(evidence, "custom");
     expect(source.kind).toBe("available");
     if (source.kind === "available") {
       expect(source.source).toBe("active-catalog-merge");
       expect(source.catalog.models?.[0]?.base_instructions).toBe("observed");
+      expect(source.runtimeSupport).toEqual({ kind: "unavailable" });
       expect(source.processLocal).toEqual({
         runtime: { state: "unused" },
         bundledCatalog: { state: "unused" },

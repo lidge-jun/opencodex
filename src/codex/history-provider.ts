@@ -722,16 +722,17 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   }
 }
 
-export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): { rows: number; files: number; failed?: true } {
+export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
-  return withHistoryRetry(() => {
+  const retried = withHistoryRetryResult(() => {
     const db = openStateDb(stateDbPath);
     try {
       return ejectRemainingOpencodexHistory(db);
     } finally {
       db.close();
     }
-  }) ?? { rows: 0, files: 0, failed: true };
+  });
+  return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
 }
 
 /**

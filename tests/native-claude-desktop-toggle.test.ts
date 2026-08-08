@@ -60,6 +60,18 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("a null toggle body is rejected before desired state or Desktop files change", async () => {
+  const response = await dispatch("/api/native-integrations/claude-desktop", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: "null",
+  });
+  expect(response!.status).toBe(400);
+  expect(await response!.json()).toEqual({ error: "enabled must be a boolean" });
+  expect(persistedIntent()).toBeUndefined();
+  expect(existsSync(library)).toBe(false);
+});
+
 test("the native route advertises Claude Desktop and OFF persists intent before removal", async () => {
   let sawPersistedOff = false;
   const result = await toggle(false, {

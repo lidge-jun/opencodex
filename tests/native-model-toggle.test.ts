@@ -272,6 +272,28 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
       .not.toContain("stored-side-account");
   });
 
+  test("picker visibility hides generated catalog rows without deleting routing bindings", () => {
+    const codexAccountNamespaces = { desktop: "@main", team: "stored-side-account" };
+    const config = {
+      codexAccounts: [{ id: "stored-side-account", isMain: false }],
+      codexAccountNamespaces,
+      codexAccountPickerEnabled: false,
+    };
+
+    expect(visibleCodexAccountSelectors(config)).toEqual([]);
+    expect(accountBoundNativeModelSlugs(config, ["gpt-5.5"])).toEqual([]);
+    expect(config.codexAccountNamespaces).toBe(codexAccountNamespaces);
+
+    config.codexAccountPickerEnabled = true;
+    expect(visibleCodexAccountSelectors(config)).toEqual(["desktop", "team"]);
+
+    expect(visibleCodexAccountSelectors({
+      codexAccounts: config.codexAccounts,
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    })).toEqual([]);
+  });
+
   test("catalog sync flips supported natives to visibility hide and restores list on re-enable", () => {
     const native = nativeTemplate();
     const disabledOnce = mergeCatalogEntriesForSync(

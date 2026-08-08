@@ -13,7 +13,7 @@ import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, r
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
-import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
+import { routedSlug, slugEquals, slugEquivalenceKey, slugsEquivalent } from "../../providers/slug-codec";
 import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
@@ -131,9 +131,14 @@ export function deriveComboCatalogModel(
   const inputModalities = intersectStrings(
     members.map(member => member.inputModalities ?? ["text"]),
   );
-  const reasoningEfforts = intersectStrings(
-    members.map(member => member.reasoningEfforts ?? []),
-  );
+  // Unknown ladders (`undefined`) are wildcards for catalog derivation — same
+  // boundary as the GUI picker. An explicit empty ladder still constrains.
+  const advertisedLadders = members
+    .map(member => member.reasoningEfforts)
+    .filter((ladder): ladder is string[] => ladder !== undefined);
+  const reasoningEfforts = advertisedLadders.length === 0
+    ? []
+    : intersectStrings(advertisedLadders);
   const contextWindow = Math.min(...members.map(member => member.contextWindow!));
   const maxInputTokens = Math.min(
     ...members.map(member => member.maxInputTokens ?? member.contextWindow!),
@@ -282,6 +287,8 @@ export const slugAliasCollisionWarnings = new Set<string>();
 
 export const comboMasqueradeCollisionWarnings = new Set<string>();
 
+export const comboUnrestorableShadowWarnings = new Set<string>();
+
 export const accountSelectorShadowCollisionWarnings = new Set<string>();
 let lastWarningReconciledGeneration = 0;
 
@@ -291,11 +298,13 @@ export function reconcileCatalogWarningMemos(generation: number): number {
     + comboCatalogWarningSignatures.size
     + slugAliasCollisionWarnings.size
     + comboMasqueradeCollisionWarnings.size
+    + comboUnrestorableShadowWarnings.size
     + accountSelectorShadowCollisionWarnings.size;
   openAiApiCollisionWarnings.clear();
   comboCatalogWarningSignatures.clear();
   slugAliasCollisionWarnings.clear();
   comboMasqueradeCollisionWarnings.clear();
+  comboUnrestorableShadowWarnings.clear();
   accountSelectorShadowCollisionWarnings.clear();
   lastWarningReconciledGeneration = generation;
   return removed;
@@ -306,6 +315,15 @@ export function warnComboMasqueradeCollisionOnce(slug: string): void {
   comboMasqueradeCollisionWarnings.add(slug);
   console.warn(
     `[opencodex] combo alias collision on "${safeCatalogWarningLabel(slug)}": the combo wins and the shadowed provider model is omitted from the catalog.`,
+  );
+}
+
+export function warnComboUnrestorableShadowOnce(slug: string): void {
+  const key = slugEquivalenceKey(slug);
+  if (comboUnrestorableShadowWarnings.has(key)) return;
+  comboUnrestorableShadowWarnings.add(key);
+  console.warn(
+    `[opencodex] combo alias collision on "${safeCatalogWarningLabel(slug)}": the existing user-managed or foreign catalog row is retained because no pristine backup can restore it. Rename the combo alias to expose both models.`,
   );
 }
 

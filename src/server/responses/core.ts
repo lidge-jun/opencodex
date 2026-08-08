@@ -40,7 +40,6 @@ import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxP
 import {
   forceRefreshOAuthAccessSnapshot,
   getOAuthCredentialApiBaseUrl,
-  getOAuthCredentialProjectId,
   getValidAccessTokenForAccount,
   getValidAccessTokenSnapshot,
   type OAuthAccessSnapshot,
@@ -1677,9 +1676,10 @@ async function handleResponsesInner(
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
         // Antigravity (cloud-code-assist) needs the discovered Cloud Code Assist project id in the
-        // CCA envelope; the server injects only the bare token, so pull project from the credential.
+        // CCA envelope. Keep it paired with the token snapshot so an account rotation cannot mix
+        // a fresh token with project metadata re-read from a different credential generation.
         if (route.provider.googleMode === "cloud-code-assist" && !route.provider.project) {
-          const projectId = getOAuthCredentialProjectId(route.providerName);
+          const projectId = resolved.projectId;
           if (projectId) route.provider = { ...route.provider, project: projectId };
         }
       }

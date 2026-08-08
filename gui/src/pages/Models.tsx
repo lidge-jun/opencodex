@@ -142,6 +142,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const [contextCapValue, setContextCapValue] = useState(() => cached?.contextCapValue ?? 350_000);
   const [customCap, setCustomCap] = useState("");
   const [showCustom, setShowCustom] = useState(false);
+  const [providerCapCustomOpen, setProviderCapCustomOpen] = useState<Record<string, boolean>>({});
+  const [providerCapCustomDraft, setProviderCapCustomDraft] = useState<Record<string, string>>({});
   const initialCollapsed = readCollapsedProviders();
   const [collapsed, setCollapsed] = useState<Set<string>>(() => initialCollapsed ?? new Set());
   const needsDefaultCollapseRef = useRef(initialCollapsed === null);
@@ -566,7 +568,9 @@ export default function Models({ apiBase }: { apiBase: string }) {
     setBusy(true);
     busyRef.current = true;
     setStatus("");
-    const enabled = contextCaps[provider] !== contextCapValue;
+    // Send the desired next state, not the current one: clicking the switch turns a
+    // currently-unset cap on (enabled: true) and a currently-set cap off (enabled: false).
+    const enabled = contextCaps[provider] === undefined;
     try {
       const r = await fetch(`${apiBase}/api/provider-context-caps`, {
         method: "PUT",
@@ -635,33 +639,68 @@ export default function Models({ apiBase }: { apiBase: string }) {
     }
   };
 
+  const allCapped = useMemo(
+    () => {
+      // Cap aggregate counts routed providers only; the single native group has no cap
+      // switch. Zero-row routed providers are included: they can still hold a per-provider
+      // cap (e.g. a custom model added later), and excluding them would let "set all"
+      // silently overwrite that cap when the global value changes. Saved caps of providers
+      // that are no longer in `groups` (e.g. disabled after receiving a custom cap) are
+      // also counted: the management API rewrites every key in providerContextCaps when
+      // setAll is true, so any saved cap that differs from the current value must keep the
+      // aggregate off.
+      const routed = groups.filter(group => !group.native);
+      return routed.length > 0
+        && routed.every(group => contextCaps[group.provider] === contextCapValue)
+        && Object.keys(contextCaps).every(key => contextCaps[key] === contextCapValue);
+    },
+    [groups, contextCaps, contextCapValue],
+  );
+
   const setGlobalCap = (value: number) => {
-    if (!Number.isFinite(value) || value <= 0) return;
-    void putCap({ value: Math.floor(value) });
+    if (!Number.isSafeInteger(value) || value <= 0) return;
+    // Only when "apply to every routed provider" is checked does the new value re-point every
+    // provider; otherwise it just becomes the default for future toggles and providers keep
+    // their own values.
+    void putCap(allCapped ? { value, setAll: true } : { value });
+  };
+
+  const onSelectProviderCap = (provider: string, raw: string) => {
+    if (raw === CUSTOM_OPTION) {
+      setProviderCapCustomOpen(prev => ({ ...prev, [provider]: true }));
+      setProviderCapCustomDraft(prev => ({ ...prev, [provider]: String(contextCaps[provider] ?? contextCapValue) }));
+      return;
+    }
+    setProviderCapCustomOpen(prev => ({ ...prev, [provider]: false }));
+    const value = Number(raw);
+    if (Number.isSafeInteger(value) && value > 0 && value !== contextCaps[provider]) {
+      void putCap({ provider, enabled: true, value });
+    }
+  };
+
+  const applyProviderCustomCap = (provider: string) => {
+    const value = Number((providerCapCustomDraft[provider] ?? "").replace(/[_,\s]/g, ""));
+    // Fractional values are rejected (the server floors, so 0.5 would silently become 0).
+    // The editor stays open when validation fails.
+    if (!Number.isSafeInteger(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
+    setProviderCapCustomOpen(prev => ({ ...prev, [provider]: false }));
+    void putCap({ provider, enabled: true, value });
   };
 
   const onSelectCap = (raw: string) => {
     if (raw === CUSTOM_OPTION) { setShowCustom(true); setCustomCap(String(contextCapValue)); return; }
     setShowCustom(false);
     const value = Number(raw);
-    if (Number.isFinite(value) && value > 0 && value !== contextCapValue) setGlobalCap(value);
+    if (Number.isSafeInteger(value) && value > 0 && value !== contextCapValue) setGlobalCap(value);
   };
 
   const applyCustomCap = () => {
     const value = Number(customCap.replace(/[_,\s]/g, ""));
-    if (!Number.isFinite(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
+    if (!Number.isSafeInteger(value) || value <= 0) { publishFeedback(false, t("models.capSaveFailed")); return; }
     setShowCustom(false);
     setGlobalCap(value);
   };
 
-  const allCapped = useMemo(
-    () => {
-      // Cap aggregate counts routed providers only; the single native group has no cap switch.
-      const routed = groups.filter(group => !group.native && group.rows.length > 0);
-      return routed.length > 0 && routed.every(group => contextCaps[group.provider] === contextCapValue);
-    },
-    [groups, contextCaps, contextCapValue],
-  );
   const setAll = () => { void putCap({ setAll: !allCapped }); };
 
   const saveShadowCall = async (patch: Partial<ShadowCallData>) => {
@@ -882,7 +921,8 @@ export default function Models({ apiBase }: { apiBase: string }) {
       disabled.has(model.namespaced),
     );
     const activeCount = rows.filter(isVisible).length;
-    const capOn = contextCaps[provider] === contextCapValue;
+    const capOn = contextCaps[provider] !== undefined;
+    const providerCap = contextCaps[provider] ?? contextCapValue;
     const isNative = native;
     const discoveryFailure = liveModels && discovery?.status === "failed" ? discovery : undefined;
     const q = (search[provider] ?? "").trim().toLowerCase();
@@ -966,8 +1006,43 @@ export default function Models({ apiBase }: { apiBase: string }) {
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
              <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
              {!isNative && <>
-               <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(contextCapValue) })} />
-               <span className="muted mono text-label">{t("models.capValue", { value: fmtK(contextCapValue) })}</span>
+               <Switch on={capOn} onClick={() => toggleProviderCap(provider)} disabled={busy} label={t("models.capValue", { value: fmtK(providerCap) })} />
+               {capOn && (
+                 <>
+                   <Select
+                     // A saved cap outside CAP_OPTIONS is still a real selectable option
+                     // (inserted below), so select it instead of falling back to "Custom";
+                     // otherwise the trigger hides the persisted 128k value behind the
+                     // custom-editor label.
+                     value={providerCapCustomOpen[provider] ? CUSTOM_OPTION : String(providerCap)}
+                     options={[
+                       ...(!CAP_OPTION_SET.has(providerCap) && !providerCapCustomOpen[provider]
+                         ? [{ value: String(providerCap), label: fmtK(providerCap) }] : []),
+                       ...CAP_OPTIONS.map(v => ({ value: String(v), label: fmtK(v) })),
+                       { value: CUSTOM_OPTION, label: t("models.custom") },
+                     ]}
+                     onChange={v => onSelectProviderCap(provider, v)}
+                     disabled={busy}
+                     label={t("models.capValue", { value: fmtK(providerCap) })}
+                   />
+                   {providerCapCustomOpen[provider] && (
+                     <>
+                       <input
+                         className="input"
+                         style={{ width: 120 }}
+                         inputMode="numeric"
+                         placeholder={t("models.customPlaceholder")}
+                         value={providerCapCustomDraft[provider] ?? ""}
+                         onChange={e => setProviderCapCustomDraft(prev => ({ ...prev, [provider]: e.target.value }))}
+                         onKeyDown={e => { if (e.key === "Enter") applyProviderCustomCap(provider); }}
+                         disabled={busy}
+                         aria-label={t("models.customPlaceholder")}
+                       />
+                       <button type="button" onClick={() => applyProviderCustomCap(provider)} disabled={busy} className="btn btn-ghost btn-sm">{t("models.customApply")}</button>
+                     </>
+                   )}
+                 </>
+               )}
              </>}
            </div>
         </div>
@@ -1208,7 +1283,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
       <div className="row models-cap-row">
         <span className="muted text-control">{t("models.contextCapLabel")}</span>
         <Select
-          value={showCustom ? CUSTOM_OPTION : (CAP_OPTION_SET.has(contextCapValue) ? String(contextCapValue) : CUSTOM_OPTION)}
+          value={showCustom ? CUSTOM_OPTION : String(contextCapValue)}
           options={[
             ...(!CAP_OPTION_SET.has(contextCapValue) && !showCustom
               ? [{ value: String(contextCapValue), label: fmtK(contextCapValue) }] : []),
