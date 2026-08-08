@@ -226,7 +226,7 @@ describe("route decision traces (RI-01)", () => {
   test("normalization only inspects retained reasoning efforts", () => {
     const reasoningEfforts = Array.from({ length: 1_000_000 }) as unknown[];
     reasoningEfforts.fill("medium", 0, 8);
-    Object.defineProperty(reasoningEfforts, reasoningEfforts.length - 1, {
+    Object.defineProperty(reasoningEfforts, 8, {
       get: () => { throw new Error("reasoning effort outside the retained range was inspected"); },
     });
     const raw = {
@@ -271,8 +271,11 @@ describe("route decision traces (RI-01)", () => {
       selected: { candidateIndex: 0, provider: "a", model: "m1", reason: "policy" },
     };
 
-    expect(normalizeRouteDecisionTrace(raw)?.candidates[0]?.capability?.reasoningEfforts)
-      .toBeUndefined();
+    const normalized = normalizeRouteDecisionTrace(raw);
+    expect(normalized).not.toBeNull();
+    if (!normalized) throw new Error("trace normalization unexpectedly failed");
+    expect(normalized.candidates).toHaveLength(1);
+    expect(normalized.candidates[0]?.capability?.reasoningEfforts).toBeUndefined();
   });
 
   test("startup hydration reads trace-sized usage rows", () => {
