@@ -2,6 +2,7 @@ import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { describeUpstreamConnectFailure } from "./upstream-error";
+import { inspectCodexCapacityBeforeOutput } from "./codex-capacity";
 import {
   getConfigPath,
   multiAgentGuidanceEnabled,
@@ -344,6 +345,9 @@ interface CodexPoolAccountRetryArgs {
   connectMs: number;
   passthroughEstimate?: number;
   stream: boolean;
+  excludedAccountIds?: Set<string>;
+  recordRejectedOutcome?: boolean;
+  preserveRejectedResponse?: boolean;
 }
 
 type CodexPoolAccountRetryResult =
@@ -402,49 +406,64 @@ async function retryCodexPoolOnAlternateAccount(
   if (firstAuthCtx.fixedAccount) return { kind: "no-alternate" };
   const inboundWire = options.inboundWire ?? "responses";
   let retryAuthCtx: CodexAuthContext | undefined;
-  try {
-    retryAuthCtx = await resolveCodexAuthContext(
-      req.headers,
-      config,
-      "pool",
-      {
-        excludeAccountId: firstAuthCtx.accountId,
-        modelId: route.modelId,
-        beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-      },
-    );
-  } catch (error) {
-    if (
-      !(error instanceof CodexPoolAuthenticationError)
-      && !(error instanceof CodexAuthContextError)
-      && !(error instanceof CodexAccountCooldownError)
-      && !(error instanceof CodexMainProfileDrainingError)
-    ) throw error;
+  while (!retryAuthCtx) {
+    try {
+      retryAuthCtx = await resolveCodexAuthContext(
+        req.headers,
+        config,
+        "pool",
+        {
+          ...(args.excludedAccountIds
+            ? { excludeAccountIds: args.excludedAccountIds }
+            : { excludeAccountId: firstAuthCtx.accountId }),
+          modelId: route.modelId,
+          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+        },
+      );
+    } catch (error) {
+      if (
+        args.excludedAccountIds
+        && (error instanceof CodexAuthContextError || error instanceof CodexAccountCooldownError)
+        && !args.excludedAccountIds.has(error.accountId)
+      ) {
+        args.excludedAccountIds.add(error.accountId);
+        continue;
+      }
+      if (
+        !(error instanceof CodexPoolAuthenticationError)
+        && !(error instanceof CodexAuthContextError)
+        && !(error instanceof CodexAccountCooldownError)
+        && !(error instanceof CodexMainProfileDrainingError)
+      ) throw error;
+      break;
+    }
   }
   if (retryAuthCtx?.kind !== "pool" && retryAuthCtx?.kind !== "main-pool") {
     return { kind: "no-alternate" };
   }
 
-  const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
-  if (outcomeStatus === 429 || outcomeStatus === 402) {
-    const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
-    applyAccountQuotaFromUpstreamHeaders(
-      firstAuthCtx.accountId,
-      firstResponse.headers,
-      firstAuthCtx.writerGeneration,
-    );
-  }
-  if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
-    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-      ...quotaMeta,
-      threadId: req.headers.get("x-codex-parent-thread-id"),
-      modelId: route.modelId,
-      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
-      writerGeneration: firstAuthCtx.writerGeneration,
-      // Retry already advanced the RR ring via excludeAccountId — reuse for promotion.
-      ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
-    });
+  if (args.recordRejectedOutcome !== false) {
+    const quotaMeta = codexQuotaOutcomeMeta(firstResponse);
+    if (outcomeStatus === 429 || outcomeStatus === 402) {
+      const { applyAccountQuotaFromUpstreamHeaders } = await import("../../codex/auth-api");
+      applyAccountQuotaFromUpstreamHeaders(
+        firstAuthCtx.accountId,
+        firstResponse.headers,
+        firstAuthCtx.writerGeneration,
+      );
+    }
+    if (!shouldDeferCodexResetDerivedCooldown(firstResponse, options.deferCodexResetDerivedCooldown)) {
+      recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+        ...quotaMeta,
+        threadId: req.headers.get("x-codex-parent-thread-id"),
+        modelId: route.modelId,
+        probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+        probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+        writerGeneration: firstAuthCtx.writerGeneration,
+        // Retry already advanced the RR ring via exclusion — reuse for promotion.
+        ...(retryAuthCtx.accountId ? { promoteAccountId: retryAuthCtx.accountId } : {}),
+      });
+    }
   }
 
   const retryHeaders = headersForCodexAuthContext(req.headers, retryAuthCtx);
@@ -463,7 +482,9 @@ async function retryCodexPoolOnAlternateAccount(
   });
   recordAdapterReasoning(logCtx, request);
 
-  await firstResponse.body?.cancel().catch(() => undefined);
+  if (args.preserveRejectedResponse !== true) {
+    await firstResponse.body?.cancel().catch(() => undefined);
+  }
   options.onCodexAuthContextResolved?.(retryAuthCtx);
   route.provider = retryProvider;
   logCtx.provider = formatCodexProviderForLog(
@@ -1961,6 +1982,21 @@ async function handleResponsesInner(
         : describeUpstreamConnectFailure(err, connectMs);
       return formatErrorResponse(502, "upstream_error", msg);
     };
+    const passthroughTransientRetryOptions = {
+      abortSignal: upstream.signal,
+      label: safeHostLabel(request.url),
+      ...(usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount
+        ? {
+          prepareTransientRetry: async (response: Response) => {
+            const inspected = await inspectCodexCapacityBeforeOutput(response, {
+              streamRequested: parsed.stream,
+              signal: options.abortSignal,
+            });
+            return { response: inspected.response, retry: inspected.kind !== "capacity" };
+          },
+        }
+        : {}),
+    };
     try {
       // Transient-5xx pre-stream retry (devlog/_plan/260716_claudecode_hardening/010):
       // the ChatGPT backend emits transient 502/520s that an immediate retry absorbs.
@@ -1981,7 +2017,7 @@ async function handleResponsesInner(
               return res;
             });
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        passthroughTransientRetryOptions,
       );
     } catch (err) {
       return transportFailureResponse(err);
@@ -2040,14 +2076,97 @@ async function handleResponsesInner(
                 return res;
               });
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+          passthroughTransientRetryOptions,
         );
       } catch (err) {
         return transportFailureResponse(err);
       }
     }
 
+    let capacityRetryExhausted = false;
     if (usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
+      const excludedAccountIds = new Set<string>();
+      let firstCapacityAttempt: {
+        response: Response;
+        authCtx: Extract<CodexAuthContext, { kind: "pool" | "main-pool" }>;
+        request: typeof request;
+        provider: OcxProviderConfig;
+        selectedForwardHeaders: Headers;
+        logProvider: string;
+        subagentFallbackAccountId: string | null;
+      } | undefined;
+
+      while (true) {
+        const inspected = await inspectCodexCapacityBeforeOutput(upstreamResponse, {
+          streamRequested: parsed.stream,
+          signal: options.abortSignal,
+        });
+        upstreamResponse = inspected.response;
+        if (inspected.kind !== "capacity") {
+          if (firstCapacityAttempt) {
+            await firstCapacityAttempt.response.body?.cancel().catch(() => undefined);
+          }
+          break;
+        }
+
+        excludedAccountIds.add(authCtx.accountId);
+        firstCapacityAttempt ??= {
+          response: upstreamResponse,
+          authCtx,
+          request,
+          provider: route.provider,
+          selectedForwardHeaders,
+          logProvider: logCtx.provider,
+          subagentFallbackAccountId,
+        };
+        const retry = await retryCodexPoolOnAlternateAccount({
+          req,
+          config,
+          route,
+          parsed,
+          logCtx,
+          options,
+          firstAuthCtx: authCtx,
+          firstResponse: upstreamResponse,
+          outcomeStatus: 503,
+          upstream,
+          connectMs,
+          passthroughEstimate,
+          stream: parsed.stream,
+          excludedAccountIds,
+          recordRejectedOutcome: false,
+          preserveRejectedResponse: upstreamResponse === firstCapacityAttempt.response,
+        });
+        if (retry.kind === "transport") {
+          await firstCapacityAttempt.response.body?.cancel().catch(() => undefined);
+          authCtx = retry.authCtx;
+          return transportFailureResponse(retry.error);
+        }
+        if (retry.kind === "no-alternate") {
+          if (upstreamResponse !== firstCapacityAttempt.response) {
+            await upstreamResponse.body?.cancel().catch(() => undefined);
+          }
+          authCtx = firstCapacityAttempt.authCtx;
+          request = firstCapacityAttempt.request;
+          route.provider = firstCapacityAttempt.provider;
+          selectedForwardHeaders = firstCapacityAttempt.selectedForwardHeaders;
+          logCtx.provider = firstCapacityAttempt.logProvider;
+          subagentFallbackAccountId = firstCapacityAttempt.subagentFallbackAccountId;
+          upstreamResponse = firstCapacityAttempt.response;
+          options.onCodexAuthContextResolved?.(authCtx);
+          capacityRetryExhausted = true;
+          break;
+        }
+
+        authCtx = retry.authCtx;
+        request = retry.request;
+        upstreamResponse = retry.upstreamResponse;
+        selectedForwardHeaders = retry.selectedForwardHeaders;
+        subagentFallbackAccountId = retry.authCtx.accountId;
+      }
+    }
+
+    if (!capacityRetryExhausted && usesCodexForwardPoolAuth(authCtx, route.provider) && !authCtx.fixedAccount) {
       let poolRetryOutcome: number | undefined;
       if (await shouldRetryCodexPoolAccountModel400(
         upstreamResponse,
@@ -2102,17 +2221,19 @@ async function handleResponsesInner(
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
-    const terminalRecorder = codexForwardTerminalOutcomeRecorder(
-      config,
-      authCtx,
-      route.provider,
-      route.modelId,
-      logCtx,
-      req.headers.get("x-codex-parent-thread-id"),
-    );
+    const terminalRecorder = capacityRetryExhausted
+      ? undefined
+      : codexForwardTerminalOutcomeRecorder(
+        config,
+        authCtx,
+        route.provider,
+        route.modelId,
+        logCtx,
+        req.headers.get("x-codex-parent-thread-id"),
+      );
     const terminalBodyWillRecord = !!terminalRecorder && upstreamResponse.ok && isEventStream;
     // Capture quota from upstream response for multi-account tracking
-   if (usesCodexForwardPoolAuth(authCtx, route.provider)) {
+   if (!capacityRetryExhausted && usesCodexForwardPoolAuth(authCtx, route.provider)) {
       // primary was the 5h window; it now carries weekly data for GPT plans.
       // Prefer primary when present, fall back to secondary for compatibility.
       const quotaMeta = codexQuotaOutcomeMeta(upstreamResponse);

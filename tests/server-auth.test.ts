@@ -135,6 +135,7 @@ afterEach(() => {
   clearThreadAccountMap();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  clearAccountNeedsReauth("pool-c");
   clearAccountQuota();
   if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
 });
@@ -145,6 +146,52 @@ function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
   return JSON.stringify({
     detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
   });
+}
+
+const CAPACITY_MESSAGE = "Selected model is at capacity. Please try a different model.";
+
+function capacityErrorBody(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CAPACITY_MESSAGE,
+): string {
+  return JSON.stringify({
+    error: {
+      type: "server_error",
+      ...(code ? { code } : {}),
+      message,
+    },
+  });
+}
+
+function capacityFailedSse(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CAPACITY_MESSAGE,
+): string {
+  const error = {
+    type: "server_error",
+    ...(code ? { code } : {}),
+    message,
+  };
+  return [
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"capacity-attempt","status":"in_progress"}}\n\n',
+    `event: response.failed\ndata: ${JSON.stringify({
+      type: "response.failed",
+      response: { status: "failed", error, last_error: error },
+    })}\n\n`,
+  ].join("");
+}
+
+function capacityErrorSse(
+  code: "server_is_overloaded" | "slow_down" | undefined = undefined,
+  message = CAPACITY_MESSAGE,
+): string {
+  return [
+    'event: response.created\ndata: {"type":"response.created","response":{"id":"capacity-attempt","status":"in_progress"}}\n\n',
+    `event: error\ndata: ${JSON.stringify({
+      type: "error",
+      error: { ...(code ? { code } : {}), message },
+    })}\n\n`,
+  ].join("");
 }
 
 type PoolRetryHarness = {
@@ -183,6 +230,7 @@ async function startPoolRetryHarness(
   reply: (accountId: string, request: Request) => Response | Promise<Response>,
   options: {
     secondAccount?: boolean;
+    thirdAccount?: boolean;
     streamMode?: "legacy-tee" | "eager-relay";
     accountMode?: "direct" | "pool";
     activeAccountId?: string;
@@ -205,6 +253,7 @@ async function startPoolRetryHarness(
   clearRequestLogsForTests();
   clearAccountNeedsReauth("pool-a");
   clearAccountNeedsReauth("pool-b");
+  clearAccountNeedsReauth("pool-c");
   // The registry is process-global and survives a harness teardown. WS-REBIND-01
   // asserts exact per-account socket counts, so a socket leaked by any earlier test
   // in this file shifts its snapshots and fails it in milliseconds — which reads as
@@ -225,6 +274,7 @@ async function startPoolRetryHarness(
   const redirectedFetch = globalThis.fetch;
 
   const secondAccount = options.secondAccount ?? true;
+  const thirdAccount = options.thirdAccount ?? false;
   const config = {
     port: 0,
     defaultProvider: "openai",
@@ -242,6 +292,9 @@ async function startPoolRetryHarness(
       { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
       ...(secondAccount
         ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
+        : []),
+      ...(thirdAccount
+        ? [{ id: "pool-c", email: "pool-c@example.test", isMain: false, chatgptAccountId: "acct-pool-c" }]
         : []),
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
@@ -271,6 +324,17 @@ async function startPoolRetryHarness(
       });
     }
     updateAccountQuota("pool-b", 20);
+  }
+  if (thirdAccount) {
+    if (!options.omitCredentialAccountIds?.includes("pool-c")) {
+      saveCodexAccountCredential("pool-c", {
+        accessToken: "pool-c-token",
+        refreshToken: "pool-c-refresh",
+        expiresAt: Date.now() + 10 * 60_000,
+        chatgptAccountId: "acct-pool-c",
+      });
+    }
+    updateAccountQuota("pool-c", 30);
   }
   for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
 
@@ -2257,6 +2321,162 @@ describe("server local API auth", () => {
       await stopPoolRetryHarness(harness);
     }
   }, { timeout: SERVER_BUDGET_MS });
+
+  test("capacity rejection rotates through every eligible pool account once", async () => {
+    const harness = await startPoolRetryHarness(accountId => {
+      if (accountId === "acct-pool-a") {
+        return new Response(capacityErrorBody(undefined), {
+          status: 502,
+          headers: { "content-type": "application/json", "x-capacity-attempt": "a" },
+        });
+      }
+      if (accountId === "acct-pool-b") {
+        return new Response(capacityErrorBody("server_is_overloaded", "busy"), {
+          status: 503,
+          headers: { "content-type": "application/json", "x-capacity-attempt": "b" },
+        });
+      }
+      return Response.json({ id: "capacity-rotation-success", status: "completed", output: [] });
+    }, { thirdAccount: true });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      const responseText = await response.text();
+      expect(responseText).toContain("capacity-rotation-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-c"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity rotation skips an unavailable intermediate account", async () => {
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorBody("server_is_overloaded"), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })
+      : Response.json({ id: "available-c", status: "completed", output: [] }), {
+      thirdAccount: true,
+      omitCredentialAccountIds: ["pool-b"],
+    });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("available-c");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-c"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("capacity exhaustion preserves the first error and resets on the next request", async () => {
+    let requestOrdinal = 0;
+    const harness = await startPoolRetryHarness(accountId => {
+      if (accountId === "acct-pool-a") requestOrdinal += 1;
+      if (requestOrdinal === 2 && accountId === "acct-pool-a") {
+        return Response.json({ id: "fresh-request-success", status: "completed", output: [] });
+      }
+      const attempt = accountId === "acct-pool-a" ? "a" : "b";
+      return new Response(capacityErrorBody("slow_down", `capacity-${attempt}`), {
+        status: 502,
+        statusText: `Capacity ${attempt.toUpperCase()}`,
+        headers: { "content-type": "application/json", "x-capacity-attempt": attempt },
+      });
+    });
+    try {
+      const exhausted = await harness.request();
+      expect(exhausted.status).toBe(502);
+      expect(exhausted.headers.get("x-capacity-attempt")).toBe("a");
+      expect(await exhausted.text()).toContain("capacity-a");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(getCodexUpstreamHealth("pool-a")).toBeNull();
+      expect(getCodexUpstreamHealth("pool-b")).toBeNull();
+
+      const fresh = await harness.request();
+      expect(fresh.status).toBe(200);
+      const freshText = await fresh.text();
+      expect(freshText).toContain("fresh-request-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-a"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("SSE capacity failure rotates only before substantive output", async () => {
+    const preOutput = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? new Response(capacityErrorSse(undefined), {
+        headers: { "content-type": "text/event-stream" },
+      })
+      : new Response(
+        'event: response.completed\ndata: {"type":"response.completed","response":{"id":"from-b","status":"completed","output":[]}}\n\n',
+        { headers: { "content-type": "text/event-stream" } },
+      ));
+    try {
+      const text = await (await preOutput.request({ stream: true })).text();
+      expect(preOutput.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(text).toContain('"id":"from-b"');
+      expect(text).not.toContain("capacity-attempt");
+    } finally {
+      await stopPoolRetryHarness(preOutput);
+    }
+
+    const postOutput = await startPoolRetryHarness(() => new Response([
+      'event: response.created\ndata: {"type":"response.created","response":{"id":"committed","status":"in_progress"}}\n\n',
+      'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"visible"}\n\n',
+      capacityFailedSse("server_is_overloaded", "busy"),
+    ].join(""), { headers: { "content-type": "text/event-stream" } }));
+    try {
+      const text = await (await postOutput.request({ stream: true })).text();
+      expect(postOutput.dispatches).toEqual(["acct-pool-a"]);
+      expect(text).toContain('"delta":"visible"');
+      expect(text).toContain("response.failed");
+    } finally {
+      await stopPoolRetryHarness(postOutput);
+    }
+  });
+
+  test("Direct mode never rotates a capacity rejection", async () => {
+    const harness = await startPoolRetryHarness(() => new Response(capacityErrorBody("server_is_overloaded"), {
+      status: 409,
+      headers: { "content-type": "application/json" },
+    }), { accountMode: "direct" });
+    try {
+      const response = await harness.request();
+      expect(response.status).toBe(409);
+      expect(harness.dispatches).toEqual(["missing"]);
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("exact account selector never rotates a capacity rejection", async () => {
+    const body = capacityErrorBody("server_is_overloaded");
+    const harness = await startPoolRetryHarness(() => new Response(body, {
+      status: 409,
+      headers: { "content-type": "application/json", "x-exact-response": "original" },
+    }), {
+      accountMode: "direct",
+      activeAccountId: "pool-b",
+      accountNamespaces: { side: "pool-a" },
+    });
+    try {
+      const response = await harness.request({
+        model: `side/${POOL_RETRY_MODEL}`,
+        callerBearer: false,
+      });
+      expect(response.status).toBe(409);
+      expect(response.headers.get("x-exact-response")).toBe("original");
+      expect(await response.text()).toBe(body);
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
 
   test("#584: pre-stream 429 retries once on another eligible pool account", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"

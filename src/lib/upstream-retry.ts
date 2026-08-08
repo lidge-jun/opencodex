@@ -244,6 +244,10 @@ export interface ResetRetryOptions {
 export interface TransientRetryOptions extends ResetRetryOptions {
   /** Test seam: per-attempt slow budget override (defaults to TRANSIENT_RETRY_SLOW_ATTEMPT_MS). */
   slowAttemptMs?: number;
+  /** Optional semantic gate run before retrying a transient HTTP response. */
+  prepareTransientRetry?: (
+    response: Response,
+  ) => Promise<{ response: Response; retry: boolean }> | { response: Response; retry: boolean };
 }
 
 export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
@@ -367,6 +371,11 @@ export async function fetchWithTransientRetry(
     if (res.ok || !isTransientUpstreamStatus(res.status)) return res;
     if (opts.abortSignal?.aborted) return res;
     if (Date.now() - attemptStart > slowAttemptMs) return res;
+    if (opts.prepareTransientRetry) {
+      const prepared = await opts.prepareTransientRetry(res);
+      res = prepared.response;
+      if (!prepared.retry) return res;
+    }
     console.warn(
       `[upstream-retry] transient ${res.status}${opts.label ? ` (${opts.label})` : ""} — retrying (${attempt + 2}/${attempts})`,
     );

@@ -150,6 +150,14 @@ alternate account in the same request, even when usage-based proactive switching
 changes preserve and replay the conversation context, but provider-side prompt-cache reuse across
 accounts is not guaranteed and the cache may need to warm again.
 
+Before any text, reasoning, tool call, or other model output reaches the client, a structured
+`server_is_overloaded` / `slow_down` model-capacity rejection (or the standard
+`Selected model is at capacity. Please try a different model.` response) tries each remaining
+eligible Pool account once. This exclusion is request-local: rejected capacity attempts do not write
+account cooldown, health, affinity, or active-selection state. If every account returns capacity, the first response
+is returned; the next request starts with a fresh eligible set. Direct mode and exact account
+selectors never use this rotation, and capacity after substantive output is never replayed.
+
 On a **401/403**, App login clears that account's process-local affinity and requires reauthentication.
 On a **429**, opencodex honors `Retry-After`, starts the account cooldown, clears affinity, and may
 rotate the request to another eligible Pool account. These failure transitions remain active with

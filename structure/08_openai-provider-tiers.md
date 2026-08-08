@@ -23,6 +23,13 @@ An explicit `Retry-After` or an unclassified quota 429 is account-wide. A reset-
 the shared native group (including GPT-5.6 Terra/Luna). This allows a same-account combo to test an
 independent quota without allowing fallbacks that share the exhausted quota.
 
+Model-capacity rejection is a different recovery class. Before substantive Responses output, exact
+structured `server_is_overloaded` / `slow_down` signals and the standard model-capacity sentence
+exclude the current account only for that request, then try each remaining eligible Pool account
+once. Rejected capacity attempts write no cooldown, health, affinity, or active-account state. Exhaustion returns the
+first rejection, and the next request starts with no capacity exclusions. Direct and exact-account
+routes never rotate, and a committed output event makes the attempt non-replayable.
+
 `pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
 affinity, quota rotation, cooldown probes, transient failover, and manual activation. In-flight
