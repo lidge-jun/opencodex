@@ -598,6 +598,103 @@ describe("BUG-R86 routed web-search timeout semantics", () => {
     expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
   });
 
+  test("buffered routed iterations keep upstream JSON while downstream remains SSE", async () => {
+    const upstreamBodies: Record<string, unknown>[] = [];
+    let routedPass = 0;
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        upstreamBodies.push(await request.json() as Record<string, unknown>);
+        routedPass += 1;
+        return Response.json({
+          id: `chatcmpl_buffered_${routedPass}`,
+          object: "chat.completion",
+          created: 1,
+          model: "routed/model",
+          choices: [{
+            index: 0,
+            message: routedPass === 1
+              ? {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [{
+                    id: "call_buffered_search",
+                    type: "function",
+                    function: { name: "web_search", arguments: JSON.stringify({ query: "current docs" }) },
+                  }],
+                }
+              : { role: "assistant", content: "healthy buffered answer" },
+            finish_reason: routedPass === 1 ? "tool_calls" : "stop",
+          }],
+          usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+        });
+      },
+    });
+    let sidecarCalls = 0;
+    const sidecar = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        sidecarCalls += 1;
+        return new Response(
+          'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"docs say X"}\n\n'
+            + 'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      },
+    });
+    const fetchStreaming: Array<boolean | undefined> = [];
+    try {
+      const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+      const sidecarBaseUrl = sidecar.url.toString().replace(/\/$/, "");
+      const realAdapter = createOpenAIChatAdapter({
+        adapter: "openai-chat",
+        baseUrl,
+        authMode: "key",
+        apiKey: "local-test-key",
+      });
+      const adapter: ProviderAdapter = {
+        ...realAdapter,
+        async fetchResponse(request, context) {
+          fetchStreaming.push(context?.stream);
+          return fetch(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.body,
+            signal: context?.abortSignal,
+          });
+        },
+      };
+
+      const response = await runWithWebSearch({
+        parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+        adapter,
+        upstreamStreaming: false,
+        forwardProvider: { ...forwardProvider, baseUrl: sidecarBaseUrl },
+        hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
+        settings: { model: "gpt-5.4-mini", reasoning: "low", timeoutMs: 30_000 },
+        maxSearches: 1,
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const frames = await collectSse(response.body!);
+      expect(upstreamBodies).toHaveLength(2);
+      expect(upstreamBodies.every(body => body.stream === false)).toBe(true);
+      expect(upstreamBodies.every(body => !("stream_options" in body))).toBe(true);
+      expect(fetchStreaming).toEqual([false, false]);
+      expect(sidecarCalls).toBe(1);
+      expect(frames.some(frame => frame.event === "response.output_text.delta"
+        && frame.data.delta === "healthy buffered answer")).toBe(true);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(true);
+    } finally {
+      upstream.stop(true);
+      sidecar.stop(true);
+    }
+  });
+
   test("fast headers plus raw byte progress can outlive connectTimeoutMs", async () => {
     const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
     let bodyCancelled = 0;

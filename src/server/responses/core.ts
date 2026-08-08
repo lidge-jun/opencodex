@@ -2639,6 +2639,7 @@ async function handleResponsesInner(
     const wsResponse = await runWithWebSearch({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
+      upstreamStreaming: parsed.stream,
       backend: wsPlan.backend,
       forwardProvider: wsPlan.forwardSidecar?.provider,
       anthropicSidecar: wsPlan.anthropicSidecar,

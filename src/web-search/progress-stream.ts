@@ -30,6 +30,8 @@ export interface ParseStreamWithProgressOptions {
   inactivityTimeoutMs: number;
   translatorBudget: TranslatorBudget;
   signal?: AbortSignal;
+  /** Optional hard cap for the raw upstream body before adapter parsing. */
+  maxBodyBytes?: number;
   /** Kept configurable for focused tests; production callers should use the 5 second default. */
   postTerminalDrainTimeoutMs?: number;
 }
@@ -142,6 +144,9 @@ export async function* parseStreamWithProgress(
   options: ParseStreamWithProgressOptions,
 ): AsyncGenerator<AdapterEvent> {
   const inactivityTimeoutMs = normalizeTimeout(options.inactivityTimeoutMs, "inactivityTimeoutMs");
+  const maxBodyBytes = options.maxBodyBytes === undefined
+    ? undefined
+    : normalizeTimeout(options.maxBodyBytes, "maxBodyBytes");
   const postTerminalDrainTimeoutMs = normalizeTimeout(
     options.postTerminalDrainTimeoutMs ?? DEFAULT_POST_TERMINAL_DRAIN_TIMEOUT_MS,
     "postTerminalDrainTimeoutMs",
@@ -151,6 +156,7 @@ export async function* parseStreamWithProgress(
   if (!reader) throw new WebSearchStreamProtocolError("upstream response has no body");
 
   let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
+  let bodyBytes = 0;
   let tappedController: ReadableStreamDefaultController<Uint8Array> | undefined;
   let settled = false;
   let iterator: AsyncGenerator<AdapterEvent> | undefined;
@@ -224,6 +230,11 @@ export async function* parseStreamWithProgress(
             return;
           }
           if (result.value.byteLength === 0) continue;
+          bodyBytes += result.value.byteLength;
+          if (maxBodyBytes !== undefined && bodyBytes > maxBodyBytes) {
+            fail(new TranslatorBudgetExceededError("live_transient", maxBodyBytes));
+            return;
+          }
           resetInactivity();
           handoff.offerProgress();
           controller.enqueue(result.value);

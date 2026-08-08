@@ -6,6 +6,7 @@ import {
   WebSearchStreamProtocolError,
 } from "../src/web-search/progress-stream";
 import type { AdapterEvent } from "../src/types";
+import { TranslatorBudgetExceededError } from "../src/lib/translator-budget";
 
 type ParseStream = ProviderAdapter["parseStream"];
 
@@ -119,6 +120,28 @@ describe("web-search streamed-body progress collector", () => {
     expect(Date.now() - started).toBeGreaterThan(inactivityTimeoutMs);
     expect(events.at(-1)).toEqual({ type: "done" });
     expect(events.some(event => event.type === "heartbeat")).toBe(true);
+  });
+
+  test("an optional raw-body cap aborts before the adapter can buffer an oversized response", async () => {
+    let cancelled = false;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(bytes("four"));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }));
+
+    const error = await collect(parseStreamWithProgress(response, drainThenDone, {
+      inactivityTimeoutMs: 200,
+      maxBodyBytes: 3,
+    })).then(() => undefined, reason => reason);
+
+    expect(error).toBeInstanceOf(TranslatorBudgetExceededError);
+    expect(error.code).toBe("translation_buffer_limit");
+    await waitFor(() => cancelled);
+    expect(cancelled).toBe(true);
   });
 
   test("continuous raw-byte silence raises the exact typed inactivity error", async () => {

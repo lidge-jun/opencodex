@@ -244,6 +244,8 @@ export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
   incomingMeta: IncomingMeta;
+  /** Effective routed-model upstream transport. Downstream web-search output remains Responses SSE. */
+  upstreamStreaming?: boolean;
   /** Which executor runs searches. Defaults to "openai" so existing callers keep the ChatGPT path (audit F4). */
   backend?: "openai" | "anthropic";
   /** Required for the openai backend; unused (and typically undefined) for the anthropic backend. */
@@ -285,14 +287,16 @@ export interface WebSearchLoopDeps {
 }
 
 /**
- * Run the main (non-OpenAI) model in a small agentic loop. Each upstream iteration is streamed and
- * fully buffered internally so raw byte progress is observable without leaking a synthetic tool or
- * preliminary assistant output. If the model invokes web_search, run it via the hosted sidecar,
- * inject the answer as a tool_result, and loop (bounded by `maxSearches`).
+ * Run the main (non-OpenAI) model in a small agentic loop. Each upstream iteration follows the
+ * route's effective streaming policy and is fully buffered internally so raw byte progress is
+ * observable without leaking a synthetic tool or preliminary assistant output. If the model
+ * invokes web_search, run it via the hosted sidecar, inject the answer as a tool_result, and loop
+ * (bounded by `maxSearches`).
  */
 export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Response> {
   const translatorBudget = deps.incomingMeta.translatorBudget;
   const { parsed, selectedForwardHeaders, forwardProvider, hostedTool, settings, maxSearches, abortSignal, recordSidecarOutcome } = deps;
+  const upstreamStreaming = deps.upstreamStreaming ?? true;
   const backend = deps.backend ?? "openai";
   const anthropicSidecar = deps.anthropicSidecar;
   // Mutable: 429 key-failover (deps.on429) can swap in a rebuilt adapter mid-loop.
@@ -362,7 +366,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       ? [...messages, forcedAnswerNudge()]
       : messages;
     const iterParsed: OcxParsedRequest = {
-      ...parsed, stream: true,
+      ...parsed, stream: upstreamStreaming,
       context: { ...parsed.context, messages: iterMessages, tools: forceAnswer ? toolsNoWebSearch : allTools },
     };
     // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
@@ -408,7 +412,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
-              stream: true,
+              stream: upstreamStreaming,
             });
           } else {
             response = await fetchWithResetRetry(
@@ -536,11 +540,23 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const consumeIterationEvents = async function* (prepared: IterationResponse): AsyncGenerator<AdapterEvent, IterationSplit> {
     const events: AdapterEvent[] = [];
     try {
-      const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
+      let parse: ProviderAdapter["parseStream"];
+      if (upstreamStreaming) {
+        parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
+      } else {
+        const parseResponse = prepared.responseAdapter.parseResponse?.bind(prepared.responseAdapter);
+        if (!parseResponse) {
+          throw new LoopError(502, `Provider adapter ${prepared.responseAdapter.name} does not support buffered responses`);
+        }
+        parse = async function* (response, budget) {
+          for (const event of await parseResponse(response, budget)) yield event;
+        };
+      }
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
         signal,
         inactivityTimeoutMs: routedModelStallTimeoutMs,
         translatorBudget,
+        ...(upstreamStreaming ? {} : { maxBodyBytes: TRANSLATOR_MAX_TURN_BYTES }),
       })) {
         if (event.type === "heartbeat") yield event;
         // Kiro's explicit-completion protocol marks ordinary assistant text as commentary while
@@ -555,9 +571,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      if (error instanceof LoopError) throw error;
       if (error instanceof RoutedModelInactivityError) throw new LoopError(504, error.message);
       if (error instanceof WebSearchStreamProtocolError) throw new LoopError(502, error.message);
-      throw new LoopError(502, `Provider stream error: ${error instanceof Error ? error.message : String(error)}`);
+      throw new LoopError(502, `Provider ${upstreamStreaming ? "stream" : "response"} error: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     const terminalIndexes = events.flatMap((event, index) =>

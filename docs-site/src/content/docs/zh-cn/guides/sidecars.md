@@ -27,9 +27,11 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
    search 工具并强制生成最终答案。如果模型调用 `apply_patch` 或 shell 等真实客户端工具，当前
    turn 会结束，以便这些调用到达 Codex。
 
-路由模型的每次迭代都会向上游请求 `stream: true`，但 opencodex 会在决定搜索还是返回最终答案前，
-在内部完整缓冲所有语义 event。只有第一次迭代的最终 header/status 和 429 key rotation 会被提前
-取得。因此，合成搜索调用和中间输出不会作为模型输出暴露给客户端。
+路由模型的每次迭代都会遵循该路由生效的上游 streaming 策略。Streaming 路由使用流式 parser；
+兼容性路由使用有大小限制的非流式 parser，而面向客户端的响应在两种情况下都保持为 Responses SSE。
+opencodex 会在决定搜索还是返回最终答案前，在内部完整缓冲所有语义 event。只有第一次迭代的最终
+header/status 和 429 key rotation 会被提前取得。因此，合成搜索调用和中间输出不会作为模型输出
+暴露给客户端。
 
 注入结果会包裹在不可信数据边界中，限制长度，并按来源 URL 去重。在结构化输出 turn
 （`json_schema` / `json_object`）中，结果会以紧凑 JSON 而不是普通文本传入。若路由模型是纯文本

@@ -29,10 +29,12 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
 
-Every routed-model iteration requests upstream `stream: true`, but opencodex fully buffers semantic
-events internally before deciding whether to search or return the final answer. Only the first
-iteration's final headers/status and 429 key rotations are acquired eagerly. Thus synthetic search
-calls and preliminary output are never exposed as client-visible model output.
+Every routed-model iteration follows the route's effective upstream streaming policy. Streaming
+routes use the streaming parser; compatibility routes use the bounded non-streaming parser while
+the client-facing response stays Responses SSE. opencodex fully buffers semantic events internally
+before deciding whether to search or return the final answer. Only the first iteration's final
+headers/status and 429 key rotations are acquired eagerly. Thus synthetic search calls and
+preliminary output are never exposed as client-visible model output.
 
 The injected result is wrapped in an untrusted-data boundary, length-capped, and de-duplicated by
 source URL. In structured-output turns (`json_schema` / `json_object`) it is handed over as compact
