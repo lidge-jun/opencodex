@@ -115,6 +115,18 @@ describe("google provider hardening", () => {
     expect(events.some(event => event.type === "done")).toBe(false);
   });
 
+  test("a malformed nested candidate is a terminal stream error", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      sseResponse([{ candidates: [null] }, { candidates: [{ finishReason: "STOP" }] }]),
+    ));
+
+    expect(events).toEqual([{
+      type: "error",
+      message: "google response contained invalid candidates",
+    }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
   test("EOF residual data frame without a trailing newline is parsed", async () => {
     const events = await collect(createGoogleAdapter(provider()).parseStream(
       new Response('data:{"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}', {
