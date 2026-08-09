@@ -17,7 +17,7 @@
  *
  * Display-time estimation only — these rows never affect billing.
  */
-import type { OcxConfig, ProviderCostOverlay } from "../types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { MAX_COST4_RATE, type ExpectedPriceOverlay } from "./expected-prices";
 import { redactSecretString } from "../lib/redact";
 
@@ -27,6 +27,42 @@ let active: readonly ExpectedPriceOverlay[] = EMPTY;
 let activeSignature = "";
 let activeConfigured = new Set<string>();
 let version = 0;
+let preservedDiskOnlyProviders: Record<string, OcxProviderConfig> | null = null;
+
+/**
+ * Remember provider rows that exist on disk but are intentionally absent from
+ * the live routing config (added by an external editor after the proxy booted).
+ * They are merged back at the config serialization boundary so an unrelated
+ * in-process save cannot erase the external provider and its overlay.
+ */
+export function setPreservedDiskOnlyProviders(
+  providers: Record<string, OcxProviderConfig> | null,
+): void {
+  preservedDiskOnlyProviders = providers;
+}
+
+/**
+ * A serialization view of `config` that keeps externally added providers on
+ * disk without adding them to live routing state. Live providers win when a
+ * name exists in both maps.
+ */
+export function withPreservedDiskOnlyProviders(config: OcxConfig): OcxConfig {
+  if (!preservedDiskOnlyProviders || Object.keys(preservedDiskOnlyProviders).length === 0) {
+    return config;
+  }
+  return {
+    ...config,
+    providers: {
+      ...preservedDiskOnlyProviders,
+      ...config.providers,
+    },
+  };
+}
+
+/** Test-only reset for the preserved disk-only provider registry. */
+export function resetPreservedDiskOnlyProvidersForTests(): void {
+  preservedDiskOnlyProviders = null;
+}
 
 /** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
 function validCost4(value: unknown): value is ProviderCostOverlay {

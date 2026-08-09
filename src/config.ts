@@ -75,7 +75,7 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
-import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
+import { refreshUserCostOverlays, withPreservedDiskOnlyProviders } from "./usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "./usage/expected-prices";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
@@ -2529,7 +2529,11 @@ export const withExpectedConfigGenerationSync: WithExpectedConfigGenerationSync 
  */
 function persistConfigUnlocked(config: OcxConfig): boolean {
   const configPath = getConfigPath();
-  const bytes = JSON.stringify(config, null, 2) + "\n";
+  // External editors can add provider rows the live config deliberately does
+  // not route with yet; merge them at the serialization boundary so an
+  // unrelated in-process save cannot erase the provider or its overlay.
+  const persisted = withPreservedDiskOnlyProviders(config);
+  const bytes = JSON.stringify(persisted, null, 2) + "\n";
   let unchanged = false;
   try {
     unchanged = readFileSync(configPath, "utf8") === bytes;
@@ -2541,13 +2545,13 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   // the same bytes (e.g. before a proxy notification), and Logs/Usage must
   // adopt the overlay without waiting for a changed save or restart.
   if (unchanged) {
-    refreshUserCostOverlays(config);
+    refreshUserCostOverlays(persisted);
     return false;
   }
   atomicWriteFile(configPath, bytes);
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
-  refreshUserCostOverlays(config);
+  refreshUserCostOverlays(persisted);
   return true;
 }
 

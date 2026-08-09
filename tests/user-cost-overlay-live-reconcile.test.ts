@@ -7,6 +7,7 @@ import { resolveMatchedPrice } from "../src/usage/cost";
 import {
   activeUserCostOverlays,
   refreshUserCostOverlays,
+  resetPreservedDiskOnlyProvidersForTests,
   userCostOverlayVersion,
 } from "../src/usage/user-cost-overlays";
 import {
@@ -52,10 +53,14 @@ async function runChild(script: string): Promise<{ exitCode: number; stderr: str
   return { exitCode, stderr };
 }
 
-async function waitForOverlayLive(timeoutMs = 10_000): Promise<void> {
+async function waitForOverlayLive(
+  provider = "acme",
+  model = "model-x",
+  timeoutMs = 10_000,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const price = resolveMatchedPrice("acme", "model-x");
+    const price = resolveMatchedPrice(provider, model);
     if (price?.source === "user") return;
     await Bun.sleep(20);
   }
@@ -73,6 +78,7 @@ afterEach(() => {
   stopUserCostOverlayReconciler();
   resetUserCostOverlayReconcilerForTests();
   refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+  resetPreservedDiskOnlyProvidersForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
@@ -167,5 +173,41 @@ describe("cross-process user cost overlay reconciliation", () => {
 
     expect(resolveMatchedPrice("acme", "model-x")?.source).toBe("user");
     expect(readConfigDiagnostics().source).toBe("fallback");
+  });
+
+  test("an externally added provider survives an unrelated live-config save", async () => {
+    const liveConfig = loadConfig();
+    startUserCostOverlayReconciler({ intervalMs: 20, liveConfig });
+
+    // Separate writer adds a brand-new provider (not present in the live
+    // config at boot) with its own overlay.
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+
+    // Reconciler adopts the overlay from disk; beta is not added to live
+    // routing state but its overlay is active for display estimates.
+    await waitForOverlayLive("beta", "beta-model");
+    expect(liveConfig.providers.beta).toBeUndefined();
+
+    // An unrelated live save (a different provider's models list) must not
+    // erase beta or its overlay.
+    liveConfig.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfig);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta?.modelCosts).toEqual({ "beta-model": OVERLAY });
+    expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
   });
 });

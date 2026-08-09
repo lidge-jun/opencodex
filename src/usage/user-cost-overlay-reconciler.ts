@@ -16,8 +16,11 @@
 import { statSync } from "node:fs";
 
 import { getConfigPath, readConfigDiagnostics } from "../config";
-import type { OcxConfig } from "../types";
-import { refreshUserCostOverlays } from "./user-cost-overlays";
+import type { OcxConfig, OcxProviderConfig } from "../types";
+import {
+  refreshUserCostOverlays,
+  setPreservedDiskOnlyProviders,
+} from "./user-cost-overlays";
 
 /** Default poll cadence for external config edits. */
 export const USER_COST_OVERLAY_RECONCILE_INTERVAL_MS = 5_000;
@@ -55,6 +58,23 @@ function adoptDiskModelCosts(live: OcxConfig, disk: OcxConfig): void {
 }
 
 /**
+ * Remember provider rows present on disk but absent from the live routing
+ * config. They stay out of `liveConfig` (adding them would change the routing
+ * surface), but `persistConfigUnlocked` merges them back at serialization so
+ * an unrelated in-process save cannot erase the external provider or its
+ * overlay.
+ */
+function rememberDiskOnlyProviders(live: OcxConfig, disk: OcxConfig): void {
+  const preserved: Record<string, OcxProviderConfig> = {};
+  if (disk.providers && live.providers) {
+    for (const [name, provider] of Object.entries(disk.providers)) {
+      if (!live.providers[name] && provider) preserved[name] = structuredClone(provider);
+    }
+  }
+  setPreservedDiskOnlyProviders(Object.keys(preserved).length > 0 ? preserved : null);
+}
+
+/**
  * Re-read the persisted config and make external overlay edits live.
  *
  * Returns `false` (and leaves the registry untouched) when the file is missing
@@ -64,7 +84,10 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   const diagnostics = readConfigDiagnostics();
   if (diagnostics.source !== "file") return false;
   const disk = diagnostics.config;
-  if (liveConfig) adoptDiskModelCosts(liveConfig, disk);
+  if (liveConfig) {
+    adoptDiskModelCosts(liveConfig, disk);
+    rememberDiskOnlyProviders(liveConfig, disk);
+  }
   // Refresh from the DISK config: overlays for providers only added by the
   // external edit are display-only and must still resolve for historical rows.
   refreshUserCostOverlays(disk);

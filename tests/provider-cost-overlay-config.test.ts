@@ -19,8 +19,10 @@ const VALID_COSTS = {
 };
 
 let testDir = "";
+let previousHome: string | undefined;
 
 beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
   testDir = mkdtempSync(join(tmpdir(), "ocx-model-costs-"));
   process.env.OPENCODEX_HOME = testDir;
 });
@@ -29,7 +31,8 @@ afterEach(() => {
   // The overlay registry is module-level; reset it so rows loaded by DTO tests
   // cannot leak into other test files in a shared-process run.
   refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (testDir && existsSync(testDir)) rmSync(testDir, { recursive: true, force: true });
   testDir = "";
 });
