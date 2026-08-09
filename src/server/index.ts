@@ -29,7 +29,10 @@ import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
 } from "../lib/state-store-registrations";
-import { startUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
+import {
+  startUserCostOverlayReconciler,
+  stopUserCostOverlayReconciler,
+} from "../usage/user-cost-overlay-reconciler";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -1543,6 +1546,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...(loopbackListenerRef
             ? [() => loopbackListenerRef.stop(closeActiveConnections)]
             : []),
+          async () => {
+            stopUserCostOverlayReconciler();
+          },
         ],
         async () => {
           await backgroundLifecycle.release();
