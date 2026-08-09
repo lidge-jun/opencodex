@@ -84,6 +84,31 @@ function rememberDiskOnlyProviders(liveConfigs: readonly OcxConfig[], disk: OcxC
 }
 
 /**
+ * Re-read the persisted config and recompute the disk-only provider
+ * preservation registry against the CURRENT owner set. Used when an owner
+ * stops but others remain: a newer owner may have owned a provider that an
+ * older owner still treats as disk-only, and the registry must reflect the
+ * remaining owners rather than the stale pre-stop snapshot.
+ *
+ * A missing or transiently invalid file leaves the registry untouched so a
+ * bad write cannot erase preservation state.
+ */
+function recomputePreservedDiskOnlyProviders(): void {
+  const diagnostics = readConfigDiagnostics();
+  if (diagnostics.source !== "file") return;
+  const liveConfigs = [...owners.values()].filter(
+    (config): config is OcxConfig => config !== null,
+  );
+  if (liveConfigs.length > 0) {
+    rememberDiskOnlyProviders(liveConfigs, diagnostics.config);
+  } else {
+    // No live routing configuration remains to protect disk-only providers;
+    // clear the cache so a later save cannot resurrect externally deleted rows.
+    setPreservedDiskOnlyProviders(null);
+  }
+}
+
+/**
  * Re-read the persisted config and make external overlay edits live.
  *
  * Returns `false` (and leaves the registry untouched) when the file is missing
@@ -95,8 +120,8 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   const disk = diagnostics.config;
   if (liveConfig) {
     adoptDiskModelCosts(liveConfig, disk);
+    rememberDiskOnlyProviders([liveConfig], disk);
   }
-  rememberDiskOnlyProviders(liveConfig ? [liveConfig] : [], disk);
   // Refresh from the DISK config: overlays for providers only added by the
   // external edit are display-only and must still resolve for historical rows.
   refreshUserCostOverlays(disk);
@@ -108,8 +133,15 @@ function reconcileForOwners(): void {
   if (diagnostics.source !== "file") return;
   const disk = diagnostics.config;
   const liveConfigs = [...owners.values()].filter((config): config is OcxConfig => config !== null);
-  for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
-  rememberDiskOnlyProviders(liveConfigs, disk);
+  if (liveConfigs.length > 0) {
+    for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
+    rememberDiskOnlyProviders(liveConfigs, disk);
+  } else {
+    // Overlay-only refresh with no live routing configuration: do not treat
+    // every disk provider as protected, and do not let a stale preservation
+    // cache resurrect providers that were intentionally removed.
+    setPreservedDiskOnlyProviders(null);
+  }
   refreshUserCostOverlays(disk);
 }
 
@@ -145,6 +177,20 @@ export function startUserCostOverlayReconciler(
         if (reconcileTimer) clearInterval(reconcileTimer);
         reconcileTimer = null;
         lastStamp = null;
+        // No live routing config remains, so nothing can keep disk-only
+        // providers alive: clear the cache to prevent a later save from
+        // resurrecting an externally deleted provider.
+        setPreservedDiskOnlyProviders(null);
+        return;
+      }
+      // Other owners remain: recompute preservation against their live
+      // configs. A newer owner may have owned providers that an older owner
+      // still sees as disk-only; without this recompute the older owner's next
+      // unrelated save could erase them.
+      try {
+        recomputePreservedDiskOnlyProviders();
+      } catch {
+        // Preservation is display-only; a failed recompute must not break stop.
       }
     },
   };
@@ -156,6 +202,9 @@ export function stopUserCostOverlayReconciler(): void {
   if (reconcileTimer) clearInterval(reconcileTimer);
   reconcileTimer = null;
   lastStamp = null;
+  // No live routing config remains; drop preservation so a later save cannot
+  // resurrect externally deleted providers.
+  setPreservedDiskOnlyProviders(null);
 }
 
 /** Test-only reset for module-global reconciler state. */

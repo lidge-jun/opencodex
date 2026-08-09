@@ -11,6 +11,7 @@ import {
   userCostOverlayVersion,
 } from "../src/usage/user-cost-overlays";
 import {
+  reconcileUserCostOverlaysFromDisk,
   resetUserCostOverlayReconcilerForTests,
   startUserCostOverlayReconciler,
   stopUserCostOverlayReconciler,
@@ -209,5 +210,178 @@ describe("cross-process user cost overlay reconciliation", () => {
     const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
     expect(persisted.providers.beta?.modelCosts).toEqual({ "beta-model": OVERLAY });
     expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
+  });
+
+  test("a stopped newer owner cannot leave an older owner able to erase a disk-only provider (A lacks beta -> B has beta -> B stops -> A saves -> beta survives)", async () => {
+    const liveConfigA = loadConfig();
+    const ownerA = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigA });
+
+    // External writer adds beta while only A is running.
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    await waitForOverlayLive("beta", "beta-model");
+    // A alone preserves beta as disk-only.
+    expect(liveConfigA.providers.beta).toBeUndefined();
+
+    // B starts later with beta already in its live config.
+    const liveConfigB = loadConfig();
+    expect(liveConfigB.providers.beta).toBeDefined();
+    const ownerB = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigB });
+
+    // Force a reconcile across both owners: beta is now owned by B, so the
+    // preservation registry drops it.
+    liveConfigA.providers.acme!.models = ["model-x", "model-extra"];
+    writeFileSync(getConfigPath(), `${JSON.stringify(loadConfig(), null, 2)}\n`, "utf8");
+    await Bun.sleep(150);
+
+    // B stops; A remains without beta in its live config.
+    ownerB.stop();
+
+    // An unrelated A save must keep beta on disk because A still treats it as
+    // disk-only after the preservation recompute on owner removal.
+    liveConfigA.providers.acme!.models = ["model-x", "model-extra", "model-y"];
+    saveConfig(liveConfigA);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta?.modelCosts).toEqual({ "beta-model": OVERLAY });
+    expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
+
+    ownerA.stop();
+  });
+
+  test("final owner stop clears preservation so a later save cannot resurrect a deleted provider", async () => {
+    const liveConfig = loadConfig();
+    const owner = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig });
+
+    // External writer adds beta; preservation remembers it.
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    await waitForOverlayLive("beta", "beta-model");
+
+    // Final owner stops: preservation must be cleared.
+    owner.stop();
+
+    // External writer deletes beta.
+    const del = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      delete raw.providers.beta;
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(del.exitCode).toBe(0);
+
+    // An unrelated in-process save must NOT resurrect beta.
+    liveConfig.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfig);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta).toBeUndefined();
+  });
+
+  test("process-wide stop clears preservation so a later save cannot resurrect a deleted provider", async () => {
+    const liveConfig = loadConfig();
+    startUserCostOverlayReconciler({ intervalMs: 20, liveConfig });
+
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    await waitForOverlayLive("beta", "beta-model");
+
+    stopUserCostOverlayReconciler();
+
+    const del = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      delete raw.providers.beta;
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(del.exitCode).toBe(0);
+
+    liveConfig.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfig);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta).toBeUndefined();
+  });
+
+  test("overlay-only refresh without a live config does not preserve every disk provider", async () => {
+    const liveConfig = loadConfig();
+
+    // External writer adds beta.
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+
+    // Overlay-only refresh (no live routing config) must not populate the
+    // preservation registry with every disk provider.
+    expect(reconcileUserCostOverlaysFromDisk()).toBe(true);
+
+    // External writer deletes beta.
+    const del = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      delete raw.providers.beta;
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(del.exitCode).toBe(0);
+
+    // An unrelated in-process save must NOT resurrect beta.
+    liveConfig.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfig);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta).toBeUndefined();
   });
 });
