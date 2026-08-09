@@ -54,8 +54,8 @@ function resolveVertexApiKey(optKey?: string): string | undefined {
 /** Prefer Codex's stable opaque thread key; retain the existing deterministic fallback for clients
  * that omit it. The replay store hashes this value and never retains the raw session identifier. */
 function vertexReplaySessionId(parsed: OcxParsedRequest): string {
-  const promptCacheKey = parsed.options.promptCacheKey?.trim();
-  return promptCacheKey || antigravitySessionId(parsed);
+  const threadId = parsed._clientThreadId?.trim();
+  return threadId || antigravitySessionId(parsed);
 }
 
 /**

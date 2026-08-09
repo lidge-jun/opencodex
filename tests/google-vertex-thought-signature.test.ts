@@ -55,6 +55,16 @@ const continuation = () => request([
   },
 ], false);
 
+function scopedReplayRequest(
+  parsed: OcxParsedRequest,
+  threadId: string | undefined,
+  promptCacheKey: string | undefined,
+): OcxParsedRequest {
+  if (threadId !== undefined) parsed._clientThreadId = threadId;
+  if (promptCacheKey !== undefined) parsed.options.promptCacheKey = promptCacheKey;
+  return parsed;
+}
+
 function vertexResponseBody(): Record<string, unknown> {
   return {
     candidates: [{
@@ -104,6 +114,34 @@ describe("Vertex thought-signature continuation (#1254)", () => {
     expect(events.some(event => event.type === "tool_call_start")).toBe(true);
 
     const followup = await createGoogleAdapter(provider).buildRequest(continuation());
+    expect(replayedFunctionCall(followup.body as string).thoughtSignature).toBe(SIGNATURE);
+  });
+
+  test("#1312: shared prompt cache keys cannot cross client-thread replay namespaces", async () => {
+    const first = scopedReplayRequest(firstTurn(false), "thread-a", "shared-cache-cohort");
+    const firstAdapter = createGoogleAdapter(provider);
+    await firstAdapter.buildRequest(first);
+    await firstAdapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+
+    const otherThread = await createGoogleAdapter(provider).buildRequest(
+      scopedReplayRequest(continuation(), "thread-b", "shared-cache-cohort"),
+    );
+    expect(replayedFunctionCall(otherThread.body as string).thoughtSignature).toBeUndefined();
+
+    const originalThread = await createGoogleAdapter(provider).buildRequest(
+      scopedReplayRequest(continuation(), "thread-a", "different-cache-cohort"),
+    );
+    expect(replayedFunctionCall(originalThread.body as string).thoughtSignature).toBe(SIGNATURE);
+  });
+
+  test("#1312: threadless clients keep deterministic replay regardless of prompt cache key", async () => {
+    const firstAdapter = createGoogleAdapter(provider);
+    await firstAdapter.buildRequest(scopedReplayRequest(firstTurn(false), undefined, "cohort-a"));
+    await firstAdapter.parseResponse!(new Response(JSON.stringify(vertexResponseBody())));
+
+    const followup = await createGoogleAdapter(provider).buildRequest(
+      scopedReplayRequest(continuation(), undefined, "cohort-b"),
+    );
     expect(replayedFunctionCall(followup.body as string).thoughtSignature).toBe(SIGNATURE);
   });
 
