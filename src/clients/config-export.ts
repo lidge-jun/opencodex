@@ -391,6 +391,9 @@ export interface ExportModel {
   displayName?: string;
   contextWindow?: number;
   inputModalities?: string[];
+  /** Optional effort ladder exported only to clients that support it. */
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface ExportContext {
@@ -638,6 +641,50 @@ export interface PiGeneratedConfig {
 }
 
 /**
+ * omp accepts a model-level API override. Keep the provider on Chat
+ * Completions so routed providers retain their established wire format, while
+ * native OpenAI models can use the lossless Responses surface.
+ */
+export interface OmpModelEntry extends PiModelEntry {
+  api?: "openai-responses";
+  /** omp requires this flag before it honors a thinking block. */
+  reasoning?: true;
+  thinking?: {
+    mode: "effort";
+    efforts: string[];
+    defaultLevel?: string;
+  };
+}
+
+export interface OmpProviderBlock {
+  baseUrl: string;
+  api: typeof PI_API_DIALECT;
+  apiKey: string;
+  models: OmpModelEntry[];
+}
+
+export interface OmpGeneratedConfig {
+  providers: Record<string, OmpProviderBlock>;
+}
+
+/**
+ * omp validates model entries strictly. These are its documented effort
+ * values; omit an unknown value rather than invalidating the whole provider.
+ */
+const OMP_EFFORT_VOCABULARY = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function ompEfforts(model: ExportModel): string[] {
+  const efforts: string[] = [];
+  for (const effort of model.reasoningEfforts ?? []) {
+    const normalized = effort.trim().toLowerCase();
+    if (OMP_EFFORT_VOCABULARY.has(normalized) && !efforts.includes(normalized)) {
+      efforts.push(normalized);
+    }
+  }
+  return efforts;
+}
+
+/**
  * Hermes `~/.hermes/config.yaml`. We emit ONLY the provider entry — never
  * `model.default` — because hijacking the user's main model is not what a
  * connect action asks for.
@@ -757,6 +804,51 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
     if (context !== undefined) {
       entry.contextWindow = context;
       entry.maxTokens = outputBudgetFor(context);
+    }
+    models.push(entry);
+  }
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        baseUrl: ctx.baseUrl,
+        api: PI_API_DIALECT,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+        models,
+      },
+    },
+  };
+}
+
+/**
+ * omp's models.yml is Pi-like, but it supports effort metadata and a per-model
+ * API dialect. Native OpenAI models use Responses; all routed models inherit
+ * the provider's existing Chat Completions dialect.
+ */
+function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
+  const models: OmpModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
+    const entry: OmpModelEntry = {
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      input,
+      ...(model.native && model.provider === "openai" ? { api: "openai-responses" } : {}),
+    };
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.contextWindow = context;
+      entry.maxTokens = outputBudgetFor(context);
+    }
+    const efforts = ompEfforts(model);
+    if (efforts.length > 0) {
+      const defaultLevel = model.defaultReasoningEffort?.trim().toLowerCase();
+      entry.reasoning = true;
+      entry.thinking = {
+        mode: "effort",
+        efforts,
+        ...(defaultLevel && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
+      };
     }
     models.push(entry);
   }
@@ -899,6 +991,11 @@ function summarizePi(document: unknown): { modelCount: number; modelsWithoutLimi
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
 }
 
+function summarizeOmp(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as OmpGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
 function summarizeHermes(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as HermesGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   // Hermes carries selectors only; it has no per-model limit to be missing.
@@ -938,7 +1035,7 @@ function buildPiContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildOmpContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildOmpClientConfig(ctx);
   return singleFragment("omp", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1007,9 +1104,9 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => ompModelsConfigPath(env),
     apiKeyEnv: "",
     exportHint: "OMP reads a non-secret placeholder from models.yml; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: buildOmpClientConfig,
     format: "yaml",
-    summarize: summarizePi,
+    summarize: summarizeOmp,
     buildContribution: buildOmpContribution,
     // OMP supports provider-level headers, but remote credential wiring is
     // intentionally deferred from this initial loopback-only integration.

@@ -238,6 +238,75 @@ describe("OMP serializer", () => {
     expect(built.text).toContain("anthropic/claude-opus-5");
     expect(built.text).toContain("apiKey: opencodex-loopback");
   });
+
+  test("keeps the provider on completions while opting native OpenAI models into Responses", () => {
+    const models = [
+      {
+        namespaced: "gpt-5.6-terra",
+        native: true,
+        provider: "openai",
+        id: "gpt-5.6-terra",
+        contextWindow: 272_000,
+        inputModalities: ["text", "image"],
+        reasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "high",
+      },
+      {
+        namespaced: "command-code/muse-spark-1.2",
+        provider: "command-code",
+        id: "muse-spark-1.2",
+        contextWindow: 128_000,
+        reasoningEfforts: ["medium", "xhigh"],
+      },
+    ] satisfies ExportModel[];
+    const document = buildClientConfig("omp", ctx({ models })) as {
+      providers: { opencodex: { api: string; models: Array<Record<string, unknown>> } };
+    };
+    const provider = document.providers.opencodex;
+    expect(provider.api).toBe("openai-completions");
+
+    const native = provider.models.find(model => model.id === "gpt-5.6-terra")!;
+    expect(native.api).toBe("openai-responses");
+    expect(native.input).toEqual(["text", "image"]);
+    expect(native.reasoning).toBe(true);
+    expect(native.thinking).toEqual({ mode: "effort", efforts: ["low", "high"], defaultLevel: "high" });
+
+    const routed = provider.models.find(model => model.id === "command-code/muse-spark-1.2")!;
+    expect(routed).not.toHaveProperty("api");
+  });
+
+  test("emits OMP reasoning metadata only for the accepted effort vocabulary", () => {
+    const document = buildClientConfig("omp", ctx({
+      models: [{
+        namespaced: "gpt-5.6-luna",
+        native: true,
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        reasoningEfforts: [" LOW ", "high", "ultra", "none", "high"],
+        defaultReasoningEffort: "ULTRA",
+      }],
+    })) as {
+      providers: { opencodex: { models: Array<Record<string, unknown>> } };
+    };
+    const model = document.providers.opencodex.models[0]!;
+    expect(model.reasoning).toBe(true);
+    expect(model.thinking).toEqual({ mode: "effort", efforts: ["low", "high"] });
+  });
+
+  test("does not emit reasoning or thinking when no supported efforts are declared", () => {
+    const document = buildClientConfig("omp", ctx({
+      models: [{
+        namespaced: "command-code/muse-spark-1.2",
+        provider: "command-code",
+        id: "muse-spark-1.2",
+        reasoningEfforts: ["ultra", "none"],
+      }],
+    })) as {
+      providers: { opencodex: { models: Array<Record<string, unknown>> } };
+    };
+    expect(document.providers.opencodex.models[0]).not.toHaveProperty("reasoning");
+    expect(document.providers.opencodex.models[0]).not.toHaveProperty("thinking");
+  });
 });
 
 describe("no credential ever reaches the output (accept criterion 3)", () => {

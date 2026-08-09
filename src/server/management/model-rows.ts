@@ -9,7 +9,14 @@
  * Bodies are unchanged from their previous home; only `export` was added.
  */
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, nativeModelRows, nativeReasoningEfforts, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import {
+  catalogModelSlug,
+  nativeDefaultReasoningEffort,
+  nativeInputModalities,
+  nativeModelRows,
+  nativeReasoningEfforts,
+  uniqueCatalogModelsForPublicList,
+} from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
 import { isVisionReasoningEffort } from "../../reasoning-effort";
@@ -42,16 +49,21 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.
-  const native: ManagementModelRow[] = nativeModelRows(config).map(row => ({
-    provider: "openai",
-    id: row.slug,
-    namespaced: row.slug,
-    disabled: row.disabled,
-    native: true,
-    // The Codex catalog may advertise `ultra`, but the image describer accepts only low..max.
-    reasoningEfforts: nativeReasoningEfforts(row.slug).filter(isVisionReasoningEffort),
-    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-  }));
+  const native: ManagementModelRow[] = nativeModelRows(config).map(row => {
+    const reasoningEfforts = nativeReasoningEfforts(row.slug).filter(isVisionReasoningEffort);
+    const defaultReasoningEffort = nativeDefaultReasoningEffort(row.slug);
+    return {
+      provider: "openai",
+      id: row.slug,
+      namespaced: row.slug,
+      disabled: row.disabled,
+      native: true,
+      reasoningEfforts,
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+      inputModalities: nativeInputModalities(row.slug),
+      ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+    };
+  });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
     const namespaced = routedSlug(cm.provider, cm.modelId);
     return {
@@ -102,6 +114,8 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
     ...(row.displayName ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
+    ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
+    ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
   };
 }
 
