@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
+import type { RequestLogContext } from "../src/server/request-log";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -125,6 +126,30 @@ describe("the gate fires on the live handleResponses path", () => {
   test("DeepSeek strips a caller-supplied service_tier", async () => {
     const body = await drive("deepseek", deepseekProvider(), "deepseek-v4-flash", { service_tier: "priority" });
     expect("service_tier" in body).toBe(false);
+  });
+
+  test("DeepSeek clears a stripped caller tier from request logging", async () => {
+    const { bodies } = captureBody();
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-v4-flash",
+          input: "ping",
+          stream: true,
+          service_tier: "priority",
+        }),
+      }),
+      { providers: { deepseek: deepseekProvider() } } as unknown as OcxConfig,
+      logCtx,
+      {},
+    );
+
+    expect("service_tier" in (bodies[0] ?? {})).toBe(false);
+    expect(logCtx.requestedServiceTier).toBeUndefined();
+    expect(logCtx.requestedSpeedLabel).toBeUndefined();
   });
 
   test("canonical OpenAI keeps fast-mode injection and removal", async () => {

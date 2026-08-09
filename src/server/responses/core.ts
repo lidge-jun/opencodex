@@ -968,6 +968,10 @@ async function applyFinalRouteRequestNormalization(args: {
     parsed.options.serviceTier = tier;
   }
   applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
+  if (route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === false) {
+    logCtx.requestedServiceTier = undefined;
+    logCtx.requestedSpeedLabel = undefined;
+  }
 
   {
     const guidance = await multiAgentGuidanceText(parsed, {
