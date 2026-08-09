@@ -304,14 +304,25 @@ export function evaluatePolicyProfile(
     const excludedByUnknown = unknown && profile.unknownEvidence.capability === "exclude";
     const costLimit = profile.limits.maxEstimatedCostUsd;
     const estimatedCost = evidence.cost?.estimatedUsd;
+    const costEstimateKnown = typeof estimatedCost === "number" && Number.isFinite(estimatedCost);
     const overCostLimit = costLimit !== undefined
-      && typeof estimatedCost === "number"
-      && Number.isFinite(estimatedCost)
-      && estimatedCost > costLimit;
+      && costEstimateKnown
+      && estimatedCost! > costLimit;
     if (overCostLimit) {
       exclusions.push({ code: "cost-limit", detail: "maxEstimatedCostUsd" });
     }
-    let eligible = !unsatisfied && !excludedByUnknown && !overCostLimit;
+    // A cap can only be *proven* satisfied when the estimate is known. The live
+    // routing path often has no usage evidence yet, so the default stays
+    // "allow" to preserve the documented dry-run contract; operators who need a
+    // genuine hard ceiling opt into "exclude". The distinct exclusion code lets
+    // a trace distinguish "known above the cap" from "cost is unknown".
+    const unknownCostBlocked = costLimit !== undefined
+      && !costEstimateKnown
+      && profile.limits.onUnknownCost === "exclude";
+    if (unknownCostBlocked) {
+      exclusions.push({ code: "cost-limit-unknown", detail: "maxEstimatedCostUsd" });
+    }
+    let eligible = !unsatisfied && !excludedByUnknown && !overCostLimit && !unknownCostBlocked;
 
     // Health scoring (RI-06): live hard cooldown is authoritative and
     // excludes; unknown health follows the profile's unknownEvidence policy;
