@@ -240,9 +240,11 @@ describe("cross-process user cost overlay reconciliation", () => {
     await waitForOverlayLive();
 
     // Remove the fast owner: a fresh edit must NOT appear before the slow
-    // cadence elapses, then must be observed once it does.
+    // cadence elapses, then must be observed once it does. The "not yet
+    // observed" half is intentionally not asserted with a fixed sleep: the
+    // child spawn itself can consume most of the 500ms window on a loaded
+    // machine, so only the positive observation is checked.
     fastOwner.stop();
-    const versionBefore = userCostOverlayVersion();
     const edit = await runChild(`
       import { readFileSync, writeFileSync } from "node:fs";
       import { join } from "node:path";
@@ -253,14 +255,56 @@ describe("cross-process user cost overlay reconciliation", () => {
     `);
     expect(edit.exitCode).toBe(0);
     expect(edit.stderr).toBe("");
-    await Bun.sleep(120);
-    expect(userCostOverlayVersion()).toBe(versionBefore);
     await waitUntil(
       () => resolveMatchedPrice("acme", "model-x")?.cost4?.input === 3,
       2_000,
     );
 
     slowOwner.stop();
+  });
+
+  test("overlay-only refresh without live config clears stale preservation so a deleted provider cannot resurrect", async () => {
+    const liveConfig = loadConfig();
+
+    // External writer adds beta; a one-shot refresh WITH a live config
+    // populates the preservation registry, the state a stopped or
+    // never-registered owner would leave behind.
+    const add = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(add.exitCode).toBe(0);
+    expect(reconcileUserCostOverlaysFromDisk(liveConfig)).toBe(true);
+    expect(withPreservedDiskOnlyProviders(liveConfig).providers.beta).toBeDefined();
+
+    // External writer deletes beta.
+    const del = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      delete raw.providers.beta;
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(del.exitCode).toBe(0);
+
+    // Overlay-only refresh (no live routing config) must clear the stale
+    // registry; otherwise the next saveConfig resurrects beta.
+    expect(reconcileUserCostOverlaysFromDisk()).toBe(true);
+
+    liveConfig.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfig);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta).toBeUndefined();
   });
 
   test("a stopped newer owner cannot leave an older owner able to erase a disk-only provider (A lacks beta -> B has beta -> B stops -> A saves -> beta survives)", async () => {

@@ -123,6 +123,20 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   if (liveConfig) {
     adoptDiskModelCosts(liveConfig, disk);
     rememberDiskOnlyProviders([liveConfig], disk);
+  } else {
+    // No live routing config was supplied: mirror the owners path so a stale
+    // preservation registry cannot resurrect externally deleted providers on
+    // the next saveConfig. Registered owners still protect disk-only rows;
+    // without any, preservation is cleared.
+    const liveConfigs = [...owners.values()].filter(
+      (config): config is OcxConfig => config !== null,
+    );
+    if (liveConfigs.length > 0) {
+      for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
+      rememberDiskOnlyProviders(liveConfigs, disk);
+    } else {
+      setPreservedDiskOnlyProviders(null);
+    }
   }
   // Refresh from the DISK config: overlays for providers only added by the
   // external edit are display-only and must still resolve for historical rows.

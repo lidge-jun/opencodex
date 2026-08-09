@@ -95,11 +95,13 @@ function managedLegacyMultiOverlay(
 /** Shape check for a legacy overlay: a plain record of complete non-negative finite Cost4 rows. */
 function validLegacyOverlayCosts(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const fields = ["input", "output", "cacheRead", "cacheWrite"] as const;
   return Object.values(value as Record<string, unknown>).every(entry => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
     const rates = entry as Record<string, unknown>;
-    return (["input", "output", "cacheRead", "cacheWrite"] as const)
-      .every(key => typeof rates[key] === "number"
+    return Object.keys(rates).length === fields.length
+      && fields.every(key => Object.hasOwn(rates, key)
+        && typeof rates[key] === "number"
         && Number.isFinite(rates[key])
         && (rates[key] as number) >= 0
         && (rates[key] as number) <= MAX_COST4_RATE);

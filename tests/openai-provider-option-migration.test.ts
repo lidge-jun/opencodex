@@ -307,6 +307,19 @@ describe("OpenAI provider option migration matrix", () => {
     expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
   });
 
+  test("legacy multi with an extra field in a modelCosts row collides", () => {
+    const input = cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": {
+          ...forward,
+          modelCosts: { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0, apiKey: "sk-extra" } },
+        },
+      },
+    });
+    expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
+  });
+
   test("merges provider context caps to the lower positive cap with path-only warning", () => {
     const result = projectOpenAiTierMigration(cfg({
       openaiProviderTierVersion: 1,

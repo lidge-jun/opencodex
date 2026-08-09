@@ -16,7 +16,7 @@ import {
 } from "../src/config";
 import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog-migration";
 import { rateLimitRetryPolicyFor } from "../src/providers/key-failover";
-import { activeUserCostOverlays } from "../src/usage/user-cost-overlays";
+import { activeUserCostOverlays, refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import type { OcxConfig } from "../src/types";
 
 /**
@@ -63,6 +63,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The overlay registry is module-level; reset it so rows adopted by
+  // reconcileLiveConfigFromDisk cannot leak into later tests in a
+  // shared-process run.
+  refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   rmSync(home, { recursive: true, force: true });
