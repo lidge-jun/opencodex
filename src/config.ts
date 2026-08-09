@@ -1243,7 +1243,7 @@ const configSchema = z.object({
     if (!isValidProviderName(name)) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name],
+        path: ["providers", redactSecretString(name)],
         message: "provider names must use letters, numbers, dot, underscore, or hyphen and cannot be reserved JavaScript object keys or routing namespaces (policy)",
       });
     }
@@ -1254,7 +1254,7 @@ const configSchema = z.object({
         code: "custom",
         path: [
           "providers",
-          name,
+          redactSecretString(name),
           openRouterRoutingError.startsWith("modelOpenRouterRouting")
             ? "modelOpenRouterRouting"
             : "openRouterRouting",
@@ -1265,7 +1265,7 @@ const configSchema = z.object({
     if (Object.hasOwn(provider, "virtualModels")) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "virtualModels"],
+        path: ["providers", redactSecretString(name), "virtualModels"],
         message: "virtualModels is registry-only and must not be persisted",
       });
     }
@@ -1273,7 +1273,7 @@ const configSchema = z.object({
     if (baseUrlError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "baseUrl"],
+        path: ["providers", redactSecretString(name), "baseUrl"],
         message: baseUrlError,
       });
     } else {
@@ -1281,7 +1281,7 @@ const configSchema = z.object({
       if (destinationError) {
         ctx.addIssue({
           code: "custom",
-          path: ["providers", name, "baseUrl"],
+          path: ["providers", redactSecretString(name), "baseUrl"],
           message: destinationError,
         });
       }
@@ -1290,7 +1290,7 @@ const configSchema = z.object({
     if (responsesPathError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "responsesPath"],
+        path: ["providers", redactSecretString(name), "responsesPath"],
         message: responsesPathError,
       });
     }
@@ -1298,7 +1298,7 @@ const configSchema = z.object({
     if (headersError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "headers"],
+        path: ["providers", redactSecretString(name), "headers"],
         message: headersError,
       });
     }
@@ -1316,7 +1316,7 @@ const configSchema = z.object({
     if (apiKeyTransportError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "apiKeyTransport"],
+        path: ["providers", redactSecretString(name), "apiKeyTransport"],
         message: apiKeyTransportError,
       });
     }
@@ -1329,7 +1329,7 @@ const configSchema = z.object({
     if (modelAdaptersError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelAdapters"],
+        path: ["providers", redactSecretString(name), "modelAdapters"],
         message: modelAdaptersError,
       });
     }
@@ -1342,7 +1342,7 @@ const configSchema = z.object({
     if (preferHostedToolsError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelPreferHostedTools"],
+        path: ["providers", redactSecretString(name), "modelPreferHostedTools"],
         message: preferHostedToolsError,
       });
     }
@@ -1353,7 +1353,7 @@ const configSchema = z.object({
     if (maxInputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelMaxInputTokens"],
+        path: ["providers", redactSecretString(name), "modelMaxInputTokens"],
         message: maxInputError,
       });
     }
@@ -1364,7 +1364,7 @@ const configSchema = z.object({
     if (reasoningSummariesError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelSupportsReasoningSummaries"],
+        path: ["providers", redactSecretString(name), "modelSupportsReasoningSummaries"],
         message: reasoningSummariesError,
       });
     }
@@ -1375,7 +1375,7 @@ const configSchema = z.object({
     if (reasoningSummaryDeliveryError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelReasoningSummaryDelivery"],
+        path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
       });
     }
@@ -1386,7 +1386,7 @@ const configSchema = z.object({
     if (defaultMaxOutputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "defaultMaxOutputTokens"],
+        path: ["providers", redactSecretString(name), "defaultMaxOutputTokens"],
         message: defaultMaxOutputError,
       });
     }
@@ -1397,7 +1397,7 @@ const configSchema = z.object({
     if (maxOutputError) {
       ctx.addIssue({
         code: "custom",
-        path: ["providers", name, "modelMaxOutputTokens"],
+        path: ["providers", redactSecretString(name), "modelMaxOutputTokens"],
         message: maxOutputError,
       });
     }
@@ -1412,7 +1412,7 @@ const configSchema = z.object({
       if (!canonicalOpenAiShape) {
         ctx.addIssue({
           code: "custom",
-          path: ["providers", name, "codexAccountMode"],
+          path: ["providers", redactSecretString(name), "codexAccountMode"],
           message: "codexAccountMode is valid only on the canonical built-in openai provider",
         });
       }
