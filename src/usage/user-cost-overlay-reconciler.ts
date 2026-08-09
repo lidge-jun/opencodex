@@ -70,21 +70,23 @@ function adoptDiskModelCosts(live: OcxConfig, disk: OcxConfig): void {
 }
 
 /**
- * Remember provider rows present on disk but absent from every live routing
- * config. They stay out of the live configs (adding them would change the
- * routing surface), but `persistConfigUnlocked` merges them back at
- * serialization so an unrelated in-process save cannot erase the external
- * provider or its overlay.
+ * Remember provider rows present on disk that at least one live routing
+ * config does NOT own. They stay out of the live configs that lack them
+ * (adding them would change the routing surface), but
+ * `persistConfigUnlocked` merges them back at serialization so ANY owner's
+ * unrelated save preserves a provider row that another active owner owns.
+ *
+ * A row is preserved when it is missing from at least one live config: the
+ * writer that lacks it would otherwise erase it. Rows every live config owns
+ * need no protection because every writer carries them from its own config.
  */
 function rememberDiskOnlyProviders(liveConfigs: readonly OcxConfig[], disk: OcxConfig): void {
   const preserved: Record<string, OcxProviderConfig> = {};
-  if (disk.providers) {
-    const liveNames = new Set<string>();
-    for (const live of liveConfigs) {
-      for (const name of Object.keys(live.providers ?? {})) liveNames.add(name);
-    }
+  if (disk.providers && liveConfigs.length > 0) {
     for (const [name, provider] of Object.entries(disk.providers)) {
-      if (!liveNames.has(name) && provider) preserved[name] = structuredClone(provider);
+      if (!provider) continue;
+      const ownedByAll = liveConfigs.every(live => Object.hasOwn(live.providers ?? {}, name));
+      if (!ownedByAll) preserved[name] = structuredClone(provider);
     }
   }
   setPreservedDiskOnlyProviders(Object.keys(preserved).length > 0 ? preserved : null);

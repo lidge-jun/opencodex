@@ -341,15 +341,16 @@ describe("cross-process user cost overlay reconciliation", () => {
     expect(liveConfigB.providers.beta).toBeDefined();
     const ownerB = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigB });
 
-    // Force a reconcile across both owners: beta is now owned by B, so the
-    // preservation registry drops it. The disk rewrite below only bumps the
-    // file stamp to trigger a reconcile tick; it is a fresh read of the file,
-    // so nothing needs to be mutated in memory for it.
+    // Force a reconcile across both owners. B owns beta, but A still lacks
+    // it, so the preservation registry must keep beta for A's writes — an
+    // older live projection must never erase a provider another active owner
+    // owns. The disk rewrite below only bumps the file stamp to trigger a
+    // reconcile tick; it is a fresh read of the file, so nothing needs to be
+    // mutated in memory for it.
     writeFileSync(getConfigPath(), `${JSON.stringify(loadConfig(), null, 2)}\n`, "utf8");
-    // Wait until the two-owner reconcile has actually run: with B owning
-    // beta, the serialization view of A no longer includes the preserved
-    // disk-only row.
-    await waitUntil(() => !("beta" in withPreservedDiskOnlyProviders(liveConfigA).providers));
+    // A's serialization view must still carry beta while both owners are
+    // alive (A lacks it in its live config; preservation protects it).
+    expect(withPreservedDiskOnlyProviders(liveConfigA).providers.beta).toBeDefined();
 
     // B stops; A remains without beta in its live config.
     ownerB.stop();
@@ -363,6 +364,48 @@ describe("cross-process user cost overlay reconciliation", () => {
     expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
 
     ownerA.stop();
+  });
+
+  test("an unrelated save from an older owner cannot erase a provider owned by a newer active owner (A lacks beta -> B has beta -> both remain alive -> A saves -> beta survives)", async () => {
+    const liveConfigA = loadConfig();
+    const ownerA = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigA });
+
+    // External writer adds beta while only A is running; A preserves it as a
+    // provider it does not own.
+    const { exitCode, stderr } = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.beta = {
+        adapter: "openai-chat",
+        baseUrl: "https://beta.example.invalid",
+        apiKey: "sk-beta",
+        modelCosts: { "beta-model": ${JSON.stringify(OVERLAY)} },
+      };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    await waitForOverlayLive("beta", "beta-model");
+
+    // B starts with beta already in its live config and STAYS alive.
+    const liveConfigB = loadConfig();
+    expect(liveConfigB.providers.beta).toBeDefined();
+    const ownerB = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigB });
+
+    // A performs an unrelated save while B is still running. A's live config
+    // lacks beta, but the preservation registry must keep beta because a
+    // different active owner owns it — otherwise A's save deletes B's
+    // provider from disk.
+    liveConfigA.providers.acme!.models = ["model-x", "model-extra"];
+    saveConfig(liveConfigA);
+    const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+    expect(persisted.providers.beta?.modelCosts).toEqual({ "beta-model": OVERLAY });
+    expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
+
+    ownerA.stop();
+    ownerB.stop();
   });
 
   test("final owner stop clears preservation so a later save cannot resurrect a deleted provider", async () => {
