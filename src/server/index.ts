@@ -29,10 +29,7 @@ import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
 } from "../lib/state-store-registrations";
-import {
-  startUserCostOverlayReconciler,
-  stopUserCostOverlayReconciler,
-} from "../usage/user-cost-overlay-reconciler";
+import { startUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -493,9 +490,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
-  // External `ocx config set` / direct config.json edits run in other
-  // processes; poll the file so Logs/Usage display prices follow them live.
-  userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
@@ -632,6 +626,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   try {
     backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    // External `ocx config set` / direct config.json edits run in other
+    // processes; poll the file so Logs/Usage display prices follow them live.
+    // Started inside the guarded startup transaction so the catch below can
+    // release the owner-scoped lease on any listener failure.
+    userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = {
       idleTimeout: 255,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
@@ -1547,7 +1546,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             ? [() => loopbackListenerRef.stop(closeActiveConnections)]
             : []),
           async () => {
-            stopUserCostOverlayReconciler();
+            userCostOverlayReconciler?.stop();
           },
         ],
         async () => {

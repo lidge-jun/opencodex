@@ -12,6 +12,11 @@
  * the disk `modelCosts` rows into the live provider rows (so a later in-process
  * save cannot erase the external edit), and refreshes the overlay registry so
  * Logs/Usage estimates follow the edit without a restart.
+ *
+ * The reconciler is owner-scoped: every `startServer` acquires its own lease
+ * (with its own live config), and the shared timer is torn down only when the
+ * LAST owner stops. This mirrors `acquireServerBackgroundLifecycle` so stopping
+ * one of several servers cannot kill reconciliation for the others.
  */
 import { statSync } from "node:fs";
 
@@ -26,7 +31,7 @@ import {
 export const USER_COST_OVERLAY_RECONCILE_INTERVAL_MS = 5_000;
 
 let reconcileTimer: ReturnType<typeof setInterval> | null = null;
-let reconcileLiveConfig: OcxConfig | null = null;
+const owners = new Map<symbol, OcxConfig | null>();
 let lastStamp: { mtimeMs: number; size: number } | null = null;
 
 function configStamp(): { mtimeMs: number; size: number } | null {
@@ -58,17 +63,21 @@ function adoptDiskModelCosts(live: OcxConfig, disk: OcxConfig): void {
 }
 
 /**
- * Remember provider rows present on disk but absent from the live routing
- * config. They stay out of `liveConfig` (adding them would change the routing
- * surface), but `persistConfigUnlocked` merges them back at serialization so
- * an unrelated in-process save cannot erase the external provider or its
- * overlay.
+ * Remember provider rows present on disk but absent from every live routing
+ * config. They stay out of the live configs (adding them would change the
+ * routing surface), but `persistConfigUnlocked` merges them back at
+ * serialization so an unrelated in-process save cannot erase the external
+ * provider or its overlay.
  */
-function rememberDiskOnlyProviders(live: OcxConfig, disk: OcxConfig): void {
+function rememberDiskOnlyProviders(liveConfigs: readonly OcxConfig[], disk: OcxConfig): void {
   const preserved: Record<string, OcxProviderConfig> = {};
-  if (disk.providers && live.providers) {
+  if (disk.providers) {
+    const liveNames = new Set<string>();
+    for (const live of liveConfigs) {
+      for (const name of Object.keys(live.providers ?? {})) liveNames.add(name);
+    }
     for (const [name, provider] of Object.entries(disk.providers)) {
-      if (!live.providers[name] && provider) preserved[name] = structuredClone(provider);
+      if (!liveNames.has(name) && provider) preserved[name] = structuredClone(provider);
     }
   }
   setPreservedDiskOnlyProviders(Object.keys(preserved).length > 0 ? preserved : null);
@@ -86,40 +95,66 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   const disk = diagnostics.config;
   if (liveConfig) {
     adoptDiskModelCosts(liveConfig, disk);
-    rememberDiskOnlyProviders(liveConfig, disk);
   }
+  rememberDiskOnlyProviders(liveConfig ? [liveConfig] : [], disk);
   // Refresh from the DISK config: overlays for providers only added by the
   // external edit are display-only and must still resolve for historical rows.
   refreshUserCostOverlays(disk);
   return true;
 }
 
-/** Start the stat-based reconciler. Idempotent: a previous timer is stopped. */
+function reconcileForOwners(): void {
+  const diagnostics = readConfigDiagnostics();
+  if (diagnostics.source !== "file") return;
+  const disk = diagnostics.config;
+  const liveConfigs = [...owners.values()].filter((config): config is OcxConfig => config !== null);
+  for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
+  rememberDiskOnlyProviders(liveConfigs, disk);
+  refreshUserCostOverlays(disk);
+}
+
+/**
+ * Start the stat-based reconciler. Each call registers an owner lease; the
+ * shared timer starts with the first owner and stops when the last owner's
+ * `stop()` releases it.
+ */
 export function startUserCostOverlayReconciler(
   options: { intervalMs?: number; liveConfig?: OcxConfig | null } = {},
 ): { stop(): void } {
-  stopUserCostOverlayReconciler();
-  reconcileLiveConfig = options.liveConfig ?? null;
+  const token = Symbol("user-cost-overlay-reconciler");
+  owners.set(token, options.liveConfig ?? null);
   const intervalMs = options.intervalMs ?? USER_COST_OVERLAY_RECONCILE_INTERVAL_MS;
-  reconcileTimer = setInterval(() => {
-    const stamp = configStamp();
-    if (!stamp) return;
-    if (lastStamp && lastStamp.mtimeMs === stamp.mtimeMs && lastStamp.size === stamp.size) return;
-    lastStamp = stamp;
-    try {
-      reconcileUserCostOverlaysFromDisk(reconcileLiveConfig);
-    } catch {
-      // Display-only reconciliation must never take the proxy down.
-    }
-  }, intervalMs);
-  reconcileTimer.unref?.();
-  return { stop: stopUserCostOverlayReconciler };
+  if (!reconcileTimer) {
+    reconcileTimer = setInterval(() => {
+      const stamp = configStamp();
+      if (!stamp) return;
+      if (lastStamp && lastStamp.mtimeMs === stamp.mtimeMs && lastStamp.size === stamp.size) return;
+      lastStamp = stamp;
+      try {
+        reconcileForOwners();
+      } catch {
+        // Display-only reconciliation must never take the proxy down.
+      }
+    }, intervalMs);
+    reconcileTimer.unref?.();
+  }
+  return {
+    stop() {
+      owners.delete(token);
+      if (owners.size === 0) {
+        if (reconcileTimer) clearInterval(reconcileTimer);
+        reconcileTimer = null;
+        lastStamp = null;
+      }
+    },
+  };
 }
 
+/** Process-wide stop: releases every owner and the shared timer. */
 export function stopUserCostOverlayReconciler(): void {
+  owners.clear();
   if (reconcileTimer) clearInterval(reconcileTimer);
   reconcileTimer = null;
-  reconcileLiveConfig = null;
   lastStamp = null;
 }
 
