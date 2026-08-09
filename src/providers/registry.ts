@@ -187,6 +187,11 @@ export interface ProviderRegistryEntry {
    */
   statelessResponses?: boolean;
   /**
+   * Responses parser requires a matched tool result directly after its call. This is
+   * seeded/backfilled like other fixed upstream wire-contract capabilities.
+   */
+  requiresAdjacentResponsesToolResults?: boolean;
+  /**
    * Registry default for the provider's Responses `service_tier` support; see
    * `OcxProviderConfig.supportsServiceTier`. Registry-only: backfilled (never
    * overriding) at enrich/route time and deliberately NOT seeded into saved
@@ -1359,6 +1364,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // "The API is stateless: responses and conversations are not stored on the
     // server." https://api-docs.deepseek.com/api/create-response/
     statelessResponses: true,
+    // DeepSeek rejects a valid Codex continuation when hook-provided developer
+    // context is persisted between a call and its matching result (#1292).
+    requiresAdjacentResponsesToolResults: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.
     - 대안 분석: Globally preserve reasoning_content for all OpenAI-compatible models; preserve it for legacy deepseek-reasoner too; mark only V4 thinking models in registry metadata.

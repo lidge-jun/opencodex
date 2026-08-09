@@ -539,6 +539,65 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
 }
 
 /**
+ * Make unambiguous Responses tool pairs adjacent for upstream parsers that require it.
+ *
+ * [Decision Log]
+ * - 목적과 의도: Keep Codex hook-injected developer context without letting it make a strict upstream reject the matching tool result.
+ * - 기존 구현 및 제약 조건: The orphan repair verifies only pair presence; globally reordering valid history would change tolerant providers unnecessarily.
+ * - 검토한 주요 대안: Reorder every Responses request, drop the intervening message, or gate a lossless reorder behind provider capability metadata.
+ * - 선택한 방식: Reorder only unique call/result pairs for providers that explicitly require adjacency, preserving every intervening item immediately after the result.
+ * - 다른 대안 대신 이 방식을 선택한 이유: The provider gate limits semantic blast radius, while refusing ambiguous duplicate ids avoids guessing which result belongs to which call.
+ * - 장점, 단점 및 영향: DeepSeek receives the adjacency its parser requires; tolerant providers stay byte/order equivalent. Ambiguous duplicate ids still fail upstream rather than being silently rewritten.
+ */
+function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const calls = new Map<string, number[]>();
+  const outputs = new Map<string, number[]>();
+
+  const appendIndex = (map: Map<string, number[]>, key: string, index: number): void => {
+    const existing = map.get(key);
+    if (existing) existing.push(index);
+    else map.set(key, [index]);
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!isPlainObject(item) || typeof item.call_id !== "string" || item.call_id.length === 0) continue;
+    if (item.type === "function_call" || item.type === "local_shell_call") {
+      appendIndex(calls, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call") {
+      appendIndex(calls, `custom:${item.call_id}`, index);
+    } else if (item.type === "function_call_output") {
+      appendIndex(outputs, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call_output") {
+      appendIndex(outputs, `custom:${item.call_id}`, index);
+    }
+  }
+
+  const movedOutputIndices = new Set<number>();
+  const outputAfterCall = new Map<number, unknown>();
+  for (const [key, callIndices] of calls) {
+    const outputIndices = outputs.get(key);
+    if (callIndices.length !== 1 || outputIndices?.length !== 1) continue;
+    const callIndex = callIndices[0]!;
+    const outputIndex = outputIndices[0]!;
+    if (outputIndex === callIndex + 1) continue;
+    movedOutputIndices.add(outputIndex);
+    outputAfterCall.set(callIndex, input[outputIndex]);
+  }
+  if (movedOutputIndices.size === 0) return body;
+
+  const normalized: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (movedOutputIndices.has(index)) continue;
+    normalized.push(input[index]);
+    if (outputAfterCall.has(index)) normalized.push(outputAfterCall.get(index));
+  }
+  return { ...body, input: normalized };
+}
+
+/**
  * Remove `previous_response_id` before forwarding. Two triggers:
  * - the proxy expanded the request into a full input replay (the id is now redundant), or
  * - the target is the ChatGPT backend (`authMode: "forward"`), whose Codex REST endpoint
@@ -1157,6 +1216,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // reaches the wire is unparseable.
       if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      }
+      if (provider.requiresAdjacentResponsesToolResults === true) {
+        outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);

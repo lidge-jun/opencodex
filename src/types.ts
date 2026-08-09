@@ -1159,6 +1159,12 @@ export interface OcxProviderConfig {
    */
   statelessResponses?: boolean;
   /**
+   * Responses upstream whose parser requires each tool result to immediately follow
+   * its matching call. When enabled, only unambiguous matched pairs are reordered;
+   * intervening messages are preserved after the result instead of being dropped.
+   */
+  requiresAdjacentResponsesToolResults?: boolean;
+  /**
    * Whether this provider's Responses route honours the OpenAI `service_tier`
    * parameter. Tri-state: `true` lets fast mode inject/remove the field (an unset
    * fast mode preserves a caller-supplied value); `false` strips the field and

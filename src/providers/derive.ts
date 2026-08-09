@@ -152,6 +152,9 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
+    ...(entry.requiresAdjacentResponsesToolResults !== undefined
+      ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
+      : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
@@ -323,6 +326,9 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
+  if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
+    prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
   // Registry-only metadata (never seeded into saved config): backfill straight from
   // the entry so an explicit user value stays distinguishable from the default.
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;

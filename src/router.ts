@@ -307,6 +307,10 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
       : {}),
+    ...(provider.requiresAdjacentResponsesToolResults === undefined
+      && registryEntry.requiresAdjacentResponsesToolResults !== undefined
+      ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
+      : {}),
     ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
       ? { supportsServiceTier: registryEntry.supportsServiceTier }
       : {}),

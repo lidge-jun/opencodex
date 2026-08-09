@@ -12,7 +12,7 @@
  * assert the captured upstream URL, which is externally observable.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { providerConfigSeed } from "../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/registry";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
@@ -439,7 +439,45 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
 
   test("the seed and backfill carry the capability, and only for declaring entries", () => {
     expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).statelessResponses).toBe(true);
+    expect(providerConfigSeed(getProviderRegistryEntry("deepseek")!).requiresAdjacentResponsesToolResults).toBe(true);
     expect(providerConfigSeed(getProviderRegistryEntry("cerebras")!).statelessResponses).toBeUndefined();
+    expect(providerConfigSeed(getProviderRegistryEntry("cerebras")!).requiresAdjacentResponsesToolResults).toBeUndefined();
+
+    const stale = deepseekProvider();
+    delete stale.requiresAdjacentResponsesToolResults;
+    enrichProviderFromRegistry("deepseek", stale);
+    expect(stale.requiresAdjacentResponsesToolResults).toBe(true);
+  });
+
+  test("DeepSeek makes a matched tool result adjacent without dropping injected developer context", () => {
+    const call = { type: "function_call", call_id: "call_plan", name: "shell_command", arguments: "{}" };
+    const injected = {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "[planning-with-files] ACTIVE PLAN" }],
+    };
+    const output = { type: "function_call_output", call_id: "call_plan", output: "Exit code: 0" };
+    const tail = { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] };
+
+    const body = buildBody(deepseekProvider(), { input: [call, injected, output, tail] }) as { input: unknown[] };
+    expect(body.input).toEqual([call, output, injected, tail]);
+  });
+
+  test("tolerant Responses providers keep interleaved tool history unchanged", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://api.openai.example/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+    };
+    const input = [
+      { type: "function_call", call_id: "call_plan", name: "shell_command", arguments: "{}" },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "plan" }] },
+      { type: "function_call_output", call_id: "call_plan", output: "done" },
+    ];
+
+    const body = buildBody(provider, { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
   });
 
   test("a replay miss does not forward an orphaned tool result", () => {
