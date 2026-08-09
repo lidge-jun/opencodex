@@ -8,6 +8,7 @@ import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { managementFetch as fetch } from "./helpers/management-auth";
 
 /**
  * Regression: `ocx login <key-provider>` used to POST the unmerged preset row
@@ -78,6 +79,15 @@ describe("CLI key-login live-update overlay preservation", () => {
       const disk = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as OcxConfig;
       expect(disk.providers.umans!.modelCosts).toEqual(edited.providers.umans!.modelCosts);
       expect(disk.providers.umans!.apiKey).toBe("sk-rotated");
+
+      // The running proxy must also carry the overlay in its live config:
+      // notifyRunningProxy posted the merged row to POST /api/providers, so a
+      // silent early return or failed POST would leave the in-memory DTO stale
+      // even though disk is correct.
+      const live = (await fetch(new URL("/api/config", server.url)).then(r => r.json())) as {
+        providers: Record<string, { modelCosts?: Record<string, unknown> }>;
+      };
+      expect(live.providers.umans?.modelCosts).toEqual(edited.providers.umans!.modelCosts);
     } finally {
       await server.stop(true);
     }

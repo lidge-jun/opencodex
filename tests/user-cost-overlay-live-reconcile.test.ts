@@ -9,6 +9,7 @@ import {
   refreshUserCostOverlays,
   resetPreservedDiskOnlyProvidersForTests,
   userCostOverlayVersion,
+  withPreservedDiskOnlyProviders,
 } from "../src/usage/user-cost-overlays";
 import {
   reconcileUserCostOverlaysFromDisk,
@@ -66,6 +67,15 @@ async function waitForOverlayLive(
     await Bun.sleep(20);
   }
   throw new Error("timed out waiting for the external overlay to become live");
+}
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await Bun.sleep(20);
+  }
+  throw new Error("timed out waiting for the reconciler to observe the config change");
 }
 
 beforeEach(() => {
@@ -170,10 +180,9 @@ describe("cross-process user cost overlay reconciliation", () => {
     // must keep serving the last good overlay instead of falling back to
     // defaults.
     writeFileSync(getConfigPath(), "{ not json", "utf8");
-    await Bun.sleep(150);
+    await waitUntil(() => readConfigDiagnostics().source === "fallback");
 
     expect(resolveMatchedPrice("acme", "model-x")?.source).toBe("user");
-    expect(readConfigDiagnostics().source).toBe("fallback");
   });
 
   test("an externally added provider survives an unrelated live-config save", async () => {
@@ -212,6 +221,48 @@ describe("cross-process user cost overlay reconciliation", () => {
     expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
   });
 
+  test("a later owner's smaller poll interval is honored and the cadence relaxes when it stops", async () => {
+    const slowConfig = loadConfig();
+    const slowOwner = startUserCostOverlayReconciler({ intervalMs: 500, liveConfig: slowConfig });
+    const fastConfig = loadConfig();
+    const fastOwner = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: fastConfig });
+
+    // External edit: with the 20ms owner active it must become live well
+    // inside the 500ms owner's cadence.
+    const { exitCode, stderr } = await runChild(`
+      const { loadConfig, saveConfig } = await import("./src/config.ts");
+      const config = loadConfig();
+      config.providers.acme.modelCosts = { "model-x": ${JSON.stringify(OVERLAY)} };
+      saveConfig(config);
+    `);
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe("");
+    await waitForOverlayLive();
+
+    // Remove the fast owner: a fresh edit must NOT appear before the slow
+    // cadence elapses, then must be observed once it does.
+    fastOwner.stop();
+    const versionBefore = userCostOverlayVersion();
+    const edit = await runChild(`
+      import { readFileSync, writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const path = join(process.env.OPENCODEX_HOME, "config.json");
+      const raw = JSON.parse(readFileSync(path, "utf8"));
+      raw.providers.acme.modelCosts = { "model-x": { input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0 } };
+      writeFileSync(path, JSON.stringify(raw, null, 2) + "\\n", "utf8");
+    `);
+    expect(edit.exitCode).toBe(0);
+    expect(edit.stderr).toBe("");
+    await Bun.sleep(120);
+    expect(userCostOverlayVersion()).toBe(versionBefore);
+    await waitUntil(
+      () => resolveMatchedPrice("acme", "model-x")?.cost4?.input === 3,
+      2_000,
+    );
+
+    slowOwner.stop();
+  });
+
   test("a stopped newer owner cannot leave an older owner able to erase a disk-only provider (A lacks beta -> B has beta -> B stops -> A saves -> beta survives)", async () => {
     const liveConfigA = loadConfig();
     const ownerA = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigA });
@@ -242,10 +293,14 @@ describe("cross-process user cost overlay reconciliation", () => {
     const ownerB = startUserCostOverlayReconciler({ intervalMs: 20, liveConfig: liveConfigB });
 
     // Force a reconcile across both owners: beta is now owned by B, so the
-    // preservation registry drops it.
-    liveConfigA.providers.acme!.models = ["model-x", "model-extra"];
+    // preservation registry drops it. The disk rewrite below only bumps the
+    // file stamp to trigger a reconcile tick; it is a fresh read of the file,
+    // so nothing needs to be mutated in memory for it.
     writeFileSync(getConfigPath(), `${JSON.stringify(loadConfig(), null, 2)}\n`, "utf8");
-    await Bun.sleep(150);
+    // Wait until the two-owner reconcile has actually run: with B owning
+    // beta, the serialization view of A no longer includes the preserved
+    // disk-only row.
+    await waitUntil(() => !("beta" in withPreservedDiskOnlyProviders(liveConfigA).providers));
 
     // B stops; A remains without beta in its live config.
     ownerB.stop();

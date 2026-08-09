@@ -31,7 +31,9 @@ import {
 export const USER_COST_OVERLAY_RECONCILE_INTERVAL_MS = 5_000;
 
 let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+let reconcileTimerMs = 0;
 const owners = new Map<symbol, OcxConfig | null>();
+const ownerIntervals = new Map<symbol, number>();
 let lastStamp: { mtimeMs: number; size: number } | null = null;
 
 function configStamp(): { mtimeMs: number; size: number } | null {
@@ -145,6 +147,41 @@ function reconcileForOwners(): void {
   refreshUserCostOverlays(disk);
 }
 
+/** Smallest poll interval across all active owners (the effective cadence). */
+function effectiveIntervalMs(): number {
+  let min = Number.POSITIVE_INFINITY;
+  for (const interval of ownerIntervals.values()) {
+    if (interval < min) min = interval;
+  }
+  return min === Number.POSITIVE_INFINITY ? USER_COST_OVERLAY_RECONCILE_INTERVAL_MS : min;
+}
+
+/**
+ * Keep the shared timer on the effective minimum cadence across owners. A
+ * later owner may request a smaller interval, which restarts the timer; when
+ * an owner stops, the cadence relaxes back up to the smallest still-active
+ * owner's request. The timer therefore never outlives or ignores an owner's
+ * faster polling need, and never polls faster than the active set requires.
+ */
+function syncReconcileTimer(): void {
+  const intervalMs = effectiveIntervalMs();
+  if (reconcileTimer && reconcileTimerMs === intervalMs) return;
+  if (reconcileTimer) clearInterval(reconcileTimer);
+  reconcileTimer = setInterval(() => {
+    const stamp = configStamp();
+    if (!stamp) return;
+    if (lastStamp && lastStamp.mtimeMs === stamp.mtimeMs && lastStamp.size === stamp.size) return;
+    lastStamp = stamp;
+    try {
+      reconcileForOwners();
+    } catch {
+      // Display-only reconciliation must never take the proxy down.
+    }
+  }, intervalMs);
+  reconcileTimer.unref?.();
+  reconcileTimerMs = intervalMs;
+}
+
 /**
  * Start the stat-based reconciler. Each call registers an owner lease; the
  * shared timer starts with the first owner and stops when the last owner's
@@ -155,27 +192,16 @@ export function startUserCostOverlayReconciler(
 ): { stop(): void } {
   const token = Symbol("user-cost-overlay-reconciler");
   owners.set(token, options.liveConfig ?? null);
-  const intervalMs = options.intervalMs ?? USER_COST_OVERLAY_RECONCILE_INTERVAL_MS;
-  if (!reconcileTimer) {
-    reconcileTimer = setInterval(() => {
-      const stamp = configStamp();
-      if (!stamp) return;
-      if (lastStamp && lastStamp.mtimeMs === stamp.mtimeMs && lastStamp.size === stamp.size) return;
-      lastStamp = stamp;
-      try {
-        reconcileForOwners();
-      } catch {
-        // Display-only reconciliation must never take the proxy down.
-      }
-    }, intervalMs);
-    reconcileTimer.unref?.();
-  }
+  ownerIntervals.set(token, options.intervalMs ?? USER_COST_OVERLAY_RECONCILE_INTERVAL_MS);
+  syncReconcileTimer();
   return {
     stop() {
       owners.delete(token);
+      ownerIntervals.delete(token);
       if (owners.size === 0) {
         if (reconcileTimer) clearInterval(reconcileTimer);
         reconcileTimer = null;
+        reconcileTimerMs = 0;
         lastStamp = null;
         // No live routing config remains, so nothing can keep disk-only
         // providers alive: clear the cache to prevent a later save from
@@ -183,6 +209,7 @@ export function startUserCostOverlayReconciler(
         setPreservedDiskOnlyProviders(null);
         return;
       }
+      syncReconcileTimer();
       // Other owners remain: recompute preservation against their live
       // configs. A newer owner may have owned providers that an older owner
       // still sees as disk-only; without this recompute the older owner's next
@@ -196,11 +223,19 @@ export function startUserCostOverlayReconciler(
   };
 }
 
-/** Process-wide stop: releases every owner and the shared timer. */
+/**
+ * Process-wide stop: releases EVERY owner's lease and the shared timer.
+ * Intended for tests and full process teardown. A per-server shutdown must
+ * call its own owner-scoped `stop()` handle instead — this function would
+ * otherwise tear down reconciliation (and disk-only preservation) for every
+ * other server still running in the same process.
+ */
 export function stopUserCostOverlayReconciler(): void {
   owners.clear();
+  ownerIntervals.clear();
   if (reconcileTimer) clearInterval(reconcileTimer);
   reconcileTimer = null;
+  reconcileTimerMs = 0;
   lastStamp = null;
   // No live routing config remains; drop preservation so a later save cannot
   // resurrect externally deleted providers.

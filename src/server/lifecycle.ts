@@ -7,7 +7,6 @@ import {
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
-import { stopUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
 import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
@@ -448,7 +447,12 @@ export async function drainAndShutdown(
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
     stopStateStoreSweeper();
-    stopUserCostOverlayReconciler();
+    // The overlay reconciler is owner-scoped: the startServer stop override
+    // releases THIS server's lease through runListenerShutdown →
+    // userCostOverlayReconciler.stop(), which also recomputes disk-only
+    // preservation for any remaining owners. A process-wide stop here would
+    // kill reconciliation for every other server in the process, so drain
+    // must not call stopUserCostOverlayReconciler().
     cancelQueuedStorageWorkerSpawns();
     const shutdownJoins = await Promise.allSettled([
       abortStorageCleanupPolicyJobAsync(),

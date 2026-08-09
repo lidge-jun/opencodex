@@ -805,8 +805,10 @@ describe("provider cost overlay (user-configured)", () => {
     expect(price?.provider).toBe("acme-pabcdef");
     expect(price?.source).toBe("jawcode");
     expect(price?.cost4).not.toEqual(USER_PRICE);
-    // The compiled model-level price for claude-opus-4-6 (anthropic vendor).
-    expect(price?.cost4).toEqual({ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 });
+    // A real positive catalog price, without pinning the vendor's current
+    // rate (the catalog lives outside this PR and may change independently).
+    expect(price?.cost4?.input).toBeGreaterThan(0);
+    expect(price?.cost4?.output).toBeGreaterThan(0);
   });
 
   test("a generated account label (not a configured provider) still collapses to the base provider's overlay", () => {
