@@ -34,12 +34,17 @@ let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 let reconcileTimerMs = 0;
 const owners = new Map<symbol, OcxConfig | null>();
 const ownerIntervals = new Map<symbol, number>();
-let lastStamp: { mtimeMs: number; size: number } | null = null;
+let lastStamp: { mtimeMs: number; size: number; ctimeMs: number; ino: number } | null = null;
 
-function configStamp(): { mtimeMs: number; size: number } | null {
+function configStamp(): { mtimeMs: number; size: number; ctimeMs: number; ino: number } | null {
   try {
     const stat = statSync(getConfigPath());
-    return { mtimeMs: stat.mtimeMs, size: stat.size };
+    return {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      ctimeMs: stat.ctimeMs,
+      ino: Number(stat.ino),
+    };
   } catch {
     return null;
   }
@@ -184,7 +189,13 @@ function syncReconcileTimer(): void {
   reconcileTimer = setInterval(() => {
     const stamp = configStamp();
     if (!stamp) return;
-    if (lastStamp && lastStamp.mtimeMs === stamp.mtimeMs && lastStamp.size === stamp.size) return;
+    if (
+      lastStamp
+      && lastStamp.mtimeMs === stamp.mtimeMs
+      && lastStamp.size === stamp.size
+      && lastStamp.ctimeMs === stamp.ctimeMs
+      && lastStamp.ino === stamp.ino
+    ) return;
     lastStamp = stamp;
     try {
       reconcileForOwners();

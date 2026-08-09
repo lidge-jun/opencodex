@@ -168,12 +168,14 @@ describe("cross-process user cost overlay reconciliation", () => {
     startUserCostOverlayReconciler({ intervalMs: 20, liveConfig });
 
     // Make the overlay live first through the same cross-process path.
-    await runChild(`
+    const seed = await runChild(`
       const { loadConfig, saveConfig } = await import("./src/config.ts");
       const config = loadConfig();
       config.providers.acme.modelCosts = { "model-x": ${JSON.stringify(OVERLAY)} };
       saveConfig(config);
     `);
+    expect(seed.exitCode).toBe(0);
+    expect(seed.stderr).toBe("");
     await waitForOverlayLive();
 
     // A non-cooperating writer leaves a transient broken file; the reconciler
@@ -237,7 +239,10 @@ describe("cross-process user cost overlay reconciliation", () => {
     `);
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
-    await waitForOverlayLive();
+    // Deadline shorter than the slow owner's 500ms cadence: only the 20ms
+    // owner can satisfy it, so a syncReconcileTimer regression that ignores
+    // the later smaller interval fails here instead of passing silently.
+    await waitForOverlayLive("acme", "model-x", 200);
 
     // Remove the fast owner: a fresh edit must NOT appear before the slow
     // cadence elapses, then must be observed once it does. The "not yet
