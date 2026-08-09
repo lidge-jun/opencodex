@@ -201,6 +201,12 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
+      // Capture the overlay version BEFORE reading/computing: the cache entry
+      // must be stamped with the version the summary was priced under. Reading
+      // it again at stamp time could cache an old-price summary as current,
+      // and the next request would then accept stale pricing for the whole
+      // cache lifetime.
+      const overlayVersion = userCostOverlayVersion();
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
       const summary = {
@@ -210,9 +216,16 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         entriesTruncated: snapshot.entriesTruncated,
         entriesDropped: snapshot.entriesDropped,
       };
+      if (userCostOverlayVersion() !== overlayVersion) {
+        // The overlay changed while the summary was being computed, so this
+        // summary may mix old and new prices. Serve it uncached: the next
+        // request recomputes against the settled overlay instead of caching a
+        // mixed-price entry under either version.
+        return jsonResponse(summary);
+      }
       setUsageSummaryCacheEntry(cacheKey, {
         revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
-        overlayVersion: userCostOverlayVersion(),
+        overlayVersion,
         expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
         revisionReadAt,
         summary,

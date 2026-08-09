@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,9 +6,11 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
-import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
+import { refreshUserCostOverlays, userCostOverlayVersion } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { resetUsageReadCacheForTests, usageReadCacheStatsForTests } from "../src/usage/log";
+import * as usageLogModule from "../src/usage/log";
+import { getUsageSummaryCacheEntry, resetUsageSummaryCacheForTests } from "../src/server/management/usage-summary-cache";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -187,6 +189,60 @@ describe("GET /api/usage", () => {
       // assertion or shutdown fails so later tests cannot resolve
       // user-configured prices unexpectedly.
       refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+      await server.stop(true);
+    }
+  });
+
+  test("usage route does not cache a summary whose overlay version changed mid-read", async () => {
+    writeFixture(Date.now());
+    refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+    resetUsageSummaryCacheForTests();
+    const versionBefore = userCostOverlayVersion();
+    // Deterministically bump the overlay version DURING the snapshot read, so
+    // the summary is computed under a version that is stale before the cache
+    // stamp — the interleaving that previously stamped an old-price summary as
+    // current. The spy must be installed before the first /api/usage request:
+    // a warm request would be served from the summary cache and never reach
+    // the read.
+    const originalRead = usageLogModule.readUsageSnapshotForManagement;
+    let bumped = false;
+    const spy = spyOn(usageLogModule, "readUsageSnapshotForManagement").mockImplementation(async (maxReadBytes?: number) => {
+      const snapshot = await originalRead(maxReadBytes);
+      if (!bumped) {
+        bumped = true;
+        refreshUserCostOverlays({
+          providers: {
+            blsc: {
+              modelCosts: {
+                "deepseek-v4-flash": { input: 0.5, output: 2, cacheRead: 0.1, cacheWrite: 0.25 },
+              },
+            },
+          },
+        } as unknown as OcxConfig);
+      }
+      return snapshot;
+    });
+    const server = startServer(0);
+    try {
+      const raced = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(bumped).toBe(true);
+      expect(userCostOverlayVersion()).toBeGreaterThan(versionBefore);
+      // The mid-read change must NOT leave a cache entry: the mixed-price
+      // summary is served uncached so the next request recomputes.
+      expect(getUsageSummaryCacheEntry("30d:all")).toBeUndefined();
+
+      spy.mockRestore();
+      // Once the overlay is settled, the next request recomputes and caches
+      // under the new version.
+      const settled = await fetch(new URL("/api/usage?range=30d", server.url)).then(res => res.json());
+      expect(settled.summary.requests).toBe(raced.summary.requests);
+      expect(getUsageSummaryCacheEntry("30d:all")?.overlayVersion).toBe(userCostOverlayVersion());
+    } finally {
+      spy.mockRestore();
+      // Clear the module-level overlay and summary cache even when an
+      // assertion or shutdown fails so later tests start clean.
+      refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
+      resetUsageSummaryCacheForTests();
       await server.stop(true);
     }
   });
