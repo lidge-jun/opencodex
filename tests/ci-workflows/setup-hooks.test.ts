@@ -114,7 +114,7 @@ describe("local hook setup", () => {
     expect(readFileSync(join(hooks(root), "pre-push"), "utf8")).toBe(custom);
   });
 
-  test("uses a configured hooks directory without touching the default one", () => {
+  test("refuses a configured hooksPath that may be shared by other repositories", () => {
     const root = fixture();
     const original = hooks(root);
     writeFileSync(join(original, "pre-push"), legacyHook);
@@ -122,9 +122,11 @@ describe("local hook setup", () => {
     mkdirSync(customDir);
     writeFileSync(join(customDir, "pre-push"), legacyHook);
     git(root, "config", "core.hooksPath", customDir);
-    setup(root);
-    expect(existsSync(join(customDir, "pre-push"))).toBe(false);
-    expect(existsSync(join(customDir, "post-merge"))).toBe(true);
+    expect(() => setup(root)).toThrow(/core.hooksPath is configured/);
+    // Nothing is written anywhere: the shared directory keeps its own hook and the
+    // repository-local one is untouched too.
+    expect(readFileSync(join(customDir, "pre-push"), "utf8")).toBe(legacyHook);
+    expect(existsSync(join(customDir, "post-merge"))).toBe(false);
     expect(readFileSync(join(original, "pre-push"), "utf8")).toBe(legacyHook);
   });
 

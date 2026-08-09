@@ -74,7 +74,8 @@ bun run setup:hooks
 
 This installs the `post-merge` hook, which rebuilds the packaged dashboard when a
 merge changes its source. It also removes the unmodified, retired repository
-pre-push hook from Git's resolved hooks directory, including linked worktrees
-and `core.hooksPath` setups. Custom pre-push hooks are preserved. Validation no
-longer runs automatically on every push; existing contributors should rerun the
-setup command once to migrate their hooks.
+pre-push hook from Git's resolved hooks directory, including linked worktrees.
+Custom pre-push hooks are preserved. For safety, setup refuses to touch hooks
+when `core.hooksPath` redirects them to a potentially shared directory.
+Validation no longer runs automatically on every push; existing contributors
+should rerun the setup command once to migrate their hooks.

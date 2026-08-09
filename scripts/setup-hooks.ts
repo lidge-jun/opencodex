@@ -16,8 +16,25 @@ import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 
-// Resolve the real hooks dir via git so linked worktrees (`.git` file), core.hooksPath,
-// and non-default git dirs all work. Hard-coding <repo>/.git/hooks breaks those setups.
+// A configured hooksPath may be shared by unrelated repositories. Installing our
+// cwd-dependent hooks there would replace shared policy hooks and run another
+// repository's package scripts. Keep installation scoped to this repository.
+try {
+  execFileSync("git", ["config", "--get", "core.hooksPath"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  console.error("setup-hooks: refusing to install because core.hooksPath is configured.");
+  process.exit(1);
+} catch (error) {
+  if (typeof error === "object" && error !== null && "status" in error && error.status !== 1) {
+    console.error("setup-hooks: could not inspect core.hooksPath.");
+    process.exit(1);
+  }
+}
+
+// Resolve Git's repository-local hooks dir so linked worktrees and non-default
+// git dirs work without assuming that <repo>/.git is a directory.
 let hooksDir: string;
 try {
   hooksDir = execFileSync(
