@@ -7,6 +7,7 @@ import { commitKeyLoginProvider, providerConfigFromKeyLoginProvider } from "../s
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { managementFetch as fetch } from "./helpers/management-auth";
 
@@ -44,6 +45,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The overlay registry is module-level; reset it so rows added through the
+  // live provider update path cannot leak into later tests in a shared run.
+  refreshUserCostOverlays({ providers: {} } as unknown as OcxConfig);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
