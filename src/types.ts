@@ -1149,6 +1149,13 @@ export interface OcxProviderConfig {
    * as before.
    */
   modelAdapters?: Record<string, string>;
+  /**
+   * Per-model Responses upstream streaming policy. `false` keeps the client-facing Responses
+   * transport but requests bounded JSON upstream, then reframes that terminal object for a
+   * streaming client. `true` explicitly overrides a matching registry `false` default. Use only
+   * with non-forward providers on the `openai-responses` wire.
+   */
+  modelResponsesUpstreamStreaming?: Record<string, boolean>;
   baseUrl: string;
   /**
    * Optional relative resource path for key-auth openai-responses requests. Must start with `/`

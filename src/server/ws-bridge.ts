@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from "bun";
-import { responsesJsonEventSequence } from "./responses-json-events";
+import { responsesJsonEventSequence, validateResponsesJsonEventResponse } from "./responses-json-events";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { headersForCodexAuthContext } from "../codex/auth-context";
@@ -304,6 +304,9 @@ export function sendResponsesJsonAsEvents(
   onTerminal?: ResponsesTerminalReporter,
   onPayload?: ResponsesPayloadObserver,
 ): void {
+  const validation = validateResponsesJsonEventResponse(response);
+  if (!validation.ok) throw new TypeError(validation.message);
+  response = validation.response;
   const sendObservedFrame = (payload: Record<string, unknown>) => {
     const text = JSON.stringify(payload);
     try {
@@ -313,13 +316,25 @@ export function sendResponsesJsonAsEvents(
     }
     sendTextFrame(ws, text);
   };
-  const finalStatus = response.status === "failed" || response.status === "incomplete"
-    ? response.status
-    : "completed";
+  const finalStatus = response.status as ResponsesTerminalStatus;
   for (const frame of responsesJsonEventSequence(response)) {
     sendObservedFrame(frame);
   }
   onTerminal?.(finalStatus);
+}
+
+function sendInvalidResponsesJson(
+  ws: ServerWebSocket<WsData>,
+  response: Response,
+  message: string,
+  onTerminal?: ResponsesTerminalReporter,
+): void {
+  onTerminal?.("incomplete");
+  sendJsonFrame(ws, buildWsErrorFrame(502, {
+    type: "protocol_error",
+    code: "websocket_protocol_error",
+    message,
+  }, response.headers));
 }
 
 function errorPayloadFromText(text: string): Record<string, unknown> {
@@ -381,8 +396,19 @@ export async function sendResponseToWebSocket(
   if (contentType.includes("application/json")) {
     const text = await response.text();
     if (!isCurrent()) return;
-    const json = JSON.parse(text) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    let json: unknown;
+    try {
+      json = JSON.parse(text) as unknown;
+    } catch {
+      sendInvalidResponsesJson(ws, response, "Upstream returned malformed Responses JSON", options.onTerminal);
+      return;
+    }
+    const validation = validateResponsesJsonEventResponse(json);
+    if (!validation.ok) {
+      sendInvalidResponsesJson(ws, response, validation.message, options.onTerminal);
+      return;
+    }
+    sendResponsesJsonAsEvents(ws, validation.response, options.onTerminal, options.onSsePayload);
     return;
   }
 
@@ -404,8 +430,19 @@ export async function sendResponseToWebSocket(
   if (!isCurrent()) return;
   const trimmed = text.trim();
   if (trimmed.startsWith("{")) {
-    const json = JSON.parse(trimmed) as Record<string, unknown>;
-    sendResponsesJsonAsEvents(ws, json, options.onTerminal, options.onSsePayload);
+    let json: unknown;
+    try {
+      json = JSON.parse(trimmed) as unknown;
+    } catch {
+      sendInvalidResponsesJson(ws, response, "Upstream returned malformed Responses JSON", options.onTerminal);
+      return;
+    }
+    const validation = validateResponsesJsonEventResponse(json);
+    if (!validation.ok) {
+      sendInvalidResponsesJson(ws, response, validation.message, options.onTerminal);
+      return;
+    }
+    sendResponsesJsonAsEvents(ws, validation.response, options.onTerminal, options.onSsePayload);
     return;
   }
 

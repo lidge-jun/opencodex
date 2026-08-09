@@ -616,6 +616,7 @@ const providerConfigSchema = z.object({
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
+  modelResponsesUpstreamStreaming: z.record(z.string(), z.boolean()).optional(),
   allowPrivateNetwork: z.boolean().optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
@@ -903,6 +904,83 @@ export function modelAdapterRecordConfigError(
     }
     if (isWirePinnedModel(providerName, key.trim())) {
       return `${field}.${key} cannot be overridden: the upstream only speaks one wire for this model`;
+    }
+  }
+  return null;
+}
+
+/** Validate the opt-in bounded-JSON policy against the model's effective Responses wire. */
+export function modelResponsesUpstreamStreamingConfigError(
+  value: unknown,
+  field: string,
+  providerName: string,
+  provider: { adapter?: unknown; authMode?: unknown; baseUrl?: unknown; modelAdapters?: unknown },
+): string | null {
+  const shapeError = booleanRecordConfigError(value, field);
+  if (shapeError) return shapeError;
+  const entries = Object.entries((value ?? {}) as Record<string, boolean>);
+  if (entries.length === 0) return null;
+
+  const registry = getProviderRegistryEntry(providerName);
+  const registryTransportMatches = typeof provider.baseUrl === "string"
+    && providerMatchesRegistryTransport(providerName, {
+      baseUrl: provider.baseUrl,
+      adapter: provider.adapter as OcxProviderConfig["adapter"],
+      ...(typeof provider.authMode === "string"
+        ? { authMode: provider.authMode as OcxProviderConfig["authMode"] }
+        : {}),
+    });
+  const effectiveForwardAuth = registryTransportMatches
+    ? registry?.authKind === "forward"
+    : provider.authMode === "forward";
+  if (effectiveForwardAuth) {
+    return `${field} is not supported on forward-auth Responses providers`;
+  }
+
+  const resolveEffectiveWire = (modelId: string, currentWire: unknown): unknown => {
+    const pinned = pinnedWireAdapter(providerName, modelId);
+    if (pinned) return pinned;
+    const configured = provider.modelAdapters && typeof provider.modelAdapters === "object"
+      && !Array.isArray(provider.modelAdapters)
+      ? (provider.modelAdapters as Record<string, unknown>)[modelId]
+      : undefined;
+    if (typeof configured === "string" && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)) {
+      return configured;
+    }
+    const registryDefault = typeof currentWire === "string" && typeof provider.baseUrl === "string"
+      ? providerModelWireDefault(
+        providerName,
+        {
+          baseUrl: provider.baseUrl,
+          adapter: currentWire,
+          ...(typeof provider.authMode === "string"
+            ? { authMode: provider.authMode as OcxProviderConfig["authMode"] }
+            : {}),
+        },
+        modelId,
+        MODEL_ADAPTER_OVERRIDE_ALLOWED,
+        "responses",
+      )
+      : undefined;
+    return registryDefault ?? currentWire;
+  };
+
+  for (const [modelId] of entries) {
+    const baseWire = registryTransportMatches ? registry?.adapter ?? provider.adapter : provider.adapter;
+    const virtualSelectedModelId = Object.keys(registry?.virtualModels ?? {}).find(
+      candidate => candidate.toLowerCase() === modelId.trim().toLowerCase(),
+    );
+    const effectiveSelectedModelId = virtualSelectedModelId ?? modelId;
+    let effectiveWire = resolveEffectiveWire(effectiveSelectedModelId, baseWire);
+    const virtualWireModel = resolveOpenAiVirtualModel(
+      providerName,
+      effectiveSelectedModelId,
+    )?.wireModelId;
+    if (virtualWireModel && virtualWireModel !== effectiveSelectedModelId) {
+      effectiveWire = resolveEffectiveWire(virtualWireModel, effectiveWire);
+    }
+    if (effectiveWire !== "openai-responses") {
+      return `${field}.${modelId} requires the openai-responses wire`;
     }
   }
   return null;
@@ -1247,6 +1325,19 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", name, "modelAdapters"],
         message: modelAdaptersError,
+      });
+    }
+    const responsesUpstreamStreamingError = modelResponsesUpstreamStreamingConfigError(
+      (provider as { modelResponsesUpstreamStreaming?: unknown }).modelResponsesUpstreamStreaming,
+      "modelResponsesUpstreamStreaming",
+      name,
+      provider,
+    );
+    if (responsesUpstreamStreamingError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", name, "modelResponsesUpstreamStreaming"],
+        message: responsesUpstreamStreamingError,
       });
     }
     const preferHostedToolsError = modelPreferHostedToolsConfigError(

@@ -376,6 +376,26 @@ describe("WS endpoint re-framer (120/132)", () => {
     expect(JSON.parse(payloads.at(-1)!).response.usage).toEqual({ input_tokens: 11, output_tokens: 7 });
   });
 
+  test("invalid successful Responses JSON becomes one protocol error", async () => {
+    for (const body of [
+      { id: "json", status: "running", output: [] },
+      { id: "json", status: "completed", output: {}, usage: [] },
+    ]) {
+      const { ws, sent } = mockWs();
+      const terminals: string[] = [];
+      await sendResponseToWebSocket(ws, Response.json(body), () => true, {
+        onTerminal: status => terminals.push(status),
+      });
+      expect(sent).toHaveLength(1);
+      expect(JSON.parse(sent[0])).toMatchObject({
+        type: "error",
+        status: 502,
+        error: { code: "websocket_protocol_error" },
+      });
+      expect(terminals).toEqual(["incomplete"]);
+    }
+  });
+
   test("unexpected successful HTML and empty 204 become standalone protocol errors", async () => {
     const html = mockWs();
     await sendResponseToWebSocket(html.ws, new Response("<html></html>", {

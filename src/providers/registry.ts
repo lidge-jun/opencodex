@@ -155,11 +155,9 @@ export interface ProviderRegistryEntry {
    */
   modelWireDefaults?: Record<string, ModelWireDefault>;
   /**
-   * Registry-only per-model override for the upstream request shape used behind a
-   * Codex Responses WebSocket turn. `false` keeps the client-facing WebSocket but
-   * asks the upstream Responses endpoint for bounded JSON, which the bridge then
-   * reframes as Responses events. Use only for upstreams whose streaming response
-   * can omit or indefinitely delay the terminal event.
+   * Registry default for the per-model upstream request shape used behind a Codex
+   * Responses transport. `false` asks the upstream endpoint for bounded JSON, which
+   * OpenCodex reframes as Responses events for streaming clients.
    */
   modelResponsesUpstreamStreaming?: Record<string, boolean>;
   /**
@@ -2288,15 +2286,44 @@ export function providerModelWireDefault(
   return wire !== undefined && allowedWires.has(wire) ? wire : undefined;
 }
 
-/** Resolve a registry-only upstream-streaming compatibility hint for Responses turns. */
-export function providerModelResponsesUpstreamStreaming(
-  id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
+function responsesStreamingPolicyValue(
+  record: Record<string, boolean> | undefined,
   modelId: string,
 ): boolean | undefined {
+  if (!record) return undefined;
+  if (Object.prototype.hasOwnProperty.call(record, modelId)) return record[modelId];
+  const folded = modelId.toLowerCase();
+  for (const [key, value] of Object.entries(record)) {
+    if (key.toLowerCase() === folded) return value;
+  }
+  return undefined;
+}
+
+/** Resolve an explicit upstream-streaming policy before the matching registry default. */
+export function providerModelResponsesUpstreamStreaming(
+  id: string,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter">
+    & Partial<Pick<OcxProviderConfig, "authMode" | "modelResponsesUpstreamStreaming">>,
+  modelId: string,
+  fallbackModelId?: string,
+): boolean | undefined {
   const entry = getProviderRegistryEntry(id);
-  if (!entry?.modelResponsesUpstreamStreaming || !providerMatchesRegistryTransport(id, provider)) return undefined;
-  return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
+  const registryTransportMatches = !!entry && providerMatchesRegistryTransport(id, provider);
+  const effectiveForwardAuth = registryTransportMatches
+    ? entry.authKind === "forward"
+    : provider.authMode === "forward";
+  if (!effectiveForwardAuth) {
+    const configured = responsesStreamingPolicyValue(provider.modelResponsesUpstreamStreaming, modelId)
+      ?? (fallbackModelId
+        ? responsesStreamingPolicyValue(provider.modelResponsesUpstreamStreaming, fallbackModelId)
+        : undefined);
+    if (configured !== undefined) return configured;
+  }
+  if (!entry?.modelResponsesUpstreamStreaming || !registryTransportMatches) return undefined;
+  return responsesStreamingPolicyValue(entry.modelResponsesUpstreamStreaming, modelId)
+    ?? (fallbackModelId
+      ? responsesStreamingPolicyValue(entry.modelResponsesUpstreamStreaming, fallbackModelId)
+      : undefined);
 }
 
 /**

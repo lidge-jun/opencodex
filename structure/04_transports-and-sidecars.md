@@ -211,12 +211,16 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
-Registry-declared per-model compatibility hints (`modelResponsesUpstreamStreaming`) may ask the
-upstream Responses endpoint for bounded JSON on ANY client transport — WebSocket or ordinary
-HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
+Per-model compatibility hints (`modelResponsesUpstreamStreaming`) may be declared by the registry
+or explicitly configured on a non-forward `openai-responses` provider. An explicit model value
+wins over the matching registry default. `false` asks the upstream Responses endpoint for bounded
+JSON on ANY client transport — WebSocket or ordinary HTTP/SSE. The validated terminal object is
+reframed into the same Responses event sequence
 (`src/server/responses-json-events.ts`): WS turns send the frames as WebSocket messages, while
 HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
-output_item.done → terminal → `[DONE]`). No production registry entry currently opts in:
+output_item.done → terminal → `[DONE]`). If the upstream ignores the policy and returns SSE or a
+different successful content type, the request fails once with 502 instead of entering the tee
+relay or replaying the model request. No production registry entry currently opts in:
 DeepSeek V4 Flash used this path while its public-beta Responses stream was suspected of not
 closing on the terminal event, but the official guide documents a
 `response.completed`/`response.incomplete`/`response.failed` terminal with no `data: [DONE]`
@@ -228,9 +232,9 @@ rollback for upstreams that regress, kept suite-reachable by a synthetic-registr
 Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
 encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
 
-`ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
-frame rather than always emitting `response.completed`. If the response status is `failed`, a
-`response.failed` frame is sent; otherwise `response.completed` carries through the original status.
+`ws-bridge.ts` preserves the upstream terminal status in the final WebSocket frame rather than
+always emitting `response.completed`: `completed`, `failed`, and `incomplete` become
+`response.completed`, `response.failed`, and `response.incomplete`, respectively.
 
 ## Heartbeat and stall deadline
 

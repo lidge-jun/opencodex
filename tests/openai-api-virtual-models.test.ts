@@ -11,7 +11,8 @@ import {
   resolveOpenAiVirtualModel,
   validateOpenAiVirtualModelDefinition,
 } from "../src/providers/openai-virtual-models";
-import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { getProviderRegistryEntry, providerModelResponsesUpstreamStreaming, PROVIDER_REGISTRY } from "../src/providers/registry";
+import { providerConfigSeed } from "../src/providers/derive";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
@@ -63,6 +64,19 @@ describe("OpenAI API virtual model resolution", () => {
   test.each(["__proto__", "constructor", "toString"])("prototype key %s is an ordinary no-match", model => {
     expect(resolveOpenAiVirtualModel("openai-apikey", model)).toBeUndefined();
     expect(resolveOpenAiCompactModel("openai-apikey", model)).toBeUndefined();
+  });
+
+  test("a base-model streaming policy applies after a Pro alias resolves", () => {
+    const provider = {
+      ...providerConfigSeed(getProviderRegistryEntry("openai-apikey")!),
+      modelResponsesUpstreamStreaming: { "gpt-5.6-luna": false },
+    };
+    expect(providerModelResponsesUpstreamStreaming(
+      "openai-apikey",
+      provider,
+      "gpt-5.6-luna-pro",
+      "gpt-5.6-luna",
+    )).toBe(false);
   });
 });
 

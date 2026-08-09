@@ -214,6 +214,40 @@ describe("provider management validation", () => {
     })).toContain("canonical built-in provider seed");
   });
 
+  test("provider management validates bounded Responses model policies", () => {
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.example.test/v1",
+      modelResponsesUpstreamStreaming: { bounded: false, streamed: true },
+    })).toBeNull();
+    expect(providerManagementConfigError("custom-mixed", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      modelAdapters: { BOUNDED: "openai-responses" },
+      modelResponsesUpstreamStreaming: { BOUNDED: false },
+    })).toBeNull();
+    expect(providerManagementConfigError("custom-mixed", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      modelAdapters: { bounded: "openai-responses" },
+      modelResponsesUpstreamStreaming: { BOUNDED: false },
+    })).toContain("requires the openai-responses wire");
+    expect(providerManagementConfigError("custom-chat", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      modelResponsesUpstreamStreaming: { bounded: false },
+    })).toContain("requires the openai-responses wire");
+    expect(providerManagementConfigError("custom", {
+      adapter: "openai-responses",
+      baseUrl: "https://api.example.test/v1",
+      modelResponsesUpstreamStreaming: { bounded: "false" },
+    })).toContain("must be a boolean");
+    expect(providerManagementConfigError("openai", {
+      ...canonicalDirect,
+      modelResponsesUpstreamStreaming: { bounded: false },
+    })).toContain("not supported on forward-auth");
+  });
+
   test("provider management validates retryOn429 bounds and unknown keys", () => {
     const base = { adapter: "openai-chat", baseUrl: "https://api.openai.com/v1" };
     expect(providerManagementConfigError("custom", {

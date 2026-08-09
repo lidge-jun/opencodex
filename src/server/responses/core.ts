@@ -200,7 +200,7 @@ import {
   relaySseWithBlockRewrite,
 } from "../sse-payload-rewrite";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
-import { responsesJsonToSseStream } from "../responses-json-events";
+import { responsesJsonToSseStream, validateResponsesJsonEventResponse } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /**
@@ -901,7 +901,7 @@ async function applyFinalRouteRequestNormalization(args: {
   logCtx: RequestLogContext;
   inboundWire: InboundWire;
   inboundTransport?: "websocket";
-}): Promise<void> {
+}): Promise<boolean | undefined> {
   const { parsed, route, config, req, logCtx, inboundWire, inboundTransport } = args;
 
   // Only Anthropic message routes retain the Codex-facing selector. Other providers must keep
@@ -917,38 +917,41 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
-  // Transport-neutral reliability policy (#875): applies to any Responses
-  // upstream whose final adapter is openai-responses, not only WS turns.
-  const responsesUpstreamStreaming = providerModelResponsesUpstreamStreaming(
-    route.providerName,
-    route.provider,
-    route.modelId,
-  );
+  // Final selected model before virtual wire-model rewriting (Pro aliases).
+  const finalSelectedModelId = route.modelId;
+  const policyProvider = route.provider;
 
-  // Settle the wire once so logging, fast-mode, auth, and sidecars read the adapter
-  // this request will actually use (#404).
+  // Resolve the public selector first; virtual aliases below may then resolve the base wire
+  // model once more. The streaming policy is captured only after both decisions settle.
   route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = route.modelId;
   logCtx.provider = route.providerName;
-  logCtx.providerAdapter = route.provider.adapter;
   logCtx.routeDecision = route.routeDecision;
 
+  // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
+  applyOpenAiVirtualModel(parsed, route, logCtx);
+  route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire);
+  logCtx.providerAdapter = route.provider.adapter;
+  if (parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId) {
+    logCtx.resolvedModel = route.modelId;
+    logCtx.preserveResolvedModelFromRoute = true;
+  }
+
+  // Transport-neutral reliability policy (#875): applies to any Responses
+  // upstream whose final adapter is openai-responses, not only WS turns. A public
+  // virtual selector wins; its final wire-model id is the fallback lookup.
+  const responsesUpstreamStreaming = providerModelResponsesUpstreamStreaming(
+    route.providerName,
+    policyProvider,
+    finalSelectedModelId,
+    route.modelId,
+  );
   if (responsesUpstreamStreaming === false && route.provider.adapter === "openai-responses") {
     parsed.stream = false;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       (parsed._rawBody as Record<string, unknown>).stream = false;
     }
-  }
-
-  // Final selected model before virtual wire-model rewriting (Pro aliases).
-  const finalSelectedModelId = route.modelId;
-
-  // Virtual model rewriting: Pro aliases → base model + reasoning.mode="pro".
-  applyOpenAiVirtualModel(parsed, route, logCtx);
-  if (parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId) {
-    logCtx.resolvedModel = route.modelId;
-    logCtx.preserveResolvedModelFromRoute = true;
   }
 
   // Fast mode override for OpenAI-routed models, only where the provider's Responses
@@ -1016,6 +1019,7 @@ async function applyFinalRouteRequestNormalization(args: {
     route.modelId,
     logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
   );
+  return responsesUpstreamStreaming;
 }
 
 
@@ -1582,7 +1586,7 @@ async function handleResponsesInner(
   // upstream for reliability (#875); the answer must then be reframed to SSE
   // for streaming clients.
   const clientRequestedStream = parsed.stream;
-  await applyFinalRouteRequestNormalization({
+  const responsesUpstreamStreaming = await applyFinalRouteRequestNormalization({
     parsed,
     route,
     config,
@@ -2103,6 +2107,8 @@ async function handleResponsesInner(
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
+    const forceBoundedResponsesJson = responsesUpstreamStreaming === false
+      && route.provider.adapter === "openai-responses";
     const terminalRecorder = codexForwardTerminalOutcomeRecorder(
       config,
       authCtx,
@@ -2199,6 +2205,15 @@ async function handleResponsesInner(
     // (src/server/relay-eager.ts; policy:
     // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
+    if (forceBoundedResponsesJson && isEventStream) {
+      upstream.abort(new DOMException("Unexpected event stream for bounded Responses request", "AbortError"));
+      try { void upstreamResponse.body?.cancel(upstream.signal.reason).catch(() => undefined); } catch { /* already closed */ }
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        "upstream ignored the bounded Responses policy and returned an event stream",
+      );
+    }
     if (isEventStream && upstreamResponse.body) {
       const repairConfig = route.provider.responsesItemIdRepair;
       const snapshotRepairEnabled = hasResponsesSnapshotRepair(route.provider.responsesSnapshotRepair);
@@ -2399,7 +2414,16 @@ async function handleResponsesInner(
       // without limit. This path is no longer rare — WebSocket turns for models whose
       // streaming terminal event is unreliable are deliberately answered with bounded JSON.
       // Oversize and stall deadlines both fail closed; a partial body is never parsed.
-      const bounded = await readBoundedResponseBody(upstreamResponse, UPSTREAM_JSON_BODY_READ_OPTIONS);
+      let bounded;
+      try {
+        bounded = await readBoundedResponseBody(upstreamResponse, {
+          ...UPSTREAM_JSON_BODY_READ_OPTIONS,
+          signal: upstream.signal,
+        });
+      } catch (error) {
+        if (upstream.signal.aborted || options.abortSignal?.aborted) return clientCancelledResponse();
+        throw error;
+      }
       if (bounded.oversized) {
         return formatErrorResponse(502, "upstream_error", "upstream JSON response exceeded the safe body limit");
       }
@@ -2407,11 +2431,29 @@ async function handleResponsesInner(
         return formatErrorResponse(502, "upstream_error", "upstream JSON response stalled before completing");
       }
       const text = bounded.text;
+      let validatedUpstreamResponse: Record<string, unknown> | undefined;
+      if (forceBoundedResponsesJson) {
+        let upstreamCandidate: unknown;
+        try {
+          upstreamCandidate = JSON.parse(text) as unknown;
+        } catch {
+          return formatErrorResponse(502, "upstream_error", "upstream returned malformed Responses JSON");
+        }
+        const upstreamValidation = validateResponsesJsonEventResponse(upstreamCandidate);
+        if (!upstreamValidation.ok) {
+          return formatErrorResponse(502, "upstream_error", upstreamValidation.message);
+        }
+        validatedUpstreamResponse = upstreamValidation.response;
+      }
       inspectResponseLogJson(logCtx, text);
       if (rememberPassthroughResponse) {
-        try {
-          rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
-        } catch { /* non-JSON despite content-type; recording is best-effort */ }
+        if (validatedUpstreamResponse) {
+          rememberPassthroughResponse(validatedUpstreamResponse);
+        } else {
+          try {
+            rememberPassthroughResponse(JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown });
+          } catch { /* non-JSON despite content-type; recording is best-effort */ }
+        }
       }
       const clientJson = (() => {
         const restored = restoreImageGenCallsInJson(text, imageGenCallAliases);
@@ -2429,6 +2471,31 @@ async function handleResponsesInner(
           ? rewriteResponsesModelJson(repaired, parsed._responseModelId)
           : repaired;
       })();
+      let boundedResponse: Record<string, unknown> | undefined;
+      let outboundJson = clientJson;
+      if (forceBoundedResponsesJson) {
+        let candidate: unknown;
+        try {
+          candidate = JSON.parse(clientJson) as unknown;
+          if ((clientRequestedStream === true || options.inboundTransport === "websocket")
+            && hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)) {
+            candidate = repairResponsesJsonItemIds(
+              candidate as Record<string, unknown>,
+              route.provider.responsesItemIdRepair!,
+              translatorBudget,
+            );
+            outboundJson = JSON.stringify(candidate);
+          }
+        } catch {
+          return formatErrorResponse(502, "upstream_error", "upstream returned malformed Responses JSON");
+        }
+        const validation = validateResponsesJsonEventResponse(candidate);
+        if (!validation.ok) {
+          return formatErrorResponse(502, "upstream_error", validation.message);
+        }
+        boundedResponse = validation.response;
+      }
+
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON
       // as the canonical terminal SSE sequence (created → output_item.done →
@@ -2436,30 +2503,11 @@ async function handleResponsesInner(
       // stream that never closes. Non-streaming clients keep the plain JSON.
       if (clientRequestedStream === true
         && options.inboundTransport !== "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
-        && route.provider.adapter === "openai-responses") {
-        let completed: Record<string, unknown> | undefined;
-        try {
-          const parsedCompleted = JSON.parse(clientJson) as unknown;
-          if (!parsedCompleted || typeof parsedCompleted !== "object" || Array.isArray(parsedCompleted)) {
-            throw new TypeError("bounded Responses JSON is not an object");
-          }
-          let candidate = parsedCompleted as Record<string, unknown>;
-          // The bounded-JSON answer bypasses the SSE relay, so it also bypasses
-          // the SSE item-id rewrite. Apply the same client-facing normalization
-          // here or this policy would silently disable id repair for the very
-          // providers that need it (raw record already happened above).
-          if (hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)) {
-            candidate = repairResponsesJsonItemIds(candidate, route.provider.responsesItemIdRepair!, translatorBudget);
-          }
-          completed = candidate;
-        } catch {
-          // Non-JSON despite content-type: fall through to the plain relay.
-        }
-        if (completed) {
+        && forceBoundedResponsesJson) {
+        if (boundedResponse) {
           let stream: ReadableStream<Uint8Array>;
           try {
-            stream = responsesJsonToSseStream(completed);
+            stream = responsesJsonToSseStream(boundedResponse);
           } catch (error) {
             if (error instanceof RangeError) {
               return formatErrorResponse(
@@ -2480,28 +2528,20 @@ async function handleResponsesInner(
           });
         }
       }
-      // WS turns reframe this JSON into events in the bridge, which is the
-      // other relay-free path — normalize ids so both bounded-JSON paths agree.
-      const outboundJson = options.inboundTransport === "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
-        && hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)
-        ? (() => {
-          try {
-            return JSON.stringify(repairResponsesJsonItemIds(
-              JSON.parse(clientJson) as Record<string, unknown>,
-              route.provider.responsesItemIdRepair!,
-              translatorBudget,
-            ));
-          } catch {
-            return clientJson;
-          }
-        })()
-        : clientJson;
       return new Response(outboundJson, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
         headers,
       });
+    }
+    if (forceBoundedResponsesJson) {
+      upstream.abort(new DOMException("Unexpected content type for bounded Responses request", "AbortError"));
+      try { void upstreamResponse.body?.cancel(upstream.signal.reason).catch(() => undefined); } catch { /* already closed */ }
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        "upstream bounded Responses response must use application/json",
+      );
     }
     const body = relayWithAbort(upstreamResponse.body, upstream);
     const turnAc = new AbortController();

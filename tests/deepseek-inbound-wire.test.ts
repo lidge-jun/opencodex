@@ -13,7 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
-import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../src/providers/registry";
+import { getProviderRegistryEntry, providerModelResponsesUpstreamStreaming, PROVIDER_REGISTRY } from "../src/providers/registry";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
 import { resolveWireProtocolOverride } from "../src/server/adapter-resolve";
 import { handleResponses } from "../src/server/responses/core";
@@ -345,6 +345,27 @@ describe("the bounded-JSON mechanism stays alive behind a synthetic registry ent
     expect(text).toContain('"type":"response.completed"');
   });
 
+  test("an explicit true config value overrides a false registry default", async () => {
+    const provider = fixtureProvider({ modelResponsesUpstreamStreaming: { [FIXTURE_MODEL]: true } });
+    expect(providerModelResponsesUpstreamStreaming(FIXTURE_ID, provider, FIXTURE_MODEL)).toBe(true);
+    const captured: Array<{ stream?: boolean }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean });
+      return completedWithPlaceholderIds();
+    }) as typeof fetch;
+    const response = await driveFixture(provider);
+    expect(captured[0]?.stream).toBe(true);
+    expect(response.headers.get("content-type")).toContain("application/json");
+  });
+
+  test("the policy lookup is case-insensitive exact and does not inherit colon families", () => {
+    const provider = fixtureProvider({
+      modelResponsesUpstreamStreaming: { "FIXTURE-MODEL": false },
+    });
+    expect(providerModelResponsesUpstreamStreaming(FIXTURE_ID, provider, "fixture-model")).toBe(false);
+    expect(providerModelResponsesUpstreamStreaming(FIXTURE_ID, provider, "fixture-model:variant")).toBeUndefined();
+  });
+
   test("the synthesized terminal SSE carries repaired item ids, not the upstream placeholders", async () => {
     globalThis.fetch = (async () => completedWithPlaceholderIds()) as typeof fetch;
     const response = await driveFixture(repairingFixtureProvider());
@@ -361,7 +382,10 @@ describe("the bounded-JSON mechanism stays alive behind a synthetic registry ent
       id: "resp_fixture",
       object: "response",
       status: "completed",
-      output: Array.from({ length: MAX_SYNTHESIZED_OUTPUT_ITEMS + 1 }, () => null),
+      output: Array.from(
+        { length: MAX_SYNTHESIZED_OUTPUT_ITEMS + 1 },
+        (_, index) => ({ type: "message", id: `msg_${index}` }),
+      ),
     })) as typeof fetch;
     const response = await driveFixture(fixtureProvider());
     expect(response.status).toBe(502);
@@ -402,6 +426,178 @@ describe("the bounded-JSON mechanism stays alive behind a synthetic registry ent
     const payload = (await response.json()) as { error?: { code?: string; message?: string } };
     expect(payload.error?.code).toBe("upstream_server_error");
     expect(payload.error?.message).toContain("exceeded the safe body limit");
+  });
+});
+
+describe("custom providers can opt into the bounded-JSON Responses path", () => {
+  const originalFetch = globalThis.fetch;
+  const PROVIDER = "custom-bounded-responses";
+  const MODEL_ID = "fixture-model";
+
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  function customProvider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
+    return {
+      adapter: "openai-responses",
+      baseUrl: "https://custom-bounded.example.test/v1",
+      authMode: "key",
+      apiKey: "sk-test",
+      modelResponsesUpstreamStreaming: { "FIXTURE-MODEL": false },
+      ...overrides,
+    };
+  }
+
+  async function drive(
+    provider: OcxProviderConfig,
+    websocket = false,
+    abortSignal: AbortSignal = AbortSignal.timeout(5_000),
+  ): Promise<Response> {
+    return handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `${PROVIDER}/${MODEL_ID}`, input: "ping", stream: true }),
+      }),
+      { providers: { [PROVIDER]: provider } } as unknown as OcxConfig,
+      { model: "", provider: "" },
+      websocket
+        ? { inboundWire: "responses", inboundTransport: "websocket" }
+        : { abortSignal },
+    );
+  }
+
+  test("a case-insensitive config match changes only upstream stream and synthesizes HTTP SSE", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return Response.json({
+        id: "resp_custom",
+        object: "response",
+        status: "completed",
+        output: [{
+          id: "msg_custom",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "ok" }],
+        }],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const response = await drive(customProvider());
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.stream).toBe(false);
+    expect(captured[0]?.model).toBe(MODEL_ID);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const text = await response.text();
+    expect(text.match(/"type":"response\.created"/g)).toHaveLength(1);
+    expect(text.match(/"type":"response\.output_item\.done"/g)).toHaveLength(1);
+    expect(text.match(/"type":"response\.completed"/g)).toHaveLength(1);
+    expect(text.match(/data: \[DONE\]/g)).toHaveLength(1);
+  });
+
+  test("failed and incomplete terminal statuses survive HTTP synthesis", async () => {
+    for (const status of ["failed", "incomplete"] as const) {
+      globalThis.fetch = (async () => Response.json({
+        id: `resp_${status}`,
+        object: "response",
+        status,
+        output: [],
+        ...(status === "failed"
+          ? { error: { code: "upstream_failure", message: "fixture" } }
+          : { incomplete_details: { reason: "max_output_tokens" } }),
+      })) as typeof fetch;
+      const response = await drive(customProvider());
+      const text = await response.text();
+      expect(text).toContain(`"type":"response.${status}"`);
+      expect(text).not.toContain('"type":"response.completed"');
+    }
+  });
+
+  test("an upstream SSE that ignores stream:false fails once without entering tee", async () => {
+    let calls = 0;
+    let cancelled = false;
+    let aborted = false;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      init?.signal?.addEventListener("abort", () => { aborted = true; }, { once: true });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.completed"}\n\n'));
+        },
+        cancel() {
+          cancelled = true;
+          return new Promise<void>(() => {});
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const response = await Promise.race([
+      drive(customProvider()),
+      Bun.sleep(250).then(() => { throw new Error("bounded policy waited for body cancellation"); }),
+    ]);
+    expect(response.status).toBe(502);
+    expect(calls).toBe(1);
+    expect(aborted).toBe(true);
+    expect(cancelled).toBe(true);
+    expect(await response.text()).not.toContain("response.completed");
+  });
+
+  test("malformed terminal JSON fails closed for HTTP and WebSocket handoff", async () => {
+    for (const websocket of [false, true]) {
+      globalThis.fetch = (async () => Response.json({
+        id: "resp_invalid",
+        object: "response",
+        status: "still_running",
+        output: [],
+      })) as typeof fetch;
+      const response = await drive(customProvider(), websocket);
+      expect(response.status).toBe(502);
+      expect(response.headers.get("content-type")).toContain("application/json");
+      expect(await response.text()).toContain("terminal status");
+    }
+  });
+
+  test("snapshot repair cannot promote a malformed bounded response to completed", async () => {
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_invalid",
+      object: "response",
+    })) as typeof fetch;
+    const response = await drive(customProvider({ responsesSnapshotRepair: true }));
+    expect(response.status).toBe(502);
+    expect(await response.text()).toContain("terminal status");
+  });
+
+  test("a per-model Responses wire override is settled before the policy", async () => {
+    const captured: Array<{ stream?: boolean }> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push(JSON.parse(String(init?.body ?? "{}")) as { stream?: boolean });
+      return Response.json({ id: "resp_mixed", status: "completed", output: [] });
+    }) as typeof fetch;
+    const response = await drive(customProvider({
+      adapter: "openai-chat",
+      modelAdapters: { [MODEL_ID]: "openai-responses" },
+    }));
+    expect(response.status).toBe(200);
+    expect(captured[0]?.stream).toBe(false);
+    expect(await response.text()).toContain('"type":"response.completed"');
+  });
+
+  test("client cancellation aborts a pending bounded JSON read", async () => {
+    let cancelled = false;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { return new Promise<void>(() => {}); },
+      cancel() { cancelled = true; },
+    }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const controller = new AbortController();
+    const pending = drive(customProvider(), false, controller.signal);
+    await Bun.sleep(5);
+    controller.abort(new DOMException("fixture cancel", "AbortError"));
+    const response = await pending;
+    expect(response.status).toBe(499);
+    expect(cancelled).toBe(true);
   });
 });
 

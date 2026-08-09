@@ -1030,6 +1030,90 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("modelResponsesUpstreamStreaming accepts only effective Responses model policies", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { BOUNDED: "openai-responses" },
+          modelResponsesUpstreamStreaming: { BOUNDED: false },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.custom.modelResponsesUpstreamStreaming)
+      .toEqual({ BOUNDED: false });
+
+    for (const provider of [
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        modelResponsesUpstreamStreaming: { "": false },
+      },
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        modelResponsesUpstreamStreaming: { bounded: "false" },
+      },
+      {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test/v1",
+        modelResponsesUpstreamStreaming: { bounded: false },
+      },
+      {
+        adapter: "openai-responses",
+        baseUrl: "https://example.test/v1",
+        modelAdapters: { bounded: "openai-chat" },
+        modelResponsesUpstreamStreaming: { bounded: false },
+      },
+      {
+        adapter: "openai-chat",
+        baseUrl: "https://example.test/v1",
+        modelAdapters: { bounded: "openai-responses" },
+        modelResponsesUpstreamStreaming: { BOUNDED: false },
+      },
+    ]) {
+      writeConfig({ port: 12345, providers: { custom: provider }, defaultProvider: "custom" });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelResponsesUpstreamStreaming");
+    }
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+          modelResponsesUpstreamStreaming: { "gpt-test": false },
+        },
+      },
+      defaultProvider: "openai",
+      openaiProviderTierVersion: 2,
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("not supported on forward-auth");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          modelAdapters: { "gpt-5.6-sol-pro": "openai-chat" },
+          modelResponsesUpstreamStreaming: { "GPT-5.6-SOL-PRO": false },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+  });
+
   test("modelReasoningSummaryDelivery validates known values and rejects summary opt-out conflicts (#538)", () => {
     writeConfig({
       port: 12345,

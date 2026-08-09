@@ -5,6 +5,7 @@ import {
   booleanRecordConfigError,
   modelAdapterRecordConfigError,
   modelPreferHostedToolsConfigError,
+  modelResponsesUpstreamStreamingConfigError,
   codexAutoStartEnabled,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
@@ -447,6 +448,7 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
     const canonicalCandidate = { ...raw };
     delete canonicalCandidate.responsesSnapshotRepair;
+    delete canonicalCandidate.modelResponsesUpstreamStreaming;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -484,6 +486,13 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (reasoningSummaryDeliveryError) return `provider ${name} ${reasoningSummaryDeliveryError}`;
   const modelAdaptersError = modelAdapterRecordConfigError(raw.modelAdapters, "modelAdapters", name, typed);
   if (modelAdaptersError) return `provider ${name} ${modelAdaptersError}`;
+  const responsesUpstreamStreamingError = modelResponsesUpstreamStreamingConfigError(
+    raw.modelResponsesUpstreamStreaming,
+    "modelResponsesUpstreamStreaming",
+    name,
+    typed,
+  );
+  if (responsesUpstreamStreamingError) return `provider ${name} ${responsesUpstreamStreamingError}`;
   const preferHostedToolsError = modelPreferHostedToolsConfigError(
     raw.modelPreferHostedTools,
     "modelPreferHostedTools",
