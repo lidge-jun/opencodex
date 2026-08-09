@@ -206,7 +206,7 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다. 성공한 POST/DELETE는 `catalogRefreshPending`를 포함합니다. | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다. 성공한 POST/DELETE는 `catalogRefreshPending`를 포함하며 DELETE는 `accountCleanupPending: true`도 포함할 수 있습니다. | 400 잘못된 입력; 404 알 수 없는 account; 409 cleanup-only retry가 account absence를 확인하지 못함; 500 `codex_account_delete_rollback_failed`는 재시도 전에 재시작해야 함; 수동 가져오기를 비활성화할 수 있음 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
@@ -234,6 +234,13 @@ Authorization: Bearer <admin-token>
 계정 생성과 삭제는 catalog convergence보다 먼저 영속화됩니다. 실패하거나 연기된 catalog 작업은 저장된
 mutation을 되돌리지 않고 내부 provider/account/path/credential 세부 정보도 반환하지 않습니다. 삭제된
 account의 selector binding은 남아 있어 계정이 없을 때 exact route가 fail closed하고 같은 id를 다시 추가하면 같은 selector가 복원됩니다.
+
+config 삭제가 커밋된 뒤 로컬 credential cleanup이 완료되지 못해도 DELETE는 live ownership을
+무효화하고 catalog convergence를 요청한 다음 `accountCleanupPending: true`가 포함된 성공 응답을 반환합니다.
+같은 DELETE를 반복하면 account row가 이미 없어도 cleanup을 다시 시도합니다. recovery client는 `cleanupOnly=1`을
+추가합니다. 이 형식은 persisted account absence를 확인하지 못하면 409로 거부하여 stale retry가 다시 추가된 account를
+삭제하지 못하게 합니다. dashboard는 불투명한 account id를 노출하지 않고 이 안전한 재시도 action을 유지하며
+CLI는 storage 세부 정보를 노출하지 않는 고정된 `--cleanup-only` 안내를 표시합니다.
 
 ## 클라이언트 선택
 

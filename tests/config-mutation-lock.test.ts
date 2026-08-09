@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -137,8 +138,44 @@ test("a throwing mutation releases the lock and leaves writers available", () =>
   expect(loadConfig().port).toBe(50500);
 });
 
-test("management API maps config mutation lock contention to retryable 503", async () => {
+test("an existing reader rejects a mutation before its callback can change external state", () => {
   saveConfig(config());
+  const reader = new Database(join(testRoot, "config-mutation.sqlite"));
+  reader.exec("PRAGMA busy_timeout = 0; BEGIN");
+  reader.query("SELECT value FROM config_generation WHERE singleton = 1").get();
+  let callbackEntered = false;
+
+  try {
+    expect(() => withConfigMutationLockSync(() => {
+      callbackEntered = true;
+    })).toThrow(ConfigMutationLockError);
+    expect(callbackEntered).toBe(false);
+    expect(loadConfig().port).toBe(10100);
+  } finally {
+    reader.exec("ROLLBACK");
+    reader.close();
+  }
+
+  expect(() => saveConfig(config(40400))).not.toThrow();
+  expect(loadConfig().port).toBe(40400);
+});
+
+test("management API maps config mutation lock contention to retryable 503", async () => {
+  const lockedConfig: OcxConfig = {
+    ...config(),
+    codexAccounts: [{
+      id: "delete-busy-account",
+      email: "delete-busy@example.test",
+      isMain: false,
+    }],
+  };
+  saveConfig(lockedConfig);
+  saveCodexAccountCredential("delete-busy-account", {
+    accessToken: "delete-busy-access",
+    refreshToken: "delete-busy-refresh",
+    expiresAt: Date.now() + 60_000,
+    chatgptAccountId: "delete-busy-chatgpt-account",
+  });
   const readyPath = join(testRoot, "mgmt-holder-ready");
   const releasePath = join(testRoot, "mgmt-holder-release");
   const configModuleUrl = pathToFileURL(join(import.meta.dir, "../src/config.ts")).href;
@@ -169,13 +206,31 @@ test("management API maps config mutation lock contention to retryable 503", asy
         body: JSON.stringify({ threshold: 50 }),
       }),
       url,
-      config(),
+      lockedConfig,
     );
     expect(response?.status).toBe(503);
     expect(await response!.json()).toMatchObject({
       error: "Configuration is busy; retry shortly",
       code: "CONFIG_MUTATION_LOCK_UNAVAILABLE",
     });
+
+    const deleteUrl = new URL(
+      "http://localhost/api/codex-auth/accounts?id=delete-busy-account",
+    );
+    const deleteResponse = await handleManagementAPI(
+      new ManagementRequest(deleteUrl, {
+        method: "DELETE",
+        headers: managementHeaders(),
+      }),
+      deleteUrl,
+      lockedConfig,
+    );
+    expect(deleteResponse?.status).toBe(503);
+    expect(await deleteResponse!.json()).toEqual({
+      error: "Configuration is busy; retry shortly",
+      code: "CONFIG_MUTATION_LOCK_UNAVAILABLE",
+    });
+    expect(getCodexAccountCredential("delete-busy-account")).not.toBeNull();
   } finally {
     writeFileSync(releasePath, "release");
     expect(await waitForOwnedChild(child)).toBe(0);

@@ -84,7 +84,7 @@ use <provider> <id> Switch the active credential; 'main' selects the Codex App l
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
@@ -182,17 +182,22 @@ preemption が未バインドリクエストを直ちに引き上げます。既
 
 ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。Codex account login は保存済みでも catalog refresh が保留中なら成功終了し、human output の stderr に固定の `ocx sync` 案内を出します。`--json` は案内を混ぜず、完了 state に `catalogRefreshPending: true` を保持します。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|main> --yes [--cleanup-only] [--json]`
 
-この保護された非対話型削除には `--yes` が必要です。削除する前に、ID が存在することが確認されます。 ID が欠落している場合は、DELETE を送信せずに 1 が終了します。メインの Codex App ログインは削除できないため、`remove openai main --yes` は拒否されます。削除後、ファミリーは再度読み取られます。固定された Codex アカウントを削除すると、ピンがクリアされ、自動選択に戻ります。 OAuth は最初に残ったアカウントを昇格させるか、何も報告しません。 API キー プールは、最初に残っているキーを昇格するか、何も報告しません。 `--json` の成功と失敗の形状は次のとおりです。
+この保護された非対話型削除には `--yes` が必要です。OAuth と API key の削除は DELETE を送る前に id の存在を確認します。Codex の削除は idempotent であり、中断したローカル credential cleanup を再試行できるよう、row がなくても DELETE を送ります。未知の id は server が 404 を返します。`accountCleanupPending` の後は `--cleanup-only` を追加します。この option は persisted account が存在しないことを確認できた場合のみ orphaned credential cleanup を完了するため、stale retry が再追加済み account を削除しません。メインの Codex App ログインは削除できないため、`remove openai main --yes` は拒否されます。削除後、ファミリーは再度読み取られます。固定された Codex アカウントを削除すると、ピンがクリアされ、自動選択に戻ります。 OAuth は最初に残ったアカウントを昇格させるか、何も報告しません。 API キー プールは、最初に残っているキーを昇格するか、何も報告しません。 `--json` の成功と失敗の形状は次のとおりです。
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
-{ error: string } // stderr, exit 1
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean, accountCleanupPending?: boolean }
+{ error: string, catalogRefreshPending?: boolean, accountCleanupPending?: boolean } // stderr, exit 1
 ```
 
 `catalogRefreshPending` は Codex 削除だけに含まれます。`true` でも削除は保存済みで、human output は
 stderr に `ocx sync` の案内を出して終了コード 0 のままです。OAuth account と API key の削除形状は変わりません。
+
+`accountCleanupPending` は Codex 削除の JSON にだけ含まれます。`false` はローカル credential cleanup の完了を示します。
+`true` は account row と live ownership の削除は完了したものの、ローカル credential cleanup が完了していないことを示します。
+human output は固定の `--cleanup-only` 案内を表示して終了コード 0 のままです。JSON output は stdout に警告を混ぜず、この flag を保持します。
+成功した Codex DELETE の後に post-delete verification read が失敗した場合、command は終了コード 1 になりますが、JSON error は両方の Codex completion boolean を保持し、human output も必要な recovery guidance を表示します。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

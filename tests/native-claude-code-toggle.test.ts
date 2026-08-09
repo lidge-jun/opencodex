@@ -171,10 +171,9 @@ test("enabling WITH a change flips the flag and reports current", async () => {
 test("a held REAL config transaction refuses 409 config_busy, and release lets a retry through", async () => {
   /*
    * Acceptance (audit r7 #2): a real second connection holding the lock, not
-   * a mocked throw. The holder runs the same `PRAGMA busy_timeout = 0;
-   * BEGIN IMMEDIATE` the lock itself uses (src/config.ts:1771), so the route's
-   * own acquisition fails with SQLITE_BUSY exactly as cross-process contention
-   * would. The route runs the REAL saveConfigPreservingClaudeCode — no seam —
+   * a mocked throw. The holder takes a SQLite write transaction, so the route's
+   * own exclusive acquisition fails with SQLITE_BUSY exactly as cross-process
+   * contention would. The route runs the REAL saveConfigPreservingClaudeCode — no seam —
    * against a fixture OPENCODEX_HOME.
    */
   const { Database } = await import("bun:sqlite");

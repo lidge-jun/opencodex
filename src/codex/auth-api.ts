@@ -19,7 +19,13 @@ import {
   CodexCredentialRefreshStaleError,
   TokenRefreshError,
 } from "./account-store";
-import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  CodexAccountCleanupRetryConflictError,
+  CodexAccountDeleteCleanupError,
+  CodexAccountDeleteRollbackError,
+  deleteCodexAccount,
+  reconcileMainCodexAccountRuntimeState,
+} from "./account-lifecycle";
 import {
   appendDefaultCodexAccountNamespace,
   codexAccountPickerEnabled,
@@ -1399,20 +1405,66 @@ export async function handleCodexAuthAPI(
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {
     const id = url.searchParams.get("id");
     if (!id) return jsonResponse({ error: "Missing id" }, 400);
+    const cleanupOnlyValue = url.searchParams.get("cleanupOnly");
+    if (cleanupOnlyValue !== null && cleanupOnlyValue !== "1") {
+      return jsonResponse({ error: "cleanupOnly must be 1 when provided" }, 400);
+    }
+    const cleanupOnly = cleanupOnlyValue === "1";
     const runtimeConfig = getRuntimeConfig(config);
-    const isLegacyPoolAccount = CODEX_ACCOUNT_ID_RE.test(id)
-      && (runtimeConfig.codexAccounts ?? []).some(account => !account.isMain && account.id === id);
-    if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
+    const hasStoredAccount = (runtimeConfig.codexAccounts ?? [])
+      .some(account => !account.isMain && account.id === id);
+    const hasLegacyIdSyntax = CODEX_ACCOUNT_ID_RE.test(id);
+    const storedCredential = hasLegacyIdSyntax
+      ? getCodexAccountCredential(id)
+      : null;
+    const isLegacyPoolAccount = hasLegacyIdSyntax
+      && (hasStoredAccount || storedCredential !== null);
+    if (!isValidCodexAccountId(id) && !(cleanupOnly ? hasLegacyIdSyntax : isLegacyPoolAccount)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
-    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
-    saveRuntimeConfig(config, runtimeConfig);
+    if (!cleanupOnly && !hasStoredAccount && storedCredential === null) {
+      return jsonResponse({ error: "Account not found" }, 404);
+    }
+    let pickerVisibilityChanged: boolean;
+    let cleanupError: CodexAccountDeleteCleanupError | undefined;
+    try {
+      pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id, {
+        // A configured row owns first-file persistence. A credential-only legacy orphan has no
+        // config deletion to commit, so removing it must not materialize config.json.
+        persistMissingConfig: !cleanupOnly && hasStoredAccount,
+        cleanupOnly,
+      });
+    } catch (error) {
+      if (error instanceof CodexAccountCleanupRetryConflictError) {
+        return jsonResponse({
+          error: "Account absence could not be confirmed; cleanup retry was not applied",
+        }, 409);
+      }
+      if (error instanceof CodexAccountDeleteRollbackError) {
+        // The typed error contains fixed recovery guidance only. The underlying persistence and
+        // restore failures can carry paths or storage details and must not cross the API boundary.
+        return jsonResponse({
+          error: error.message,
+          code: "codex_account_delete_rollback_failed",
+        }, 500);
+      }
+      if (!(error instanceof CodexAccountDeleteCleanupError)) throw error;
+      pickerVisibilityChanged = error.pickerVisibilityChanged;
+      cleanupError = error;
+    }
     reconcileLiveStateStores();
     const catalogRefresh = await convergeAccountNamespaceCatalog(
       runtimeConfig,
       pickerVisibilityChanged,
       convergeCodexCatalog,
     );
+    if (cleanupError) {
+      return jsonResponse({
+        ok: true,
+        accountCleanupPending: true,
+        ...catalogRefresh,
+      });
+    }
     return jsonResponse({ ok: true, ...catalogRefresh });
   }
 

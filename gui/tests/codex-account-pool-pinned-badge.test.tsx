@@ -62,6 +62,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: true }),
+    retryAccountCleanup: async () => ({ ok: true }),
     syncAfterAccountAdded: async () => ({ ok: true }),
     pauseRefresh: () => ({ __brand: "codex-pool-pause" }) as never,
     resumeRefresh: () => {},

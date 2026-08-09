@@ -230,7 +230,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex. Успешные POST/DELETE включают `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex. Успешные POST/DELETE включают `catalogRefreshPending`; DELETE также может включать `accountCleanupPending: true`. | 400 invalid input; 404 unknown account; 409 cleanup-only retry could not confirm absence; 500 `codex_account_delete_rollback_failed` требует перезапуска перед повтором; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
@@ -263,6 +263,14 @@ HTTP 500, а OAuth `login-status` сообщает `status: "error"`. Оба о�
 boolean завершения. При удалении аккаунта его selector binding сохраняется, поэтому exact routes
 fail closed, пока аккаунт отсутствует, а при повторном добавлении того же id восстанавливается тот же
 селектор.
+
+Если удаление из config уже зафиксировано, но локальная очистка credential не завершилась,
+DELETE всё равно отключает live ownership, запускает catalog convergence и возвращает успешный ответ с
+`accountCleanupPending: true`. Повтор того же DELETE идемпотентно запускает очистку, даже когда account row
+уже отсутствует. Recovery-клиенты добавляют `cleanupOnly=1`; эта форма возвращает 409, если отсутствие
+persisted account не удалось подтвердить, поэтому stale retry не удалит повторно добавленный account. Dashboard сохраняет
+это безопасное действие, не раскрывая opaque account id, а CLI выводит фиксированную подсказку
+`--cleanup-only` без раскрытия деталей storage.
 
 ## Как выбрать клиента
 

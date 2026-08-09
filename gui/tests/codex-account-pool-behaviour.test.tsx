@@ -36,6 +36,7 @@ let activePinnedAccountId: string | null = null;
 let omitPinnedAccountId = false;
 let activeGetId: string | null = null;
 let deleteCatalogRefreshPending = false;
+let deleteAccountCleanupPending = false;
 
 beforeEach(() => {
   previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
@@ -64,6 +65,7 @@ beforeEach(() => {
   omitPinnedAccountId = false;
   activeGetId = null;
   deleteCatalogRefreshPending = false;
+  deleteAccountCleanupPending = false;
   accounts = [{ id: "a1", email: "account-one", isMain: true, paused: false, priority: 0, hasCredential: true, quota: null }];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -124,6 +126,7 @@ beforeEach(() => {
           json: async () => ({
             ok: true,
             catalogRefreshPending: deleteCatalogRefreshPending,
+            accountCleanupPending: deleteAccountCleanupPending,
             privateDetail: "private-delete-detail",
           }),
         } as unknown as Response;
@@ -227,6 +230,33 @@ test("account removal returns only the public catalog completion flag", async ()
     });
   });
   expect(calls).toContain("DELETE codex-auth/accounts?id=a1");
+});
+
+test("account removal carries the public cleanup-pending completion flag", async () => {
+  deleteAccountCleanupPending = true;
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.removeAccount("a1")).toEqual({
+      ok: true,
+      catalogRefreshPending: false,
+      accountCleanupPending: true,
+    });
+  });
+  expect(calls).toContain("DELETE codex-auth/accounts?id=a1");
+});
+
+test("account cleanup retry uses the cleanup-only deletion contract", async () => {
+  deleteAccountCleanupPending = false;
+  const seen = await mountController();
+
+  await act(async () => {
+    expect(await seen.current!.retryAccountCleanup("a1")).toEqual({
+      ok: true,
+      catalogRefreshPending: false,
+    });
+  });
+  expect(calls).toContain("DELETE codex-auth/accounts?id=a1&cleanupOnly=1");
 });
 
 test("pausing an account writes the persisted endpoint and updates shared state", async () => {

@@ -181,6 +181,7 @@ export function CodexAccountPoolPageHead({
   pauseBusy,
   actionFeedback,
   actionFeedbackTone,
+  actionFeedbackAction,
   onRefresh,
   onPauseExhausted,
 }: {
@@ -191,6 +192,11 @@ export function CodexAccountPoolPageHead({
   pauseBusy?: boolean;
   actionFeedback?: string | null;
   actionFeedbackTone?: NoticeTone | null;
+  actionFeedbackAction?: {
+    label: string;
+    disabled: boolean;
+    onClick: () => void;
+  } | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
 }) {
@@ -208,6 +214,16 @@ export function CodexAccountPoolPageHead({
         >
           {actionFeedback ?? ""}
         </span>
+        {actionFeedbackAction && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost codex-auth-action-btn"
+            onClick={actionFeedbackAction.onClick}
+            disabled={actionFeedbackAction.disabled}
+          >
+            {actionFeedbackAction.label}
+          </button>
+        )}
         <button
           type="button"
           className="btn btn-sm btn-ghost codex-auth-action-btn"

@@ -23,7 +23,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account alias <provider> <account-or-key-id> <display-name|-> [--json]
   ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
-  ocx account remove <provider> <account-or-key-id|main> --yes [--json]
+  ocx account remove <provider> <account-or-key-id|main> --yes [--cleanup-only] [--json]
   ocx account clear-cooldown <provider> <account-id|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
   ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]

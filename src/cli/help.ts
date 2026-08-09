@@ -119,7 +119,7 @@ const helpEntries: Record<string, HelpEntry> = {
       "refresh <provider>  Force-refresh Codex or provider quota reports.",
       "auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.",
       "priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.",
-      "remove <provider> <id> --yes  Remove a stored account or key after an existence check.",
+      "remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.",
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.",
       "reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.",

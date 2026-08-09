@@ -44,7 +44,7 @@ export type CodexAccountLoadState = "loading" | "ready" | "error";
 
 export type CodexAccountActionResult<T extends object = Record<never, never>> =
   | ({ ok: true } & T)
-  | { ok: false; reason: "busy" | "request" | "reload" };
+  | { ok: false; reason: "busy" | "request" | "reload" | "account-present" };
 
 /**
  * The auto-switch threshold arrives on the same /active response as the account list.
@@ -92,6 +92,7 @@ export interface CodexAccountPoolController {
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
+  retryAccountCleanup(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
   syncAfterAccountAdded(): Promise<CodexAccountActionResult>;
 
   pauseRefresh(): PauseToken;
@@ -489,13 +490,19 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
-  const removeAccount = useCallback(async (id: string) => {
+  const deleteAccount = useCallback(async (id: string, cleanupOnly: boolean) => {
     try {
       const response = await fetch(
-        `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}`,
+        `${apiBase}/api/codex-auth/accounts?id=${encodeURIComponent(id)}${cleanupOnly ? "&cleanupOnly=1" : ""}`,
         { method: "DELETE" },
       );
-      if (!response.ok) return { ok: false, reason: "request" } as const;
+      if (!response.ok) {
+        if (cleanupOnly) await load();
+        return {
+          ok: false,
+          reason: cleanupOnly && response.status === 409 ? "account-present" : "request",
+        } as const;
+      }
       const completion = codexAccountMutationCompletion(
         await response.json().catch(() => ({})),
       );
@@ -505,6 +512,8 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       return { ok: false, reason: "request" } as const;
     }
   }, [apiBase, load]);
+  const removeAccount = useCallback((id: string) => deleteAccount(id, false), [deleteAccount]);
+  const retryAccountCleanup = useCallback((id: string) => deleteAccount(id, true), [deleteAccount]);
 
   const syncAfterAccountAdded = useCallback(async () => {
     const ok = await load();
@@ -538,6 +547,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     pauseExhaustedAccounts,
     saveAlias,
     removeAccount,
+    retryAccountCleanup,
     syncAfterAccountAdded,
     pauseRefresh,
     resumeRefresh,

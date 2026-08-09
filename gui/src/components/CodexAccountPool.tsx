@@ -66,6 +66,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [reauthId, setReauthId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
+  const [cleanupRetryId, setCleanupRetryId] = useState<string | null>(null);
+  const [cleanupRetrying, setCleanupRetrying] = useState(false);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
@@ -75,10 +77,16 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
   const doctorCopy = useCopyFeedback<string>();
 
-  const showActionFeedback = useCallback((text: string, tone: NoticeTone = "ok") => {
+  const showActionFeedback = useCallback((
+    text: string,
+    tone: NoticeTone = "ok",
+    persist = false,
+  ) => {
     if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     setActionFeedback(text);
     setActionFeedbackTone(tone);
+    feedbackTimerRef.current = null;
+    if (persist) return;
     feedbackTimerRef.current = setTimeout(() => {
       setActionFeedback(null);
       setActionFeedbackTone(null);
@@ -209,8 +217,46 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     const result = await controller.removeAccount(id);
     if (!result.ok) {
       showActionFeedback(t("codexAuth.removeFailed"), "err");
+    } else if (result.accountCleanupPending) {
+      setCleanupRetryId(id);
+      const cleanupWarning = t("codexAuth.removeCleanupPending");
+      showActionFeedback(result.catalogRefreshPending
+        ? `${cleanupWarning} ${t("codexAuth.catalogRefreshPending")}`
+        : cleanupWarning, "warn", true);
     } else if (result.catalogRefreshPending) {
       showActionFeedback(t("codexAuth.catalogRefreshPending"), "warn");
+    }
+  };
+
+  const retryCleanup = async () => {
+    const id = cleanupRetryId;
+    if (id === null || cleanupRetrying) return;
+    setCleanupRetrying(true);
+    try {
+      const result = await controller.retryAccountCleanup(id);
+      if (!result.ok) {
+        if (result.reason === "account-present") {
+          setCleanupRetryId(null);
+          showActionFeedback(t("codexAuth.removeCleanupRetryRefused"), "warn");
+        } else {
+          showActionFeedback(t("codexAuth.removeFailed"), "err", true);
+        }
+      } else if (result.accountCleanupPending) {
+        const cleanupWarning = t("codexAuth.removeCleanupPending");
+        showActionFeedback(result.catalogRefreshPending
+          ? `${cleanupWarning} ${t("codexAuth.catalogRefreshPending")}`
+          : cleanupWarning, "warn", true);
+      } else {
+        setCleanupRetryId(null);
+        showActionFeedback(
+          result.catalogRefreshPending
+            ? t("codexAuth.catalogRefreshPending")
+            : t("codexAuth.removeCleanupComplete"),
+          result.catalogRefreshPending ? "warn" : "ok",
+        );
+      }
+    } finally {
+      setCleanupRetrying(false);
     }
   };
 
@@ -286,6 +332,11 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         refreshingQuota={refreshingQuota}
         actionFeedback={actionFeedback}
         actionFeedbackTone={actionFeedbackTone}
+        actionFeedbackAction={cleanupRetryId === null ? null : {
+          label: t("codexAuth.removeCleanupRetry"),
+          disabled: cleanupRetrying,
+          onClick: () => { void retryCleanup(); },
+        }}
         pausingExhausted={pausingExhausted}
         pauseBusy={pauseBusy}
         onRefresh={() => { void refreshQuotas(); }}

@@ -206,7 +206,7 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。成功した POST/DELETE は `catalogRefreshPending` を返します。 | 400 無効な入力。手動インポートは無効にすることができます。 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。成功した POST/DELETE は `catalogRefreshPending` を返し、DELETE は `accountCleanupPending: true` を返す場合もあります。 | 400 無効な入力。404 不明なアカウント。409 cleanup-only retry で account absence を確認できない。500 `codex_account_delete_rollback_failed` は再試行前に再起動が必要。手動インポートは無効にすることができます。 |
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
@@ -234,6 +234,13 @@ account 作成を再試行する前に再認証するか削除してください
 アカウント作成と削除は catalog convergence より先に永続化されます。失敗または延期された catalog 処理は
 保存済み mutation をロールバックせず、内部 provider/account/path/credential detail も返しません。削除した
 account の selector binding は残るため、欠落中の exact route は fail closed し、同じ id の再追加で同じ selector が戻ります。
+
+config の削除がコミットされた後にローカルの credential cleanup が完了できない場合でも、
+DELETE は live ownership を無効化して catalog convergence を要求し、`accountCleanupPending: true` を含む
+成功応答を返します。同じ DELETE を繰り返すと、account row が既に存在しなくても cleanup を再試行できます。
+recovery client は `cleanupOnly=1` を追加します。この形式は persisted account absence を確認できない場合に 409 で拒否し、
+stale retry が再追加済み account を削除しないようにします。dashboard は不透明な account id を公開せずこの安全な再試行
+action を保持し、CLI は storage detail を公開せず固定の `--cleanup-only` 案内を表示します。
 
 ## クライアントの選択
 

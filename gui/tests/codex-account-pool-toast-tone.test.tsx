@@ -50,6 +50,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: false, reason: "request" }),
+    retryAccountCleanup: async () => ({ ok: false, reason: "request" }),
     syncAfterAccountAdded: async () => ({ ok: true }),
     pauseRefresh: () => ({ __brand: "codex-pool-pause" }) as never,
     resumeRefresh: () => {},
@@ -189,6 +190,85 @@ test("a saved removal with pending catalog refresh renders a warning tone", asyn
   expect(warning?.textContent).toContain("ocx sync");
   expect(warning?.textContent).not.toContain("pool@example.test");
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
+});
+
+test("a saved removal with pending local cleanup renders retry guidance", async () => {
+  const removed: string[] = [];
+  await mountPool(makeController({
+    removeAccount: async (id) => {
+      removed.push(id);
+      return { ok: true, catalogRefreshPending: false, accountCleanupPending: true };
+    },
+    retryAccountCleanup: async (id) => {
+      removed.push(id);
+      return { ok: true, catalogRefreshPending: false };
+    },
+  }));
+
+  const removeButton = [...host.querySelectorAll("button")].find(button =>
+    (button.getAttribute("aria-label") ?? "").includes("pool@example.test")
+    && (button.getAttribute("aria-label") ?? "").toLowerCase().includes("remove"),
+  );
+  expect(removeButton).toBeTruthy();
+  await act(async () => {
+    removeButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+
+  const warning = host.querySelector(".codex-auth-page-head__feedback.is-warn");
+  expect(warning?.textContent).toContain("local credential cleanup is still pending");
+  expect(warning?.textContent).not.toContain("pool-1");
+  const retryButton = [...host.querySelectorAll("button")]
+    .find(button => button.textContent?.includes("Retry cleanup"));
+  expect(retryButton).toBeTruthy();
+
+  await act(async () => {
+    retryButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+
+  expect(removed).toEqual(["pool-1", "pool-1"]);
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")?.textContent)
+    .toContain("Account cleanup completed");
+  expect([...host.querySelectorAll("button")]
+    .some(button => button.textContent?.includes("Retry cleanup"))).toBe(false);
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
+});
+
+test("a cleanup retry cannot remove an account that is present again", async () => {
+  const calls: string[] = [];
+  await mountPool(makeController({
+    removeAccount: async (id) => {
+      calls.push(`remove:${id}`);
+      return { ok: true, catalogRefreshPending: false, accountCleanupPending: true };
+    },
+    retryAccountCleanup: async (id) => {
+      calls.push(`cleanup:${id}`);
+      return { ok: false, reason: "account-present" };
+    },
+  }));
+
+  const removeButton = [...host.querySelectorAll("button")].find(button =>
+    (button.getAttribute("aria-label") ?? "").includes("pool@example.test")
+    && (button.getAttribute("aria-label") ?? "").toLowerCase().includes("remove"),
+  );
+  await act(async () => {
+    removeButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+  const retryButton = [...host.querySelectorAll("button")]
+    .find(button => button.textContent?.includes("Retry cleanup"));
+  await act(async () => {
+    retryButton!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+  });
+
+  expect(calls).toEqual(["remove:pool-1", "cleanup:pool-1"]);
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-warn")?.textContent)
+    .toContain("account could not be confirmed absent");
+  expect(host.querySelector(".codex-auth-page-head__feedback")?.textContent).not.toContain("pool-1");
+  expect([...host.querySelectorAll("button")]
+    .some(button => button.textContent?.includes("Retry cleanup"))).toBe(false);
 });
 
 test("a busy selection order write shows no toast at all", async () => {

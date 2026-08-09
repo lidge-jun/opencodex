@@ -88,7 +88,7 @@ use <provider> <id> Switch the active credential; 'main' selects the Codex App l
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
@@ -206,22 +206,29 @@ token，也不是简单重读账号列表。`--json` 返回
 `--json` 时 stdout 保持可解析，已完成的登录状态会包含 `catalogRefreshPending: true`，且不会
 打印人类可读警告。
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|main> --yes [--cleanup-only] [--json]`
 
-这个受保护的非交互式删除需要 `--yes`。删除前，它会验证 id 是否存在；缺失的 id
-会以 1 退出，而不会发送 DELETE。主 Codex App 登录不能被移除，因此会拒绝
+这个受保护的非交互式删除需要 `--yes`。OAuth 和 API key 删除会在发送 DELETE 前验证 id。
+Codex 删除是幂等的，即使 row 已不存在也会发送 DELETE，以便重试中断的本地 credential cleanup；未知 id 仍由
+server 返回 404。收到 `accountCleanupPending` 后请添加 `--cleanup-only`；该选项只在能够确认 persisted
+account 不存在时完成 orphaned credential cleanup，因此 stale retry 不会删除重新添加的 account。主 Codex App 登录不能被移除，因此会拒绝
 `remove openai main --yes`。删除后会重新读取该家族：移除已固定的 Codex 账号会清除
 固定并回到自动选择；OAuth 会提升第一个剩余账号，或者报告不存在；API 密钥池会
 提升第一个剩余密钥，或者报告不存在。`--json` 的成功和失败结构如下：
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
-{ error: string } // stderr, exit 1
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean, accountCleanupPending?: boolean }
+{ error: string, catalogRefreshPending?: boolean, accountCleanupPending?: boolean } // stderr, exit 1
 ```
 
 `catalogRefreshPending` 只出现在 Codex 删除结果中。值为 `true` 时，账号删除已经保存；人类可读
 输出会在 stderr 打印通用的 `ocx sync` 恢复指引，并仍以 0 退出。OAuth 账号和 API 密钥删除的
 响应结构不会增加此字段。
+
+`accountCleanupPending` 仅出现在 Codex 删除的 JSON 中。`false` 表示本地 credential cleanup 已完成；
+`true` 表示 account row 和 live ownership 已移除，但本地 credential cleanup 尚未完成。
+人类可读输出会显示固定的 `--cleanup-only` 指引并仍以 0 退出。JSON output 会保留该 flag，而不会把警告混入 stdout。
+如果成功的 Codex DELETE 之后 post-delete verification read 失败，命令会以 1 退出，但 JSON error 仍保留两个 Codex completion boolean，人类可读输出也仍会显示所需的 recovery guidance。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

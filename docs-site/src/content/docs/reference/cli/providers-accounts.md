@@ -94,7 +94,7 @@ use <provider> <id> Switch the active credential; 'main' selects the Codex App l
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
@@ -233,23 +233,34 @@ its model-catalog refresh remains pending, human output still exits successfully
 `ocx sync` recovery guidance on stderr. `--json` keeps stdout parseable and carries
 `catalogRefreshPending: true` in the completed login state without the human warning.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|main> --yes [--cleanup-only] [--json]`
 
-This guarded, non-interactive deletion requires `--yes`. Before deleting, it verifies that the id
-exists; a missing id exits 1 without sending DELETE. The main Codex App login cannot be removed, so
-`remove openai main --yes` is refused. After deletion, the family is read again: removing the pinned
+This guarded, non-interactive deletion requires `--yes`. OAuth and API-key removals verify that the id
+exists before sending DELETE. Codex removal is idempotent and sends DELETE for an absent row so a
+previously interrupted local cleanup can be retried; the server still returns 404 for an unknown id.
+After an `accountCleanupPending` result, add `--cleanup-only`: this completes orphaned credential
+cleanup only when persisted account absence can be confirmed, so a stale retry cannot remove a
+re-added account.
+The main Codex App login cannot be removed, so `remove openai main --yes` is refused. After deletion, the family is read again: removing the pinned
 Codex account clears the pin and returns to automatic selection; OAuth promotes the first remaining
 account or reports none; API-key pools promote the first remaining key or report none. `--json`
 success and failure shapes are:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
-{ error: string } // stderr, exit 1
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean, accountCleanupPending?: boolean }
+{ error: string, catalogRefreshPending?: boolean, accountCleanupPending?: boolean } // stderr, exit 1
 ```
 
 `catalogRefreshPending` is present on Codex removals only. When it is `true`, the account deletion is
 already saved; human output prints generic `ocx sync` recovery guidance on stderr and still exits 0.
 OAuth-account and API-key removal envelopes do not gain this field.
+
+`accountCleanupPending` is present only on Codex removal JSON. `false` means local credential cleanup
+completed. `true` means the account row was removed and live ownership was invalidated, but local
+credential cleanup did not complete. Human output prints fixed `--cleanup-only` guidance and still
+exits 0. JSON output preserves the flag without mixing warnings into stdout. If the post-delete
+verification read fails after a successful Codex DELETE, the command exits 1 but retains both Codex
+completion booleans in the JSON error, and human output still prints any required recovery guidance.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

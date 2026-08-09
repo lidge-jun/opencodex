@@ -18,7 +18,9 @@ import {
   type ProviderQuotaDto, type ProviderQuotaReportDto,
 } from "./account-api";
 import {
+  codexAccountCleanupPending,
   codexCatalogRefreshPending,
+  warnIfCodexAccountCleanupPending,
   warnIfCodexCatalogRefreshPending,
 } from "./account-catalog-refresh";
 
@@ -29,7 +31,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
   ocx account alias <provider> <id|main> <display-name|-> [--json]
   ocx account priority <provider> <id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
-  ocx account remove <provider> <id|main> --yes [--json]
+  ocx account remove <provider> <id|main> --yes [--cleanup-only] [--json]
   ocx account clear-cooldown <provider> <id|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]`;
 const PIPE_GUIDANCE = `Pipe the API key on stdin, for example:
@@ -207,16 +209,27 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   return 0;
 }
 
-function deletePath(type: "codex" | "oauth" | "api-key", name: string, id: string): string {
-  if (type === "codex") return `/api/codex-auth/accounts?id=${encodeURIComponent(id)}`;
+function deletePath(
+  type: "codex" | "oauth" | "api-key",
+  name: string,
+  id: string,
+  cleanupOnly = false,
+): string {
+  if (type === "codex") {
+    return `/api/codex-auth/accounts?id=${encodeURIComponent(id)}${cleanupOnly ? "&cleanupOnly=1" : ""}`;
+  }
   if (type === "oauth") return `/api/oauth/accounts?provider=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`;
   return `/api/providers/keys?name=${encodeURIComponent(name)}&id=${encodeURIComponent(id)}`;
 }
 
 export async function cmdRemove(args: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = flag(args, "--json");
-  const fail = (message: string): number => {
-    if (wantsJson) console.error(JSON.stringify({ error: message }));
+  const cleanupOnly = flag(args, "--cleanup-only");
+  const fail = (
+    message: string,
+    codexStatus?: { catalogRefreshPending: boolean; accountCleanupPending: boolean },
+  ): number => {
+    if (wantsJson) console.error(JSON.stringify({ error: message, ...codexStatus }));
     else console.error(`Error: ${message}`);
     return 1;
   };
@@ -225,13 +238,16 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
   const requestedId = args.shift();
   if (!name || !requestedId || args.length) return wantsJson ? fail("provider and account id are required") : usage();
   if (!confirmed) {
-    const message = `Confirmation required. Re-run: ocx account remove ${name} ${requestedId} --yes`;
+    const message = `Confirmation required. Re-run: ocx account remove ${name} ${requestedId} --yes${cleanupOnly ? " --cleanup-only" : ""}`;
     return wantsJson ? fail(message) : usage(message);
   }
   const classified = configAndType(deps, name);
   if ("error" in classified) return wantsJson ? fail(classified.error) : usage(`Error: ${classified.error}`);
+  if (cleanupOnly && classified.type !== "codex") return wantsJson
+    ? fail("--cleanup-only applies only to Codex accounts")
+    : usage("Error: --cleanup-only applies only to Codex accounts");
   const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
-  if (classified.type === "codex" && id === MAIN_ID) return wantsJson
+  if (classified.type === "codex" && id === MAIN_ID && !cleanupOnly) return wantsJson
     ? fail("the main Codex App login cannot be removed")
     : usage("Error: the main Codex App login cannot be removed");
   const baseUrl = await resolveBaseUrl(deps);
@@ -239,18 +255,32 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
   const before = await fetchRows(deps, baseUrl, name, classified.type);
   if (before.networkDown) return fail("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
   if (before.errorJson) return fail(errorText(before.errorJson, `failed to verify ${name} before removal`));
-  if (!before.rows.some(row => row.id === id)) return wantsJson
+  if (!before.rows.some(row => row.id === id) && classified.type !== "codex") return wantsJson
     ? fail(`account or key "${requestedId}" was not found`)
     : usage(`Error: account or key "${requestedId}" was not found`);
-  const response = await apiJson(deps, baseUrl, "DELETE", deletePath(classified.type, name, id));
+  const response = await apiJson(
+    deps,
+    baseUrl,
+    "DELETE",
+    deletePath(classified.type, name, id, cleanupOnly),
+  );
   if (response.status === 0) return fail("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
   if (response.status !== 200) return fail(errorText(response.json, `failed to remove ${requestedId}`));
   const catalogRefreshPending = classified.type === "codex"
     && codexCatalogRefreshPending(response.json);
+  const accountCleanupPending = classified.type === "codex"
+    && codexAccountCleanupPending(response.json);
   const after = await fetchRows(deps, baseUrl, name, classified.type);
   if (after.networkDown || after.errorJson) {
     const detail = after.networkDown ? "proxy not reachable" : typeof after.errorJson?.error === "string" ? after.errorJson.error : "unknown error";
-    return fail(`post-delete verification failed; delete may have succeeded: ${detail}`);
+    const message = `post-delete verification failed; delete may have succeeded: ${detail}`;
+    if (wantsJson) return fail(message, classified.type === "codex"
+      ? { catalogRefreshPending, accountCleanupPending }
+      : undefined);
+    const code = fail(message);
+    if (catalogRefreshPending) warnIfCodexCatalogRefreshPending(response.json);
+    if (accountCleanupPending) warnIfCodexAccountCleanupPending(response.json);
+    return code;
   }
   const removedActive = before.activeId === id;
   const result = {
@@ -259,14 +289,18 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
     id,
     removedActive,
     promotedActiveId: after.activeId,
-    ...(classified.type === "codex" ? { catalogRefreshPending } : {}),
+    ...(classified.type === "codex" ? { catalogRefreshPending, accountCleanupPending } : {}),
   };
   if (wantsJson) console.log(JSON.stringify(result, null, 2));
   else if (classified.type === "codex" && removedActive && after.activeId === null) console.log(`openai: ${AUTO_NOTE}`);
   else if (classified.type === "oauth") console.log(after.rows.length ? `${name}: active account is now ${after.activeId}` : `${name}: no accounts remaining`);
   else if (classified.type === "api-key") console.log(after.rows.length ? `${name}: active key is now ${after.activeId}` : `${name}: no keys remaining`);
+  else if (cleanupOnly) console.log(accountCleanupPending
+    ? `${name}: account cleanup is still pending`
+    : `${name}: account cleanup completed`);
   else console.log(`${name}: removed account ${requestedId}`);
   if (!wantsJson && catalogRefreshPending) warnIfCodexCatalogRefreshPending(response.json);
+  if (!wantsJson && accountCleanupPending) warnIfCodexAccountCleanupPending(response.json);
   return 0;
 }
 

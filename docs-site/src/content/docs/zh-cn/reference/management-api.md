@@ -208,7 +208,7 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户。成功的 POST/DELETE 响应包含 `catalogRefreshPending`。 | 400 输入无效；手动导入可能被禁用 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户。成功的 POST/DELETE 响应包含 `catalogRefreshPending`；DELETE 还可能包含 `accountCleanupPending: true`。 | 400 输入无效；404 未知账户；409 cleanup-only 重试无法确认 account 不存在；500 `codex_account_delete_rollback_failed` 需要重启后再重试；手动导入可能被禁用 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
@@ -237,6 +237,12 @@ Authorization: Bearer <admin-token>
 账号变更不会回滚，响应也不会暴露内部 provider、account、path 或 credential 详情；客户端只会
 收到完成状态布尔值。删除账号时会保留 selector 绑定，因此该账号缺失期间精确路由会 fail closed，
 而以后添加相同账号 id 时会恢复同一 selector。
+
+如果 config 删除已经提交，但本地 credential cleanup 未能完成，DELETE 仍会使 live ownership
+失效、请求 catalog convergence，并返回包含 `accountCleanupPending: true` 的成功响应。重复同一个 DELETE
+是幂等的，即使 account row 已不存在也会重试 cleanup。恢复客户端会添加 `cleanupOnly=1`；如果无法确认
+persisted account 不存在，该形式会返回 409，避免 stale retry 删除重新添加的 account。dashboard 会保留这个
+安全重试操作且不暴露不透明的 account id，CLI 会显示固定的 `--cleanup-only` 指引且不暴露 storage 详情。
 
 ## 如何选择客户端
 

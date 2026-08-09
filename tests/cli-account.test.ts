@@ -58,6 +58,8 @@ let oauthActiveId: string | null = "acct_1";
 let oauthLoginStatus: Record<string, unknown> = { loggedIn: false };
 let codexLoginStatus: Record<string, unknown> = { status: "pending" };
 let codexDeleteCatalogRefreshPending = false;
+let codexDeleteCleanupFailuresRemaining = 0;
+let codexOrphanAccountIds = new Set<string>();
 let keyEntries: Array<Record<string, unknown>> = [];
 let keyActiveId: string | null = "key_1";
 let logs: string[] = [];
@@ -138,9 +140,32 @@ async function mockManagementApi(req: Request): Promise<Response> {
   if (req.method === "DELETE" && url.pathname === "/api/codex-auth/accounts") {
     if (deleteFailure) return json({ error: deleteFailure.error }, deleteFailure.status);
     const id = url.searchParams.get("id");
-    codexAccounts = codexAccounts.filter(account => account.id !== id);
-    if (activeCodexAccountId === id) activeCodexAccountId = null;
+    const cleanupOnly = url.searchParams.get("cleanupOnly") === "1";
+    const configured = codexAccounts.some(account => account.id === id && account.isMain !== true);
+    if (cleanupOnly && configured) {
+      return json({ error: "Account absence could not be confirmed; cleanup retry was not applied" }, 409);
+    }
+    if (!cleanupOnly && !configured && (id === null || !codexOrphanAccountIds.has(id))) {
+      return json({ error: "Account not found" }, 404);
+    }
+    if (!cleanupOnly) {
+      codexAccounts = codexAccounts.filter(account => account.id !== id);
+      if (activeCodexAccountId === id) activeCodexAccountId = null;
+    }
     lastDeletedType = "codex";
+    if (id !== null
+      && codexDeleteCleanupFailuresRemaining > 0
+      && (!cleanupOnly || codexOrphanAccountIds.has(id))) {
+      codexDeleteCleanupFailuresRemaining -= 1;
+      codexOrphanAccountIds.add(id);
+      return json({
+        ok: true,
+        accountCleanupPending: true,
+        catalogRefreshPending: codexDeleteCatalogRefreshPending,
+        internalError: "private-delete-detail",
+      });
+    }
+    if (id !== null) codexOrphanAccountIds.delete(id);
     return json({
       ok: true,
       catalogRefreshPending: codexDeleteCatalogRefreshPending,
@@ -417,6 +442,8 @@ beforeEach(() => {
   oauthLoginStatus = { loggedIn: false };
   codexLoginStatus = { status: "pending" };
   codexDeleteCatalogRefreshPending = false;
+  codexDeleteCleanupFailuresRemaining = 0;
+  codexOrphanAccountIds = new Set<string>();
   keyEntries = [{
     id: "key_1",
     label: "personal",
@@ -787,12 +814,12 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("23: remove pre-check rejects an unknown id without DELETE", async () => {
+  test("23: the server rejects an unknown Codex id after an idempotent DELETE", async () => {
     const result = await run(["remove", "openai", "nope", "--yes"]);
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain('"nope" was not found');
-    expect(requests.some(request => request.method === "DELETE")).toBe(false);
+    expect(result.stderr).toContain("Account not found");
+    expect(requests.some(request => request.method === "DELETE")).toBe(true);
   });
 
   test("24: removing the pinned Codex account reports automatic selection", async () => {
@@ -816,17 +843,117 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(result.output).not.toContain("private-delete-detail");
   });
 
-  test("JSON Codex removal retains the pending flag without a human warning", async () => {
+  test("JSON Codex removal retains pending flags without a human warning", async () => {
     codexDeleteCatalogRefreshPending = true;
+    codexDeleteCleanupFailuresRemaining = 1;
     const result = await run(["remove", "openai", "chatgpt_1", "--yes", "--json"]);
 
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual(expect.objectContaining({
       ok: true,
       catalogRefreshPending: true,
+      accountCleanupPending: true,
     }));
     expect(result.stdout).not.toContain("private-delete-detail");
     expect(result.stderr).toBe("");
+  });
+
+  test("Codex cleanup-pending removal warns and cleanup-only completes the retry", async () => {
+    codexDeleteCleanupFailuresRemaining = 1;
+    codexDeleteCatalogRefreshPending = true;
+
+    const first = await run(["remove", "openai", "chatgpt_1", "--yes"]);
+    expect(first.code).toBe(0);
+    expect(first.stderr).toContain("local credential cleanup is pending");
+    expect(first.stderr).toContain("--cleanup-only");
+    expect(first.stderr).toContain("without deleting a re-added account");
+    expect(first.stderr).toContain("ocx sync");
+    expect(first.output).not.toContain("private-delete-detail");
+    expect(codexOrphanAccountIds.has("chatgpt_1")).toBe(true);
+
+    codexDeleteCatalogRefreshPending = false;
+    const retry = await run(["remove", "openai", "chatgpt_1", "--yes", "--cleanup-only"]);
+    expect(retry.code).toBe(0);
+    expect(retry.stdout).toContain("openai: account cleanup completed");
+    expect(retry.stderr).toBe("");
+    expect(codexOrphanAccountIds.has("chatgpt_1")).toBe(false);
+    expect(requests.some(request => request.method === "DELETE"
+      && request.search === "?id=chatgpt_1&cleanupOnly=1")).toBe(true);
+    expect(requests.filter(request =>
+      request.method === "DELETE" && request.path === "/api/codex-auth/accounts"
+    )).toHaveLength(2);
+  });
+
+  test("Codex cleanup-only retry never claims completion while cleanup remains pending", async () => {
+    codexDeleteCleanupFailuresRemaining = 2;
+
+    const first = await run(["remove", "openai", "chatgpt_1", "--yes"]);
+    expect(first.code).toBe(0);
+    expect(codexOrphanAccountIds.has("chatgpt_1")).toBe(true);
+
+    const retry = await run(["remove", "openai", "chatgpt_1", "--yes", "--cleanup-only"]);
+    expect(retry.code).toBe(0);
+    expect(retry.stdout).toContain("openai: account cleanup is still pending");
+    expect(retry.stdout).not.toContain("account cleanup completed");
+    expect(retry.stderr).toContain("--cleanup-only");
+    expect(codexOrphanAccountIds.has("chatgpt_1")).toBe(true);
+  });
+
+  test("Codex cleanup-only removal refuses a present account", async () => {
+    const before = structuredClone(codexAccounts);
+    const result = await run([
+      "remove", "openai", "chatgpt_1", "--yes", "--cleanup-only",
+    ]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("cleanup retry was not applied");
+    expect(codexAccounts).toEqual(before);
+  });
+
+  test("Codex cleanup-only removal completes when no orphaned credential exists", async () => {
+    codexDeleteCleanupFailuresRemaining = 1;
+
+    const result = await run([
+      "remove", "openai", "missing", "--yes", "--cleanup-only",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("openai: account cleanup completed");
+    expect(result.stderr).toBe("");
+    expect(codexOrphanAccountIds.has("missing")).toBe(false);
+    expect(codexDeleteCleanupFailuresRemaining).toBe(1);
+    expect(requests.some(request => request.method === "DELETE"
+      && request.path === "/api/codex-auth/accounts"
+      && request.search === "?id=missing&cleanupOnly=1")).toBe(true);
+  });
+
+  test("Codex cleanup-only removal maps main to an orphaned __main__ credential", async () => {
+    codexOrphanAccountIds.add("__main__");
+
+    const result = await run([
+      "remove", "openai", "main", "--yes", "--cleanup-only",
+    ]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("openai: account cleanup completed");
+    expect(result.stderr).toBe("");
+    expect(codexOrphanAccountIds.has("__main__")).toBe(false);
+    expect(requests.some(request => request.method === "DELETE"
+      && request.path === "/api/codex-auth/accounts"
+      && request.search === "?id=__main__&cleanupOnly=1")).toBe(true);
+    expect(codexAccounts.some(account => account.id === "__main__"
+      && account.isMain === true)).toBe(true);
+  });
+
+  test("Codex removal refuses the main account without cleanup-only", async () => {
+    const before = structuredClone(codexAccounts);
+    const result = await run(["remove", "openai", "main", "--yes"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("the main Codex App login cannot be removed");
+    expect(requests).toHaveLength(0);
+    expect(codexAccounts).toEqual(before);
   });
 
   test("25: removing the active OAuth account reports the promoted account", async () => {
@@ -841,14 +968,6 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("no keys remaining");
-  });
-
-  test("27: removing the main Codex login is refused without DELETE", async () => {
-    const result = await run(["remove", "openai", "main", "--yes"]);
-
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("main Codex App login cannot be removed");
-    expect(requests).toHaveLength(0);
   });
 
   test("28: add-key reads a pipe, posts the key and never prints it", async () => {
@@ -896,6 +1015,37 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(verifyFailed.code).toBe(1);
     expect(verifyFailed.stderr).toContain("delete may have succeeded");
     expect(verifyFailed.stderr).toContain("post-delete read failed");
+  });
+
+  test("Codex post-delete verification failure retains human cleanup guidance", async () => {
+    codexDeleteCleanupFailuresRemaining = 1;
+    codexDeleteCatalogRefreshPending = true;
+    postDeleteReadFailure = { status: 500, error: "post-delete read failed" };
+
+    const result = await run(["remove", "openai", "chatgpt_1", "--yes"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("delete may have succeeded");
+    expect(result.stderr).toContain("--cleanup-only");
+    expect(result.stderr).toContain("ocx sync");
+    expect(result.output).not.toContain("private-delete-detail");
+  });
+
+  test("Codex JSON post-delete verification failure retains completion flags", async () => {
+    codexDeleteCleanupFailuresRemaining = 1;
+    codexDeleteCatalogRefreshPending = true;
+    postDeleteReadFailure = { status: 500, error: "post-delete read failed" };
+
+    const result = await run(["remove", "openai", "chatgpt_1", "--yes", "--json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(JSON.parse(result.stderr)).toEqual({
+      error: "post-delete verification failed; delete may have succeeded: post-delete read failed",
+      catalogRefreshPending: true,
+      accountCleanupPending: true,
+    });
+    expect(result.output).not.toContain("private-delete-detail");
   });
 
   test("31: add-key surfaces POST failure and cleans stdin timeout listeners", async () => {
@@ -968,6 +1118,9 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     for (const command of ["refresh", "auto-switch", "remove", "add-key"]) {
       expect(help).toContain(command);
     }
+    expect(help).toContain(
+      "remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.",
+    );
   });
 
   test("C-gate fold: add-key redacts a key containing JSON-escaped characters", async () => {
@@ -1052,7 +1205,14 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       removedActive: true,
       promotedActiveId: null,
       catalogRefreshPending: false,
+      accountCleanupPending: false,
     });
+
+    const removedKey = await run(["remove", "openrouter", "key_1", "--yes", "--json"]);
+    const removedKeyJson = JSON.parse(removedKey.stdout) as Record<string, unknown>;
+    expect(removedKey.code).toBe(0);
+    expect(removedKeyJson).not.toHaveProperty("catalogRefreshPending");
+    expect(removedKeyJson).not.toHaveProperty("accountCleanupPending");
 
     deleteFailure = { status: 500, error: "json delete failed" };
     const failed = await run(["remove", "anthropic", "acct_1", "--yes", "--json"]);

@@ -97,7 +97,7 @@ use <provider> <id> Switch the active credential; 'main' selects the Codex App l
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
 priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+remove <provider> <id|main> --yes [--cleanup-only]  OAuth/API-key ids are checked first; Codex can retry orphan credential cleanup.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
@@ -230,10 +230,14 @@ provider-specific формы команды используйте `ocx account 
 остаётся пригодным для парсинга, а завершённый login-state содержит
 `catalogRefreshPending: true` без human-readable предупреждения.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|main> --yes [--cleanup-only] [--json]`
 
-Это защищённое неинтерактивное удаление требует `--yes`. Перед удалением оно проверяет, что id
-существует; если id отсутствует, команда завершается кодом 1 и DELETE даже не отправляется.
+Это защищённое неинтерактивное удаление требует `--yes`. Для OAuth и API-key наличие id проверяется
+до DELETE. Удаление Codex идемпотентно и отправляет DELETE даже при отсутствии row, чтобы повторить
+прерванную локальную очистку credential; для неизвестного id server всё равно возвращает 404.
+После `accountCleanupPending` добавьте `--cleanup-only`: этот option завершает очистку orphaned
+credential только когда отсутствие persisted account подтверждено, поэтому stale retry не удалит
+повторно добавленный account.
 Главный логин Codex App удалить нельзя, поэтому `remove openai main --yes` отклоняется. После
 удаления семейство перечитывается заново: удаление pinned-аккаунта Codex очищает pin и возвращает
 автоматический выбор; OAuth повышает в active первый оставшийся аккаунт либо сообщает, что их не
@@ -241,13 +245,20 @@ provider-specific формы команды используйте `ocx account 
 Формы успеха и неудачи в `--json`:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
-{ error: string } // stderr, exit 1
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean, accountCleanupPending?: boolean }
+{ error: string, catalogRefreshPending?: boolean, accountCleanupPending?: boolean } // stderr, exit 1
 ```
 
 `catalogRefreshPending` присутствует только при удалении аккаунтов Codex. Значение `true` означает,
 что удаление уже сохранено; human-readable вывод печатает в stderr общую рекомендацию `ocx sync` и
 по-прежнему завершается с кодом 0. Форматы удаления OAuth-аккаунтов и API-key не меняются.
+
+`accountCleanupPending` присутствует только в JSON удаления Codex. `false` означает, что локальная очистка
+credential завершена. `true` означает, что account row и live ownership удалены, но локальная очистка
+credential не завершилась. Human-readable вывод печатает фиксированную подсказку `--cleanup-only` и
+сохраняет код 0. JSON output сохраняет flag без предупреждения в stdout. Если post-delete verification
+read завершается ошибкой после успешного Codex DELETE, команда возвращает код 1, но JSON error сохраняет
+оба Codex completion boolean, а human-readable вывод по-прежнему печатает необходимые recovery guidance.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 

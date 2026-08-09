@@ -2221,9 +2221,11 @@ let configMutationDatabase: Database | null = null;
 
 /**
  * Serialize synchronous config and Codex credential-generation commits across processes with an
- * OS-backed SQLite write transaction. `busy_timeout=0` is deliberate: runtime request paths must
- * fail immediately under contention rather than freeze the Bun event loop. Process exit releases
- * SQLite locks without stale-owner deletion or lease recovery races.
+ * OS-backed SQLite write transaction. In rollback-journal mode, `BEGIN EXCLUSIVE` acquires the
+ * commit-required reader exclusion before callbacks can mutate external files; in WAL mode readers
+ * cannot block commit. `busy_timeout=0` is deliberate: runtime request paths must fail immediately
+ * under contention rather than freeze the Bun event loop. Process exit releases SQLite locks
+ * without stale-owner deletion or lease recovery races.
  *
  * Reentrancy is limited to the current synchronous call stack; never return a Promise from `fn`.
  */
@@ -2242,7 +2244,7 @@ export function withConfigMutationLockSync<T>(fn: () => T): T {
   try {
     database = new Database(path, { create: true });
     try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
-    database.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE");
     transactionOpen = true;
     initializeConfigGeneration(database);
   } catch (cause) {
@@ -2302,7 +2304,7 @@ export function observeConfigGeneration(): ConfigGenerationObservation {
  * Read the generation from the transaction that is open RIGHT NOW.
  *
  * The observer cannot do this job. On the very first acquisition the
- * `BEGIN IMMEDIATE` that creates the table has not committed yet, so a separate
+ * transaction that creates the table has not committed yet, so a separate
  * read-only connection cannot read a generation from it — measured, not
  * assumed. A caller that compared a pre-lock observation against an observer
  * re-read would therefore refuse every first write as stale.

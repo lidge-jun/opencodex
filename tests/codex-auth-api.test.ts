@@ -2563,6 +2563,7 @@ describe("codex-auth API", () => {
       codexAccountNamespaces: { team: accountId },
       codexAccountPickerEnabled: true,
     });
+    saveConfig(config);
     saveCodexAccountCredential(accountId, {
       accessToken: "delete-access",
       refreshToken: "delete-refresh",
@@ -3547,6 +3548,167 @@ describe("codex-auth API", () => {
     expect(isAccountNeedsReauth("pool-delete")).toBe(false);
   });
 
+  test("DELETE converges the picker after credential cleanup fails", async () => {
+    const accountId = "pool-delete-cleanup-failure";
+    const config = makeConfig({
+      activeCodexAccountId: accountId,
+      codexAccounts: [{ id: accountId, email: "delete-cleanup@example.test", isMain: false }],
+      codexAccountNamespaces: { stable: accountId },
+      codexAccountPickerEnabled: true,
+    });
+    saveConfig(config);
+    saveCodexAccountCredential(accountId, {
+      accessToken: "access-delete-cleanup",
+      refreshToken: "refresh-delete-cleanup",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "acct-delete-cleanup",
+    });
+    markAccountNeedsReauth(accountId);
+    updateAccountQuota(accountId, 70);
+    const closed: Array<{ code?: number; reason?: string }> = [];
+    let cancelled = false;
+    const ws = {
+      data: {
+        authContext: {
+          kind: "pool",
+          accountId,
+          generation: 1,
+          accessToken: "access-delete-cleanup",
+          chatgptAccountId: "acct-delete-cleanup",
+        },
+        cancel: () => { cancelled = true; },
+      } as WsData,
+      close: (code?: number, reason?: string) => { closed.push({ code, reason }); },
+    } as unknown as ServerWebSocket<WsData>;
+    registerCodexWebSocket(ws);
+    expect(getTrackedCodexWebSocketCountForAccount(accountId)).toBe(1);
+
+    let configSaveCalls = 0;
+    let convergenceCalls = 0;
+    const realSave = configModule.saveConfigPreservingClaudeCode;
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        configSaveCalls += 1;
+        realSave(candidate);
+      });
+    const removeSpy = spyOn(accountStoreModule, "removeCodexAccountCredential")
+      .mockImplementation(() => {
+        throw new Error("private cleanup detail /private/codex-accounts.json Bearer secret-token");
+      });
+
+    try {
+      const req = new Request(
+        `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+        { method: "DELETE" },
+      );
+      const response = await handleCodexAuthAPI(req, new URL(req.url), config, async () => {
+        convergenceCalls += 1;
+        expect(config.codexAccounts).toEqual([]);
+        expect(loadConfig().codexAccounts).toEqual([]);
+        expect(config.codexAccountNamespaces).toEqual({ stable: accountId });
+        expect(getCodexAccountCredential(accountId)).not.toBeNull();
+        expect(isAccountNeedsReauth(accountId)).toBe(false);
+        expect(getAccountQuota(accountId)).toBeNull();
+        expect(cancelled).toBe(true);
+        expect(closed).toEqual([{ code: 4001, reason: "Codex account invalidated" }]);
+        expect(getTrackedCodexWebSocketCountForAccount(accountId)).toBe(0);
+        return { status: "skipped", reason: "busy", retryable: true };
+      });
+
+      expect(response!.status).toBe(200);
+      const body = await response!.json();
+      expect(body).toEqual({
+        ok: true,
+        accountCleanupPending: true,
+        catalogRefreshPending: true,
+      });
+      expect(JSON.stringify(body)).not.toContain("private cleanup detail");
+      expect(JSON.stringify(body)).not.toContain("secret-token");
+      expect(configSaveCalls).toBe(1);
+      expect(convergenceCalls).toBe(1);
+    } finally {
+      removeSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
+
+    const retry = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}&cleanupOnly=1`,
+      { method: "DELETE" },
+    );
+    const retried = await handleCodexAuthAPI(retry, new URL(retry.url), config);
+    expect(retried!.status).toBe(200);
+    expect(await retried!.json()).toEqual({ ok: true, catalogRefreshPending: false });
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+  });
+
+  test("cleanup-only DELETE refuses an account row that is present again", async () => {
+    const accountId = "delete-cleanup-readded";
+    const config = makeConfig({
+      activeCodexAccountId: accountId,
+      codexAccounts: [{ id: accountId, email: "readded@example.test", isMain: false }],
+    });
+    saveConfig(config);
+    const beforePersistedConfig = loadConfig();
+    saveCodexAccountCredential(accountId, {
+      accessToken: "readded-access",
+      refreshToken: "readded-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "readded-account",
+    });
+    const beforeConfig = structuredClone(config);
+    const beforeCredential = getCodexAccountCredential(accountId);
+
+    const request = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}&cleanupOnly=1`,
+      { method: "DELETE" },
+    );
+    const response = await handleCodexAuthAPI(request, new URL(request.url), config);
+
+    expect(response!.status).toBe(409);
+    expect(await response!.json()).toEqual({
+      error: "Account absence could not be confirmed; cleanup retry was not applied",
+    });
+    expect(config).toEqual(beforeConfig);
+    expect(loadConfig()).toEqual(beforePersistedConfig);
+    expect(getCodexAccountCredential(accountId)).toEqual(beforeCredential);
+
+    accountStoreModule.removeCodexAccountCredential(accountId);
+    const noCredentialResponse = await handleCodexAuthAPI(request, new URL(request.url), config);
+    expect(noCredentialResponse!.status).toBe(409);
+    expect(config).toEqual(beforeConfig);
+    expect(loadConfig()).toEqual(beforePersistedConfig);
+  });
+
+  test("DELETE /api/codex-auth/accounts rejects an unknown valid account id", async () => {
+    const config = makeConfig();
+    const req = new Request(
+      "http://localhost/api/codex-auth/accounts?id=missing-account",
+      { method: "DELETE" },
+    );
+
+    const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(response!.status).toBe(404);
+    expect(await response!.json()).toEqual({ error: "Account not found" });
+  });
+
+  test.each(["0", "true", "yes", ""])(
+    "DELETE /api/codex-auth/accounts rejects cleanupOnly=%s",
+    async (cleanupOnly) => {
+      const config = makeConfig();
+      const url = new URL("http://localhost/api/codex-auth/accounts?id=missing-account");
+      url.searchParams.set("cleanupOnly", cleanupOnly);
+      const request = new Request(url, { method: "DELETE" });
+
+      const response = await handleCodexAuthAPI(request, url, config);
+
+      expect(response!.status).toBe(400);
+      expect(await response!.json()).toEqual({
+        error: "cleanupOnly must be 1 when provided",
+      });
+    },
+  );
+
   test.each([
     MAIN_CODEX_ACCOUNT_ID,
     "__proto__",
@@ -3607,6 +3769,147 @@ describe("codex-auth API", () => {
     expect(getCodexAccountCredential(accountId)).toBeNull();
   });
 
+  test("DELETE persists a configured row removal when config.json does not exist yet", async () => {
+    const accountId = "delete-first-config";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, email: "first-config@example.test", isMain: false }],
+    });
+    saveCodexAccountCredential(accountId, {
+      accessToken: "first-config-access",
+      refreshToken: "first-config-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "first-config-account",
+    });
+    expect(existsSync(getConfigPath())).toBe(false);
+
+    const request = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
+    );
+    const response = await handleCodexAuthAPI(request, new URL(request.url), config);
+
+    expect(response!.status).toBe(200);
+    expect(existsSync(getConfigPath())).toBe(true);
+    expect(loadConfig().codexAccounts).toEqual([]);
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+  });
+
+  test("credential-only legacy deletion does not create a missing config.json", async () => {
+    const accountId = "Constructor";
+    const config = makeConfig();
+    saveCodexAccountCredential(accountId, {
+      accessToken: "orphan-access",
+      refreshToken: "orphan-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "orphan-account",
+    });
+    expect(existsSync(getConfigPath())).toBe(false);
+
+    const request = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
+    );
+    const response = await handleCodexAuthAPI(request, new URL(request.url), config);
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toEqual({ ok: true, catalogRefreshPending: false });
+    expect(existsSync(getConfigPath())).toBe(false);
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+  });
+
+  test("DELETE returns fixed recovery guidance when config rollback cannot be restored", async () => {
+    const accountId = "delete-rollback-failed";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, email: "rollback@example.test", isMain: false }],
+    });
+    saveConfig(structuredClone(config));
+    saveCodexAccountCredential(accountId, {
+      accessToken: "rollback-access",
+      refreshToken: "rollback-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "rollback-account",
+    });
+    const beforeRuntime = structuredClone(config);
+    const beforeCredential = getCodexAccountCredential(accountId);
+    const saveSpy = spyOn(configModule, "saveConfigPreservingClaudeCode")
+      .mockImplementation(candidate => {
+        writeFileSync(getConfigPath(), JSON.stringify(candidate));
+        throw new Error("private primary persistence detail /secret/config.json");
+      });
+    const restoreSpy = spyOn(configModule, "atomicWriteFile")
+      .mockImplementation(() => {
+        throw new Error("private rollback detail /secret/backup.json");
+      });
+
+    try {
+      const request = new Request(
+        `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+        { method: "DELETE" },
+      );
+      const response = await handleCodexAuthAPI(request, new URL(request.url), config);
+      const body = await response!.json();
+
+      expect(response!.status).toBe(500);
+      expect(body).toEqual({
+        error: "Account deletion failed and the previous config could not be restored. Restart before retrying.",
+        code: "codex_account_delete_rollback_failed",
+      });
+      expect(JSON.stringify(body)).not.toContain("private");
+      expect(JSON.stringify(body)).not.toContain("/secret/");
+      expect(config).toEqual(beforeRuntime);
+      expect(getCodexAccountCredential(accountId)).toEqual(beforeCredential);
+    } finally {
+      restoreSpy.mockRestore();
+      saveSpy.mockRestore();
+    }
+  });
+
+  test("DELETE /api/codex-auth/accounts retries cleanup for an orphaned legacy reserved account", async () => {
+    const accountId = "Constructor";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, email: "legacy@example.test", isMain: false }],
+    });
+    saveCodexAccountCredential(accountId, {
+      accessToken: "legacy-access",
+      refreshToken: "legacy-refresh",
+      expiresAt: Date.now() + 5 * 60_000,
+      chatgptAccountId: "legacy-account",
+    });
+    const removeSpy = spyOn(accountStoreModule, "removeCodexAccountCredential")
+      .mockImplementation(() => {
+        throw new Error("private legacy cleanup detail");
+      });
+
+    try {
+      const firstRequest = new Request(
+        `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+        { method: "DELETE" },
+      );
+      const firstResponse = await handleCodexAuthAPI(firstRequest, new URL(firstRequest.url), config);
+
+      expect(firstResponse!.status).toBe(200);
+      expect(await firstResponse!.json()).toEqual({
+        ok: true,
+        accountCleanupPending: true,
+        catalogRefreshPending: false,
+      });
+      expect(config.codexAccounts).toEqual([]);
+      expect(getCodexAccountCredential(accountId)).not.toBeNull();
+    } finally {
+      removeSpy.mockRestore();
+    }
+
+    const retryRequest = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(accountId)}`,
+      { method: "DELETE" },
+    );
+    const retryResponse = await handleCodexAuthAPI(retryRequest, new URL(retryRequest.url), config);
+
+    expect(retryResponse!.status).toBe(200);
+    expect(await retryResponse!.json()).toEqual({ ok: true, catalogRefreshPending: false });
+    expect(getCodexAccountCredential(accountId)).toBeNull();
+  });
+
   test("legacy non-main __main__ is quarantined and removable without touching Desktop auth", async () => {
     const config = makeConfig({
       activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID,
@@ -3624,17 +3927,42 @@ describe("codex-auth API", () => {
 
     expect(getMainChatgptAccountId()).toBe("desktop-account");
     expect(resolveCodexAccountForThread("legacy-main-row", config)).toBeNull();
+    const removeSpy = spyOn(accountStoreModule, "removeCodexAccountCredential")
+      .mockImplementation(() => {
+        throw new Error("private legacy main cleanup detail");
+      });
 
-    const req = new Request(
+    try {
+      const req = new Request(
+        `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(MAIN_CODEX_ACCOUNT_ID)}`,
+        { method: "DELETE" },
+      );
+
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+      expect(resp!.status).toBe(200);
+      expect(await resp!.json()).toEqual({
+        ok: true,
+        accountCleanupPending: true,
+        catalogRefreshPending: false,
+      });
+    } finally {
+      removeSpy.mockRestore();
+    }
+
+    expect(config.codexAccounts).toEqual([]);
+    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(getCodexAccountCredential(MAIN_CODEX_ACCOUNT_ID)).not.toBeNull();
+    expect(getMainChatgptAccountId()).toBe("desktop-account");
+
+    const retry = new Request(
       `http://localhost/api/codex-auth/accounts?id=${encodeURIComponent(MAIN_CODEX_ACCOUNT_ID)}`,
       { method: "DELETE" },
     );
+    const retried = await handleCodexAuthAPI(retry, new URL(retry.url), config);
 
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
-
-    expect(resp!.status).toBe(200);
-    expect(config.codexAccounts).toEqual([]);
-    expect(config.activeCodexAccountId).toBeUndefined();
+    expect(retried!.status).toBe(200);
+    expect(await retried!.json()).toEqual({ ok: true, catalogRefreshPending: false });
     expect(getCodexAccountCredential(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
     expect(getMainChatgptAccountId()).toBe("desktop-account");
   });

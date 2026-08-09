@@ -231,7 +231,7 @@ manager. Its routes are:
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts. Successful POST/DELETE responses include `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts. Successful POST/DELETE responses include `catalogRefreshPending`; a DELETE can also include `accountCleanupPending: true`. | 400 invalid input; 404 unknown account; 409 cleanup-only retry could not confirm absence; 500 `codex_account_delete_rollback_failed` requires restart before retry; manual import can be disabled |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
@@ -263,6 +263,14 @@ deferred catalog attempt never rolls back the durable account mutation and never
 provider, account, path, or credential details; clients receive only the completion boolean. Deleting
 an account retains its selector binding so exact routes fail closed while the account is absent and the
 same selector is restored if that account id is added again.
+
+If the config deletion commits but local credential cleanup cannot finish, DELETE still
+invalidates live ownership, requests catalog convergence, and returns success with
+`accountCleanupPending: true`. Repeating the same DELETE is idempotent and retries cleanup even though
+the account row is already absent. Recovery clients add `cleanupOnly=1`; that form refuses with 409
+unless persisted account absence can be confirmed, so a stale retry cannot remove a re-added account.
+The dashboard retains this safe retry action without exposing the opaque account id, and the CLI
+prints fixed `--cleanup-only` guidance without reflecting storage details.
 
 ## Choosing a client
 

@@ -178,7 +178,7 @@ describe("absence is one state, and being unable to look is another", () => {
 describe("the generation read that belongs to the open transaction", () => {
   /**
    * The measured fact that made this necessary: on first acquisition the
-   * BEGIN IMMEDIATE creating the table has not committed, so a separate
+   * transaction creating the table has not committed, so a separate
    * read-only connection still sees nothing. The observer cannot do this job.
    */
   test("the observer cannot read the first transaction, and this can", () => {
