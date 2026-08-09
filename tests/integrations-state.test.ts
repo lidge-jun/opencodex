@@ -62,10 +62,10 @@ function input(overrides: Partial<Parameters<typeof readIntegrationState>[0]> = 
 }
 
 /** Write a Pi config carrying our provider entry, and return its exact text. */
-function seedOurConfig(): string {
+function seedOurConfig(models: readonly ExportModel[] = MODELS): string {
   const document = EXPORT_CLIENTS.pi.build({
     baseUrl: "http://127.0.0.1:10100/v1",
-    models: MODELS,
+    models,
     config: CONFIG,
   });
   const text = `${JSON.stringify(document, null, 2)}\n`;
@@ -75,10 +75,14 @@ function seedOurConfig(): string {
   return text;
 }
 
-function seedRecord(fileText: string, blockOverride?: string): OwnershipRecord {
+function seedRecord(
+  fileText: string,
+  blockOverride?: string,
+  recordedModels: readonly ExportModel[] = MODELS,
+): OwnershipRecord {
   const contribution = EXPORT_CLIENTS.pi.buildContribution({
     baseUrl: "http://127.0.0.1:10100/v1",
-    models: MODELS,
+    models: recordedModels,
     config: CONFIG,
   });
   const record: OwnershipRecord = {
@@ -113,16 +117,30 @@ describe("the five states, each triggered directly", () => {
   });
 
   test("stale: untouched, but no longer what we would write now", () => {
-    // Same file, but the record remembers a different contribution.
-    seedRecord(seedOurConfig(), fingerprint("a-previous-catalog"));
+    // The file still carries the contribution from the previous catalog. The
+    // desired contribution has moved on, so this is drift rather than a user
+    // edit to our fragment.
+    const previousModels: ExportModel[] = [
+      { namespaced: "anthropic/claude-opus-4-7", provider: "anthropic", id: "claude-opus-4-7", contextWindow: 200_000 },
+    ];
+    const text = seedOurConfig(previousModels);
+    seedRecord(text, undefined, previousModels);
     expect(readIntegrationState(input()).state).toBe("stale");
   });
 
-  test("conflict: the file changed after we wrote it", () => {
+  test("conflict: an owned fragment changed after we wrote it", () => {
     const text = seedOurConfig();
     seedRecord(text);
-    // A user edit after our write: the file hash no longer matches.
-    writeFileSync(join(home, ".pi", "agent", "models.json"), `${text}\n`);
+    // A user edit inside our provider block must still win over the catalog
+    // drift checks, even though unrelated siblings are allowed to change.
+    const editedDocument = JSON.parse(text) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    editedDocument.providers.opencodex!.baseUrl = "http://user-edited.invalid/v1";
+    writeFileSync(
+      join(home, ".pi", "agent", "models.json"),
+      `${JSON.stringify(editedDocument, null, 2)}\n`,
+    );
     const status = readIntegrationState(input());
     expect(status.state).toBe("conflict");
     expect(status.reason).toBe("foreign-edit");
@@ -168,12 +186,22 @@ describe("ordering guards", () => {
   });
 
   test("a foreign edit is never reported as stale", () => {
-    // Both axes differ: the file changed AND the contribution moved on. The
-    // foreign edit must win, because reporting drift here would let a later
-    // disable delete the user's change.
-    const text = seedOurConfig();
-    seedRecord(text, fingerprint("a-previous-catalog"));
-    writeFileSync(join(home, ".pi", "agent", "models.json"), `${text} `);
+    // Both axes differ: the owned fragment changed AND the contribution moved
+    // on. The foreign edit must win, because reporting drift here would let a
+    // later disable delete the user's change.
+    const previousModels: ExportModel[] = [
+      { namespaced: "anthropic/claude-opus-4-7", provider: "anthropic", id: "claude-opus-4-7", contextWindow: 200_000 },
+    ];
+    const text = seedOurConfig(previousModels);
+    seedRecord(text, undefined, previousModels);
+    const editedDocument = JSON.parse(text) as {
+      providers: Record<string, Record<string, unknown>>;
+    };
+    editedDocument.providers.opencodex!.baseUrl = "http://user-edited.invalid/v1";
+    writeFileSync(
+      join(home, ".pi", "agent", "models.json"),
+      `${JSON.stringify(editedDocument, null, 2)}\n`,
+    );
     const status = readIntegrationState(input());
     expect(status.state).toBe("conflict");
     expect(status.reason).toBe("foreign-edit");
@@ -359,6 +387,107 @@ describe("classifier unit behavior", () => {
   test("fragment order does not change the contribution fingerprint", () => {
     const reversed = { ...contribution, fragments: [...contribution.fragments].reverse() };
     expect(canonicalContribution(reversed)).toBe(canonicalContribution(contribution));
+  });
+});
+
+describe("ownership is scoped to recorded fragments", () => {
+  const ownedValue = {
+    baseUrl: "http://127.0.0.1:10100/v1",
+    api: "openai-chat",
+  };
+  const ownedContribution = {
+    clientId: "omp" as const,
+    fragments: [{ path: ["providers", "opencodex"], value: ownedValue }],
+  };
+  const extraValue = {
+    baseUrl: "https://freebuff.invalid/v1",
+    api: "openai-chat",
+  };
+  const documentWithExtra = {
+    providers: { opencodex: ownedValue, freebuff: extraValue },
+  };
+  const originalText = "providers:\n  opencodex:\n    baseUrl: http://127.0.0.1:10100/v1\n    api: openai-chat\n";
+  const textWithExtra = `${originalText}  freebuff:\n    baseUrl: https://freebuff.invalid/v1\n    api: openai-chat\n`;
+  const record: OwnershipRecord = {
+    clientId: "omp",
+    configPath: "/tmp/models.yml",
+    // The extra provider was added after this record was written. The
+    // classifier must not use this whole-file hash to claim our block changed.
+    fileFingerprint: fingerprint(originalText),
+    blockFingerprint: fingerprint(canonicalContribution(ownedContribution)),
+    fragmentPaths: [["providers", "opencodex"]],
+    appliedAt: "2026-08-02T00:00:00.000Z",
+    opId: "seeded-op",
+  };
+
+  test("an unrelated extra fragment remains current", () => {
+    const result = classifyIntegration({
+      fileText: textWithExtra,
+      fileIsRegular: true,
+      parsed: documentWithExtra,
+      record,
+      contribution: ownedContribution,
+    });
+
+    expect(result).toEqual({ state: "current" });
+  });
+
+  test("an unrelated extra fragment remains stale when our catalog moves", () => {
+    const newerContribution = {
+      ...ownedContribution,
+      fragments: [
+        {
+          ...ownedContribution.fragments[0],
+          value: { ...ownedValue, model: "new-model" },
+        },
+      ],
+    };
+    const result = classifyIntegration({
+      fileText: textWithExtra,
+      fileIsRegular: true,
+      parsed: documentWithExtra,
+      record,
+      contribution: newerContribution,
+    });
+
+    expect(result).toEqual({ state: "stale" });
+  });
+
+  test("modifying an owned fragment remains a conflict", () => {
+    const editedDocument = {
+      providers: {
+        opencodex: { ...ownedValue, baseUrl: "http://user-edited.invalid/v1" },
+        freebuff: extraValue,
+      },
+    };
+    const result = classifyIntegration({
+      fileText: `${JSON.stringify(editedDocument, null, 2)}\n`,
+      fileIsRegular: true,
+      parsed: editedDocument,
+      record,
+      contribution: ownedContribution,
+    });
+
+    expect(result).toEqual({ state: "conflict", reason: "foreign-edit" });
+  });
+
+  test("whole-document serializers still conflict on an unrelated source edit", () => {
+    const piContribution = { ...ownedContribution, clientId: "pi" as const };
+    const piRecord: OwnershipRecord = {
+      ...record,
+      clientId: "pi",
+      configPath: "/tmp/pi-models.json",
+      blockFingerprint: fingerprint(canonicalContribution(piContribution)),
+    };
+    const result = classifyIntegration({
+      fileText: textWithExtra,
+      fileIsRegular: true,
+      parsed: documentWithExtra,
+      record: piRecord,
+      contribution: piContribution,
+    });
+
+    expect(result).toEqual({ state: "conflict", reason: "foreign-edit" });
   });
 });
 

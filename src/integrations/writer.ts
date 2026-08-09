@@ -10,7 +10,7 @@
  * Design of record: devlog/_fin/260802_client_toggle_api/030 and 031.
  */
 import { dirname } from "node:path";
-import { EXPORT_CLIENTS, type ExportModel } from "../clients/config-export";
+import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { isLoopbackHostname } from "../codex/inject";
 import type { OcxConfig } from "../types";
 import { PARSE_FAILED, defaultIntegrationIO, loadTarget, parseConfig, type IntegrationIO } from "./config-io";
@@ -23,6 +23,7 @@ import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
+import { patchOmpYamlSource } from "./omp-yaml-source";
 
 export type RefusalReason =
   | "not_installed"
@@ -168,6 +169,15 @@ function snapshotAbsPath(store: IntegrationStateStore, entry: JournalEntry): str
   return snapshot.kind === "stored" ? snapshot.path : undefined;
 }
 
+function ompFragmentValue(contribution: ManagedContribution): unknown | undefined {
+  const fragment = contribution.fragments.find(item => (
+    item.path.length === 2
+    && item.path[0] === "providers"
+    && item.path[1] === "opencodex"
+  ));
+  return fragment?.value;
+}
+
 /** Shared preflight: detect, gate, read, parse and classify. */
 function preflight(input: IntegrationWriteInput) {
   const store = input.store ?? createIntegrationStateStore();
@@ -280,9 +290,22 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
    * user as a 500 with no path and no advice; it is a refusal like any other,
    * and the file is untouched because this happens before any write.
    */
+  const nextDocument = mergeContribution(base, contribution);
   let text: string;
   try {
-    text = serializeDocument(mergeContribution(base, contribution), exportSpec.format);
+    if (clientId === "omp" && before !== null) {
+      const value = ompFragmentValue(contribution);
+      const patched = value === undefined
+        ? null
+        : patchOmpYamlSource(before, { kind: "upsert", value }, nextDocument);
+      if (patched === null) {
+        return refuse(clientId, "unsafe", "unsafe",
+          `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so it was left alone`);
+      }
+      text = patched;
+    } else {
+      text = serializeDocument(nextDocument, exportSpec.format);
+    }
   } catch (error) {
     if (!(error instanceof UnserializableValueError)) throw error;
     return refuse(clientId, "unsafe", "unsafe",
@@ -357,7 +380,19 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   }
   let text: string;
   try {
-    text = serializeDocument(doc, exportSpec.format);
+    if (clientId === "omp" && before !== null) {
+      const patched = patchOmpYamlSource(before, {
+        kind: "remove",
+        removeEmptyProviders: record!.createdContainers?.includes("providers") === true,
+      }, doc);
+      if (patched === null) {
+        return refuse(clientId, "unsafe", "unsafe",
+          `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so nothing was removed`);
+      }
+      text = patched;
+    } else {
+      text = serializeDocument(doc, exportSpec.format);
+    }
   } catch (error) {
     if (!(error instanceof UnserializableValueError)) throw error;
     return refuse(clientId, "unsafe", "unsafe",

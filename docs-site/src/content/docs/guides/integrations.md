@@ -66,11 +66,12 @@ edits were yours.
 
 ## What to expect, honestly
 
-**Formatting is not preserved.** Applying parses your config and writes it back out, so
-every format may be reformatted, and YAML, JSON5 and TOML additionally lose their
-comments. Your settings survive the round trip and the bytes change. If you need the
-file exactly as it was, use Restore rather than Disable: the snapshot is a verbatim
-copy.
+**Formatting is generally not preserved.** Applying parses a config and writes it back
+out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
+OMP is the exception: its YAML writer patches only `providers.opencodex`, preserving
+unrelated provider comments and formatting byte-for-byte. If that exact source range
+cannot be identified safely, the operation refuses instead. For other clients, use
+Restore when you need the previous file bytes: the snapshot is a verbatim copy.
 
 **If a value cannot be rewritten faithfully, the switch refuses instead.** The round
 trip covers the value kinds these formats use in practice, and where it does not —

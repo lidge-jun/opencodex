@@ -72,6 +72,14 @@ function installHermes(): string {
   return configPath;
 }
 
+function installOmp(): string {
+  const spec = INTEGRATION_CLIENTS.omp;
+  mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
+  const configPath = spec.configPath(TEST_ENV, home);
+  mkdirSync(dirname(configPath), { recursive: true });
+  return configPath;
+}
+
 function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
   return {
     clientId: "hermes",
@@ -127,16 +135,20 @@ describe("apply", () => {
     expect((doc.providers as Record<string, unknown>).other).toEqual({ api: "http://elsewhere" });
   });
 
-  test("refuses when the file changed after we wrote it", () => {
+  test("refuses when a managed provider field changes after we wrote it", () => {
     const configPath = installHermes();
     expect(applyIntegration(input()).ok).toBe(true);
-    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}# a human edited this\n`);
+    const edited = readFileSync(configPath, "utf8").replace(
+      "api_mode: chat_completions",
+      "api_mode: user_edited",
+    );
+    writeFileSync(configPath, edited);
 
     const result = applyIntegration(input());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("conflict");
-    // The user's comment is still there.
-    expect(readFileSync(configPath, "utf8")).toContain("# a human edited this");
+    // The user's edit is still there.
+    expect(readFileSync(configPath, "utf8")).toContain("api_mode: user_edited");
   });
 
   test("refuses an unparseable config rather than overwriting it", () => {
@@ -203,15 +215,19 @@ describe("disable", () => {
     if (result.ok) expect(result.changed).toBe(false);
   });
 
-  test("refuses to delete a block after someone edited the file", () => {
+  test("refuses to delete a block after someone edits a managed provider field", () => {
     const configPath = installHermes();
     expect(applyIntegration(input()).ok).toBe(true);
-    writeFileSync(configPath, `${readFileSync(configPath, "utf8")}# mine\n`);
+    const edited = readFileSync(configPath, "utf8").replace(
+      "api_mode: chat_completions",
+      "api_mode: user_edited",
+    );
+    writeFileSync(configPath, edited);
 
     const result = disableIntegration(input());
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe("conflict");
-    expect(readFileSync(configPath, "utf8")).toContain("opencodex");
+    expect(readFileSync(configPath, "utf8")).toContain("api_mode: user_edited");
   });
 
   test("kimi loses its provider AND every model entry it owns", () => {
@@ -227,6 +243,73 @@ describe("disable", () => {
     expect(disableIntegration(input({ clientId: "kimi" })).ok).toBe(true);
     const after = Bun.TOML.parse(readFileSync(configPath, "utf8")) as { models?: Record<string, unknown> };
     expect(after.models).toEqual({ "opencodex/mine": { provider: "elsewhere" } });
+  });
+});
+
+describe("OMP source preservation", () => {
+  test("disables a generated OMP config without leaving its created container", () => {
+    const configPath = installOmp();
+    expect(applyIntegration(input({ clientId: "omp" })).ok).toBe(true);
+    expect(disableIntegration(input({ clientId: "omp" })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe("");
+  });
+
+  test("preserves unrelated provider comments and formatting through apply, refresh, and disable", () => {
+    const configPath = installOmp();
+    const original = [
+      "# user header",
+      "providers:",
+      "  freebuff: # keep provider comment",
+      "    baseUrl: \"https://freebuff.invalid/v1\"",
+      "    api: openai-completions # keep inline comment",
+      "# user tail",
+      "settings:",
+      "  compact: false",
+      "",
+    ].join("\n");
+    writeFileSync(configPath, original);
+
+    const ompInput = input({ clientId: "omp" });
+    expect(applyIntegration(ompInput).ok).toBe(true);
+    const applied = readFileSync(configPath, "utf8");
+    expect(applied).toContain("  freebuff: # keep provider comment\n");
+    expect(applied).toContain("    api: openai-completions # keep inline comment\n");
+
+    // This edit happens after OpenCodex recorded its file fingerprint. OMP's
+    // source patcher must preserve it while refreshing only our stale block.
+    const externallyEdited = applied.replace("# user header", "# user header edited later");
+    writeFileSync(configPath, externallyEdited);
+    const refreshedModels = [...MODELS, {
+      namespaced: "openai/gpt-5.6",
+      provider: "openai",
+      id: "gpt-5.6",
+      contextWindow: 272_000,
+    }];
+    expect(applyIntegration(input({ clientId: "omp", models: refreshedModels })).ok).toBe(true);
+    const refreshed = readFileSync(configPath, "utf8");
+    expect(refreshed).toContain("# user header edited later\n");
+    expect(refreshed).toContain("  freebuff: # keep provider comment\n");
+    expect(refreshed).toContain("    api: openai-completions # keep inline comment\n");
+
+    expect(disableIntegration(input({ clientId: "omp", models: refreshedModels })).ok).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(
+      original.replace("# user header", "# user header edited later"),
+    );
+  });
+
+  test("refuses to rewrite an ambiguous comment inside the managed YAML block", () => {
+    const configPath = installOmp();
+    expect(applyIntegration(input({ clientId: "omp" })).ok).toBe(true);
+    const edited = readFileSync(configPath, "utf8").replace(
+      "    baseUrl:",
+      "    # user note inside managed block\n    baseUrl:",
+    );
+    writeFileSync(configPath, edited);
+
+    const result = disableIntegration(input({ clientId: "omp" }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(edited);
   });
 });
 

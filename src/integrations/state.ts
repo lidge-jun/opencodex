@@ -2,9 +2,9 @@
  * "What is on disk, and did we put it there?"
  *
  * The classifier is deliberately ordered, and the order is load-bearing: an
- * unreadable file can never be reported as absent, and a foreign edit can never
- * be reported as ordinary drift. Getting that wrong would let `disable` delete
- * a user's own edits.
+ * unreadable file can never be reported as absent, and an edit to a fragment
+ * we own can never be reported as ordinary drift. Getting that wrong would let
+ * `disable` delete a user's own edits.
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §3.
  */
@@ -100,8 +100,43 @@ export function blockedContainerPath(
 }
 
 /**
- * The two-axis rule: the FILE hash proves nobody touched the file after us, and
- * the BLOCK hash proves our content is still what we would write today.
+ * Fingerprint the recorded fragments as they appear in the document now.
+ *
+ * The record intentionally names every path we own. Comparing just those
+ * values lets another integration or a user add a sibling without blocking a
+ * later refresh, while a change inside our block still fails closed.
+ */
+function recordedFragmentFingerprint(
+  doc: unknown,
+  record: OwnershipRecord,
+): string | null {
+  if (
+    !Array.isArray(record.fragmentPaths)
+    || record.fragmentPaths.length === 0
+    || !record.fragmentPaths.every(path => (
+      Array.isArray(path)
+      && path.length > 0
+      && path.every(key => typeof key === "string")
+    ))
+  ) return null;
+  const fragments = [];
+  for (const path of record.fragmentPaths) {
+    const value = readPath(doc, path);
+    if (value === undefined) return null;
+    fragments.push({ path, value });
+  }
+  return fingerprint(canonicalContribution({
+    clientId: record.clientId,
+    fragments,
+  }));
+}
+
+/**
+ * The two-axis rule: the recorded bytes or fragments prove nobody changed
+ * what we may rewrite, and the contribution hash proves our catalog has not
+ * moved on. OMP is the sole fragment-scoped client because its writer patches
+ * only `providers.opencodex`; every whole-document serializer retains the
+ * whole-file fingerprint guard.
  */
 export function classifyIntegration(input: {
   fileText: string | null;
@@ -144,7 +179,11 @@ export function classifyIntegration(input: {
   if (input.configPath !== undefined && input.record.configPath !== input.configPath) {
     return { state: "conflict", reason: "unowned-key" };
   }
-  if (fingerprint(input.fileText ?? "") !== input.record.fileFingerprint) {
+  const clientId = input.clientId ?? input.record.clientId;
+  if (clientId !== "omp" && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint) {
+    return { state: "conflict", reason: "foreign-edit" };
+  }
+  if (recordedFragmentFingerprint(input.parsed, input.record) !== input.record.blockFingerprint) {
     return { state: "conflict", reason: "foreign-edit" };
   }
   return input.record.blockFingerprint === fingerprint(canonicalContribution(input.contribution))
