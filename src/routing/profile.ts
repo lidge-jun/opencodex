@@ -9,6 +9,7 @@ import type {
   OcxConfig,
   OcxRoutingProfileConfig,
   OcxRoutingUnknownEvidenceMode,
+  OcxRoutingUnknownCostCapMode,
 } from "../types";
 import { codexAccountNamespaceEntries } from "../codex/account-namespaces";
 import { listComboIds, resolveComboId } from "../combos";
@@ -60,7 +61,7 @@ export interface NormalizedRoutingProfile {
   candidates: Array<{ provider: string; model: string }>;
   require: NormalizedRoutingProfileRequirements;
   optimize: { latency: number; health: number; cost: number; quota: number };
-  limits: { maxEstimatedCostUsd?: number };
+  limits: { maxEstimatedCostUsd?: number; onUnknownCost?: OcxRoutingUnknownCostCapMode };
   unknownEvidence: Record<"capability" | "health" | "quota" | "cost", OcxRoutingUnknownEvidenceMode>;
   revision: string;
 }
@@ -317,6 +318,11 @@ export function routingProfileIssues(
           || limits.maxEstimatedCostUsd < 0)) {
         issues.push({ path: ["limits", "maxEstimatedCostUsd"], message: "maxEstimatedCostUsd must be a non-negative number" });
       }
+      if (limits.onUnknownCost !== undefined
+        && limits.onUnknownCost !== "allow"
+        && limits.onUnknownCost !== "exclude") {
+        issues.push({ path: ["limits", "onUnknownCost"], message: 'onUnknownCost must be "allow" or "exclude"' });
+      }
     }
   }
 
@@ -401,6 +407,9 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
     limits: {
       ...(raw.limits?.maxEstimatedCostUsd !== undefined
         ? { maxEstimatedCostUsd: raw.limits.maxEstimatedCostUsd }
+        : {}),
+      ...(raw.limits?.onUnknownCost !== undefined
+        ? { onUnknownCost: raw.limits.onUnknownCost }
         : {}),
     },
     unknownEvidence: normalizedUnknownEvidence(raw),

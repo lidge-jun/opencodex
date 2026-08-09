@@ -955,9 +955,23 @@ export interface OcxRoutingProfileOptimize {
   quota?: number;
 }
 
+/**
+ * Policy for the hard cost ceiling when a candidate has no finite cost
+ * estimate. `"allow"` (default) preserves the documented dry-run contract:
+ * the cap only excludes evidence known to exceed it. `"exclude"` makes the
+ * ceiling fail-closed, so a candidate that cannot be proven under the cap is
+ * ineligible.
+ */
+export type OcxRoutingUnknownCostCapMode = "allow" | "exclude";
+
 export interface OcxRoutingProfileLimits {
   /** Hard per-request estimated-cost ceiling in USD. */
   maxEstimatedCostUsd?: number;
+  /**
+   * How `maxEstimatedCostUsd` behaves when the estimate is unknown.
+   * Defaults to `"allow"`; opt in to `"exclude"` for a true hard ceiling.
+   */
+  onUnknownCost?: OcxRoutingUnknownCostCapMode;
 }
 
 export interface OcxRoutingProfileUnknownEvidence {
