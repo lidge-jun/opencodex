@@ -7,6 +7,7 @@ import {
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
+import { stopUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
 import {
   cancelQueuedStorageWorkerSpawns,
   drainStorageWorkers,
@@ -447,6 +448,7 @@ export async function drainAndShutdown(
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
     stopStateStoreSweeper();
+    stopUserCostOverlayReconciler();
     cancelQueuedStorageWorkerSpawns();
     const shutdownJoins = await Promise.allSettled([
       abortStorageCleanupPolicyJobAsync(),
