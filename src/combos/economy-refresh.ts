@@ -3,6 +3,7 @@ import {
   currentUsageLogRevision,
   readRecentUsageEntries,
   usageLogRevisionKey,
+  type PersistedUsageEntry,
 } from "../usage/log";
 import {
   getEconomicQuotaSnapshot,
@@ -16,7 +17,7 @@ function nonNegative(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function usageAmount(allowance: OcxEconomicAllowance, entry: ReturnType<typeof readRecentUsageEntries>[number]): number {
+function usageAmount(allowance: OcxEconomicAllowance, entry: PersistedUsageEntry): number {
   if (allowance.unit === "requests") return 1;
   if (allowance.unit === "inputTokens") return nonNegative(entry.usage?.inputTokens);
   if (allowance.unit === "outputTokens") return nonNegative(entry.usage?.outputTokens);
@@ -25,18 +26,29 @@ function usageAmount(allowance: OcxEconomicAllowance, entry: ReturnType<typeof r
     : 0));
 }
 
+function entryMatchesAllowance(allowance: OcxEconomicAllowance, entry: PersistedUsageEntry): boolean {
+  const match = allowance.usageMatch;
+  if (!match) return true;
+  if (match.providers && match.providers.length > 0 && !match.providers.includes(entry.provider)) return false;
+  if (match.models && match.models.length > 0 && !match.models.includes(entry.model)) return false;
+  return true;
+}
+
 function snapshotFor(
   allowance: OcxEconomicAllowance,
-  entries: ReturnType<typeof readRecentUsageEntries>,
+  entries: PersistedUsageEntry[],
   now: number,
 ): OcxEconomicSnapshot {
   // The remaining value is computed from usage over the just-closed window, but it
   // applies to the CURRENT window starting now — so the snapshot advertises
   // windowStart = now. A boundary of now - durationMs would make the snapshot look
   // immediately rolled-over.
+  // Unscoped usage-log is experimental: when usageMatch is absent the allowance
+  // sums every provider/model in the log. Prefer scoping with usageMatch.providers/models.
   const filterStart = allowance.window.kind === "rolling" ? now - allowance.window.durationMs : undefined;
   const used = entries
     .filter(entry => filterStart === undefined || entry.timestamp >= filterStart)
+    .filter(entry => entryMatchesAllowance(allowance, entry))
     .reduce((total, entry) => total + usageAmount(allowance, entry), 0);
   return {
     remaining: Math.max(0, allowance.capacity - used),

@@ -1530,6 +1530,32 @@ const configSchema = z.object({
               }
             }
           }
+          if (allowance.usageMatch !== undefined) {
+            if (!allowance.usageMatch || typeof allowance.usageMatch !== "object" || Array.isArray(allowance.usageMatch)) {
+              ctx.addIssue({ code: "custom", path: [...path, "usageMatch"], message: "usageMatch must be an object" });
+            } else {
+              const usageMatch = allowance.usageMatch as Record<string, unknown>;
+              const allowedUsageMatchKeys = new Set(["providers", "models"]);
+              for (const key of Object.keys(usageMatch)) {
+                if (!allowedUsageMatchKeys.has(key)) {
+                  ctx.addIssue({ code: "custom", path: [...path, "usageMatch", key], message: `unknown usageMatch key "${key}"` });
+                }
+              }
+              for (const key of ["providers", "models"] as const) {
+                const value = usageMatch[key];
+                if (value === undefined) continue;
+                if (!Array.isArray(value)) {
+                  ctx.addIssue({ code: "custom", path: [...path, "usageMatch", key], message: `${key} must be an array of non-empty strings` });
+                  continue;
+                }
+                for (let i = 0; i < value.length; i += 1) {
+                  if (typeof value[i] !== "string" || !(value[i] as string).trim()) {
+                    ctx.addIssue({ code: "custom", path: [...path, "usageMatch", key, String(i)], message: `${key}[${i}] must be a non-empty string` });
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

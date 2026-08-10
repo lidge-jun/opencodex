@@ -443,25 +443,32 @@ export function reserveEconomicSelection(
   const reserve = (currentExcluded: Set<string>): EconomicSelectionResult => {
     const result = selectEconomicTarget(config, comboId, estimate, now, currentExcluded, isEligible);
     if (!result.target) return result;
+    const allowanceIds = result.target.allowances ?? [];
+    // Pure PAYG: no allowance holds and no reservation id noise.
+    if (allowanceIds.length === 0) return result;
+
+    const failTarget = (): EconomicSelectionResult => {
+      if (currentExcluded.size >= targetCount) {
+        return { targetIndex: null, candidates: result.candidates, reason: "reservation-headroom-race" };
+      }
+      const nextExcluded = new Set(currentExcluded);
+      nextExcluded.add(targetKey(result.target!));
+      const fallback = reserve(nextExcluded);
+      return fallback.target
+        ? { ...fallback, reason: "reservation-headroom-race" }
+        : { targetIndex: null, candidates: fallback.candidates, reason: "reservation-headroom-race" };
+    };
+
     const id = `econ-${++reservationSequence}`;
     const reservationsToAdd: Reservation[] = [];
-    for (const allowanceId of result.target.allowances ?? []) {
+    for (const allowanceId of allowanceIds) {
       const allowance = allowanceFor(config, allowanceId);
       const snapshot = snapshots.get(allowanceId);
-      if (!allowance || !snapshot) continue;
+      // Atomic: missing def/snapshot/headroom fails the whole target — never partial holds.
+      if (!allowance || !snapshot) return failTarget();
       const amount = economicConsumption(allowance, estimate, result.target.pricing);
       const headroom = usableHeadroom(allowance, snapshot, amount, activeReserved(allowanceId, now), now);
-      if (headroom === null || headroom < -EPSILON) {
-        if (currentExcluded.size >= targetCount) {
-          return { targetIndex: null, candidates: result.candidates, reason: "reservation-headroom-race" };
-        }
-        const nextExcluded = new Set(currentExcluded);
-        nextExcluded.add(targetKey(result.target));
-        const fallback = reserve(nextExcluded);
-        return fallback.target
-          ? { ...fallback, reason: "reservation-headroom-race" }
-          : { targetIndex: null, candidates: fallback.candidates, reason: "reservation-headroom-race" };
-      }
+      if (headroom === null || headroom < -EPSILON) return failTarget();
       reservationsToAdd.push({
         id,
         allowanceId,
@@ -473,6 +480,7 @@ export function reserveEconomicSelection(
         generation: captureConfigGeneration(),
       });
     }
+    if (reservationsToAdd.length !== allowanceIds.length) return failTarget();
     for (const reservation of reservationsToAdd) reservations.set(`${id}\0${reservation.allowanceId}`, reservation);
     return { ...result, reservationId: id };
   };

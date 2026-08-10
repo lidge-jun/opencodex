@@ -249,4 +249,42 @@ describe("economic snapshot refresh", () => {
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  test("scoped usageMatch.providers only counts matching provider", async () => {
+    const scoped = {
+      ...config(),
+      economicAllowances: {
+        promo: {
+          unit: "requests" as const,
+          capacity: 10,
+          window: { kind: "rolling" as const, durationMs: 60 * 60_000 },
+          source: "usage-log" as const,
+          usageMatch: { providers: ["included"] },
+        },
+      },
+    };
+    appendUsageEntry({ ...usage("one"), provider: "included", model: "m" });
+    appendUsageEntry({ ...usage("two"), provider: "payg", model: "m" });
+    await refreshEconomicSnapshots(scoped, NOW);
+    expect(getEconomicQuotaSnapshot("promo")?.remaining).toBe(9);
+  });
+
+  test("scoped usageMatch.models only counts matching model", async () => {
+    const scoped = {
+      ...config(),
+      economicAllowances: {
+        promo: {
+          unit: "requests" as const,
+          capacity: 10,
+          window: { kind: "rolling" as const, durationMs: 60 * 60_000 },
+          source: "usage-log" as const,
+          usageMatch: { models: ["m"] },
+        },
+      },
+    };
+    appendUsageEntry({ ...usage("one"), provider: "included", model: "m" });
+    appendUsageEntry({ ...usage("two"), provider: "included", model: "other" });
+    await refreshEconomicSnapshots(scoped, NOW);
+    expect(getEconomicQuotaSnapshot("promo")?.remaining).toBe(9);
+  });
 });

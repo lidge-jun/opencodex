@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearEconomicState,
+  countEconomicReservationsForAllowance,
   reserveEconomicSelection,
   setEconomicQuotaSnapshot,
 } from "../src/combos/economy";
@@ -87,5 +88,99 @@ describe("economic reservation races", () => {
 
     expect(result.target?.provider).toBe("alternate");
     expect(result.reservationId).toBeString();
+  });
+
+  test("target [A,B] with only A snapshotted is not picked and no partial A-only holds remain", () => {
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "payg",
+      providers: {
+        comboPrimary: { adapter: "openai-chat", baseUrl: "https://combo.example", models: ["m"] },
+        payg: { adapter: "openai-chat", baseUrl: "https://payg.example", models: ["m"] },
+      },
+      economicAllowances: {
+        allowanceA: { unit: "requests", capacity: 10, window: { kind: "balance" }, source: "manual" },
+        allowanceB: { unit: "requests", capacity: 10, window: { kind: "balance" }, source: "manual" },
+      },
+      combos: {
+        c: {
+          strategy: "economy",
+          economy: { unknownQuota: "reject" },
+          targets: [
+            { provider: "comboPrimary", model: "m", allowances: ["allowanceA", "allowanceB"] },
+            { provider: "payg", model: "m" },
+          ],
+        },
+      },
+    };
+    setEconomicQuotaSnapshot("allowanceA", { remaining: 10, updatedAt: NOW, source: "manual", confidence: "authoritative" });
+    const result = reserveEconomicSelection(cfg, "c", estimate, NOW);
+    expect(result.target?.provider).toBe("payg");
+    expect(countEconomicReservationsForAllowance("allowanceA", NOW)).toBe(0);
+    expect(countEconomicReservationsForAllowance("allowanceB", NOW)).toBe(0);
+  });
+
+  test("pure PAYG has no reservationId", () => {
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "payg",
+      providers: {
+        payg: { adapter: "openai-chat", baseUrl: "https://payg.example", models: ["m"] },
+      },
+      combos: {
+        c: { strategy: "economy", targets: [{ provider: "payg", model: "m" }] },
+      },
+    };
+    const result = reserveEconomicSelection(cfg, "c", estimate, NOW);
+    expect(result.target?.provider).toBe("payg");
+    expect(result.reservationId).toBeUndefined();
+  });
+
+  test("pure PAYG with empty allowances has no reservationId", () => {
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "payg",
+      providers: {
+        payg: { adapter: "openai-chat", baseUrl: "https://payg.example", models: ["m"] },
+      },
+      combos: {
+        c: { strategy: "economy", targets: [{ provider: "payg", model: "m", allowances: [] }] },
+      },
+    };
+    const result = reserveEconomicSelection(cfg, "c", estimate, NOW);
+    expect(result.target?.provider).toBe("payg");
+    expect(result.reservationId).toBeUndefined();
+  });
+
+  test("both A,B ok => reservationId present and one hold per allowance", () => {
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "comboPrimary",
+      providers: {
+        comboPrimary: { adapter: "openai-chat", baseUrl: "https://combo.example", models: ["m"] },
+        payg: { adapter: "openai-chat", baseUrl: "https://payg.example", models: ["m"] },
+      },
+      economicAllowances: {
+        allowanceA: { unit: "requests", capacity: 10, window: { kind: "balance" }, source: "manual" },
+        allowanceB: { unit: "requests", capacity: 10, window: { kind: "balance" }, source: "manual" },
+      },
+      combos: {
+        c: {
+          strategy: "economy",
+          economy: { unknownQuota: "reject" },
+          targets: [
+            { provider: "comboPrimary", model: "m", allowances: ["allowanceA", "allowanceB"] },
+            { provider: "payg", model: "m" },
+          ],
+        },
+      },
+    };
+    setEconomicQuotaSnapshot("allowanceA", { remaining: 10, updatedAt: NOW, source: "manual", confidence: "authoritative" });
+    setEconomicQuotaSnapshot("allowanceB", { remaining: 10, updatedAt: NOW, source: "manual", confidence: "authoritative" });
+    const result = reserveEconomicSelection(cfg, "c", estimate, NOW);
+    expect(result.target?.provider).toBe("comboPrimary");
+    expect(result.reservationId).toBeString();
+    expect(countEconomicReservationsForAllowance("allowanceA", NOW)).toBe(1);
+    expect(countEconomicReservationsForAllowance("allowanceB", NOW)).toBe(1);
   });
 });

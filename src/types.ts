@@ -975,6 +975,10 @@ export interface OcxEconomicAllowance {
   source?: OcxEconomicSource;
   staleAfterMs?: number;
   rates?: OcxEconomicRates;
+  usageMatch?: {
+    providers?: string[];
+    models?: string[];
+  };
 }
 export interface OcxEconomicSnapshot {
   remaining: number;
