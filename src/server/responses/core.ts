@@ -1075,10 +1075,15 @@ function settleComboStream(
 ): Response {
   if (!response.body || !reservationId) return response;
   let settled = false;
-  const settle = (): void => {
+  const doSettle = (): void => {
     if (settled) return;
     settled = true;
     settleComboReservation(reservationId, usage());
+  };
+  const doRelease = (): void => {
+    if (settled) return;
+    settled = true;
+    releaseEconomicReservation(reservationId);
   };
   const reader = response.body.getReader();
   const body = new ReadableStream<Uint8Array>({
@@ -1086,18 +1091,20 @@ function settleComboStream(
       try {
         const next = await reader.read();
         if (next.done) {
-          settle();
+          doSettle();
           controller.close();
         } else {
           controller.enqueue(next.value);
         }
       } catch (error) {
-        settle();
+        // Stream errors are not clean EOF: prefer release over settling
+        // partial usage to avoid burning quota on truncated/failed streams.
+        doRelease();
         controller.error(error);
       }
     },
     async cancel(reason) {
-      settle();
+      doRelease();
       await reader.cancel(reason);
     },
   });

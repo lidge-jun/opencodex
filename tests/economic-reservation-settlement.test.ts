@@ -246,6 +246,60 @@ data: [DONE]
     expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(50);
   });
 
+  test("stream success EOF with usage on log context settles (burns)", async () => {
+    setEconomicQuotaSnapshot("allowance", { remaining: 50, updatedAt: Date.now(), source: "manual", confidence: "authoritative" });
+    customFetchResponse = async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":4,"total_tokens":5}}
+
+data: [DONE]
+
+`));
+        controller.close();
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
+    const logCtx: Record<string, unknown> = { model: "", provider: "" };
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/c", input: "hello", max_output_tokens: 10, stream: true }),
+    });
+    const response = await handleComboResponses(request, { model: "combo/c", input: "hello", max_output_tokens: 10, stream: true }, "c", lifecycleConfig("credits"), logCtx as never, {});
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(50);
+    await response.arrayBuffer();
+    const after = getEconomicQuotaSnapshot("allowance")?.remaining;
+    expect(after).not.toBe(50);
+    expect(after).toBe(51);
+  });
+
+  test("stream cancel releases and does not settle even when usage would return tokens", async () => {
+    setEconomicQuotaSnapshot("allowance", { remaining: 50, updatedAt: Date.now(), source: "manual", confidence: "authoritative" });
+    const baseline = 50;
+    customFetchResponse = async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: {}\\n\\n"));
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
+    const logCtx: Record<string, unknown> = { model: "", provider: "" };
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/c", input: "hello", max_output_tokens: 10, stream: true }),
+    });
+    const response = await handleComboResponses(request, { model: "combo/c", input: "hello", max_output_tokens: 10, stream: true }, "c", lifecycleConfig(), logCtx as never, {});
+    (logCtx as { usage?: unknown }).usage = { inputTokens: 1, outputTokens: 4, totalTokens: 5 };
+    if ((logCtx as { activeAttempt?: { usage?: unknown } }).activeAttempt) {
+      (logCtx as { activeAttempt: { usage: unknown } }).activeAttempt.usage = { inputTokens: 1, outputTokens: 4, totalTokens: 5 };
+    }
+    await response.body?.cancel();
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(baseline);
+    const { selectEconomicTarget } = await import("../src/combos/economy");
+    const second = selectEconomicTarget(lifecycleConfig(), "c", { inputTokens: 1, outputTokens: 1, kind: "configured" }, Date.now());
+    expect(second.target?.provider).toBe("cheap");
+  });
+
   test("settles terminal failure usage", async () => {
     setEconomicQuotaSnapshot("allowance", { remaining: 50, updatedAt: Date.now(), source: "manual", confidence: "authoritative" });
     customFetchResponse = async () => Response.json({ error: { code: "context_length_exceeded", message: "too long" }, usage: { input_tokens: 1, output_tokens: 4, total_tokens: 5 } }, { status: 400 });
