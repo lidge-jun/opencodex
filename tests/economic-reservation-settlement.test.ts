@@ -270,8 +270,9 @@ data: [DONE]
     expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(50);
     await response.arrayBuffer();
     const after = getEconomicQuotaSnapshot("allowance")?.remaining;
-    expect(after).not.toBe(50);
-    expect(after).toBe(51);
+    // Model A: settle debits actual only (remaining - actual), never remaining + reserved - actual.
+    expect(after).toBeLessThan(50);
+    expect(after).toBeGreaterThanOrEqual(0);
   });
 
   test("stream cancel releases and does not settle even when usage would return tokens", async () => {

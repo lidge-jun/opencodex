@@ -229,7 +229,8 @@ describe("economic snapshot refresh", () => {
     const res = reserveEconomicSelection(promoCfg, "bulk", { inputTokens: 0, outputTokens: 0, fixedRequests: 1, kind: "configured" }, NOW);
     settleEconomicReservation(res.reservationId, { requests: 1 }, NOW + 100);
     const afterSettleManual = getEconomicQuotaSnapshot("manual")!;
-    expect(afterSettleManual.remaining).toBe(20);
+    // Model A: baseline 20 - actual 1 request = 19
+    expect(afterSettleManual.remaining).toBe(19);
     // Now refresh promo (usage-log) — it must not clobber manual.
     appendUsageEntry(usage("x", NOW));
     await refreshEconomicSnapshots(config(), NOW + 500);
