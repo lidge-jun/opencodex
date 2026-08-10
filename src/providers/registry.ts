@@ -1067,7 +1067,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // (billed against the Portal subscription) and `:free` slugs (e.g.
     // tencent/hy3:free, stepfun/step-3.7-flash:free, inclusionai/ling-3.0-flash:free);
     // free-tier gating is decided live by the Portal per account, so discovery
-    // from the signed-in account is authoritative (no static model list).
+    // from the signed-in account is authoritative; the static seed below is the
+    // logged-out fallback and only lists free models verified on a real account
+    // (2026-08-10): the Portal free list is authoritative and currently has
+    // exactly 4 :free models: tencent/hy3:free, poolside/laguna-s-2.1:free,
+    // stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free.
+    // inclusionai/ling-3.0-flash:free was removed from the Portal free list
+    // (404 on the inference API since 2026-08-07) and must not be seeded.
     id: "nous",
     label: "Nous Portal",
     adapter: "openai-chat",
@@ -1079,12 +1085,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://portal.nousresearch.com",
     defaultModel: "tencent/hy3:free",
     liveModels: true,
+    models: ["tencent/hy3:free", "poolside/laguna-s-2.1:free", "stepfun/step-3.7-flash:free", "poolside/laguna-xs-2.1:free"],
     modelDiscovery: {
       url: "https://inference-api.nousresearch.com/v1/models",
       maxResponseBytes: 262_144,
       maxModels: 512,
     },
-    note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live.",
+    note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
   },
   {
     id: "openai-apikey",
