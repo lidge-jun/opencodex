@@ -2065,7 +2065,12 @@ function sanitizeEconomicAllowancesForLoad(rawParsed: unknown): void {
   if (Object.keys(kept).length > 0) raw.economicAllowances = kept;
   else delete raw.economicAllowances;
   if (dropped.length > 0) {
-    console.warn(`⚠️  config.json ignored invalid economic allowance${dropped.length === 1 ? "" : "s"}: ${dropped.join(", ")}. Other settings were preserved.`);
+    const preview = dropped.slice(0, 10);
+    const more = dropped.length > preview.length ? ` (+${dropped.length - preview.length} more)` : "";
+    console.warn(
+      `⚠️  config.json dropped ${dropped.length} invalid economic allowance${dropped.length === 1 ? "" : "s"}: ${preview.join(", ")}${more}. `
+      + "Prepaid routing for those ids will not apply until fixed. Other settings were preserved.",
+    );
   }
 }
 

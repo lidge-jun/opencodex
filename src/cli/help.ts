@@ -147,9 +147,24 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Alias of ocx models.",
   },
   combo: {
-    usage: "ocx combo <list|show|set|remove> ...",
-    summary: "Manage combo failover and round-robin virtual models.",
-    details: ["Alias hierarchy: ocx route combo ...", "Use --targets provider/model[:weight],provider/model[:weight]."],
+    usage: "ocx combo <list|show|set|explain|remove> ...",
+    summary: "Manage combo failover, round-robin, and experimental economy virtual models.",
+    details: [
+      "Alias hierarchy: ocx route combo ...",
+      "Use --targets provider/model[:weight],provider/model[:weight].",
+      "Economy: ocx combo set <id> --combo-json '...' ; ocx combo explain <id> [--input-tokens n] [--output-tokens n] [--json].",
+    ],
+  },
+  allowance: {
+    usage: "ocx allowance <list|snapshot> ...",
+    summary: "Inspect economic allowances and manage runtime quota snapshots (experimental economy).",
+    details: [
+      "ocx allowance list [--json]",
+      "ocx allowance snapshot get <id> [--json]",
+      "ocx allowance snapshot set <id> --snapshot-json '<obj>' [--clear-reservations] [--json]",
+      "ocx allowance snapshot clear <id> [--clear-reservations] [--json]",
+      "Snapshots are in-memory only and lost on restart.",
+    ],
   },
   route: {
     usage: "ocx route combo <list|show|set|remove> ...",

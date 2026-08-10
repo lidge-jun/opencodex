@@ -121,7 +121,6 @@ describe("economic hostile-review blindspots", () => {
           economy: { unknownQuota: "deprioritize" },
           targets: [
             { provider: "included", model: "m", allowances: ["promo"] },
-            { provider: "payg", model: "m", pricing: { fixedPerRequest: 1 } },
           ],
         },
       },
@@ -136,14 +135,44 @@ describe("economic hostile-review blindspots", () => {
       },
     });
     setEconomicQuotaSnapshot("promo", { remaining: 10, updatedAt: NOW, source: "manual", confidence: "authoritative" });
-    // demand 2 → post=8, reserve threshold=9 → soft reserve pressure
+    // demand 2 → post=8, reserve threshold=9 → soft reserve pressure; sole eligible winner
     const explanation = explainEconomicCombo(cfg, "bulk", { inputTokens: 0, outputTokens: 0, fixedRequests: 2, kind: "configured" }, NOW);
     expect(explanation.selectedTarget).toBeString();
     const winner = explanation.candidates.find(c => c.target.provider === "included");
     expect(winner?.eligible).toBe(true);
     expect(winner?.exclusions).toEqual([]);
+    expect(winner?.hardExclusions).toEqual([]);
     expect(winner?.softSignals).toContain("reserve");
     expect(winner?.cashCost).toBe("included");
+    expect(explanation.reason).toBe("reserve pressure");
+    expect(winner?.rankingBand).toBe("reserve");
+  });
+
+  test("explain DTO exposes hardExclusions alias and stable shape keys", () => {
+    const cfg = baseConfig();
+    setEconomicQuotaSnapshot("promo", { remaining: 5, updatedAt: NOW, source: "manual", confidence: "authoritative" });
+    const explanation = explainEconomicCombo(cfg, "bulk", { inputTokens: 0, outputTokens: 0, fixedRequests: 1, kind: "configured" }, NOW);
+    expect(explanation).toMatchObject({
+      comboId: "bulk",
+      strategy: "economy",
+      selectedTarget: expect.any(String),
+      generatedAt: NOW,
+      reason: expect.any(String),
+    });
+    for (const c of explanation.candidates) {
+      expect(c.hardExclusions).toEqual(c.exclusions);
+      expect(Array.isArray(c.softSignals)).toBe(true);
+      expect(typeof c.configIndex).toBe("number");
+      expect(c.cashCost === "included" || c.cashCost === "unknown" || typeof c.cashCost === "number").toBe(true);
+    }
+  });
+
+  test("pure PAYG has no reservationId; atomic multi-allowance needs all snapshots", () => {
+    const paygOnly = baseConfig({
+      combos: { bulk: { strategy: "economy", targets: [{ provider: "payg", model: "m", pricing: { fixedPerRequest: 0.01 } }] } },
+    });
+    const payg = reserveEconomicSelection(paygOnly, "bulk", { inputTokens: 0, outputTokens: 0, fixedRequests: 1, kind: "configured" }, NOW);
+    expect(payg.reservationId).toBeUndefined();
   });
 
   test("countEconomicReservationsForAllowance tracks holds", () => {

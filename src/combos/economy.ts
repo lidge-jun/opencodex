@@ -39,12 +39,21 @@ export type EconomicSoftSignal =
   | "unknown-quota"
   | "expiration-pressure";
 
-export type EconomicRankingBand = "excluded" | "expiration" | "marginal-cost" | string;
+export type EconomicRankingBand =
+  | "excluded"
+  | "reserve"
+  | "unknown-quota"
+  | "expiration"
+  | "marginal-cost"
+  | "stable-order";
 
 export interface EconomicSelectionCandidate {
   target: EconomicTarget;
   eligible: boolean;
+  /** Hard disqualifiers (same as hardExclusions). */
   exclusions: EconomicHardExclusion[];
+  /** Alias of exclusions for explain consumers. */
+  hardExclusions: EconomicHardExclusion[];
   softSignals: EconomicSoftSignal[];
   configIndex: number;
   cashCost: number | "included" | "unknown";
@@ -312,6 +321,26 @@ function compareCandidates(a: EconomicSelectionCandidate, b: EconomicSelectionCa
   return a.configIndex - b.configIndex;
 }
 
+function rankingForCandidate(candidate: EconomicSelectionCandidate): { band: EconomicRankingBand; reason: string } {
+  if (!candidate.eligible || candidate.hardExclusions.length > 0) {
+    return { band: "excluded", reason: "excluded" };
+  }
+  // Match comparator priority: reserve → unknown → expiration → marginal cost → stable order.
+  if (candidate.softSignals.includes("reserve")) {
+    return { band: "reserve", reason: "reserve pressure" };
+  }
+  if (candidate.softSignals.includes("unknown-quota")) {
+    return { band: "unknown-quota", reason: "unknown quota deprioritized" };
+  }
+  if (candidate.softSignals.includes("expiration-pressure") || candidate.burnPressure !== null) {
+    return { band: "expiration", reason: "expiration pressure" };
+  }
+  if (typeof candidate.marginalUsd === "number" && Number.isFinite(candidate.marginalUsd)) {
+    return { band: "marginal-cost", reason: "lowest marginal cost" };
+  }
+  return { band: "stable-order", reason: "stable target order" };
+}
+
 function candidateFor(
   config: OcxConfig,
   combo: OcxComboConfig,
@@ -382,10 +411,11 @@ function candidateFor(
   }
   const cashCost = cashCostFor(target, estimate, cost);
   const eligible = hardExclusions.length === 0;
-  return {
+  const ranking = rankingForCandidate({
     target,
     eligible,
     exclusions: hardExclusions,
+    hardExclusions,
     softSignals,
     configIndex: index,
     cashCost,
@@ -395,7 +425,24 @@ function candidateFor(
     burnPressure: pressure,
     marginalUsd: cost,
     stale,
-    rankingBand: hardExclusions.includes("hard-headroom") ? "excluded" : pressure !== null ? "expiration" : cost !== null ? "marginal-cost" : `order-${index + 1}`,
+    rankingBand: "stable-order",
+    allowances: allowanceDetails,
+  });
+  return {
+    target,
+    eligible,
+    exclusions: hardExclusions,
+    hardExclusions,
+    softSignals,
+    configIndex: index,
+    cashCost,
+    consumption: consumptions,
+    postRequestRemaining,
+    reserveThresholds,
+    burnPressure: pressure,
+    marginalUsd: cost,
+    stale,
+    rankingBand: ranking.band,
     allowances: allowanceDetails,
   };
 }
@@ -415,18 +462,28 @@ export function selectEconomicTarget(
     const candidate = candidateFor(config, combo, { ...target, weight: target.weight ?? 1 }, estimate, now, index, new Set(excluded));
     if (isEligible && !isEligible(candidate.target)) {
       if (!candidate.exclusions.includes("ineligible")) candidate.exclusions.push("ineligible");
-      candidate.eligible = candidate.exclusions.length === 0;
+      if (!candidate.hardExclusions.includes("ineligible")) candidate.hardExclusions.push("ineligible");
+      candidate.eligible = candidate.hardExclusions.length === 0;
+      if (!candidate.eligible) {
+        const ranking = rankingForCandidate(candidate);
+        candidate.rankingBand = ranking.band;
+      }
     }
     return candidate;
   });
   const available = candidates.filter(candidate => candidate.eligible);
   if (available.length === 0) return { targetIndex: null, candidates, reason: "no-economically-eligible-target" };
-  const winner = available.slice().sort(compareCandidates)[0]!;
+  let winner = available[0]!;
+  for (let i = 1; i < available.length; i += 1) {
+    if (compareCandidates(available[i]!, winner) < 0) winner = available[i]!;
+  }
+  const ranking = rankingForCandidate(winner);
+  winner.rankingBand = ranking.band;
   return {
     target: winner.target,
     targetIndex: combo.targets.findIndex(target => targetKey(target) === targetKey(winner.target)),
     candidates,
-    reason: winner.rankingBand === "expiration" ? "expiration pressure" : winner.rankingBand === "marginal-cost" ? "lowest marginal cost" : "stable target order",
+    reason: ranking.reason,
   };
 }
 

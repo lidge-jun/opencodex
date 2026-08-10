@@ -237,15 +237,18 @@ an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
 rebuild-index` forces one. Nothing in this system auto-tunes weights,
 budgets, or candidate sets.
 
-## Economic combo routing
+## Economic combo routing (experimental)
 
-`strategy: "economy"` is an additive combo strategy. Shared static allowance buckets
-are configured under `economicAllowances` and referenced by target `allowances` arrays;
-remaining values are cached runtime snapshots. Selection is deterministic and applies
-hard eligibility first, then reserves, expiration pressure, marginal cost, snapshot
-freshness, and configured target order. It does not classify requests or synchronously
-contact provider quota APIs. Use `ocx combo explain <id> --json` for the full decision
-breakdown.
+`strategy: "economy"` is an **experimental**, additive combo strategy. Shared static allowance
+buckets live under `economicAllowances` and are referenced by target `allowances` arrays; remaining
+values are cached **process-local** runtime snapshots (lost on restart; not shared across instances).
+Selection is deterministic: hard eligibility first, then soft reserve / unknown-quota pressure,
+expiration pressure, marginal cost, and configured target order. It does not classify requests or
+call provider quota APIs on the request path. Ledger: settle debits actual usage only; cancel
+releases holds without burn. Optional `usageMatch.providers` / `usageMatch.models` scopes
+`source: "usage-log"` refresh; unscoped usage-log summation is experimental. Use
+`ocx combo explain <id> --json` and `ocx allowance …` for operator surfaces. The GUI preserves
+economy fields only — no full editor.
 
 ### `economy` policy
 
@@ -259,8 +262,8 @@ breakdown.
 - `unknownQuota` (`allow` | `deprioritize` | `reject`, default `deprioritize`): how a
   target behaves when a referenced allowance has no cached snapshot.
 - `maxMarginalUsd` (optional, non-negative): the highest estimated per-request USD a
-  target may cost before it is excluded; unknown costs are treated as unknown, not
-  zero.
+  target may cost before it is excluded; **unknown cash cost is fail-closed excluded**
+  when this guardrail is set.
 
 ### Target fields
 

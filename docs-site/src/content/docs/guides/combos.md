@@ -335,12 +335,21 @@ validation message.
 The error was terminal rather than target-specific. Fix invalid input, reduce an oversized context,
 handle a policy refusal, or correct the rejected request origin. Combos do not hop for those cases.
 
-## Economic routing
+## Economic routing (experimental)
+
+> **Experimental.** Economy combos are opt-in. Quota state is process-local (not shared across
+> multiple proxy instances), snapshots are lost on restart, and without manual snapshots or a scoped
+> `usage-log` feed the common case is deprioritized included targets falling through to PAYG.
+> The GUI only **preserves** economy JSON fields — it is not an allowance editor.
 
 Use `strategy: "economy"` when the targets in one combo are already known to be interchangeable and
 should be ranked by quota opportunity cost. It is not a task classifier; keep separate combos such as
 `bulk-code` and `frontier-review` for different capability classes. Existing `failover` and
 `round-robin` behavior is unchanged.
+
+**Ledger (Model A):** `snapshot.remaining` is a baseline from refresh/manual PUT. Reservations are
+off-book concurrency holds. Settle subtracts **actual** usage only (`remaining - actual`). Cancel and
+plain release drop the hold without changing remaining.
 
 **Day-one reality:** without operator-supplied snapshots (or a future provider adapter), included
 targets usually have unknown quota and are deprioritized (or rejected, if you set
