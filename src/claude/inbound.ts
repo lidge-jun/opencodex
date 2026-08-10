@@ -13,6 +13,7 @@ import type { OcxClaudeCodeConfig } from "../types";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { resolveDesktop3pAlias } from "./desktop-3p";
+import { isClaudeWebSearchToolName } from "./outbound";
 import { createHash } from "node:crypto";
 
 export class AnthropicRequestError extends Error {}
@@ -375,7 +376,12 @@ function toolChoiceToResponses(choice: unknown, body: Rec): void {
       if (typeof choice.name !== "string" || choice.name.length === 0) {
         throw new AnthropicRequestError("tool_choice.tool requires a name");
       }
-      body.tool_choice = { type: "function", name: choice.name };
+      // Anthropic represents hosted WebSearch as a named tool choice, while
+      // Responses requires the choice type to match the hosted declaration.
+      // Preserve forced-tool intent rather than weakening it to `auto`.
+      body.tool_choice = isClaudeWebSearchToolName(choice.name)
+        ? { type: "web_search" }
+        : { type: "function", name: choice.name };
       break;
     default: break;
   }
@@ -502,8 +508,9 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
     // An explicit "disabled" is an instruction, not an absence. Dropping it made this
     // indistinguishable from a request that never mentioned thinking — and for models that
     // think by default, omission means thinking is ON, sharing the caller's max_tokens (#545).
-    // "none" is the parser's disable sentinel (parser.ts REASONING_EFFORTS).
-    body.reasoning = { effort: "none", summary: "none" };
+    // `none` is the effort disable sentinel. It is not a valid OpenAI summary
+    // value, so do not attach the similarly named internal catalog sentinel.
+    body.reasoning = { effort: "none" };
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
     const reasoning: Rec = { summary: "auto" };
     if (outputConfigEffort !== undefined) {
