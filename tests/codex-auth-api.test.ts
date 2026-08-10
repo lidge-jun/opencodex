@@ -69,6 +69,7 @@ import {
   listOpenAiForwardSidecarCandidates,
   resolveFirstUsableOpenAiSidecar,
 } from "../src/providers/openai-sidecar";
+import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
@@ -1956,6 +1957,143 @@ describe("codex-auth API", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("reset-credit lookup rejects a declared oversized response before reading it", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-declared-cap", email: "declared@example.test" });
+    let pulls = 0;
+    let markCancelled!: () => void;
+    const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { pulls += 1; },
+      cancel() { markCancelled(); },
+    }, { highWaterMark: 0 }), {
+      headers: { "content-length": String(BOUNDED_BODY_MAX_BYTES + 1) },
+    })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-declared-cap");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+    await cancelled;
+    expect(pulls).toBe(0);
+  });
+
+  test("reset-credit lookup cancels an undeclared response that crosses the byte cap", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-stream-cap", email: "stream@example.test" });
+    let sent = false;
+    let markCancelled!: () => void;
+    const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new Uint8Array(BOUNDED_BODY_MAX_BYTES));
+          return;
+        }
+        controller.enqueue(new Uint8Array([0x61]));
+      },
+      cancel() { markCancelled(); },
+    }))) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-stream-cap");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+    await cancelled;
+  });
+
+  test("reset-credit lookup binds client cancellation to the upstream body", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-cancel", email: "cancel@example.test" });
+    let started!: () => void;
+    const bodyStarted = new Promise<void>(resolve => { started = resolve; });
+    let markCancelled!: () => void;
+    const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull() { started(); },
+      cancel() { markCancelled(); },
+    }))) as typeof fetch;
+    const controller = new AbortController();
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-cancel", {
+      signal: controller.signal,
+    });
+
+    const pending = handleCodexAuthAPI(req, new URL(req.url), config);
+    await bodyStarted;
+    controller.abort(new DOMException("client disconnected", "AbortError"));
+    const resp = await pending;
+
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+    await cancelled;
+  });
+
+  test("reset-credit lookup cancels a response when the client aborts before the reader attaches", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-pre-reader-cancel", email: "pre-reader@example.test" });
+    const controller = new AbortController();
+    let pulls = 0;
+    let markCancelled!: () => void;
+    const cancelled = new Promise<void>(resolve => { markCancelled = resolve; });
+    globalThis.fetch = (async () => {
+      controller.abort(new DOMException("client disconnected", "AbortError"));
+      return new Response(new ReadableStream<Uint8Array>({
+        pull() { pulls += 1; },
+        cancel() { markCancelled(); },
+      }, { highWaterMark: 0 }));
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-pre-reader-cancel", {
+      signal: controller.signal,
+    });
+
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+    await cancelled;
+    expect(pulls).toBe(0);
+  });
+
+  test.each([
+    { label: "invalid UTF-8", body: new Uint8Array([0xff]) },
+    { label: "malformed JSON", body: "{" },
+  ])("reset-credit lookup rejects $label without reflecting it", async ({ body }) => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-invalid", email: "invalid@example.test" });
+    globalThis.fetch = (async () => new Response(body)) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-invalid");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+  });
+
+  test("reset-credit lookup returns only validated fields from a bounded response", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-fields", email: "fields@example.test" });
+    globalThis.fetch = (async () => Response.json({
+      credits: [
+        { granted_at: "2026-01-01T00:00:00Z", expires_at: "2026-02-01T00:00:00Z", secret: "drop-me" },
+        { granted_at: 123, expires_at: "invalid" },
+      ],
+      rate_limit_reset_credits: { available_count: 1 },
+      unexpected: "drop-me",
+    })) as typeof fetch;
+
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-fields");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+
+    expect(resp?.status).toBe(200);
+    expect(await resp?.json()).toEqual({
+      credits: [{ granted_at: "2026-01-01T00:00:00Z", expires_at: "2026-02-01T00:00:00Z" }],
+      available_count: 1,
+    });
   });
 
   test("reset-credit consume rejects invalid account ids before credential lookup", async () => {

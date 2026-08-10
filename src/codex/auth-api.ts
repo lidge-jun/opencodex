@@ -104,7 +104,8 @@ import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types"
 import type { CatalogDisposition } from "./convergence-types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
-import { readBoundedResponseBody } from "../lib/bounded-body";
+import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBody } from "../lib/bounded-body";
+import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import {
   oauthAccountHealthFields,
   projectCodexAccountHealth,
@@ -335,6 +336,43 @@ function safeResetCreditsDto(input: unknown): { credits: { granted_at: string; e
 function safeResetCreditConsumeDto(input: unknown): { code: string } {
   const obj = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   return { code: typeof obj.code === "string" ? obj.code : "unknown" };
+}
+
+type ResetCreditJsonRead =
+  | { ok: true; value: unknown }
+  | { ok: false };
+
+function cancelResponseBodyWithoutWaiting(body: ReadableStream<Uint8Array> | null): void {
+  if (!body) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // Some stream implementations throw synchronously from cancel().
+  }
+}
+
+async function readResetCreditJson(
+  response: Response,
+  signal: AbortSignal,
+): Promise<ResetCreditJsonRead> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isSafeInteger(declaredLength)
+    && declaredLength >= 0
+    && declaredLength > BOUNDED_BODY_MAX_BYTES) {
+    cancelResponseBodyWithoutWaiting(response.body);
+    return { ok: false };
+  }
+  try {
+    const body = await readBoundedResponseBody(response, {
+      signal,
+      maxBytes: BOUNDED_BODY_MAX_BYTES,
+      fatalUtf8: true,
+    });
+    if (!body.displaySafe || body.truncated || !body.text.trim()) return { ok: false };
+    return { ok: true, value: JSON.parse(body.text) as unknown };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export function isUnverifiedCodexImportEnabled(): boolean {
@@ -1682,21 +1720,36 @@ export async function handleCodexAuthAPI(
 
     try {
       const result = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
-        const resp = await fetch(
-          "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
-          {
-            headers: {
-              Authorization: `Bearer ${auth.accessToken}`,
-              "ChatGPT-Account-Id": auth.chatgptAccountId,
+        const linkedSignal = signalWithTimeout(8000, req.signal);
+        let detachBodyAbort = () => {};
+        try {
+          const resp = await fetch(
+            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+            {
+              headers: {
+                Authorization: `Bearer ${auth.accessToken}`,
+                "ChatGPT-Account-Id": auth.chatgptAccountId,
+              },
+              signal: linkedSignal.signal,
             },
-            signal: AbortSignal.timeout(8000),
-          },
-        );
-        if (!resp.ok) {
-          await resp.body?.cancel().catch(() => {});
-          return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
+          );
+          // Own the response body before the bounded reader attaches. If the client
+          // disconnects in that narrow window, Bun otherwise tears down the native
+          // body off the awaited path and can report an unhandled rejection.
+          detachBodyAbort = cancelBodyOnAbort(resp.body, linkedSignal.signal);
+          if (!resp.ok) {
+            await resp.body?.cancel().catch(() => {});
+            return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
+          }
+          const parsed = await readResetCreditJson(resp, linkedSignal.signal);
+          if (!parsed.ok) {
+            return jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
+          }
+          return jsonResponse(safeResetCreditsDto(parsed.value));
+        } finally {
+          detachBodyAbort();
+          linkedSignal.cleanup();
         }
-        return jsonResponse(safeResetCreditsDto(await resp.json()));
       });
       return result.ok ? result.value : result.response;
     } catch (e) {
