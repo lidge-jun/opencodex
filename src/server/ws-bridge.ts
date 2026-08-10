@@ -40,6 +40,8 @@ export interface WsData {
   liveUpstreamUrl?: string;
   liveUpstreamHeaders?: Record<string, string>;
   livePending?: Array<string | Buffer>;
+  /** Total encoded bytes retained in livePending while the upstream connects. */
+  livePendingBytes?: number;
   liveOpened?: boolean;
   /** Once teardown starts, ignore new client frames until the upstream closes. */
   liveClosing?: boolean;
