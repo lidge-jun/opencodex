@@ -7,7 +7,7 @@ import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../../src/codex/catalog/native-mo
 
 export { SUPPORTED_NATIVE_OPENAI_SLUGS };
 
-export type ComboStrategy = "failover" | "round-robin";
+export type ComboStrategy = "failover" | "round-robin" | "economy";
 export type ComboEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export const COMBO_EFFORTS: ComboEffort[] = ["low", "medium", "high", "xhigh", "max", "ultra"];
@@ -45,6 +45,8 @@ export interface ComboTarget {
   provider: string;
   model: string;
   weight?: number;
+  allowances?: string[];
+  pricing?: Record<string, number>;
   /** UI-only stable key for React lists; never sent to the API. */
   clientKey?: string;
 }
@@ -56,6 +58,8 @@ export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget 
     provider: partial.provider ?? "",
     model: partial.model ?? "",
     ...(partial.weight !== undefined ? { weight: partial.weight } : {}),
+    ...(partial.allowances ? { allowances: [...partial.allowances] } : {}),
+    ...(partial.pricing ? { pricing: { ...partial.pricing } } : {}),
     clientKey: partial.clientKey ?? `ct-${++comboTargetKeySeq}`,
   };
 }
@@ -71,6 +75,7 @@ export interface ComboItem {
   /** Display-only catalog label used by native aliases. */
   displayName: string | null;
   strategy: ComboStrategy;
+  economy?: { unknownQuota?: "allow" | "deprioritize" | "reject"; maxMarginalUsd?: number };
   stickyLimit: number;
   defaultEffort: ComboEffort | null;
   targets: ComboTarget[];
@@ -79,6 +84,7 @@ export interface ComboItem {
 export interface ComboSections {
   failover: ComboItem[];
   roundRobin: ComboItem[];
+  economy: ComboItem[];
 }
 
 export interface ComboAttentionItem {
@@ -124,7 +130,7 @@ function normalizeAlias(raw: unknown): string | null {
 }
 
 export function normalizeStrategy(raw: unknown): ComboStrategy {
-  return raw === "round-robin" ? "round-robin" : "failover";
+  return raw === "round-robin" || raw === "economy" ? raw : "failover";
 }
 
 export function normalizeStickyLimit(raw: unknown): number {
@@ -164,7 +170,17 @@ export function parseComboList(payload: unknown): ComboItem[] {
       const model = typeof tr.model === "string" ? tr.model.trim() : "";
       if (!provider || !model) continue;
       const weight = normalizeWeight(tr.weight);
-      targets.push(weight !== undefined ? newComboTarget({ provider, model, weight }) : newComboTarget({ provider, model }));
+      const allowances = Array.isArray(tr.allowances) ? tr.allowances.filter((value): value is string => typeof value === "string") : undefined;
+      const pricing = tr.pricing && typeof tr.pricing === "object" && !Array.isArray(tr.pricing)
+        ? Object.fromEntries(Object.entries(tr.pricing).filter(([, value]) => typeof value === "number" && Number.isFinite(value)))
+        : undefined;
+      targets.push(newComboTarget({
+        provider,
+        model,
+        ...(weight !== undefined ? { weight } : {}),
+        ...(allowances ? { allowances } : {}),
+        ...(pricing ? { pricing } : {}),
+      }));
     }
     out.push({
       id,
@@ -175,6 +191,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       nativeAlias: r.nativeAlias === true,
       displayName: normalizeAlias(r.displayName),
       strategy: normalizeStrategy(r.strategy),
+      ...(r.economy && typeof r.economy === "object" && !Array.isArray(r.economy) ? { economy: r.economy as ComboItem["economy"] } : {}),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),
       defaultEffort: normalizeDefaultEffort(r.defaultEffort),
       targets,
@@ -186,11 +203,13 @@ export function parseComboList(payload: unknown): ComboItem[] {
 export function groupCombos(items: ComboItem[]): ComboSections {
   const failover: ComboItem[] = [];
   const roundRobin: ComboItem[] = [];
+  const economy: ComboItem[] = [];
   for (const item of items) {
     if (item.strategy === "round-robin") roundRobin.push(item);
+    else if (item.strategy === "economy") economy.push(item);
     else failover.push(item);
   }
-  return { failover, roundRobin };
+  return { failover, roundRobin, economy };
 }
 
 export function filterCombos(items: ComboItem[], query: string): ComboItem[] {
@@ -234,13 +253,16 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     || a.nativeAlias !== b.nativeAlias
     || a.displayName !== b.displayName
     || a.strategy !== b.strategy
+    || JSON.stringify(a.economy) !== JSON.stringify(b.economy)
     || a.stickyLimit !== b.stickyLimit
     || a.defaultEffort !== b.defaultEffort
   ) return false;
   if (a.targets.length !== b.targets.length) return false;
   return a.targets.every((t, i) => {
     const o = b.targets[i]!;
-    return t.provider === o.provider && t.model === o.model && (t.weight ?? 1) === (o.weight ?? 1);
+    return t.provider === o.provider && t.model === o.model && (t.weight ?? 1) === (o.weight ?? 1)
+      && JSON.stringify(t.allowances ?? []) === JSON.stringify(o.allowances ?? [])
+      && JSON.stringify(t.pricing ?? {}) === JSON.stringify(o.pricing ?? {});
   });
 }
 
@@ -252,6 +274,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     strategy: ComboStrategy;
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
+    economy?: ComboItem["economy"];
     alias?: string;
     nativeAlias?: true;
     displayName?: string;
@@ -261,11 +284,17 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     id: item.id.trim(),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
     combo: {
-      targets: item.targets.map((target) => item.strategy === "round-robin"
-        ? { provider: target.provider.trim(), model: target.model.trim(), weight: target.weight ?? 1 }
-        : { provider: target.provider.trim(), model: target.model.trim() }),
+      targets: item.targets.map((target) => ({
+        provider: target.provider.trim(),
+        model: target.model.trim(),
+        ...(item.strategy === "round-robin" ? { weight: target.weight ?? 1 } : {}),
+        ...(target.allowances ? { allowances: [...target.allowances] } : {}),
+        ...(target.pricing ? { pricing: { ...target.pricing } } : {}),
+        ...(item.strategy === "economy" && target.weight !== undefined ? { weight: target.weight } : {}),
+      })),
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
+      ...(item.economy ? { economy: { ...item.economy } } : {}),
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
       ...(item.nativeAlias ? { nativeAlias: true } : {}),

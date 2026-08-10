@@ -1287,6 +1287,11 @@ switch (command) {
     process.exitCode = await handleComboCommand(args.slice(1));
     break;
   }
+  case "allowance": {
+    const { handleAllowanceCommand } = await import("./allowance");
+    process.exitCode = await handleAllowanceCommand(args.slice(1));
+    break;
+  }
   case "route": {
     if (args[1] !== "combo" && args[1] !== "policy") {
       console.error("Usage: ocx route <combo|policy> <subcommand>");
