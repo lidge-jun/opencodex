@@ -214,15 +214,22 @@ export function resetPreservedDiskOnlyProvidersForTests(): void {
   preservationOwnerStates.clear();
 }
 
+/** Exact four fields accepted for a user-configured cost tuple. */
+export const COST4_RATE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
+
+/** Shared per-rate predicate used by config validation, display sanitization, and runtime lifting. */
+export function isValidCost4Rate(rate: unknown): rate is number {
+  return typeof rate === "number"
+    && Number.isFinite(rate)
+    && rate >= 0
+    && rate <= MAX_COST4_RATE;
+}
+
 /** True when `value` is a complete cost entry: all four rates are non-negative finite numbers. */
 function validCost4(value: unknown): value is ProviderCostOverlay {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
-  return (["input", "output", "cacheRead", "cacheWrite"] as const)
-    .every(key => typeof entry[key] === "number"
-      && Number.isFinite(entry[key])
-      && entry[key] >= 0
-      && entry[key] <= MAX_COST4_RATE);
+  return COST4_RATE_KEYS.every(key => isValidCost4Rate(entry[key]));
 }
 
 /**

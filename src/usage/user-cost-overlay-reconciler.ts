@@ -38,6 +38,7 @@ let reconcileTimerMs = 0;
 const owners = new Map<symbol, OcxConfig | null>();
 const ownerIntervals = new Map<symbol, number>();
 let lastStamp: { mtimeMs: number; size: number; ctimeMs: number; ino: number } | null = null;
+let invalidReconcileCount = 0;
 
 function configStamp(): { mtimeMs: number; size: number; ctimeMs: number; ino: number } | null {
   try {
@@ -51,6 +52,22 @@ function configStamp(): { mtimeMs: number; size: number; ctimeMs: number; ino: n
   } catch {
     return null;
   }
+}
+
+/** Registered live configs plus an optional one-shot config, deduped by object identity. */
+function liveConfigsForPreservation(extra?: OcxConfig | null): OcxConfig[] {
+  const liveConfigs: OcxConfig[] = [];
+  const seen = new Set<OcxConfig>();
+  if (extra) {
+    seen.add(extra);
+    liveConfigs.push(extra);
+  }
+  for (const config of owners.values()) {
+    if (!config || seen.has(config)) continue;
+    seen.add(config);
+    liveConfigs.push(config);
+  }
+  return liveConfigs;
 }
 
 /**
@@ -111,9 +128,7 @@ function rememberDiskOnlyProviders(liveConfigs: readonly OcxConfig[], disk: OcxC
 function recomputePreservedDiskOnlyProviders(): void {
   const diagnostics = readConfigDiagnostics();
   if (diagnostics.source !== "file") return;
-  const liveConfigs = [...owners.values()].filter(
-    (config): config is OcxConfig => config !== null,
-  );
+  const liveConfigs = liveConfigsForPreservation();
   if (liveConfigs.length > 0) {
     rememberDiskOnlyProviders(liveConfigs, diagnostics.config);
   } else {
@@ -135,15 +150,16 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
   const disk = diagnostics.config;
   if (liveConfig) {
     adoptDiskModelCosts(liveConfig, disk);
-    rememberDiskOnlyProviders([liveConfig], disk);
+    // A one-shot caller is not the whole process. Existing server owners still
+    // participate in global preservation or this call can drop protection for
+    // a provider absent from an older live projection.
+    rememberDiskOnlyProviders(liveConfigsForPreservation(liveConfig), disk);
   } else {
     // No live routing config was supplied: mirror the owners path so a stale
     // preservation registry cannot resurrect externally deleted providers on
     // the next saveConfig. Registered owners still protect disk-only rows;
     // without any, preservation is cleared.
-    const liveConfigs = [...owners.values()].filter(
-      (config): config is OcxConfig => config !== null,
-    );
+    const liveConfigs = liveConfigsForPreservation();
     if (liveConfigs.length > 0) {
       for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
       rememberDiskOnlyProviders(liveConfigs, disk);
@@ -159,9 +175,12 @@ export function reconcileUserCostOverlaysFromDisk(liveConfig?: OcxConfig | null)
 
 function reconcileForOwners(): void {
   const diagnostics = readConfigDiagnostics();
-  if (diagnostics.source !== "file") return;
+  if (diagnostics.source !== "file") {
+    if (diagnostics.source === "fallback") invalidReconcileCount += 1;
+    return;
+  }
   const disk = diagnostics.config;
-  const liveConfigs = [...owners.values()].filter((config): config is OcxConfig => config !== null);
+  const liveConfigs = liveConfigsForPreservation();
   if (liveConfigs.length > 0) {
     for (const live of liveConfigs) adoptDiskModelCosts(live, disk);
     rememberDiskOnlyProviders(liveConfigs, disk);
@@ -172,6 +191,11 @@ function reconcileForOwners(): void {
     setPreservedDiskOnlyProviders(null);
   }
   refreshUserCostOverlays(disk);
+}
+
+/** Test-only observation that proves the timer actually read an invalid config fallback. */
+export function userCostOverlayInvalidReconcileCountForTests(): number {
+  return invalidReconcileCount;
 }
 
 /** Smallest poll interval across all active owners (the effective cadence). */
@@ -285,4 +309,5 @@ export function stopUserCostOverlayReconciler(): void {
 /** Test-only reset for module-global reconciler state. */
 export function resetUserCostOverlayReconcilerForTests(): void {
   stopUserCostOverlayReconciler();
+  invalidReconcileCount = 0;
 }

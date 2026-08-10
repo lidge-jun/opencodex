@@ -75,7 +75,12 @@ import {
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
-import { refreshUserCostOverlays, withPreservedDiskOnlyProviders } from "./usage/user-cost-overlays";
+import {
+  COST4_RATE_KEYS,
+  isValidCost4Rate,
+  refreshUserCostOverlays,
+  withPreservedDiskOnlyProviders,
+} from "./usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "./usage/expected-prices";
 import {
   DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES,
@@ -712,8 +717,6 @@ export function providerHeadersConfigError(headers: unknown): string | null {
  * id, each value a 4-tuple of non-negative finite USD-per-1M-token rates.
  * Returns null when valid/absent, else a human-readable error.
  */
-const MODEL_COST_RATE_KEYS = ["input", "output", "cacheRead", "cacheWrite"] as const;
-
 export function providerModelCostsConfigError(value: unknown, field = "modelCosts"): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -729,16 +732,17 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
       return `${field}.${safeModelId} must be an object with input, output, cacheRead, and cacheWrite (USD per 1M tokens)`;
     }
     const rates = entry as Record<string, unknown>;
-    for (const key of MODEL_COST_RATE_KEYS) {
+    for (const key of COST4_RATE_KEYS) {
       const rate = rates[key];
-      if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate > MAX_COST4_RATE) {
+      if (!isValidCost4Rate(rate)) {
         return `${field}.${safeModelId}.${key} must be a non-negative finite number at most ${MAX_COST4_RATE} (USD per 1M tokens)`;
       }
     }
     // Reject unknown fields: a misplaced apiKey/apiKeyPool under a cost row
     // would otherwise be persisted and echoed verbatim by display paths that
     // mask only top-level provider secrets.
-    const extraKeys = Object.keys(rates).filter((key) => !(MODEL_COST_RATE_KEYS as readonly string[]).includes(key));
+    const extraKeys = Object.keys(rates)
+      .filter((key) => !(COST4_RATE_KEYS as readonly string[]).includes(key));
     if (extraKeys.length > 0) {
       return `${field}.${safeModelId} has unexpected fields ${JSON.stringify(extraKeys.map(redactSecretString).join(", "))} — only input, output, cacheRead, and cacheWrite are allowed (USD per 1M tokens)`;
     }
@@ -762,9 +766,12 @@ export function sanitizeModelCostsForDisplay(costs: unknown): Record<string, Pro
     const output = rates.output;
     const cacheRead = rates.cacheRead;
     const cacheWrite = rates.cacheWrite;
-    const valid = (rate: unknown): rate is number =>
-      typeof rate === "number" && Number.isFinite(rate) && rate >= 0 && rate <= MAX_COST4_RATE;
-    if (valid(input) && valid(output) && valid(cacheRead) && valid(cacheWrite)) {
+    if (
+      isValidCost4Rate(input)
+      && isValidCost4Rate(output)
+      && isValidCost4Rate(cacheRead)
+      && isValidCost4Rate(cacheWrite)
+    ) {
       // Secret-shaped ids are DROPPED rather than mapped to "[REDACTED]" so
       // distinct rows cannot collapse into one placeholder key.
       if (redactSecretString(modelId) !== modelId) continue;
@@ -1933,10 +1940,11 @@ function warnDegradedNativeSubagentConfig(rawParsed: unknown, config: OcxConfig)
 }
 
 /**
- * Load and validate config.json into an OcxConfig. Missing or broken files fall
- * back to defaults (invalid files are backed up first); a partially-invalid
- * config is merged with defaults so providers and pool accounts survive. Also
- * refreshes the user cost-overlay registry from the resulting config.
+ * Load and validate config.json into an OcxConfig. Missing files reset to
+ * defaults and clear stale overlays. Broken existing files also fall back to
+ * default routing (after backup), but keep the last-good cost-overlay registry
+ * until a valid config or a genuinely missing file is observed. A partially-
+ * invalid config is merged with defaults so providers and pool accounts survive.
  */
 export function loadConfig(): OcxConfig {
   const dir = getConfigDir();
@@ -1989,10 +1997,10 @@ export function loadConfig(): OcxConfig {
     }
     // Merge couldn't fix it — truly broken config
     warnAndBackupInvalidConfig(configPath, result.error);
-    return withRefreshedCostOverlays(getDefaultConfig());
+    return getDefaultConfig();
   } catch (error) {
     warnAndBackupInvalidConfig(configPath, error);
-    return withRefreshedCostOverlays(getDefaultConfig());
+    return getDefaultConfig();
   }
 }
 

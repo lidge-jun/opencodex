@@ -10,9 +10,12 @@ import {
   saveConfigPreservingClaudeCode,
 } from "../src/config";
 import type { OcxConfig } from "../src/types";
+import { resolveMatchedPrice } from "../src/usage/cost";
 import {
+  activeUserCostOverlays,
   refreshUserCostOverlays,
   resetPreservedDiskOnlyProvidersForTests,
+  userCostOverlayVersion,
   withPreservedDiskOnlyProviders,
 } from "../src/usage/user-cost-overlays";
 import {
@@ -91,16 +94,21 @@ describe("provider deletion with disk-only preservation", () => {
     saveConfig(liveConfigA);
     let persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
     expect(persisted.providers.beta?.modelCosts).toEqual({ "beta-model": OVERLAY });
+    expect(resolveMatchedPrice("beta", "beta-model")?.source).toBe("user");
 
     // This mirrors DELETE /api/providers: B owned beta, then intentionally removes it
     // and uses the live-config save wrapper. The real route has an await import after
     // deleting the row, so force a reconcile in that gap to prove ownership is retained
     // until disk confirms the deletion. Preservation must still not put beta back.
+    const versionBeforeDelete = userCostOverlayVersion();
     delete liveConfigB.providers.beta;
     expect(reconcileUserCostOverlaysFromDisk()).toBe(true);
     saveConfigPreservingClaudeCode(liveConfigB);
     persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
     expect(persisted.providers.beta).toBeUndefined();
+    expect(activeUserCostOverlays().some(row => row.provider === "beta")).toBe(false);
+    expect(resolveMatchedPrice("beta", "beta-model")?.source).not.toBe("user");
+    expect(userCostOverlayVersion()).toBeGreaterThan(versionBeforeDelete);
 
     // Successful deletion converges every active owner so a third, older projection
     // that still had beta cannot recreate it on a later unrelated save.
