@@ -2907,6 +2907,20 @@ describe("GitHub Actions hardening", () => {
       expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
     });
 
+    test("malformed changed_files metadata fails closed on the screenshot gate", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          changed_files: 2.5,
+        },
+        files: [{ filename: "scripts/foo.ts" }],
+        authorPermission: "write",
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+    });
+
     test("gui in the body without a screenshot fails when gui/ changed", async () => {
       const result = await run({
         pr: {

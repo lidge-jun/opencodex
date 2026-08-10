@@ -53,6 +53,8 @@ export type PullRequestState = {
   draft?: boolean;
   base?: { ref: string };
   user?: { login: string };
+  /** `pulls.get` changed_files; omit to default to listed file count in harness. */
+  changed_files?: number;
 };
 
 export type Comment = {
@@ -654,9 +656,9 @@ export async function runEnforcePrTarget(
     options.filePages ??
     (options.files && options.files.length > 0 ? [options.files] : [[]]);
   const listedFileCount = filePages.flat().length;
-  const prChangedFiles = (options.pr as { changed_files?: number }).changed_files;
-  if (Number.isInteger(prChangedFiles)) {
-    (pr as { changed_files: number }).changed_files = prChangedFiles!;
+  const prInput = options.pr as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(prInput, "changed_files")) {
+    (pr as Record<string, unknown>).changed_files = prInput.changed_files;
   } else {
     (pr as { changed_files: number }).changed_files = listedFileCount;
   }
