@@ -11,7 +11,7 @@
  * - token endpoint:   POST {portal}/api/oauth/token
  * - the access token returned by the token endpoint IS the per-request
  *   inference JWT (scope `inference:invoke`) and is used directly as
- *   `Authorization: Bearer` against the OpenAI-compatible inference API at
+ *   `Authorization: *** against the OpenAI-compatible inference API at
  *   https://inference-api.nousresearch.com/v1.
  * - refresh sends the refresh token in the `x-nous-refresh-token` HEADER (not
  *   the body): `POST /api/oauth/token` with `grant_type=refresh_token` +
@@ -22,8 +22,19 @@
  *   OpenCodex's refresh path persists the rotated token immediately
  *   (`mergeAccountCredential`), which is exactly the discipline the Portal
  *   expects; proactive background refresh must stay off for this provider.
+ *
+ * Single-use refresh is made failure-atomic (review blocker #2): a durable
+ * refresh-intent file is written BEFORE the refresh request and only removed
+ * after the rotated token is obtained. If we ever receive a server response
+ * but fail to persist the rotated token, the intent is marked "uncertain" and
+ * the next refresh refuses to replay the (possibly consumed) token, forcing a
+ * clean re-authentication instead of a silent session-revoking replay.
  */
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import type { OAuthController, OAuthCredentials } from "./types";
+import { getAuthStorePath } from "./store";
 
 export const NOUS_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const NOUS_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1";
@@ -61,8 +72,73 @@ interface NousJwtPayload {
   sub?: unknown;
   email?: unknown;
   exp?: unknown;
+  scope?: unknown;
   [key: string]: unknown;
 }
+
+// ── Durable refresh-intent (review blocker #2) ──────────────────────────────
+// A refresh-intent file records that we submitted `refreshToken` to the Portal
+// and whether we are certain the rotated token was persisted. It lives next to
+// the auth store (same config dir) and is keyed by a hash of the refresh
+// token, so it never contains the token in cleartext.
+
+type RefreshIntentStatus = "pending" | "uncertain";
+
+interface RefreshIntent {
+  status: RefreshIntentStatus;
+  updatedAt: number;
+}
+
+function refreshIntentDir(): string {
+  const base = join(getAuthStorePath(), "..", ".nous-refresh-intent");
+  return base;
+}
+
+function refreshIntentPath(refreshToken: string): string {
+  const hash = createHash("sha256").update(refreshToken).digest("hex");
+  return join(refreshIntentDir(), `${hash}.json`);
+}
+
+function readRefreshIntent(refreshToken: string): RefreshIntent | undefined {
+  try {
+    const raw = readFileSync(refreshIntentPath(refreshToken), "utf8");
+    return JSON.parse(raw) as RefreshIntent;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeRefreshIntent(refreshToken: string, status: RefreshIntentStatus): void {
+  const dir = refreshIntentDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(refreshIntentPath(refreshToken), JSON.stringify({ status, updatedAt: Date.now() } satisfies RefreshIntent), "utf8");
+  } catch {
+    // Best-effort: if we cannot record the intent, the refresh still proceeds;
+    // we simply lose the uncertain-outcome guard for this single attempt.
+  }
+}
+
+function clearRefreshIntent(refreshToken: string): void {
+  try {
+    rmSync(refreshIntentPath(refreshToken), { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * True when we have already submitted this refresh token and were NOT able to
+ * confirm the rotated token was persisted. In that uncertain state we must
+ * never blindly replay it — the server may have already consumed it, and a
+ * replay would trigger `refresh_token_reused` and revoke the session. The
+ * caller should force a clean re-authentication instead.
+ */
+export function nousRefreshIntentIsUncertain(refreshToken: string): boolean {
+  return readRefreshIntent(refreshToken)?.status === "uncertain";
+}
+
+// ── Base URL hardening (review blocker #1, also flagged by multiple reviewers) ─
 
 /**
  * Normalize and hard-validate the Nous Portal OAuth base URL.
@@ -144,15 +220,30 @@ function jwtExpiryMs(payload: NousJwtPayload | undefined): number | undefined {
   return exp * 1000;
 }
 
+/** Does the inference JWT grant the required `inference:invoke` scope? */
+function jwtGrantsInference(payload: NousJwtPayload | undefined): boolean {
+  const scope = nonEmptyString(payload?.scope);
+  if (!scope) return false;
+  // Scope is a space-separated list per RFC 6749.
+  return scope.split(/\s+/).includes(NOUS_OAUTH_SCOPE);
+}
+
 export class NousTokenError extends Error {
+  /** When true, the token cannot be saved/used and the account needs re-auth. */
+  public readonly terminal: boolean;
+  /** When set, the (already rotated) credentials to persist before re-auth. */
+  public readonly credentials?: OAuthCredentials;
+
   constructor(
-    public readonly status: number | undefined,
+    status: number | undefined,
     public readonly oauthError: string | undefined,
     message: string,
-    options?: { cause?: unknown },
+    options?: { cause?: unknown; terminal?: boolean; credentials?: OAuthCredentials },
   ) {
     super(message, options);
     this.name = "NousTokenError";
+    this.terminal = options?.terminal ?? false;
+    this.credentials = options?.credentials;
   }
 }
 
@@ -161,26 +252,39 @@ function requestSignal(signal: AbortSignal | undefined): AbortSignal {
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
+/**
+ * Sleep for `ms`, resolving on timer completion. The abort listener is removed
+ * on both resolve and abort so we do not accumulate listeners across polling
+ * iterations (review point #9).
+ */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new Error("Login cancelled"));
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => { clearTimeout(t); reject(new Error("Login cancelled")); }, { once: true });
+    const onAbort = () => {
+      clearTimeout(t);
+      cleanup();
+      reject(new Error("Login cancelled"));
+    };
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+    const t = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-async function readTokenError(response: Response): Promise<NousTokenError> {
-  let oauthError: string | undefined;
-  let detail = "";
-  try {
-    const body = (await response.json()) as { error?: unknown; error_description?: unknown };
-    if (typeof body.error === "string") oauthError = body.error;
-    if (typeof body.error_description === "string") detail = body.error_description;
-  } catch {
-    // Non-JSON error body — fall through to the status-only message.
-  }
+/**
+ * Read an error payload from a failed token response. `payload` is the already
+ * parsed JSON (so callers do not re-read a consumed body — review point #8).
+ */
+function tokenErrorFromPayload(status: number, payload: unknown): NousTokenError {
+  const body = (payload ?? {}) as { error?: unknown; error_description?: unknown };
+  const oauthError = typeof body.error === "string" ? body.error : undefined;
+  const detail = typeof body.error_description === "string" ? body.error_description : "";
   const suffix = detail ? `: ${detail}` : oauthError ? `: ${oauthError}` : "";
-  return new NousTokenError(response.status, oauthError, `Nous Portal token request failed: ${response.status}${suffix}`);
+  const terminal = oauthError === "invalid_token" || oauthError === "invalid_grant" || oauthError === "revoked" || oauthError === "revoked_token";
+  return new NousTokenError(status, oauthError, `Nous Portal token request failed: ${status}${suffix}`, { terminal });
 }
 
 /**
@@ -194,6 +298,12 @@ async function readTokenError(response: Response): Promise<NousTokenError> {
  * (`refresh_token_reused`), revoking the whole session. Reject both cases
  * rather than silently falling back to the submitted token.
  *
+ * The returned access token must also grant the `inference:invoke` scope; if it
+ * does not, the credential is unusable for inference and we raise a terminal
+ * error — but we still surface the (already rotated) refresh token in the
+ * error so the caller can persist it and drive a clean re-authentication
+ * without discarding the rotation the server already performed (review #5).
+ *
  * @param submittedRefreshToken the refresh token sent in the request; used only
  *   to detect a no-rotation / consumed-token response, never as a fallback.
  */
@@ -206,6 +316,7 @@ function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: st
       undefined,
       "refresh_token_reused",
       "Nous Portal did not return a replacement refresh token; refusing to reuse the consumed one (would trigger refresh_token_reused and revoke the session)",
+      { terminal: true },
     );
   }
   if (submittedRefreshToken && refresh === submittedRefreshToken) {
@@ -213,6 +324,7 @@ function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: st
       undefined,
       "refresh_token_reused",
       "Nous Portal returned the same refresh token we submitted; refusing to reuse it (single-use rotation expected, session may be compromised)",
+      { terminal: true },
     );
   }
 
@@ -223,12 +335,27 @@ function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: st
   // JWT lifetime), else fall back to `expires_in`.
   const expires = (expMs ?? (expiresInMs !== undefined ? Date.now() + expiresInMs : Date.now() + DEFAULT_DEVICE_FLOW_TTL_MS))
     - OAUTH_EXPIRY_SKEW_MS;
-  return {
+
+  const creds: OAuthCredentials = {
     access,
     refresh,
     expires,
     ...identityFromNousTokens(access),
   };
+
+  if (!jwtGrantsInference(jwtPayload)) {
+    // Unusable for inference, but the server already rotated the refresh token:
+    // surface it so the caller persists it and forces a re-auth rather than
+    // discarding a valid rotation.
+    throw new NousTokenError(
+      undefined,
+      "insufficient_scope",
+      "Nous Portal access token does not grant the required inference:invoke scope",
+      { terminal: true, credentials: creds },
+    );
+  }
+
+  return creds;
 }
 
 async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
@@ -245,9 +372,10 @@ async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
       client_id: NOUS_OAUTH_CLIENT_ID,
       scope: NOUS_OAUTH_SCOPE,
     }),
+    redirect: "error",
     signal: requestSignal(signal),
   });
-  if (!response.ok) throw await readTokenError(response);
+  if (!response.ok) throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
   const payload = (await response.json()) as NousDeviceAuthorizationResponse;
   const userCode = nonEmptyString(payload.user_code);
   const deviceCode = nonEmptyString(payload.device_code);
@@ -286,8 +414,11 @@ async function pollForToken(
         device_code: deviceCode,
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
       }),
+      redirect: "error",
       signal: requestSignal(signal),
     });
+    // Parse once and pass the payload through to the failure path (review #8),
+    // so we never try to re-read a body that has already been consumed.
     const payload = (await response.json().catch(() => ({}))) as NousTokenResponse;
     if (response.ok && nonEmptyString(payload.access_token)) return parseTokenPayload(payload, "");
     const error = payload.error;
@@ -304,7 +435,13 @@ async function pollForToken(
     }
     if (error === "expired_token") throw new NousTokenError(response.status, "expired_token", "Nous Portal device authorization expired");
     if (error === "access_denied") throw new NousTokenError(response.status, "access_denied", "Nous Portal device authorization denied");
-    throw await readTokenError(response);
+    // Unknown OAuth error: report it from the parsed payload, not by
+    // re-reading the (already consumed) response body.
+    if (error) {
+      const detail = typeof payload.error_description === "string" ? `: ${payload.error_description}` : "";
+      throw new NousTokenError(response.status, String(error), `Nous Portal device authorization failed (${error})${detail}`);
+    }
+    throw tokenErrorFromPayload(response.status, payload);
   }
   throw new NousTokenError(undefined, "expired_token", "Nous Portal device flow timed out");
 }
@@ -323,21 +460,67 @@ export async function loginNous(ctrl: OAuthController): Promise<OAuthCredentials
  * Refresh a Nous Portal session. The refresh token travels in the
  * `x-nous-refresh-token` header; the server rotates it on every successful
  * refresh, and the rotated token is what the caller persists.
+ *
+ * Failure-atomicity contract (review blocker #2): a durable refresh-intent is
+ * recorded before the request and cleared only after the rotated token is
+ * obtained. If the server responds but we fail to persist the rotation, the
+ * intent becomes "uncertain" and a later refresh refuses to replay the
+ * possibly-consumed token, forcing re-auth instead of a session-revoking
+ * replay.
  */
 export async function refreshNousToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
-  const response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-      "x-nous-refresh-token": refreshToken,
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      client_id: NOUS_OAUTH_CLIENT_ID,
-    }),
-    signal: requestSignal(signal),
-  });
-  if (!response.ok) throw await readTokenError(response);
-  return parseTokenPayload((await response.json()) as NousTokenResponse, refreshToken);
+  // Never blindly replay a token whose outcome we could not confirm earlier.
+  if (nousRefreshIntentIsUncertain(refreshToken)) {
+    throw new NousTokenError(
+      undefined,
+      "refresh_token_reused",
+      "Refusing to replay a refresh token with an uncertain prior outcome (previous rotation may not have persisted)",
+      { terminal: true },
+    );
+  }
+  // Mark that we are about to submit this token. It stays "pending" until we
+  // either obtain the rotated token (cleared) or confirm a server response
+  // while failing to persist (marked "uncertain").
+  writeRefreshIntent(refreshToken, "pending");
+
+  let response: Response;
+  try {
+    response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-nous-refresh-token": refreshToken,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: NOUS_OAUTH_CLIENT_ID,
+      }),
+      redirect: "error",
+      signal: requestSignal(signal),
+    });
+  } catch (netErr) {
+    // Network-level failure: the server never saw the token, so it was not
+    // consumed. Leave the intent "pending" so a later retry can resubmit it.
+    throw netErr;
+  }
+
+  if (!response.ok) {
+    // Error before any rotation: the token was not consumed. Clear the intent
+    // so a retry can resubmit it.
+    clearRefreshIntent(refreshToken);
+    throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
+  }
+
+  // The server responded 200 — the submitted token may now be consumed. If we
+  // fail to parse/persist the rotated token, mark the intent uncertain so we
+  // never replay it.
+  try {
+    const creds = parseTokenPayload((await response.json()) as NousTokenResponse, refreshToken);
+    clearRefreshIntent(refreshToken);
+    return creds;
+  } catch (e) {
+    writeRefreshIntent(refreshToken, "uncertain");
+    throw e;
+  }
 }

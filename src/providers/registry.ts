@@ -1081,7 +1081,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "oauth",
     oauthId: "nous",
     featured: true,
-    freeTier: true,
+    // Mixed free + paid provider: the free tier is per-model (the `:free`
+    // slugs), not a property of the whole provider, so freeTier stays false to
+    // avoid implying every model is free.
+    freeTier: false,
     dashboardUrl: "https://portal.nousresearch.com",
     defaultModel: "tencent/hy3:free",
     liveModels: true,

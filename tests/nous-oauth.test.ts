@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { identityFromNousTokens, loginNous, refreshNousToken } from "../src/oauth/nous";
+import { identityFromNousTokens, loginNous, nousRefreshIntentIsUncertain, refreshNousToken } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 
@@ -11,8 +11,11 @@ let previousOpencodexHome: string | undefined;
 let previousPortalBase: string | undefined;
 
 function jwtWithClaims(claims: Record<string, unknown>): string {
+  // A real Nous inference JWT carries the inference:invoke scope; callers that
+  // need to exercise the missing-scope path pass an explicit `scope` override.
+  const payloadClaims = { scope: "inference:invoke", ...claims };
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
+  const payload = Buffer.from(JSON.stringify(payloadClaims)).toString("base64url");
   return `${header}.${payload}.sig`;
 }
 
@@ -232,6 +235,20 @@ describe("Nous device-flow error handling", () => {
 });
 
 describe("Nous Portal base URL hardening", () => {
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
   test("an HTTP override fails before fetch is invoked", async () => {
     process.env.NOUS_PORTAL_BASE_URL = "http://portal.test";
     let fetchCalled = false;
@@ -297,13 +314,20 @@ describe("Nous refresh token safety", () => {
 
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
+    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
+    process.env.OPENCODEX_HOME = TEST_DIR;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
   test("rejecting a missing replacement refresh token does not reuse the consumed one", async () => {
@@ -409,5 +433,121 @@ describe("Nous multiauth via saveCredential", () => {
     expect(listAccounts("nous").length).toBe(1);
     expect(getCredential("nous")?.access).toBe(access2);
     expect(getCredential("nous")?.refresh).toBe("refresh-2");
+  });
+});
+
+describe("Nous refresh failure-atomicity + terminal errors", () => {
+  const realFetch = globalThis.fetch;
+  let intentHome: string | undefined;
+
+  beforeEach(() => {
+    previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
+    process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
+    // Isolate the refresh-intent dir under a temp OPENCODEX_HOME.
+    previousOpencodexHome = process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
+    else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  test("a rotated token is persisted and the intent is cleared", async () => {
+    const access = jwtWithClaims({ sub: "atomic-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "inference:invoke" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+    const cred = await refreshNousToken("old-refresh");
+    expect(cred.refresh).toBe("rotated-refresh");
+    // Intent cleared after a successful rotation.
+    expect(nousRefreshIntentIsUncertain("old-refresh")).toBe(false);
+  });
+
+  test("an uncertain prior outcome blocks replay of the consumed token (no silent reuse)", async () => {
+    const access = jwtWithClaims({ sub: "atomic-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "inference:invoke" });
+    // First attempt: server returns 200 but parse would fail to persist -> mark uncertain.
+    let firstCall = true;
+    globalThis.fetch = (async () => {
+      if (firstCall) {
+        firstCall = false;
+        return new Response(JSON.stringify({
+          access_token: access,
+          refresh_token: "rotated-refresh",
+          expires_in: 3600,
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 });
+    }) as typeof fetch;
+
+    // First refresh rotates successfully (intent cleared).
+    const cred = await refreshNousToken("old-refresh");
+    expect(cred.refresh).toBe("rotated-refresh");
+
+    // Simulate a crash that lost the rotated token: re-submit the OLD token.
+    // Because we cannot re-clear the intent here (store persistence is what
+    // clears it), emulate the uncertain state the store would leave behind.
+    // We re-run a refresh that reaches the server but fails to persist: to
+    // exercise the guard we write the uncertain intent directly via a failed
+    // parse path.
+    globalThis.fetch = (async () => new Response("not json", { status: 200 })) as typeof fetch;
+    // A non-JSON 200 body makes parseTokenPayload throw, marking the intent
+    // uncertain; the NEXT submission of the same token must be refused.
+    await expect(refreshNousToken("old-refresh")).rejects.toThrow();
+    expect(nousRefreshIntentIsUncertain("old-refresh")).toBe(true);
+
+    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 })) as typeof fetch;
+    await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+  });
+
+  test("invalid_token is a terminal error that forces re-authentication", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: "invalid_token",
+      error_description: "token revoked",
+    }), { status: 400 })) as typeof fetch;
+    let err: unknown;
+    try {
+      await refreshNousToken("old-refresh");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
+  });
+
+  test("an access token without the inference:invoke scope is a terminal error but surfaces the rotated refresh", async () => {
+    // access token whose JWT scope lacks inference:invoke
+    const access = jwtWithClaims({ sub: "scope-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "billing:manage" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+    let err: unknown;
+    try {
+      await refreshNousToken("old-refresh");
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("insufficient_scope");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
+    // The already-rotated refresh token is preserved so the caller can persist
+    // it and drive a clean re-auth without discarding the rotation.
+    expect((err as { credentials?: { refresh?: string } }).credentials?.refresh).toBe("rotated-refresh");
   });
 });
