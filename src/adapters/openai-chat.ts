@@ -829,9 +829,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
 
       if (tools) {
-        body.parallel_tool_calls = provider.parallelToolCalls === false
-          ? false
-          : parsed.options.parallelToolCalls !== false;
+        if (provider.parallelToolCalls === false) {
+          // NIM documents the Boolean defaulting to false and kimi rejects true; pin the
+          // wire bit so Codex cannot opt in via request.options. Other opted-out providers
+          // omit the field so strict OpenAI-compatible hosts never see an unsupported knob.
+          if (provider.baseUrl === "https://integrate.api.nvidia.com/v1") {
+            body.parallel_tool_calls = false;
+          }
+        } else {
+          body.parallel_tool_calls = parsed.options.parallelToolCalls !== false;
+        }
       }
       if (parsed.stream) body.stream_options = { include_usage: true };
 

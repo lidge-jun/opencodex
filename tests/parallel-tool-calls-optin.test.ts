@@ -37,10 +37,10 @@ describe("parallel tool calls provider opt-in (request body)", () => {
     expect(body.parallel_tool_calls).toBe(true);
   });
 
-  test("explicit provider false overrides even a permissive request bit", () => {
+  test("explicit provider false overrides even a permissive request bit by omitting parallel_tool_calls", () => {
     const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "k", parallelToolCalls: false });
     const body = JSON.parse(adapter.buildRequest(parsedRequest({ parallelToolCalls: true })).body) as Record<string, unknown>;
-    expect(body.parallel_tool_calls).toBe(false);
+    expect(body).not.toHaveProperty("parallel_tool_calls");
   });
 });
 

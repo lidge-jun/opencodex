@@ -228,7 +228,7 @@ describe("Nscale and Vultr provider presets", () => {
       expect(request.headers.Authorization).toBe(`Bearer ${API_KEY}`);
       expect(body.model).toBe(modelId);
       expect(body.tools).toBeArray();
-      expect(body.parallel_tool_calls).toBe(false);
+      expect(body).not.toHaveProperty("parallel_tool_calls");
       expect(body).not.toHaveProperty("reasoning_effort");
     }
   });

@@ -305,7 +305,7 @@ describe("DigitalOcean and Scaleway providers", () => {
       expect(request.url).toBe(`${PROVIDERS[providerId].baseUrl}/chat/completions`);
       expect(request.headers.Authorization).toBe(`Bearer ${PROVIDERS[providerId].key}`);
       expect(body.model).toBe(modelId);
-      expect(body.parallel_tool_calls).toBe(false);
+      expect(body).not.toHaveProperty("parallel_tool_calls");
       expect(body).not.toHaveProperty("reasoning_effort");
     }
   });
