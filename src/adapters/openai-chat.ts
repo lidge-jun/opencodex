@@ -836,7 +836,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           if (provider.baseUrl === "https://integrate.api.nvidia.com/v1") {
             body.parallel_tool_calls = false;
           }
-        } else {
+        } else if (provider.parallelToolCalls === true) {
           body.parallel_tool_calls = parsed.options.parallelToolCalls !== false;
         }
       }
