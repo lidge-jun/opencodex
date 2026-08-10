@@ -154,6 +154,12 @@ checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
 
+Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
+the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the
+effective `CODEX_HOME`. Relative SQLite homes resolve from the current working directory. When an
+explicit `CODEX_SQLITE_HOME` is present during service installation or repair, the durable launcher
+stores its install-time absolute path so the background proxy continues to address the same database.
+
 On Windows, an Orca shell can set both `CODEX_HOME` and `ORCA_CODEX_HOME` to Orca's bundled runtime
 home while the ChatGPT/Codex app still reads `%USERPROFILE%\\.codex`. `ocx status` and `ocx doctor`
 warn about this exact mismatch and print redacted target paths. If a background service was installed

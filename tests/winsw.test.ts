@@ -20,7 +20,13 @@ function winswEnvValue(xml: string, name: string): string | null {
 }
 
 describe("winsw xml", () => {
-  const env = { USERDOMAIN: "WORKGROUP", USERNAME: "jun", PATH: "C:\\bin;C:\\tools & more" } as NodeJS.ProcessEnv;
+  const env = {
+    USERDOMAIN: "WORKGROUP",
+    USERNAME: "jun",
+    PATH: "C:\\bin;C:\\tools & more",
+    CODEX_HOME: "C:\\Users\\jun\\.codex",
+    CODEX_SQLITE_HOME: "C:\\Users\\jun\\.codex-sqlite",
+  } as NodeJS.ProcessEnv;
 
   test("registers the user service account (v2 schema), never LocalSystem", () => {
     const xml = buildWinswXml(entry, env);
@@ -41,6 +47,7 @@ describe("winsw xml", () => {
     expect(xml).toContain('<env name="OCX_SERVICE" value="1"/>');
     expect(xml).toContain('<env name="OCX_API_TOKEN_FILE"');
     expect(xml).toContain('<env name="PATH" value="C:\\bin;C:\\tools &amp; more"/>');
+    expect(winswEnvValue(xml, "CODEX_SQLITE_HOME")).toBe("C:\\Users\\jun\\.codex-sqlite");
     expect(winswEnvValue(xml, "OPENCODEX_HOME")).toBe(getConfigDir());
     // Token VALUES never land in the XML — only file pointers / non-secret budgets.
     expect(xml).not.toContain("OPENCODEX_API_AUTH_TOKEN");

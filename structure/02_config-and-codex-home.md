@@ -34,6 +34,23 @@ records are never migrated implicitly.
 - 다른 대안 대신 이 방식을 선택한 이유: It preserves explicit overrides and the existing WSL ambiguity rules without rewriting user environment or foreign state.
 - 장점, 단점 및 영향: New installs and same-environment repairs agree with runtime targeting; genuinely foreign or ambiguous state remains fail-closed.
 
+SQLite-backed thread state may live outside `CODEX_HOME`. The one resolver in `src/codex/paths.ts`
+uses Codex's precedence: root `sqlite_home` in the effective `config.toml`, then
+`CODEX_SQLITE_HOME`, then the effective `CODEX_HOME`; relative SQLite homes resolve from the current
+working directory. History jobs resolve the database and its hashed backup identity together at
+call time, and admission/residue checks consume the same database path. Storage retention still
+owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
+root from this resolver alone. Durable service launchers preserve an explicitly supplied
+`CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
+
+[Decision Log]
+- 목적과 의도: Make every history safety check and mutation address the SQLite database Codex actually opened.
+- 기존 구현 및 제약 조건: History code rebuilt `CODEX_HOME/state_5.sqlite`, while Codex supports a config or environment-selected SQLite root for split Windows/WSL layouts.
+- 검토한 주요 대안: Copy the database into CODEX_HOME, teach only the writer about the override, or centralize the call-time target.
+- 선택한 방식: Add one Codex-compatible SQLite resolver and share it across history jobs, provider defaults, admission, and residue classification.
+- 다른 대안 대신 이 방식을 선택한 이유: A writer-only override would let ownership checks authorize one database while the mutation touched another.
+- 장점, 단점 및 영향: Split-home history remains correct and backup identities stay database-specific; storage cleanup of an external root remains out of scope.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged

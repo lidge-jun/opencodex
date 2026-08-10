@@ -3,7 +3,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, re
 import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
-import { CODEX_HOME } from "./paths";
+import { resolveCodexStateDbPath } from "./paths";
 import { atomicWriteFile, getConfigDir } from "../config";
 
 /**
@@ -13,7 +13,6 @@ import { atomicWriteFile, getConfigDir } from "../config";
  */
 export const MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 
-const STATE_DB_PATH = join(CODEX_HOME, "state_5.sqlite");
 /**
  * The manifest that shadows one state database.
  *
@@ -26,7 +25,6 @@ export function historyBackupPathFor(stateDbPath: string): string {
   const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
   return join(getConfigDir(), `codex-history-backup-${id}.json`);
 }
-const HISTORY_BACKUP_PATH = historyBackupPathFor(STATE_DB_PATH);
 const RESUMABLE_SOURCES = ["cli", "vscode"] as const;
 
 /**
@@ -690,8 +688,8 @@ function openaiRestoreIsNoop(stateDbPath: string, backupPath: string): boolean {
 
 export function syncCodexHistoryProvider(
   provider: CodexHistoryProvider,
-  stateDbPath = STATE_DB_PATH,
-  backupPath = HISTORY_BACKUP_PATH,
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
   opts: { skipWhenProvablyNoop?: boolean } = {},
 ): CodexHistorySyncResult {
   // Opt-in steady-state gate (Design B loopback callers only): default semantics of
@@ -824,7 +822,7 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   }
 }
 
-export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): CodexHistorySyncResult {
+export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath()): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
   const retried = withHistoryRetryResult(() => {
     const db = openStateDb(stateDbPath);
@@ -844,8 +842,8 @@ export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): CodexHi
  * per tick so a locked DB never stalls the event loop beyond one sqlite busy wait.
  */
 export function migrateHistoryToOpenai(
-  stateDbPath = STATE_DB_PATH,
-  backupPath = HISTORY_BACKUP_PATH,
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
   opts: { attempts?: number; delayMs?: number; sleepFn?: (ms: number) => void } = {},
 ): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
@@ -948,7 +946,10 @@ export interface PendingHistoryCount {
  * pending predicate mirrors ejectRemainingOpencodexHistory exactly — rows eject ignores
  * (empty first_user_message) are not counted, so 0 really means "migration done".
  */
-export function countPendingOpencodexHistory(stateDbPath = STATE_DB_PATH, backupPath = HISTORY_BACKUP_PATH): PendingHistoryCount {
+export function countPendingOpencodexHistory(
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
+): PendingHistoryCount {
   let backupEntries = 0;
   try {
     const manifest = readBackup(backupPath, stateDbPath);

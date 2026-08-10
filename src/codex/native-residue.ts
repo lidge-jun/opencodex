@@ -30,6 +30,7 @@ import {
   DEFAULT_CATALOG_PATH,
   getCodexHome,
   readRootTomlString,
+  resolveCodexStateDbPath,
 } from "./paths";
 
 export type NativeResidueSurface =
@@ -77,7 +78,6 @@ const PROFILE_FILE_NAME = basename(CODEX_PROFILE_PATH);
 const CATALOG_FILE_NAME = basename(DEFAULT_CATALOG_PATH);
 const MODELS_CACHE_FILE_NAME = basename(CODEX_MODELS_CACHE_PATH);
 const JOURNAL_FILE_NAME = "opencodex-journal.json";
-const HISTORY_DATABASE_FILE_NAME = "state_5.sqlite";
 const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
 const MAX_ROLLOUT_INSPECTION_BYTES = 64 * 1024 * 1024;
 const ROLLOUT_READ_CHUNK_BYTES = 64 * 1024;
@@ -640,7 +640,7 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
     return indeterminate("partial-write", unresolved, `CODEX_HOME cannot be resolved: ${errorReason(error)}`);
   }
 
-  const stateDatabasePath = join(codexHome, HISTORY_DATABASE_FILE_NAME);
+  const stateDatabasePath = resolveCodexStateDbPath({ codexHome });
   const configPath = join(codexHome, CONFIG_FILE_NAME);
   const profilePath = join(codexHome, PROFILE_FILE_NAME);
   const modelsCachePath = join(codexHome, MODELS_CACHE_FILE_NAME);

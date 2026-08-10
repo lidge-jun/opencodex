@@ -9,7 +9,7 @@ import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
@@ -99,6 +99,18 @@ function currentCodexHome(deps: CodexHomeDeps = {}): string {
   // unset CODEX_HOME can resolve to the single Windows Desktop home rather than
   // Linux ~/.codex; recording the fallback here creates a false foreign owner.
   return resolveCodexHomeDir(deps);
+}
+
+function currentCodexSqliteHomeAbsolute(target: "native" | "windows" = "native"): string | undefined {
+  const raw = process.env.CODEX_SQLITE_HOME?.trim();
+  if (!raw) return undefined;
+  const expanded = expandUserPath(raw);
+  // Windows service artifacts can be rendered by cross-platform tests and
+  // repair tooling. Preserve an already-absolute drive/UNC path instead of
+  // anchoring it beneath the current POSIX worktree.
+  return target === "windows" && win32.isAbsolute(expanded)
+    ? win32.normalize(expanded)
+    : resolve(expanded);
 }
 
 function currentOpenCodexHome(): string {
@@ -366,6 +378,7 @@ export function buildPlist(): string {
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = process.env.CODEX_HOME?.trim();
+  const codexSqliteHome = currentCodexSqliteHomeAbsolute();
   const opencodexHome = process.env.OPENCODEX_HOME?.trim();
   const envLines = [
     `    <key>OCX_SERVICE</key><string>1</string>`,
@@ -373,6 +386,7 @@ export function buildPlist(): string {
     `    <key>${BUN_RUNTIME_PATH_ENV}</key><string>${plistString(bun)}</string>`,
     `    <key>PATH</key><string>${plistString(path)}</string>`,
     codexHome ? `    <key>CODEX_HOME</key><string>${plistString(codexHome)}</string>` : null,
+    codexSqliteHome ? `    <key>CODEX_SQLITE_HOME</key><string>${plistString(codexSqliteHome)}</string>` : null,
     opencodexHome ? `    <key>OPENCODEX_HOME</key><string>${plistString(opencodexHome)}</string>` : null,
   ].filter((line): line is string => Boolean(line)).join("\n");
   const command = buildServiceShellCommand(bun, cli);
@@ -1457,6 +1471,7 @@ export function buildWindowsServiceScript(entry = cliEntry(), port = resolveServ
     windowsBatchSet(BUN_RUNTIME_PATH_ENV, bun, "path"),
     windowsBatchSet("PATH", path, "pathList"),
     windowsBatchSet("CODEX_HOME", process.env.CODEX_HOME?.trim(), "path"),
+    windowsBatchSet("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute("windows"), "path"),
     windowsBatchSet("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim(), "path"),
     windowsBatchSet("OCX_API_TOKEN_FILE", serviceApiTokenFilePath(), "path"),
     windowsBatchSet("OCX_SERVICE_LOG", serviceLogPath(), "path"),
@@ -2049,6 +2064,7 @@ export function buildUnit(): string {
   const log = logPath();
   const path = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
   const codexHome = systemdEnvironmentAssignment("CODEX_HOME", process.env.CODEX_HOME?.trim());
+  const codexSqliteHome = systemdEnvironmentAssignment("CODEX_SQLITE_HOME", currentCodexSqliteHomeAbsolute());
   const opencodexHome = systemdEnvironmentAssignment("OPENCODEX_HOME", process.env.OPENCODEX_HOME?.trim());
   const envLines = [
     systemdEnvironmentAssignment("OCX_SERVICE", "1"),
@@ -2056,6 +2072,7 @@ export function buildUnit(): string {
     systemdEnvironmentAssignment(BUN_RUNTIME_PATH_ENV, bun),
     systemdEnvironmentAssignment("PATH", path),
     codexHome,
+    codexSqliteHome,
     opencodexHome,
   ].filter((line): line is string => Boolean(line)).join("\n");
   return `[Unit]

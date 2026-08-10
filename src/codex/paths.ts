@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
@@ -32,6 +32,43 @@ export const CODEX_MODELS_CACHE_PATH = join(CODEX_HOME, "models_cache.json");
 /** Runtime CODEX_HOME lookup (honors CODEX_HOME env changes after import). */
 export function getCodexHome(): string {
   return resolveCodexHome();
+}
+
+export interface CodexSqliteHomeDeps {
+  env?: NodeJS.ProcessEnv;
+  cwd?: () => string;
+  codexHome?: string;
+  readConfig?: (path: string) => string;
+}
+
+/**
+ * Resolve Codex's SQLite state root at call time.
+ *
+ * Codex permits SQLite-backed state to live outside CODEX_HOME, especially for
+ * Windows Desktop sessions whose app-server runs in WSL. Keep the precedence
+ * identical to Codex: root config, then environment, then the effective home.
+ */
+export function resolveCodexSqliteHome(deps: CodexSqliteHomeDeps = {}): string {
+  const codexHome = deps.codexHome ?? getCodexHome();
+  const readConfig = deps.readConfig ?? (path => readFileSync(path, "utf8"));
+  let configured = "";
+  try {
+    configured = readRootTomlString(readConfig(join(codexHome, "config.toml")), "sqlite_home")?.trim() ?? "";
+  } catch {
+    // Missing/unreadable config has no sqlite_home override; environment and
+    // CODEX_HOME retain their documented precedence below.
+  }
+  const raw = configured || (deps.env ?? process.env).CODEX_SQLITE_HOME?.trim() || "";
+  if (!raw) return codexHome;
+  const expanded = expandUserPath(raw);
+  return isAbsolute(expanded)
+    ? resolve(expanded)
+    : resolve((deps.cwd ?? process.cwd)(), expanded);
+}
+
+/** Active Codex thread-state database, derived from the call-time SQLite root. */
+export function resolveCodexStateDbPath(deps: CodexSqliteHomeDeps = {}): string {
+  return join(resolveCodexSqliteHome(deps), "state_5.sqlite");
 }
 
 export function tomlString(value: string): string {

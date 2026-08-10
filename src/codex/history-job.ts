@@ -18,7 +18,6 @@
  */
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
 
 import type {
   CodexHistoryWorkerOperation,
@@ -26,19 +25,15 @@ import type {
 } from "./history-worker";
 import { historyBackupPathFor } from "./history-provider";
 import type { CodexHistoryFailureReason, CodexHistoryVerifiedNoopProof } from "./history-provider";
-import { getCodexHome } from "./paths";
-
-/** Where Codex keeps its resume history, and the manifest that shadows it. */
-const STATE_DB_FILE = "state_5.sqlite";
+import { getCodexHome, resolveCodexStateDbPath } from "./paths";
 
 /**
  * Resolve the paths a history job needs, at CALL time.
  *
- * `history-provider.ts` resolves its equivalents at module load (`:16`, `:22`),
- * which is fine in one process and wrong for a Worker: the Worker does not
- * inherit them, so anything derived from those constants would address a
- * different home than the caller intended. Resolving here also means a test that
- * moves `CODEX_HOME` is honoured rather than ignored.
+ * The SQLite root can differ from CODEX_HOME and both environment/config inputs
+ * can change between invocations. The parent resolves one exact target and hands
+ * those canonical paths to the Worker rather than asking the Worker to infer a
+ * possibly different environment.
  */
 export function resolveCodexHistoryJobTarget(): {
   readonly canonicalCodexHome: string;
@@ -46,7 +41,7 @@ export function resolveCodexHistoryJobTarget(): {
   readonly canonicalBackupPath: string;
 } {
   const home = getCodexHome();
-  const stateDb = join(home, STATE_DB_FILE);
+  const stateDb = resolveCodexStateDbPath({ codexHome: home });
   return {
     canonicalCodexHome: home,
     canonicalStateDbPath: stateDb,

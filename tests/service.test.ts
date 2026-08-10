@@ -108,14 +108,17 @@ describe("systemd service unit", () => {
 
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
+      process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const unit = buildUnit();
       expect(unit).toContain('Environment="CODEX_HOME=/tmp/codex-home"');
+      expect(unit).toContain('Environment="CODEX_SQLITE_HOME=/tmp/codex-sqlite-home"');
       expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/opencodex-home"');
       expectTextToContainPath(unit, serviceApiTokenFilePath());
       expect(unit).not.toContain("local-secret");
@@ -123,6 +126,8 @@ describe("systemd service unit", () => {
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = oldCodexSqliteHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -539,10 +544,12 @@ describe("Windows service task", () => {
 
   test("writes token-safe startup identity and child output to the service log", () => {
     const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "C:\\codex-home";
+      process.env.CODEX_SQLITE_HOME = "C:\\codex-sqlite-home";
       process.env.OPENCODEX_HOME = TEST_DIR;
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const script = buildWindowsServiceScript({
@@ -559,6 +566,7 @@ describe("Windows service task", () => {
       expect(script).toContain('echo cli="%OCX_CLI%"');
       expect(script).toContain('echo opencodex_home="%OPENCODEX_HOME%"');
       expect(script).toContain('echo codex_home="%CODEX_HOME%"');
+      expect(script).toContain('set "CODEX_SQLITE_HOME=C:\\codex-sqlite-home"');
       expect(script).toContain('echo token_file="%OCX_API_TOKEN_FILE%"');
       expect(script).toMatch(/"%OCX_BUN%" "%OCX_CLI%" start --port \d+ >>"%OCX_SERVICE_LOG%" 2>&1/);
       expect(script).toContain("child exited with code %ERRORLEVEL%");
@@ -567,6 +575,8 @@ describe("Windows service task", () => {
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = oldCodexSqliteHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -623,14 +633,17 @@ describe("launchd service plist", () => {
 
   test("preserves custom Codex and OpenCodex homes", () => {
     const oldCodexHome = process.env.CODEX_HOME;
+    const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.CODEX_HOME = "/tmp/codex-home";
+      process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
       process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
       expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
+      expect(plist).toContain("<key>CODEX_SQLITE_HOME</key><string>/tmp/codex-sqlite-home</string>");
       expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
       expectTextToContainPath(plist, serviceApiTokenFilePath());
       expect(plist).not.toContain("local-secret");
@@ -638,6 +651,8 @@ describe("launchd service plist", () => {
     } finally {
       if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = oldCodexHome;
+      if (oldCodexSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
+      else process.env.CODEX_SQLITE_HOME = oldCodexSqliteHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;

@@ -1,0 +1,77 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+import { resolveCodexHistoryJobTarget } from "../src/codex/history-job";
+import { historyBackupPathFor } from "../src/codex/history-provider";
+import { resolveCodexSqliteHome, resolveCodexStateDbPath } from "../src/codex/paths";
+
+const originalCodexHome = process.env.CODEX_HOME;
+const originalSqliteHome = process.env.CODEX_SQLITE_HOME;
+const roots: string[] = [];
+
+afterEach(() => {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+  if (originalSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
+  else process.env.CODEX_SQLITE_HOME = originalSqliteHome;
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("Codex SQLite home resolution", () => {
+  test("uses config, environment, and Codex home precedence", () => {
+    const env = { CODEX_SQLITE_HOME: "/state/from-env" };
+    expect(resolveCodexSqliteHome({
+      codexHome: "/state/codex-home",
+      env,
+      readConfig: () => 'sqlite_home = "/state/from-config"\n',
+    })).toBe(resolve("/state/from-config"));
+
+    expect(resolveCodexSqliteHome({
+      codexHome: "/state/codex-home",
+      env,
+      readConfig: () => { throw new Error("missing"); },
+    })).toBe(resolve("/state/from-env"));
+
+    expect(resolveCodexSqliteHome({
+      codexHome: "/state/codex-home",
+      env: {},
+      readConfig: () => "",
+    })).toBe("/state/codex-home");
+  });
+
+  test("resolves relative SQLite homes from the current working directory", () => {
+    const deps = {
+      codexHome: "/state/codex-home",
+      env: { CODEX_SQLITE_HOME: "../sqlite" },
+      cwd: () => "/work/project",
+      readConfig: () => "",
+    };
+    expect(resolveCodexSqliteHome(deps)).toBe("/work/sqlite");
+    expect(resolveCodexStateDbPath(deps)).toBe("/work/sqlite/state_5.sqlite");
+  });
+
+  test("history jobs resolve the selected database and backup identity at call time", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-sqlite-home-"));
+    roots.push(root);
+    const codexHome = join(root, "codex");
+    const envSqliteHome = join(root, "env-sqlite");
+    const configSqliteHome = join(root, "config-sqlite");
+    mkdirSync(codexHome);
+    mkdirSync(envSqliteHome);
+    mkdirSync(configSqliteHome);
+    process.env.CODEX_HOME = codexHome;
+    process.env.CODEX_SQLITE_HOME = envSqliteHome;
+    writeFileSync(join(codexHome, "config.toml"), `sqlite_home = ${JSON.stringify(configSqliteHome)}\n`);
+
+    const configured = resolveCodexHistoryJobTarget();
+    expect(configured.canonicalStateDbPath).toBe(join(configSqliteHome, "state_5.sqlite"));
+    expect(configured.canonicalBackupPath).toBe(historyBackupPathFor(configured.canonicalStateDbPath));
+
+    unlinkSync(join(codexHome, "config.toml"));
+    const fromEnv = resolveCodexHistoryJobTarget();
+    expect(fromEnv.canonicalStateDbPath).toBe(join(envSqliteHome, "state_5.sqlite"));
+    expect(fromEnv.canonicalBackupPath).toBe(historyBackupPathFor(fromEnv.canonicalStateDbPath));
+  });
+});
