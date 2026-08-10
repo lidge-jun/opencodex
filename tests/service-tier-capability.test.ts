@@ -147,7 +147,9 @@ describe("the gate fires on the live handleResponses path", () => {
       {},
     );
 
-    expect("service_tier" in (bodies[0] ?? {})).toBe(false);
+    const upstreamBody = bodies[0];
+    expect(upstreamBody).toBeDefined();
+    expect("service_tier" in upstreamBody!).toBe(false);
     expect(logCtx.requestedServiceTier).toBeUndefined();
     expect(logCtx.requestedSpeedLabel).toBeUndefined();
   });
