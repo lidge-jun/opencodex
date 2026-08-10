@@ -6,7 +6,7 @@ import { getCredential, listAccounts, saveCredential } from "../src/oauth/store"
 import type { OAuthController } from "../src/oauth/types";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-nous-oauth-test");
-const TEST_PORTAL = "http://portal.test";
+const TEST_PORTAL = "https://portal.test";
 let previousOpencodexHome: string | undefined;
 let previousPortalBase: string | undefined;
 
@@ -159,7 +159,16 @@ describe("Nous device-flow error handling", () => {
       new Response(JSON.stringify({ error: "access_denied", error_description: "User denied the request" }), { status: 400 }),
     );
     const ctrl: OAuthController = { onAuth() {} };
-    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization denied");
+    let err: unknown;
+    try {
+      await loginNous(ctrl);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("Nous Portal device authorization denied");
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("access_denied");
   });
 
   test("expired_token surfaces as a terminal NousTokenError", async () => {
@@ -167,7 +176,16 @@ describe("Nous device-flow error handling", () => {
       new Response(JSON.stringify({ error: "expired_token", error_description: "Code expired" }), { status: 400 }),
     );
     const ctrl: OAuthController = { onAuth() {} };
-    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization expired");
+    let err: unknown;
+    try {
+      await loginNous(ctrl);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("Nous Portal device authorization expired");
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("expired_token");
   });
 
   test("slow_down backs off and resumes polling until success", async () => {
@@ -213,7 +231,68 @@ describe("Nous device-flow error handling", () => {
   }, 15_000);
 });
 
-describe("Nous refresh fallback", () => {
+describe("Nous Portal base URL hardening", () => {
+  test("an HTTP override fails before fetch is invoked", async () => {
+    process.env.NOUS_PORTAL_BASE_URL = "http://portal.test";
+    let fetchCalled = false;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    try {
+      const ctrl: OAuthController = { onAuth() {} };
+      await expect(loginNous(ctrl)).rejects.toThrow(/must use HTTPS/);
+      await expect(refreshNousToken("old-refresh")).rejects.toThrow(/must use HTTPS/);
+      expect(fetchCalled).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.NOUS_PORTAL_BASE_URL;
+    }
+  });
+
+  test("a non-URL override fails before fetch is invoked", async () => {
+    process.env.NOUS_PORTAL_BASE_URL = "not a url";
+    let fetchCalled = false;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    try {
+      await expect(refreshNousToken("old-refresh")).rejects.toThrow(/not a valid URL/);
+      expect(fetchCalled).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.NOUS_PORTAL_BASE_URL;
+    }
+  });
+
+  test("embedded credentials / query / fragment in the override are rejected", async () => {
+    for (const bad of [
+      "https://user:pass@portal.test",
+      "https://portal.test?x=1",
+      "https://portal.test#frag",
+    ]) {
+      process.env.NOUS_PORTAL_BASE_URL = bad;
+      const realFetch = globalThis.fetch;
+      let fetchCalled = false;
+      globalThis.fetch = (async () => {
+        fetchCalled = true;
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch;
+      try {
+        await expect(refreshNousToken("old-refresh")).rejects.toThrow(/base URL/);
+        expect(fetchCalled).toBe(false);
+      } finally {
+        globalThis.fetch = realFetch;
+        delete process.env.NOUS_PORTAL_BASE_URL;
+      }
+    }
+  });
+});
+
+describe("Nous refresh token safety", () => {
   const realFetch = globalThis.fetch;
 
   beforeEach(() => {
@@ -227,7 +306,7 @@ describe("Nous refresh fallback", () => {
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
   });
 
-  test("keeps the previous refresh token when the response omits a new one", async () => {
+  test("rejecting a missing replacement refresh token does not reuse the consumed one", async () => {
     const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const observedHeader = (init?.headers as Record<string, string> | undefined)?.["x-nous-refresh-token"];
@@ -239,10 +318,41 @@ describe("Nous refresh fallback", () => {
       }), { status: 200 });
     }) as typeof fetch;
 
-    const cred = await refreshNousToken("old-refresh");
+    await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+  });
 
+  test("rejecting a replacement equal to the submitted token (consumed-credential reuse)", async () => {
+    const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "old-refresh", // identical to what was submitted
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+  });
+
+  test("a rotated replacement refresh token is kept", async () => {
+    const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const observedHeader = (init?.headers as Record<string, string> | undefined)?.["x-nous-refresh-token"];
+      expect(observedHeader).toBe("old-refresh");
+      return new Response(JSON.stringify({
+        access_token: access,
+        refresh_token: "rotated-refresh",
+        expires_in: 3600,
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const cred = await refreshNousToken("old-refresh");
     expect(cred.access).toBe(access);
-    expect(cred.refresh).toBe("old-refresh");
+    expect(cred.refresh).toBe("rotated-refresh");
     expect(cred.accountId).toBe("wired-user");
   });
 });

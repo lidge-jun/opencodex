@@ -64,8 +64,45 @@ interface NousJwtPayload {
   [key: string]: unknown;
 }
 
+/**
+ * Normalize and hard-validate the Nous Portal OAuth base URL.
+ *
+ * Security: the portal accepts the bearer-equivalent single-use refresh token
+ * in the `x-nous-refresh-token` header and returns the per-request inference
+ * JWT as the access token. Sending either over cleartext (or to a
+ * credential/query/fragment-laden URL) leaks credentials to a network
+ * attacker. Validate the *complete* URL up front and throw before any
+ * `fetch` is dispatched — both the device-grant and the refresh path call
+ * this from inside their `fetch` arguments, so a thrown error guarantees the
+ * network call never runs.
+ *
+ * Mirrors the allowlist discipline in Hermes `hermes_cli/auth.py`
+ * (`_NOUS_PORTAL_ALLOWED_HOSTS`, https-only default
+ * `DEFAULT_NOUS_PORTAL_URL`).
+ */
 function resolvePortalBaseUrl(): string {
-  return (process.env.NOUS_PORTAL_BASE_URL || NOUS_PORTAL_BASE_URL).replace(/\/+$/, "");
+  const raw = (process.env.NOUS_PORTAL_BASE_URL || NOUS_PORTAL_BASE_URL).trim();
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL is not a valid URL: ${raw}`);
+  }
+  if (url.protocol !== "https:") {
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must use HTTPS (got ${url.protocol}): ${raw}`);
+  }
+  if (url.username || url.password) {
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain embedded credentials: ${raw}`);
+  }
+  if (url.search) {
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain a query string: ${raw}`);
+  }
+  if (url.hash) {
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain a fragment: ${raw}`);
+  }
+  // Origin only — no path/query/fragment — so callers cannot smuggle a
+  // non-canonical endpoint through the override.
+  return url.origin;
 }
 
 function decodeJwtPayload(token: string): NousJwtPayload | undefined {
@@ -146,11 +183,38 @@ async function readTokenError(response: Response): Promise<NousTokenError> {
   return new NousTokenError(response.status, oauthError, `Nous Portal token request failed: ${response.status}${suffix}`);
 }
 
-function parseTokenPayload(payload: NousTokenResponse, refreshFallback?: string): OAuthCredentials {
+/**
+ * Build credentials from a token endpoint response.
+ *
+ * Nous refresh tokens are SINGLE-USE and rotated on every successful refresh
+ * (see module docstring, matching Hermes `hermes_cli/auth.py`). A response
+ * that omits `refresh_token`, or returns a replacement equal to the token we
+ * just submitted, leaves us holding a consumed credential: the next refresh
+ * would replay it and the Portal treats reuse as token theft
+ * (`refresh_token_reused`), revoking the whole session. Reject both cases
+ * rather than silently falling back to the submitted token.
+ *
+ * @param submittedRefreshToken the refresh token sent in the request; used only
+ *   to detect a no-rotation / consumed-token response, never as a fallback.
+ */
+function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: string): OAuthCredentials {
   const access = nonEmptyString(payload.access_token);
   if (!access) throw new Error("Nous Portal token response did not include an access token");
-  const refresh = nonEmptyString(payload.refresh_token) ?? refreshFallback;
-  if (!refresh) throw new Error("Nous Portal token response did not include a refresh token");
+  const refresh = nonEmptyString(payload.refresh_token);
+  if (!refresh) {
+    throw new NousTokenError(
+      undefined,
+      "refresh_token_reused",
+      "Nous Portal did not return a replacement refresh token; refusing to reuse the consumed one (would trigger refresh_token_reused and revoke the session)",
+    );
+  }
+  if (submittedRefreshToken && refresh === submittedRefreshToken) {
+    throw new NousTokenError(
+      undefined,
+      "refresh_token_reused",
+      "Nous Portal returned the same refresh token we submitted; refusing to reuse it (single-use rotation expected, session may be compromised)",
+    );
+  }
 
   const jwtPayload = decodeJwtPayload(access);
   const expMs = jwtExpiryMs(jwtPayload);
@@ -225,7 +289,7 @@ async function pollForToken(
       signal: requestSignal(signal),
     });
     const payload = (await response.json().catch(() => ({}))) as NousTokenResponse;
-    if (response.ok && nonEmptyString(payload.access_token)) return parseTokenPayload(payload);
+    if (response.ok && nonEmptyString(payload.access_token)) return parseTokenPayload(payload, "");
     const error = payload.error;
     if (error === "authorization_pending") {
       await sleep(waitMs, signal);
