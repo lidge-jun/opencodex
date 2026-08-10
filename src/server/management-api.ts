@@ -67,6 +67,7 @@ import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
+import { handleEconomicSnapshotRoutes } from "./management/economic-snapshot-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleLabRoutes } from "./management/lab-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
@@ -187,6 +188,7 @@ export async function handleManagementAPI(
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
+    ??     (await handleEconomicSnapshotRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));

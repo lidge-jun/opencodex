@@ -68,6 +68,25 @@ import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
+  const explainMatch = url.pathname.match(/^\/api\/combos\/([^/]+)\/explain$/);
+  if (explainMatch && req.method === "GET") {
+    let comboId: string;
+    try {
+      comboId = decodeURIComponent(explainMatch[1]!);
+    } catch {
+      return jsonResponse({ error: "combo id has malformed percent-encoding" }, 400);
+    }
+    const combo = config.combos?.[comboId];
+    if (!combo) return jsonResponse({ error: `unknown combo "${comboId}"` }, 404);
+    const { explainEconomicCombo } = await import("../../combos/economy");
+    const inputTokens = Number(url.searchParams.get("inputTokens") ?? "0");
+    const outputTokens = Number(url.searchParams.get("outputTokens") ?? "1024");
+    if (![inputTokens, outputTokens].every(value => Number.isFinite(value) && value >= 0)) {
+      return jsonResponse({ error: "inputTokens and outputTokens must be finite non-negative numbers" }, 400);
+    }
+    return jsonResponse(explainEconomicCombo(config, comboId, { inputTokens, outputTokens, kind: "configured" }));
+  }
+
   if (url.pathname === "/api/combos" && req.method === "GET") {
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
     return jsonResponse({ combos: listComboIds(config).map(id => {
@@ -120,6 +139,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     const error = comboConfigError(id, body.combo, config.providers, {
       requireEnabledTarget: true,
       combos: config.combos,
+      allowances: config.economicAllowances,
       excludeComboId: renameFrom ?? id,
     });
     if (error) return jsonResponse({ error }, 400);
