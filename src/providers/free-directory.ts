@@ -45,6 +45,8 @@ export interface FreeDirectoryProvider {
   keyOptional?: boolean;
   models?: string[];
   liveModels: boolean;
+  /** Anthropic-compatible gateways that may close streams before terminal frames. */
+  anthropicEofTolerance?: boolean;
   note?: string;
   googleMode?: "ai-studio" | "vertex";
 }
@@ -97,7 +99,7 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   ovhcloud: openAi("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1", "https://console.ovhcloud.com", { keyOptional: true, modelsUrl: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/models" }),
   pollinations: openAi("https://gen.pollinations.ai/v1", "https://pollinations.ai", { keyOptional: true }),
   reka: openAi("https://api.reka.ai/v1", "https://platform.reka.ai"),
-  sambanova: openAi("https://api.sambanova.ai/v1", "https://cloud.sambanova.ai/apis", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.sambanova.ai/cloud/docs/api-reference/models" }),
+  sambanova: openAi("https://api.sambanova.ai/v1", "https://cloud.sambanova.ai/apis", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.sambanova.ai/docs/en/get-started/api-keys-urls", modelsUrl: "https://api.sambanova.ai/v1/models", lastVerified: "2026-08-02" }),
   sparkdesk: openAi("https://spark-api-open.xf-yun.com/v1", "https://console.xfyun.cn", { verification: "official", documentationUrl: "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html" }),
   agnes: openAi("https://apihub.agnes-ai.com/v1", "https://agnes-ai.com"),
   ainative: openAi("https://api.ainative.studio/api/v1", "https://ainative.studio", { modelsUrl: "https://api.ainative.studio/api/v1/models" }),
@@ -116,7 +118,7 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   // `unverified` and drops the shared verification date rather than borrowing it.
   bytez: openAi("https://api.bytez.com/models/v2/openai/v1", "https://bytez.com", { verification: "unverified", lastVerified: undefined, documentationUrl: "https://docs.bytez.com/", discovery: "static", liveModels: false, models: ["meta-llama/Llama-3.3-70B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-72B-Instruct"], note: "The recurring-credit classification is retained from the requested catalog, but the current reset terms could not be independently verified." }),
   "nous-research": openAi("https://inference-api.nousresearch.com/v1", "https://portal.nousresearch.com", { discovery: "static", liveModels: false, models: ["Hermes-4-405B", "Hermes-4-70B"] }),
-  agentrouter: { baseUrl: "https://agentrouter.org", dashboardUrl: "https://agentrouter.org", adapter: "anthropic", authKind: "key", supportLevel: "experimental", verification: "primary", modelsUrl: "https://agentrouter.org/v1/models", lastVerified: LAST_VERIFIED, discovery: "live", liveModels: true },
+  agentrouter: { baseUrl: "https://agentrouter.org", dashboardUrl: "https://agentrouter.org", adapter: "anthropic", authKind: "key", supportLevel: "experimental", verification: "primary", modelsUrl: "https://agentrouter.org/v1/models", lastVerified: LAST_VERIFIED, discovery: "live", liveModels: true, anthropicEofTolerance: true },
   ai21: openAi("https://api.ai21.com/studio/v1", "https://studio.ai21.com/account/api-key", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.ai21.com/reference/models" }),
   baichuan: openAi("https://api.baichuan-ai.com/v1", "https://platform.baichuan-ai.com/console/apikey", { verification: "official" }),
   // Verified end-to-end 2026-07-30: /v1/models returns the OpenAI-shaped live catalog (13 models),
@@ -130,12 +132,12 @@ const CONNECTABLE: Record<string, ConnectableOverride> = {
   hyperbolic: openAi("https://api.hyperbolic.xyz/v1", "https://app.hyperbolic.xyz/settings", { verification: "official" }),
   longcat: openAi("https://api.longcat.chat/openai/v1", "https://longcat.chat", { verification: "official", discovery: "static", liveModels: false, models: ["LongCat-2.0"] }),
   monsterapi: openAi("https://api.monsterapi.ai/v1", "https://monsterapi.ai", { verification: "official" }),
-  nebius: openAi("https://api.tokenfactory.nebius.com/v1", "https://studio.nebius.com", { verification: "official" }),
+  nebius: openAi("https://api.tokenfactory.nebius.com/v1", "https://tokenfactory.nebius.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.tokenfactory.nebius.com/quickstart", modelsUrl: "https://api.tokenfactory.nebius.com/v1/models?verbose=true", lastVerified: "2026-08-02" }),
   novita: openAi("https://api.novita.ai/openai/v1", "https://novita.ai/settings/key-management", { supportLevel: "supported", verification: "official", modelsUrl: "https://api.novita.ai/openai/v1/models" }),
-  nscale: openAi("https://inference.api.nscale.com/v1", "https://console.nscale.com", { verification: "official" }),
+  nscale: openAi("https://inference.api.nscale.com/v1", "https://console.nscale.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.nscale.com/docs/use-cases/chat", modelsUrl: "https://inference.api.nscale.com/v1/models", lastVerified: "2026-08-03" }),
   nvidia: openAi("https://integrate.api.nvidia.com/v1", "https://build.nvidia.com", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.api.nvidia.com/nim/reference/llm-apis" }),
   publicai: openAi("https://api.publicai.co/v1", "https://publicai.co"),
-  scaleway: openAi("https://api.scaleway.ai/v1", "https://console.scaleway.com/generative-api", { verification: "official" }),
+  scaleway: openAi("https://api.scaleway.ai/v1", "https://console.scaleway.com/generative-api", { supportLevel: "supported", verification: "official", documentationUrl: "https://www.scaleway.com/en/docs/generative-apis/api-cli/using-generative-apis/", modelsUrl: "https://api.scaleway.ai/v1/models", lastVerified: "2026-08-01" }),
   sensenova: openAi("https://token.sensenova.cn/v1", "https://console.sensenova.cn", { verification: "official" }),
   stepfun: openAi("https://api.stepfun.com/v1", "https://platform.stepfun.com", { verification: "official" }),
   together: openAi("https://api.together.xyz/v1", "https://api.together.xyz/settings/api-keys", { supportLevel: "supported", verification: "official", documentationUrl: "https://docs.together.ai/reference/models-1" }),
@@ -153,7 +155,8 @@ const LABELS: Record<string, string> = {
   glm: "Z.AI GLM", "glm-cn": "BigModel GLM (CN)", "kilo-gateway": "Kilo Gateway", "opencode-zen": "OpenCode Zen",
   sealion: "SEA-LION", bytez: "Bytez", "nous-research": "Nous Research", agentrouter: "AgentRouter",
   ai21: "AI21", baichuan: "Baichuan", deepinfra: "DeepInfra", deepseek: "DeepSeek", doubao: "Doubao",
-  "freemodel-dev": "FreeModel.dev", nebius: "Nebius", novita: "Novita", nscale: "Nscale", nvidia: "NVIDIA NIM",
+  "freemodel-dev": "FreeModel.dev", sambanova: "SambaNova Cloud", nebius: "Nebius Token Factory",
+  novita: "Novita", nscale: "Nscale", nvidia: "NVIDIA NIM",
   publicai: "PublicAI", qoder: "Qoder", sensenova: "SenseNova", stepfun: "StepFun", vertex: "Google Vertex AI",
 };
 

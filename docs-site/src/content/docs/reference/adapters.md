@@ -31,6 +31,9 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
 
 - Converts internal messages to OpenAI roles; maps tools to `{type:"function", function:{…}}` and
   `tool_choice` (`auto`/`none`/`required` or a named function).
+- **Tool-result images** ride in a follow-up user vision message (`image_url` parts) released once
+  the tool round closes, since `role:"tool"` content is text-only; the `[image]` marker stays in the
+  tool message as the anchor.
 - **Rewrites Codex's GPT-5 identity prompt** to a model-agnostic intro so routed models don't claim to
   be OpenAI.
 - **Clamps `reasoning_effort`** to the model's advertised subset when an exact tier is unavailable;
@@ -38,12 +41,22 @@ provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud),
   adapter **omits it entirely** for ids in `provider.noReasoningModels`.
 - Streams `delta.content` (text), `delta.reasoning_content` (thinking), and `delta.tool_calls[]`;
   collects `usage`.
+- ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort: "low" }`
+  (or `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
+  this request shape. The adapter clamps other effort requests to the verified `low` tier, accepts
+  reasoning deltas from either `delta.reasoning_content` or `delta.reasoning`, requests streamed
+  usage with `stream_options.include_usage`, and reads usage from non-stream response envelopes.
 
 ## `openai-responses`
 
 **Targets:** the OpenAI **Responses API**. **`passthrough: true`** — forwards the raw request body and
 streams the response back **untranslated**.
 **Auth:** `forward` (relay the caller's headers) or `key`.
+
+For `key` auth, [`retryOn429`](/reference/configuration/) applies here too: a pre-stream 429
+waits and replays the identical request on the same key before any other handling, exactly like
+the translated `openai-chat` / Anthropic request path. Custom `runTurn` transports are not part
+of the HTTP retry loop.
 
 - `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to the legacy `{baseUrl}/v1/responses` construction.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
@@ -77,8 +90,8 @@ streams the response back **untranslated**.
 
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
-- Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
-  `thoughtSignature` values so reasoning continuity survives later turns.
+- Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
+  real `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
@@ -168,6 +181,9 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
+- Sends regular `cursor/grok-4.5` tiers with Cursor's exact live-discovery wire ids
+  (`cursor-grok-4.5-low`, `-medium`, or `-high`). Keeps `cursor/grok-4.5-fast` selectable while
+  sending the canonical `grok-4.5` model with separate `effort` and `fast=true` parameters.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy

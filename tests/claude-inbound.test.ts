@@ -94,7 +94,9 @@ describe("claude inbound translation", () => {
   test("thinking variants", () => {
     const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
     expect((anthropicToResponsesBody({ ...base, thinking: { type: "adaptive" } }) as any).reasoning).toEqual({ summary: "auto" });
-    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toBeUndefined();
+    // "disabled" and omitted must NOT collapse to the same state: for a model that thinks by
+    // default, omission means thinking is ON and shares the caller's max_tokens (#545).
+    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toEqual({ effort: "none", summary: "none" }); // justified: sibling assertions in this test use the same cast
     expect((anthropicToResponsesBody(base) as any).reasoning).toBeUndefined();
     expect(effortForThinkingBudget(1024)).toBe("low");
     expect(effortForThinkingBudget(8192)).toBe("medium");
@@ -126,10 +128,13 @@ describe("claude inbound translation", () => {
       thinking: { type: "enabled", budget_tokens: 1024 },
       output_config: { effort: "xhigh" },
     }))).toEqual({ summary: "auto", effort: "xhigh" });
-    // disabled thinking suppresses effort entirely (subagent wire, claude-code#65863)
+    // disabled thinking suppresses effort entirely (subagent wire, claude-code#65863).
+    // Still suppressed — "high" never reaches the wire — but now stated explicitly as the
+    // "none" disable sentinel instead of by absence, so a default-on model is told to stop
+    // rather than left to think anyway (#545).
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "disabled" }, output_config: { effort: "high" },
-    }))).toBeUndefined();
+    }))).toEqual({ effort: "none", summary: "none" });
     // unknown effort strings are dropped so downstream defaults win
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "adaptive" }, output_config: { effort: "turbo" },
@@ -172,6 +177,41 @@ describe("claude inbound translation", () => {
       ],
     }) as any;
     expect(body.input[1].output).toBe("[tool error] boom");
+    expect(() => parseRequest(body)).not.toThrow();
+  });
+
+  test("tool_result document blocks surface the attachment marker", () => {
+    const body = anthropicToResponsesBody({
+      model: "m", max_tokens: 10,
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t1",
+            content: [
+              { type: "text", text: "3 pages" },
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" }, title: "report.pdf" },
+            ],
+          }],
+        },
+        { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t2",
+            content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" } }],
+          }],
+        },
+      ],
+    }) as any;
+    expect(body.input[1].output).toEqual([
+      { type: "input_text", text: "3 pages" },
+      { type: "input_text", text: "[document: report.pdf]" },
+    ]);
+    // An untitled document still leaves a marker rather than the empty output that
+    // read as "the tool returned nothing".
+    expect(body.input[3].output).toEqual([{ type: "input_text", text: "[document]" }]);
     expect(() => parseRequest(body)).not.toThrow();
   });
 

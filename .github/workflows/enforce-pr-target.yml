@@ -6,10 +6,17 @@ on:
       - opened
       - reopened
       - edited
+      - labeled
+      - unlabeled
       - ready_for_review
       - synchronize
+  # CodeRabbit publishes a legacy commit status named `CodeRabbit` on the
+  # reviewed head SHA. `status` workflows are loaded only from the default
+  # branch, so a PR cannot suppress or rewrite this signal path. The status is
+  # only a wake-up signal; the gate re-reads live reviews before any write.
+  status:
 
-# pull-requests:write covers title/comment updates.
+# pull-requests:write covers title/comment/label updates.
 # contents:write is required for convertPullRequestToDraft /
 # markPullRequestReadyForReview GraphQL mutations with GITHUB_TOKEN
 # (otherwise: "Resource not accessible by integration"). This workflow
@@ -18,40 +25,220 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: enforce-pr-target-${{ github.event.pull_request.number }}
-
 jobs:
-  enforce-target:
+  resolve-pr:
+    # This read-only job resolves every trusted wake-up event to a PR number
+    # before the write-capable job starts. The PR number is the stable identity
+    # used by both gate writers even when a contributor pushes a new head SHA.
+    if: >-
+      (github.event_name == 'status' &&
+       github.event.context == 'CodeRabbit' &&
+       github.event.state == 'success' &&
+       github.event.sender.login == 'coderabbitai[bot]' &&
+       github.event.sender.id == 136622811) ||
+      (github.event_name == 'pull_request_target' &&
+       ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+        github.event.label.name == 'gui-screenshot-waived' ||
+        github.event.label.name == 'intake: hygiene-blocked' ||
+        github.event.label.name == 'maintainer-sponsored' ||
+        github.event.label.name == 'test-exception-approved' ||
+        github.event.label.name == 'suppression-approved' ||
+        github.event.label.name == 'generated-change-approved' ||
+        github.event.label.name == 'dependency-change-approved'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pull-number: ${{ steps.resolve.outputs.pull-number }}
+    steps:
+      - name: Resolve trusted gate event to PR
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let pullNumber = context.payload.pull_request?.number ?? null;
+
+            if (context.eventName === "status") {
+              const sender = context.payload.sender;
+              const trustedCodeRabbit =
+                context.payload.context === "CodeRabbit" &&
+                context.payload.state === "success" &&
+                sender?.login === "coderabbitai[bot]" &&
+                sender?.id === 136622811;
+              if (!trustedCodeRabbit) {
+                core.info("Status producer is not the CodeRabbit GitHub App; skipping.");
+                return;
+              }
+
+              const statusSha = context.payload.sha;
+              const associatedPrs = await github.paginate(
+                github.rest.repos.listPullRequestsAssociatedWithCommit,
+                { owner, repo, commit_sha: statusSha, per_page: 100 }
+              );
+              const candidates = associatedPrs.filter(
+                candidate =>
+                  candidate.state === "open" &&
+                  candidate.head?.sha === statusSha
+              );
+              if (candidates.length !== 1) {
+                core.info(
+                  `CodeRabbit status ${statusSha} maps to ${candidates.length} open current-head PRs; skipping ambiguous/stale revalidation.`
+                );
+                return;
+              }
+              pullNumber = candidates[0].number;
+            }
+
+            if (Number.isInteger(pullNumber)) {
+              core.setOutput("pull-number", String(pullNumber));
+            }
+
+  enforce-target:
+    needs: resolve-pr
+    if: needs.resolve-pr.outputs.pull-number != ''
+    runs-on: ubuntu-latest
+    # Job-scoped permissions replace, rather than extend, the workflow default.
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      # Serialize every writer by PR identity, not head SHA. An older-head run
+      # therefore cannot race a newer-head run that rewrites the same comment.
+      group: pr-gate-comment-${{ needs.resolve-pr.outputs.pull-number }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout trusted PR-quality scripts
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          # Source trusted scripts from an integration branch, never from the
+          # PR's own base commit. A stacked child PR's base is another open
+          # PR's head, so `base.sha` let an unpromoted commit choose which code
+          # runs with this job's contents/pull-requests write token.
+          #
+          # The branch is chosen, not fixed. `status` has no pull_request
+          # payload and runs the privileged workflow from the repository
+          # default branch, so it sources from that same promoted boundary. A
+          # `main`-targeting PR must take its scripts from `main`, or the gate
+          # runs a `main` workflow definition against `dev` scripts. Every
+          # other base, including a stacked child's, resolves to `dev`.
+          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
           persist-credentials: false
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            MAINTAINERS.md
 
       - name: Enforce PR target, ancestry, and description
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RESOLVED_PULL_NUMBER: ${{ needs.resolve-pr.outputs.pull-number }}
         with:
           script: |
             const path = require("path");
-            const { collectPrQualityFailures } = require(
+            const fs = require("node:fs");
+            const {
+              collectPrQualityFailures,
+              authorHasPushPermission,
+              hasGuiOverride,
+              isChangedFileListTruncated,
+              extractReviewReadiness,
+              appendReviewReadinessSection,
+              stripReviewReadinessSection,
+              uncheckReviewReadinessBoxes,
+              REVIEW_READINESS_CLAIM_INDEX,
+              resetReviewReadinessSection
+            } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
+            );
+            const {
+              collectDeterministicHygieneFailures,
+              HYGIENE_FAILURE_HINTS,
+            } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
+            );
+            const {
+              parseGateState,
+              gateStateMarker,
+              parseState,
+              parseReadinessState,
+              defaultGateState,
+              migrateLegacyGateState,
+              completionIsStale,
+              readinessClaimViolations,
+              unresolvedFindingsClaim,
+              READINESS_STATE_VERSION
+            } = require(
+              path.join(
+                process.cwd(),
+                ".github",
+                "scripts",
+                "pr-quality-state.cjs"
+              ),
+            );
+            const {
+              GATE_MARKER,
+              READINESS_MARKER,
+              HYGIENE_MARKER,
+              HYGIENE_BLOCK_START,
+              HYGIENE_BLOCK_END,
+              inlineCode,
+              buildGateCommentBody,
+              extractHygieneSection,
+              buildFailureSections,
+              failureSummary,
+              buildStaleNotice,
+              buildClaimCheckNotice,
+              buildFindingsClaimNotice
+            } = require(
+              path.join(
+                process.cwd(),
+                ".github",
+                "scripts",
+                "pr-quality-messages.cjs"
+              ),
+            );
+            const {
+              parseMaintainerLogins
+            } = require(
+              path.join(
+                process.cwd(),
+                ".github",
+                "scripts",
+                "pr-maintainers.cjs"
+              ),
             );
 
             const ALLOWED_BASES = ["dev"];
             const DEFAULT_BASE = "dev";
             const TITLE_PREFIX = "[WRONG BRANCH] ";
-            const COMMENT_MARKER = "<!-- pr-quality-enforcer -->";
             const LEGACY_COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
-            const STATE_PATTERN =
-              /<!-- (?:wrong-branch-enforcer|pr-quality-enforcer)-state:([\s\S]*?) -->/;
-
+            const REVIEW_READY_LABEL = "review-ready";
+            const GUI_SCREENSHOT_WAIVER_LABEL = "gui-screenshot-waived";
+            const MAINTAINERS_FILE = "MAINTAINERS.md";
             const { owner, repo } = context.repo;
-            const pull_number = context.payload.pull_request.number;
+            const resolvedPullNumber = process.env.RESOLVED_PULL_NUMBER ?? "";
+            const pull_number = /^\d+$/.test(resolvedPullNumber)
+              ? Number.parseInt(resolvedPullNumber, 10)
+              : Number.NaN;
+
+            // `resolve-pr` is the single authority that maps a trusted event to
+            // exactly one live PR. The write-capable job consumes only that
+            // resolved identity so its concurrency key and mutation target
+            // cannot diverge.
+            if (!Number.isSafeInteger(pull_number) || pull_number < 1) {
+              core.info("No pull request could be resolved for this gate event; skipping.");
+              return;
+            }
+
+            // Defense in depth: the resolver job is the primary event gate, but
+            // the write-capable script also rejects event classes this workflow
+            // never intends to mutate from.
+            if (!["pull_request_target", "status"].includes(context.eventName)) {
+              core.info(`Unsupported gate event ${context.eventName}; skipping.`);
+              return;
+            }
 
             const { data: pr } = await github.rest.pulls.get({
               owner,
@@ -69,63 +256,159 @@ jobs:
               }
             );
 
-            const botComment = comments.find(
+            // One consolidated comment. The gate finds its own comment by the
+            // single GATE_MARKER; the legacy enforcer/readiness markers are
+            // matched only to migrate pre-consolidation PRs.
+            const gateComment = comments.find(
               comment =>
                 comment.user?.login === "github-actions[bot]" &&
-                (comment.body?.includes(COMMENT_MARKER) ||
+                comment.body?.includes(GATE_MARKER)
+            );
+            let gateCommentId = gateComment?.id ?? null;
+            const storedGateState = parseGateState(
+              gateComment?.body,
+              message => core.warning(message)
+            );
+
+            // Legacy comments: the pre-consolidation two-comment model. Their
+            // state is merged once into the single comment, then the old
+            // comments are deleted.
+            const legacyEnforcerComment = comments.find(
+              comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                (comment.body?.includes("<!-- pr-quality-enforcer -->") ||
                   comment.body?.includes(LEGACY_COMMENT_MARKER))
             );
-            let botCommentId = botComment?.id ?? null;
+            const legacyReadinessComment = comments.find(
+              comment =>
+                comment.user?.login === "github-actions[bot]" &&
+                comment.body?.includes(READINESS_MARKER)
+            );
+            const legacyEnforcerState = parseState(
+              legacyEnforcerComment?.body,
+              message => core.warning(message)
+            );
+            const legacyReadinessState = parseReadinessState(
+              legacyReadinessComment?.body,
+              message => core.warning(message)
+            );
+            const migratedGateState = migrateLegacyGateState(
+              legacyEnforcerState,
+              legacyReadinessState
+            );
 
-            function parseState(body) {
-              const match = body?.match(STATE_PATTERN);
+            let gateState = storedGateState ?? migratedGateState;
 
-              if (!match) {
-                return null;
-              }
-
+            /**
+             * Maintainers from `MAINTAINERS.md` on the trusted default branch
+             * (checked out sparse by the step above). The file is the canonical
+             * list; mentioning these logins on the PR notifies them.
+             */
+            function readMaintainerLogins() {
               try {
-                return JSON.parse(match[1]);
+                const text = fs.readFileSync(
+                  path.join(process.cwd(), MAINTAINERS_FILE),
+                  "utf8"
+                );
+                return parseMaintainerLogins(text);
               } catch (error) {
                 core.warning(
-                  `Could not parse stored workflow state: ${error.message}`
+                  `Could not read ${MAINTAINERS_FILE}: ${error.message}`
                 );
 
-                return null;
+                return [];
               }
             }
 
-            function stateMarker(state) {
-              return (
-                "<!-- pr-quality-enforcer-state:" +
-                JSON.stringify(state) +
-                " -->"
-              );
+            async function setReviewReadyLabel(shouldHave, hasLabel) {
+              // The label is a review trigger, not a gate decision. A label
+              // write failure must not abort the run before the gate comment
+              // or the draft/ready conversion happens.
+              try {
+                if (shouldHave && !hasLabel) {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: pull_number,
+                    labels: [REVIEW_READY_LABEL]
+                  });
+                } else if (!shouldHave && hasLabel) {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: pull_number,
+                    name: REVIEW_READY_LABEL
+                  });
+                }
+              } catch (error) {
+                core.warning(
+                  `Could not ${shouldHave ? "add" : "remove"} the ${inlineCode(REVIEW_READY_LABEL)} label: ${error.message}`
+                );
+              }
             }
 
-            function inlineCode(value) {
-              return `\`${String(value).replaceAll("`", "\\`")}\``;
-            }
-
-            async function upsertComment(body) {
-              if (botCommentId) {
+            /**
+             * The single write to the consolidated comment. Every run rebuilds
+             * the full body and writes it exactly once (create-if-absent,
+             * update-if-present), so there is never a double-edit of the
+             * readiness section or a stale intermediate checkpoint body.
+             */
+            async function upsertGateComment(state, opts) {
+              let body = buildGateCommentBody(state, opts).join("\n");
+              // The hygiene workflow writes its status into this same comment.
+              // Preserve whatever it left so a gate rebuild does not drop it.
+              const existingHygiene = extractHygieneSection(gateComment?.body);
+              if (existingHygiene && !body.includes("pr-hygiene-block")) {
+                body = body.replace(
+                  /\s+$/,
+                  `\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${existingHygiene}\n\n${HYGIENE_BLOCK_END}`
+                );
+              }
+              if (gateCommentId) {
                 await github.rest.issues.updateComment({
                   owner,
                   repo,
-                  comment_id: botCommentId,
+                  comment_id: gateCommentId,
                   body
                 });
-
+                await migrateLegacyCommentsIfNeeded();
                 return;
               }
-
               const created = await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: pull_number,
                 body
               });
-              botCommentId = created.data.id;
+              gateCommentId = created.data.id;
+              await migrateLegacyCommentsIfNeeded();
+            }
+
+            /**
+             * One-time migration: merge legacy state into the single comment,
+             * then delete the two old comments. The gate comment must already
+             * exist (created/updated by upsertGateComment) so its id is known
+             * and the legacy comments are not mistaken for it.
+             */
+            async function migrateLegacyCommentsIfNeeded() {
+              const legacyIds = [
+                legacyEnforcerComment?.id,
+                legacyReadinessComment?.id
+              ].filter(id => typeof id === "number" && id !== gateCommentId);
+              if (legacyIds.length === 0) return;
+              for (const id of legacyIds) {
+                try {
+                  await github.rest.issues.deleteComment({
+                    owner,
+                    repo,
+                    comment_id: id
+                  });
+                } catch (error) {
+                  core.warning(
+                    `Could not delete legacy bot comment ${id}: ${error.message}`
+                  );
+                }
+              }
             }
 
             async function convertToDraft() {
@@ -171,92 +454,6 @@ jobs:
                 }
               );
             }
-
-            function descriptionFailureLines(reason) {
-              switch (reason) {
-                case "empty":
-                  return [
-                    "The pull request body is empty after stripping HTML comments.",
-                    "",
-                    "Include a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance)."
-                  ];
-                case "placeholder":
-                  return [
-                    "The pull request body contains only placeholder text (for example `N/A`, `TODO`, or `No response`).",
-                    "",
-                    "Replace placeholders with a **Summary** and **Test plan**, or another description with at least two substantive sections or paragraphs."
-                  ];
-                case "escaped_newlines":
-                  return [
-                    "The pull request body uses literal `\\n` escape sequences instead of real line breaks.",
-                    "",
-                    "Fix the formatting so the body uses normal markdown line breaks, then add a **Summary** and **Test plan**."
-                  ];
-                case "thin":
-                default:
-                  return [
-                    "The pull request description is too thin to review.",
-                    "",
-                    "Add a **Summary** and **Test plan** (two sections with at least 40 characters each), or an unstructured body of at least 120 characters with two paragraphs or bullet groups."
-                  ];
-              }
-            }
-
-            function buildFailureSections(failures) {
-              const sections = [];
-
-              if (failures.some(failure => failure.code === "wrong_base")) {
-                sections.push(
-                  "⚠️ **Wrong target branch**",
-                  "",
-                  `This pull request currently targets ${inlineCode(pr.base.ref)}, but pull requests must target one of ${ALLOWED_BASES.map(inlineCode).join(" or ")}.`,
-                  "",
-                  `@${pr.user.login} Please retarget this PR to ${inlineCode(DEFAULT_BASE)}. All contributions go to ${inlineCode(DEFAULT_BASE)}; \`main\` receives only release promotions. See our [Contributing guide](https://lidge-jun.github.io/opencodex/contributing/) for details. Thanks! 🙏`
-                );
-              }
-
-              if (failures.some(failure => failure.code === "wrong_ancestry")) {
-                sections.push(
-                  "⚠️ **Wrong branch ancestry**",
-                  "",
-                  `This pull request targets ${inlineCode(pr.base.ref)}, but its head appears to sit on the current ${inlineCode("main")} tip while being far behind ${inlineCode(pr.base.ref)}.`,
-                  "",
-                  `@${pr.user.login} Rebase onto the current ${inlineCode(pr.base.ref)} branch instead of opening from ${inlineCode("main")}. That keeps already-released commits out of the integration branch.`
-                );
-              }
-
-              const badDescription = failures.find(
-                failure => failure.code === "bad_description"
-              );
-              if (badDescription) {
-                sections.push(
-                  "⚠️ **Pull request description**",
-                  "",
-                  ...descriptionFailureLines(badDescription.reason)
-                );
-              }
-
-              return sections;
-            }
-
-            function failureSummary(failures) {
-              return failures
-                .map(failure => {
-                  if (failure.code === "wrong_base") {
-                    return `wrong base (${pr.base.ref})`;
-                  }
-                  if (failure.code === "wrong_ancestry") {
-                    return "wrong ancestry";
-                  }
-                  if (failure.code === "bad_description") {
-                    return `bad description (${failure.reason})`;
-                  }
-                  return failure.code;
-                })
-                .join("; ");
-            }
-
-            const storedState = parseState(botComment?.body);
 
             let authorPermission = null;
             let permissionLookupFailed = false;
@@ -341,9 +538,55 @@ jobs:
               }
             }
 
-            const failures = collectPrQualityFailures({
+            const changedFiles = [];
+            const changedFilePaths = [];
+            let filesTruncated = true;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const { data: fileSnapshot } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number
+              });
+              const headShaForFiles = fileSnapshot.head?.sha ?? "";
+              const listedFiles = await github.paginate(
+                github.rest.pulls.listFiles,
+                { owner, repo, pull_number, per_page: 100 }
+              );
+              const { data: fileVerify } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number
+              });
+              const headMatches = fileVerify.head?.sha === headShaForFiles;
+              if (!headMatches && attempt === 0) {
+                core.info(
+                  "PR head moved while listing changed files; retrying once."
+                );
+                continue;
+              }
+              if (!headMatches) {
+                core.warning(
+                  "PR head moved during changed-file snapshot; treating file list as truncated."
+                );
+              }
+              changedFiles.length = 0;
+              changedFiles.push(...listedFiles);
+              changedFilePaths.length = 0;
+              changedFilePaths.push(
+                ...listedFiles.map(file => file.filename).filter(Boolean)
+              );
+              filesTruncated = isChangedFileListTruncated(
+                fileSnapshot.changed_files,
+                listedFiles.length,
+                headMatches
+              );
+              break;
+            }
+
+            let failures = collectPrQualityFailures({
               baseRef: pr.base.ref,
               allowedBases: ALLOWED_BASES,
+              title: pr.title,
               body: pr.body,
               behindMain,
               behindBase,
@@ -351,33 +594,464 @@ jobs:
               authorPermission,
               permissionLookupFailed,
               ancestryLookupFailed,
-              stackedBase
+              stackedBase,
+              // A maintainer issue comment ("not touching gui") waives the
+              // GUI-screenshot gate; the comments are already fetched above.
+              guiOverrideComments: comments,
+              changedFilePaths,
+              filesTruncated
             });
 
-            if (failures.length > 0) {
+            // Hygiene is a separate workflow that owns the blocked label and
+            // the Hygiene comment section, but Ready / review-ready must not
+            // clear while those checks fail. Re-assess here from the same
+            // trusted scripts so the gate cannot race ahead of hygiene.
+            const labelNames = (pr.labels ?? []).map(label => label.name);
+            failures = [
+              ...failures,
+              ...collectDeterministicHygieneFailures({
+                files: changedFiles,
+                labels: labelNames,
+                authorHasPushPermission:
+                  !permissionLookupFailed &&
+                  authorHasPushPermission(authorPermission),
+              }),
+            ];
+
+            // A maintainer issue comment saying the change does not touch
+            // the GUI waives the screenshot gate. The flag is what tells the
+            // author the screenshot is not required, even though the failure
+            // itself is gone from `failures`.
+            const screenshotWaiverLabelPresent = (pr.labels ?? []).some(
+              label => label.name === GUI_SCREENSHOT_WAIVER_LABEL
+            );
+            const maintainerLogins = new Set(
+              readMaintainerLogins().map(login => login.toLowerCase())
+            );
+            let screenshotWaiverLabelActorLogin = null;
+            if (screenshotWaiverLabelPresent) {
+              try {
+                const issueEvents = await github.paginate(
+                  github.rest.issues.listEvents,
+                  {
+                    owner,
+                    repo,
+                    issue_number: pull_number,
+                    per_page: 100
+                  }
+                );
+                const waiverEvents = issueEvents
+                  .filter(
+                    event =>
+                      (event.event === "labeled" || event.event === "unlabeled") &&
+                      event.label?.name === GUI_SCREENSHOT_WAIVER_LABEL
+                  )
+                  .sort((left, right) => {
+                    const leftTime = Date.parse(left.created_at ?? "") || 0;
+                    const rightTime = Date.parse(right.created_at ?? "") || 0;
+                    if (leftTime !== rightTime) return leftTime - rightTime;
+                    return Number(left.id ?? 0) - Number(right.id ?? 0);
+                  });
+                const latestWaiverEvent = waiverEvents.at(-1);
+                if (latestWaiverEvent?.event === "labeled") {
+                  screenshotWaiverLabelActorLogin =
+                    latestWaiverEvent.actor?.login ?? null;
+                }
+              } catch (error) {
+                core.warning(
+                  `Could not resolve ${GUI_SCREENSHOT_WAIVER_LABEL} label provenance: ${error.message}`
+                );
+              }
+            }
+            const screenshotWaivedByLabel =
+              screenshotWaiverLabelPresent &&
+              typeof screenshotWaiverLabelActorLogin === "string" &&
+              maintainerLogins.has(screenshotWaiverLabelActorLogin.toLowerCase());
+            if (screenshotWaiverLabelPresent && !screenshotWaivedByLabel) {
+              core.info(
+                `${screenshotWaiverLabelActorLogin ?? "unknown label actor"} is not in MAINTAINERS.md; ignoring ${GUI_SCREENSHOT_WAIVER_LABEL}.`
+              );
+            }
+            if (screenshotWaivedByLabel) {
+              failures = failures.filter(
+                failure => failure.code !== "missing_ui_screenshot"
+              );
+            }
+            const screenshotWaived =
+              screenshotWaivedByLabel || hasGuiOverride({ comments });
+            const screenshotWaiverNotice = screenshotWaived
+              ? (screenshotWaivedByLabel
+                  ? `UI screenshot waived by the ${inlineCode(GUI_SCREENSHOT_WAIVER_LABEL)} label.`
+                  : "UI screenshot waived by a maintainer comment.")
+              : null;
+
+            // The readiness gate applies to contributors (no push permission).
+            // Maintainers keep the failure-only contract: draft while quality
+            // gates fail, ready again once they clear. A failed permission
+            // lookup fails closed — the PR is treated as a contributor PR.
+            const authorIsMaintainer =
+              !permissionLookupFailed && authorHasPushPermission(authorPermission);
+            const checklistRequired = !authorIsMaintainer;
+
+            // A confirmed maintainer does not need the bot's checklist: retire
+            // the injected section from the body so it stops rendering as a
+            // gate on later runs.
+            let readiness = extractReviewReadiness(pr.body);
+            if (!checklistRequired && readiness.present) {
+              const strippedBody = stripReviewReadinessSection(pr.body ?? "");
+              if (strippedBody !== pr.body) {
+                await github.rest.pulls.update({
+                  owner,
+                  repo,
+                  pull_number,
+                  body: strippedBody
+                });
+              }
+              readiness = extractReviewReadiness(strippedBody);
+            }
+
+            // The tickable checklist lives in the PR body, because only the PR
+            // author can edit it. Inject it once; the HTML markers make the
+            // injection idempotent, so the `edited` event this write triggers
+            // cannot churn the body on every run.
+            if (checklistRequired && !readiness.present) {
+              const injectedBody = appendReviewReadinessSection(pr.body ?? "");
+              await github.rest.pulls.update({
+                owner,
+                repo,
+                pull_number,
+                body: injectedBody
+              });
+              readiness = extractReviewReadiness(injectedBody);
+            }
+            let checklistComplete = readiness.present && readiness.complete;
+
+            // A completed checklist is an attestation about a specific head
+            // (see `completionIsStale`). When it is stale the gate resets the
+            // boxes and the notification state, re-drafts, and tells the
+            // author to re-test and re-tick against the latest code.
+            // `status` events carry no `pull_request.head.sha`, so the
+            // fallback to the live head would let a completed checklist with
+            // no recorded completion head pass as if it attested the current
+            // head. A status-triggered run must not promote readiness: pass
+            // the live head only when the event actually delivered it.
+            const eventHeadSha =
+              context.payload.pull_request?.head?.sha ??
+              (context.eventName === "status"
+                ? ""
+                : pr.head.sha);
+            const completionHeadSha =
+              gateState.completedAtHeadSha ?? null;
+            const headDrifted = completionIsStale({
+              checklistRequired,
+              checklistComplete,
+              readinessPresent: readiness.present,
+              completionHeadSha,
+              eventHeadSha,
+              liveHeadSha: pr.head.sha,
+              eventAction: context.payload.action
+            });
+
+            let readinessStateOverride = null;
+            let headDriftNotice = [];
+            let revalidationNotice = [];
+            if (headDrifted) {
+              // Re-fetch the PR so an author edit that landed while this job
+              // was reading cannot be clobbered by the reset.
+              const { data: freshPr } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number
+              });
+              const freshReadiness = extractReviewReadiness(
+                freshPr.body ?? ""
+              );
+              // Reset only the checklist/notification state. The bot's draft
+              // ownership and title-prefix ownership survive the reset so a
+              // wrong-base-drafted PR that was retargeted keeps its restore
+              // path and its prefix ownership.
+              readinessStateOverride = {
+                ...defaultGateState(),
+                active: gateState.active,
+                autoDraftedByBot: gateState.autoDraftedByBot,
+                titlePrefixedByBot: gateState.titlePrefixedByBot
+              };
+              headDriftNotice = buildStaleNotice({
+                completionHeadSha,
+                liveHeadSha: freshPr.head.sha,
+                eventAction: context.payload.action
+              });
+              if (freshReadiness.present && freshReadiness.complete) {
+                const resetBody = resetReviewReadinessSection(
+                  freshPr.body ?? ""
+                );
+                if (resetBody !== freshPr.body) {
+                  await github.rest.pulls.update({
+                    owner,
+                    repo,
+                    pull_number,
+                    body: resetBody
+                  });
+                }
+                readiness = extractReviewReadiness(resetBody);
+              } else {
+                readiness = freshReadiness;
+              }
+              checklistComplete = readiness.present && readiness.complete;
+            }
+
+            // The bot verifies the checklist claims it can check itself. The
+            // local-CI box is an author attestation only — fork contributors
+            // cannot start repository CI (a maintainer has to) — so the gate
+            // never disproves it; head-drift still resets every box after a
+            // new push. The latest-dev box only counts while the head is at
+            // most READINESS_LATEST_DEV_BEHIND_MAX commits behind the base;
+            // the findings box only counts while every Codex/CodeRabbit
+            // review thread on the PR is resolved. A disproved claim unchecks
+            // that box and keeps the PR a draft, exactly like a head-drift
+            // reset.
+            let claimViolations = [];
+            let claimNotice = [];
+            if (
+              checklistRequired &&
+              checklistComplete &&
+              !headDrifted &&
+              failures.length === 0
+            ) {
+              claimViolations = readinessClaimViolations({
+                behindBase,
+                behindUnknown: ancestryLookupFailed
+              });
+              // The findings claim reads the review threads via GraphQL. Only
+              // threads authored by the review bots count; `isResolved` must be
+              // explicitly true, so a missing or unreadable thread fails closed.
+              // CodeRabbit additionally reports some findings only in its
+              // review body (outside the diff range); `pulls.listReviews`
+              // supplies those as a supplement. A review listing failure fails
+              // closed the same way as an unreadable thread list.
+              let findingsClaim = null;
+              let findingsUnverifiable = false;
+              try {
+                // Paginate the review threads: a busy PR can carry more than
+                // 100 threads (CodeRabbit posts many reviews), and a truncated
+                // read would silently miss unresolved bot threads — a fail-open
+                // gap in a fail-closed check.
+                const allThreadNodes = [];
+                let threadCursor = null;
+                let threadPage = null;
+                let reviewThreadsPage = null;
+                do {
+                  threadPage = await github.graphql(
+                    `
+                      query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                        repository(owner: $owner, name: $repo) {
+                          pullRequest(number: $number) {
+                            reviewThreads(first: 100, after: $cursor) {
+                              pageInfo {
+                                hasNextPage
+                                endCursor
+                              }
+                              nodes {
+                                isResolved
+                                comments(first: 1) {
+                                  nodes {
+                                    author { login }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    `,
+                    {
+                      owner,
+                      repo,
+                      number: pull_number,
+                      cursor: threadCursor
+                    }
+                  );
+                  reviewThreadsPage = threadPage?.repository?.pullRequest?.reviewThreads;
+                  allThreadNodes.push(...(reviewThreadsPage?.nodes ?? []));
+                  threadCursor = reviewThreadsPage?.pageInfo?.endCursor ?? null;
+                } while (
+                  reviewThreadsPage?.pageInfo?.hasNextPage === true &&
+                  threadCursor
+                );
+                const reviewsData = await github.paginate(
+                  github.rest.pulls.listReviews,
+                  {
+                    owner,
+                    repo,
+                    pull_number,
+                    per_page: 100
+                  }
+                );
+                findingsClaim = unresolvedFindingsClaim({
+                  threads: allThreadNodes.map(node => ({
+                    isResolved: node.isResolved,
+                    author: node.comments?.nodes?.[0]?.author ?? null
+                  })),
+                  reviews: reviewsData,
+                  liveHeadSha: pr.head.sha
+                });
+              } catch (error) {
+                core.warning(
+                  `Could not list review threads for the readiness claim check: ${error.message}`
+                );
+                // Fail closed: an attestation must not ride on missing
+                // evidence, exactly like unknown CI or behind counts.
+                findingsUnverifiable = true;
+                findingsClaim = {
+                  code: "review_findings",
+                  unresolved: 0,
+                  byBot: {}
+                };
+              }
+              if (findingsClaim?.code) {
+                claimViolations.push(findingsClaim.code);
+              }
+              if (claimViolations.length > 0) {
+                const { data: freshPr } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number
+                });
+                const freshReadiness = extractReviewReadiness(
+                  freshPr.body ?? ""
+                );
+                readinessStateOverride = {
+                  ...defaultGateState(),
+                  active: gateState.active,
+                  autoDraftedByBot: gateState.autoDraftedByBot,
+                  titlePrefixedByBot: gateState.titlePrefixedByBot
+                };
+                claimNotice = [
+                  ...(claimViolations.includes("review_findings")
+                    ? findingsUnverifiable
+                      ? [
+                          "The Codex/CodeRabbit findings claim could not be verified; the **Codex/CodeRabbit findings** box has been unticked. The PR stays a draft until review threads are readable again."
+                        ]
+                      : buildFindingsClaimNotice(findingsClaim.byBot)
+                    : []),
+                  ...buildClaimCheckNotice(
+                    claimViolations.filter(
+                      code => code !== "review_findings"
+                    ),
+                    freshPr.head.sha
+                  )
+                ];
+                if (freshReadiness.present) {
+                  const uncheckedBody = uncheckReviewReadinessBoxes(
+                    freshPr.body ?? "",
+                    claimViolations.map(
+                      code => REVIEW_READINESS_CLAIM_INDEX[code]
+                    )
+                  );
+                  if (uncheckedBody !== freshPr.body) {
+                    await github.rest.pulls.update({
+                      owner,
+                      repo,
+                      pull_number,
+                      body: uncheckedBody
+                    });
+                  }
+                  readiness = extractReviewReadiness(uncheckedBody);
+                } else {
+                  readiness = freshReadiness;
+                }
+                checklistComplete = readiness.present && readiness.complete;
+              }
+            }
+
+            // A contributor PR stays a draft while the checklist is open, even
+            // when every quality gate already passes.
+            const mustDraft =
+              failures.length > 0 || (checklistRequired && !checklistComplete);
+
+            // Which reset notice (head drift vs claim check) accompanies the
+            // draft path; only one can be active because the claim check is
+            // skipped when the head drifted.
+            revalidationNotice = headDrifted
+              ? headDriftNotice
+              : claimNotice;
+
+            // Assemble the "What to do" action lines for the consolidated
+            // comment. Only the applicable actions render.
+            function buildActions() {
+              const actions = [];
+              if (failures.some(failure => failure.code === "wrong_base")) {
+                actions.push(
+                  `Retarget this PR to ${inlineCode(DEFAULT_BASE)} — all contributions go to ${inlineCode(DEFAULT_BASE)}.`
+                );
+              }
+              if (failures.some(failure => failure.code === "wrong_ancestry")) {
+                actions.push(
+                  `Rebase onto the current ${inlineCode(DEFAULT_BASE)} branch instead of opening from ${inlineCode("main")}.`
+                );
+              }
+              if (failures.some(failure => failure.code === "bad_description")) {
+                actions.push(
+                  "Add a real **Summary** and **Test plan** to the PR description."
+                );
+              }
+              if (failures.some(failure => failure.code === "missing_ui_screenshot")) {
+                actions.push(
+                  "Add a screenshot of the UI change to the PR description."
+                );
+              }
+              for (const failure of failures) {
+                const hint = HYGIENE_FAILURE_HINTS[failure.code];
+                if (!hint) continue;
+                const paths = failure.paths?.length
+                  ? ` Paths: ${failure.paths.map(p => inlineCode(p)).join(", ")}.`
+                  : "";
+                actions.push(`Fix **${failure.code}** — ${hint}${paths}`);
+              }
+              if (checklistRequired && !checklistComplete) {
+                actions.push(
+                  `Tick all four boxes in the PR description once you're done (currently ${readiness.checked}/${readiness.total}).`
+                );
+              }
+              if (revalidationNotice.length > 0) {
+                actions.push(...revalidationNotice);
+              }
+              return actions;
+            }
+
+            // The `review-ready` label marks the ready moment for humans and
+            // bots. It is not a CodeRabbit auto-review filter: a positive
+            // `labels:` entry in `.coderabbit.yaml` would restrict ALL reviews
+            // to labeled PRs (maintainer PRs never carry this label), so the
+            // label is kept as a visible status marker only.
+            const readyMoment =
+              checklistRequired && checklistComplete && failures.length === 0;
+            const reviewReadyDesired = readyMoment;
+            const hasReviewReadyLabel = (pr.labels ?? []).some(
+              label => label.name === REVIEW_READY_LABEL
+            );
+            const reviewReadyChanged = hasReviewReadyLabel !== reviewReadyDesired;
+            if (reviewReadyChanged) {
+              await setReviewReadyLabel(reviewReadyDesired, hasReviewReadyLabel);
+            }
+            gateState.reviewReadyLabeled = reviewReadyDesired;
+
+            if (mustDraft) {
+              let draftConverted = false;
+              const draftState = readinessStateOverride ?? { ...gateState };
+              if (checklistRequired && checklistComplete) {
+                // The attestation covers this head even while another quality
+                // gate keeps the draft: bind it now, because the failure path
+                // below returns before the completion block that records it.
+                draftState.completedAtHeadSha = pr.head.sha;
+                draftState.version = 1;
+              }
+              const state = { ...draftState, active: true };
               const hasWrongBase = failures.some(
                 failure => failure.code === "wrong_base"
               );
               const willPrefixTitle =
                 hasWrongBase && !pr.title.startsWith(TITLE_PREFIX);
-              const state = storedState?.active
-                ? { ...storedState }
-                : {
-                    version: 1,
-                    active: true,
-                    autoDraftedByBot: false,
-                    titlePrefixedByBot: false,
-                    ancestryFailed: false,
-                    descriptionFailed: false
-                  };
-
-              state.ancestryFailed = failures.some(
-                failure => failure.code === "wrong_ancestry"
-              );
-              state.descriptionFailed = failures.some(
-                failure => failure.code === "bad_description"
-              );
-
               const shouldStripTitlePrefix =
                 !hasWrongBase &&
                 state.titlePrefixedByBot &&
@@ -389,28 +1063,9 @@ jobs:
                 state.titlePrefixedByBot = true;
               }
 
-              let draftConversionFailed = false;
-              const failureSections = buildFailureSections(failures);
-
-              await upsertComment(
-                [
-                  COMMENT_MARKER,
-                  stateMarker(state),
-                  "",
-                  ...failureSections,
-                  "",
-                  "Recording ownership state before applying title/draft changes…"
-                ].join("\n")
-              );
-
-              if (willPrefixTitle) {
-                await github.rest.pulls.update({
-                  owner,
-                  repo,
-                  pull_number,
-                  title: `${TITLE_PREFIX}${pr.title}`
-                });
-              } else if (shouldStripTitlePrefix) {
+              // A stale bot-owned prefix comes off once, whichever path owns
+              // the draft: the branch is fixed even when the checklist is not.
+              if (shouldStripTitlePrefix) {
                 await github.rest.pulls.update({
                   owner,
                   repo,
@@ -418,93 +1073,191 @@ jobs:
                   title: pr.title.slice(TITLE_PREFIX.length)
                 });
                 state.titlePrefixedByBot = false;
-                await upsertComment(
-                  [
-                    COMMENT_MARKER,
-                    stateMarker(state),
-                    "",
-                    ...failureSections,
-                    "",
-                    "Stale title prefix removed; continuing…"
-                  ].join("\n")
-                );
               }
 
-              if (!pr.draft) {
-                // Claim draft ownership before the mutation so a successful
-                // convert followed by a failed comment still restores later.
-                state.autoDraftedByBot = true;
-                await upsertComment(
-                  [
-                    COMMENT_MARKER,
-                    stateMarker(state),
-                    "",
-                    ...failureSections,
-                    "",
-                    "Draft conversion pending…"
-                  ].join("\n")
+              if (failures.length > 0) {
+                let draftConversionFailed = false;
+
+                // One-line reason for each failure, used in the status line.
+                const failureStatusReason = failures
+                  .map(failure => {
+                    if (failure.code === "wrong_base") {
+                      return `wrong target branch (${pr.base.ref}); retarget to ${inlineCode(DEFAULT_BASE)}.`;
+                    }
+                    if (failure.code === "wrong_ancestry") {
+                      return "wrong branch ancestry; rebase onto the latest dev.";
+                    }
+                    if (failure.code === "bad_description") {
+                      return `PR description needs work (${failure.reason}).`;
+                    }
+                    if (failure.code === "missing_ui_screenshot") {
+                      return "UI screenshot required.";
+                    }
+                    if (HYGIENE_FAILURE_HINTS[failure.code]) {
+                      return `hygiene: ${failure.code}.`;
+                    }
+                    return failure.code;
+                  })
+                  .join(" ");
+
+                // Shared notices for the failure comment: revalidation reason,
+                // the waiver flag, and the prefix notice when the bot owns it.
+                const failureNotices = [
+                  ...revalidationNotice,
+                  ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
+                  ...(hasWrongBase && state.titlePrefixedByBot
+                    ? [`Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`]
+                    : [])
+                ];
+
+                const draftComment = (notices) =>
+                  upsertGateComment(state, {
+                    status: "DRAFT",
+                    statusReason: failureStatusReason,
+                    actions: buildActions(),
+                    readiness,
+                    checklistRequired,
+                    notices
+                  });
+
+                // Apply the bot-owned title prefix so the PR itself carries a
+                // durable signal of the wrong base (claim ownership before the
+                // write; a failed write keeps ownership for the next retry).
+                if (willPrefixTitle) {
+                  await github.rest.pulls.update({
+                    owner,
+                    repo,
+                    pull_number,
+                    title: `${TITLE_PREFIX}${pr.title}`
+                  });
+                }
+
+                const wantsDraftConversion = !pr.draft;
+                if (wantsDraftConversion) {
+                  // Persist the ownership claim BEFORE the mutation so a
+                  // successful convert followed by a failed comment write
+                  // still leaves the bot-created draft owned and restorable.
+                  state.autoDraftedByBot = true;
+                  await draftComment([
+                    ...failureNotices,
+                    "This pull request is being kept as a draft automatically. Once every issue above is resolved, it will be marked ready for review again.",
+                    ...(checklistRequired && !checklistComplete
+                      ? [
+                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                        ]
+                      : [])
+                  ]);
+                  try {
+                    await convertToDraft();
+                    draftConverted = true;
+                  } catch (error) {
+                    draftConversionFailed = true;
+                    state.autoDraftedByBot = false;
+                    core.warning(
+                      `Could not convert pull request to draft: ${error.message}`
+                    );
+                    // Reflect the failed conversion in the persisted state.
+                    await draftComment([
+                      ...failureNotices,
+                      "Automatic draft conversion failed (token cannot change draft status). Please convert this pull request to a draft manually. The required `enforce-target` check will keep failing until every issue above is resolved."
+                    ]);
+                  }
+                } else {
+                  await draftComment([
+                    ...failureNotices,
+                    "This pull request was already a draft. Its draft status will be preserved after every issue above is resolved.",
+                    ...(checklistRequired && !checklistComplete
+                      ? [
+                          `@${pr.user.login} Tick the boxes once your local CI is green, your branch is on the latest ${inlineCode(DEFAULT_BASE)} commit, and every correct Codex and CodeRabbit finding is resolved.`
+                        ]
+                      : [])
+                  ]);
+                }
+
+                core.setFailed(
+                  `PR quality gate failed: ${failureSummary(failures, { pr })}`
                 );
+                return;
+              }
+
+              // No quality failure; the draft is owed by the open checklist.
+              if (pr.draft) {
+                // Already a draft: update the gate comment with the open
+                // checklist status and no conversion needed.
+                await upsertGateComment(state, {
+                  status: "DRAFT",
+                  statusReason: checklistRequired
+                    ? `review readiness checklist open (${readiness.checked}/${readiness.total} boxes ticked).`
+                    : "PR is kept in draft.",
+                  actions: buildActions(),
+                  readiness,
+                  checklistRequired,
+                  notices: [
+                    ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
+                    "This PR stays in draft until every box above is ticked."
+                  ]
+                });
+              } else if (!draftConverted) {
+                // Persist the ownership checkpoint BEFORE the mutation so a
+                // successful convert followed by a failed comment write still
+                // leaves the bot-created draft owned and restorable. The
+                // failure path above uses the same ordering via draftComment.
+                state.autoDraftedByBot = true;
+                await upsertGateComment(state, {
+                  status: "DRAFT",
+                  statusReason: checklistRequired
+                    ? `review readiness checklist open (${readiness.checked}/${readiness.total} boxes ticked).`
+                    : "PR is kept in draft.",
+                  actions: buildActions(),
+                  readiness,
+                  checklistRequired,
+                  notices: [
+                    ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
+                    "This PR stays in draft until every box above is ticked."
+                  ]
+                });
                 try {
                   await convertToDraft();
-                  await upsertComment(
-                    [
-                      COMMENT_MARKER,
-                      stateMarker(state),
-                      "",
-                      ...failureSections,
-                      "",
-                      "Draft conversion succeeded; finalising explanation…"
-                    ].join("\n")
-                  );
+                  draftConverted = true;
                 } catch (error) {
-                  draftConversionFailed = true;
                   state.autoDraftedByBot = false;
                   core.warning(
                     `Could not convert pull request to draft: ${error.message}`
                   );
+                  core.setFailed(
+                    "PR quality gate failed: could not convert the pull request to draft while the review readiness checklist is open."
+                  );
                 }
               }
 
-              const draftExplanation = draftConversionFailed
-                ? "Automatic draft conversion failed (token cannot change draft status). Please convert this pull request to a draft manually. The required `enforce-target` check will keep failing until every issue above is resolved."
-                : state.autoDraftedByBot
-                  ? "This pull request is being kept as a draft automatically. Once every issue above is resolved, it will be marked ready for review again."
-                  : "This pull request was already a draft. Its draft status will be preserved after every issue above is resolved.";
-
-              const finalSections = [...failureSections];
-
-              if (hasWrongBase && state.titlePrefixedByBot) {
-                finalSections.push(
-                  "",
-                  `Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`
-                );
+              // A failed conversion must still surface in the persisted state:
+              // the checkpoint above claimed ownership, so a failure rewrites
+              // it to release ownership and tell the author what to do.
+              if (!draftConverted && !pr.draft) {
+                state.autoDraftedByBot = false;
+                await upsertGateComment(state, {
+                  status: "DRAFT",
+                  statusReason: checklistRequired
+                    ? `review readiness checklist open (${readiness.checked}/${readiness.total} boxes ticked).`
+                    : "PR is kept in draft.",
+                  actions: buildActions(),
+                  readiness,
+                  checklistRequired,
+                  notices: [
+                    ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
+                    "Automatic draft conversion failed. Please convert this pull request to a draft manually until every box above is ticked."
+                  ]
+                });
               }
-
-              await upsertComment(
-                [
-                  COMMENT_MARKER,
-                  stateMarker(state),
-                  "",
-                  ...finalSections,
-                  "",
-                  draftExplanation
-                ].join("\n")
-              );
-
-              core.setFailed(`PR quality gate failed: ${failureSummary(failures)}`);
               return;
             }
 
-            if (!storedState?.active) {
-              core.info(
-                "All PR quality gates passed and there is no active bot state."
-              );
-
-              return;
-            }
-
+            // Ready path: strip a stale title prefix, mark ready, clear state.
             if (
-              storedState.titlePrefixedByBot &&
+              gateState.titlePrefixedByBot &&
               pr.title.startsWith(TITLE_PREFIX)
             ) {
               await github.rest.pulls.update({
@@ -513,15 +1266,18 @@ jobs:
                 pull_number,
                 title: pr.title.slice(TITLE_PREFIX.length)
               });
+              gateState.titlePrefixedByBot = false;
             }
 
             let readyConversionFailed = false;
-            if (
-              storedState.autoDraftedByBot &&
-              pr.draft
-            ) {
+            let readyConverted = false;
+            const shouldMarkReady =
+              (gateState.active && gateState.autoDraftedByBot) ||
+              (checklistRequired && checklistComplete);
+            if (shouldMarkReady && pr.draft) {
               try {
                 await markReadyForReview();
+                readyConverted = true;
               } catch (error) {
                 readyConversionFailed = true;
                 core.warning(
@@ -530,43 +1286,114 @@ jobs:
               }
             }
 
-            const completedState = readyConversionFailed
-              ? {
-                  version: 1,
-                  active: true,
-                  autoDraftedByBot: true,
-                  titlePrefixedByBot: false,
-                  ancestryFailed: false,
-                  descriptionFailed: false
+            const readyState = {
+              ...gateState,
+              active: readyConversionFailed ? true : false
+            };
+            if (checklistRequired && checklistComplete) {
+              const maintainers = readMaintainerLogins().filter(
+                login => login !== pr.user.login
+              );
+              let notified = false;
+              if (!readyState.maintainersPinged && maintainers.length > 0) {
+                readyState.maintainersPinged = true;
+                notified = true;
+              }
+              readyState.completedAtHeadSha = pr.head.sha;
+              readyState.version = 1;
+
+              const notices = [
+                screenshotWaiverNotice,
+                readyConversionFailed
+                  ? "Automatic ready-for-review conversion failed; please mark the pull request ready manually if it is still a draft."
+                  : readyConverted
+                    ? "This pull request has been marked Ready for Review."
+                    : "This pull request is already Ready for Review.",
+                readyMoment
+                  ? `The ${inlineCode(REVIEW_READY_LABEL)} label marks this PR as ready; review automation runs independently. If no CodeRabbit review appears, comment ${inlineCode("@coderabbitai review")} to request one.`
+                  : "",
+                notified && maintainers.length > 0
+                  ? `Maintainers notified: ${maintainers
+                      .map(login => `@${login}`)
+                      .join(" ")}`
+                  : maintainers.length > 0
+                    ? `Maintainers: ${maintainers
+                        .map(login => `@${login}`)
+                        .join(" ")}`
+                    : "Maintainers will be notified."
+              ].filter(Boolean);
+
+              await upsertGateComment(readyState, {
+                status: "READY",
+                statusReason: "all PR quality gates passed; the review readiness checklist is complete.",
+                actions: [],
+                readiness,
+                checklistRequired,
+                notices
+              });
+              return;
+            }
+
+            // Maintainer PR with no checklist: the comment is the single status
+            // surface but there is nothing to tick; only render it if the
+            // author is a maintainer and no checklist is required.
+            if (!checklistRequired) {
+              // A maintainer PR the gate drafted (`autoDraftedByBot`) must be
+              // restored when its failures clear. A maintainer PR that was
+              // already a draft while it failed a gate still carries an active
+              // gate comment (`active: true` with stale DRAFT actions) that
+              // must be cleared to READY even though the bot never converted
+              // it — otherwise the old comment keeps telling the author to fix
+              // already-passed gates.
+              if (gateState.autoDraftedByBot && pr.draft) {
+                let recoveryFailed = false;
+                if (!readyConverted && !readyConversionFailed) {
+                  try {
+                    await markReadyForReview();
+                  } catch (error) {
+                    recoveryFailed = true;
+                    core.warning(
+                      `Could not mark pull request ready for review: ${error.message}`
+                    );
+                  }
+                } else {
+                  // The ready path already handled the mutation: either it
+                  // converted (nothing left to do) or it failed and this run
+                  // must not attempt a second mutation on the stale draft.
+                  recoveryFailed = readyConversionFailed;
                 }
-              : {
-                  version: 1,
-                  active: false,
-                  autoDraftedByBot: false,
-                  titlePrefixedByBot: false,
-                  ancestryFailed: false,
-                  descriptionFailed: false
+                const recoveredState = {
+                  ...gateState,
+                  autoDraftedByBot: recoveryFailed
                 };
-
-            const titleResult = storedState.titlePrefixedByBot
-              ? `The ${inlineCode(TITLE_PREFIX.trim())} title prefix has been removed.`
-              : "The title was left unchanged.";
-
-            const draftResult = readyConversionFailed
-              ? "Automatic ready-for-review conversion failed; please mark the pull request ready manually if it is still a draft."
-              : storedState.autoDraftedByBot
-                ? "The pull request has been marked ready for review again."
-                : "Its existing draft status has been preserved.";
-
-            await upsertComment(
-              [
-                COMMENT_MARKER,
-                stateMarker(completedState),
-                "",
-                "✅ **PR quality gates passed**",
-                "",
-                `This pull request now targets ${inlineCode(pr.base.ref)} with acceptable ancestry and description.`,
-                "",
-                `${titleResult} ${draftResult}`
-              ].join("\n")
-            );
+                await upsertGateComment(recoveredState, {
+                  status: "READY",
+                  statusReason: recoveryFailed
+                    ? "ready-for-review conversion failed; will retry on the next run."
+                    : "this PR is ready for review.",
+                  actions: [],
+                  readiness,
+                  checklistRequired,
+                  notices: screenshotWaiverNotice ? [screenshotWaiverNotice] : []
+                });
+                return;
+              }
+              if (gateState.active) {
+                await upsertGateComment(
+                  { ...gateState, active: false, autoDraftedByBot: false },
+                  {
+                    status: "READY",
+                    statusReason: "all PR quality gates passed.",
+                    actions: [],
+                    readiness,
+                    checklistRequired,
+                    notices: screenshotWaiverNotice ? [screenshotWaiverNotice] : []
+                  }
+                );
+                return;
+              }
+              core.info(
+                "All PR quality gates passed and there is no active bot state."
+              );
+              return;
+            }

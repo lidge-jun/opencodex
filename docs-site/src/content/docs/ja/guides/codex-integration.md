@@ -17,9 +17,14 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# fastMode を設定した場合のみ。未設定なら [features] は作られません
 [features]
 fast_mode = true
 ```
+
+注入される `fast_mode` は三値の `fastMode` 設定に従います。`true` は `fast_mode = true` を書き込み、
+`false` は `fast_mode = false` を書き込み、未設定の場合は既存の `fast_mode` を変更せずに
+`[features]` テーブルも追加しません。
 
 プロキシはデフォルトでポート `10100` をリッスンし、`POST /v1/responses`、`POST /v1/responses/compact`、`POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/models`、`GET /healthz`、および `/api/*` 管理サーフェスを提供します。
 
@@ -128,6 +133,25 @@ Codex には、ディスク上のカタログ (デフォルトでは `$CODEX_HOM
 
 プロバイダーとモデルメタデータに応じて Codex の `low | medium | high | xhigh | max | ultra` 段階を使い、
 上流がサポートしない値はリクエスト送信前にマッピングまたはサポート範囲に下げます。
+
+### ルーティングされたローカルツール
+
+ネイティブではないルーティング済みカタログ項目は `tool_mode: "code_mode_only"` を使用します。これにより、
+Codex は公式の `exec` エントリポイントと、Browser や Computer Use を含むネストされた MCP ツールを公開できます。
+opencodex がルーティングするのはモデルの通常の function call だけです。ツールの実行、権限、確認は Codex 内に
+残り、opencodex が別のブラウザーやデスクトップ操作 executor を実装することはありません。
+
+Codex の `exec` custom-tool grammar を受け付けない key-auth Responses provider に対しては、opencodex が宣言と
+履歴を上流向けの function tool にエンコードし、ストリーミングされた function-call lifecycle を Codex に返す前に
+`custom_tool_call` へ復元します。ネイティブ OpenAI の forward routing と、対応済みの `apply_patch` custom tool は
+変更されません。
+
+選択した provider は function/tool calling をサポートしている必要があります。tool call に対応しない text-only
+provider では `exec`、Browser、Computer Use は使用できません。ネイティブ OpenAI の項目は上流の tool mode を
+そのまま維持します。
+
+`ocx sync` でこの metadata を変更した後は Codex App を再起動し、新しいタスクを開いてください。既存の
+app-server process とタスクは、起動時に読み込んだ catalog と tool plan を保持している場合があります。
 
 ### カスタムモデルの表示名
 

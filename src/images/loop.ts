@@ -14,12 +14,14 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage } from "../types";
-import { namespacedToolName } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -159,6 +161,7 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
   const parts: OcxThinkingContent[] = [];
   let thinking = "";
   let signature: string | undefined;
+  let rawReasoning = "";
 
   const flushVisible = () => {
     if (!thinking && !signature) return;
@@ -170,19 +173,33 @@ function extractIterationThinking(events: AdapterEvent[]): OcxThinkingContent[] 
     thinking = "";
     signature = undefined;
   };
+  const flushRaw = () => {
+    if (!rawReasoning) return;
+    parts.push({ type: "thinking", thinking: rawReasoning });
+    rawReasoning = "";
+  };
 
   for (const e of events) {
     if (e.type === "thinking_delta") {
+      flushRaw();
       thinking += e.thinking;
+    } else if (e.type === "reasoning_raw_delta") {
+      // OpenAI-compatible providers emit raw reasoning instead of signed
+      // thinking; DeepSeek thinking mode requires it back alongside replayed
+      // tool_calls (mirrors src/web-search/loop.ts, issue #950).
+      flushVisible();
+      rawReasoning += e.text;
     } else if (e.type === "thinking_signature") {
       signature = e.signature;
       flushVisible();
     } else if (e.type === "redacted_thinking") {
       flushVisible();
+      flushRaw();
       parts.push({ type: "thinking", thinking: "", redacted: [e.data] });
     }
   }
   flushVisible();
+  flushRaw();
   return parts;
 }
 
@@ -202,6 +219,10 @@ class LoopError extends Error {
   }
 }
 
+/**
+ * Dependencies for one image-bridge iteration: parsed request, active adapter, incoming
+ * metadata, and the optional image/video bridge plans.
+ */
 export interface ImageBridgeDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
@@ -212,8 +233,8 @@ export interface ImageBridgeDeps {
   videoTimeoutMs?: number;
   /** Headers forwarded from the original request (e.g. Codex auth). Cloned per iteration. */
   forwardHeaders?: Headers;
-  /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. */
-  onAttemptSend?: () => void;
+  /** Called before each routed-model dispatch in the bridge loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
+  onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /** Called after each upstream request is built (parity with web-search / normal path). */
   onRequestBuilt?: (request: AdapterRequest) => void;
   abortSignal?: AbortSignal;
@@ -233,6 +254,8 @@ export interface ImageBridgeDeps {
    * rotated key, or null when the pool is exhausted.
    */
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
+  retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
   /** Called when the bridged Responses stream completes (parity with runTurn / routed paths). */
   onCompletedResponse?: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => void;
   /** WebSocket Responses path only — leave response id empty for protocol compatibility. */
@@ -331,9 +354,20 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   }
   type IterationSplit = ReturnType<typeof scanEventsForImageCall>;
 
+  // Same-target 429 budget is per REQUEST, not per model iteration: later image rounds inherit
+  // what earlier rounds left of `attempts`, so a bounded multi-round turn can never exceed the
+  // configured replay count in total (a per-round reset would multiply it by maxRounds).
+  const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
+  let rateLimitRetries = 0;
+
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
   // connect/header/HTTP failure stays a non-2xx JSON response — except for runTurn adapters, which
   // have no HTTP status surface and must not block SSE headers behind queue.collect().
+  /**
+   * Fetch one image-bridge iteration's final response headers, applying the response-header
+   * deadline and the same-target 429 retry policy (with awaited body release and deadline
+   * restart) before the `on429` key rotation.
+   */
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
     const iterParsed: OcxParsedRequest = {
       ...parsed,
@@ -422,27 +456,51 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: wrappedAdapter };
     }
 
-    const headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     try {
-      const fetchOnce = async (requestAdapter: ProviderAdapter): Promise<IterationResponse> => {
-        const request = await requestAdapter.buildRequest(iterParsed, {
-          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
-          abortSignal: headerDeadline.signal,
-          translatorBudget,
-        });
-        try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best-effort */ }
-        deps.onAttemptSend?.();
+      /**
+       * Build and fetch one image-bridge iteration on the given adapter, under the iteration
+       * header deadline. The caller owns same-target 429 replays and key rotation around it.
+       * The outbound request is cached per adapter so a same-target replay reuses the EXACT
+       * URL, serialized body, and headers (builder runs once per target sequence).
+       */
+      let cachedRequest: AdapterRequest | undefined;
+      let cachedAdapter: ProviderAdapter | undefined;
+      /**
+       * Build and fetch one image-bridge iteration on the given adapter, under the iteration
+       * header deadline. The caller owns same-target 429 replays and key rotation around it.
+       */
+      const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        let request: AdapterRequest;
+        if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
+          request = cachedRequest;
+        } else {
+          request = await requestAdapter.buildRequest(iterParsed, {
+            headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+            abortSignal: headerDeadline.signal,
+            translatorBudget,
+          });
+          try { deps.onRequestBuilt?.(request); } catch { /* diagnostics are best-effort */ }
+          cachedRequest = request;
+          cachedAdapter = requestAdapter;
+        }
         let response: Response;
         try {
-          response = requestAdapter.fetchResponse
-            ? await requestAdapter.fetchResponse(request, {
+          if (requestAdapter.fetchResponse) {
+            deps.onAttemptSend?.(recovery);
+            response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
-            })
-          : await fetchWithResetRetry(
-              () => {
+            });
+          } else {
+            response = await fetchWithResetRetry(
+              (retryRecovery) => {
+                // Record every helper-driven send (the callback runs for the first attempt and
+                // each connection-reset replay); preserve the caller's recovery kind
+                // (rate-limit-429 / key-429) when the retry layer supplies none.
+                deps.onAttemptSend?.(retryRecovery ?? recovery);
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                 return fetchImpl(request.url, {
@@ -453,7 +511,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 });
               },
               { abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
-              );
+            );
+          }
         } finally {
           request.releaseBodyObservation?.();
         }
@@ -461,6 +520,39 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       };
 
       let prepared = await fetchOnce(adapter);
+      // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
+      // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
+      while (
+        prepared.response.status === 429
+        && rateLimitRetryPolicy !== null
+        && rateLimitRetries < rateLimitRetryPolicy.attempts
+      ) {
+        rateLimitRetries += 1;
+        // Release unread body + heartbeat-fed wait via the shared same-target helper.
+        const retryAfterHeader = prepared.response.headers.get("retry-after");
+        // The old header deadline must not stay armed across the deliberate wait: clear it
+        // before sleeping so a stale expiry can never race the client-cancel path.
+        headerDeadline.clear();
+        try {
+          yield* prepareSameTarget429Wait({
+            body: prepared.response.body,
+            signal,
+            delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
+            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+          });
+        } catch {
+          throw new LoopError(499, "client closed request during image-bridge");
+        }
+        // Client cancellation wins over any stale-deadline edge: re-check before telemetry/replay.
+        if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+        // The deliberate backoff must not consume the cumulative response-header deadline:
+        // start a fresh one so the replay gets a new connect budget (504 stays reserved for real
+        // upstream latency).
+        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        // Stall-watchdog seam between bounded retry fetches.
+        yield { type: "heartbeat" };
+        prepared = await fetchOnce(adapter, "rate-limit-429");
+      }
       // 429 key-failover parity with web-search / normal routed path.
       while (prepared.response.status === 429 && deps.on429) {
         const rotated = deps.on429(prepared.response.headers.get("retry-after"));
@@ -468,7 +560,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;
         yield { type: "heartbeat" };
-        prepared = await fetchOnce(adapter);
+        prepared = await fetchOnce(adapter, "key-429");
       }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
@@ -570,7 +662,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    if (!toolAllowed(t)) continue;
     if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
@@ -808,11 +902,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
       translatorBudget,
+      replayCacheScope: parsed._clientThreadId ?? "global",
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,

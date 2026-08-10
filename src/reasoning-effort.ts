@@ -19,6 +19,28 @@ export function isCodexReasoningEffort(effort: string): boolean {
   return CODEX_REASONING_SET.has(effort);
 }
 
+/**
+ * Reasoning ladder accepted for the OpenAI vision sidecar. `ultra` is deliberately excluded:
+ * the vision describer is a single helper call, and `ultra` would be collapsed to `max` by the
+ * upstream client boundary anyway.
+ */
+export const VISION_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type VisionReasoningEffort = typeof VISION_REASONING_EFFORTS[number];
+
+/** True when `effort` is one of the vision sidecar's supported Responses reasoning levels. */
+export function isVisionReasoningEffort(effort: unknown): effort is VisionReasoningEffort {
+  return typeof effort === "string" && (VISION_REASONING_EFFORTS as readonly string[]).includes(effort);
+}
+
+/**
+ * Normalize a persisted/configured vision reasoning value. Invalid values (hand-edited config,
+ * stale files) degrade to `undefined` so the caller falls back to the documented default instead
+ * of forwarding an upstream-rejected effort.
+ */
+export function sanitizeVisionReasoning(effort: unknown): VisionReasoningEffort | undefined {
+  return isVisionReasoningEffort(effort) ? effort : undefined;
+}
+
 /** Position of `effort` in the Codex ladder (low=0 .. ultra=5), or -1 when not a ladder member. */
 export function codexEffortRank(effort: string): number {
   return CODEX_REASONING_ORDER.indexOf(effort);

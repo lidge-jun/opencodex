@@ -143,7 +143,7 @@ test("unmapped claude model + sk-ant credential passes through verbatim", async 
     expect(codexUsage.surface).toBe("codex");
     expect(codexUsage.summary.requests).toBe(0);
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -177,7 +177,7 @@ test("native passthrough persists conversationId from metadata.user_id", async (
     expect(logs[0]?.provider).toBe("anthropic-native");
     expect(logs[0]?.conversationId).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -200,7 +200,7 @@ test("count_tokens passes through with native credentials", async () => {
     expect(captured[0].path).toBe("/v1/messages/count_tokens");
     expect(captured[0].headers.get("x-api-key")).toBe("sk-ant-api03-key");
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -237,7 +237,7 @@ test("alias/mapped models and non-anthropic credentials do NOT pass through", as
 
     expect(captured).toHaveLength(0); // the anthropic upstream never saw any of them
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -256,7 +256,7 @@ test("nativePassthrough:false disables the pierce", async () => {
     expect(res.status).not.toBe(200);
     expect(captured).toHaveLength(0);
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -322,7 +322,7 @@ test("P1: 30-image history arrives age-tiered — newest pass through, older shr
       expect(images[i].source?.data).toBe(src);
     }
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -341,7 +341,7 @@ test("P2: dimension-oversized image is re-encoded (normalized), not dropped", as
     const d = sniffImageDimensions(img.source?.data ?? "");
     expect(Math.max(d!.width, d!.height)).toBeLessThanOrEqual(2000);
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -359,7 +359,7 @@ test("P2b: 101 images trip the guard's 100-cap — exactly one oldest textified"
     expect(blocks.filter(b => b.type === "image")).toHaveLength(100);
     expect(blocks.filter(b => b.type === "text").length).toBeGreaterThanOrEqual(2); // original text + 1 omitted note
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -378,7 +378,7 @@ test("P4: count_tokens body is normalized identically to the real send", async (
     const [img] = capturedBlocks(captured).filter(b => b.type === "image");
     expect(img.source?.media_type).toBe("image/jpeg");
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });
@@ -396,7 +396,7 @@ test("P5: Files API image source passes through untouched", async () => {
     const [img] = capturedBlocks(captured).filter(b => b.type === "image");
     expect(img.source).toEqual({ type: "file", file_id: "file_abc123" });
   } finally {
-    server.stop(true);
+    await server.stop(true);
     upstream.stop(true);
   }
 });

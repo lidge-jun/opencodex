@@ -1,7 +1,9 @@
 /* Quota rows: stacked overview layout + warn/exhausted states (WP070). */
 
+/* Flat warn tone, not a gradient: gradients on data bars read as an AI tell and break the
+   flat-surface grammar (FE-GRADIENT-02). Warn matches the amber label/value tones. */
 .bar-warn {
-  background: linear-gradient(90deg, var(--green), var(--amber));
+  background: var(--amber);
 }
 
 .quota-row--warn .quota-label {
@@ -44,7 +46,31 @@
   font-weight: 600;
 }
 
+.quota-stacked-limit-group {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.quota-window-partial {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: 999px;
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
 .quota-stacked-reset {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 12px;
 }
 

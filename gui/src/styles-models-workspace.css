@@ -5,7 +5,17 @@
    Uses only design tokens from styles.css. No gradients.
    ============================================================================ */
 
-.main-inner:has(.models-workspace-shell) {
+/*
+  The catalog wants a wider column than the 980px default.
+
+  Scoped to a VISIBLE catalog panel, not merely a present one: panels mount lazily and
+  then stay mounted so drafts survive a tab hop, so a bare `:has(.models-workspace-shell)`
+  keeps matching after the catalog has been opened once. Routing would then render at
+  980px on a direct visit and 1200px afterwards — a width that depends on browsing
+  history. No surface renders the shell outside a tabpanel any more, so the old
+  direct-child arm is gone with the standalone pages it served.
+*/
+.main-inner:has(#models-panel-catalog:not([hidden]) .models-workspace-shell) {
   max-width: 1200px;
 }
 
@@ -15,6 +25,14 @@
   container-type: inline-size;
   container-name: models-workspace;
 }
+
+/*
+  Tab panels. Inactive panels carry `hidden`, which the UA stylesheet renders as
+  display:none, so they take no space and leave the focus order — no rule needed for
+  that. `--fill` marks the panel that owns a full-height workspace; the height chain
+  that feeds it lives with the combos rules in styles.css.
+*/
+.models-tab-panel { min-width: 0; }
 
 .models-workspace-root {
   display: grid;
@@ -322,6 +340,11 @@
   margin-bottom: var(--space-3);
 }
 
+/* Invisible stand-in for the empty Combos card while /api/combos loads. */
+.models-combos-card--pending {
+  min-height: var(--space-12);
+}
+
 .models-combos-empty-head {
   padding: var(--space-3);
   justify-content: space-between;
@@ -336,6 +359,12 @@
 
 .models-help-link {
   margin-top: var(--space-3);
+}
+
+.models-context-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 .models-field {

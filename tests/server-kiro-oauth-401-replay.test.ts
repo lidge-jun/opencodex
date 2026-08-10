@@ -178,7 +178,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
       expect(response.status).toBe(200);
       expect(observed).toEqual({ url: "https://runtime.eu-west-1.kiro.dev/", profileHeader: profileArn, profileBody: profileArn });
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -195,7 +195,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
       expect(observed.refreshCalls()).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -255,7 +255,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
         { url: "https://runtime.eu-west-1.kiro.dev/", auth: "Bearer concurrent-access", profile: newProfile },
       ]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -270,7 +270,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
       expect(observed.refreshCalls()).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -316,7 +316,7 @@ describe("Kiro OAuth upstream 401 replay", () => {
       expect(refreshCalls).toBe(1);
       expect(chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access", "Bearer fresh-access"]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

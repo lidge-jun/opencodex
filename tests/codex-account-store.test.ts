@@ -2,6 +2,7 @@ import { describe, expect, test, beforeEach, afterEach, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { setIcaclsRunnerForTests } from "../src/lib/windows-secret-acl";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-accounts-test");
 const ACCOUNTS_PATH = join(TEST_DIR, "codex-accounts.json");
@@ -17,12 +18,17 @@ function refreshLockPathForToken(refreshToken: string): string {
 
 describe("codex-account-store CRUD", () => {
   beforeEach(() => {
+    // These exercises cover credential-store contention, not Windows ACL behavior.
+    // Avoid spawning icacls for every fixture write; its lingering handle makes
+    // the fixed fixture directory flaky under `bun test --isolate` on Windows.
+    setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
     process.env.OPENCODEX_HOME = TEST_DIR;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
   });
 
   afterEach(() => {
+    setIcaclsRunnerForTests(null);
     delete process.env.OPENCODEX_HOME;
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });

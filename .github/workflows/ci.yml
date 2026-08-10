@@ -1,23 +1,28 @@
 name: Cross-platform CI
 
 on:
-  pull_request:
-    branches: [main, dev]
-    paths:
-      - "src/**"
-      - "bin/**"
-      - "tests/**"
-      - "scripts/**"
-      - "gui/**"
-      - ".gitattributes"
-      - ".npmignore"
-      - "package.json"
-      - "bun.lock"
-      - "tsconfig.json"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
+  # Always create the aggregate `ci` check for pull requests. Expensive jobs
+  # apply the former path allowlist through the `changes` job below, so a
+  # docs-only PR receives explicit positive evidence instead of no check at all.
+  pull_request: {}
+    # No base-branch filter on purpose. GitHub matches `branches:` against the
+    # BASE ref, so `[main, dev]` silently excluded stacked child PRs — whose
+    # base is another open PR's head branch, an intentional review workflow per
+    # AGENTS.md that `enforce-target` already exempts from the wrong-base gate.
+    # The #951-#955 stack merged with `enforce-target`, `label`, and
+    # `react-doctor` as its only check-runs: no test job ever queued for 24
+    # changed files under `src/`.
+    #
+    # An allowlist cannot express "base is another PR's head" — stacked bases
+    # carry contributor prefixes (`fix/`, `feat/`, `agent/`) as readily as
+    # `codex/`, and contributor stacks need CI most. The `changes` job below is
+    # the real scope gate, using the same allowlist as the push trigger. Safe to
+    # widen here
+    # because this workflow is `pull_request` (not `pull_request_target`),
+    # declares `contents: read`, and reads no secrets.
+    #
+    # `push:` stays pinned to the integration lines: it gates the release path,
+    # and this trigger already covers review.
   push:
     branches: [main, preview, dev]
     paths:
@@ -26,11 +31,14 @@ on:
       - "tests/**"
       - "scripts/**"
       - "gui/**"
+      - "assets/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
       - "bun.lock"
       - "tsconfig.json"
+      - "README.md"
+      - "LICENSE"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/enforce-pr-target.yml"
@@ -55,8 +63,8 @@ jobs:
   # A hostile PR can delete the branch and hardcode the self-hosted labels into
   # `$GITHUB_OUTPUT`, and `runs-on` will honour it. That this job runs on
   # `ubuntu-latest` changes nothing — the untrusted part is its OUTPUT, not its
-  # host. `.github/workflows/ci.yml` is in this workflow's `pull_request.paths`,
-  # so such an edit triggers its own run.
+  # host. `.github/workflows/ci.yml` is in the `changes` job's `ci` filter, so
+  # such an edit triggers every expensive verification job.
   #
   # What actually keeps untrusted code off a self-hosted runner lives OUTSIDE
   # this file, where a PR cannot reach it: the fork-PR approval policy
@@ -66,8 +74,9 @@ jobs:
   # only one available here. GitHub's own guidance is to avoid self-hosted
   # runners on public repositories for this reason.
   #
-  # So read the routing below as a COST control that keeps honest pull requests
-  # on GitHub-hosted runners, not as a guarantee about hostile ones.
+  # So read the routing below as a STABILITY/OPERATIONS control that keeps
+  # honest pull requests on GitHub-hosted runners and lets trusted branch runs
+  # avoid the hosted-Windows Bun crashes. It is not the security boundary.
   #
   # `push` on dev/main/preview requires the push permission, and
   # `workflow_dispatch` requires write access, so both carry a trusted author.
@@ -111,56 +120,274 @@ jobs:
             echo 'label=windows-latest' >> "$GITHUB_OUTPUT"
           fi
 
+  # Which areas this push actually touches.
+  #
+  # Deliberately a job-level filter rather than a wider workflow-level `paths:`
+  # one. A workflow skipped by path filtering leaves its checks Pending forever,
+  # so a PR requiring them can never merge; a skipped *job* reports success.
+  # That asymmetry is the whole reason this job exists instead of more entries
+  # in the `on:` block above.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The workflow grants only `contents: read`, and specifying any permission
+    # sets every unspecified one to `none`. paths-filter reads the PR's file list
+    # through the API on `pull_request`, so without this it fails outright — and
+    # a failed filter produces empty outputs, which every `== 'true'` condition
+    # below would read as "nothing changed, skip".
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      # Downstream jobs consume only the value re-emitted by the validation
+      # step. A missing or malformed filter output must fail this job instead
+      # of silently making every expensive job skip.
+      ci: ${{ steps.scope.outputs.ci }}
+      gui: ${{ steps.filter.outputs.gui }}
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
+
+      - name: Detect changed areas
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          # Without this the action compares against the repository's DEFAULT
+          # branch, which is `main`. A push to `dev` would then be diffed against
+          # `main`, so every area touched since the last promotion keeps reading
+          # as "changed" — the scoped jobs would run on nearly every dev push and
+          # the saving would silently not happen while CI stayed green.
+          #
+          # On `pull_request` the action ignores this and uses the PR's own file
+          # list. On a branch push it means "compare against the previous commit
+          # on this branch", which is the intent.
+          base: ${{ github.ref }}
+          filters: |
+            # Mirrors the push trigger's path allowlist. Pull requests always
+            # start the workflow so the aggregate check exists, while these
+            # paths decide whether the expensive test jobs need to run.
+            ci:
+              - 'src/**'
+              - 'bin/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'gui/**'
+              - 'assets/**'
+              - '.gitattributes'
+              - '.npmignore'
+              - 'package.json'
+              - 'bun.lock'
+              - 'tsconfig.json'
+              - 'README.md'
+              - 'LICENSE'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+              - '.github/workflows/enforce-pr-target.yml'
+              - '.github/workflows/stale-needs-info.yml'
+            gui:
+              - 'gui/**'
+            # Everything that ends up inside `npm pack`, or that decides what
+            # does. `src/**` belongs here because package.json ships `src` and
+            # bin/ocx.mjs executes it: without that entry an ordinary source PR
+            # would get no Windows verification at all, since the Windows suite
+            # now runs only at the shipping boundary.
+            packaging:
+              - 'package.json'
+              - 'bun.lock'
+              - 'src/**'
+              - 'bin/**'
+              - 'gui/**'
+              - 'assets/**'
+              - '.npmignore'
+              # `.gitattributes` decides how tracked package inputs are
+              # materialized on each runner, so an attribute change can put CRLF
+              # shebangs into the tarball without any source file moving.
+              - '.gitattributes'
+              - 'README.md'
+              - 'LICENSE'
+              - 'scripts/prepare-package.ts'
+
+      - name: Assert the scope output is usable
+        id: scope
+        shell: bash
+        env:
+          CI_SCOPE: ${{ steps.filter.outputs.ci }}
+        run: |
+          set -euo pipefail
+          case "$CI_SCOPE" in
+            true|false)
+              printf 'ci=%s\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+
+  # The suite, split by file across four Linux runners.
+  #
+  # `bun test --shard=i/N` sorts test files by path and deals them round-robin,
+  # so the split is deterministic for the files that remain in this lane.
+  # Storage-policy API tests and api-usage are deliberately excluded here and run
+  # in dedicated jobs below. Bun 1.3.14 can corrupt the Linux isolate/epoll state
+  # around those Worker-heavy harnesses; keeping them out of the general shards
+  # prevents one runtime failure from wedging ~150 unrelated files while preserving
+  # the same coverage in fresh Bun processes.
+  #
+  # Only the suite lives here. Typecheck, lint, build, and the scans run once in
+  # `gates` rather than four times — they are fixed cost, and paying it per shard
+  # would eat what the sharding saves.
   test:
-    name: ${{ matrix.name }}
-    needs: select-windows-runner
-    runs-on: ${{ matrix.runner }}
-    # Windows dominates this matrix: on run 30459554635 the same suite took
-    # ubuntu 4.6min / macos 5.6min / windows 11.8min. Against the previous
-    # 12-minute ceiling that left ~12s of headroom, so runner variance decided
-    # the result rather than the code under review — #711's rerun finished at
-    # 11.8min and passed while #653's was killed at 12.0min (issue #717).
-    # A cancelled job renders as `fail` in `gh pr checks`, so that flakiness
-    # reads as a broken PR. After the 2026-08-01 state-store admission merge,
-    # Windows under `bun test --isolate` on #827 hit the 20-minute kill while
-    # still green mid-suite (~19m of tests). 30 minutes is the margin for that
-    # tip — not a licence to absorb hung tests (see oauth mutation waitMs
-    # unref fix). Shrink the suite / close the platform gap rather than raising
-    # this again for ordinary variance.
-    timeout-minutes: 30
+    name: test ${{ matrix.shard }}/4
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    # A quarter of the suite. A shard that needs longer than this is wedged, not
+    # slow — the old 30-minute ceiling was margin for the Windows leg, which no
+    # longer runs here (see platform-windows).
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        # `name` is spelled out rather than derived from `runner`: a runner given
-        # as a label array renders as "self-hosted Windows X64 ocx-home", so the
-        # check name would change with the routing and break any branch
-        # protection rule that names it. Keeping `windows` fixed means the
-        # required check stays the same whichever machine served it.
-        include:
-          - name: ubuntu
-            runner: ubuntu-latest
-          - name: windows
-            runner: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
-          - name: macos
-            runner: macos-latest
+        shard: [1, 2, 3, 4]
     steps:
-      - name: Show selected runner
-        if: matrix.name == 'windows'
-        shell: bash
-        run: echo "windows leg on ${{ needs.select-windows-runner.outputs.label }}"
-
-      # A self-hosted runner keeps its working directory between jobs. Without an
-      # explicit wipe, a file deleted in the commit under test survives on disk
-      # and the suite passes against a tree that no longer exists in git.
-      # `--ephemeral` registration de-registers the runner after each job but does
-      # not clean the workspace, so this step is what makes the checkout honest.
-      - name: Clean workspace (self-hosted only)
-        if: runner.environment == 'self-hosted'
-        shell: bash
-        run: git clean -xffd . || true
-
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      # The GUI install is NOT optional here, however unrelated it looks to a
+      # test shard. Several files under tests/ import JSX-bearing modules from
+      # gui/src (ProviderRail and friends), and React is declared only in
+      # gui/package.json. Without this the affected shards die on
+      # `Cannot find module 'react/jsx-dev-runtime'` while the other shards pass.
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      # Nor is the build. Tests that fetch the served dashboard read the session
+      # bootstrap meta tags out of `gui/dist/index.html`, so without a build the
+      # server has no index to serve and those assertions see an empty string.
+      # The old three-platform job happened to satisfy this because every leg ran
+      # the GUI build as part of the same job; splitting the suite away from the
+      # gates removed that coincidence, so the dependency has to be explicit.
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      - name: Test
+        run: bun test --isolate tests --path-ignore-patterns 'tests/api-storage-policy*.test.ts' --path-ignore-patterns 'tests/api-storage.test.ts' --path-ignore-patterns 'tests/api-usage.test.ts' --shard=${{ matrix.shard }}/4
+
+  # Bun 1.3.14 has shown a Linux isolate/epoll race around the storage-policy
+  # harness. Keep the entire six-file family in one fresh process so a runtime
+  # failure is bounded to this job instead of poisoning a general test shard.
+  storage-policy:
+    name: storage policy
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      - name: Test storage policy API
+        run: |
+          bun test --isolate \
+            ./tests/api-storage-policy-already-running.test.ts \
+            ./tests/api-storage-policy-mutation-busy.test.ts \
+            ./tests/api-storage-policy-put-race.test.ts \
+            ./tests/api-storage-policy-run.test.ts \
+            ./tests/api-storage-policy.test.ts \
+            ./tests/api-storage.test.ts
+
+  # Bun 1.3.14 has shown a Linux isolate wedge around startServer() plus the user
+  # cost overlay reconciler. Keep api-usage in one fresh process so a runtime
+  # failure is bounded to this job instead of poisoning a general test shard.
+  api-usage:
+    name: api usage
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      - name: Test api usage API
+        run: bun test --isolate ./tests/api-usage.test.ts
+
+  # Everything that is not the suite: type safety, privacy, lint, build, smoke.
+  # One runner, once per push. Splitting these across the shards would repeat a
+  # fixed couple of minutes four times to save nothing.
+  gates:
+    name: gates
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -176,9 +403,6 @@ jobs:
       - name: Typecheck
         run: bun x tsc --noEmit
 
-      - name: Test
-        run: bun test --isolate tests
-
       - name: GUI tests
         run: cd gui && bun test tests
 
@@ -189,11 +413,13 @@ jobs:
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
 
       - name: GUI lint
+        if: needs.changes.outputs.gui == 'true'
         run: |
           cd gui
           bun run lint
 
       - name: GUI build
+        if: needs.changes.outputs.gui == 'true'
         run: |
           cd gui
           bun run build
@@ -201,8 +427,213 @@ jobs:
       - name: CLI help smoke
         run: bun run src/cli/index.ts help
 
+  # macOS runs on every pull request, and runs the WHOLE suite unsharded.
+  #
+  # That is the point of it. The four Linux shards each cover a quarter of the
+  # files, which quietly assumes no test depends on a sibling file having run in
+  # the same process pool. This leg is the control that would notice if that
+  # assumption ever broke. It is also the cheapest leg on the board — 5m23s on
+  # the baseline run, faster than the ubuntu leg it sits beside — so there was
+  # never a latency argument for touching it.
+  #
+  # It does not repeat the gates: typecheck, privacy, lint, and build are
+  # platform-independent and already ran once above.
+  platform-macos:
+    name: macos
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: macos-latest
+    # The unsharded control for the sharded Linux lane: the only place the whole
+    # suite runs in one pool, so it is the place that catches what sharding
+    # hides. The flakes it keeps surfacing are timing, not logic, and the fix
+    # is the tests, not a fourth lane.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      # Same reason as the shards: the suite serves gui/dist and reads it back.
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      - name: Test
+        run: bun test --isolate tests
+
+      - name: CLI help smoke
+        run: bun run src/cli/index.ts help
+
+  # Windows runs only when a maintainer asks for it by hand.
+  #
+  # It left the PR lane first (16m23s against a 6-minute Linux critical path;
+  # the ceiling was raised twice rather than the gap closed — #711 vs #653,
+  # issue #717, then #827's 20-minute kill), then left the shipping boundary
+  # when the sharded promotion run surfaced ~207 Windows-only test failures
+  # that had been invisible while dev skipped the leg. Those are real defects,
+  # tracked as issue #1059, but they are pre-existing on every released
+  # version — gating the release on them blocks shipping fixes to the platforms
+  # that pass, for a platform that has never shipped green.
+  #
+  # The leg stays in the workflow, sharded and dispatchable, so the failure
+  # list can be burned down without losing the ability to measure progress.
+  # release.yml gates on a successful push-event run of this workflow, which
+  # now means Linux + macOS + the gates; Windows re-enters the gate when the
+  # tracked failures are fixed, not before.
+  platform-windows:
+    name: windows ${{ matrix.shard }}/4
+    needs: select-windows-runner
+    if: >-
+      github.event_name == 'workflow_dispatch'
+    runs-on: ${{ fromJSON(needs.select-windows-runner.outputs.runner) }}
+    # Sharded like the Linux legs. The single-leg run reached 30 minutes on a
+    # green suite and was killed in cleanup; four shards put each leg inside the
+    # same budget the Linux shards already hold.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Show selected runner
+        shell: bash
+        run: echo "windows leg on ${{ needs.select-windows-runner.outputs.label }}"
+
+      # A self-hosted runner keeps its working directory between jobs. Without an
+      # explicit wipe, a file deleted in the commit under test survives on disk
+      # and the suite passes against a tree that no longer exists in git.
+      # `--ephemeral` registration de-registers the runner after each job but does
+      # not clean the workspace, so this step is what makes the checkout honest.
+      - name: Clean workspace (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        shell: bash
+        # `|| true` used to swallow this, which defeats the point: a clean that
+        # fails on permissions leaves the deleted files in place and the checkout
+        # below then validates a tree that no longer exists in git. Only the
+        # not-a-repository case is tolerated — that is the first run on a fresh
+        # box, where there is nothing to clean.
+        run: |
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git clean -xffd .
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          cd gui
+          bun install --frozen-lockfile
+
+      # Same reason as the shards: the suite serves gui/dist and reads it back.
+      - name: Build GUI
+        run: |
+          cd gui
+          bun run build
+
+      - name: Test
+        run: bun test --isolate tests --shard=${{ matrix.shard }}/4
+
+      - name: CLI help smoke
+        run: bun run src/cli/index.ts help
+
+  # Keep every OS credential-store check on a disposable GitHub-hosted machine.
+  # A force-cancelled process cannot run its in-process finally cleanup, so no
+  # keyring matrix leg may use the persistent self-hosted Windows runner.
+  keyring-smoke:
+    name: keyring ${{ matrix.name }}
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            runner: ubuntu-latest
+          - name: windows
+            runner: windows-latest
+          - name: macos
+            runner: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Linux hosted runners do not provide an unlocked desktop keyring session.
+      # Run Secret Service with temporary state instead of skipping Linux.
+      - name: Install Secret Service dependencies (Linux)
+        if: matrix.name == 'ubuntu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends dbus-x11 gnome-keyring
+
+      - name: OS keyring create/read/delete smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" != "Linux" ]; then
+            bun run scripts/keyring-smoke.ts
+            exit 0
+          fi
+
+          keyring_home="$(mktemp -d)"
+          runtime_dir="$(mktemp -d)"
+          cleanup() { rm -rf -- "$keyring_home" "$runtime_dir"; }
+          trap cleanup EXIT
+          chmod 700 "$keyring_home" "$runtime_dir"
+          HOME="$keyring_home" XDG_RUNTIME_DIR="$runtime_dir" dbus-run-session -- bash -euo pipefail -c '
+            # Create and unlock the isolated login keyring without putting its
+            # ephemeral password in argv, the environment, or the job log.
+            od -An -N32 -tx1 /dev/urandom |
+              tr -d "[:space:]" |
+              gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            bun run scripts/keyring-smoke.ts
+          '
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 8
     strategy:
@@ -216,6 +647,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # No job here pushes, and the self-hosted box keeps its checkout
+          # between jobs, so leaving a usable token in .git/config is avoidable
+          # residue. Matches the convention already used by the other workflows.
+          persist-credentials: false
 
       # Deliberately NO setup-bun: prove `npm install -g` works without a
       # separately-installed Bun. The launcher uses the bundled `bun` dependency.
@@ -243,3 +679,57 @@ jobs:
 
       - name: ocx help via bundled bun
         run: ocx help
+
+  # The one check name that means "CI passed".
+  #
+  # Shard names move whenever the shard count changes, and the platform legs come
+  # and go by trigger. Neither is a stable thing to require in branch protection.
+  # This job is: it depends on every other job and asserts each result. `dev` has
+  # no branch protection configured today, so nothing has to be re-pointed — but
+  # whoever enables it has one obvious check to require.
+  #
+  # Pull requests always trigger this workflow. The `changes` job keeps
+  # expensive jobs scoped, but this aggregate still records explicit success
+  # when every producer is deliberately skipped for an out-of-scope docs change.
+  #
+  # `if: always()` is load-bearing. Without it, a failed or skipped dependency
+  # skips this job too — and GitHub reports a skipped job as success, so the gate
+  # would go green precisely when something went wrong.
+  ci:
+    name: ci
+    if: always()
+    # Every producer, including the ones that only feed other jobs. `needs` holds
+    # direct dependencies only, so a failing `select-windows-runner` would
+    # otherwise reach this gate as nothing at all while its dependents report
+    # `skipped` — which the gate is required to read as a deliberate skip.
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, platform-windows, keyring-smoke, npm-global-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert every needed job succeeded or was skipped
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq .
+          # Allowlist, not denylist. Anything that is not a known-good result
+          # fails the gate, so a result GitHub adds later cannot pass silently.
+          #
+          # `skipped` is a pass on purpose: that is how a trigger-scoped job
+          # (platform-windows on a pull request) reports when it is deliberately
+          # not run.
+          bad=$(echo "$RESULTS" | jq -r '
+            to_entries
+            | map(select(.value.result != "success" and .value.result != "skipped"))
+            | .[] | "\(.key)=\(.value.result)"')
+          if [ -n "$bad" ]; then
+            echo "::error::needed job(s) did not pass: $bad"
+            exit 1
+          fi
+
+      # Windows is dispatch-only, so there is no event where a skipped Windows
+      # leg is a gate violation: on push events it is always skipped, and on
+      # dispatch a failed Windows leg already fails the allowlist above. The
+      # old "windows must have run on main/preview" assertion left with the
+      # condition it policed.

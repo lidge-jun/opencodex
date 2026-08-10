@@ -268,6 +268,32 @@ describe("kiro adapter — buildRequest", () => {
     expect(results[0].status).toBe("success");
   });
 
+  // Kiro's own client replays the encrypted reasoning blob on the assistant turn it belongs to;
+  // dropping it makes every turn start without the previous turn's reasoning.
+  test("assistant history replays the Kiro redacted reasoning blob", async () => {
+    const messages = [
+      { role: "user", content: "think" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }], kiroRedactedReasoning: "LktUUn5+blob" },
+      { role: "user", content: "again" },
+    ];
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages));
+    const arm = JSON.parse(body).conversationState.history
+      .find((h: { assistantResponseMessage?: unknown }) => h.assistantResponseMessage)?.assistantResponseMessage;
+    expect(arm.reasoningContent).toEqual({ redactedContent: "LktUUn5+blob" });
+  });
+
+  test("assistant history omits reasoningContent when no blob was captured", async () => {
+    const messages = [
+      { role: "user", content: "think" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] },
+      { role: "user", content: "again" },
+    ];
+    const { body } = await createKiroAdapter(provider).buildRequest(parsedWith(messages));
+    const arm = JSON.parse(body).conversationState.history
+      .find((h: { assistantResponseMessage?: unknown }) => h.assistantResponseMessage)?.assistantResponseMessage;
+    expect(arm).not.toHaveProperty("reasoningContent");
+  });
+
   test("empty tool output is normalized to a non-empty Kiro result block", async () => {
     const messages = [
       { role: "user", content: "run it" },
@@ -818,6 +844,11 @@ describe("kiro adapter — buildRequest", () => {
       } as OcxParsedRequest)).rejects.toThrow(/Kiro (supports only|does not support)/);
     }
 
+    await expect(createKiroAdapter(provider).buildRequest({
+      ...parsedWith([{ role: "user", content: "hi" }], [bashTool]),
+      _structuredOutput: true,
+    } as OcxParsedRequest)).rejects.toThrow("Kiro does not support Responses text controls or structured output");
+
     const none = { ...parsedWith([{ role: "user", content: "hi" }], [bashTool]), options: { toolChoice: "none" } } as OcxParsedRequest;
     const current = JSON.parse((await createKiroAdapter(provider).buildRequest(none)).body).conversationState.currentMessage.userInputMessage;
     expect(current.userInputMessageContext?.tools).toBeUndefined();
@@ -1029,5 +1060,23 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
 
   test("Auto router has no fixed window (omitted)", () => {
     expect(cw["kiro-auto"]).toBeUndefined();
+  });
+});
+
+describe("boundedInjectedInstruction surrogate safety", () => {
+  test("a budget cut never ends on a lone high surrogate", async () => {
+    const { boundedInjectedInstructionForTests } = await import("../src/adapters/kiro");
+    const { MAX_KIRO_INJECTED_INSTRUCTION_CHARS } = await import("../src/adapters/kiro-constants");
+    // Place an astral character exactly at the budget boundary.
+    const prefix = "가".repeat(MAX_KIRO_INJECTED_INSTRUCTION_CHARS - 1);
+    const text = `${prefix}🎆tail`;
+    const used = { value: 0 };
+    const result = boundedInjectedInstructionForTests(text, used);
+    expect(result).toBeDefined();
+    const last = result!.charCodeAt(result!.length - 1);
+    // The astral pair is dropped whole rather than split into a broken half.
+    expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    expect(result!.includes("\uFFFD")).toBe(false);
+    expect(Buffer.byteLength(result!, "utf8")).toBeGreaterThan(0);
   });
 });

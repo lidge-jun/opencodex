@@ -63,6 +63,8 @@ deltas, 그리고 정확히 하나의 종료 `response.completed`, `response.fai
 `stream: false`이거나 `stream`이 없으면, 같은 adapter 이벤트가 하나의 Responses JSON 객체로 수집됩니다.
 두 형식 모두 선택한 모델, output item, 종료 상태, usage를 보존합니다.
 
+클라이언트로 전달되는 Responses SSE 프레임은 SSE 블록 구분자 앞의 원시 바이트 기준으로 프레임당 4 MiB로 제한됩니다. HTTP에서는 구분자 없이 이 한도를 초과한 업스트림 프레임을 합성 `response.failed` 이벤트와 이어지는 `data: [DONE]`으로 fail closed 처리합니다. Responses WebSocket 브리지에서는 같은 조건에서 502 `websocket_protocol_error`를 보내고 업스트림 reader를 취소합니다. 완전한 Responses 종료 프레임이 이미 수신된 경우에는 그 종료가 우선하며, 이후의 과도한 크기 또는 잘못된 바이트는 완료된 턴을 전송 오류로 바꾸지 않고 버립니다.
+
 모든 종료 Responses usage 객체에는 제공자가 해당 세부 정보를 보고하지 않았더라도 두 상세 객체가 모두
 포함됩니다.
 

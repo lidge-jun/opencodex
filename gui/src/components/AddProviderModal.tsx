@@ -28,7 +28,7 @@ type Preset = CatalogPreset;
 
 export default function AddProviderModal({
   apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
-  accountRows, accountStatus, accountBusy, onAccountLogin, onAccountCancelLogin, onAccountLogout, onOpen,
+  accountRows, accountStatus, accountBusy, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
 }: {
   apiBase: string;
   existingNames: string[];
@@ -39,9 +39,10 @@ export default function AddProviderModal({
   accountRows?: AccountLoginRow[];
   accountStatus?: Record<string, AccountLoginStatus>;
   accountBusy?: string | null;
-  onAccountLogin?: (provider: string) => void;
+  onAccountLogin?: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
+  onAccountManage?: (provider: string) => void;
   onOpen?: () => void;
 }) {
   const t = useT();
@@ -249,6 +250,7 @@ export default function AddProviderModal({
             onLogin={onAccountLogin}
             onCancelLogin={onAccountCancelLogin}
             onLogout={onAccountLogout}
+            onManage={onAccountManage}
           />
         ) : form && (
           preset.auth === "oauth" && form.authMode === "oauth" ? (

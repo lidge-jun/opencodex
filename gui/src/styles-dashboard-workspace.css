@@ -32,6 +32,13 @@
   padding: 0 var(--space-2) var(--space-2);
 }
 
+/* Top inset without sticky-header leaks: margin on the table, not padding on the
+   scrollport. At rest the table sits below the shell border; while scrolled the
+   sticky thead stays flush at the scrollport top. */
+.dashboard-workspace-main .tbl {
+  margin-top: var(--space-3);
+}
+
 .dashboard-workspace-main .tbl thead th {
   position: sticky;
   top: 0;
@@ -69,55 +76,90 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
   gap: var(--space-4);
-  align-items: start;
+  /* Stretch, not start: the two sidecar cards are a matched pair, and a hint that
+     wraps to a different line count in one of them should not leave the other
+     visibly short. */
+  align-items: stretch;
 }
 
-/* Title + select on one row; hint gets the full card width underneath so
-   it stays a stable 2-line block (no clamp / no cutoff when the select grows). */
-.dash-sidecar-card {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* The effort control holds one short wire value (low…max); it must not inherit
+   the model select's reserved width. Matched by POSITION, not `:last-child`:
+   the web-search card has a single select that is simultaneously first and last,
+   and `:last-child` would shrink its model picker too. `:nth-child(2)` only ever
+   matches a real second control. */
+.dash-sidecar-row-card .dash-delegation-controls .custom-select:nth-child(2) {
+  min-width: 6.5rem;
+  max-width: 9rem;
+}
+
+.dash-sidecar-copy {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
-.dash-sidecar-card__row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  min-width: 0;
+/* The hint must wrap inside its own column, never run under the controls. The
+   copy block is the flex item that yields, so it needs a real basis: without
+   one, `flex-basis: auto` lets its max-content width win the negotiation and the
+   text overlaps the control group in longer locales (ko/ru/ja). */
+.dash-sidecar-row-card .dash-sidecar-copy {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
 }
 
-.dash-sidecar-card__row .font-semibold {
-  min-width: 0;
+/* The copy block yields; the control group holds its intrinsic width. Letting the
+   controls shrink (`0 1 auto`) does NOT wrap them — `.custom-select` keeps its own
+   min-width, so the children simply overflow their shrunken container and slide
+   left under the hint text. Hold the group at content width and make the copy the
+   only thing that gives way; the narrow-viewport case is handled by stacking the
+   whole card below. */
+.dash-sidecar-row-card .dash-delegation-controls {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
-.dash-sidecar-card__row .custom-select {
-  /* Reserve baseline space to prevent row reflow, but keep the trigger
-     compact instead of forcing a permanently wide fixed width. */
-  flex: 0 1 auto;
-  width: auto;
-  min-width: clamp(10rem, 24vw, 11.5rem);
-  max-width: min(100%, 14rem);
+/* The model select carries the long value: give it a floor wide enough to read a
+   real model id, and ellipsize inside rather than growing without bound. */
+.dash-sidecar-row-card .dash-delegation-controls .custom-select:first-child {
+  min-width: 10.5rem;
+  max-width: 14rem;
 }
 
-.dash-sidecar-card__row .select-trigger {
+.dash-sidecar-row-card .dash-delegation-controls .select-trigger {
   width: 100%;
   max-width: 100%;
   justify-content: space-between;
 }
 
-.dash-sidecar-card__row .select-trigger > span {
+.dash-sidecar-row-card .dash-delegation-controls .select-trigger > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-.dash-sidecar-card .setting-hint {
-  margin-top: 0;
+/* Both sidecar panels are delegation-style ROWS. This class carries only the
+   grid-cell min-width; the row layout itself comes from .dash-delegation-summary. */
+.dash-sidecar-row-card {
+  min-width: 0;
+}
+
+/* Below the width where a row can hold copy + two selects, stack instead of
+   overflowing. Measured: the row is clean down to ~320px viewport; under that the
+   controls would push past the panel edge. */
+@media (max-width: 22rem) {
+  .dash-sidecar-row-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dash-sidecar-row-card .dash-delegation-controls {
+    justify-content: flex-start;
+    /* Stacking gives the group the full card width, but the two selects still floor at
+       10.5rem + 6.5rem, which is wider than the viewport this query targets. Once the
+       controls own their own line, wrapping is free — the reason to hold `nowrap` in the
+       row layout (children sliding under the hint) no longer applies. */
+    flex-wrap: wrap;
+  }
 }
 
 /* Available models: search + per-provider accordion with model chips */

@@ -12,7 +12,13 @@ Codex 的 models-manager 按 `priority` 升序排列选择器中可见的目录�
 丢弃，因此在生成的 JSON 数组中把某个条目前移，并不会让它在选择器中前移。该约束直接记录在
 `src/codex/catalog/sync.ts` 中。
 
-因此，opencodex 通过分配更低的 priority 控制置顶位置，而不依赖数组位置。相关 priority 如下：
+因此，opencodex 通过分配更低的 priority 控制置顶位置，而不依赖数组位置。本表中的固定值及下例适用于
+没有有效账户 selector 的配置。存在 `N` 个 selector 时，配置 rank 为 `i` 的置顶裸原生模型会展开为
+priority 为 `i * N + j` 的 selector 行，其中 `j` 是从 0 开始的 selector 位置。置顶的路由行使用
+`i * N`，精确的账户限定原生 id 使用其 selector 对应的 `i * N + j`。Codex 仍只公布选择器中可见的
+前五行。未选中的路由行会移到这些 selector 分组之外。
+
+没有 selector 时的相关 priority 如下：
 
 | 目录条目 | Priority | 来源 |
 | --- | ---: | --- |
@@ -52,7 +58,7 @@ priority，因此 Codex 的 priority 排序会保留这个开头序列。
 
 ## 最终选择器顺序
 
-featured 列表非空时，最终顺序为：
+没有有效账户 selector 且 featured 列表非空时，最终顺序为：
 
 1. 严格按照配置的 `subagentModels` 顺序排列，priority 为 `0` 至 `4`；
 2. 所有剩余路由模型，先按 provider、再按模型 id 的字母顺序排列，priority 为 `5`；
@@ -90,12 +96,16 @@ subagentModels = [
 
 前五个条目是向 `spawn_agent` 公布的 override，其余模型继续按普通选择器顺序排列。
 
+存在账户 selector 时，五项限制会在裸原生选择展开为 selector-qualified 分组之后应用。
+
 ## 更改顺序
 
-自定义开头模型顺序的唯一受支持方式是重新排列 `subagentModels`。你可以在仪表盘的
-**Sub-agents** 页面或 opencodex 配置中修改它。该列表最多接受五个模型，其数组顺序有实际意义。
+自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **Sub-agents** 页面可以调整
+裸原生和路由 id 的顺序。配置和 `ocx agent subagents set` 也接受精确的账户限定
+`<selector>/<native-openai-model>` id，但仪表盘不会提供这些 id，保存列表时也不会保留它们。配置的
+id 请勿超过五个。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified 行，因此
+已配置的选项与公布的行不一定一一对应。
 
 目前 `OcxConfig` 中没有通用的 `modelOrder`、`providerOrder` 或 priority map 设置。受支持的排序
-字段是 `subagentModels`（`src/types.ts:238-246`）；`disabledModels` 和各 provider 的
-`selectedModels` 都是可见性字段（`src/types.ts:276-282`、`src/types.ts:439-446`）。因此，要更改
-选择器其余部分的顺序，需要修改代码行为，而不是调整配置。
+字段是 `subagentModels`；`disabledModels` 和各 provider 的 `selectedModels` 都是可见性字段。
+因此，要更改选择器其余部分的顺序，需要修改代码行为，而不是调整配置。

@@ -36,8 +36,13 @@ ocx start --port 8080
 
 ### `ocx restart`
 
-`stop` 다음에 `ensure`를 실행합니다. 즉, 프록시/서비스를 중지하고 기본 Codex를 복원한 뒤,
-프록시를 백그라운드에서 다시 시작하고 살아 있는 포트를 Codex에 다시 동기화합니다.
+프록시가 실행 중이면 확인된 정확한 PID와 포트에 in-place 재시작을 요청하고, 정상 드레인을
+기다린 뒤 같은 포트에 다른 런타임 PID가 올라왔는지 확인합니다. 이 과정에서 관리형 라우팅과
+서비스 감시는 유지되며, 요청 결과가 불확실해도 별도의 stop/start로 재실행하지 않습니다.
+실행 중인 프록시가 없을 때만 일반 `ensure` 시작 동작으로 전환합니다.
+실행 중인 리스너를 런타임 PID로 증명할 수 없으면(업데이트 전 프록시 포함) `ensure`나
+stop/start 대체 동작 없이 안전하게 실패합니다. 소유권을 확인한 뒤 `ocx stop`과 `ocx start`를
+순서대로 한 번 실행하세요.
 
 ### `ocx ensure`
 
@@ -143,6 +148,18 @@ ocx status --json
 `{ok, pid, port}`를 내보냅니다. 이 명령은 정상일 때만 종료 코드 0을, 그렇지 않으면 1을 반환하므로
 서비스 프로브에 적합합니다.
 
+### `ocx ready [--json] [--wait [--timeout <seconds>]]`
+
+인증이 필요 없는 `GET /readyz` 엔드포인트로 동기화 후 준비 상태를 확인합니다. 준비되면 `200`,
+`pending` 또는 종단 상태인 `failed`이면 `Retry-After: 1`과 함께 `503`을 반환합니다. HTTP의 정제된
+식별 필드는 `{service, version, uptime, pid, port, status}`입니다. `/readyz`가 없는 이전 프록시는
+`unreachable`로 fail-closed하며, `/healthz`는 준비 상태가 아닌 별도의 liveness 확인입니다. 기본값은 한 번의
+probe이며, `--wait`는 준비 또는 timeout까지 polling하지만 종단 `failed`를 확인하면 즉시 종료합니다.
+기본 timeout은 45초이며, `--timeout <seconds>`는 `--wait`와 함께 써야 하고 양의 정수인 1~300초 범위를 받습니다. CLI JSON은
+`{ready, status, pid, port}`를 출력하며 `status`는 `ready`, `pending`, `failed`,
+`unreachable` 중 하나입니다. 종료 코드는 ready가 0, not-ready/pending/failed/timeout/unreachable이
+1, 잘못된 인수가 64입니다.
+
 ### `ocx doctor`
 
 읽기 전용 환경 및 연결 진단을 실행합니다. 상태 경로와 파일시스템 유형, WSL 이중 설치, 프록시
@@ -176,7 +193,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 
 ## 백그라운드 서비스
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 로그인 관리형 백그라운드 서비스로 opencodex를 실행합니다(macOS **launchd**, Linux **systemd** 사용자
 유닛, Windows **Task Scheduler**). 로그인 시 자동 시작하고 충돌 시 자동 재시작합니다. 서비스 실행은
@@ -186,6 +203,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 | --- | --- |
 | 없음 | 서비스를 생성/업데이트하고 시작합니다. |
 | `install` | 서비스를 생성하고 시작합니다. |
+| `repair` | 설치된 서비스를 다시 등록하지 않고 제자리에서 새로 고친 뒤 재시작합니다. |
 | `start` | 설치된 서비스를 시작합니다. |
 | `stop` | 서비스를 중지하고 기본 Codex를 복원합니다. |
 | `status` | 서비스와 프록시 진단, 로그 경로를 보고합니다. |
@@ -195,6 +213,7 @@ Codex의 로컬 모델 선택기 캐시를 무효화하여, 활성 opencodex 카
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
@@ -260,8 +279,12 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 npm에서 opencodex를 자체 업데이트합니다. 안정판 설치는 `@latest`를 사용하고, 미리보기 설치는
 `--tag latest|preview`를 주지 않으면 `@preview`를 유지합니다. 소스 체크아웃을 감지하면 대신
 `git pull && bun install`을 실행하라고 안내하고, 해당 태그에서 이미 최신 버전이면 아무 동작도 하지
-않습니다. 실행 중인 프록시가 있으면 파일을 교체하기 전에 중지합니다. 설치된 서비스는 자동으로 다시
-빌드해 시작하며, 포그라운드 설치에서는 다음 단계로 `ocx start`를 출력합니다.
+않습니다. npm 설치에서는 어떤 프로세스도 중지하기 전에 Unix 캐시의 소유권과 접근 가능성을 제한된
+범위에서 검사합니다. 중첩 심볼릭 링크는 `lstat`으로 확인하되 따라가지 않으며, Windows에서는 이
+Unix 전용 검사를 명시적으로 건너뜁니다. 검사에 실패하면 트레이와 프록시가 실행 중인 상태에서
+업데이트를 중단합니다. 그 다음 실행 중인 프록시가 있으면 파일을 교체하기 전에 중지합니다. 설치된
+서비스는 자동으로 다시 빌드해 시작하며, 포그라운드 설치에서는 다음 단계로 `ocx start`를 출력합니다.
+대시보드 업데이트 기록은 저장 전에 프로필/캐시 경로와 UID/GID 값을 가립니다.
 
 ```bash
 ocx update

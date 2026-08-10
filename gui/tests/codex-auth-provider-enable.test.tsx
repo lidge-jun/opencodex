@@ -59,7 +59,8 @@ test("noncanonical disabled OpenAI rows do not offer built-in recovery", () => {
   );
 
   expect(html).toContain("The built-in OpenAI provider is not configured.");
-  expect(html).toContain('href="#providers"');
+  expect(html).toContain('class="link-btn"');
+  expect(html).toContain("Open Providers");
   expect(html).not.toContain("Enable OpenAI");
   expect(html).not.toContain("Your OpenAI accounts are still available");
 });

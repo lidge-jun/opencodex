@@ -4,7 +4,9 @@ import {
   getInspectionCounters,
   MAX_COMPLETED_OUTPUT_ITEMS,
   MAX_INSPECTION_SSE_FRAME_BYTES,
+  relaySseWithHeartbeat,
   resetInspectionCountersForTest,
+  trackSseForRequestLog,
 } from "../src/server/relay";
 import type { RequestLogContext } from "../src/server/request-log";
 
@@ -58,6 +60,43 @@ async function readAllBytes(stream: ReadableStream<Uint8Array>): Promise<Uint8Ar
 beforeEach(() => resetInspectionCountersForTest());
 
 describe("createSseInspector frame bounds", () => {
+  test("optionally persists a completed snapshot under the first client-visible response id", () => {
+    const completed: Array<{ id?: unknown }> = [];
+    const inspector = createSseInspector({
+      pinCompletedResponseIdToFirstSeen: true,
+      onCompletedResponse: response => completed.push(response),
+    });
+
+    inspector.feed(frame({
+      type: "response.created",
+      response: { id: "resp-client-visible", status: "in_progress", output: [] },
+    }));
+    inspector.feed(frame(completedEvent("resp-upstream-terminal", [{ type: "message", id: "msg-1" }])));
+
+    expect(completed).toEqual([
+      expect.objectContaining({ id: "resp-client-visible" }),
+    ]);
+    inspector.dispose();
+  });
+
+  test("keeps the upstream completed response id when pinning is not enabled", () => {
+    const completed: Array<{ id?: unknown }> = [];
+    const inspector = createSseInspector({
+      onCompletedResponse: response => completed.push(response),
+    });
+
+    inspector.feed(frame({
+      type: "response.created",
+      response: { id: "resp-client-visible", status: "in_progress", output: [] },
+    }));
+    inspector.feed(frame(completedEvent("resp-upstream-terminal", [{ type: "message", id: "msg-1" }])));
+
+    expect(completed).toEqual([
+      expect.objectContaining({ id: "resp-upstream-terminal" }),
+    ]);
+    inspector.dispose();
+  });
+
   test("oversized candidate is inspection-only: tee client bytes stay exact and the next event resynchronizes", async () => {
     const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x\n\n`);
     const terminal = frame(completedEvent("after-cap"));
@@ -377,5 +416,68 @@ describe("createSseInspector parse-once", () => {
     } finally {
       JSON.parse = originalParse;
     }
+  });
+});
+
+describe("client-facing SSE wrapper bounds", () => {
+  test("translated request-log tracking discards an oversized frame, resynchronizes, and preserves bytes", async () => {
+    const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x`);
+    const delimiter = encoder.encode("\n\n");
+    const terminal = frame(completedEvent("translated-after-cap"));
+    const chunks = [oversized, delimiter, terminal];
+    const terminals: string[] = [];
+    const tracked = trackSseForRequestLog(
+      streamFromChunks(chunks),
+      status => terminals.push(status),
+      () => {},
+      {} as RequestLogContext,
+      () => {},
+    );
+
+    expect(await readAllBytes(tracked)).toEqual(joinBytes(chunks));
+    expect(terminals).toEqual(["completed"]);
+    expect(getInspectionCounters().frameCapOverflows).toBe(1);
+    expect(getInspectionCounters().frameBufferHighWaterBytes)
+      .toBeLessThanOrEqual(MAX_INSPECTION_SSE_FRAME_BYTES);
+  });
+
+  test("translated request-log tracking parses a complete payload once for all observers", async () => {
+    const originalParse = JSON.parse;
+    let parses = 0;
+    JSON.parse = ((text: string) => {
+      parses += 1;
+      return originalParse(text);
+    }) as typeof JSON.parse;
+    try {
+      const tracked = trackSseForRequestLog(
+        streamFromChunks([frame(completedEvent("translated-parse-once"))]),
+        () => {},
+        () => {},
+        {} as RequestLogContext,
+        () => {},
+      );
+      await readAllBytes(tracked);
+      expect(parses).toBe(1);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
+
+  test("heartbeat relay applies the same frame bound without changing upstream bytes", async () => {
+    const oversized = encoder.encode(`data: ${"x".repeat(MAX_INSPECTION_SSE_FRAME_BYTES)}x`);
+    const delimiter = encoder.encode("\r\n\r\n");
+    const terminal = frame(completedEvent("heartbeat-after-cap"));
+    const chunks = [oversized, delimiter, terminal];
+    const terminals: string[] = [];
+    const relayed = relaySseWithHeartbeat(
+      streamFromChunks(chunks),
+      new AbortController(),
+      60_000,
+      status => terminals.push(status),
+    )!;
+
+    expect(await readAllBytes(relayed)).toEqual(joinBytes(chunks));
+    expect(terminals).toEqual(["completed"]);
+    expect(getInspectionCounters().frameCapOverflows).toBe(1);
   });
 });

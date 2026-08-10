@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
   codexAutoStartEnabled,
@@ -18,16 +18,22 @@ import {
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   readConfigDiagnostics,
+  readPid,
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  ocxStartProcessCacheSizeForTests,
+  setOcxStartProcessCacheForTests,
+  setProcessCommandLineExecForTests,
+  setProcessCommandLinePlatformForTests,
   validateConfigCandidate,
   writeRuntimePort,
   writePid,
 } from "../src/config";
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
-import { AtomicWriteResidualTempError, atomicWriteFile, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
+import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
+import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 let testDir = "";
 
 beforeEach(() => {
@@ -150,6 +156,35 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("Antigravity static-catalog migration marker is schema-safe but not default-injected", () => {
+    expect(getDefaultConfig().googleAntigravityStaticCatalogVersion).toBeUndefined();
+
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+    expect(loadConfig().googleAntigravityStaticCatalogVersion).toBe(1);
+
+    writeConfig({
+      port: 12345,
+      defaultProvider: "custom",
+      googleAntigravityStaticCatalogVersion: 2,
+      providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
+    });
+    expect(loadConfig().googleAntigravityStaticCatalogVersion).toBe(2);
+    expect(backupNames()).toEqual([]);
+
+    expect(validateConfigCandidate({
+      ...getDefaultConfig(),
+      googleAntigravityStaticCatalogVersion: 3,
+    })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("googleAntigravityStaticCatalogVersion"),
+    });
+  });
+
   test("Codex autostart can be disabled explicitly", () => {
     expect(codexAutoStartEnabled({ codexAutoStart: false })).toBe(false);
     expect(codexAutoStartEnabled({ codexAutoStart: true })).toBe(true);
@@ -169,6 +204,45 @@ describe("opencodex config defaults", () => {
     expect(validateConfigCandidate({ ...base, hostname: "127.0.0.1" })).toMatchObject({
       ok: true,
       config: expect.objectContaining({ hostname: "127.0.0.1" }),
+    });
+  });
+
+  // A write must not inherit the read path's degrade-to-undefined: dropping a malformed
+  // map on load leaves the raw entries in the file to be repaired by hand, but dropping
+  // it on a write erases every order the user had set and still reports success.
+  test("config candidates reject a malformed selection-order map instead of erasing it", () => {
+    const base = getDefaultConfig();
+
+    expect(validateConfigCandidate({ ...base, codexAccountPriorities: { work: 2, side: 200 } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("codexAccountPriorities"),
+    });
+    expect(validateConfigCandidate({ ...base, codexAccountPriorities: { "bad id!": 1 } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("codexAccountPriorities"),
+    });
+    expect(validateConfigCandidate({ ...base, activeCodexAccountPinned: "not a valid id" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("activeCodexAccountPinned"),
+    });
+    // A coercing guard lets these through — String(123) matches the id pattern — and the
+    // schema's .catch(undefined) then drops the pin while reporting the write as a success.
+    for (const pin of [123, true, ["work"]]) {
+      expect(validateConfigCandidate({ ...base, activeCodexAccountPinned: pin })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("activeCodexAccountPinned"),
+      });
+    }
+    expect(validateConfigCandidate({
+      ...base,
+      codexAccountPriorities: { work: 2, __main__: -2 },
+      activeCodexAccountPinned: "work",
+    })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({
+        codexAccountPriorities: { work: 2, __main__: -2 },
+        activeCodexAccountPinned: "work",
+      }),
     });
   });
 
@@ -617,6 +691,36 @@ describe("opencodex config defaults", () => {
     expect(readConfigDiagnostics().error).toContain("responsesItemIdRepair");
   });
 
+  test("accepts only a boolean responsesSnapshotRepair opt-in", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesSnapshotRepair: true,
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+    expect(readConfigDiagnostics().config.providers.custom.responsesSnapshotRepair).toBe(true);
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          responsesSnapshotRepair: { enabled: true },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("responsesSnapshotRepair");
+  });
+
   test("accepts a relative responsesPath", () => {
     writeResponsesPathConfig("/responses");
 
@@ -839,6 +943,20 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().error).toBeNull();
 
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "provider-image-model": "openai-responses" },
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
     for (const provider of [
       { adapter: "openai-chat", baseUrl: "https://gateway.example/v1", authMode: "key", apiKeyTransport: "bearer" },
       { adapter: "anthropic", baseUrl: "https://gateway.example/v1", authMode: "oauth", apiKeyTransport: "bearer" },
@@ -970,6 +1088,204 @@ describe("opencodex config defaults", () => {
     });
     expect(readConfigDiagnostics().source).toBe("fallback");
     expect(readConfigDiagnostics().error).toContain("conflicts with modelSupportsReasoningSummaries=false");
+  });
+
+  test("modelPreferHostedTools accepts only supported hosted-tool arrays", () => {
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    // A registry `modelWireDefaults` entry that selects openai-responses for a
+    // Responses inbound must be honored by validation, exactly as the runtime
+    // honors it. DeepSeek's preset routes `deepseek-v4-flash` over native
+    // Responses for a Responses inbound while the provider-wide wire stays
+    // openai-chat; validating from `registry.adapter` alone rejected a
+    // preference the runtime would have accepted.
+    writeConfig({
+      port: 12345,
+      providers: {
+        deepseek: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.deepseek.com/v1",
+          modelPreferHostedTools: { "deepseek-v4-flash": ["image_generation"] },
+        },
+      },
+      defaultProvider: "deepseek",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    // The mirror of the case above. `volcengine-agent-plan` is a Responses registry row
+    // with `preserveCustomDestination`, so a config reusing that id while pointing at a
+    // different endpoint keeps its own transport at runtime —
+    // `providerMatchesRegistryTransport()` returns false and `routedProviderConfig()`
+    // preserves the configured `openai-chat` adapter. Validating from `registry.adapter`
+    // unconditionally would accept a preference that the Responses adapter never sees.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "volcengine-agent-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://custom.example.test/v1",
+          modelPreferHostedTools: { "some-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "volcengine-agent-plan",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    // The forward-auth half of the same effective-transport question. A
+    // `preserveCustomDestination` registry row reused under a different endpoint keeps
+    // its OWN auth at runtime, not the registry's, because `routedProviderConfig()`
+    // honors `providerMatchesRegistryTransport()`. Deciding forward-auth from
+    // `registry.authKind` alone accepted a preference the adapter never applies:
+    // `preferConfiguredHostedTools()` runs only on the non-forward branch.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "volcengine-agent-plan": {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://custom.example.test/v1",
+          modelPreferHostedTools: { "some-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "volcengine-agent-plan",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("not supported on forward-auth");
+
+    // Registry providers route through their registry wire, not this persisted adapter.
+    writeConfig({
+      port: 12345,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.openai.com/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics().error).toBeNull();
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          modelAdapters: { "gpt-5.6-sol": "openai-chat" },
+          modelPreferHostedTools: { "gpt-5.6-sol-pro": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai-apikey",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    for (const modelPreferHostedTools of [
+      [],
+      { "": ["image_generation"] },
+      { model: [] },
+      { model: "image_generation" },
+      { model: ["web_search"] },
+    ]) {
+      writeConfig({
+        port: 12345,
+        providers: {
+          custom: {
+            adapter: "openai-responses",
+            baseUrl: "https://example.test/v1",
+            modelPreferHostedTools,
+          },
+        },
+        defaultProvider: "custom",
+      });
+      expect(readConfigDiagnostics().source).toBe("fallback");
+      expect(readConfigDiagnostics().error).toContain("modelPreferHostedTools");
+    }
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-chat",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        openrouter: {
+          adapter: "openai-responses",
+          baseUrl: "https://openrouter.ai/api/v1",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openrouter",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelAdapters: { "provider-image-model": "openai-chat" },
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("requires the openai-responses wire");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+          modelPreferHostedTools: { "gpt-5.3-codex-spark": ["image_generation"] },
+        },
+      },
+      defaultProvider: "custom",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("does not support");
+
+    writeConfig({
+      port: 12345,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          modelPreferHostedTools: { "provider-image-model": ["image_generation"] },
+        },
+      },
+      defaultProvider: "openai",
+    });
+    expect(readConfigDiagnostics().source).toBe("fallback");
+    expect(readConfigDiagnostics().error).toContain("not supported on forward-auth");
   });
 
   test("modelAdapters accepts only allowed wires on eligible providers (#404)", () => {
@@ -1204,7 +1520,7 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("constructor")).toBe(false);
   });
 
-  test("persists an explicit Codex account selector map without enabling it by default", () => {
+  test("persists an explicit Codex account selector map without adding one to defaults", () => {
     const selectors = {
       desktop: "@main",
       work: "work-account",
@@ -1217,6 +1533,94 @@ describe("opencodex config defaults", () => {
     expect(diagnostics.error).toBeNull();
     expect(diagnostics.config.codexAccountNamespaces).toEqual(selectors);
     expect(Object.hasOwn(getDefaultConfig(), "codexAccountNamespaces")).toBe(false);
+  });
+
+  test("persists the optional picker override without adding it to defaults", () => {
+    for (const enabled of [true, false]) {
+      writeAccountNamespaceConfig({ desktop: "@main" }, { codexAccountPickerEnabled: enabled });
+
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.codexAccountPickerEnabled).toBe(enabled);
+    }
+
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountPickerEnabled")).toBe(false);
+  });
+
+  test("malformed persisted picker visibility fails closed without discarding accounts or providers", () => {
+    writeAccountNamespaceConfig({ desktop: "@main", side: "stored-account" }, {
+      codexAccountPickerEnabled: "yes",
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "stored-account", email: "side@example.test", isMain: false },
+      ],
+    });
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      config: {
+        defaultProvider: "openai",
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+        codexAccounts: [
+          { id: "main", email: "main@example.test", isMain: true },
+          { id: "stored-account", email: "side@example.test", isMain: false },
+        ],
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        codexAccountPickerEnabled: false,
+      },
+    });
+    expect(diagnostics.warnings).toContain(
+      "codexAccountPickerEnabled ignored: expected a boolean",
+    );
+    expect(backupNames()).toEqual([]);
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toMatchObject({
+        codexAccountPickerEnabled: false,
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("codexAccountPickerEnabled ignored"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    for (const invalid of [null, "false", 1]) {
+      expect(validateConfigCandidate({
+        ...getDefaultConfig(),
+        codexAccountPickerEnabled: invalid,
+      })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("codexAccountPickerEnabled"),
+      });
+    }
+
+    const inherited = Object.assign(
+      Object.create({ codexAccountPickerEnabled: true }) as Record<string, unknown>,
+      getDefaultConfig(),
+    );
+    expect(validateConfigCandidate(inherited)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("own boolean data property"),
+    });
+
+    let getterCalls = 0;
+    const accessor = { ...getDefaultConfig() } as Record<string, unknown>;
+    Object.defineProperty(accessor, "codexAccountPickerEnabled", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return true;
+      },
+    });
+    expect(validateConfigCandidate(accessor)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("own boolean data property"),
+    });
+    expect(getterCalls).toBe(0);
   });
 
   test("validates Claude Desktop profiles and Codex account selectors independently", () => {
@@ -1300,6 +1704,8 @@ describe("opencodex config defaults", () => {
     ],
     ["the combo namespace", { combo: "side-account" }, {}, "must not collide"],
     ["the combo namespace with different casing", { Combo: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace", { policy: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace with different casing", { Policy: "side-account" }, {}, "must not collide"],
     ["the canonical OpenAI namespace with different casing", { OpenAI: "side-account" }, {}, "must not collide"],
     [
       "the canonical OpenAI provider namespace before legacy migration",
@@ -1430,6 +1836,97 @@ describe("opencodex config defaults", () => {
     expect(readFileSync(getPidPath(), "utf-8")).toBe(String(process.pid));
   });
 
+  test("pid validation does not execute ps from PATH", () => {
+    const attackerDir = join(testDir, "attacker-bin");
+    const fakePs = join(attackerDir, "ps");
+    const markerPath = `${fakePs}.executed`;
+    const previousPath = process.env.PATH;
+    const probes: string[] = [];
+    mkdirSync(attackerDir);
+    writeFileSync(fakePs, `#!/bin/sh\ntouch "$0.executed"\necho 'ocx start'\n`, { mode: 0o755 });
+
+    setOcxStartProcessCacheForTests([]);
+    try {
+      setProcessCommandLinePlatformForTests("darwin");
+      setProcessCommandLineExecForTests((executable) => {
+        probes.push(executable);
+        throw new Error("fixed ps probe unavailable");
+      });
+      process.env.PATH = `${attackerDir}${delimiter}${previousPath ?? ""}`;
+      writePid(process.pid);
+
+      expect(readPid()).toBeNull();
+      expect(probes).toEqual(["/bin/ps", "/usr/bin/ps"]);
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      setProcessCommandLineExecForTests(null);
+      setProcessCommandLinePlatformForTests(null);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      setOcxStartProcessCacheForTests([]);
+    }
+
+    expect(process.env.PATH).toBe(previousPath);
+    expect(ocxStartProcessCacheSizeForTests()).toBe(0);
+  });
+
+  test("pid validation selects only trusted Windows process probes", () => {
+    const previousSystemRoot = process.env.SystemRoot;
+    const previousWindir = process.env.WINDIR;
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(
+      trustedSystem32,
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const attackerRoot = join(testDir, "attacker-windows");
+    const calls: string[] = [];
+
+    try {
+      mkdirSync(dirname(trustedPowerShell), { recursive: true });
+      writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+      setProcessCommandLinePlatformForTests("win32");
+      setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+      process.env.SystemRoot = attackerRoot;
+      process.env.WINDIR = attackerRoot;
+      writeFileSync(getPidPath(), String(process.pid), "utf-8");
+      setOcxStartProcessCacheForTests([]);
+
+      setProcessCommandLineExecForTests((executable) => {
+        calls.push(executable);
+        if (executable === trustedWmic) return "CommandLine=ocx start\r\n";
+        throw new Error(`unexpected process probe: ${executable}`);
+      });
+      expect(readPid()).toBe(process.pid);
+      expect(calls).toEqual([trustedWmic]);
+
+      calls.length = 0;
+      setOcxStartProcessCacheForTests([]);
+      setProcessCommandLineExecForTests((executable) => {
+        calls.push(executable);
+        if (executable === trustedWmic) throw new Error("WMIC unavailable");
+        if (executable === trustedPowerShell) return "ocx start\n";
+        throw new Error(`unexpected process probe: ${executable}`);
+      });
+      expect(readPid()).toBe(process.pid);
+      expect(calls).toEqual([trustedWmic, trustedPowerShell]);
+      expect(calls.every(executable => !executable.startsWith(attackerRoot))).toBe(true);
+    } finally {
+      setProcessCommandLineExecForTests(null);
+      setProcessCommandLinePlatformForTests(null);
+      setTrustedWindowsSystemDirectoryResolverForTests(null);
+      setOcxStartProcessCacheForTests([]);
+      if (previousSystemRoot === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = previousSystemRoot;
+      if (previousWindir === undefined) delete process.env.WINDIR;
+      else process.env.WINDIR = previousWindir;
+    }
+
+    expect(ocxStartProcessCacheSizeForTests()).toBe(0);
+  });
+
   test("removes pid file only when the expected pid still matches", () => {
     writeFileSync(getPidPath(), "111", "utf-8");
     removePid(222);
@@ -1440,10 +1937,11 @@ describe("opencodex config defaults", () => {
   });
 
   test("runtime port metadata round-trips and validates expected pid", () => {
-    writeRuntimePort({ pid: 1234, port: 58195, hostname: "0.0.0.0" });
+    const attestationSecret = "A".repeat(43);
+    writeRuntimePort({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
 
-    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0" });
-    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0" });
+    expect(readRuntimePort()).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
+    expect(readRuntimePort(1234)).toEqual({ pid: 1234, port: 58195, hostname: "0.0.0.0", attestationSecret });
     expect(readRuntimePort(9999)).toBeNull();
   });
 
@@ -1460,6 +1958,9 @@ describe("opencodex config defaults", () => {
   test("invalid runtime port metadata returns null", () => {
     writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 1234, port: 99999 }), "utf-8");
 
+    expect(readRuntimePort()).toBeNull();
+
+    writeFileSync(getRuntimePortPath(), JSON.stringify({ pid: 1234, port: 58195, attestationSecret: "too-short" }), "utf-8");
     expect(readRuntimePort()).toBeNull();
   });
 });
@@ -1667,5 +2168,254 @@ describe("config.ts – Windows ACL hardening integration", () => {
     expect(spy).not.toHaveBeenCalled();
     expect(existsSync(getConfigPath())).toBe(true);
     spy.mockRestore();
+  });
+});
+
+describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
+  test("the production sync harden keys timeouts by destination", () => {
+    const source = readFileSync(join(import.meta.dir, "..", "src", "config.ts"), "utf-8");
+    expect(source).toContain("hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
+  });
+
+  test("timed-out write with a RESIDUAL temp retains both memos (fail-closed)", () => {
+    const destination = join(testDir, "residual-timeout.json");
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    windowsAcl.resetHardenedStateForTests();
+    windowsAcl.setPlatformForTests("win32");
+    windowsAcl.setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    const io = {
+      write: (path: string, content: string) => writeFileSync(path, content, { mode: 0o600 }),
+      harden: (path: string) => {
+        chmodSync(path, 0o600);
+        windowsAcl.hardenSecretPath(path, { required: true, timeoutMemoKey: destination });
+      },
+      rename: renameSync,
+      truncate: (path: string) => truncateSync(path, 0),
+      unlink: () => {
+        throw Object.assign(new Error("denied"), { code: "EPERM" });
+      },
+    };
+    try {
+      expect(() => atomicWriteFile(destination, "secret", io)).toThrow();
+      // Destination timeout memo retained (anti-restall) while the residual
+      // temp remains on disk.
+      expect(windowsAcl.timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      windowsAcl.setIcaclsRunnerForTests(null);
+      windowsAcl.setPlatformForTests(null);
+      windowsAcl.resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+});
+
+describe("config.ts – atomic writes preserve symlinked destinations", () => {
+  test("a symlinked destination survives the write and the real file receives it", () => {
+    // Dotfiles shape: ~/.codex/config.toml -> ~/dotfiles/.codex/config.toml
+    const repoDir = join(testDir, "dotfiles");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config.toml");
+    symlinkSync(realFile, link);
+
+    atomicWriteFile(link, "rewritten");
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(realFile);
+    expect(readFileSync(realFile, "utf8")).toBe("rewritten");
+    expect(readFileSync(link, "utf8")).toBe("rewritten");
+  });
+
+  test("no temp file is left beside the link or its target", () => {
+    const repoDir = join(testDir, "dotfiles-clean");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-clean.toml");
+    symlinkSync(realFile, link);
+
+    atomicWriteFile(link, "rewritten");
+
+    expect(readdirSync(repoDir).filter(name => name.includes(".ocx."))).toEqual([]);
+    expect(readdirSync(testDir).filter(name => name.includes(".ocx."))).toEqual([]);
+  });
+
+  test("a plain destination is unaffected", () => {
+    const destination = join(testDir, "plain.toml");
+    atomicWriteFile(destination, "first");
+    atomicWriteFile(destination, "second");
+
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, "utf8")).toBe("second");
+  });
+
+  test("a destination that does not exist yet is created at the literal path", () => {
+    const destination = join(testDir, "created.toml");
+    expect(existsSync(destination)).toBe(false);
+
+    atomicWriteFile(destination, "fresh");
+
+    expect(readFileSync(destination, "utf8")).toBe("fresh");
+  });
+
+  test("a dangling symlink is preserved and the write is refused", () => {
+    const link = join(testDir, "dangling.toml");
+    symlinkSync(join(testDir, "gone", "config.toml"), link);
+
+    // The target volume may only be temporarily unavailable; replacing the link
+    // would recreate the dotfiles divergence this fix exists to prevent.
+    expect(() => atomicWriteFile(link, "recovered")).toThrow(/unresolvable symlinked write target/);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(testDir, "gone"))).toBe(false);
+  });
+});
+
+describe("config.ts – async atomic writes preserve symlinked destinations", () => {
+  test("a symlinked destination survives the write and the real file receives it", async () => {
+    const repoDir = join(testDir, "dotfiles-async");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(link)).toBe(realFile);
+    expect(readFileSync(realFile, "utf8")).toBe("rewritten");
+    expect(readFileSync(link, "utf8")).toBe("rewritten");
+  });
+
+  test("no temp file is left beside the link or its target", async () => {
+    const repoDir = join(testDir, "dotfiles-async-clean");
+    mkdirSync(repoDir, { recursive: true });
+    const realFile = join(repoDir, "config.toml");
+    writeFileSync(realFile, "original", "utf-8");
+    const link = join(testDir, "config-async-clean.toml");
+    symlinkSync(realFile, link);
+
+    await atomicWriteFileAsync(link, "rewritten");
+
+    expect(readdirSync(repoDir).filter(name => name.includes(".ocx."))).toEqual([]);
+    expect(readdirSync(testDir).filter(name => name.includes(".ocx."))).toEqual([]);
+  });
+
+  test("a plain destination is unaffected", async () => {
+    const destination = join(testDir, "plain-async.toml");
+    await atomicWriteFileAsync(destination, "first");
+    await atomicWriteFileAsync(destination, "second");
+
+    expect(lstatSync(destination).isSymbolicLink()).toBe(false);
+    expect(readFileSync(destination, "utf8")).toBe("second");
+  });
+
+  test("a dangling symlink is preserved and the write is refused", async () => {
+    const link = join(testDir, "dangling-async.toml");
+    symlinkSync(join(testDir, "gone-async", "config.toml"), link);
+
+    await expect(atomicWriteFileAsync(link, "recovered")).rejects.toThrow(/unresolvable symlinked write target/);
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(existsSync(join(testDir, "gone-async"))).toBe(false);
+  });
+});
+
+describe("codex account selection order", () => {
+  function writePriorityConfig(
+    codexAccountPriorities: unknown,
+    overrides: Record<string, unknown> = {},
+  ): void {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAccountPriorities,
+      ...overrides,
+    });
+  }
+
+  test("round-trips pool ids, the main account, and negative order", () => {
+    const priorities = { work: 2, side: 1, __main__: -2 };
+    writePriorityConfig(priorities);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.config.codexAccountPriorities).toEqual(priorities);
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountPriorities")).toBe(false);
+  });
+
+  test.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "work"],
+    ["a fractional value", { work: 1.5 }],
+    ["a stringified number", { work: "2" }],
+    ["a boolean", { work: true }],
+    ["an above-range value", { work: 101 }],
+    ["a below-range value", { work: -101 }],
+    ["a reserved constructor key", { constructor: 1 }],
+    ["a slash in the key", { "work/account": 1 }],
+  ] as const)("degrades %s to no ordering without discarding the rest of the config", (_label, priorities) => {
+    writePriorityConfig(priorities);
+
+    const diagnostics = readConfigDiagnostics();
+    // Selection order is a preference: a malformed map must never trip the
+    // backup-and-defaults repair path that would reset providers.
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.codexAccountPriorities).toBeUndefined();
+    expect(Object.keys(diagnostics.config.providers)).toContain("openai");
+    expect(backupNames()).toHaveLength(0);
+    expect(diagnostics.warnings).toContainEqual(expect.stringContaining("account selection order is disabled"));
+  });
+
+  test("degrades a literal __proto__ entry, which JSON.parse materializes as an own key", () => {
+    writeConfig(
+      '{"port":10100,"providers":{"openai":{"adapter":"openai-responses",'
+      + '"baseUrl":"https://chatgpt.com/backend-api/codex","authMode":"forward"}},'
+      + '"defaultProvider":"openai","codexAccountPriorities":{"__proto__":1,"work":2}}',
+    );
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.config.codexAccountPriorities).toBeUndefined();
+    expect(Object.keys(diagnostics.config.providers)).toContain("openai");
+    expect(diagnostics.warnings).toContainEqual(expect.stringContaining("account selection order is disabled"));
+  });
+
+  test("warns when load degrades a malformed selection-order map", () => {
+    writePriorityConfig({ work: 101 });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const loaded = loadConfig();
+      expect(loaded.codexAccountPriorities).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("account selection order is disabled"));
+      expect(backupNames()).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("keeps a valid pin and degrades a malformed one", () => {
+    writePriorityConfig({ work: 1 }, { activeCodexAccountPinned: "work" });
+    expect(readConfigDiagnostics().config.activeCodexAccountPinned).toBe("work");
+
+    writePriorityConfig({ work: 1 }, { activeCodexAccountPinned: "work/account" });
+    const degraded = readConfigDiagnostics();
+    expect(degraded.source).toBe("file");
+    expect(degraded.config.activeCodexAccountPinned).toBeUndefined();
+    expect(degraded.config.codexAccountPriorities).toEqual({ work: 1 });
+    expect(degraded.warnings).toContainEqual(expect.stringContaining("no longer pinned"));
   });
 });

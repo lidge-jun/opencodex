@@ -20,8 +20,11 @@ const {
   isPlaceholder,
   isRawPlaceholder,
   isUnusableVersion,
+  stripMediaTokens,
+  isMediaOnly,
   countWords,
   hasConcreteDetail,
+  hasActionableReproductionDetail,
   rejectsWorkflowDispatchPullRequest,
   rejectsWorkflowDispatchNonDefaultBranch,
 } = require("./issue-quality.cjs");
@@ -232,6 +235,232 @@ describe("validateIssue - feature", () => {
     assert.equal(result.kind, "feature");
     assert.equal(result.valid, false);
     assert.ok(result.reasons.length > 0);
+  });
+
+  it("rejects an image-only goal section that hides repeated prose (#1098)", () => {
+    // Regression for #1098: an HTML <img> in the goal section made the goal
+    // look non-empty, so the repeated identical sentences in the other three
+    // sections were not caught as duplicates and the issue passed validation.
+    const repeated =
+      "It is hoped that the usage query will support time-based queries and statistics, as well as key-based queries and statistics";
+    const img =
+      '<img width="2474" height="1071" alt="Image" src="https://github.com/user-attachments/assets/17ea27a8-cec6-4591-aa09-a0ce36f1211f" />';
+    const body = [
+      "### Area",
+      "CLI",
+      "### What are you trying to accomplish?",
+      img,
+      "### What prevents this today?",
+      repeated,
+      "### What should OpenCodex do?",
+      repeated,
+      "### Example usage or interface",
+      repeated,
+    ].join("\n");
+    const result = validateIssue({ title: repeated, body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /missing or empty/i.test(r)),
+      `Expected missing/empty reason, got: ${result.reasons.join("; ")}`,
+    );
+    assert.ok(
+      result.reasons.some((r) => /same content/i.test(r)),
+      `Expected duplicate-content reason, got: ${result.reasons.join("; ")}`,
+    );
+    assert.ok(
+      result.reasons.some((r) => /repeat the issue title/i.test(r)),
+      `Expected repeated-title reason, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
+  it("rejects a markdown-image-only goal section with repeated prose (#1098)", () => {
+    const repeated =
+      "It is hoped that the usage query will support time-based queries and statistics, as well as key-based queries and statistics";
+    const mdImg = "![Image](https://github.com/user-attachments/assets/17ea27a8-cec6-4591-aa09-a0ce36f1211f)";
+    const body = [
+      "### What are you trying to accomplish?",
+      mdImg,
+      "### What prevents this today?",
+      repeated,
+      "### What should OpenCodex do?",
+      repeated,
+      "### Example usage or interface",
+      repeated,
+    ].join("\n");
+    const result = validateIssue({ title: repeated, body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /missing or empty/i.test(r)),
+      `Expected missing/empty reason, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
+  it("rejects a markdown image with bracketed alt text in the goal (#1098)", () => {
+    const repeated =
+      "It is hoped that the usage query will support time-based queries and statistics, as well as key-based queries and statistics";
+    // GitHub permits balanced brackets inside image alt text, e.g.
+    // ![Image [screenshot]](url). The stripper must still treat it as
+    // media-only so it cannot hide repeated prose.
+    const mdImg = "![Image [screenshot]](https://example.com/x.png)";
+    const body = [
+      "### What are you trying to accomplish?",
+      mdImg,
+      "### What prevents this today?",
+      repeated,
+      "### What should OpenCodex do?",
+      repeated,
+      "### Example usage or interface",
+      repeated,
+    ].join("\n");
+    const result = validateIssue({ title: repeated, body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /missing or empty/i.test(r)),
+      `Expected missing/empty reason, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
+  it("rejects a markdown image whose URL contains balanced parentheses (#1098)", () => {
+    const repeated =
+      "It is hoped that the usage query will support time-based queries and statistics, as well as key-based queries and statistics";
+    // Markdown destinations may contain balanced parentheses, e.g.
+    // ![diagram](https://example.com/image_(final).png). The stripper must
+    // still treat it as media-only so it cannot hide repeated prose.
+    const mdImg = "![diagram](https://example.com/image_(final).png)";
+    const body = [
+      "### What are you trying to accomplish?",
+      mdImg,
+      "### What prevents this today?",
+      repeated,
+      "### What should OpenCodex do?",
+      repeated,
+      "### Example usage or interface",
+      repeated,
+    ].join("\n");
+    const result = validateIssue({ title: repeated, body, labels: ["enhancement"] });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /missing or empty/i.test(r)),
+      `Expected missing/empty reason, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
+  it("preserves a goal section that mixes an image with real text", () => {
+    const goal = [
+      "![Screenshot](https://example.com/shot.png)",
+      "Route voice requests to a configured fallback provider when the primary quota is exhausted.",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Voice fallback routing",
+      body: featureBodyWithGoal(goal),
+      labels: ["enhancement"],
+    });
+    assert.equal(result.kind, "feature");
+    assert.equal(result.valid, true);
+  });
+
+  it("treats image/media-only sections as empty via isMediaOnly", () => {
+    assert.equal(isMediaOnly('<img src="x.png" />'), true);
+    assert.equal(isMediaOnly("![alt](https://example.com/x.png)"), true);
+    assert.equal(isMediaOnly("![alt [with bracket]](https://example.com/x.png)"), true);
+    assert.equal(isMediaOnly("![diagram](https://example.com/image_(final).png)"), true);
+    assert.equal(isMediaOnly('![alt](https://example.com/image_(final).png "title")'), true);
+    assert.equal(isMediaOnly("![bad](https://example.com/a)b.png)"), false);
+    assert.equal(isMediaOnly("\\![escaped](url)"), false);
+    // Reference-style images (Codex bot finding): inline ref + definition.
+    assert.equal(isMediaOnly("![Image][shot]\n\n[shot]: https://example.com/x.png"), true);
+    assert.equal(isMediaOnly("![Image][]\n\n[Image]: https://example.com/x.png"), true);
+    assert.equal(isMediaOnly("![Image][shot]\n\n[shot]: https://example.com/x.png\ncaption"), false);
+    // Fallback prose inside media blocks is preserved (Codex bot finding).
+    assert.equal(
+      isMediaOnly("<video controls>Route voice requests through the configured fallback provider when quota is exhausted.</video>"),
+      false,
+    );
+    assert.equal(isMediaOnly('<audio src="a.mp3"></audio>'), true);
+    assert.equal(isMediaOnly("<picture>Fallback image description</picture>"), false);
+    // Indented code blocks render as literal code, not images (Codex bot finding).
+    assert.equal(isMediaOnly("    ![provider status](https://example.com/status.png)"), false);
+    assert.equal(isMediaOnly("\t![provider status](https://example.com/status.png)"), false);
+    // HTML media inside indented code is also literal code (CodeRabbit finding).
+    assert.equal(isMediaOnly('    <img src="x.png">'), false);
+    assert.equal(isMediaOnly('    <video src="v.mp4"></video>'), false);
+    assert.equal(isMediaOnly('\t<img src="x.png">'), false);
+    // Reference labels with nested alt brackets (CodeRabbit finding).
+    assert.equal(isMediaOnly("![Image [screenshot]][shot]\n\n[shot]: https://example.com/x.png"), true);
+    assert.equal(
+      isMediaOnly("![Image [screenshot]][shot]\n\n[shot]: https://example.com/x.png\ncaption"),
+      false,
+    );
+    assert.equal(isMediaOnly('<picture><source srcset="x.webp"><img src="x.png"></picture>'), true);
+    assert.equal(isMediaOnly('<video>No response</video>'), true);
+    assert.equal(isMediaOnly('<audio> _No response_ </audio>'), true);
+    assert.equal(isMediaOnly('<video><p><em>No response</em></p></video>'), true);
+    assert.equal(clean('<video>No response</video>'), "");
+    for (const caption of [
+      "TBD",
+      "N/A",
+      "None",
+      "설명 없음",
+      "🎬",
+      "demo.mp4",
+      "https://example.com/demo.mp4",
+    ]) {
+      const media = `<video>${caption}</video>`;
+      assert.equal(stripMediaTokens(media), media, `caption must survive: ${caption}`);
+      assert.equal(isMediaOnly(media), false, `caption must be substantive: ${caption}`);
+      assert.equal(clean(media), media, `caption must survive cleaning: ${caption}`);
+    }
+    assert.equal(
+      isMediaOnly('<picture>\n    <source srcset="x.webp">\n    <img src="x.png">\n</picture>'),
+      true,
+    );
+    assert.equal(
+      isMediaOnly('<video>\n    <source src="clip.mp4">\n    Real fallback caption\n</video>'),
+      false,
+    );
+    assert.equal(
+      isMediaOnly([
+        "<picture",
+        '    data-kind="responsive"',
+        ">",
+        '    <source srcset="x.webp">',
+        '    <img src="x.png">',
+        "</picture>",
+      ].join("\n")),
+      true,
+    );
+    assert.equal(isMediaOnly('<video src="clip.mp4"></video>'), true);
+    assert.equal(isMediaOnly('<img src="x.png" />\nCaption text'), false);
+    assert.equal(isMediaOnly("Some real description."), false);
+    assert.equal(stripMediaTokens('<img src="x.png" />').trim(), "");
+    assert.equal(stripMediaTokens('![alt](url "title")').trim(), "");
+    assert.equal(stripMediaTokens('before ![alt](url) after').replace(/\s+/g, " ").trim(), "before after");
+
+    const fencedMediaExample = [
+      "```html",
+      "<video>No response</video>",
+      "```",
+    ].join("\n");
+    assert.equal(stripMediaTokens(fencedMediaExample), fencedMediaExample);
+    assert.equal(isMediaOnly(fencedMediaExample), false);
+
+    const protectedAroundMedia = [
+      "    ![before](url)",
+      "<video>",
+      '    <source src="clip.mp4">',
+      "</video>",
+      "    ![after](url)",
+    ].join("\n");
+    const strippedAroundMedia = stripMediaTokens(protectedAroundMedia);
+    assert.ok(strippedAroundMedia.includes("    ![before](url)"));
+    assert.ok(strippedAroundMedia.includes("    ![after](url)"));
+    assert.equal(strippedAroundMedia.includes("<video>"), false);
+    assert.equal(strippedAroundMedia.includes("<source"), false);
+    assert.equal(strippedAroundMedia.includes("\u0000"), false);
   });
 
   it("accepts a concise but actionable feature", () => {
@@ -463,6 +692,32 @@ describe("validateIssue - feature", () => {
     assert.equal(vagueResult.kind, "feature");
     assert.equal(vagueResult.valid, false);
     assert.ok(vagueResult.reasons.some((r) => r.includes("too vague")));
+  });
+
+  it("treats only commands, errors, paths, or exact actions as actionable reproduction detail", () => {
+    assert.equal(hasActionableReproductionDetail("1. choose model deepseek\n2. send a message in codex plugin"), false);
+    assert.equal(hasActionableReproductionDetail("I want to work with deepseek in VSCode, but it dont reply"), false);
+    assert.equal(hasActionableReproductionDetail("1. ocx start --port 10100\n2. Send a request"), true);
+    assert.equal(hasActionableReproductionDetail("Run ocx start and send any streaming request."), true);
+    assert.equal(hasActionableReproductionDetail("ocx start on Raspberry Pi 4, send any streaming request."), true);
+    assert.equal(hasActionableReproductionDetail("send a request"), false);
+    assert.equal(hasActionableReproductionDetail("make a call"), false);
+    assert.equal(hasActionableReproductionDetail("post a command"), false);
+    assert.equal(hasActionableReproductionDetail("make an API call"), true);
+    assert.equal(hasActionableReproductionDetail("send an HTTP request"), true);
+    assert.equal(hasActionableReproductionDetail("send a request to /v1/responses"), true);
+    assert.equal(hasActionableReproductionDetail("The proxy returns HTTP 502 after the first streaming chunk."), true);
+    assert.equal(hasActionableReproductionDetail("Paste ~/.codex/config.toml, then restart the proxy."), true);
+    assert.equal(hasActionableReproductionDetail("```\n\n```"), false);
+    assert.equal(hasActionableReproductionDetail("~~~\n\n~~~"), false);
+    assert.equal(hasActionableReproductionDetail("```\nSIGSEGV at 0x0000\n```"), true);
+  });
+
+  it("bounds long non-matching reproduction path tokens", () => {
+    const startedAt = performance.now();
+    assert.equal(hasActionableReproductionDetail(`${"a".repeat(60_000)}.unknown`), false);
+    assert.ok(performance.now() - startedAt < 500, "actionable reproduction check took too long");
+    assert.equal(hasActionableReproductionDetail("CONFIG.JSON"), true);
   });
 
   it("rejects fenced placeholder-only examples", () => {
@@ -865,6 +1120,41 @@ describe("validateIssue - bug", () => {
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, false);
     assert.ok(result.reasons.some((r) => /Reproduction/i.test(r) && /vague/i.test(r)));
+  });
+
+  it("rejects a #977-shaped bug with product keywords but no actionable reproduction", () => {
+    const body = [
+      "### Client or integration",
+      "Other",
+      "### Area",
+      "Proxy and routing",
+      "### Summary",
+      "I want to work with deepseek in VSCode, but it dont reply,just thinking",
+      "### Reproduction",
+      "1.choose model deepseek",
+      "2.send a message in codex plugin",
+      "### Version",
+      "2.10.0",
+      "### Operating system",
+      "Ubuntu 24.04",
+      "### Provider and model",
+      "deepseek",
+    ].join("\n");
+    const result = validateIssue({
+      title: "Dont work in VSCode Codex plugin",
+      body,
+      labels: ["bug", "proxy"],
+    });
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((r) => /Reproduction/i.test(r) && /vague/i.test(r)),
+      `Expected a vague Reproduction reason, got: ${result.reasons.join("; ")}`,
+    );
+    assert.ok(
+      result.guidance.some((g) => /commands|steps/i.test(g)),
+      `Expected reproduction guidance, got: ${result.guidance.join("; ")}`,
+    );
   });
 
   it("rejects unknown Operating system stand-ins on the new bug form", () => {

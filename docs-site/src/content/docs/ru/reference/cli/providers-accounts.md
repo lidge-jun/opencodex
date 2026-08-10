@@ -17,7 +17,7 @@ pool'ами и контролируют каталог моделей, кото�
 | --- | --- | --- |
 | `list` | `--json` | Показать настроенных провайдеров и оставшиеся записи registry. |
 | `add <name>` | `--adapter <adapter>`, `--base-url <url>`, `--api-key <key>`, `--default-model <model>`, `--set-default`, `--force`, `--json`, `--sync` | Добавить registry/custom-провайдера. `--force` перезаписывает; `--sync` обновляет живой прокси в human-output mode. |
-| `edit <name>` | provider field flags, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. |
+| `edit <name>` | provider field flags, `--headers <json>`, `--json` | Изменить валидированные live-поля провайдера, не заменяя key-pool'ы. `--headers` объединяет пользовательские request-header'ы; передайте `{}` или `-`, чтобы очистить их. |
 | `test <name>` | `--json` | Пробный запрос к реальному upstream model-endpoint'у. |
 | `show <name>` | `--json` | Показать конфиг с замаскированными API-key'ами. |
 | `remove <name>` | `--json` | Удалить не-default-провайдера; последний провайдер удалить нельзя. |
@@ -36,6 +36,25 @@ ocx provider show anthropic --json
 ocx models --provider anthropic --json
 ocx models live --provider ark --json
 ```
+
+:::caution[Пользовательские заголовки — не канал для учётных данных]
+`--headers` предназначен для несекретных метаданных запроса — подсказок
+маршрутизации, селекторов тенанта или проекта, идентификаторов трассировки. Это не
+место для аутентификационных данных: валидатор отклоняет стандартные имена
+заголовков с учётными данными (`Authorization`, `X-Api-Key`, `Cookie` и другие),
+указывая на `apiKey` / `authMode`.
+
+Произвольное имя вроде `X-My-Token` валидатор распознать не может, поэтому границу
+соблюдает пользователь. Две причины, почему это важно:
+
+- JSON передаётся как аргумент командной строки, поэтому секрет попадает в историю
+  оболочки и в список процессов, где его прочитает любой другой процесс на машине —
+  ещё до того, как CLI что-либо скроет.
+- Значения заголовков сохраняются в `config.json` открытым текстом, в отличие от
+  API-ключей с их собственным путём хранения и маскирования.
+
+Для всего секретного используйте `--api-key` или вход через OAuth.
+:::
 
 ## Аутентификация
 
@@ -70,13 +89,14 @@ ocx login anthropic
 Поставляемая help-surface выглядит так:
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
 use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
+priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
@@ -104,6 +124,7 @@ label и masked key.
   "label": "plus",
   "email": "m***@example.com",
   "plan": "plus",
+  "priority": 0,
   "masked": "sk-ab****wxyz",
   "active": true,
   "needsReauth": false,
@@ -116,7 +137,7 @@ label и masked key.
 Без провайдера команда показывает пул Codex, OAuth-аккаунты и настроенные API-key pool'ы.
 Пустые провайдеры пропускаются, если не задан `--all`. С провайдером выводится только это
 семейство credential'ов. Human-output использует формат
-`PROVIDER TYPE ID PLAN/LABEL STATUS`; строка Codex, выбранная вручную, помечается `selected`.
+`PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS`; строка Codex, выбранная вручную, помечается `selected`.
 Если существует сохранённый аккаунт Kiro, вывод дополнительно отмечает, что у Kiro один слот
 логина и новый вход заменит текущий аккаунт. Пустой результат всё равно считается успехом.
 `--json` возвращает:
@@ -128,7 +149,7 @@ label и masked key.
 ### `ocx account current <provider> [--json]`
 
 Показывает активный аккаунт или ключ. Если в пуле Codex нет ручного pin'а, команда сообщает об
-автоматическом выборе аккаунта с наименьшим usage; если в другом семействе нет активного
+автоматическом выборе с учётом порядка: выбирается самый высокий подходящий уровень, а внутри него при quota-маршрутизации аккаунт с наименьшим usage; если в другом семействе нет активного
 credential'а, это состояние тоже печатается, но код выхода всё равно остаётся 0. `--json`
 возвращает:
 
@@ -175,10 +196,39 @@ quota-bar'ов дашборда.
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
+### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+
+Читает или задаёт порядок выбора одного аккаунта пула Codex: **больше — используется раньше**,
+значение по умолчанию `0`, диапазон от `-100` до `100`. Порядок есть только у пула Codex `openai`,
+поэтому другие провайдеры завершаются с кодом 1. `main` указывает на логин Codex Desktop, который
+упорядочивается наравне с остальными: `ocx account priority openai main last` оставляет его резервным.
+
+Слова-пресеты заменяют небольшие целые числа: `first` — это `+2`, `earlier` — `+1`, `normal` — `0`,
+`later` — `-1`, `last` — `-2`. `reset` возвращает значение по умолчанию и удаляет сохранённую запись.
+**Пропуск значения читает** текущий порядок, ничего не записывая.
+
+Порядок определяет, какие аккаунты рассматриваются первыми, а не какие пригодны: выбор по-прежнему
+идёт среди подходящих аккаунтов, берётся самый высокий уровень с оставшимся запасом квоты, а внутри
+него аккаунт выбирает `accountPoolStrategy`. Пауза, cooldown и повторная аутентификация не
+затрагиваются. Изменения действуют начиная со **следующего непривязанного запроса**, а не только для новых сессий:
+как только у более высокого порядка снова появляется запас, preemption сразу поднимает непривязанный
+запрос. Потоки, уже привязанные к аккаунту, обычно сохраняют его до исчерпания, но ошибка повторной аутентификации, cooldown по квоте или серия временных сбоев снимают привязку раньше.
+Любая принятая запись также снимает ручное закрепление "использовать этот аккаунт сейчас" с того аккаунта, на котором оно стояло. Это касается и записи того же порядка, который уже был установлен. Такой способ — единственный, который снимает закрепление, сохранив выбранный аккаунт. Сброс активного аккаунта через management API тоже снимает закрепление, но вместе с самим выбором. Недоступный прокси, неизвестный id аккаунта или значение вне допустимого набора завершаются
+с кодом 1. `--json` возвращает:
+
+```text
+{ ok: true, provider, id, priority: number, preset: string | null }
+```
+
+
 ### `ocx account login|reauth|code|cancel ...`
 
 Запускать browser-based или manual-code account-authentication из headless-shell. Для
-provider-specific формы команды используйте `ocx account --help`.
+provider-specific формы команды используйте `ocx account --help`. Если login аккаунта Codex
+сохранён, но обновление каталога моделей ещё не завершилось, human-readable вывод по-прежнему
+завершается успешно и печатает в stderr фиксированную рекомендацию `ocx sync`. С `--json` stdout
+остаётся пригодным для парсинга, а завершённый login-state содержит
+`catalogRefreshPending: true` без human-readable предупреждения.
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
@@ -191,9 +241,13 @@ provider-specific формы команды используйте `ocx account 
 Формы успеха и неудачи в `--json`:
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` присутствует только при удалении аккаунтов Codex. Значение `true` означает,
+что удаление уже сохранено; human-readable вывод печатает в stderr общую рекомендацию `ocx sync` и
+по-прежнему завершается с кодом 0. Форматы удаления OAuth-аккаунтов и API-key не меняются.
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
@@ -214,6 +268,33 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 Проверить reset-credit'ы Codex для аккаунта. Расходование кредита разрушительно и требует сразу
 оба флага: и `--consume`, и `--yes`.
+
+### `ocx account main <subcommand>`
+
+Управлять именованными профилями нативного основного логина Codex, не изменяя маршрутизацию пула аккаунтов OpenCodex.
+
+```text
+ocx account main doctor [--json]
+ocx account main list [--json]
+ocx account main register <label> [--json]
+ocx account main add <label>
+ocx account main switch <profile-id-or-label> --yes [--json]
+ocx account main recover [--rollback --yes] [--json]
+```
+
+Каждая изменяющая команда показывает канонический эффективный `CODEX_HOME`, возвращенный
+работающим прокси. Этот путь может отличаться от `CODEX_HOME` вызывающего процесса; команды с
+поддержкой JSON возвращают то же значение в `effectiveCodexHome`.
+
+Версия 1 поддерживает файловую аутентификацию Codex, шифрует сохранённые профили с помощью AES-256-GCM и хранит ключ шифрования в хранилище учётных данных операционной системы. `add` запускает официальный вход Codex в промежуточной среде перед импортом полученных учётных данных. Перед переключением профиля закройте Codex. Успешное переключение сохраняет локальные задачи и историю, после чего Codex необходимо перезапустить. Используйте `doctor` для проверки состояния профилей, а `recover` для завершения или отката прерванного перехода. `switch` принимает ID профиля или его label.
+
+Матрица восстановления v1 охватывает завершение процесса OpenCodex после публикации файла транзакции переименованием. Она не заявляет устойчивость при сбое ОС или ядра либо внезапном отключении питания: `atomicWriteFileAsync()` не вызывает `fsync` ни для файла, ни для родительского каталога.
+
+Зашифрованное хранилище (vault), журнал переключения, маркер восстановления и файл карантина журнала находятся в каноническом каталоге `<real CODEX_HOME>/.opencodex-native-main-profiles`. Поэтому все экземпляры OpenCodex, использующие один и тот же Codex home, видят одного владельца и одно состояние восстановления. Промежуточные данные входа в незашифрованном виде остаются изолированными в каталоге `<OPENCODEX_HOME>/native-main-profile-staging` каждого экземпляра.
+
+До допуска трафика native-main или восстановления по журналу владелец на весь срок жизни получает исключительное право на учётные данные и удаляет только остаточные после сбоя файлы, имена которых точно соответствуют `auth.json.ocx.<pid>.<sequence>.tmp`. Каждый файл-кандидат должен оставаться обычным файлом ровно с одной жёсткой ссылкой внутри неизменившегося канонического `CODEX_HOME`; его усекают, сбрасывают его буферы, а затем удаляют ссылку на него (unlink). Подмена ссылкой или точкой повторной обработки (reparse point), изменение идентификационных данных файла или любая другая неоднозначность сохраняют запрет на трафик native-main; файлы с лишь похожими именами никогда не удаляются автоматически. Эта защита рассчитана на сбои добросовестно взаимодействующих экземпляров OpenCodex, а не на вредоносный процесс, уже запущенный от имени того же пользователя ОС. Этот пользователь и файловая система, содержащая `CODEX_HOME`, остаются доверенными, а усечение файла не гарантирует физического стирания данных из хранилища с копированием при записи, снимков или остаточных данных SSD.
+
+Предварительные сборки использовали `<OPENCODEX_HOME>/native-main-profiles`. Эта схема никогда не импортируется без явного действия. Если `doctor` сообщает о состоянии профилей старого формата, остановите все прокси OpenCodex, использующие тот же `CODEX_HOME`. Затем создайте резервную копию и вместе переместите соответствующие `*.vault.json`, `*.journal.json`, маркер восстановления и любой указанный файл карантина журнала в канонический каталог, сохранив права доступа только для владельца. Либо удалите старый набор файлов предварительной версии и снова выполните `ocx account main register`. Пока работает хотя бы один прокси, использующий тот же `CODEX_HOME`, не выбирайте один из нескольких старых корневых каталогов и не используйте обе схемы одновременно. В Windows состояние предварительной версии, привязанное к прежнему идентификатору домашнего каталога без учёта регистра, необходимо сбросить, а не перемещать, поскольку его зашифрованные AAD и идентификатор в системном хранилище ключей намеренно не используются повторно.
 
 ## Модели
 
@@ -243,8 +324,8 @@ management API и требуют, чтобы прокси уже работал 
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Скрыть одну модель от Codex. |
 | `provider <name> <on\|off>` | `--json` | Включить или выключить сразу все модели одного провайдера одним действием. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Прочитать или заменить allowlist моделей провайдера. `--clear` удаляет allowlist, и тогда доступны все модели. |
-| `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | Прочитать или задать context-window cap глобально либо по провайдерам. |
-| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.4-mini` и `gpt-5.6-luna`). |
+| `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Прочитать или задать context-window cap глобально либо по провайдерам. `value <tokens> --set-all` также переустанавливает значение для всех маршрутизируемых провайдеров (как переключатель дашборда); без него меняется только значение по умолчанию. `provider ... on --value <tokens>` задаёт отдельный cap только для этого провайдера (`--value` допустим только с `on`). |
+| `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.6-luna`; `gpt-5.4-mini` для клиентов до 0.144.x включительно можно восстановить явным переопределением `sourceModels`). |
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

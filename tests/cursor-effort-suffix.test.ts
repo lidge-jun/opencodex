@@ -3,6 +3,15 @@ import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { cursorEffortSuffix, cursorModelEffortLadder } from "../src/adapters/cursor/effort-map";
 import type { OcxParsedRequest } from "../src/types";
 
+// Static fixture recorded from Cursor GetUsableModels on 2026-08-06. This pins the
+// exact wire ids observed during the incident; live availability normalization is
+// covered separately in cursor-discovery.test.ts.
+const RECORDED_CURSOR_GROK_45_DISCOVERY_IDS = [
+  "cursor-grok-4.5-low",
+  "cursor-grok-4.5-medium",
+  "cursor-grok-4.5-high",
+] as const;
+
 function modelIdFor(modelId: string, reasoning?: string): string {
   const parsed: OcxParsedRequest = {
     modelId,
@@ -11,6 +20,17 @@ function modelIdFor(modelId: string, reasoning?: string): string {
     options: reasoning ? { reasoning } : {},
   };
   return createCursorRequest(parsed).modelId;
+}
+
+function selectionFor(modelId: string, reasoning?: string) {
+  const parsed: OcxParsedRequest = {
+    modelId,
+    context: { messages: [{ role: "user", content: "hi", timestamp: 1 }] },
+    stream: false,
+    options: reasoning ? { reasoning } : {},
+  };
+  const request = createCursorRequest(parsed);
+  return { modelId: request.modelId, parameters: request.requestedModelParameters };
 }
 
 describe("Cursor per-model reasoning-effort suffix", () => {
@@ -37,6 +57,18 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/claude-4.6-opus")).toBe("claude-4.6-opus-max");
   });
 
+  // #545 made Claude Desktop's `thinking:{type:"disabled"}` survive translation as the "none"
+  // sentinel instead of being dropped. For a modelMap that routes such a request to Cursor,
+  // that changes the selected tier — pin it so the cross-provider effect is deliberate.
+  //
+  // Cursor has no "off" for a reasoning model, so the lowest tier is the closest honest
+  // reading of "do not think". Dropping the instruction sent these to the model's TOP tier,
+  // which is the opposite of what the caller asked for.
+  test("an explicit 'none' picks the lowest tier, not the top one (#545)", () => {
+    expect(modelIdFor("cursor/claude-opus-4-8", "none")).toBe("claude-opus-4-8-low");
+    expect(modelIdFor("cursor/claude-opus-4-8")).toBe("claude-opus-4-8-max");
+  });
+
   test("single-tier models always use their one tier", () => {
     expect(modelIdFor("cursor/gpt-5.5-extra", "low")).toBe("gpt-5.5-extra-high");
     expect(modelIdFor("cursor/claude-4.6-sonnet", "high")).toBe("claude-4.6-sonnet-medium");
@@ -60,20 +92,47 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(modelIdFor("cursor/glm-5.2", "max")).toBe("glm-5.2-max");
   });
 
-  test("grok-4.5 uses current low/medium/high tiers and trailing Fast wire ids", () => {
-    expect(modelIdFor("cursor/grok-4.5", "low")).toBe("grok-4.5-low");
-    expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("grok-4.5-medium");
-    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5-fast", "low")).toBe("grok-4.5-low-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast", "medium")).toBe("grok-4.5-medium-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast", "high")).toBe("grok-4.5-high-fast");
+  test("grok-4.5 uses current tiers and sends Fast as a separate model parameter", () => {
+    expect(modelIdFor("cursor/grok-4.5", "low")).toBe("cursor-grok-4.5-low");
+    expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("cursor-grok-4.5-medium");
+    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("cursor-grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("cursor-grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5")).toBe("cursor-grok-4.5-high");
+    expect(selectionFor("cursor/grok-4.5", "high")).toEqual({
+      modelId: "cursor-grok-4.5-high",
+      parameters: undefined,
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "low")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "low" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "medium")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "medium" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast", "high")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
     // Codex-only upper tiers and an omitted effort clamp to Cursor's current top tier.
-    expect(modelIdFor("cursor/grok-4.5-fast", "xhigh")).toBe("grok-4.5-high-fast");
-    expect(modelIdFor("cursor/grok-4.5-fast")).toBe("grok-4.5-high-fast");
+    expect(selectionFor("cursor/grok-4.5-fast", "xhigh")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.5-fast")).toEqual({
+      modelId: "grok-4.5",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
     expect(cursorModelEffortLadder("grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(cursorModelEffortLadder("grok-4.5-fast")).toEqual(["low", "medium", "high"]);
+  });
+
+  test("regular grok-4.5 request ids match the recorded discovery fixture", () => {
+    for (const effort of ["low", "medium", "high"] as const) {
+      const requestModelId = modelIdFor("cursor/grok-4.5", effort);
+      expect(requestModelId).toBe(`cursor-grok-4.5-${effort}`);
+      expect(RECORDED_CURSOR_GROK_45_DISCOVERY_IDS).toContain(requestModelId);
+    }
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

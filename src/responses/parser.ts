@@ -263,6 +263,34 @@ function findToolById(messages: OcxMessage[], callId: string): { name: string; n
   return { name: "" };
 }
 
+/**
+ * Attach pending reasoning to the assistant turn that owns the given call id.
+ * Reconstructed histories (resume/retry/synthetic) can order a `reasoning`
+ * item AFTER the `function_call` it belongs to; without this, the pending
+ * buffer is cleared at the tool output and the turn serializes without
+ * `reasoning_content`, which DeepSeek thinking mode rejects with HTTP 400
+ * (issue #950).
+ */
+function attachPendingReasoningToCallOwner(
+  messages: OcxMessage[],
+  callId: string,
+  pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }>,
+): void {
+  if (pendingReasoning.length === 0 || !callId) return;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== "assistant") continue;
+    for (const part of m.content) {
+      if (part.type === "toolCall" && part.id === callId) {
+        // Prepend so thinking still precedes tool_use for adapters that require
+        // that ordering (Anthropic-style replay).
+        m.content = [...pendingReasoning.map(entry => entry.part), ...m.content];
+        return;
+      }
+    }
+  }
+}
+
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 export function parseRequest(body: unknown): OcxParsedRequest {
@@ -416,6 +444,18 @@ export function parseRequest(body: unknown): OcxParsedRequest {
           : null;
         const thinkingText = envelope?.txt || text;
 
+        // Kiro reasoning round-trip: a krc-only item carries nothing renderable — it is provider
+        // state for the assistant turn that ALREADY closed, because Kiro emits its
+        // reasoningContentEvent at the END of a turn (after content AND tool calls, verified
+        // against kiro-cli 2.14.1/2.16.0). Folding it into the FOLLOWING turn like ordinary
+        // reasoning would attach turn N's blob to turn N+1, so attach it backwards instead. With
+        // no assistant turn to own it the blob is dropped rather than mis-paired.
+        if (envelope?.krc && thinkingText.length === 0) {
+          const previous = messages[messages.length - 1];
+          if (previous?.role === "assistant") previous.kiroRedactedReasoning = envelope.krc;
+          continue;
+        }
+
         // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0) {
@@ -545,8 +585,9 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "function_call_output") {
-        pendingReasoning.length = 0;
         const output = item as { call_id: string; output?: string | unknown[] };
+        attachPendingReasoningToCallOwner(messages, output.call_id, pendingReasoning);
+        pendingReasoning.length = 0;
         const toolInfo = findToolById(messages, output.call_id);
         messages.push({
           role: "toolResult", toolCallId: output.call_id,
@@ -558,8 +599,9 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
 
       if (effectiveType === "custom_tool_call_output") {
-        pendingReasoning.length = 0;
         const output = item as { call_id: string; output: string | unknown[] };
+        attachPendingReasoningToCallOwner(messages, output.call_id, pendingReasoning);
+        pendingReasoning.length = 0;
         const toolInfo = findToolById(messages, output.call_id);
         messages.push({
           role: "toolResult", toolCallId: output.call_id,
@@ -626,9 +668,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     ...(data.tools as unknown[] ?? []),
     ...loadedToolSpecs,
   ]);
-  // Detect structured-output mode (Responses `text.format`) so the web-search sidecar can render its
-  // tool_result as JSON rather than prose that could corrupt the model's schema-constrained answer.
-  const structuredOutput = detectStructuredOutput(data.text);
+  // Capture structured-output mode (Responses `text.format`): the format object rides
+  // options.textFormat for adapters whose wire has an equivalent (openai-chat response_format),
+  // while the `_structuredOutput` flag keeps the web-search sidecar rendering its tool_result
+  // as JSON rather than prose that could corrupt the model's schema-constrained answer.
+  const textFormat = parseTextFormat(data.text);
+  if (textFormat) options.textFormat = textFormat;
 
   return {
     modelId: data.model,
@@ -640,17 +685,30 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
-    ...(structuredOutput ? { _structuredOutput: true } : {}),
+    ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
     ...(contextCompactionBoundary ? { _contextCompactionBoundary: true } : {}),
   };
 }
 
-/** True when the Responses `text.format` requests structured output (json_schema or json_object). */
-function detectStructuredOutput(text: unknown): boolean {
-  if (!isObj(text)) return false;
+/**
+ * The Responses `text.format` object when it requests structured output (json_schema or
+ * json_object), undefined otherwise. Acceptance is identical to the boolean detector this
+ * replaces; unknown or malformed formats are ignored, never rejected, so the native
+ * passthrough keeps forwarding whatever the caller sent via `_rawBody`.
+ */
+function parseTextFormat(text: unknown): OcxRequestOptions["textFormat"] {
+  if (!isObj(text)) return undefined;
   const format = (text as { format?: unknown }).format;
-  if (!isObj(format)) return false;
-  const t = (format as { type?: unknown }).type;
-  return t === "json_schema" || t === "json_object";
+  if (!isObj(format)) return undefined;
+  const f = format as { type?: unknown; name?: unknown; description?: unknown; schema?: unknown; strict?: unknown };
+  if (f.type === "json_object") return { type: "json_object" };
+  if (f.type !== "json_schema") return undefined;
+  return {
+    type: "json_schema",
+    ...(typeof f.name === "string" ? { name: f.name } : {}),
+    ...(typeof f.description === "string" ? { description: f.description } : {}),
+    ...(isObj(f.schema) ? { schema: f.schema as Record<string, unknown> } : {}),
+    ...(typeof f.strict === "boolean" ? { strict: f.strict } : {}),
+  };
 }

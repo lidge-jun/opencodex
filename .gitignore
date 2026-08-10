@@ -4,6 +4,10 @@ dist/
 *.log
 .DS_Store
 
+# Generated CL compatibility identity embedded by prepare:package. It must stay
+# untracked so the manifest cannot hash itself.
+src/generated/compatibility-version.json
+
 # Maintainer planning notes are TRACKED in this repository (`devlog/`). Security
 # material is not: see the "Security working notes" section of AGENTS.md.
 #
@@ -36,6 +40,16 @@ devlog/**/security-advisory-draft*
 .omo/
 **/.omo/
 
+# Local development worktrees
+.worktrees/
+
 # Test-generated artifacts
 tests/.tmp-*/
 .claude/
+
+# Retired Go native-runtime experiment. `go/` is not part of the build, the
+# typecheck, or the test path, and nothing in `src/` imports it. A single file
+# from it (go/internal/cli/config_parity.go) has now been committed by a broad
+# `git add` three separate times and reached `dev` once — see
+# tests/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
+go/

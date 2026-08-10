@@ -1,0 +1,21 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "Meta-Llama-3.3-70B-Instruct",
+      "object": "model",
+      "owned_by": "sambanova",
+      "context_length": 131072,
+      "max_completion_tokens": 3072,
+      "sn_metadata": {}
+    },
+    {
+      "id": "gpt-oss-120b",
+      "object": "model",
+      "owned_by": "sambanova",
+      "context_length": 131072,
+      "max_completion_tokens": 131072,
+      "sn_metadata": {}
+    }
+  ]
+}

@@ -4,11 +4,13 @@ import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxP
 import { catalogModelSupportsReasoningSummaries } from "../codex/catalog";
 import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../responses/compaction";
 import { collectResponsesToolGroups } from "../responses/tool-groups";
+import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -32,7 +34,10 @@ export const FORWARD_HEADERS = [
   "x-responsesapi-include-timing-metrics",
 ];
 
-export function sanitizeReasoningInputContent(body: unknown): unknown {
+export function sanitizeReasoningInputContent(
+  body: unknown,
+  opts?: { preserveRawReasoningContent?: boolean },
+): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const raw = body as Record<string, unknown>;
   if (!Array.isArray(raw.input)) return body;
@@ -47,13 +52,23 @@ export function sanitizeReasoningInputContent(body: unknown): unknown {
     // backend cannot decrypt them and would reject the request. Strip regardless of content shape.
     const hasOcxEnvelope = typeof rec.encrypted_content === "string" && rec.encrypted_content.startsWith(OCX_REASONING_PREFIX);
     if (!hasRawContent && !hasOcxEnvelope) return item;
-    changed = true;
+    if (hasOcxEnvelope) {
+      changed = true;
+      const next: Record<string, unknown> = { ...rec };
+      delete next.encrypted_content;
+      if (!opts?.preserveRawReasoningContent) next.content = [];
+      return next;
+    }
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.
-    const next: Record<string, unknown> = { ...rec, content: [] };
-    if (hasOcxEnvelope) delete next.encrypted_content;
-    return next;
+    // DeepSeek's Responses API instead ACCEPTS plaintext reasoning replay (its compatibility
+    // guide merges reasoning items into the adjacent assistant message), so providers flagged
+    // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
+    // continuations after tool calls (issue #875 family).
+    if (opts?.preserveRawReasoningContent) return item;
+    changed = true;
+    return { ...rec, content: [] };
   });
 
   return changed ? { ...raw, input } : body;
@@ -147,18 +162,6 @@ function scrubOcxCompactionItems(body: unknown): unknown {
 
   return changed ? { ...body, input } : body;
 }
-
-/**
- * Hosted (OpenAI-executed) tool types that specific native slugs reject at request time. Codex
- * attaches these for app skills (e.g. `image_generation` for imagegen) regardless of the target
- * model, and the passthrough path forwards the raw body untouched — so a slug that doesn't support
- * the tool 400s (`Tool 'image_generation' is not supported with gpt-5.3-codex-spark.`). Each entry
- * maps a model-slug matcher to the hosted tool types that must be stripped before forwarding.
- * Extend this when another native slug rejects a hosted tool (e.g. `code_interpreter`).
- */
-const UNSUPPORTED_HOSTED_TOOLS: ReadonlyArray<{ match: (model: string) => boolean; tools: ReadonlySet<string> }> = [
-  { match: model => model.includes("codex-spark"), tools: new Set(["image_generation", "tool_search"]) },
-];
 
 /**
  * Strip unsupported `reasoning` sub-parameters for native slugs that reject them (e.g. Spark).
@@ -471,6 +474,33 @@ function toolOutputText(output: unknown): string {
  *   reasoning chain is intact and must be preserved.
  * Runs on every forward request; with intact pairs it returns the original reference.
  */
+/**
+ * Backfill `queries` on a replayed single-query `web_search_call`.
+ *
+ * `webSearchAction()` in the bridge now emits both keys, but that only helps items
+ * created after the fix. A conversation that already recorded
+ * `{type:"search", query:"..."}` replays that stored item on every subsequent turn, and
+ * DeepSeek's native Responses parser requires `queries` — so upgrading alone leaves
+ * those threads permanently 400ing with `missing field 'queries'` (#930).
+ *
+ * Runs on every Responses request, on both `input` items and the `action` nested inside
+ * them. Returns the original reference when nothing needs repair, so the common path
+ * allocates nothing.
+ */
+function backfillWebSearchQueries(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let changed = false;
+  const input = body.input.map(item => {
+    if (!isPlainObject(item) || item.type !== "web_search_call") return item;
+    const action = item.action;
+    if (!isPlainObject(action) || action.type !== "search") return item;
+    if (typeof action.query !== "string" || Array.isArray(action.queries)) return item;
+    changed = true;
+    return { ...item, action: { ...action, queries: [action.query] } };
+  });
+  return changed ? { ...body, input } : body;
+}
+
 function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
@@ -507,6 +537,65 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
   }
 
   return changed ? { ...body, input: repaired } : body;
+}
+
+/**
+ * Make unambiguous Responses tool pairs adjacent for upstream parsers that require it.
+ *
+ * [Decision Log]
+ * - 목적과 의도: Keep Codex hook-injected developer context without letting it make a strict upstream reject the matching tool result.
+ * - 기존 구현 및 제약 조건: The orphan repair verifies only pair presence; globally reordering valid history would change tolerant providers unnecessarily.
+ * - 검토한 주요 대안: Reorder every Responses request, drop the intervening message, or gate a lossless reorder behind provider capability metadata.
+ * - 선택한 방식: Reorder only unique call/result pairs for providers that explicitly require adjacency, preserving every intervening item immediately after the result.
+ * - 다른 대안 대신 이 방식을 선택한 이유: The provider gate limits semantic blast radius, while refusing ambiguous duplicate ids avoids guessing which result belongs to which call.
+ * - 장점, 단점 및 영향: DeepSeek receives the adjacency its parser requires; tolerant providers stay byte/order equivalent. Ambiguous duplicate ids still fail upstream rather than being silently rewritten.
+ */
+function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const calls = new Map<string, number[]>();
+  const outputs = new Map<string, number[]>();
+
+  const appendIndex = (map: Map<string, number[]>, key: string, index: number): void => {
+    const existing = map.get(key);
+    if (existing) existing.push(index);
+    else map.set(key, [index]);
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!isPlainObject(item) || typeof item.call_id !== "string" || item.call_id.length === 0) continue;
+    if (item.type === "function_call" || item.type === "local_shell_call") {
+      appendIndex(calls, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call") {
+      appendIndex(calls, `custom:${item.call_id}`, index);
+    } else if (item.type === "function_call_output") {
+      appendIndex(outputs, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call_output") {
+      appendIndex(outputs, `custom:${item.call_id}`, index);
+    }
+  }
+
+  const movedOutputIndices = new Set<number>();
+  const outputAfterCall = new Map<number, unknown>();
+  for (const [key, callIndices] of calls) {
+    const outputIndices = outputs.get(key);
+    if (callIndices.length !== 1 || outputIndices?.length !== 1) continue;
+    const callIndex = callIndices[0]!;
+    const outputIndex = outputIndices[0]!;
+    if (outputIndex === callIndex + 1) continue;
+    movedOutputIndices.add(outputIndex);
+    outputAfterCall.set(callIndex, input[outputIndex]);
+  }
+  if (movedOutputIndices.size === 0) return body;
+
+  const normalized: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (movedOutputIndices.has(index)) continue;
+    normalized.push(input[index]);
+    if (outputAfterCall.has(index)) normalized.push(outputAfterCall.get(index));
+  }
+  return { ...body, input: normalized };
 }
 
 /**
@@ -606,6 +695,128 @@ function declaresImageGenClientTool(tool: unknown): boolean {
   if (!isPlainObject(tool) || typeof tool.name !== "string") return false;
   if (tool.type === "namespace") return tool.name === IMAGE_GEN_NAMESPACE;
   return isImageGenClientName(tool.name);
+}
+
+/** Rewrite client image-gen selectors to the hosted tool without widening caller restrictions. */
+function preferHostedImageGenToolChoice(toolChoice: unknown): unknown {
+  if (!isPlainObject(toolChoice)) return toolChoice;
+  if ((toolChoice.type === "function" || toolChoice.type === "custom") && typeof toolChoice.name === "string") {
+    return isImageGenClientName(toolChoice.name) ? { type: HOSTED_IMAGE_GENERATION_TOOL } : toolChoice;
+  }
+  if (toolChoice.type !== "allowed_tools" || !Array.isArray(toolChoice.tools)) return toolChoice;
+  const hasHostedImageTool = toolChoice.tools.some(tool => isPlainObject(tool) && tool.type === HOSTED_IMAGE_GENERATION_TOOL);
+  let changed = false;
+  let addedHostedImageTool = false;
+  const tools: unknown[] = [];
+  for (const tool of toolChoice.tools) {
+    const isClientImageTool = isPlainObject(tool)
+      && (tool.type === "function" || tool.type === "custom")
+      && typeof tool.name === "string"
+      && isImageGenClientName(tool.name);
+    if (!isClientImageTool) {
+      tools.push(tool);
+      continue;
+    }
+    changed = true;
+    if (!hasHostedImageTool && !addedHostedImageTool) {
+      tools.push({ type: HOSTED_IMAGE_GENERATION_TOOL });
+      addedHostedImageTool = true;
+    }
+  }
+  return changed ? { ...toolChoice, tools } : toolChoice;
+}
+
+/**
+ * Some Responses-compatible gateways reserve the hosted image namespace even when the request
+ * does not explicitly declare `image_generation`. For an explicitly configured model, remove only
+ * colliding client declarations so the gateway's hosted tool can take precedence.
+ */
+function preferConfiguredHostedTools(
+  body: unknown,
+  provider: OcxProviderConfig,
+  modelId: string,
+  selectedModelId?: string,
+): unknown {
+  // A virtual model's advertised id takes precedence over its resolved wire-model id.
+  // Read own properties only: a routed model id of `constructor`/`toString` would
+  // otherwise resolve to an inherited Object.prototype function and throw on the
+  // membership test below, failing the request before it is dispatched.
+  const preferenceMap = provider.modelPreferHostedTools;
+  const ownPreference = (key: string | undefined): string[] | undefined => {
+    if (!key || !preferenceMap || !Object.prototype.hasOwnProperty.call(preferenceMap, key)) return undefined;
+    const entry = preferenceMap[key];
+    return Array.isArray(entry) ? entry : undefined;
+  };
+  const preferredTools = ownPreference(selectedModelId) ?? ownPreference(modelId);
+  if (!preferredTools?.includes(HOSTED_IMAGE_GENERATION_TOOL) || !isPlainObject(body)) return body;
+
+  const stripGroup = (tools: unknown[]): unknown[] => {
+    const filtered = tools.filter(tool => !declaresImageGenClientTool(tool));
+    return filtered.length === tools.length ? tools : filtered;
+  };
+
+  let changed = false;
+  let tools = body.tools;
+  let strippedTopLevelImageGenTool = false;
+  if (Array.isArray(body.tools)) {
+    tools = stripGroup(body.tools);
+    strippedTopLevelImageGenTool = tools !== body.tools;
+    changed ||= strippedTopLevelImageGenTool;
+  }
+
+  let input = body.input;
+  const strippedAdditionalToolsIndices = new Set<number>();
+  if (Array.isArray(body.input)) {
+    let nestedChanged = false;
+    const mappedInput = body.input.map((item, index) => {
+      if (!isPlainObject(item) || item.type !== "additional_tools" || !Array.isArray(item.tools)) return item;
+      const nestedTools = stripGroup(item.tools);
+      if (nestedTools === item.tools) return item;
+      strippedAdditionalToolsIndices.add(index);
+      nestedChanged = true;
+      return { ...item, tools: nestedTools };
+    });
+    if (nestedChanged) {
+      input = mappedInput;
+      changed = true;
+    }
+  }
+
+  const hasToolChoice = Object.hasOwn(body, "tool_choice");
+  const toolChoice = hasToolChoice ? preferHostedImageGenToolChoice(body.tool_choice) : body.tool_choice;
+  const toolChoiceChanged = hasToolChoice && toolChoice !== body.tool_choice;
+  const hasHostedImageGenTool = (toolGroup: unknown): boolean => Array.isArray(toolGroup)
+    && toolGroup.some(tool => isPlainObject(tool) && tool.type === HOSTED_IMAGE_GENERATION_TOOL);
+  const hasHostedImageGenDeclaration = hasHostedImageGenTool(tools)
+    || (Array.isArray(input) && input.some(item => isPlainObject(item)
+      && item.type === "additional_tools"
+      && hasHostedImageGenTool(item.tools)));
+  if ((strippedTopLevelImageGenTool || strippedAdditionalToolsIndices.size > 0) && !hasHostedImageGenDeclaration) {
+    if (strippedTopLevelImageGenTool && Array.isArray(tools)) {
+      tools = [...tools, { type: HOSTED_IMAGE_GENERATION_TOOL }];
+    } else if (strippedAdditionalToolsIndices.size > 0 && Array.isArray(input)) {
+      // Restore into the FIRST stripped container only. Tool declarations are
+      // request-scoped, not container-scoped — the containers are separate carriers for
+      // one tool set, so a single hosted declaration covers the request. An earlier
+      // revision restored into every stripped container and put `image_generation` on
+      // the wire twice; review caught it.
+      const firstStripped = Math.min(...strippedAdditionalToolsIndices);
+      input = input.map((item, index) => index === firstStripped
+        && isPlainObject(item)
+        && Array.isArray(item.tools)
+        ? { ...item, tools: [...item.tools, { type: HOSTED_IMAGE_GENERATION_TOOL }] }
+        : item);
+    }
+  }
+  changed ||= toolChoiceChanged;
+  if (!changed) return body;
+  const next: Record<string, unknown> = {
+    ...body,
+    ...(Array.isArray(body.tools) ? { tools } : {}),
+    ...(Array.isArray(body.input) ? { input } : {}),
+  };
+  if (toolChoiceChanged) next.tool_choice = toolChoice;
+  return next;
 }
 
 /**
@@ -866,13 +1077,9 @@ function normalizeImageGenClientTools(body: unknown): unknown {
 function stripUnsupportedHostedTools(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.tools)) return body;
   const model = typeof body.model === "string" ? body.model : "";
-  const unsupported = UNSUPPORTED_HOSTED_TOOLS.filter(e => e.match(model));
-  if (unsupported.length === 0) return body;
-
   const tools = body.tools.filter(t => {
     const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;
-    if (!type) return true;
-    return !unsupported.some(e => e.tools.has(type));
+    return !type || !isHostedToolUnsupportedForModel(model, type);
   });
   return tools.length === body.tools.length ? body : { ...body, tools };
 }
@@ -901,7 +1108,8 @@ function stripInputImagesDeep(value: unknown): unknown {
  */
 function buildRoutedCompactionBody(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, ...rest } = body;
+  // `text` goes with the tool fields: the summary must be prose, not schema-constrained JSON.
+  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, text: _text, ...rest } = body;
   const input = Array.isArray(body.input) ? body.input : [];
   const kept = input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
@@ -1010,21 +1218,38 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
       }
+      if (provider.requiresAdjacentResponsesToolResults === true) {
+        outBody = normalizeResponsesToolResultAdjacency(outBody);
+      }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
+      } else {
+        outBody = preferConfiguredHostedTools(
+          outBody,
+          provider,
+          parsed.modelId,
+          parsed._openAiVirtualSelectedModelId,
+        );
+        outBody = normalizeImageGenClientTools(outBody);
       }
-      else outBody = normalizeImageGenClientTools(outBody);
       if (forward || parsed._previousResponseInputExpanded === true) {
         outBody = repairOversizedReplayCallIds(outBody);
       }
       outBody = stripUnsupportedReasoningSummaryDelivery(outBody, parsed.modelId);
+      // Repair stored history from before the bridge emitted both keys: a conversation
+      // that already recorded a single-query web_search_call replays it every turn, and
+      // a strict parser rejects the whole request over it (#930).
+      outBody = backfillWebSearchQueries(outBody);
       // Same predicate as the routedCompaction gate in handleResponses(): an
       // authMode check would let a noncanonical custom forward provider skip this
       // rewrite while the server still routes it as a summarizer turn (#422).
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
-      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody))))))));
+      if (provider.authMode !== "forward") {
+        outBody = rewriteRoutedCustomToolsForUpstream(outBody).body;
+      }
+      const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(
         normalizeConfiguredReasoningSummaryDelivery(sanitizedBody, provider, parsed.modelId),
         provider,

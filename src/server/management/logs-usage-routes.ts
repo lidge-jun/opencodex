@@ -70,6 +70,7 @@ import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig 
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, filteredRequestLogCount, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
@@ -121,7 +122,7 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
 }
 
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/logs" && req.method === "GET") {
     const all = getRequestLogEntries();
@@ -193,10 +194,19 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observedRevisionKey = `${usageLogRevisionKey(currentUsageLogRevision())}\0${effectiveReadLimit}`;
       const cached = getUsageSummaryCacheEntry(cacheKey);
-      if (cached && cached.revisionKey === observedRevisionKey && now < cached.expiresAt) {
+      if (cached
+        && cached.revisionKey === observedRevisionKey
+        && cached.overlayVersion === userCostOverlayVersion()
+        && now < cached.expiresAt) {
         return jsonResponse(refreshedUsageSummary(cached.summary, range, now));
       }
       if (cached) discardUsageSummaryCacheEntry(cacheKey);
+      // Capture the overlay version BEFORE reading/computing: the cache entry
+      // must be stamped with the version the summary was priced under. Reading
+      // it again at stamp time could cache an old-price summary as current,
+      // and the next request would then accept stale pricing for the whole
+      // cache lifetime.
+      const overlayVersion = userCostOverlayVersion();
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
       const summary = {
@@ -206,8 +216,16 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         entriesTruncated: snapshot.entriesTruncated,
         entriesDropped: snapshot.entriesDropped,
       };
+      if (userCostOverlayVersion() !== overlayVersion) {
+        // The overlay changed while the summary was being computed, so this
+        // summary may mix old and new prices. Serve it uncached: the next
+        // request recomputes against the settled overlay instead of caching a
+        // mixed-price entry under either version.
+        return jsonResponse(summary);
+      }
       setUsageSummaryCacheEntry(cacheKey, {
         revisionKey: `${usageLogRevisionKey(snapshot.revision)}\0${effectiveReadLimit}`,
+        overlayVersion,
         expiresAt: usageSummaryExpiresAt(snapshot.entries, range, surface, now),
         revisionReadAt,
         summary,
@@ -321,6 +339,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           result.error === "codex_busy"
             || result.error === "stale_preview"
             || result.error === "referenced_history"
+            || result.error === "pinned_thread"
             || result.error === "storage_mutation_busy"
             || result.error === "restore_pending_overlap"
             ? 409
@@ -333,6 +352,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
           stale_preview: "Archived files changed since preview — run Preview again.",
           restore_pending_overlap: "Selected archives overlap an incomplete trash restore — finish or retry restore first.",
           referenced_history: "Selected archives are still referenced by forked or paginated history.",
+          pinned_thread: "Selected archives include a pinned thread — unpin it in Codex before cleanup.",
           invalid_digest: "Preview digest is missing or invalid.",
           invalid_mode: "mode must be quarantine or permanent.",
           fs_failed: "Filesystem cleanup failed. Some changes may already be applied — check CODEX_HOME/.trash and any recovery path in the response.",

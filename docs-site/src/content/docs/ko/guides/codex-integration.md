@@ -17,9 +17,14 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# fastMode를 설정했을 때만 들어갑니다. 설정하지 않으면 [features] 자체가 생기지 않습니다
 [features]
 fast_mode = true
 ```
+
+주입되는 `fast_mode`는 3-상태 `fastMode` 설정을 따릅니다. `true`면 `fast_mode = true`를 쓰고,
+`false`면 `fast_mode = false`를 쓰며, 설정하지 않으면 기존 `fast_mode`를 그대로 두고
+`[features]` 테이블도 추가하지 않습니다.
 
 프록시는 기본적으로 포트 `10100`에서 듣고 `POST /v1/responses`, `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`, `GET /v1/models`, `GET /healthz`, 그리고 `/api/*` 관리 표면을 제공합니다.
 
@@ -118,6 +123,25 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 라우팅된 카탈로그 항목의 GPT-5 정체성 문구도 실제 업스트림 모델 이름에 맞게 바꿉니다. reasoning 선택지는
 프로바이더와 모델 메타데이터에 따라 Codex의 `low | medium | high | xhigh | max | ultra` 단계를 사용하며,
 업스트림이 지원하지 않는 값은 요청을 보내기 전에 매핑하거나 지원 범위로 낮춥니다.
+
+### 라우팅된 로컬 도구
+
+네이티브가 아닌 라우팅 catalog 항목은 `tool_mode: "code_mode_only"`를 사용합니다. 이를 통해 Codex는 공식
+`exec` 진입점과 Browser 및 Computer Use를 포함한 중첩 MCP 도구를 노출할 수 있으며, opencodex는 모델의 일반
+function call만 라우팅합니다. 도구 실행, 권한, 확인은 Codex에 그대로 남고 opencodex가 별도의 browser 또는
+desktop-control executor를 구현하지는 않습니다.
+
+Codex의 `exec` custom-tool grammar를 허용하지 않는 key-auth Responses provider의 경우, opencodex는 해당 선언과
+history를 업스트림 function tool로 인코딩한 다음 스트리밍된 function-call lifecycle을 Codex에 전달하기 전에
+`custom_tool_call`로 복원합니다. 네이티브 OpenAI forward routing과 지원되는 `apply_patch` custom tool은 변경되지
+않습니다.
+
+선택한 provider는 function/tool calling을 지원해야 합니다. tool call을 지원하지 않는 text-only provider에서는
+`exec`, Browser 또는 Computer Use를 사용할 수 없습니다. 네이티브 OpenAI 항목은 업스트림 tool mode를 그대로
+유지합니다.
+
+`ocx sync`가 이 metadata를 변경한 뒤에는 Codex App을 다시 시작하고 새 task를 여세요. 기존 app-server process와
+task는 시작할 때 불러온 catalog와 tool plan을 계속 유지할 수 있습니다.
 
 ### 사용자 지정 모델 표시 이름
 

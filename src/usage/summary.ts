@@ -2,7 +2,7 @@ import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
 import type { PersistedUsageEntry, UsageStatus } from "./log";
-import { estimateComboCost, estimateRequestCost, effectiveServiceTier } from "./cost";
+import { estimateComboCost, estimateRequestCost, serviceTierContext } from "./cost";
 
 export type UsageRange = "7d" | "30d" | "all";
 export type UsageSurface = "all" | "codex" | "claude" | "grok";
@@ -286,7 +286,7 @@ function addEstimatedCost(
     totals.unmeteredRequests += 1;
     return;
   }
-  const tier = effectiveServiceTier(entry);
+  const tier = serviceTierContext(entry);
   const estimate = entry.attempts?.length
     ? estimateComboCost(entry.attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -415,7 +415,7 @@ function buildModels(entries: PersistedUsageEntry[], totalTokens: number): Usage
   }
   // Accumulate per-model estimated cost
   for (const entry of entries) {
-    const tier = effectiveServiceTier(entry);
+    const tier = serviceTierContext(entry);
     const estimate = entry.attempts?.length
       ? estimateComboCost(entry.attempts, undefined, tier)
       : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -524,7 +524,7 @@ function buildProviders(entries: PersistedUsageEntry[], totalTokens: number): Us
     }
   }
   for (const entry of entries) {
-    const tier = effectiveServiceTier(entry);
+    const tier = serviceTierContext(entry);
     const estimate = entry.attempts?.length
       ? estimateComboCost(entry.attempts, undefined, tier)
       : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });

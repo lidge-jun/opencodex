@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getVertexAccessToken, __resetVertexTokenCache } from "../src/lib/gcp-adc";
 import { createGoogleAdapter } from "../src/adapters/google";
+import { providerManagementConfigError } from "../src/server/auth-cors";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { STATE_STORE_REGISTRATIONS } from "../src/lib/state-store-registrations";
 
@@ -147,6 +148,54 @@ describe("google adapter vertex mode", () => {
     const provider = { adapter: "google", baseUrl: "https://x", googleMode: "vertex", project: "proj-1", location: "global" } as OcxProviderConfig;
     const req = await createGoogleAdapter(provider).buildRequest(parsed());
     expect(req.url).toBe("https://aiplatform.googleapis.com/v1/projects/proj-1/locations/global/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse");
+  });
+
+  test("vertex + ADC rejects a location that can alter the request authority before fetching a token", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
+    const provider = {
+      adapter: "google",
+      baseUrl: "https://x",
+      googleMode: "vertex",
+      project: "proj-1",
+      location: "attacker.example:443/capture#",
+    } as OcxProviderConfig;
+    await expect(createGoogleAdapter(provider).buildRequest(parsed())).rejects.toThrow(
+      "Vertex AI location must be a single lowercase Google Cloud location label",
+    );
+    expect(oauthCalls).toBe(0);
+  });
+
+  test("provider management rejects unsafe Vertex locations, including registry-backfilled mode", () => {
+    const explicit = {
+      adapter: "google",
+      baseUrl: "https://aiplatform.googleapis.com",
+      googleMode: "vertex",
+      location: "attacker.example/path",
+    } as OcxProviderConfig;
+    expect(providerManagementConfigError("custom-vertex", explicit)).toContain(
+      "Vertex AI location must be a single lowercase Google Cloud location label",
+    );
+
+    const registryBackfilled = {
+      adapter: "google",
+      baseUrl: "https://aiplatform.googleapis.com",
+      location: "attacker.example/path",
+    } as OcxProviderConfig;
+    expect(providerManagementConfigError("google-vertex", registryBackfilled)).toContain(
+      "Vertex AI location must be a single lowercase Google Cloud location label",
+    );
+  });
+
+  test("provider management preserves legitimate Vertex locations", () => {
+    for (const location of ["global", "us-central1", "europe-west4", "us"]) {
+      const provider = {
+        adapter: "google",
+        baseUrl: "https://aiplatform.googleapis.com",
+        googleMode: "vertex",
+        location,
+      } as OcxProviderConfig;
+      expect(providerManagementConfigError("custom-vertex", provider)).toBeNull();
+    }
   });
 
   test("ai-studio default mode is unchanged (no regression)", async () => {

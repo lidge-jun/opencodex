@@ -9,7 +9,7 @@ import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
-import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
+import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
@@ -31,7 +31,9 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, nativeMultiAgentVersion } from "./metadata";
+import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -84,11 +86,18 @@ export function isDefaultCatalogPath(path: string): boolean {
   return samePath(path, activeDefaultCatalogPath());
 }
 
+/** Stable nonsemantic ownership marker for rows projected from config.customModels. */
+export const CODEX_CUSTOM_MODEL_CATALOG_KIND = "custom-model-v1";
+/** A formerly ambiguous slug was authoritatively observed as an ordinary provider row. */
+export const CODEX_PROVIDER_MODEL_CATALOG_KIND = "provider-model-v1";
+
 export interface CatalogModel {
   id: string;
   provider: string;
   /** Public Codex-facing slug override (used by combo aliases). */
   alias?: string;
+  /** Explicit combo takeover of a bare OpenAI-native catalog id. */
+  nativeAlias?: boolean;
   /**
    * Display-only Codex catalog `display_name` override. Relabels the picker row ONLY — it never
    * affects the routing slug, alias-collision order, native marketing-name precedence, or provider
@@ -112,13 +121,15 @@ export interface CatalogModel {
   supportsReasoningSummaries?: boolean;
   /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
   capabilities?: string[];
+  /** OpenCodex-only catalog ownership marker; Codex ignores the serialized extension field. */
+  catalogKind?: typeof CODEX_CUSTOM_MODEL_CATALOG_KIND | typeof CODEX_PROVIDER_MODEL_CATALOG_KIND;
 }
 
 export type RawEntry = Record<string, unknown>;
 
 export type RawCatalog = { models?: RawEntry[]; [k: string]: unknown };
 
-export const JAWCODE_CATALOG_AUGMENT_PROVIDERS = new Set(["opencode-go"]);
+export const JAWCODE_CATALOG_AUGMENT_PROVIDERS = new Set(["opencode-go", "deepseek"]);
 
 export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
   // Issue #82: Zen Go /models advertises HY3, but Console Go rejects it as outside the lite list.
@@ -192,7 +203,12 @@ export function readCatalog(path: string): RawCatalog | null {
 
 export function findNativeTemplate(catalog: RawCatalog | null): RawEntry | null {
   return catalog?.models?.find(
-    m => typeof m.slug === "string" && !m.slug.includes("/") && "base_instructions" in m,
+    m => typeof m.slug === "string"
+      && !m.slug.includes("/")
+      && "base_instructions" in m
+      && m.opencodex_catalog_kind !== CODEX_NATIVE_ALIAS_CATALOG_KIND
+      && m.owned_by !== COMBO_NAMESPACE
+      && !(typeof m.description === "string" && m.description.startsWith("Routed via opencodex → ")),
   ) ?? null;
 }
 
@@ -244,8 +260,10 @@ export function isNativeOpenAiEntry(entry: RawEntry): boolean {
 }
 
 export function applyNativeOpenAiContextOverride(entry: RawEntry): void {
-  if (!isNativeOpenAiEntry(entry)) return;
-  const override = NATIVE_OPENAI_CONTEXT_OVERRIDES[entry.slug as string];
+  const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry)
+    ?? (isNativeOpenAiEntry(entry) ? entry.slug as string : undefined);
+  if (!nativeSlug) return;
+  const override = NATIVE_OPENAI_CONTEXT_OVERRIDES[nativeSlug];
   if (!override) return;
   if (typeof override.contextWindow === "number") {
     entry.context_window = override.contextWindow;
@@ -300,6 +318,13 @@ export function ensureStrictCatalogFields(
 
 export type MultiAgentMode = "v1" | "default" | "v2";
 
+export const ROUTED_CODEX_TOOL_MODE = "code_mode_only";
+
+export function applyRoutedCodexToolMode(entry: RawEntry): RawEntry {
+  entry.tool_mode = ROUTED_CODEX_TOOL_MODE;
+  return entry;
+}
+
 /**
  * @param v2FeatureEnabled When the native multi_agent_v2 feature is on, "default"
  *   mode stamps unpinned entries as "v2" instead of deleting the key. The native
@@ -317,8 +342,10 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
-      const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
-      const upstreamPin = upstream?.multi_agent_version;
+      const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
+      const upstreamPin = nativeAlias
+        ? nativeMultiAgentVersion(slug)
+        : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
       } else if (v2FeatureEnabled) {
@@ -338,6 +365,7 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
 export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls = false): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;
+  applyRoutedCodexToolMode(entry);
   delete entry.multi_agent_version;
   delete entry.use_responses_lite;
   delete entry.supports_websockets;
@@ -389,11 +417,11 @@ export function catalogModelSupportsReasoningSummaries(modelId: string): boolean
   return values.size === 1 ? values.values().next().value : undefined;
 }
 
-export function applyJawcodeCatalogMetadata(entry: RawEntry, provider: string, modelId: string, contextCap?: number): void {
-  const jawcodeProvider = resolveJawcodeProvider(provider);
+export function applyCatalogMetadata(entry: RawEntry, provider: string, modelId: string, contextCap?: number): void {
+  const jawcodeProvider = resolveMetadataProvider(provider);
   if (!jawcodeProvider) return;
-  const meta = getJawcodeModelMetadata(jawcodeProvider, modelId)
-    ?? (shouldCaseFoldMetadataModelId(provider) ? getJawcodeModelMetadataCaseInsensitive(jawcodeProvider, modelId) : undefined);
+  const meta = getModelMetadata(jawcodeProvider, modelId)
+    ?? (shouldCaseFoldMetadataModelId(provider) ? getModelMetadataCaseInsensitive(jawcodeProvider, modelId) : undefined);
   if (!meta) return;
   if (typeof meta.contextWindow === "number" && meta.contextWindow > 0) {
     const contextWindow = applyProviderContextCap(meta.contextWindow, contextCap) ?? meta.contextWindow;
@@ -422,7 +450,8 @@ export function readCatalogBackup(catalogPath: string): RawCatalog | null {
 }
 
 export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
-  return (catalog?.models ?? []).some(m => typeof m.slug === "string" && m.slug.includes("/"));
+  return (catalog?.models ?? []).some(m => typeof m.slug === "string"
+    && (m.slug.includes("/") || m.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND));
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {

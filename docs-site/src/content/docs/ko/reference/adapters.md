@@ -31,6 +31,9 @@ interface ProviderAdapter {
 
 - 내부 메시지를 OpenAI role로 변환하고, 툴은 `{type:"function", function:{…}}`과
   `tool_choice`(`auto`/`none`/`required` 또는 지정 함수)로 매핑합니다.
+- **툴 결과에 든 이미지**는 `role:"tool"`이 텍스트 전용이므로, 툴 라운드가 닫힌 뒤 후속
+  user vision 메시지(`image_url` 파트)로 전달됩니다. 툴 메시지에는 `[image]` 마커가 앵커로
+  남습니다.
 - **Codex의 GPT-5 정체성 프롬프트를 다시 작성**해 모델 중립적인 소개로 바꿉니다. 따라서 라우팅된
   모델이 자신을 OpenAI라고 주장하지 않습니다.
 - 정확한 단계가 없으면 **`reasoning_effort`를 모델이 알린 하위 집합에 맞춰 조정**합니다.
@@ -38,12 +41,22 @@ interface ProviderAdapter {
   유지합니다. `provider.noReasoningModels`에 든 id에는 값을 **아예 보내지 않습니다**.
 - `delta.content`(텍스트), `delta.reasoning_content`(thinking), `delta.tool_calls[]`를
   스트리밍하고 `usage`를 수집합니다.
+- ClinePass는 라이브로 검증된 게이트웨이 형식 `reasoning: { enabled: true, effort: "low" }`을
+  사용하며, reasoning을 끌 때는 `{ enabled: false }`를 사용합니다. 공개 API 문서에는 현재 이 요청
+  형식이 명시되어 있지 않습니다. 어댑터는 다른 effort 요청을 검증된 `low`로 조정하고,
+  `delta.reasoning_content` 또는 `delta.reasoning`을 reasoning delta로 처리하며,
+  `stream_options.include_usage`로 스트림 usage를 요청하고 비스트림 응답 envelope에서도 usage를 읽습니다.
 
 ## `openai-responses`
 
 **대상:** OpenAI **Responses API**. **`passthrough: true`** — 원본 요청 본문을 전달하고 응답을
 **변환하지 않은 채** 스트리밍합니다.
 **인증:** `forward`(호출자 헤더 중계) 또는 `key`.
+
+`key` 인증에서는 [`retryOn429`](/ko/reference/configuration/)도 여기에 적용됩니다: 사전 스트림
+429는 번역된 `openai-chat`/Anthropic 요청 경로와 동일하게 다른 처리나 페일오버보다 먼저
+같은 키로 동일 요청을 대기 후 재전송합니다. 커스텀 `runTurn` 전송은 HTTP 재시도 루프에
+포함되지 않습니다.
 
 - `forward` URL → `{baseUrl}/responses`. `key` provider는 기본적으로 기존 `{baseUrl}/v1/responses` 구성을 사용합니다.
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
@@ -73,8 +86,8 @@ interface ProviderAdapter {
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.
-- Gemini가 tool-call id를 생략하면 합성합니다. Antigravity에서는 실제 `thoughtSignature` 값을
-  보존하고 재사용해 다음 턴에서도 reasoning 연속성을 유지합니다.
+- Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 실제
+  `thoughtSignature` 값을 보존하고 재사용해 tool-result 후속 턴에서도 reasoning 연속성을 유지합니다.
 
 ## `kiro`
 
@@ -123,6 +136,8 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 - content-addressed blob으로 대화 상태를 재생하고 서버 툴 호출을 Codex에 다시 매핑합니다. protobuf
   `GetUsableModels` RPC로 실시간 Cursor 모델을 찾으며, run 요청이 wire에 commit되기 전까지만
   재시도합니다.
+- `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델을 보내고
+  별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
 - Cursor 네이티브 로컬 파일시스템/shell/network 실행은 기본적으로 거부합니다. 명시적인
   `mcpServers`와 `desktopExecutor` 통합은 각각 별도 opt-in입니다. `unsafeAllowNativeLocalExec`은
   더 넓은 내장 executor를 켜며 Codex 승인/샌드박스 규칙을 우회합니다.

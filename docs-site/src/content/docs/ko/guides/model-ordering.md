@@ -14,7 +14,13 @@ Codex의 models-manager는 선택기에 표시되는 카탈로그 항목을 `pri
 이동하지 않습니다. 이 제약은 `src/codex/catalog/sync.ts`에 직접 기록되어 있습니다.
 
 따라서 opencodex는 배열 위치가 아니라 더 낮은 priority를 부여해 featured 위치를 제어합니다.
-관련 priority는 다음과 같습니다.
+이 표의 고정값과 아래 예시는 유효한 account selector가 없는 설정을 설명합니다. `N`개의 selector가
+있으면 설정 rank `i`의 featured bare native는 priority `i * N + j`인 selector 행으로 확장되며,
+`j`는 0부터 시작하는 selector 위치입니다. featured routed 행은 `i * N`, exact account-qualified
+native id는 해당 selector의 `i * N + j`를 사용합니다. Codex는 계속 선택기에 표시되는 처음 다섯
+행만 노출합니다. 선택되지 않은 routed 행은 이러한 selector 그룹 밖으로 이동합니다.
+
+selector가 없을 때의 priority는 다음과 같습니다.
 
 | 카탈로그 항목 | Priority | 근거 |
 | --- | ---: | --- |
@@ -54,7 +60,7 @@ Codex의 priority 정렬에서도 이 선두 순서가 보존됩니다.
 
 ## 최종 선택기 패턴
 
-featured 목록이 비어 있지 않을 때 최종 순서는 다음과 같습니다.
+유효한 account selector가 없고 featured 목록이 비어 있지 않을 때 최종 순서는 다음과 같습니다.
 
 1. 설정된 `subagentModels` 순서 그대로, priority `0`부터 `4`를 받은 모델
 2. 나머지 모든 라우팅 모델, 프로바이더순과 모델 id순 알파벳 정렬, priority `5`
@@ -93,13 +99,18 @@ subagentModels = [
 
 처음 5개 항목은 `spawn_agent`에 광고되는 override이며, 나머지는 일반 선택기 순서로 이어집니다.
 
+account selector가 있으면 bare native 선택이 selector-qualified 그룹으로 확장된 뒤에 5개 제한이
+적용됩니다.
+
 ## 순서를 바꾸는 방법
 
-선두 모델 순서를 사용자가 바꿀 수 있는 유일한 지원 수단은 `subagentModels`를 재정렬하는 것입니다.
-대시보드의 **Sub-agents** 페이지 또는 opencodex 설정에서 바꿀 수 있습니다. 목록은 최대 5개 모델을
-받으며 배열 순서에 의미가 있습니다.
+선두 모델 순서를 바꾸는 지원 수단은 `subagentModels`를 재정렬하는 것입니다. 대시보드의
+**Sub-agents** 페이지에서는 bare native와 routed id의 순서를 바꿀 수 있습니다. 설정과
+`ocx agent subagents set`은 exact account-qualified `<selector>/<native-openai-model>` id도
+지원하지만, 대시보드는 이러한 id를 제공하지 않으며 목록을 저장할 때도 보존하지 않습니다. 설정 id는
+최대 5개만 사용하세요. account selector가 있으면 bare native 하나가 여러 selector-qualified 행으로
+확장될 수 있으므로 설정 항목과 노출 행이 항상 일대일로 대응하지는 않습니다.
 
 현재 `OcxConfig`에는 일반 `modelOrder`, `providerOrder`, priority map 설정이 없습니다. 지원되는 정렬
-필드는 `subagentModels`입니다(`src/types.ts:238-246`). `disabledModels`와 각 프로바이더의
-`selectedModels`는 노출 필드입니다(`src/types.ts:276-282`, `src/types.ts:439-446`). 따라서 나머지
-선택기 순서를 바꾸려면 설정 수정이 아니라 코드 동작 변경이 필요합니다.
+필드는 `subagentModels`입니다. `disabledModels`와 각 프로바이더의 `selectedModels`는 노출
+필드입니다. 따라서 나머지 선택기 순서를 바꾸려면 설정 수정이 아니라 코드 동작 변경이 필요합니다.

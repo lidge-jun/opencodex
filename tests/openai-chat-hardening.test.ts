@@ -62,11 +62,45 @@ describe("openai-chat non-stream response hardening", () => {
     }]);
   });
 
+  test("treats falsey upstream error payloads as errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const error of [0, ""]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify({ error })));
+      expect(events).toEqual([{ type: "error", message: "upstream error" }]);
+    }
+  });
+
   test("rejects an empty choices array", async () => {
     const adapter = createOpenAIChatAdapter(provider());
     const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [] })));
 
     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
+  });
+
+  test("preserves usage when an upstream response has no choices", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({
+      choices: [],
+      usage: { prompt_tokens: 7, completion_tokens: 2 },
+    })));
+
+    expect(events).toEqual([{
+      type: "error",
+      message: "upstream response contained no choices",
+      usage: { inputTokens: 7, outputTokens: 2 },
+    }]);
+  });
+
+  test("keeps ordinary and data-wrapped responses compatible for non-Cline providers", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const body of [
+      { choices: [{ message: { content: "plain" } }] },
+      { success: true, data: { choices: [{ message: { content: "wrapped" } }] } },
+    ]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify(body)));
+      expect(events.find(event => event.type === "error")).toBeUndefined();
+      expect(events.at(-1)?.type).toBe("done");
+    }
   });
 
   test("rejects a choice with no message", async () => {
@@ -75,9 +109,63 @@ describe("openai-chat non-stream response hardening", () => {
 
     expect(events).toEqual([{ type: "error", message: "upstream response contained no choices" }]);
   });
+
+  test("rejects a null choice without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({ choices: [null] })));
+
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid choices" }]);
+  });
+
+  test("rejects malformed nested tool calls without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const toolCalls of [
+      { unexpected: true },
+      [null],
+      [{ id: "call_missing_function" }],
+    ]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", tool_calls: toolCalls } }],
+        usage: { prompt_tokens: 7, completion_tokens: 2 },
+      })));
+      expect(events).toEqual([{
+        type: "error",
+        message: "upstream response contained invalid tool calls",
+        usage: { inputTokens: 7, outputTokens: 2 },
+      }]);
+    }
+  });
 });
 
 describe("openai-chat stream response hardening", () => {
+  test("treats falsey upstream error payloads as terminal errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const error of [0, ""]) {
+      const response = new Response([
+        `data: ${JSON.stringify({ error })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""));
+
+      const events = await collect(adapter.parseStream(response));
+      expect(events).toEqual([{ type: "error", message: "upstream error" }]);
+    }
+  });
+
+  test("rejects a non-array choices payload without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      'data: {"choices":{},"usage":{"prompt_tokens":7,"completion_tokens":2}}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{
+      type: "error",
+      message: "upstream response contained invalid choices",
+      usage: { inputTokens: 7, outputTokens: 2 },
+    }]);
+  });
+
   test("malformed SSE data is terminal even when followed by [DONE]", async () => {
     const adapter = createOpenAIChatAdapter(provider());
     const response = new Response([
@@ -90,6 +178,26 @@ describe("openai-chat stream response hardening", () => {
 
     expect(events.at(-1)).toEqual({ type: "error", message: "malformed upstream SSE data frame" });
     expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("malformed nested streaming tool calls are terminal errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const toolCalls of [{ unexpected: true }, [null]]) {
+      const response = new Response([
+        `data: ${JSON.stringify({
+          choices: [{ delta: { tool_calls: toolCalls } }],
+          usage: { prompt_tokens: 7, completion_tokens: 2 },
+        })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""));
+
+      const events = await collect(adapter.parseStream(response));
+      expect(events).toEqual([{
+        type: "error",
+        message: "upstream response contained invalid tool calls",
+        usage: { inputTokens: 7, outputTokens: 2 },
+      }]);
+    }
   });
 });
 
@@ -269,5 +377,63 @@ describe("openai-chat max output defaults", () => {
 
     expect(body.max_tokens).toBe(20_000);
     expect(body.thinking_budget).toBe(15_000);
+  });
+});
+
+describe("openai-chat response_format emission", () => {
+  const bodyOf = (req: { body?: unknown }): Record<string, unknown> =>
+    JSON.parse(req.body as string) as Record<string, unknown>;
+
+  test("maps textFormat json_object onto response_format", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_object" } },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({ type: "json_object" });
+  });
+
+  test("re-nests textFormat json_schema as chat response_format", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: {
+        textFormat: { type: "json_schema", name: "answer", description: "shape", schema: { type: "object" }, strict: true },
+      },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", description: "shape", schema: { type: "object" }, strict: true },
+    });
+  });
+
+  test("defaults the json_schema name when the Responses form omits it", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_schema", schema: { type: "object" } } },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "response", schema: { type: "object" } },
+    });
+  });
+
+  test("omits response_format without a textFormat option", () => {
+    const plain = createOpenAIChatAdapter(provider()).buildRequest(parsed());
+
+    expect(bodyOf(plain).response_format).toBeUndefined();
+  });
+
+  test("preserves a schema-less json_schema response_format", () => {
+    const schemaless = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_schema", name: "answer" } },
+    });
+
+    expect(bodyOf(schemaless).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer" },
+    });
   });
 });

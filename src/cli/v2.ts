@@ -11,7 +11,8 @@
  *  - nothing in the catalog build path calls this module; no auto-flip exists.
  */
 import { execFileSync } from "node:child_process";
-import { getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
+import { dirname } from "node:path";
+import { activeCodexConfigPath, getAgentsEnabled, getAgentsMaxDepth, getLogicalMaxThreads, getSubagentDeveloperInstructions, hasAgentsMaxThreads, isMultiAgentV2Enabled, transitionMultiAgentV2 } from "../codex/features";
 
 import { commandInvocation, type SpawnInvocation } from "../lib/win-exec";
 import { loadConfig, saveConfig } from "../config";
@@ -30,13 +31,16 @@ export type CodexFeaturesInvocationDeps =
   & Pick<ResolveCodexRuntimeDeps, "existsSync" | "execFileSync" | "configDir" | "readFileSync">;
 
 /**
- * Shared invocation for `codex features enable|disable multi_agent_v2` — the single
+ * Shared invocation for `codex features enable|disable <feature>` — the single
  * source of truth for the CLI and the management API fallback. Windows npm installs
  * expose `codex` as a `.cmd` shim, which needs the win-exec launcher
- * (devlog 260715_cross_platform_audit/020).
+ * (devlog 260715_cross_platform_audit/020). Upstream `codex features` validates
+ * the key against the installed build's feature registry, so an old Codex will
+ * fail loudly instead of silently writing an unknown flag.
  */
 export function codexFeaturesInvocation(
   action: "enable" | "disable",
+  feature: string = "multi_agent_v2",
   platform: NodeJS.Platform = process.platform,
   deps: CodexFeaturesInvocationDeps = {},
 ): SpawnInvocation {
@@ -48,15 +52,38 @@ export function codexFeaturesInvocation(
     configDir: deps.configDir,
     readFileSync: deps.readFileSync,
   }).runtime.command || "codex";
-  return commandInvocation(command, ["features", action, "multi_agent_v2"], platform, deps);
+  return commandInvocation(command, ["features", action, feature], platform, deps);
+}
+
+/**
+ * Run `codex features <action> <feature>` synchronously - the management API
+ * fallback when no deps toggle is injected. Shares the invocation builder and
+ * the bounded timeout/stdio options so every production toggle path behaves
+ * identically.
+ */
+export function runCodexFeaturesCommand(
+  action: "enable" | "disable",
+  feature: string = "multi_agent_v2",
+): void {
+  const inv = codexFeaturesInvocation(action, feature);
+  execFileSync(inv.file, inv.args,
+    {
+      stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, encoding: "utf8",
+      // The reader resolves $CODEX_HOME at call time (including the WSL Windows-home
+      // detection); force the same home on the child so it never toggles a different
+      // config than the one the postcondition re-reads.
+      env: { ...process.env, CODEX_HOME: dirname(activeCodexConfigPath()) },
+      ...inv.options,
+    });
 }
 
 function runCodexFeatures(action: "enable" | "disable", deps: V2CliDeps): void {
-  const exec = deps.execFile ?? ((file: string, args: string[], options?: SpawnInvocation["options"]) => {
-    execFileSync(file, args, { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, windowsHide: true, ...options });
-  });
-  const inv = codexFeaturesInvocation(action);
-  exec(inv.file, inv.args, inv.options);
+  if (deps.execFile) {
+    const inv = codexFeaturesInvocation(action);
+    deps.execFile(inv.file, inv.args, inv.options);
+    return;
+  }
+  runCodexFeaturesCommand(action);
 }
 
 export function v2StatusLine(enabled: boolean): string {

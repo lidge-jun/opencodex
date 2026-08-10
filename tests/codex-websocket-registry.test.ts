@@ -8,6 +8,7 @@ import {
   unregisterCodexWebSocket,
   updateCodexWebSocketAuthContext,
 } from "../src/codex/websocket-registry";
+import { applyConfirmedMainCodexAccountTransition } from "../src/codex/account-lifecycle";
 import type { WsData } from "../src/server/ws-bridge";
 
 function mockWs(data: WsData): {
@@ -68,6 +69,25 @@ describe("codex websocket registry", () => {
     expect(getTrackedCodexWebSocketCountForAccount("__main__")).toBe(1);
 
     unregisterCodexWebSocket(mainPool.ws);
+    expect(getTrackedCodexWebSocketCountForAccount("__main__")).toBe(0);
+  });
+
+  test("confirmed native-main transition cancels and closes tracked Responses WebSocket work", () => {
+    let cancelled = 0;
+    const mainPool = mockWs({
+      authContext: {
+        kind: "main-pool",
+        accountId: "__main__",
+        accessToken: "old-main-token",
+        chatgptAccountId: "old-main-account",
+      },
+      cancel: () => { cancelled += 1; },
+    });
+    registerCodexWebSocket(mainPool.ws);
+
+    expect(applyConfirmedMainCodexAccountTransition("old-main-account", "new-main-account")).toBe(true);
+    expect(cancelled).toBe(1);
+    expect(mainPool.closed).toEqual([{ code: 4001, reason: "Codex account invalidated" }]);
     expect(getTrackedCodexWebSocketCountForAccount("__main__")).toBe(0);
   });
 

@@ -1,38 +1,29 @@
 import { createContext, useContext } from "react";
-import { en, type TKey } from "./en";
-import { de } from "./de";
-import { ko } from "./ko";
-import { zh } from "./zh";
-import { zhTW } from "./zh-TW";
-import { ru } from "./ru";
-import { ja } from "./ja";
+import { DICTS, localeDisplayName, type Locale, type TKey } from "./catalogs";
 
-export type Locale = "en" | "de" | "ko" | "zh" | "zh-TW" | "ru" | "ja";
-export type { TKey };
+export { DICTS, localeDisplayName, type Locale, type TKey };
 
-export const DICTS: Record<Locale, Record<TKey, string>> = {
-  en, de, ko, zh, "zh-TW": zhTW, ru, ja,
-};
-
-export const LOCALES: { code: Locale; name: string; htmlLang: string }[] = [
-  { code: "en", name: "English", htmlLang: "en" },
-  { code: "de", name: "Deutsch", htmlLang: "de" },
-  { code: "ko", name: "한국어", htmlLang: "ko" },
-  { code: "zh", name: "简体中文", htmlLang: "zh-CN" },
-  { code: "zh-TW", name: "繁體中文", htmlLang: "zh-TW" },
-  { code: "ru", name: "Русский", htmlLang: "ru" },
-  { code: "ja", name: "日本語", htmlLang: "ja" },
+export const LOCALES: { code: Locale; htmlLang: string }[] = [
+  { code: "en", htmlLang: "en" },
+  { code: "de", htmlLang: "de" },
+  { code: "ko", htmlLang: "ko" },
+  { code: "zh", htmlLang: "zh-CN" },
+  { code: "zh-TW", htmlLang: "zh-TW" },
+  { code: "ru", htmlLang: "ru" },
+  { code: "ja", htmlLang: "ja" },
+  { code: "tr", htmlLang: "tr" },
 ];
 
 const LANG_KEY = "ocx-lang";
-const LOCALE_CODES = new Set<string>(LOCALES.map(l => l.code));
+
+let activeLocale: Locale | null = null;
 
 export function detectInitial(): Locale {
   try {
     const stored = localStorage.getItem(LANG_KEY);
-    if (stored && LOCALE_CODES.has(stored)) return stored as Locale;
+    if (stored === "en" || stored === "de" || stored === "ko" || stored === "zh" || stored === "zh-TW" || stored === "ru" || stored === "ja" || stored === "tr") return stored;
   } catch { /* ignore */ }
-  const nav = typeof navigator !== "undefined" ? navigator.language.toLowerCase() : "en";
+  const nav = typeof navigator !== "undefined" && navigator?.language ? navigator.language.toLowerCase() : "en";
   if (nav.startsWith("de")) return "de";
   if (nav.startsWith("ko")) return "ko";
   if (nav.startsWith("zh")) {
@@ -49,7 +40,17 @@ export function detectInitial(): Locale {
   }
   if (nav.startsWith("ru")) return "ru";
   if (nav.startsWith("ja")) return "ja";
+  if (nav.startsWith("tr")) return "tr";
   return "en";
+}
+
+/** Current LanguageProvider locale for non-React UI such as the auth fetch dialog. */
+export function getActiveLocale(): Locale {
+  return activeLocale ?? detectInitial();
+}
+
+export function setActiveLocale(locale: Locale): void {
+  activeLocale = locale;
 }
 
 export type Vars = Record<string, string | number>;

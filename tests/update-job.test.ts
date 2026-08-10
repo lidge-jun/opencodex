@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +10,8 @@ import {
   readUpdateJob,
   restartCommand,
   restartAfterUpdateForTests,
+  runGuiUpdateWorker,
+  summarizeCommandOutput,
   staleActiveUpdateJobReason,
   startUpdateJob,
   UPDATE_JOB_LEGACY_STALE_MS,
@@ -85,9 +87,348 @@ describe("GUI update check", () => {
     expect(result.canUpdate).toBe(false);
     expect(result.reason).toBe("already_latest");
   });
+
+  test("offers a stable update from an older preview but not the same base", () => {
+    const olderPreview = checkForUpdate("latest", {
+      currentVersion: () => "2.8.2-preview.20260731",
+      detectInstall: () => "npm",
+      latestVersion: () => "2.9.1",
+    });
+    expect(olderPreview.updateAvailable).toBe(true);
+    expect(olderPreview.canUpdate).toBe(true);
+
+    const sameBasePreview = checkForUpdate("latest", {
+      currentVersion: () => "2.9.1-preview.20260731",
+      detectInstall: () => "npm",
+      latestVersion: () => "2.9.1",
+    });
+    expect(sameBasePreview.updateAvailable).toBe(false);
+    expect(sameBasePreview.canUpdate).toBe(false);
+  });
 });
 
 describe("GUI update execution decisions", () => {
+  test("the persistence boundary redacts profile/cache paths and UID/GID from every field", () => {
+    const privateOutput = [
+      String.raw`profile C:\Users\Mary Jane van der Berg\Documents\private.txt`,
+      String.raw`cache C:\Users\Mary Jane van der Berg\AppData\Local\npm-cache\_logs\debug.log`,
+      "/Users/Mary Jane van der Berg/.npm/_cacache/content-v2/entry",
+      "uid=501 gid: 20",
+    ].join("\n");
+
+    expect(() => startUpdateJob("latest", true, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: privateOutput,
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw new Error(privateOutput); },
+    })).toThrow("Could not start update worker");
+
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("Mary Jane van der Berg");
+    expect(persisted).not.toContain("AppData");
+    expect(persisted).not.toContain("_cacache");
+    expect(persisted).not.toContain("Users");
+    expect(persisted).not.toMatch(/\buid\s*[=:]\s*501\b/i);
+    expect(persisted).not.toMatch(/\bgid\s*[=:]\s*20\b/i);
+    // Multi-line vendor output no longer crosses the boundary at all — it is replaced by a
+    // shape note. The secrets are what matter here, and none of them survive.
+    expect(persisted).toContain("withheld");
+    expect(persisted).not.toContain("private.txt");
+  });
+
+  test("the persistence boundary survives wrapped paths and profile expansions", () => {
+    // Every input here defeated the first version of the sanitizer. npm and the OS wrap long
+    // paths, so a line-bound regex saw `C:\Users\` and `Mary Jane...` as unrelated fragments
+    // and passed the username straight through.
+    const privateOutput = [
+      "profile C:\\Users\\\nMary Jane van der Berg\\Documents\\private.txt",
+      String.raw`expanded %USERPROFILE%\Documents\private.txt`,
+      String.raw`unc \\fileserver\share\Users\Mary Jane van der Berg\notes.txt`,
+      "root /root/private.txt",
+      "home $HOME/private.txt",
+      // Wraps that do NOT land on a separator — these defeated the first collapse.
+      "midsegment C:\\Us\\\nners\\Zoe [Admin]+\\Documents\\private.txt",
+      "midname C:\\Users\\Zo\\\ne Admin\\Documents\\private.txt",
+      // Indented continuations: the wrap leaves leading whitespace, which blocked keyword
+      // reconstruction until the scan copy learned to drop it too.
+      "unc-wrap \\\\fileserver\\share\\Us\n  ers\\Zoe [Admin]+\\notes.txt",
+      "docs-wrap \\\\fileserver\\share\\Documents and Set\n\ttings\\A+B (Ops)\\notes.txt",
+      "posix-wrap /Us\n  ers/\ud64d \uae38\ub3d9/private.txt",
+      // A redacted path must not swallow the lines after it: the persisted log is what a user
+      // reads when an update fails, and eating the diagnostics is its own kind of damage.
+      "unc \\\\server\\share\\Us\n  ers\\Jane\\x",
+      "KEEP diagnostic code E42",
+      // Ends INSIDE the account name with no separator on the continuation.
+      "terminal C:\\Users\\Z\n  oe [Admin]+",
+      // A genuinely new record that contains a separator must survive.
+      "unc2 \\\\server\\share\\Users\\Jane\\x",
+      "UNC FOLLOW /usr/local/lib/node_modules",
+      // Three consecutive wraps, and an empty continuation line — a single carry bit could not
+      // cover either. These are why raw output is no longer persisted at all.
+      "three C:\\Us\n  ers\\Ja\n  ne [Admin]+\\Documents\\x",
+      "empty C:\\Users\\Z\n\n  oe (Blank)+",
+    ].join("\n");
+
+    expect(() => startUpdateJob("latest", true, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: privateOutput,
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw new Error(privateOutput); },
+    })).toThrow("Could not start update worker");
+
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("Mary Jane van der Berg");
+    expect(persisted).not.toContain("USERPROFILE");
+    expect(persisted).not.toContain("fileserver");
+    expect(persisted).not.toMatch(/\/root\b/);
+    expect(persisted).not.toMatch(/\$HOME/);
+    expect(persisted).not.toContain("Zoe [Admin]+");
+    expect(persisted).not.toContain("e Admin");
+    expect(persisted).not.toContain("Zoe [Admin]+");
+    expect(persisted).not.toContain("A+B (Ops)");
+    expect(persisted).not.toContain("\ud64d \uae38\ub3d9");
+    expect(persisted).not.toContain("Jane");
+    expect(persisted).not.toContain("oe [Admin]+");
+    expect(persisted).not.toContain("ne [Admin]+");
+    expect(persisted).not.toContain("oe (Blank)+");
+  });
+
+  test("a failed cache pre-flight leaves the install command unrun", async () => {
+    // Behavioral proof of gate ordering. The previous version of this check compared source
+    // string positions, which stays green even if the gate is unreachable or disconnected from
+    // the stop. Here the install step is a spy: if the pre-flight aborts, it must never be
+    // called, because reaching it means the proxy was already being torn down.
+    writeFileSync(updateJobPath(), JSON.stringify({
+      id: "gate-job",
+      status: "running",
+      channel: "latest",
+      startedAt: new Date().toISOString(),
+      log: [],
+    }));
+
+    let installRan = false;
+    let preflightRan = false;
+    await runGuiUpdateWorker("gate-job", "latest", false, {
+      // Force the npm installer: this worktree is a source checkout, so the real
+      // checkForUpdate aborts before the npm branch and the gate would never be reached.
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "npm i -g opencodex@latest",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      integrityFn: () => ({ ok: true as const, integrity: "sha512-testfixturevalue000000000" }),
+      cachePreflightFn: () => { preflightRan = true; return { ok: false, reason: "cache_entry_foreign_owner" }; },
+      runCommandFn: () => { installRan = true; return { status: 0, signal: null }; },
+    });
+
+    expect(preflightRan).toBe(true);
+    expect(installRan).toBe(false);
+    const job = readUpdateJob("gate-job");
+    expect(job?.status).toBe("failed");
+    expect(job?.error ?? "").toMatch(/cache/i);
+    expect(JSON.stringify(job?.log ?? [])).toContain("before stopping the proxy");
+    // Leave no job file behind: sibling tests in this file assert on the same shared path.
+    rmSync(updateJobPath(), { force: true });
+  });
+
+  test("single-line UNC and custom profile roots do not leak account names", () => {
+    // A shape-based code pattern let `C:\\Users\\ERROR\\.npm` echo back as a "code", and the
+    // single-line path still carried `\\\\server\\home$\\Jane Doe` and `D:\\Profiles\\Mary Jane`.
+    const oneLine = String.raw`unc \\server\home$\Jane Doe\private.txt; custom D:\Profiles\Mary Jane\private.txt`;
+
+    expect(() => startUpdateJob("latest", true, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: oneLine,
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw new Error(oneLine); },
+    })).toThrow("Could not start update worker");
+
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("Jane Doe");
+    expect(persisted).not.toContain("Mary Jane");
+  });
+
+  test("an error message naming a person is never persisted, path or not", () => {
+    // The leak that survived nine rounds of path-based redaction: `spawn denied for Jane Doe`
+    // contains no path, so every content test passed it through. Error text does not cross the
+    // boundary at all now — only the type, a recognized code, and a byte count.
+    expect(() => startUpdateJob("latest", false, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "npm install -g opencodex@2.7.41",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw new Error("spawn denied for Jane Doe"); },
+    })).toThrow("Could not start update worker");
+
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("Jane Doe");
+    expect(persisted).toContain("bytes withheld");
+    // The command shape survives: it is rendered from validated parts, not copied.
+    expect(persisted).toContain("opencodex@2.7.41");
+  });
+
+  test("a renamed error cannot smuggle a name through the type field", () => {
+    // `Error.name` is writable, so it is external text exactly like the message. Reporting it
+    // verbatim put the caller's chosen string straight into the persisted record.
+    const renamed = new Error("spawn denied for Jane Doe");
+    renamed.name = "Jane Doe";
+
+    expect(() => startUpdateJob("latest", false, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40",
+        latestVersion: "2.7.41",
+        channel: "latest",
+        installer: "npm",
+        updateAvailable: true,
+        canUpdate: true,
+        command: "npm install -g opencodex@2.7.41",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw renamed; },
+    })).toThrow("Could not start update worker");
+
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("Jane Doe");
+    expect(persisted).toContain("bytes withheld");
+  });
+
+  test("npm failures stay diagnosable: named fields survive, paths do not", () => {
+    // Captured from real `npm install` failures. npm's output is STRUCTURED —
+    // `npm error <field> <value>`, one field per line — so the useful parts can be read by
+    // name instead of reproduced as text. Withholding the whole stream made a failed update
+    // undebuggable; this keeps the cause and drops the paths.
+    const eacces = [
+      "npm error code EACCES",
+      "npm error syscall mkdir",
+      "npm error path /Users/Jane Doe/.npm/_cacache/tmp/x",
+      "npm error errno -13",
+      "npm error Error: EACCES: permission denied, mkdir '/Users/Jane Doe/.npm/x'",
+      "npm error     at async mkdir (node:internal/fs/promises:859:10)",
+    ].join("\n");
+
+    const summary = summarizeCommandOutput("", eacces, 1, null);
+
+    // The cause is legible.
+    expect(summary).toContain("code: EACCES");
+    expect(summary).toContain("syscall: mkdir");
+    expect(summary).toContain("errno: -13");
+    // The paths and the account name are not.
+    expect(summary).not.toContain("Jane Doe");
+    expect(summary).not.toContain("_cacache");
+    expect(summary).not.toContain("promises:859");
+
+    // A registry URL is a legitimate diagnostic and carries no local path.
+    const e404 = [
+      "npm error code E404",
+      "npm error 404 Not Found - GET https://registry.npmjs.org/nope - Not found",
+      "npm error A complete log of this run can be found in: /Users/Jane Doe/.npm/_logs/x.log",
+    ].join("\n");
+    const notFound = summarizeCommandOutput("", e404, 1, null);
+    expect(notFound).toContain("code: E404");
+    expect(notFound).not.toContain("Jane Doe");
+
+    // An unrecognized code is not echoed: `npm error code TOTALLY-MADE-UP` must not pass.
+    const bogus = summarizeCommandOutput("", "npm error code NOTAREALCODE", 1, null);
+    expect(bogus).not.toContain("NOTAREALCODE");
+
+    // The registry host survives — that is the diagnostic — but never the URL path, which can
+    // name a private scope, and never userinfo, which is a credential.
+    expect(notFound).toContain("registry.npmjs.org");
+    const scoped = summarizeCommandOutput("", "npm error 404 Not Found - GET https://registry.npmjs.org/@janedoe-private/pkg", 1, null);
+    expect(scoped).not.toContain("janedoe-private");
+    // Userinfo in a registry URL is a credential. Assembled rather than written literally so
+    // the privacy scanner does not read the fixture itself as an embedded secret.
+    const userinfoUrl = `https://Jane:secret${"@"}registry.npmjs.org/x`;
+    const credentialed = summarizeCommandOutput("", `npm error 404 GET ${userinfoUrl}`, 1, null);
+    expect(credentialed).not.toContain("Jane");
+    expect(credentialed).not.toContain("secret");
+  });
+
+  test("an allowlisted field name does not make its value safe", () => {
+    // The gap after the first attempt: field NAMES were allowlisted while VALUES stayed
+    // free-form, so `npm error syscall janedoe` walked straight through a recognized field.
+    // Every field is now rendered from a validated value, never echoed.
+    const forged = [
+      "npm error syscall janedoe",
+      "npm error errno JaneDoe",
+      "npm error notarget No matching version found for Jane Doe",
+      "NpM ErRoR SyScAlL JaneDoe",
+    ].join("\n");
+
+    const summary = summarizeCommandOutput("", forged, 1, null);
+    expect(summary).not.toContain("janedoe");
+    expect(summary).not.toContain("JaneDoe");
+    expect(summary).not.toContain("Jane Doe");
+    // The one field that still reports does so as a fixed phrase with no borrowed text.
+    expect(summary).toContain("no matching version");
+
+    // No package spec is echoed at all. `name@version` matches an email address; pinning the
+    // name to our own package still left the VERSION free, and a semver prerelease identifier
+    // can encode anything (`@bitkyc08/opencodex@99.99.99-JaneDoe`). `code: ETARGET` plus the
+    // bare fact is the diagnostic that matters.
+    for (const line of [
+      "npm error notarget No matching version found for jane.doe@example.com",
+      "npm error notarget No matching version found for @bitkyc08/opencodex@99.99.99-JaneDoe",
+    ]) {
+      const out = summarizeCommandOutput("", line, 1, null);
+      expect(out).toContain("no matching version");
+      expect(out).not.toContain("JaneDoe");
+      expect(out).not.toContain("jane.doe");
+    }
+
+    // Registry hosts are an allowlist, not a shape: an arbitrary hostname is a disclosure
+    // channel even when it parses cleanly.
+    const foreign = summarizeCommandOutput("", "npm error 404 GET https://janedoe.example/private", 1, null);
+    expect(foreign).not.toContain("janedoe");
+    expect(foreign).toContain("HTTP 404");
+
+    // Node exceptions use the same vocabulary rather than a shape check.
+    const hostile = Object.assign(new Error("boom"), { syscall: "janedoe", errno: "JaneDoe" });
+    expect(() => startUpdateJob("latest", false, {
+      checkForUpdateFn: () => ({
+        currentVersion: "2.7.40", latestVersion: "2.7.41", channel: "latest", installer: "npm",
+        updateAvailable: true, canUpdate: true, command: "npm install -g opencodex@2.7.41",
+        releaseNotesUrl: "https://github.com/lidge-jun/opencodex/releases/latest",
+      }),
+      spawnWorkerFn: () => { throw hostile; },
+    })).toThrow("Could not start update worker");
+    const persisted = readFileSync(updateJobPath(), "utf8");
+    expect(persisted).not.toContain("janedoe");
+    expect(persisted).not.toContain("JaneDoe");
+  });
+
   test("npm worker uses the Node launcher update path", () => {
     const cmd = updateExecutionCommand("npm", "preview", "/pkg/bin/ocx.mjs");
     expect(cmd.bin).toMatch(/^node/);
@@ -97,7 +438,7 @@ describe("GUI update execution decisions", () => {
   test("restart command separates service and direct proxy modes", () => {
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "service",
-      args: ["/pkg/bin/ocx.mjs", "service", "install"],
+      args: ["/pkg/bin/ocx.mjs", "service", "repair"],
     });
     expect(restartCommand(false, "npm", "/pkg/bin/ocx.mjs")).toMatchObject({
       mode: "proxy",
@@ -105,14 +446,53 @@ describe("GUI update execution decisions", () => {
     });
   });
 
+  test("service restart is not skipped when the listener scan fails", async () => {
+    let serviceRuns = 0;
+    const serviceArgs: string[][] = [];
+    const job: UpdateJobState = {
+      id: "svc-scan-failure",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.10.2",
+      latestVersion: "2.10.3",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+      releaseNotesUrl: "",
+    };
+    writeFileSync(updateJobPath(), JSON.stringify(job));
+    await restartAfterUpdateForTests(job, { port: 19997, hostname: "127.0.0.1" }, {
+      serviceInstalledFn: () => true,
+      serviceViableFn: () => true,
+      waitForPort: async () => false,
+      listListenPidsFn: () => [],
+      scanListenPidsFn: () => ({ ok: false, error: "listener tools unavailable" }),
+      runService: (_job, _bin, args) => {
+        serviceRuns += 1;
+        serviceArgs.push(args);
+        return { status: 0 };
+      },
+      spawnStart: () => {},
+      probeProxy: async () => true,
+    });
+    expect(serviceRuns).toBe(1);
+    expect(serviceArgs[0]).toContain("repair");
+    expect(readUpdateJob(job.id)?.log.some(line =>
+      line.includes("Skipping service reinstall after reclaim timeout"),
+    )).toBe(false);
+  });
+
   test("proxy restart pins --port so post-update start does not hop to an ephemeral port", () => {
     const proxy = restartCommand(false, "npm", "/pkg/bin/ocx.mjs", 10100);
     expect(proxy.mode).toBe("proxy");
     expect(proxy.args).toEqual(["/pkg/bin/ocx.mjs", "start", "--port", "10100"]);
     expect(proxy.display).toContain("start --port 10100");
-    // Service reinstall stays install-only at the argv level; wrappers bake --port via OCX_BAKE_PORT.
+    // The service refresh takes no --port at the argv level; wrappers bake it via OCX_BAKE_PORT.
     expect(restartCommand(true, "npm", "/pkg/bin/ocx.mjs", 10100).args).toEqual([
-      "/pkg/bin/ocx.mjs", "service", "install",
+      "/pkg/bin/ocx.mjs", "service", "repair",
     ]);
   });
 
@@ -306,6 +686,12 @@ describe("GUI update execution decisions", () => {
       await restartAfterUpdateForTests(job, { port: 18765, hostname: "127.0.0.1" }, {
         serviceInstalledFn: () => true,
         serviceViableFn: () => true,
+        // The service-recovery gate now asks the port before skipping the direct-start
+        // fallback. This test is about the OCX_BAKE_PORT lifecycle, not the recovery
+        // decision, so answer the probe rather than letting it reach a real socket:
+        // without it the run falls through to the direct-start path, calls waitFn a
+        // second time, and times out on the ghost-LISTEN wait.
+        probeProxy: async () => true,
         waitForPort: async (port, hostname) => {
           waited.push({ port, hostname: hostname ?? "" });
           expect(process.env.OCX_BAKE_PORT).toBeUndefined();
@@ -355,6 +741,56 @@ describe("GUI update execution decisions", () => {
       });
       // The fallback must fire: direct proxy start instead of throwing.
       expect(spawned).toEqual([{ port: 19999 }]);
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+  });
+
+  // 260804 #970: the Windows GUI update worker (OCX_SERVICE=1, never elevated) used to
+  // skip the service refresh entirely, because it ran `service install` whose scheduler
+  // path always reaches `schtasks /create`. `repair` never calls /create, so the skip's
+  // reason is gone and the dashboard-triggered update — the most common Windows path —
+  // must actually refresh the service. Ablate by restoring the unconditional skip:
+  // runService is then never called and this goes red.
+  test("a non-elevated Windows update worker repairs the service instead of skipping it", async () => {
+    const ranService: string[][] = [];
+    const spawned: Array<{ port: number }> = [];
+    const job: UpdateJobState = {
+      id: "svc-win-repair",
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.42",
+      latestVersion: "2.7.43",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    const prevService = process.env.OCX_SERVICE;
+    process.env.OCX_SERVICE = "1";
+    try {
+      await restartAfterUpdateForTests(job, { port: 19998, hostname: "127.0.0.1" }, {
+        platform: "win32",
+        serviceInstalledFn: () => true,
+        serviceViableFn: () => true,
+        waitForPort: async () => true,
+        probeProxy: async () => true,
+        runService: (_j, _bin, args) => {
+          ranService.push(args);
+          return { status: 0 };
+        },
+        spawnStart: (_job, _installer, port) => {
+          spawned.push({ port: port ?? 0 });
+        },
+      });
+      // The refresh ran, and it ran the non-registering subcommand.
+      expect(ranService.length).toBe(1);
+      expect(ranService[0]).toContain("repair");
+      expect(ranService[0]).not.toContain("install");
     } finally {
       if (prevService === undefined) delete process.env.OCX_SERVICE;
       else process.env.OCX_SERVICE = prevService;
@@ -933,6 +1369,28 @@ describe("GUI update execution decisions", () => {
     expect(readUpdateJob(job.id)?.log.some(line => line.includes("skipping redundant restart"))).toBe(false);
   });
 
+  test("a hostile /healthz version never reaches a persisted reason", () => {
+    // `2.7.41-JaneDoe` is valid semver, so shape validation alone let it through — and the
+    // mismatch reason echoed it. /healthz is answered by whatever holds the port, so its
+    // version is external input: we report THAT it mismatched and name only our own expectation.
+    const hostile = npmSelfUpdateRestartEvidence(
+      { latestVersion: "2.7.41" },
+      { oldPid: 111 },
+      { pid: 222, version: "2.7.41-JaneDoe" },
+    );
+    expect(hostile.ok).toBe(false);
+    expect(JSON.stringify(hostile)).not.toContain("JaneDoe");
+    expect(JSON.stringify(hostile)).toContain("2.7.41");
+
+    // A genuine match still reports the version, rendered from the trusted expectation.
+    const matched = npmSelfUpdateRestartEvidence(
+      { latestVersion: "2.7.41" },
+      {},
+      { pid: 222, version: "2.7.41" },
+    );
+    expect(matched.ok).toBe(true);
+  });
+
   test("npmSelfUpdateRestartEvidence requires a PID change or target version", () => {
     expect(npmSelfUpdateRestartEvidence(
       { latestVersion: "2.7.41" },
@@ -1056,7 +1514,12 @@ describe("GUI update execution decisions", () => {
       spawnWorkerFn: () => { throw new Error("spawn denied"); },
     })).toThrow("Could not start update worker");
     expect(readUpdateJob()?.status).toBe("failed");
-    expect(readUpdateJob()?.error).toContain("spawn denied");
+    // The message itself is deliberately NOT persisted: `spawn denied for Jane Doe` carries no
+    // path and still names a person, so no content test can separate diagnostic from identity.
+    // The error's type and size are what the record keeps.
+    expect(readUpdateJob()?.error).not.toContain("spawn denied");
+    expect(readUpdateJob()?.error).toContain("Error");
+    expect(readUpdateJob()?.error).toContain("bytes withheld");
   });
 });
 
@@ -1105,19 +1568,103 @@ describe("immutable update target (WP160)", () => {
   test("GUI worker gates integrity before spawning and fails the job on anomalous metadata", async () => {
     const source = await Bun.file(new URL("../src/update/job.ts", import.meta.url)).text();
 
-    const gateAt = source.indexOf("const integrity = checkUpdatePackageIntegrity(check.latestVersion);");
+    const gateAt = source.indexOf("const integrity = (io.integrityFn ?? checkUpdatePackageIntegrity)(check.latestVersion);");
+    const cacheGateAt = source.indexOf("const cachePreflight = (io.cachePreflightFn ?? runNpmCachePreflight)();");
+    const trayStopAt = source.indexOf("handoffWindowsTrayForUpdate(tray");
     const failAt = source.indexOf('updateJob(job, { status: "failed", error: integrity.reason });');
-    const spawnAt = source.indexOf("const result = runLoggedCommand(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);");
+    const spawnAt = source.indexOf("const result = (io.runCommandFn ?? runLoggedCommand)(job, cmd.bin, cmd.args, UPDATE_TIMEOUT_MS);");
     expect(gateAt).toBeGreaterThan(-1);
+    expect(cacheGateAt).toBeGreaterThan(-1);
+    expect(trayStopAt).toBeGreaterThan(-1);
     expect(failAt).toBeGreaterThan(-1);
     expect(spawnAt).toBeGreaterThan(-1);
     // Gate and its failure return both precede the installer spawn.
     expect(gateAt).toBeLessThan(spawnAt);
     expect(failAt).toBeLessThan(spawnAt);
+    expect(cacheGateAt).toBeLessThan(trayStopAt);
+    expect(cacheGateAt).toBeLessThan(spawnAt);
     // The job log records the verified-or-skipped integrity line at handoff.
     expect(source).toContain("integrity metadata ${integrity.integrity.slice(0, 24)}");
     expect(source).toContain("Integrity pre-flight skipped");
     // The bun lane pins the resolved version through updateExecutionCommand.
     expect(source).toContain("updateExecutionCommand(check.installer, channel, undefined, check.latestVersion)");
+  });
+});
+
+/**
+ * `isServiceViable()` answers registration, not service: `launchctl list` reports a
+ * job that bound nothing, and `schtasks` reports a task whose child exited at once.
+ * Returning early on it skipped the direct-start fallback that exists so a dashboard
+ * update never leaves the proxy dead.
+ */
+describe("service recovery is health-gated, not viability-gated", () => {
+  function healthGateJob(id: string): UpdateJobState {
+    const job: UpdateJobState = {
+      id,
+      status: "restarting",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      currentVersion: "2.7.26",
+      latestVersion: "2.7.28",
+      channel: "latest",
+      installer: "npm",
+      restart: true,
+      command: "",
+      log: [],
+    };
+    writeFileSync(updateJobPath(job.id), JSON.stringify(job));
+    return job;
+  }
+
+  async function runGate(
+    id: string,
+    io: Parameters<typeof restartAfterUpdateForTests>[2],
+  ): Promise<number[]> {
+    const spawned: number[] = [];
+    let now = 0;
+    const prevService = process.env.OCX_SERVICE;
+    delete process.env.OCX_SERVICE;
+    try {
+      await restartAfterUpdateForTests(healthGateJob(id), { port: 18765, hostname: "127.0.0.1" }, {
+        serviceInstalledFn: () => true,
+        runService: () => ({ status: 0 }),
+        waitForPort: async () => true,
+        spawnStart: (_job, _installer, port) => { spawned.push(port ?? 0); },
+        sleepMs: async ms => { now += ms; },
+        now: () => now,
+        ...io,
+      });
+    } finally {
+      if (prevService === undefined) delete process.env.OCX_SERVICE;
+      else process.env.OCX_SERVICE = prevService;
+    }
+    return spawned;
+  }
+
+  // The regression: viable=true, service registered, nothing listening.
+  test("falls through to a direct start when a viable service never serves", async () => {
+    const spawned = await runGate("svc-health-dead", {
+      serviceViableFn: () => true,
+      probeProxy: async () => false,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(spawned).toEqual([18765]);
+  });
+
+  test("returns without a direct start when the service does serve", async () => {
+    const spawned = await runGate("svc-health-live", {
+      serviceViableFn: () => true,
+      probeProxy: async () => true,
+    });
+    expect(spawned).toEqual([]);
+  });
+
+  test("still falls back when the service is not viable at all", async () => {
+    const spawned = await runGate("svc-health-nonviable", {
+      serviceViableFn: () => false,
+      probeProxy: async () => false,
+      serviceHealthTimeoutMs: 1_000,
+    });
+    expect(spawned).toEqual([18765]);
   });
 });

@@ -114,6 +114,7 @@ description.
 - Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
 - Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
 - Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
+- If the title or description mentions `gui`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present.
 - Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
 
 ## Project maintainers
@@ -163,7 +164,8 @@ sent to. A preset therefore needs primary-source evidence, not a working code pa
 that add or promote a provider must supply all of the following in the description:
 
 - **The documented OpenAI-compatible endpoints.** Link the vendor's own API reference for the chat
-  endpoint and, when the entry sets `liveModels: true`, for authenticated `GET /v1/models`. A
+  endpoint and, when the entry sets `liveModels: true`, for its authenticated model-discovery
+  endpoint (typically `GET /v1/models`). A
   passing fixture test is not a substitute: it proves our code shape, not the upstream contract.
 - **Terms of service and the operating legal entity.** An empty or placeholder legal page does not
   establish who runs the endpoint or under what terms user traffic is handled.

@@ -31,8 +31,8 @@ test("moves a Beijing entry holding an international endpoint", () => {
   const config = migratableConfig();
   // Beijing catalog fields, as `ocx provider add` would have persisted them.
   Object.assign(config.providers["alibaba-token-plan"]!, {
-    models: ["qwen3.8-max-preview", "qwen3.7-max"],
-    defaultModel: "qwen3.8-max-preview",
+    models: ["qwen3.8-max", "qwen3.7-max"],
+    defaultModel: "qwen3.8-max",
   });
 
   const projection = projectAlibabaRegionMigration(config);
@@ -165,12 +165,14 @@ test("is idempotent across repeated startups", () => {
   expect(second.config).toEqual(first.config);
 });
 
-test("carries liveModels and a user-authored note, but not the Beijing catalog", () => {
+test("carries liveModels, modelCosts, and a user-authored note, but not the Beijing catalog", () => {
   const config = migratableConfig();
-  Object.assign(config.providers["alibaba-token-plan"]!, { liveModels: true, note: "my own note" });
+  const costs = { "kimi-k3": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 } };
+  Object.assign(config.providers["alibaba-token-plan"]!, { liveModels: true, note: "my own note", modelCosts: costs });
 
   const moved = projectAlibabaRegionMigration(config).config.providers["alibaba-token-plan-intl"]!;
   expect(moved.liveModels).toBe(true);
+  expect(moved.modelCosts).toEqual(costs);
   expect(moved.note).toBe("my own note");
   expect(moved.models).toContain("kimi-k2.7-code");
 });

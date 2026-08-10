@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON, setOwnedBudgetAbandonedMsForTests } from "../src/bridge";
+import {
+  resetTranslatorAggregateForTests,
+  translatorAggregateCurrentBytesForTests,
+  translatorLiveBudgetCountForTests,
+} from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -877,7 +882,9 @@ describe("Responses bridge web_search_call native item", () => {
     expect((addedItem.id as string).startsWith("ws_")).toBe(true);
     expect(doneItem.id).toBe(addedItem.id);
     expect(doneItem.status).toBe("completed");
-    expect(doneItem.action).toEqual({ type: "search", query: "current docs" });
+    // Both shapes: codex-rs reads `query`, and DeepSeek's native Responses parser
+    // requires `queries` when the item is replayed in later turns (#930).
+    expect(doneItem.action).toEqual({ type: "search", query: "current docs", queries: ["current docs"] });
 
     const completed = frames.find(f => f.event === "response.completed")?.data.response as Record<string, unknown>;
     const output = completed.output as Record<string, unknown>[];
@@ -913,6 +920,36 @@ describe("Responses bridge web_search_call native item", () => {
     // Native renders "<first> ..." only when `query` is absent and queries.len() > 1.
     expect(action).toEqual({ type: "search", queries: ["rust async", "tokio runtime"] });
     expect(action.query).toBeUndefined();
+  });
+
+  test("a single-query search also carries queries so strict parsers accept the replay (#930)", () => {
+    // DeepSeek's native Responses parser requires `queries`. Without it, the replayed
+    // web_search_call in every later turn of the conversation fails deserialization with
+    // `missing field 'queries'` and 400s the whole thread.
+    const json = buildResponseJSON([
+      { type: "web_search_call_begin", id: "ws_930" },
+      { type: "web_search_call_end", id: "ws_930", queries: ["deepseek responses"] },
+      { type: "text_delta", text: "answer" },
+      { type: "done" },
+    ], "routed/model");
+
+    const action = (json.output as Record<string, unknown>[])[0].action as Record<string, unknown>;
+    expect(action.queries).toEqual(["deepseek responses"]);
+    // `query` stays present: codex-rs reads it, and the single-query rendering depends
+    // on it, so this is additive rather than a swap.
+    expect(action.query).toBe("deepseek responses");
+  });
+
+  test("an empty-query search still carries a queries array (#930)", () => {
+    const json = buildResponseJSON([
+      { type: "web_search_call_begin", id: "ws_931" },
+      { type: "web_search_call_end", id: "ws_931", queries: [] },
+      { type: "done" },
+    ], "routed/model");
+
+    const action = (json.output as Record<string, unknown>[])[0].action as Record<string, unknown>;
+    expect(action.queries).toEqual([""]);
+    expect(action.query).toBe("");
   });
 
   test("streaming: web_search_call_end sources attach as url_citation annotations on the next message", async () => {
@@ -1020,5 +1057,87 @@ describe("Responses bridge stopReason threading (issue #246)", () => {
     ], "routed/model");
     expect(json.status).toBe("completed");
     expect(json.incomplete_details).toBeUndefined();
+  });
+});
+
+describe("buildResponseJSON default budget safety net", () => {
+  test("omitting the translator budget is bounded, never unbounded", () => {
+    // A single tool call with arguments above the 2 MiB default per-call cap
+    // must overflow even with NO budget option passed (previously unbounded).
+    const events: AdapterEvent[] = [
+      { type: "tool_call_start", id: "call_huge", name: "f" },
+      { type: "tool_call_delta", arguments: "x".repeat(3 * 1024 * 1024) },
+      { type: "tool_call_end", id: "call_huge" },
+      { type: "done" },
+    ];
+    expect(() => buildResponseJSON(events, "mock/test-model")).toThrow(/translation_buffer_limit|buffer exceeded/);
+  });
+});
+
+describe("bridgeToResponsesSSE owned default budget lifecycle", () => {
+  test("terminal completion disposes the owned default budget", async () => {
+    const before = translatorLiveBudgetCountForTests();
+    const stream = bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "hi" },
+      { type: "done" },
+    ]), "mock/test-model");
+    await new Response(stream).text();
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  });
+
+  test("client cancel disposes the owned default budget", async () => {
+    const before = translatorLiveBudgetCountForTests();
+    const stream = bridgeToResponsesSSE(replay([
+      { type: "text_delta", text: "hi" },
+      { type: "done" },
+    ]), "mock/test-model");
+    await stream.cancel(new Error("client gone"));
+    expect(translatorLiveBudgetCountForTests()).toBe(before);
+  });
+
+  test("cancel during a pending upstream next never charges the disposed budget", async () => {
+    resetTranslatorAggregateForTests();
+    let release: ((event: AdapterEvent) => void) | null = null;
+    async function* gated(): AsyncGenerator<AdapterEvent> {
+      yield { type: "text_delta", text: "first" };
+      yield await new Promise<AdapterEvent>((resolve) => { release = resolve; });
+      yield { type: "done" };
+    }
+    const stream = bridgeToResponsesSSE(gated(), "mock/test-model");
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    // Drain frames until the first text arrives; the next read leaves step()
+    // parked inside `await it.next()`.
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error("stream closed before the first text frame");
+      if (decoder.decode(value).includes("first")) break;
+    }
+    const pending = reader.read();
+    // Prove the second upstream next() has STARTED before cancelling — otherwise
+    // the cancel happens before the race exists and the regression is vacuous.
+    for (let attempt = 0; attempt < 200 && !release; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(release).not.toBeNull();
+    await reader.cancel(new Error("client gone"));
+    release?.({ type: "text_delta", text: "late event after cancel" });
+    await pending;
+    reader.releaseLock();
+    expect(translatorLiveBudgetCountForTests()).toBe(0);
+    expect(translatorAggregateCurrentBytesForTests()).toBe(0);
+  });
+
+  test("an abandoned stream's owned budget is disposed by the watchdog", async () => {
+    resetTranslatorAggregateForTests();
+    setOwnedBudgetAbandonedMsForTests(10);
+    try {
+      const before = translatorLiveBudgetCountForTests();
+      bridgeToResponsesSSE(replay([{ type: "text_delta", text: "never read" }]), "mock/test-model");
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(translatorLiveBudgetCountForTests()).toBe(before);
+    } finally {
+      setOwnedBudgetAbandonedMsForTests(null);
+    }
   });
 });

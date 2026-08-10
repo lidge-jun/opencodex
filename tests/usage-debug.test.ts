@@ -112,8 +112,14 @@ describe("appendUsageDebug", () => {
     const parsed = JSON.parse(lines[0]) as { bodySample: string };
     expect(parsed.bodySample).not.toContain("usage-debug-token");
     expect(parsed.bodySample).not.toContain("refresh-debug-token");
-    expect(parsed.bodySample).toContain("Bearer [REDACTED]");
-    expect(parsed.bodySample).toContain("refreshToken");
+    // A credential value now masks to end of line, so the trailing fields of a
+    // serialized body go with it. That is deliberate: every attempt to stop
+    // early and keep the siblings readable turned out to be a way to smuggle a
+    // credential past the redactor. The first field name still identifies what
+    // the sample was, which is what a debug line actually needs.
+    expect(parsed.bodySample).not.toContain("Bearer usage-debug-token");
+    expect(parsed.bodySample).toContain("authorization");
+    expect(parsed.bodySample).toContain("[REDACTED]");
   });
 
   test("preserves estimated extracted usage while redacting surrounding secrets", () => {

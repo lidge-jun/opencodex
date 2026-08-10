@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  hashBelongsToPage,
   readPageFromHash,
   resolveAppHashChange,
   type Page,
@@ -76,20 +75,28 @@ export function useAppRouteState() {
     };
   }, [applyHashAction]);
 
+  /*
+   * Initial mount and page-driven normalization go through the SAME resolver.
+   *
+   * This effect used to re-implement two of the redirects by hand, which meant
+   * every new legacy mapping had to be added in two places or the initial
+   * mount would disagree with later hash changes: a first load on `#api` would
+   * be normalized to the bare page here and lose the nested destination the
+   * resolver was written to preserve.
+   */
   useEffect(() => {
     const rawHash = normalizeHashPath(window.location.hash);
-    if (rawHash === "debug" || rawHash.startsWith("debug/")) {
-      replaceHash("logs/debug");
-      return;
-    }
-    // Legacy deep link from the removed dual-layout era.
-    if (rawHash === "providers/workspace") {
-      replaceHash("providers");
-      return;
-    }
-    if (!hashBelongsToPage(rawHash, page)) {
-      replaceHash(page);
-    }
+    const action = resolveAppHashChange(rawHash);
+    if (action.replaceTo) replaceHash(action.replaceTo);
+    /*
+     * Initial state comes from `readPageFromHash`, so this normally agrees
+     * already. The guard covers the one gap it cannot: a hash changed between
+     * render and effect commit, before the `hashchange` listener below is
+     * registered. Without it that change is observed by nobody and the page
+     * renders against a hash it no longer matches.
+     */
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reconciles a hash changed before the listener existed; the equality check bounds it to one render
+    if (action.page !== page) setPageState(action.page);
   }, [page]);
 
   return {

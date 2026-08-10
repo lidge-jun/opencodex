@@ -8,16 +8,28 @@ import {
   type HarnessResult,
 } from "./helpers/enforce-pr-target-harness";
 
-/** Final enforcer comment body after pending/draft checkpoints. */
-function lastEnforcerCommentBody(result: HarnessResult): string {
-  const updates = callsTo(result, "issues.updateComment") as Array<{ body: string }>;
+/** Final consolidated gate comment body (the single bot message). */
+function lastGateCommentBody(result: HarnessResult): string {
+  const marker = "<!-- opencodex-pr-gate -->";
+  const updates = (callsTo(result, "issues.updateComment") as Array<{ body: string }>)
+    .filter(call => call.body.includes(marker));
   if (updates.length > 0) return updates[updates.length - 1]!.body;
   const creates = callsTo(result, "issues.createComment") as Array<{ body: string }>;
-  return creates[creates.length - 1]!.body;
+  const gateCreates = creates.filter(call => call.body.includes(marker));
+  if (gateCreates.length === 0) {
+    throw new Error("scenario recorded no gate comment");
+  }
+  return gateCreates[gateCreates.length - 1]!.body;
 }
+
+/** The single consolidated comment body; alias kept for scenario readability. */
+const lastReadinessCommentBody = lastGateCommentBody;
+/** Alias kept for scenarios that named the pre-consolidation enforcer comment. */
+const lastEnforcerCommentBody = lastGateCommentBody;
 
 const root = new URL("../", import.meta.url);
 const doctorGuiIfChangedScript = fileURLToPath(new URL("../scripts/doctor-gui-if-changed.ts", import.meta.url));
+const lintGuiIfChangedScript = fileURLToPath(new URL("../scripts/lint-gui-if-changed.ts", import.meta.url));
 
 async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
@@ -27,47 +39,222 @@ function count(text: string, fragment: string): number {
   return text.split(fragment).length - 1;
 }
 
+/** Match an executable shell line, not a fragment that could appear in echo or a comment. */
+function hasExactShellCommand(run: string | undefined, expected: string): boolean {
+  return (run ?? "")
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith("#"))
+    .includes(expected);
+}
+
+function expectSecureLinuxKeyringBootstrap(workflow: string): void {
+  const smokeStep = workflow
+    .split("- name: OS keyring create/read/delete smoke")[1]
+    ?.split(/\n(?: {6}- name:| {2}[A-Za-z0-9_-]+:)/)[0];
+
+  expect(smokeStep).toBeDefined();
+  expect(smokeStep).toContain('keyring_home="$(mktemp -d)"');
+  expect(smokeStep).toContain('runtime_dir="$(mktemp -d)"');
+  expect(smokeStep).toContain('cleanup() { rm -rf -- "$keyring_home" "$runtime_dir"; }');
+  expect(smokeStep).toContain("trap cleanup EXIT");
+  expect(smokeStep).toContain('chmod 700 "$keyring_home" "$runtime_dir"');
+  expect(smokeStep).toContain(
+    'HOME="$keyring_home" XDG_RUNTIME_DIR="$runtime_dir" dbus-run-session',
+  );
+  expect(smokeStep).toMatch(
+    /od -An -N32 -tx1 \/dev\/urandom \|\s+tr -d "\[:space:\]" \|\s+gnome-keyring-daemon --unlock --components=secrets >\/dev\/null/,
+  );
+  expect(smokeStep).not.toContain("eval ");
+  expect(smokeStep).not.toContain("gnome-keyring-daemon --start");
+}
+
 describe("GitHub Actions hardening", () => {
   test("cross-platform CI keeps bounded jobs and immutable action references", async () => {
     const workflow = await readText(".github/workflows/ci.yml");
     const ci = Bun.YAML.parse(workflow) as {
+      permissions?: Record<string, string>;
       jobs?: Record<string, { "timeout-minutes"?: number } | undefined>;
     };
 
     // Job-scoped: a global count still passes if values are swapped between jobs.
-    // Pin ownership explicitly. `test` is 30m for Windows isolate margin on #827
-    // after state-store admission — do not raise again; fix hung tests instead
-    // (unref'd oauth waitMs / shell kill-grace). Selector stays at 2; smoke at 8.
+    // Pin ownership explicitly. The Windows leg is sharded like the Linux ones
+    // since 8034cd7c0 — a single leg reached 30m on a green suite and was killed
+    // in cleanup, so each shard now holds the same 15m a Linux shard holds. A
+    // shard that needs longer is wedged, not slow.
     expect(ci.jobs?.["select-windows-runner"]?.["timeout-minutes"]).toBe(2);
-    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.test?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.gates?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.["platform-macos"]?.["timeout-minutes"]).toBe(30);
+    expect(ci.jobs?.["platform-windows"]?.["timeout-minutes"]).toBe(15);
+    expect(ci.jobs?.["keyring-smoke"]?.["timeout-minutes"]).toBe(8);
     expect(ci.jobs?.["npm-global-smoke"]?.["timeout-minutes"]).toBe(8);
+    expect(ci.jobs?.ci?.["timeout-minutes"]).toBe(5);
+    expect(ci.permissions).toEqual({ contents: "read" });
+
+    const keyringJob = ci.jobs?.["keyring-smoke"] as {
+      "runs-on"?: string;
+      strategy?: {
+        matrix?: {
+          include?: Array<{ name: string; runner: string }>;
+        };
+      };
+    } | undefined;
+    expect(keyringJob?.["runs-on"]).toBe("${{ matrix.runner }}");
+    expect(keyringJob?.strategy?.matrix?.include).toEqual([
+      { name: "ubuntu", runner: "ubuntu-latest" },
+      { name: "windows", runner: "windows-latest" },
+      { name: "macos", runner: "macos-latest" },
+    ]);
+    expectSecureLinuxKeyringBootstrap(workflow);
     // Every job must stay bounded — an unbounded job can hang a queue for hours.
-    expect(count(workflow, "timeout-minutes:")).toBe(3);
+    // Asserted structurally rather than by counting the string: a count passes if
+    // a job is added while another loses its bound in the same edit. Iterating the
+    // parsed jobs proves what the sentence above always claimed, and names the
+    // offending job when it fails.
+    for (const [name, job] of Object.entries(ci.jobs ?? {})) {
+      expect(`${name}:${typeof job?.["timeout-minutes"]}`).toBe(`${name}:number`);
+    }
     expect(workflow).toContain("actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0");
     expect(workflow).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(workflow).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
     expect(workflow).toContain("bun test --isolate tests");
     expect(workflow).not.toMatch(/uses:\s+\S+@(?:v\d+|main|master)\b/);
+
+    // Sharding is only safe while the shards tile the suite exactly. If the
+    // matrix and the divisor drift apart, some files stop running and CI stays
+    // green — the worst failure available here. Pin them to each other.
+    const linuxShards = (ci.jobs?.test as { strategy?: { matrix?: { shard?: number[] } } })
+      ?.strategy?.matrix?.shard ?? [];
+    expect(linuxShards).toEqual([1, 2, 3, 4]);
+    expect(workflow).toContain(`--shard=\${{ matrix.shard }}/${linuxShards.length}`);
+
+    // Windows uses the same shard matrix after the single-leg isolate budget was
+    // replaced. Keep the two matrices equal so a future edit cannot reintroduce
+    // a partial Windows suite while Linux stays fully tiled.
+    const windowsShards = (ci.jobs?.["platform-windows"] as {
+      strategy?: { matrix?: { shard?: number[] } };
+    })?.strategy?.matrix?.shard ?? [];
+    expect(windowsShards).toEqual(linuxShards);
+
+    // The aggregate gate is the check a human trusts. Three ways to break it
+    // silently: drop `if: always()` so it skips (and a skipped job reports
+    // success), shrink `needs:` so it stops covering a job, or add a job and
+    // forget to gate it. Deriving the expected list from the workflow's own job
+    // keys closes all three — a hardcoded list rots on the next job added.
+    const gate = ci.jobs?.ci as { if?: unknown; needs?: string[] } | undefined;
+    expect(gate?.if).toBe("always()");
+    expect([...(gate?.needs ?? [])].sort())
+      .toEqual(Object.keys(ci.jobs ?? {}).filter(name => name !== "ci").sort());
+
+    // macOS is the unsharded control for every CI-relevant change. It may skip
+    // only when the shared path filter says the entire expensive suite is out of
+    // scope (for example a docs-site-only PR).
+    const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { run?: string }[] })?.steps ?? [];
+    expect(macosSteps.some(step => step.run?.includes("bun test --isolate tests"))).toBe(true);
+    expect(macosSteps.some(step => step.run?.includes("--shard"))).toBe(false);
+    expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
+    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
+      .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
+
+    // Windows is dispatch-only: it gates nothing, not even the shipping
+    // boundary. The sharded promotion run surfaced ~207 Windows-only failures
+    // that pre-date every released version, so the leg became a measurement
+    // tool a maintainer runs by hand, not a gate. Assert the positive
+    // condition and the absence of every automatic trigger — a stray
+    // `|| github.ref == ...` would restore a red leg to the release path.
+    const windowsIf = String((ci.jobs?.["platform-windows"] as { if?: string })?.if ?? "");
+    expect(windowsIf).toContain("github.event_name == 'workflow_dispatch'");
+    expect(windowsIf).not.toContain("refs/heads/main");
+    expect(windowsIf).not.toContain("refs/heads/preview");
+    expect(windowsIf).not.toContain("refs/heads/dev");
+    expect(windowsIf).not.toContain("pull_request");
+
+    // Windows runs the same suite, sharded like the Linux legs, and keeps the
+    // self-hosted workspace wipe. Without the wipe a deleted file survives on
+    // the runner's disk and the suite passes against a tree that no longer
+    // exists in git.
+    const winSteps = (ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
+    const windowsTestCommand = `bun test --isolate tests --shard=\${{ matrix.shard }}/${windowsShards.length}`;
+    expect(hasExactShellCommand(`echo ${windowsTestCommand}`, windowsTestCommand)).toBe(false);
+    // Binding the assertion to an executable line is only half the guarantee: a
+    // step carrying the exact command still runs nothing under `if: false`, and
+    // the suite would stay green against a Windows leg that never tests. Require
+    // the matching step to be unconditional.
+    const windowsTestSteps = winSteps.filter(step => hasExactShellCommand(step.run, windowsTestCommand));
+    expect(windowsTestSteps.length).toBeGreaterThan(0);
+    expect(windowsTestSteps.every(step => step.if === undefined)).toBe(true);
+    expect(winSteps.some(step => step.if === "runner.environment == 'self-hosted'"
+      && step.run?.includes("git clean -xffd"))).toBe(true);
+
+    // Every job that runs the root suite must build the GUI first, unconditionally.
+    // Tests that fetch the served dashboard read their session bootstrap out of
+    // `gui/dist/index.html`; with no build the server has no index to serve and the
+    // assertions read an empty string. The old three-platform job satisfied this by
+    // accident, because the same job also ran the GUI build — splitting the suite
+    // away from the gates removed that coincidence, and the shards went red on a
+    // pull request before this pin existed.
+    for (const jobName of ["test", "platform-macos", "platform-windows"]) {
+      const steps = (ci.jobs?.[jobName] as { steps?: { if?: string; run?: string }[] })?.steps ?? [];
+      const build = steps.find(step => step.run?.includes("bun run build"));
+      expect(`${jobName}:${build === undefined}`).toBe(`${jobName}:false`);
+      expect(`${jobName}:${build?.if ?? "unconditional"}`).toBe(`${jobName}:unconditional`);
+    }
+
+    // No job in this workflow pushes, and the self-hosted runner keeps its
+    // checkout between jobs, so a persisted token is avoidable residue. The
+    // other workflows in this repository already set this; ci.yml was the gap.
+    const checkouts = Object.values(ci.jobs ?? {})
+      .flatMap(job => (job as { steps?: { uses?: string; with?: Record<string, unknown> }[] })?.steps ?? [])
+      .filter(step => step.uses?.startsWith("actions/checkout@"));
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const [index, step] of checkouts.entries()) {
+      expect(`checkout[${index}]:${step.with?.["persist-credentials"]}`).toBe(`checkout[${index}]:false`);
+    }
+
+    // The self-hosted workspace wipe must not swallow its own failure. A clean
+    // that fails on permissions leaves deleted files on disk, and the checkout
+    // after it then validates a tree that no longer exists in git.
+    const wipe = ((ci.jobs?.["platform-windows"] as { steps?: { if?: string; run?: string }[] })?.steps ?? [])
+      .find(step => step.run?.includes("git clean -xffd"));
+    expect(wipe?.run).not.toContain("|| true");
+    expect(wipe?.run).toContain("git rev-parse --is-inside-work-tree");
   });
 
   test("PR checks reach every branch the target gate accepts", async () => {
-    // These two lists have to move together with enforce-pr-target.yml. A PR
-    // that passes the gate but triggers no checks is worse than one that is
-    // blocked: it looks reviewable and has nothing behind it. Pin the
-    // pull_request branch lists to the gate's allow-list plus main.
+    // These lists have to move together with enforce-pr-target.yml. A PR that
+    // passes the gate but triggers no checks is worse than one that is blocked:
+    // it looks reviewable and has nothing behind it (commit 5229717b1).
+    //
+    // The gate accepts more than `ALLOWED_BASES`. It also exempts a STACKED
+    // child — a PR whose base is another open PR's head branch — from the
+    // wrong-base failure. That exemption has no fixed branch list, so a
+    // `branches:` allow-list on the check workflow can never cover it, and
+    // `ci.yml` therefore carries no base filter at all. `service-lifecycle.yml`
+    // keeps its list: it gates the release service path, not review.
     const gate = await readText(".github/workflows/enforce-pr-target.yml");
     const allowed = gate.match(/const ALLOWED_BASES = \[([^\]]*)\];/);
     expect(allowed).not.toBeNull();
     const bases = [...(allowed?.[1] ?? "").matchAll(/"([^"]+)"/g)].map(m => m[1]);
     expect(bases).toEqual(["dev"]);
 
-    for (const path of [".github/workflows/ci.yml", ".github/workflows/service-lifecycle.yml"]) {
+    // The gate itself must stay unfiltered by base, or the stacked exemption it
+    // implements would never be evaluated for the branches it exempts.
+    expect(gate).not.toMatch(/pull_request_target:[\s\S]{0,200}?branches:/);
+
+    for (const [path, expectedKeys] of [
+      // No `branches`: the stacked-base exemption has no enumerable branch list.
+      [".github/workflows/ci.yml", []],
+      [".github/workflows/service-lifecycle.yml", ["branches", "paths"]],
+    ] as const) {
       const workflow = Bun.YAML.parse(await readText(path)) as {
         on?: { pull_request?: Record<string, unknown> };
       };
       const trigger = workflow.on?.pull_request ?? {};
-      const branches = (trigger.branches as string[] | undefined) ?? [];
-      expect([...branches].sort()).toEqual(["dev", "main"]);
+      if (expectedKeys.includes("branches")) {
+        const branches = (trigger.branches as string[] | undefined) ?? [];
+        expect([...branches].sort()).toEqual(["dev", "main"]);
+      }
 
       // Narrowing a default is a mutation that deletes nothing. Omitting
       // `types` means opened + synchronize + reopened; writing
@@ -75,7 +262,7 @@ describe("GitHub Actions hardening", () => {
       // running checks on every commit pushed after the PR was opened — the
       // review then reads a green tick that belongs to an older tree. An
       // absent key is only pinned by asserting the key set, so assert it.
-      expect(Object.keys(trigger).sort()).toEqual(["branches", "paths"]);
+      expect(Object.keys(trigger).sort()).toEqual([...expectedKeys].sort());
       if ("types" in trigger) {
         // If a future change genuinely needs `types`, it must still cover the
         // three events the default covers.
@@ -89,16 +276,32 @@ describe("GitHub Actions hardening", () => {
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
-        pull_request?: { paths?: string[] };
+        pull_request?: { branches?: string[]; paths?: string[] };
       };
+      jobs?: Record<string, Record<string, unknown> | undefined>;
     };
     expect([...(ci.on?.push?.branches ?? [])].sort()).toEqual(["dev", "main", "preview"]);
 
-    // The path filter decides whether the job runs at all. Deleting one entry
-    // deletes nothing visible: the workflow still exists, still lists the right
-    // branches, and simply never fires for a PR that touches only that surface.
-    // Round 16 dropped `src/**`, `tests/**`, and both workflow self-references
-    // one at a time and the suite stayed green each time. Pin the list.
+    // The PR trigger must carry NO base-branch filter, and the two triggers
+    // differ on purpose. GitHub matches `branches:` against the BASE ref, so
+    // `[main, dev]` silently excluded stacked child PRs — whose base is another
+    // open PR's head branch. The #951-#955 stack merged with `enforce-target`,
+    // `label`, and `react-doctor` as its only check-runs and no test job at
+    // all, for 24 changed files under `src/`; the type annotation above did not
+    // even model `branches` on this trigger, so no assertion could have caught
+    // it.
+    //
+    // Re-adding an allowlist is the regression this pins, and it cannot be
+    // written correctly: stacked bases carry contributor prefixes (`fix/`,
+    // `feat/`, `agent/`) as readily as `codex/`, so any list leaves some stack
+    // silently unverified. Pull requests also carry no workflow-level path
+    // filter: every head needs an aggregate `ci` check.
+    expect(ci.on?.pull_request?.branches).toBeUndefined();
+    expect(ci.on?.pull_request?.paths).toBeUndefined();
+
+    // The push trigger and pull-request `changes` job share one expensive-CI
+    // allowlist. PRs always create the workflow and aggregate check; this list
+    // decides whether the costly jobs run. Pin the entire list on both paths.
     const ciPaths = [
       ".gitattributes",
       ".github/workflows/ci.yml",
@@ -106,6 +309,9 @@ describe("GitHub Actions hardening", () => {
       ".github/workflows/release.yml",
       ".github/workflows/stale-needs-info.yml",
       ".npmignore",
+      "LICENSE",
+      "README.md",
+      "assets/**",
       "bin/**",
       "bun.lock",
       "gui/**",
@@ -115,10 +321,50 @@ describe("GitHub Actions hardening", () => {
       "tests/**",
       "tsconfig.json",
     ];
-    expect([...(ci.on?.pull_request?.paths ?? [])].sort()).toEqual(ciPaths);
-    // Push and pull_request have to cover the same surfaces, or a change lands
-    // on dev having been checked on one trigger and not the other.
     expect([...(ci.on?.push?.paths ?? [])].sort()).toEqual(ciPaths);
+
+    const filterStep = (ci.jobs?.changes as {
+      steps?: { with?: Record<string, string> }[];
+    })?.steps?.find(step => step.with?.filters);
+    const areaFilters = Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as {
+      ci?: string[];
+    };
+    expect([...(areaFilters.ci ?? [])].sort()).toEqual(ciPaths);
+
+    const changesJob = ci.jobs?.changes as {
+      outputs?: Record<string, string>;
+      steps?: Array<{
+        name?: string;
+        id?: string;
+        shell?: string;
+        env?: Record<string, string>;
+        run?: string;
+        with?: Record<string, string>;
+      }>;
+    } | undefined;
+    const scopeStep = changesJob?.steps?.find(
+      step => step.name === "Assert the scope output is usable",
+    );
+    expect(changesJob?.outputs?.ci).toBe("${{ steps.scope.outputs.ci }}");
+    expect(scopeStep?.id).toBe("scope");
+    expect(scopeStep?.shell).toBe("bash");
+    expect(scopeStep?.env?.CI_SCOPE).toBe("${{ steps.filter.outputs.ci }}");
+    expect(scopeStep?.run).not.toContain("${{");
+    expect(scopeStep?.run).toContain('case "$CI_SCOPE" in');
+    expect(scopeStep?.run).toContain("true|false)");
+    expect(scopeStep?.run).toContain(`printf 'ci=%s\\n' "$CI_SCOPE" >> "$GITHUB_OUTPUT"`);
+    expect(scopeStep?.run).toContain("exit 1");
+    const filterIndex = changesJob?.steps?.findIndex(step => step.id === "filter") ?? -1;
+    const scopeIndex = changesJob?.steps?.findIndex(step => step.id === "scope") ?? -1;
+    expect(filterIndex).toBeGreaterThanOrEqual(0);
+    expect(scopeIndex).toBeGreaterThan(filterIndex);
+
+    const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
+    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke"]) {
+      const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
+      expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
+      expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);
+    }
   });
 
   test("cross-platform CI keeps the GUI lint and build gates", async () => {
@@ -130,6 +376,69 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("bun run lint");
     expect(workflow).toContain("- name: GUI build");
     expect(workflow).toContain("bun run build");
+
+    // Presence is no longer enough. After area scoping, a step conditioned on a
+    // filter that never fires is a dropped gate wearing the step's name — the
+    // same outcome #97 hit, reached a different way. Pin the condition to the
+    // filter output, and pin the filter to patterns that can actually match.
+    const ci = Bun.YAML.parse(workflow) as {
+      jobs?: Record<string, Record<string, unknown> | undefined>;
+    };
+    const gateSteps = (ci.jobs?.gates as {
+      steps?: { name?: string; if?: string }[];
+    })?.steps ?? [];
+    for (const stepName of ["GUI lint", "GUI build"]) {
+      const step = gateSteps.find(candidate => candidate.name === stepName);
+      expect(`${stepName}:${step === undefined}`).toBe(`${stepName}:false`);
+      expect(step?.if).toBe("needs.changes.outputs.gui == 'true'");
+    }
+
+    const filterStep = (ci.jobs?.changes as {
+      steps?: { with?: Record<string, string> }[];
+    })?.steps?.find(step => step.with?.filters);
+
+    // `base` is not cosmetic. Unset, paths-filter diffs a `dev` push against the
+    // repository default branch (`main`), so everything changed since the last
+    // promotion still reads as changed and the scoped jobs run anyway — the
+    // filter would look correct, stay green, and save nothing.
+    expect(filterStep?.with?.base).toBe("${{ github.ref }}");
+
+    // paths-filter cannot read a PR's file list without this, and a filter that
+    // errors produces empty outputs — which every `== 'true'` condition reads as
+    // "skip". The scoped jobs would silently stop running.
+    expect((ci.jobs?.changes as { permissions?: Record<string, string> })?.permissions)
+      .toEqual({ contents: "read", "pull-requests": "read" });
+
+    // Whole-list comparison, not samples. Every entry is an input to the
+    // published tarball; dropping one silently stops packaging verification for
+    // that surface. `src/**` is the load-bearing one: it keeps a source-only PR
+    // running the Windows smoke jobs (keyring, npm-global) now that the full
+    // Windows suite runs only on manual dispatch.
+    const filters = String(filterStep?.with?.filters ?? "");
+    const packagingBlock = filters.split(/\n\s*packaging:\s*\n/)[1] ?? "";
+    const packaging = [...packagingBlock.matchAll(/-\s*'([^']+)'/g)].map(match => match[1]).sort();
+    expect(packaging).toEqual([
+      ".npmignore",
+      ".gitattributes",
+      "LICENSE",
+      "README.md",
+      "assets/**",
+      "bin/**",
+      "bun.lock",
+      "gui/**",
+      "package.json",
+      "scripts/prepare-package.ts",
+      "src/**",
+    ].sort());
+
+    // Every packaging pattern that names a real path must also appear in the
+    // shared expensive-CI filter. Otherwise the workflow records a cheap green
+    // aggregate while silently skipping the packaging verification.
+    const ciPatterns = (Bun.YAML.parse(filters) as { ci?: string[] }).ci ?? [];
+    for (const pattern of packaging) {
+      if (pattern === "scripts/prepare-package.ts") continue; // covered by scripts/**
+      expect(`${pattern}:${ciPatterns.includes(pattern)}`).toBe(`${pattern}:true`);
+    }
   });
 
   test("stale needs-info workflow is schedule-only and least-privilege", async () => {
@@ -204,13 +513,54 @@ describe("GitHub Actions hardening", () => {
 
   test("release workflow gates the exact SHA, channel, and service surface without injection", async () => {
     const workflow = await readText(".github/workflows/release.yml");
+    const release = Bun.YAML.parse(workflow) as {
+      permissions?: Record<string, string>;
+      jobs?: { publish?: { "runs-on"?: string } };
+    };
 
     // Least privilege + never cancel a publish mid-flight.
+    expect(release.permissions).toEqual({
+      contents: "write",
+      actions: "read",
+      "pull-requests": "read",
+      "id-token": "write",
+    });
+    expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(workflow).toContain("actions: read");
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).toContain("timeout-minutes: 15");
+
+    // The exact-SHA CI gate already includes the three hosted keyring legs. The
+    // release workflow must not duplicate the Linux bootstrap and drift from CI.
+    expect(workflow).not.toContain("- name: OS keyring create/read/delete smoke");
+    expect(workflow).not.toContain("gnome-keyring-daemon");
+
+    // Root and GUI dependency trees share one audit definition across local and
+    // workflow release paths.
+    const packageJson = JSON.parse(await readText("package.json")) as {
+      scripts?: Record<string, string>;
+    };
+    expect(packageJson.scripts?.["audit:high"]).toBe(
+      "bun audit --audit-level=high && cd gui && bun audit --audit-level=high",
+    );
+    expect(workflow).toContain("run: bun run audit:high");
+    expect(workflow).not.toContain("run: bun audit --audit-level=high");
+
+    // gh embeds a jq expression but does not expose jq's --arg flag. Keep the
+    // branch and event filters on gh's native, documented flag surface.
+    const ciLookup = workflow.split('ci_url="$(')[1]?.split('\n          )"')[0];
+    expect(ciLookup).toBeDefined();
+    expect(ciLookup).toContain("--workflow ci.yml");
+    expect(ciLookup).toContain('--branch "${GITHUB_REF#refs/heads/}"');
+    expect(ciLookup).toContain('--commit "$GITHUB_SHA"');
+    expect(ciLookup).toContain("--event push");
+    expect(ciLookup).toContain("--status success");
+    expect(ciLookup).toContain("--json url");
+    expect(ciLookup).toContain("--jq '.[0].url // \"\"'");
+    expect(ciLookup).not.toContain("--arg");
+    expect(ciLookup).not.toContain("$branch");
 
     // Dry-run first by default; tokenless trusted publishing only.
     expect(workflow).toMatch(/dry-run:[\s\S]*?default: true/);
@@ -274,16 +624,19 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("main releases must use a stable semver version");
     expect(workflow).toContain("preview releases must use a preview prerelease version");
 
-    // Release notes must include PR categories and the full channel commit range
-    // (branch merges + direct commits). Preflight forbids an existing release, so
-    // only create (not edit) is wired. Stable releases also carry matching preview notes.
+    // Release notes must be OpenAI-Codex-style: PR categories with grouped summary
+    // bullets plus a full PR changelog (no raw commit dump). Preflight forbids an
+    // existing release, so only create (not edit) is wired. Stable releases also
+    // carry matching preview notes.
     expect(workflow).toContain("releases/generate-notes");
-    expect(workflow).toContain("git log --pretty=format:'- %s (%h)'");
-    expect(workflow).toContain('commit_range="${notes_range_start}..${GITHUB_SHA}"');
+    expect(workflow).not.toContain("git log --pretty=format");
     expect(workflow).toContain('previous_tag_name=${notes_range_start}');
-    expect(workflow).toContain("skipping generate-notes (commits-only notes)");
+    expect(workflow).toContain("skipping generate-notes (minimal notes)");
     expect(workflow).toContain("bun scripts/release-notes.ts strip-carried");
-    expect(workflow).toContain("bun scripts/release-notes.ts assemble");
+    expect(workflow).toContain("bun scripts/release-notes.ts render");
+    expect(workflow).not.toContain("bun scripts/release-notes.ts assemble");
+    expect(workflow).not.toContain("--commits");
+    expect(workflow).not.toContain("commits_file");
     expect(workflow).toContain("bun scripts/release-notes.ts matching-preview-tags");
     expect(workflow).toContain("bun scripts/release-notes.ts previous-release-tag");
     expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
@@ -303,7 +656,8 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("not an ancestor");
     expect(workflow).toContain("newest_carried_preview_tag");
     expect(workflow).not.toMatch(/newest_preview_tag="\$preview_carry_tag"/);
-    expect(workflow).toContain("--commits");
+    expect(workflow).toContain('--carried "$carried_file"');
+    expect(workflow).toContain('--delta "$delta_file"');
     expect(workflow).toContain('git tag --list "v${RELEASE_VERSION}-preview.*"');
     expect(workflow).toContain("Carrying preview release notes from");
     // Every subcommand the workflow invokes must be dispatched by the CLI.
@@ -331,6 +685,18 @@ describe("GitHub Actions hardening", () => {
     expect(createStep.indexOf("gh api")).toBeGreaterThan(-1);
     expect(createStep.indexOf('git tag "$release_tag"')).toBeGreaterThan(-1);
     expect(createStep.indexOf("gh api")).toBeLessThan(createStep.indexOf('git tag "$release_tag"'));
+    // The notes baseline must read the FULL tag set, not `--merged HEAD`: stable
+    // tags live on main's lineage, which the preview branch does not carry, and a
+    // trailing same-core preview must not hide the stable from the range
+    // (v2.9.1-preview → v2.10.0-preview is wrong; the range must start at v2.9.1).
+    expect(createStep).toContain("git tag --list 'v[0-9]*' |");
+    expect(createStep).not.toContain("--merged HEAD");
+    // The merged-only restriction remains on the service gate, whose
+    // changed-files comparison is deliberately lineage-relative.
+    const ciGateStep = workflow
+      .split("- name: Require successful Cross-platform CI for this commit")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(ciGateStep).toContain("--merged HEAD");
     // First-channel releases must not call generate-notes without an explicit baseline
     // (GitHub would otherwise pick the newest repo tag, possibly from the other channel).
     // Scope to the single if-block that owns generate-notes; createStep has two
@@ -368,7 +734,14 @@ describe("GitHub Actions hardening", () => {
   };
   type WorkflowJob = Record<string, unknown> & { "runs-on"?: unknown; steps?: WorkflowStep[] };
   type WorkflowShape = Record<string, unknown> & {
-    on?: { pull_request_target?: { types?: string[] } };
+    on?: {
+      pull_request_target?: { types?: string[] };
+      issue_comment?: { types?: string[] };
+      workflow_run?: { workflows?: string[]; types?: string[] };
+      pull_request_review?: { types?: string[] };
+      pull_request_review_comment?: { types?: string[] };
+      status?: unknown;
+    };
     permissions?: Record<string, string> | string;
     concurrency?: Record<string, unknown> & { group?: string };
     jobs?: Record<string, WorkflowJob>;
@@ -396,7 +769,15 @@ describe("GitHub Actions hardening", () => {
     return { workflow, jobs, steps: steps!, allSteps, script };
   }
 
-  const SCRIPT_LOAD = ["require", "require"] as const;
+  const SCRIPT_LOAD = [
+    "require",
+    "require",
+    "require",
+    "require",
+    "require",
+    "require",
+    "require",
+  ] as const;
 
   /** Reads every allowed-base PR performs before any enforcement writes. */
   function readsAllowedBase(tail: string[] = []): string[] {
@@ -407,6 +788,9 @@ describe("GitHub Actions hardening", () => {
       "repos.getCollaboratorPermissionLevel",
       "repos.compareCommitsWithBasehead",
       "repos.compareCommitsWithBasehead",
+      "pulls.get",
+      "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -419,6 +803,9 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
       "pulls.list",
+      "pulls.get",
+      "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -433,6 +820,12 @@ describe("GitHub Actions hardening", () => {
       "repos.getCollaboratorPermissionLevel",
       "repos.compareCommitsWithBasehead",
       "repos.compareCommitsWithBasehead",
+      // The harness walks every paginate call across the same page count, so
+      // listFiles appears once per comment page even when the file list is empty.
+      "pulls.get",
+      "pulls.listFiles",
+      "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -505,9 +898,8 @@ describe("GitHub Actions hardening", () => {
   test("PR target enforcement's structure is an exact allowlist, not a deny-list", async () => {
     const { workflow, jobs, steps } = await readEnforcePrTarget();
 
-    // Top level: these five keys and nothing else.
+    // Top level: concurrency lives on the write job after read-only PR resolution.
     expect(Object.keys(workflow).sort()).toEqual([
-      "concurrency",
       "jobs",
       "name",
       "on",
@@ -515,8 +907,19 @@ describe("GitHub Actions hardening", () => {
     ]);
 
     // pull_request_target runs with the base repo's token. Checking out or
-    // executing the PR's code under it is the classic escalation.
-    expect(Object.keys(workflow.on ?? {})).toEqual(["pull_request_target"]);
+    // executing the PR's code under it is the classic escalation. Review
+    // events are deliberately NOT added: they load the workflow from the PR
+    // head branch (like `pull_request`), which would run head-controlled
+    // workflow YAML under a write token against base-pinned scripts — a
+    // mismatch that crashes the gate and breaks the trusted-base model.
+    //
+    // `status` is the only extra trigger. CodeRabbit publishes a legacy
+    // commit status; this privileged workflow is loaded from the default branch
+    // and re-reads live review evidence before any mutation.
+    expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+      "pull_request_target",
+      "status",
+    ]);
 
     // And the trigger is exactly a `types:` list — nothing else.
     //
@@ -528,9 +931,10 @@ describe("GitHub Actions hardening", () => {
     // additive, both look like ordinary scoping in a diff, and neither failed a
     // single assertion.
     expect(Object.keys(workflow.on?.pull_request_target ?? {})).toEqual(["types"]);
+    expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
 
-    // Exactly the scopes this gate needs. `pull-requests: write` covers title
-    // and comment updates. `contents: write` is required for the draft GraphQL
+    // Exactly the scopes this gate needs. `pull-requests: write` covers title and
+    // comment updates. `contents: write` is required for the draft GraphQL
     // mutations with GITHUB_TOKEN (#626: "Resource not accessible by integration"
     // when contents was unset). Asserting the whole object pins both presence
     // and the absence of anything broader (write-all, contents alone, …).
@@ -539,25 +943,65 @@ describe("GitHub Actions hardening", () => {
       "pull-requests": "write",
     });
 
-    // One run per PR, so two rapid events cannot race on the title/draft state,
-    // and no `cancel-in-progress` — cancelling the in-flight run mid-mutation is
-    // how the bot ends up having prefixed the title but not recorded that it did.
-    expect(workflow.concurrency).toEqual({
-      group: "enforce-pr-target-${{ github.event.pull_request.number }}",
+    expect(workflow.concurrency).toBeUndefined();
+
+    const resolver = workflow.jobs?.["resolve-pr"] as WorkflowJob | undefined;
+    expect(resolver).toBeDefined();
+    expect(Object.keys(resolver ?? {}).sort()).toEqual([
+      "if",
+      "outputs",
+      "permissions",
+      "runs-on",
+      "steps",
+    ]);
+    expect(resolver?.["runs-on"]).toBe("ubuntu-latest");
+    expect(resolver?.permissions).toEqual({
+      contents: "read",
+      "pull-requests": "read",
     });
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.context == 'CodeRabbit'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.state == 'success'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.login == 'coderabbitai[bot]'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.sender.id == 136622811");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'gui-screenshot-waived'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'intake: hygiene-blocked'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'maintainer-sponsored'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'test-exception-approved'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'suppression-approved'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'generated-change-approved'");
+    expect(String(resolver?.["if"] ?? "")).toContain("github.event.label.name == 'dependency-change-approved'");
 
-    // One job, and it is this one. An audit round added a `sidecar:` job that
-    // inherited the PR-write token and un-drafted the PR — every assertion below
-    // still passed, because they only ever looked at `enforce-target`.
-    expect(jobs.map(([name]) => name)).toEqual(["enforce-target"]);
+    const hygieneWorkflow = Bun.YAML.parse(
+      await readText(".github/workflows/pr-hygiene.yml"),
+    ) as { concurrency?: { group?: string; "cancel-in-progress"?: boolean } };
+    expect(hygieneWorkflow.concurrency?.group).toBe(
+      "pr-gate-comment-${{ github.event.pull_request.number }}",
+    );
+    expect(hygieneWorkflow.concurrency?.["cancel-in-progress"]).toBe(false);
 
-    // The job is exactly a runner plus steps. No `if:` (which silently disables
-    // the whole gate), no `permissions:` (a job-level block overrides the narrow
-    // workflow-level one), no `container:`/`strategy:`/`outputs:`/`env:`/
-    // `defaults:`, and no `<<:` merge key to reintroduce any of them sideways.
-    const [, job] = jobs[0]!;
-    expect(Object.keys(job).sort()).toEqual(["runs-on", "steps"]);
-    expect(job["runs-on"]).toBe("ubuntu-latest");
+    expect(jobs.map(([name]) => name)).toEqual(["resolve-pr", "enforce-target"]);
+
+    const job = workflow.jobs?.["enforce-target"] as WorkflowJob | undefined;
+    expect(job).toBeDefined();
+    expect(Object.keys(job ?? {}).sort()).toEqual([
+      "concurrency",
+      "if",
+      "needs",
+      "permissions",
+      "runs-on",
+      "steps",
+    ]);
+    expect(job?.["runs-on"]).toBe("ubuntu-latest");
+    expect(job?.permissions).toEqual({
+      contents: "write",
+      "pull-requests": "write",
+    });
+    expect(job?.needs).toBe("resolve-pr");
+    expect(job?.["if"]).toBe("needs.resolve-pr.outputs.pull-number != ''");
+    expect(job?.concurrency).toEqual({
+      group: "pr-gate-comment-${{ needs.resolve-pr.outputs.pull-number }}",
+      "cancel-in-progress": false,
+    });
 
     // Checkout trusted scripts, then run the gate. Anything more is an extra
     // privileged action nobody reviewed.
@@ -573,12 +1017,26 @@ describe("GitHub Actions hardening", () => {
       "sparse-checkout",
     ]);
     expect(checkout.with).toEqual({
-      ref: "${{ github.event.repository.default_branch }}",
+      // The trusted ref comes from a fixed set of integration branches, never
+      // from the pull request: a stacked child's base is another open PR's
+      // head, so an unpromoted commit must not select the code that runs with
+      // this workflow's write-capable token. A `status` event has no
+      // pull_request payload and loads scripts from the default-branch trust
+      // boundary that owns the event; a `main`-targeting PR loads from `main`
+      // so the scripts match the workflow definition `pull_request_target`
+      // itself loaded; everything else resolves to `dev`.
+      ref:
+        "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
       "persist-credentials": false,
-      "sparse-checkout": ".github/scripts",
+      // MAINTAINERS.md rides along so the completion ping reads the canonical
+      // maintainer list from the same trusted base revision as the scripts.
+      "sparse-checkout": ".github/scripts\nMAINTAINERS.md\n",
     });
 
-    expect(Object.keys(scriptStep).sort()).toEqual(["name", "uses", "with"]);
+    expect(Object.keys(scriptStep).sort()).toEqual(["env", "name", "uses", "with"]);
+    expect(scriptStep.env).toEqual({
+      RESOLVED_PULL_NUMBER: "${{ needs.resolve-pr.outputs.pull-number }}",
+    });
 
     // `github-script` is the action, pinned to a 40-hex commit SHA: this
     // workflow hands a write token to whatever the ref resolves to, so a tag or
@@ -617,15 +1075,35 @@ describe("GitHub Actions hardening", () => {
     const types = workflow.on?.pull_request_target?.types ?? [];
     expect([...types].sort()).toEqual([
       "edited",
+      "labeled",
       "opened",
       "ready_for_review",
       "reopened",
       "synchronize",
+      "unlabeled",
     ]);
+
+    // GUI-waiver labels re-run immediately through pull_request_target.
+    // CodeRabbit reviews re-run through the default-branch status event instead
+    // of using bot status-comment edits as workflow synchronisation.
+    expect(Object.prototype.hasOwnProperty.call(workflow.on ?? {}, "status")).toBe(true);
+
+    // Review events must NOT be added: they load the workflow from the PR
+    // head branch, breaking the base-pinned checkout (`pull_request_review`
+    // runs head YAML + base scripts → `parseGateState is not a function`).
+    expect(workflow.on?.pull_request_review).toBeUndefined();
+    expect(workflow.on?.pull_request_review_comment).toBeUndefined();
 
     // The verdict is a live PR read plus ancestry/description checks.
     expect(script).toContain("github.rest.pulls.get");
     expect(script).toContain("collectPrQualityFailures");
+    expect(script).toContain("collectDeterministicHygieneFailures");
+    expect(script).toContain("github.rest.pulls.listFiles");
+    // The GUI screenshot gate reads changed file paths under gui/.
+    expect(script).toContain("changedFilePaths");
+    expect(script).toContain("filesTruncated");
+    expect(script).toContain("isChangedFileListTruncated");
+    expect(script).toContain("PR head moved while listing changed files");
     expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
     expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
     // The allow-list is the gate's whole policy, so it is pinned by value and
@@ -634,15 +1112,11 @@ describe("GitHub Actions hardening", () => {
     expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
     expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
 
-    // Every mutation targets the PR the event fired for. `pull_number` is the
-    // only handle the script has, and an audit round repointed it at
-    // `Number(context.payload.pull_request.title)` — a value the PR author
-    // controls, which turns the bot into a write primitive against any PR
-    // number the author can name. Bind it to the immutable event field.
-    expect(script).toMatch(
-      /const pull_number = context\.payload\.pull_request\.number;/,
-    );
-    expect(script.match(/pull_number\s*=/g) ?? []).toHaveLength(1);
+    // The read-only resolver is the single authority for PR identity. The
+    // write job consumes exactly that output, so its mutation target and
+    // concurrency key cannot diverge or perform a second SHA-to-PR lookup.
+    expect(script).toContain("process.env.RESOLVED_PULL_NUMBER");
+    expect(script).not.toContain("listPullRequestsAssociatedWithCommit");
 
     // Nothing may write back into the fetched PR. The audit round preserved the
     // required comparison line verbatim and defeated it one line earlier with
@@ -701,16 +1175,23 @@ describe("GitHub Actions hardening", () => {
       return found;
     }
 
-    // The two title rewrites — one adds the prefix, one removes it on a correct
-    // retarget. `base`, `state`, and `body` are all accepted by this endpoint
-    // and none of them belong here.
+    // Seven `pulls.update` sites: the maintainer checklist retirement, the
+    // checklist injection, the head-drift reset, the claim-check uncheck
+    // (body only), the wrong-base prefix add, and the two stale-prefix strips
+    // (draft path and ready path). `base` and `state` are accepted by this
+    // endpoint and none of them belong anywhere here.
     expect(callArgs("github.rest.pulls.update")).toEqual([
+      ["body", "owner", "pull_number", "repo"],
+      ["body", "owner", "pull_number", "repo"],
+      ["body", "owner", "pull_number", "repo"],
+      ["body", "owner", "pull_number", "repo"],
       ["owner", "pull_number", "repo", "title"],
       ["owner", "pull_number", "repo", "title"],
       ["owner", "pull_number", "repo", "title"],
     ]);
 
-    // Both comment writes address the PR being enforced, by its own number.
+    // The single consolidated comment addresses the PR being enforced, by its
+    // own number.
     expect(callArgs("github.rest.issues.createComment")).toEqual([
       ["body", "issue_number", "owner", "repo"],
     ]);
@@ -723,8 +1204,8 @@ describe("GitHub Actions hardening", () => {
     expect(script).toMatch(/issue_number:\s*pull_number\b/);
     expect(script).not.toMatch(/issue_number:\s*\d/);
 
-    // These are the only three mutating REST calls. A fourth is a new write
-    // nobody reviewed. `pulls.list` is a stacked-base read, not a write.
+    // These are the only mutating REST calls. A new one is a write nobody
+    // reviewed. `pulls.list` and `pulls.listReviews` are reads, not writes.
     const restWrites = [...script.matchAll(/github\.rest\.[\w.]+/g)]
       .map(match => match[0])
       .filter(
@@ -732,11 +1213,19 @@ describe("GitHub Actions hardening", () => {
           !name.endsWith(".get") &&
           !name.endsWith(".list") &&
           !name.endsWith(".listComments") &&
+          name !== "github.rest.pulls.listReviews" &&
           name !== "github.rest.repos.getCollaboratorPermissionLevel" &&
-          name !== "github.rest.repos.compareCommitsWithBasehead",
+          name !== "github.rest.repos.compareCommitsWithBasehead" &&
+          name !== "github.rest.repos.listPullRequestsAssociatedWithCommit" &&
+          name !== "github.rest.issues.listEvents" &&
+          // Hygiene reassessment reads the changed-file list; not a write.
+          name !== "github.rest.pulls.listFiles",
       );
     expect([...new Set(restWrites)].sort()).toEqual([
+      "github.rest.issues.addLabels",
       "github.rest.issues.createComment",
+      "github.rest.issues.deleteComment",
+      "github.rest.issues.removeLabel",
       "github.rest.issues.updateComment",
       "github.rest.pulls.update",
     ]);
@@ -784,6 +1273,101 @@ describe("GitHub Actions hardening", () => {
     const BOT = "github-actions[bot]";
     const MARKER = "<!-- pr-quality-enforcer -->";
     const LEGACY_MARKER = "<!-- wrong-branch-enforcer -->";
+    const GATE_MARKER = "<!-- opencodex-pr-gate -->";
+    const READINESS_MARKER = "<!-- pr-quality-readiness -->";
+    const CHECKLIST_START = "<!-- pr-quality-readiness-checklist:start -->";
+    const CHECKLIST_END = "<!-- pr-quality-readiness-checklist:end -->";
+    const CHECKLIST_ITEMS = [
+      "All CI tests are green on my local testing.",
+      "I pushed my PR to the latest dev commit.",
+      "I resolved all correct Codex and CodeRabbit findings.",
+      "My PR is ready for review.",
+    ];
+    const CONTRIBUTOR_BODY = [
+      "## Summary",
+      "",
+      "This change adds enough substantive detail for reviewers to understand the motivation and approach taken.",
+      "",
+      "## Test plan",
+      "",
+      "- Run `bun test tests/ci-workflows.test.ts`",
+    ].join("\n");
+    /**
+     * Fixture for the trusted `MAINTAINERS.md`: the current-maintainers table
+     * plus a change-log mention, so the section scoping of the ping is proven
+     * and the scenario does not depend on the live repository file.
+     */
+    const MAINTAINERS_FIXTURE = [
+      "## Current maintainers",
+      "",
+      "| GitHub account | Project role | Responsibilities |",
+      "| --- | --- | --- |",
+      "| [@lidge-jun](https://github.com/lidge-jun) | Project owner | x |",
+      "| [@Ingwannu](https://github.com/Ingwannu) | Maintainer | x |",
+      "| [@Wibias](https://github.com/Wibias) | Maintainer | x |",
+      "",
+      "## Change log",
+      "",
+      "- [@Wibias](https://github.com/Wibias) was added as a maintainer.",
+    ].join("\n");
+
+    const GUI_CHANGED_FILES = [
+      { filename: "gui/src/App.tsx" },
+      { filename: "tests/smoke.test.ts" },
+    ];
+
+    /** A PR body whose readiness checklist has exactly `checked` boxes ticked. */
+    function readinessChecklistBody(checked: number, base = CONTRIBUTOR_BODY): string {
+      const boxes = CHECKLIST_ITEMS.map((item, index) =>
+        (index === CHECKLIST_ITEMS.length - 1 ? "\n" : "") +
+        `- [${index < checked ? "x" : " "}] ${item}`,
+      );
+      return [
+        base,
+        CHECKLIST_START,
+        "## Review readiness checklist",
+        "",
+        ...boxes,
+        CHECKLIST_END,
+      ].join("\n");
+    }
+
+    function readinessComment(state: Record<string, unknown>): Comment {
+      return {
+        id: 8,
+        user: { login: BOT },
+        body: [
+          READINESS_MARKER,
+          `<!-- pr-quality-readiness-state:${JSON.stringify(state)} -->`,
+          "about readiness",
+        ].join("\n"),
+      };
+    }
+
+    /**
+     * The writes a fresh contributor PR triggers on `dev` with no quality
+     * failures: inject the checklist, then the ownership checkpoint comment
+     * (claiming `autoDraftedByBot` before the mutation), then the draft
+     * conversion.
+     */
+    const CONTRIBUTOR_CLEAN_TAIL = [
+      "pulls.update",
+      "issues.createComment",
+      "graphql",
+    ];
+
+    /**
+     * The writes a fresh wrong-base contributor PR triggers: inject the
+     * checklist, then the title prefix, then the ownership checkpoint comment
+     * (claiming `autoDraftedByBot` before the mutation), then the draft
+     * conversion.
+     */
+    const CONTRIBUTOR_WRONG_BASE_TAIL = [
+      "pulls.update",
+      "pulls.update",
+      "issues.createComment",
+      "graphql",
+    ];
 
     function botComment(state: Record<string, unknown>, title = "Add a thing") {
       return {
@@ -798,11 +1382,1195 @@ describe("GitHub Actions hardening", () => {
     }
 
     test("a PR targeting dev is left completely alone", async () => {
-      const result = await run({ pr: { base: { ref: "dev" } } });
+      const result = await run({
+        pr: { base: { ref: "dev" } },
+        authorPermission: "write",
+      });
 
       // Reads only. If a rewrite adds a write here, it appears in this list.
       expect(methodsOf(result)).toEqual(readsAllowedBase());
       expect(result.logs.join(" ")).toContain("All PR quality gates passed");
+    });
+
+    test("a contributor PR targeting dev is drafted with a readiness checklist", async () => {
+      const result = await run({ pr: { base: { ref: "dev" } } });
+
+      // The gate keeps the PR in draft until the four-box checklist in the
+      // description is complete — even though every quality gate passes. The
+      // check itself stays green: no setFailed for a pending checklist.
+      expect(methodsOf(result)).toEqual(readsAllowedBase(CONTRIBUTOR_CLEAN_TAIL));
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+
+      const [injected] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(injected.body).toContain(CHECKLIST_START);
+      expect(injected.body).toContain(CHECKLIST_END);
+      expect(injected.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(injected.body).toContain("- [ ] My PR is ready for review.");
+
+      const [draft] = callsTo(result, "graphql") as [{ query: string }];
+      expect(draft.query).toContain("convertPullRequestToDraft");
+
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**0/4** boxes ticked");
+      expect(readinessBody).toContain(GATE_MARKER);
+      expect(readinessBody).toContain('"maintainersPinged":false');
+    });
+
+    test("a failed checklist draft conversion fails the check closed", async () => {
+      // The enforcer path soft-fails a failed draft conversion with a red
+      // check. The readiness path must fail closed the same way: a contributor
+      // PR that stays ready with an open checklist is exactly the state the
+      // gate exists to prevent.
+      const { script } = await readEnforcePrTarget();
+      const result = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: false },
+        failGraphqlOn: ["convertPullRequestToDraft"],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+        "issues.updateComment",
+      ]));
+      // Only a successful conversion records autoDraftedByBot; a failed one
+      // clears it so a later permission recovery cannot leave the bot-created
+      // draft in place forever.
+      expect(lastReadinessCommentBody(result)).toContain('"autoDraftedByBot":false');
+      expect(lastReadinessCommentBody(result)).toContain(
+        "Automatic draft conversion failed",
+      );
+      expect(
+        result.warnings.some(w =>
+          w.includes("could not convert the pull request to draft while the review readiness checklist is open"),
+        ),
+      ).toBe(true);
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("ticking every checklist box marks the contributor PR ready and pings maintainers", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+      });
+
+      // No prior enforcer history: the checklist completion alone lifts the
+      // draft and notifies the maintainers from MAINTAINERS.md.
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      expect(readinessBody).toContain("Maintainers notified: @lidge-jun @Ingwannu @Wibias");
+      expect(readinessBody).toContain('"maintainersPinged":true');
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("unsponsored restricted surfaces keep Ready and review-ready blocked", async () => {
+      // Regression for #1324: hygiene failed on auth-api while the quality gate
+      // still posted READY and applied review-ready. The gate must re-assess
+      // deterministic hygiene itself and treat those failures like any other
+      // quality block.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        files: [
+          { filename: "src/codex/auth-api.ts", patch: "+change" },
+          { filename: "tests/codex-auth-api.test.ts", patch: "+test" },
+        ],
+      });
+
+      expect(
+        result.warnings.some(
+          w => w.startsWith("setFailed:") && w.includes("unsponsored_surface"),
+        ),
+      ).toBe(true);
+      expect(methodsOf(result)).toContain("pulls.listFiles");
+      expect(methodsOf(result)).not.toContain("issues.addLabels");
+      expect(methodsOf(result)).not.toContain("markPullRequestReadyForReview");
+      const graphqlCalls = callsTo(result, "graphql") as Array<{ query: string }>;
+      expect(
+        graphqlCalls.some(call => call.query.includes("markPullRequestReadyForReview")),
+      ).toBe(false);
+      expect(
+        graphqlCalls.some(call => call.query.includes("convertPullRequestToDraft")),
+      ).toBe(true);
+      const gateBody = lastReadinessCommentBody(result);
+      expect(gateBody).toContain("## ⏳ DRAFT");
+      expect(gateBody).toContain("unsponsored_surface");
+      expect(gateBody).toContain("maintainer-sponsored");
+      expect(gateBody).not.toContain("## ✅ READY");
+    });
+
+    test("maintainer-sponsored clears the restricted-surface Ready block", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        labels: ["maintainer-sponsored"],
+        files: [
+          { filename: "src/codex/auth-api.ts", patch: "+change" },
+          { filename: "tests/codex-auth-api.test.ts", patch: "+test" },
+        ],
+      });
+
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+      expect(methodsOf(result)).toContain("issues.addLabels");
+      const graphqlCalls = callsTo(result, "graphql") as Array<{ query: string }>;
+      expect(
+        graphqlCalls.some(call => call.query.includes("markPullRequestReadyForReview")),
+      ).toBe(true);
+      expect(lastReadinessCommentBody(result)).toContain("## ✅ READY");
+    });
+
+    test("completing the checklist records the head it was completed on", async () => {
+      // A pre-binding v1 state has no recorded SHA. Completion on the current
+      // head binds forward instead of resetting, so a checklist that was
+      // completed before this feature exists does not draft every already-ready
+      // PR on the first run after the upgrade.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [readinessComment({
+          version: 1,
+          autoDraftedByBot: true,
+          maintainersPinged: true,
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      const readinessBody = lastReadinessCommentBody(result);
+      // The completion is bound to the exact head that was reviewed.
+      expect(readinessBody).toContain(
+        '"completedAtHeadSha":"3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b"',
+      );
+      // A migrated v1 state is rewritten at the current version.
+      expect(readinessBody).toContain('"version":1');
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      // Already pinged before the upgrade: no second notification.
+      expect(readinessBody).toContain('"maintainersPinged":true');
+      expect(readinessBody).not.toContain("Maintainers notified");
+    });
+
+    test("new commits after checklist completion re-draft, reset the checklist, and clear the notification state", async () => {
+      // The reviewer's gap: a completed checklist is an attestation about a
+      // specific head. When new commits land, the attestation no longer covers
+      // the code under review, so the gate resets the boxes and the maintainer
+      // ping, converts the PR back to a draft, and tells the author to
+      // re-test and re-tick on the latest code.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [readinessComment({
+          version: 2,
+          autoDraftedByBot: false,
+          maintainersPinged: true,
+          completedAtHeadSha: "1111111111111111111111111111111111111111",
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.get",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
+        "graphql",
+      ]));
+      const [resetBody] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(resetBody.body).toContain(CHECKLIST_START);
+      expect(resetBody.body).toContain("- [ ] All CI tests are green on my local testing.");
+      expect(resetBody.body).toContain("- [ ] My PR is ready for review.");
+      expect(resetBody.body).not.toContain("- [x]");
+
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("convertPullRequestToDraft");
+      expect(drafts[0]!.query).not.toContain("markPullRequestReadyForReview");
+
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**0/4** boxes ticked");
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).toContain('"maintainersPinged":false');
+      expect(readinessBody).toContain(
+        "New commits were pushed after the checklist was completed on `1111111`",
+      );
+      expect(readinessBody).toContain(
+        "The checklist has been reset: re-test against the latest code and tick all four boxes again.",
+      );
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a checklist completed on the current head is not reset on a rerun", async () => {
+      // Same head, same boxes, already notified: the rerun is a no-op apart
+      // from refreshing the readiness message. No re-draft, no body rewrite,
+      // no second maintainer ping.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [readinessComment({
+          version: 2,
+          autoDraftedByBot: false,
+          maintainersPinged: true,
+          completedAtHeadSha: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      // The only GraphQL call is the review-threads read; the completion is
+      // already bound and green, so no mutation fires.
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      expect(readinessBody).toContain(
+        '"completedAtHeadSha":"3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b"',
+      );
+      expect(readinessBody).toContain('"maintainersPinged":true');
+      expect(readinessBody).not.toContain("Maintainers notified");
+    });
+
+    test("new commits after completion still enforce quality failures", async () => {
+      // The head-drift reset folds into the existing failure path instead of
+      // short-circuiting it: a PR that drifted onto a wrong base is drafted,
+      // the checklist resets, AND the wrong-base gate still fails closed with
+      // its title prefix and explanation.
+      const result = await run({
+        pr: {
+          base: { ref: "main" },
+          draft: false,
+          title: "Add a thing",
+          body: readinessChecklistBody(4),
+        },
+        comments: [readinessComment({
+          version: 2,
+          autoDraftedByBot: false,
+          maintainersPinged: true,
+          completedAtHeadSha: "1111111111111111111111111111111111111111",
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.get",
+        "pulls.update",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
+        "graphql",
+      ]));
+      expect(lastEnforcerCommentBody(result)).toContain("wrong target branch");
+      expect(lastEnforcerCommentBody(result)).toContain("[WRONG BRANCH]");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(true);
+
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**0/4** boxes ticked");
+      expect(readinessBody).toContain('"maintainersPinged":false');
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).toContain(
+        "New commits were pushed after the checklist was completed",
+      );
+    });
+
+    test("a completion whose ticks predate the live head is rejected and reset", async () => {
+      // A push raced the `edited` job: the event saw the older head the boxes
+      // were ticked against, but the live head is newer. Binding the
+      // completion to the live head would attest code the author never ticked
+      // against, so the gate rejects the completion, resets the boxes, and
+      // re-drafts instead of sliding the attestation forward.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        eventPayload: {
+          head: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.get",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("convertPullRequestToDraft");
+      expect(drafts[0]!.query).not.toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "The checklist was ticked before the current head `3f1c0de` was pushed.",
+      );
+      expect(readinessBody).toContain("**0/4** boxes ticked");
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).toContain('"maintainersPinged":false');
+      expect(readinessBody).not.toContain("Maintainers notified");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a synchronize event does not inherit an unrecorded complete checklist", async () => {
+      // The boxes were ticked on head A, but the edited job has not yet
+      // persisted completedAtHeadSha. A synchronize for head B must not
+      // mark B ready with A's attestation; it must reset and re-draft.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        eventAction: "synchronize",
+        maintainersFile: MAINTAINERS_FIXTURE,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.get",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("convertPullRequestToDraft");
+      expect(drafts[0]!.query).not.toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "A complete checklist was found on a synchronize event with no recorded completion head",
+      );
+      expect(readinessBody).toContain("**0/4** boxes ticked");
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).toContain('"maintainersPinged":false');
+      expect(readinessBody).not.toContain("Maintainers notified");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("red GitHub CI does not untick the local-CI attestation", async () => {
+      // Fork contributors attest local green; repository CI is
+      // maintainer-started. A red or missing GitHub `ci` check must not
+      // disprove the local box or block ready-for-review.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        checkRuns: [{ name: "ci", status: "completed", conclusion: "failure" }],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "checks.listForRef")).toEqual([]);
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }, { query: string }];
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a revalidation reset preserves bot ownership of the title prefix", async () => {
+      // A wrong-base PR that the bot prefixed and later had retargeted to dev
+      // with a complete checklist hits a revalidation failure (stale vs `dev`
+      // unchecks a box). The reset must preserve `titlePrefixedByBot` long
+      // enough for the mustDraft strip to fire — otherwise the stale
+      // `[WRONG BRANCH] ` prefix stays on the title forever because ownership
+      // was forgotten.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        compareByBasehead: {
+          "dev...3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b": { ahead_by: 0, behind_by: 11 },
+        },
+        comments: [botComment({
+          version: 1,
+          active: true,
+          autoDraftedByBot: true,
+          titlePrefixedByBot: true,
+        })],
+      });
+
+      const titleUpdates = callsTo(result, "pulls.update") as Array<{ title?: string; body?: string }>;
+      // The stale prefix is stripped (the ownership survived the reset long
+      // enough for the strip to run), and the state records ownership cleared.
+      expect(titleUpdates.some(u => u.title === "Add a thing")).toBe(true);
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain('"titlePrefixedByBot":false');
+      expect(readinessBody).toContain('"autoDraftedByBot":true');
+      expect(readinessBody).toContain("more than 10 commits behind `dev`");
+    });
+
+    test("a complete checklist more than 10 commits behind dev unchecks the latest-dev box and re-drafts", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        compareByBasehead: {
+          "dev...3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b": { ahead_by: 0, behind_by: 11 },
+        },
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "pulls.get",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      // Only the latest-dev box is unticked; local CI stays checked.
+      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [ ] I pushed my PR to the latest dev commit.");
+      expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("convertPullRequestToDraft");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "The PR is more than 10 commits behind `dev`; the **latest dev** box has been unticked.",
+      );
+      expect(readinessBody).toContain("**3/4** boxes ticked");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a head exactly 10 commits behind dev keeps the latest-dev box", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        compareByBasehead: {
+          "dev...3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b": { ahead_by: 0, behind_by: 10 },
+        },
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+    });
+
+    test("missing or pending GitHub CI does not block a complete local attestation", async () => {
+      for (const checkRuns of [
+        [],
+        [{ name: "ci", status: "in_progress", conclusion: null }],
+        [{
+          name: "ci",
+          status: "completed",
+          conclusion: "success",
+          app: { id: 999999 },
+        }],
+      ]) {
+        const result = await run({
+          pr: {
+            base: { ref: "dev" },
+            draft: true,
+            body: readinessChecklistBody(4),
+          },
+          maintainersFile: MAINTAINERS_FIXTURE,
+          checkRuns,
+        });
+
+        expect(callsTo(result, "checks.listForRef")).toEqual([]);
+        expect(callsTo(result, "pulls.update")).toEqual([]);
+        const drafts = callsTo(result, "graphql") as [{ query: string }, { query: string }];
+        expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+        expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+      }
+    });
+
+    test("an unresolved Codex thread unchecks the findings box and re-drafts", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: false, author: { login: "chatgpt-codex-connector[bot]" } },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "pulls.get",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      // Only the findings box is unticked; CI and latest-dev stay checked.
+      expect(bodyUpdate.body).toContain("- [x] All CI tests are green on my local testing.");
+      expect(bodyUpdate.body).toContain("- [x] I pushed my PR to the latest dev commit.");
+      expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
+      expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("convertPullRequestToDraft");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "Codex has 1 unresolved finding; the **Codex/CodeRabbit findings** box has been unticked.",
+      );
+      expect(readinessBody).toContain("**3/4** boxes ticked");
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("an unresolved CodeRabbit thread unchecks the findings box and re-drafts", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: false, author: { login: "coderabbitai[bot]" } },
+        ],
+      });
+
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
+      expect(bodyUpdate.body).toContain("- [x] My PR is ready for review.");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "CodeRabbit has 1 unresolved finding; the **Codex/CodeRabbit findings** box has been unticked.",
+      );
+    });
+
+    test("all bot threads resolved keeps the findings box and marks ready", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: true, author: { login: "chatgpt-codex-connector[bot]" } },
+          { isResolved: true, author: { login: "coderabbitai[bot]" } },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+    });
+
+    test("CodeRabbit outside-diff findings do not untick the box once threads are clean", async () => {
+      // CodeRabbit posts some findings only in its review body ("outside the
+      // diff range"), which never become review threads. A review body is
+      // immutable, so the count can never fall to zero on its own once posted;
+      // the supplement therefore only counts while an unresolved bot thread
+      // exists. Clean threads + a live-head review body with a positive count
+      // must stay green — otherwise the author could never clear the box
+      // without pushing an empty commit.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviews: [
+          {
+            body: "**Actionable comments posted: 2**\n\nWalkthrough.",
+            commit_id: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+            submitted_at: "2026-08-04T06:24:02Z",
+            user: { login: "coderabbitai[bot]" },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("CodeRabbit outside-diff findings add to an unresolved thread count", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: false, author: { login: "coderabbitai[bot]" } },
+        ],
+        reviews: [
+          {
+            body: "**Actionable comments posted: 2**\n\nWalkthrough.",
+            commit_id: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+            submitted_at: "2026-08-04T06:24:02Z",
+            user: { login: "coderabbitai[bot]" },
+          },
+        ],
+      });
+
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "CodeRabbit has 3 unresolved findings; the **Codex/CodeRabbit findings** box has been unticked.",
+      );
+      expect(readinessBody).toContain("**3/4** boxes ticked");
+    });
+
+    test("a CodeRabbit outside-diff review of a stale head does not untick the box", async () => {
+      // The supplement is head-bound: a review of a superseded commit cannot
+      // flag the current head. Clean threads + a stale review stay green.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviews: [
+          {
+            body: "**Actionable comments posted: 2**",
+            commit_id: "1111111111111111111111111111111111111111",
+            submitted_at: "2026-08-04T06:24:02Z",
+            user: { login: "coderabbitai[bot]" },
+          },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+    });
+
+    test("an unresolved human review thread does not untick the findings box", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: false, author: { login: "wibias" } },
+        ],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+    });
+
+    test("a human review quoting the actionable-comments line does not untick the box", async () => {
+      // The outside-diff supplement filters by author: a maintainer quoting
+      // CodeRabbit's summary in their own review must not count as CodeRabbit
+      // findings, or the box would be unticked by a human's quote.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        reviewThreads: [
+          { isResolved: false, author: { login: "coderabbitai[bot]" } },
+        ],
+        reviews: [
+          {
+            body: "CodeRabbit said **Actionable comments posted: 2** — let's discuss.",
+            commit_id: "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
+            submitted_at: "2026-08-04T06:24:02Z",
+            user: { login: "wibias" },
+          },
+        ],
+      });
+
+      // Only the unresolved thread counts (1), not the human's quoted line.
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "CodeRabbit has 1 unresolved finding; the **Codex/CodeRabbit findings** box has been unticked.",
+      );
+    });
+
+    test("a review-threads lookup failure fails closed for the findings claim", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        // Only the review-threads read fails; the draft conversion must stay
+        // green so the assert below is about the findings claim, not a
+        // mutation failure.
+        failGraphqlOn: ["reviewThreads"],
+      });
+
+      // The threads read fails closed: the findings box is unticked even
+      // though no thread data was readable, and the PR stays a draft.
+      const [bodyUpdate] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(bodyUpdate.body).toContain("- [ ] I resolved all correct Codex and CodeRabbit findings.");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        "The Codex/CodeRabbit findings claim could not be verified",
+      );
+      expect(result.warnings.some(w => w.includes("Could not list review threads for the readiness claim check"))).toBe(true);
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a completion recorded while quality gates fail still binds the head", async () => {
+      // The mustDraft failure path returns before the completion block, so
+      // without an explicit record the checklist would stay unbound while a
+      // quality gate is red — the author could push un-attested code and have
+      // the newest head bound to the old attestation once the gate clears.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          title: "GUI: fix provider list spacing",
+          body: readinessChecklistBody(4),
+        },
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "issues.createComment",
+        "graphql",
+      ]));
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(true);
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain(
+        '"completedAtHeadSha":"3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b"',
+      );
+      expect(readinessBody).toContain('"version":1');
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      expect(readinessBody).toContain(
+        "This pull request is being kept as a draft automatically",
+      );
+    });
+
+    test("a stale recorded head with an already-open checklist still recovers the reset state", async () => {
+      // Partial-reset window: the body update succeeded but the readiness
+      // comment failed, leaving unticked boxes with the old completion head
+      // and ping flag. The stale-record detection must not depend on the
+      // boxes being ticked, or the next completion would be reset one extra
+      // cycle and the ping would silently survive.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: false,
+          body: readinessChecklistBody(0),
+        },
+        comments: [readinessComment({
+          version: 2,
+          autoDraftedByBot: false,
+          maintainersPinged: true,
+          completedAtHeadSha: "1111111111111111111111111111111111111111",
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.get",
+        "issues.createComment",
+        "issues.deleteComment",
+        "graphql",
+      ]));
+      // No body rewrite: the boxes are already unticked from the failed reset.
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("convertPullRequestToDraft");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).toContain('"maintainersPinged":false');
+      expect(readinessBody).toContain(
+        "New commits were pushed after the checklist was completed on `1111111`",
+      );
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("a stale event on a never-completed checklist does not wipe bot state or post a reset notice", async () => {
+      // `ticksPredateLiveHead` must only fire for an actual completion. A
+      // stale event on an open checklist has nothing to reset: posting the
+      // notice would be noise, and replacing the stored state would drop the
+      // bot's draft-ownership record (`autoDraftedByBot`).
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(1),
+        },
+        eventPayload: {
+          head: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+        },
+        comments: [readinessComment({
+          version: 2,
+          autoDraftedByBot: true,
+          maintainersPinged: false,
+        })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "graphql")).toEqual([]);
+      const readinessBody = lastReadinessCommentBody(result);
+      // Ownership is preserved and no reset was performed or announced.
+      expect(readinessBody).toContain('"autoDraftedByBot":true');
+      expect(readinessBody).toContain('"completedAtHeadSha":null');
+      expect(readinessBody).not.toContain("ticked before the current head");
+      expect(readinessBody).not.toContain("has been reset");
+    });
+
+    test("an empty PR cannot be laundered into ready by ticking the injected boxes", async () => {
+      // The unit tests pin `assessPrDescription` against the injected section.
+      // This pins the sequence that would exploit it end to end, because the
+      // exploit needs two runs and a body the bot itself wrote in between:
+      // open with no description (run one injects), tick the four boxes the
+      // bot just added (run two), and the PR is ready for review with the
+      // author having written nothing at all.
+      const { script } = await readEnforcePrTarget();
+      const injectRun = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: false, body: "" },
+        authorPermission: "read",
+      });
+      expect(
+        injectRun.warnings.some(
+          w => w.startsWith("setFailed:") && w.includes("bad description"),
+        ),
+      ).toBe(true);
+
+      // Take the body the bot actually wrote, not a hand-built fixture: the
+      // exploit is only real if the injected text is what gets ticked.
+      const injectedBody = (
+        callsTo(injectRun, "pulls.update") as Array<{ body?: string }>
+      ).find(call => typeof call.body === "string")?.body;
+      expect(injectedBody).toContain(CHECKLIST_START);
+
+      const tickedRun = await runEnforcePrTarget(script, {
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: injectedBody!.replace(/- \[ \]/g, "- [x]"),
+        },
+        authorPermission: "read",
+        maintainersFile: MAINTAINERS_FIXTURE,
+      });
+      expect(
+        tickedRun.warnings.some(
+          w => w.startsWith("setFailed:") && w.includes("bad description"),
+        ),
+      ).toBe(true);
+      // `markPullRequestReadyForReview` goes out over `graphql`. Four ticked
+      // boxes must not summon it while the description gate is still failing.
+      expect(methodsOf(tickedRun)).not.toContain("graphql");
+    });
+
+    test("the injected checklist does not satisfy the gui screenshot gate", async () => {
+      // Same laundering shape on the screenshot axis: the injected section adds
+      // renderable structure but no image, so a gui-cued contributor PR with a
+      // complete checklist and no screenshot must still fail and stay drafted.
+      const guiBody = [
+        "## Summary",
+        "",
+        "Reworks the gui settings panel so the provider list keeps its scroll",
+        "position when a preset is applied from the sidebar.",
+        "",
+        "## Test plan",
+        "",
+        "`bun run build:gui` — pass; verified by hand in the dashboard.",
+      ].join("\n");
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4, guiBody),
+        },
+        authorPermission: "read",
+        maintainersFile: MAINTAINERS_FIXTURE,
+        files: GUI_CHANGED_FILES,
+      });
+      expect(
+        result.warnings.some(
+          w => w.startsWith("setFailed:") && w.includes("screenshot"),
+        ),
+      ).toBe(true);
+      expect(methodsOf(result)).not.toContain("graphql");
+    });
+
+    test("a maintainer PR drafted during a permission-lookup failure is restored once the lookup recovers", async () => {
+      // The permission lookup fails closed: a clean maintainer PR is treated
+      // as a contributor PR, gets the checklist and a draft. When the lookup
+      // recovers, the early return must not leave that PR drafted forever —
+      // the readiness state records the bot's draft, and the recovery path
+      // undoes it.
+      const { script } = await readEnforcePrTarget();
+      const duringFailure = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: false },
+        failPermissionLookup: true,
+      });
+      expect(methodsOf(duringFailure)).toEqual(readsAllowedBase([
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      expect(lastReadinessCommentBody(duringFailure)).toContain('"autoDraftedByBot":true');
+
+      const recovered = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: true, body: readinessChecklistBody(0) },
+        authorPermission: "write",
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [readinessComment({
+          version: 1,
+          autoDraftedByBot: true,
+          maintainersPinged: false,
+        })],
+      });
+      expect(methodsOf(recovered)).toEqual(readsAllowedBase([
+        "pulls.update",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      // The injected checklist is retired from the maintainer's body.
+      const [stripped] = callsTo(recovered, "pulls.update") as [{ body: string }];
+      expect(stripped.body).not.toContain(CHECKLIST_START);
+      const drafts = callsTo(recovered, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]!.query).toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(recovered);
+      expect(readinessBody).toContain("## ✅ READY");
+      expect(readinessBody).toContain("this PR is ready for review");
+      expect(readinessBody).not.toContain("## Review readiness checklist");
+      expect(readinessBody).not.toContain("⬜");
+      expect(readinessBody).toContain('"autoDraftedByBot":false');
+      expect(recovered.warnings.some(w => w.startsWith("setFailed:"))).toBe(false);
+    });
+
+    test("permission recovery keeps draft ownership when ready conversion fails", async () => {
+      // If markReadyForReview fails transiently during recovery, the readiness
+      // state must keep autoDraftedByBot so a later run retries — otherwise
+      // the maintainer's PR stays a draft forever with a comment claiming it
+      // is ready.
+      const { script } = await readEnforcePrTarget();
+      const result = await runEnforcePrTarget(script, {
+        pr: { base: { ref: "dev" }, draft: true, body: readinessChecklistBody(0) },
+        authorPermission: "write",
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [readinessComment({
+          version: 1,
+          autoDraftedByBot: true,
+          maintainersPinged: false,
+        })],
+        failOn: ["graphql"],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.update",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      expect(result.warnings.some(w =>
+        w.includes("Could not mark pull request ready for review"),
+      )).toBe(true);
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain('"autoDraftedByBot":true');
+      expect(readinessBody).toContain("will retry on the next run");
+      expect(readinessBody).not.toContain("✅ This PR is ready for review.");
+    });
+
+    test("a contributor completing the checklist with a corrupted enforcer comment still completes", async () => {
+      // `parseState` returns null for malformed state, but the bot comment
+      // still exists — the restore path must not dereference `storedState`
+      // unguarded (CodeRabbit critical + Codex review P2).
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [{
+          id: 7,
+          user: { login: BOT },
+          body: `${MARKER}\n<!-- wrong-branch-enforcer-state:{not json} -->`,
+        }],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain('"active":false');
+      expect(readinessBody).toContain("all PR quality gates passed");
+      expect(result.warnings.join(" ")).toContain("Could not parse stored workflow state");
+    });
+
+    test("a complete checklist does not lift the draft while the base is wrong", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "main" },
+          draft: true,
+          title: "Add a thing",
+          body: readinessChecklistBody(4),
+        },
+      });
+
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
+        "issues.createComment",
+      ]));
+      expect(callsTo(result, "graphql")).toEqual([]);
+      expect(lastEnforcerCommentBody(result)).toContain("wrong target branch");
+      expect(lastReadinessCommentBody(result)).toContain("**4/4** boxes ticked");
+      expect(result.warnings.some(w => w.startsWith("setFailed:"))).toBe(true);
+    });
+
+    test("a maintainer PR on the wrong base gets no readiness checklist", async () => {
+      const result = await run({
+        pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
+        authorPermission: "write",
+      });
+
+      // The maintainer contract is unchanged: draft on failure, explain, and
+      // nothing else — no checklist injection, no readiness message.
+      expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
+      ]);
+      expect(
+        (callsTo(result, "issues.createComment") as [{ body: string }])
+          .every(call => !call.body.includes(READINESS_MARKER)),
+      ).toBe(true);
     });
 
     const HEAD_SHA = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
@@ -818,17 +2586,18 @@ describe("GitHub Actions hardening", () => {
         compareByBasehead: ANCESTRY_FAIL_COMPARES,
       });
 
-      expect(callsTo(result, "pulls.update")).toEqual([]);
+      // No wrong base, so no title write — the checklist injection is the only
+      // `pulls.update`, and the contributor flow writes the ownership
+      // checkpoint comment before the draft conversion.
       expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "pulls.update",
         "issues.createComment",
-        "issues.updateComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       const commentBody = lastEnforcerCommentBody(result);
-      expect(commentBody).toContain("Wrong branch ancestry");
-      expect(commentBody).not.toContain("Wrong target branch");
+      expect(commentBody).toContain("wrong branch ancestry");
+      expect(commentBody).not.toContain("wrong target branch");
+      expect(commentBody).toContain("## Review readiness checklist");
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       expect(result.warnings.some((w) => w.includes("wrong ancestry"))).toBe(true);
     });
@@ -848,9 +2617,543 @@ describe("GitHub Actions hardening", () => {
       const result = await run({ pr: { base: { ref: "dev" }, body: "" } });
 
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
-      expect(lastEnforcerCommentBody(result)).toContain("Pull request description");
-      expect(lastEnforcerCommentBody(result)).toContain("body is empty");
+      expect(lastEnforcerCommentBody(result)).toContain("PR description needs work");
+      expect(lastEnforcerCommentBody(result)).toContain("(empty)");
+      // The bot also injects the checklist, so the draft conversion is the only
+      // GraphQL mutation.
       expect(callsTo(result, "graphql")).toHaveLength(1);
+      const [draft] = callsTo(result, "graphql") as [{ query: string }];
+      expect(draft.query).toContain("convertPullRequestToDraft");
+      const [injected] = callsTo(result, "pulls.update") as [{ body: string }];
+      expect(injected.body).toContain(CHECKLIST_START);
+    });
+
+    test("gui/ changes without a screenshot fail and draft", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" }, title: "Fix dashboard spacing" },
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).toContain(
+        "screenshot of the UI change",
+      );
+      expect(callsTo(result, "graphql")).toHaveLength(1);
+    });
+
+    test("gui in the title alone does not demand a screenshot", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" }, title: "GUI: fix provider list spacing" },
+        authorPermission: "write",
+        files: [{ filename: "scripts/foo.ts" }],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+    });
+
+    test("no gui changes text without gui/ file changes does not demand a screenshot", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "Fix proxy routing",
+          body: [
+            "## Summary",
+            "",
+            "This change adjusts proxy routing only; there are no gui changes in this PR.",
+            "The handler in scripts/foo.ts keeps the same public surface while fixing retry semantics.",
+            "",
+            "## Test plan",
+            "",
+            "- Ran \`bun test tests/ci-workflows.test.ts\`",
+          ].join("\n"),
+        },
+        authorPermission: "write",
+        files: [{ filename: "scripts/foo.ts" }],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+    });
+
+    test("malformed changed_files metadata fails closed on the screenshot gate", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          changed_files: 2.5,
+        },
+        files: [{ filename: "scripts/foo.ts" }],
+        authorPermission: "write",
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+    });
+
+    test("gui in the body without a screenshot fails when gui/ changed", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "Fix dashboard spacing",
+          body: [
+            "## Summary",
+            "This change adjusts gui/ spacing tokens used by the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+    });
+
+    test("an OWNER comment waiving gui skips the screenshot gate", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "Fix dashboard spacing",
+          body: [
+            "## Summary",
+            "This change adjusts gui/ spacing tokens used by the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        comments: [
+          { id: 1, user: { login: "lidge-jun" }, author_association: "OWNER", body: "Not touching gui here." },
+        ],
+        files: GUI_CHANGED_FILES,
+      });
+
+      // The screenshot failure is gone: no setFailed for it, and the comment
+      // does not demand a screenshot. The contributor checklist still applies.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot waived by a maintainer comment");
+    });
+
+    test("a COLLABORATOR comment saying no gui changes also waives it", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        comments: [
+          { id: 1, user: { login: "wibias" }, author_association: "COLLABORATOR", body: "no gui changes needed" },
+        ],
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot waived by a maintainer comment");
+    });
+
+    test("the gui-screenshot-waived label clears the sole screenshot failure and reports the waiver", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        labels: ["gui-screenshot-waived"],
+        maintainersFile: MAINTAINERS_FIXTURE,
+        eventName: "pull_request_target",
+        eventAction: "synchronize",
+        senderLogin: "contributor",
+        issueEvents: [{
+          id: 101,
+          event: "labeled",
+          created_at: "2026-08-08T06:00:00Z",
+          actor: { login: "lidge-jun" },
+          label: { name: "gui-screenshot-waived" },
+        }],
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot waived by the `gui-screenshot-waived` label");
+    });
+
+
+    test("the gui-screenshot-waived label is reported after it clears the sole failure on the ready path", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "GUI: fix provider list spacing",
+          body: readinessChecklistBody(4),
+        },
+        labels: ["gui-screenshot-waived"],
+        maintainersFile: MAINTAINERS_FIXTURE,
+        eventName: "pull_request_target",
+        eventAction: "edited",
+        senderLogin: "contributor",
+        issueEvents: [{
+          id: 101,
+          event: "labeled",
+          created_at: "2026-08-08T06:00:00Z",
+          actor: { login: "lidge-jun" },
+          label: { name: "gui-screenshot-waived" },
+        }],
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(false);
+      expect(lastEnforcerCommentBody(result)).toContain("## ✅ READY");
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot waived by the `gui-screenshot-waived` label");
+    });
+
+    test("the gui-screenshot-waived label from an unauthorized sender does not waive the screenshot requirement", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        labels: ["gui-screenshot-waived"],
+        maintainersFile: MAINTAINERS_FIXTURE,
+        eventName: "pull_request_target",
+        eventAction: "synchronize",
+        senderLogin: "lidge-jun",
+        issueEvents: [{
+          id: 102,
+          event: "labeled",
+          created_at: "2026-08-08T06:00:00Z",
+          actor: { login: "unauthorized-contributor" },
+          label: { name: "gui-screenshot-waived" },
+        }],
+        files: GUI_CHANGED_FILES,
+      });
+
+      // The screenshot failure must remain because the label was applied by
+      // an unauthorized user (not in MAINTAINERS.md).
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot waived");
+      expect(result.logs.join(" ")).toContain("unauthorized-contributor");
+      expect(result.logs.join(" ")).toContain("not in MAINTAINERS.md");
+    });
+
+    test("a missing resolved PR number fails closed before PR lookup", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" } },
+        resolvedPullNumber: "",
+      });
+
+      expect(result.logs.join(" ")).toContain("No pull request could be resolved for this gate event; skipping");
+      expect(callsTo(result, "pulls.get")).toEqual([]);
+      expect(callsTo(result, "issues.createComment")).toEqual([]);
+      expect(callsTo(result, "issues.updateComment")).toEqual([]);
+      expect(callsTo(result, "graphql")).toEqual([]);
+    });
+
+    test("the write gate consumes the resolved PR number without re-resolving status SHA", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" }, number: 4242 },
+        eventName: "status",
+        resolvedPullNumber: 4242,
+      });
+
+      expect(callsTo(result, "pulls.get")).toEqual([
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
+      ]);
+      expect(callsTo(result, "repos.listPullRequestsAssociatedWithCommit")).toEqual([]);
+      expect(methodsOf(result)).toContain("issues.listComments");
+    });
+
+    test("a non-maintainer issue_comment does not re-run the gate", async () => {
+      // The `issue_comment` trigger must only re-run for maintainer comments
+      // (OWNER / COLLABORATOR / MEMBER). A random comment from a contributor
+      // must not start the write-capable gate or re-draft the PR.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        eventName: "issue_comment",
+        eventAction: "created",
+        commentAuthorAssociation: "CONTRIBUTOR",
+        comments: [
+          { id: 1, user: { login: "someone" }, author_association: "CONTRIBUTOR", body: "looks good to me" },
+        ],
+      });
+
+      // The gate never runs: no screenshot failure, no waiver notice, no draft
+      // mutation, no comment write.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      expect(methodsOf(result)).not.toContain("issues.createComment");
+      expect(methodsOf(result)).not.toContain("issues.updateComment");
+      expect(methodsOf(result)).not.toContain("graphql");
+    });
+
+    test("an issue_comment on a plain issue does not re-run the gate", async () => {
+      // `issue_comment` fires for comments on ANY issue. A comment on a plain
+      // issue (no `issue.pull_request`) is not a PR comment and must not start
+      // this PR-only gate.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        eventName: "issue_comment",
+        eventAction: "created",
+        issueIsPullRequest: false,
+        comments: [
+          { id: 1, user: { login: "wibias" }, author_association: "COLLABORATOR", body: "not touching gui" },
+        ],
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      expect(methodsOf(result)).not.toContain("issues.createComment");
+      expect(methodsOf(result)).not.toContain("issues.updateComment");
+      expect(methodsOf(result)).not.toContain("graphql");
+    });
+
+    test("a COLLABORATOR who is not in MAINTAINERS.md cannot re-run the gate", async () => {
+      // OWNER/COLLABORATOR/MEMBER association is broader than the canonical
+      // maintainer list. A collaborator or member who is absent from
+      // MAINTAINERS.md must not start the write-capable gate — no PR lookup,
+      // no comment/label/title/draft mutations.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        eventName: "issue_comment",
+        eventAction: "created",
+        commentAuthorAssociation: "COLLABORATOR",
+        commentAuthorLogin: "someone-else",
+        maintainersFile: MAINTAINERS_FIXTURE,
+        comments: [
+          { id: 1, user: { login: "someone-else" }, author_association: "COLLABORATOR", body: "not touching gui" },
+        ],
+      });
+
+      // The in-script guard reads MAINTAINERS.md and skips before pulls.get:
+      // no PR lookup, no writes, no GraphQL mutation.
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
+      expect(methodsOf(result)).not.toContain("pulls.get");
+      expect(methodsOf(result)).not.toContain("issues.createComment");
+      expect(methodsOf(result)).not.toContain("issues.updateComment");
+      expect(methodsOf(result)).not.toContain("graphql");
+    });
+
+    test("the gate comment preserves an existing hygiene section across rebuilds", async () => {
+      // The hygiene workflow writes its status into the same consolidated gate
+      // comment. When the gate rebuilds that comment, it must carry the
+      // hygiene block forward instead of dropping it.
+      const HYGIENE_BLOCK_START = "<!-- pr-hygiene-block:start -->";
+      const HYGIENE_BLOCK_END = "<!-- pr-hygiene-block:end -->";
+      const existingGateBody = [
+        GATE_MARKER,
+        '<!-- opencodex-pr-gate-state:{"version":1,"active":true,"autoDraftedByBot":false,"titlePrefixedByBot":false} -->',
+        "",
+        "## ⏳ DRAFT",
+        "- PR is kept in draft.",
+        "",
+        "## Hygiene",
+        "",
+        HYGIENE_BLOCK_START,
+        "<!-- pr-hygiene -->",
+        "",
+        "✅ **Deterministic PR hygiene checks passed.**",
+        "",
+        HYGIENE_BLOCK_END,
+      ].join("\n");
+
+      const result = await run({
+        pr: { base: { ref: "dev" }, draft: false },
+        authorPermission: "write",
+        comments: [
+          { id: 7, user: { login: "github-actions[bot]" }, body: existingGateBody },
+        ],
+      });
+
+      const updated = callsTo(result, "issues.updateComment") as [{ body: string }];
+      expect(updated.length).toBeGreaterThan(0);
+      const gateUpdate = updated.find(call => call.body.includes(GATE_MARKER))!;
+      expect(gateUpdate.body).toContain(HYGIENE_BLOCK_START);
+      expect(gateUpdate.body).toContain(HYGIENE_BLOCK_END);
+      expect(gateUpdate.body).toContain("✅ **Deterministic PR hygiene checks passed.**");
+    });
+
+    test("the PR author cannot waive their own screenshot requirement", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        comments: [
+          { id: 1, user: { login: "contributor" }, author_association: "CONTRIBUTOR", body: "Not touching gui here." },
+        ],
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+      expect(lastEnforcerCommentBody(result)).not.toContain("UI screenshot waived");
+    });
+
+    test("a maintainer comment naming gui without negating keeps the gate", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        comments: [
+          { id: 1, user: { login: "lidge-jun" }, author_association: "OWNER", body: "This is gui related, please add a screenshot." },
+        ],
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:") && w.includes("screenshot"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+    });
+
+    test("gui with an embedded screenshot passes", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "![after](https://example.com/after.png)",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        authorPermission: "write",
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
+    });
+
+    test("gui with a reference-style screenshot passes", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "![after][shot]",
+            "",
+            "[shot]: https://example.com/after.png",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        authorPermission: "write",
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.logs.join(" ")).toContain("All PR quality gates passed");
+    });
+
+    test("gui with image syntax only inside a code fence still fails", async () => {
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          title: "GUI: fix provider list spacing",
+          body: [
+            "## Summary",
+            "This change fixes the provider list spacing in the dashboard.",
+            "",
+            "```",
+            "![after](https://example.com/after.png)",
+            "```",
+            "",
+            "## Test plan",
+            "- Ran bun test tests/ci-workflows.test.ts",
+          ].join("\n"),
+        },
+        files: GUI_CHANGED_FILES,
+      });
+
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
+      expect(lastEnforcerCommentBody(result)).toContain("UI screenshot required");
+    });
+
+    test("guidance in the title does not demand a screenshot", async () => {
+      const result = await run({
+        pr: { base: { ref: "dev" }, title: "Add contributor guidance docs" },
+        authorPermission: "write",
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase());
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
     });
 
     test("literal backslash-n in the body fails the description gate", async () => {
@@ -862,12 +3165,17 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
-      expect(lastEnforcerCommentBody(result)).toContain("literal `\\n` escape sequences");
+      expect(lastEnforcerCommentBody(result)).toContain("PR description needs work");
     });
 
     test("clears prior bot state when every gate passes again", async () => {
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          body: readinessChecklistBody(4),
+        },
+        maintainersFile: MAINTAINERS_FIXTURE,
         comments: [botComment({
           version: 1,
           active: true,
@@ -880,12 +3188,24 @@ describe("GitHub Actions hardening", () => {
 
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
-        "issues.updateComment",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
       expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
-      const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
-      expect(cleared.body).toContain('"active":false');
-      expect(cleared.body).toContain("PR quality gates passed");
+      const readinessBody = lastReadinessCommentBody(result);
+      expect(readinessBody).toContain('"active":false');
+      expect(readinessBody).toContain("all PR quality gates passed");
+
+      // Checklist completion also lifts the draft and pings the maintainers.
+      expect(readinessBody).toContain("**4/4** boxes ticked");
+      expect(readinessBody).toContain("Maintainers notified: @lidge-jun @Ingwannu @Wibias");
+      expect(readinessBody).toContain('"maintainersPinged":true');
+      // The ping list is read through the recorded fs stub, and the change-log
+      // duplicate of @Wibias is not re-added.
+      expect(result.fsReads.some(read => read.endsWith("MAINTAINERS.md"))).toBe(true);
     });
 
     test("every base outside the allow-list is still blocked", async () => {
@@ -898,14 +3218,12 @@ describe("GitHub Actions hardening", () => {
         const result = await run({ pr: { base: { ref }, title: "Add a thing", draft: false } });
 
         expect(methodsOf(result)).toEqual(readsWrongBase([
-          "issues.createComment",
-          "pulls.update",
-          "issues.updateComment",
-          "graphql",
-          "issues.updateComment",
-          "issues.updateComment",
-        ]));
-        expect(lastEnforcerCommentBody(result)).toContain(`\`${ref}\``);
+        "pulls.update",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+      ]));
+        expect(lastEnforcerCommentBody(result)).toContain(`wrong target branch (${ref})`);
         expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
     });
@@ -916,23 +3234,56 @@ describe("GitHub Actions hardening", () => {
       // does not fire, they are left with a permanently renamed, drafted PR
       // and no state to explain it.
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Port the runtime entry" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Port the runtime entry",
+          body: readinessChecklistBody(4),
+        },
+        comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
+      });
+
+      expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "pulls.update",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      expect(callsTo(result, "pulls.update")).toEqual([
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Port the runtime entry" },
+      ]);
+      const cleared = lastReadinessCommentBody(result);
+      expect(cleared).toContain('"active":false');
+      // The confirmation names the ready state, read from the live PR.
+      expect(cleared).toContain("all PR quality gates passed");
+    });
+
+    test("a PR retargeted to dev with an open checklist stays a draft", async () => {
+      // Retargeting clears the branch failure, but the readiness checklist is
+      // still open, so the PR must NOT be marked ready. The enforcer message is
+      // updated to say the branch is now correct and the checklist is pending.
+      const result = await run({
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Port the runtime entry",
+        },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
-        "graphql",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
-      expect(callsTo(result, "pulls.update")).toEqual([
-        { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Port the runtime entry" },
-      ]);
-      const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
-      expect(cleared.body).toContain('"active":false');
-      // The confirmation names where the PR actually went, read from the live
-      // PR rather than assumed.
-      expect(cleared.body).toContain("now targets `dev`");
+      expect(callsTo(result, "graphql")).toEqual([]);
+      expect(lastEnforcerCommentBody(result)).toContain("review readiness checklist open");
+      expect(lastEnforcerCommentBody(result)).toContain("**0/4** boxes ticked");
+      expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(false);
     });
 
     test("a PR moved from dev back to main is enforced again from a cleared state", async () => {
@@ -945,14 +3296,19 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.updateComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Port the runtime entry" },
       ]);
       expect(lastEnforcerCommentBody(result)).toContain('"active":true');
@@ -969,8 +3325,8 @@ describe("GitHub Actions hardening", () => {
       });
       const commentBody = lastEnforcerCommentBody(result);
 
-      expect(commentBody).toContain("must target one of `dev`");
-      expect(commentBody).toContain("Please retarget this PR to `dev`");
+      expect(commentBody).toContain("wrong target branch (main)");
+      expect(commentBody).toContain("Retarget this PR to `dev`");
       expect(commentBody).not.toContain("dev2-go");
     });
 
@@ -983,28 +3339,34 @@ describe("GitHub Actions hardening", () => {
       // checkpoint before convertToDraft so a successful convert followed by a
       // failed comment still restores later.
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.createComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
 
       // The title update carries the title and nothing else. `base`, `state`
       // and `body` are all accepted by this endpoint; an audit round added
       // `base: "main"` here and no static assertion caught it.
       expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
       ]);
 
-      // The first comment create addresses this PR, by its own number.
-      const [created] = callsTo(result, "issues.createComment") as [{ issue_number: number; body: string }];
+      // The single comment create addresses this PR, by its own number.
+      const createdComments = callsTo(result, "issues.createComment") as [{ issue_number: number; body: string }];
+      const created = createdComments.find(call => call.body.includes(GATE_MARKER))!;
       expect(created.issue_number).toBe(42);
-      expect(created.body).toContain(MARKER);
+      expect(created.body).toContain(GATE_MARKER);
       const commentBody = lastEnforcerCommentBody(result);
       expect(commentBody).toContain("@contributor");
       expect(commentBody).toContain('"autoDraftedByBot":true');
+      expect(commentBody).toContain("## Review readiness checklist");
 
       // The only GraphQL mutation is the draft conversion — not a retarget.
       const [draft] = callsTo(result, "graphql") as [{ query: string; variables: unknown }];
@@ -1028,6 +3390,7 @@ describe("GitHub Actions hardening", () => {
           title: "Stacked child",
           draft: false,
         },
+        authorPermission: "write",
         openPulls: [
           {
             number: 41,
@@ -1078,6 +3441,7 @@ describe("GitHub Actions hardening", () => {
             },
           ],
         ],
+        authorPermission: "write",
       });
 
       const listPages = callsTo(result, "pulls.list").map(
@@ -1105,14 +3469,18 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.createComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         {
           owner: "lidge-jun",
           repo: "opencodex",
@@ -1132,9 +3500,9 @@ describe("GitHub Actions hardening", () => {
       // then title prefix, then final explanation. State records that the bot
       // did not draft — which stops restore from marking it ready.
       expect(methodsOf(wrong)).toEqual(readsWrongBase([
-        "issues.createComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
       ]));
       expect(lastEnforcerCommentBody(wrong)).toContain('"autoDraftedByBot":false');
       expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
@@ -1145,39 +3513,59 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: false, titlePrefixedByBot: true })],
       });
 
-      // The prefix comes off; the draft stays. No GraphQL at all.
+      // The prefix comes off; the draft stays — the checklist is still open and
+      // the bot never drafted this PR. No GraphQL at all.
       expect(methodsOf(restored)).toEqual(readsAllowedBase([
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
       expect(callsTo(restored, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
       ]);
     });
 
     test("a corrected PR gets its title and ready state back", async () => {
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
       expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
         "pulls.update",
         "graphql",
-        "issues.updateComment",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
       expect(callsTo(result, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
       ]);
-      const [ready] = callsTo(result, "graphql") as [{ query: string }];
-      expect(ready.query).toContain("markPullRequestReadyForReview");
+      const drafts = callsTo(result, "graphql") as [{ query: string }];
+      expect(drafts).toHaveLength(2);
+      expect(drafts[0]!.query).toContain("reviewThreads");
+      expect(drafts[1]!.query).toContain("markPullRequestReadyForReview");
 
-      // The comment is edited in place, and the state is cleared so a later
-      // run does not try to restore twice.
-      const [update] = callsTo(result, "issues.updateComment") as [{ comment_id: number; body: string }];
-      expect(update.comment_id).toBe(7);
-      expect(update.body).toContain('"active":false');
-      expect(update.body).toContain("PR quality gates passed");
+      // The single consolidated comment is created, and the state is cleared
+      // so a later run does not try to restore twice.
+      const update = lastReadinessCommentBody(result);
+      expect(update).toContain('"active":false');
+      expect(update).toContain("all PR quality gates passed");
+      expect(update).toContain("review readiness checklist is complete");
     });
 
     test("only this workflow's own prefix is removed, not a contributor's edits", async () => {
@@ -1187,6 +3575,12 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing (v2)" },
       ]);
     });
@@ -1199,8 +3593,9 @@ describe("GitHub Actions hardening", () => {
 
       // The comment is refreshed (pending + final); title and draft are already right.
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.updateComment",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
     });
 
@@ -1218,14 +3613,18 @@ describe("GitHub Actions hardening", () => {
       // `github.request("POST /repos/attacker/other/issues", …)` off precisely
       // this path because it was the one scenario asserting loosely.
       expect(methodsOf(wentWrong)).toEqual(readsWrongBase([
-        "issues.createComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       expect(callsTo(wentWrong, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] Add a thing" },
       ]);
 
@@ -1233,6 +3632,7 @@ describe("GitHub Actions hardening", () => {
       const wasFixed = await run({
         pr: { base: { ref: "dev" } },
         eventPayload: { base: { ref: "main" } },
+        authorPermission: "write",
       });
       expect(methodsOf(wasFixed)).toEqual(readsAllowedBase());
     });
@@ -1248,8 +3648,8 @@ describe("GitHub Actions hardening", () => {
         pr: { base: { ref: "main" }, title: "Add a thing", draft: false },
         eventPayload: { base: { ref: "dev" }, title: "Add a thing", draft: false },
       });
-      expect(lastEnforcerCommentBody(wrongTarget)).toContain("currently targets `main`");
-      expect(lastEnforcerCommentBody(wrongTarget)).not.toContain("currently targets `dev`");
+      expect(lastEnforcerCommentBody(wrongTarget)).toContain("wrong target branch (main)");
+      expect(lastEnforcerCommentBody(wrongTarget)).not.toContain("wrong target branch (dev)");
 
       // The corrected-path sentence: the event still carries the old wrong
       // base, the live PR is on dev. Naming the event's base here tells the
@@ -1259,9 +3659,9 @@ describe("GitHub Actions hardening", () => {
         eventPayload: { base: { ref: "main" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: false, titlePrefixedByBot: true })],
       });
-      const [edited] = callsTo(corrected, "issues.updateComment") as [{ body: string }];
-      expect(edited.body).toContain("now targets `dev`");
-      expect(edited.body).not.toContain("now targets `main`");
+      const edited = lastReadinessCommentBody(corrected);
+      expect(edited).toContain("review readiness checklist open");
+      expect(edited).not.toContain("wrong target branch");
     });
 
     test("the bot finds its own comment even when it has scrolled onto a later page", async () => {
@@ -1276,7 +3676,12 @@ describe("GitHub Actions hardening", () => {
       }));
 
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         commentPages: [
           filler,
           [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
@@ -1284,13 +3689,22 @@ describe("GitHub Actions hardening", () => {
       });
 
       // Found it: the prefix comes off, the PR is marked ready, and the
-      // existing comment is edited rather than duplicated.
+      // existing enforcer comment is edited rather than duplicated. The one
+      // created comment is the readiness checklist message, which did not
+      // exist on the busy PR yet.
       expect(methodsOf(result)).toEqual(readsAllowedBasePaged([
+        "graphql",
+        "pulls.listReviews",
+        "pulls.listReviews",
+        "issues.addLabels",
         "pulls.update",
         "graphql",
-        "issues.updateComment",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
-      expect(callsTo(result, "issues.createComment")).toEqual([]);
+      const [created] = callsTo(result, "issues.createComment") as [{ body: string }];
+      expect(created.body).toContain(GATE_MARKER);
+      expect(created.body).not.toContain(MARKER);
     });
 
     test("a bot comment with unreadable state is treated as no state, not as a reason to stop", async () => {
@@ -1310,12 +3724,11 @@ describe("GitHub Actions hardening", () => {
       // Enforcement still happens, and the unreadable comment is repaired in
       // place rather than duplicated.
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.updateComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       expect(result.warnings.join(" ")).toContain("Could not parse stored workflow state");
     });
@@ -1339,20 +3752,26 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment(noRecordedChanges)],
       });
       expect(methodsOf(stillWrong)).toEqual(readsWrongBase([
-        "issues.updateComment",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
 
-      // Corrected: nothing to undo, but the state must still be cleared or the
-      // next wrong-target event resumes from a stale record.
+      // Corrected branch, open checklist: nothing to undo, the enforcer state
+      // is cleared (the checklist message now owns the draft), and the next
+      // wrong-target event cannot resume from a stale record.
       const corrected = await run({
         pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
         comments: [botComment(noRecordedChanges)],
       });
-      expect(methodsOf(corrected)).toEqual(readsAllowedBase(["issues.updateComment"]));
-      const [cleared] = callsTo(corrected, "issues.updateComment") as [{ body: string }];
-      expect(cleared.body).toContain('"active":false');
-      expect(cleared.body).toContain("PR quality gates passed");
+      expect(methodsOf(corrected)).toEqual(readsAllowedBase([
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      const cleared = lastReadinessCommentBody(corrected);
+      expect(cleared).toContain('"active":true');
+      expect(cleared).toContain("review readiness checklist open");
     });
 
     test("a PR undrafted by hand before the retarget still gets its state cleared", async () => {
@@ -1366,13 +3785,18 @@ describe("GitHub Actions hardening", () => {
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
-      // Nothing to un-draft, the prefix comes off, and the state is cleared.
+      // The prefix comes off, the state stays active, and the open checklist
+      // re-drafts the PR the author undrafted by hand.
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
+        "issues.deleteComment",
+        "graphql",
       ]));
-      const [cleared] = callsTo(result, "issues.updateComment") as [{ body: string }];
-      expect(cleared.body).toContain('"active":false');
+      const cleared = lastReadinessCommentBody(result);
+      expect(cleared).toContain('"active":true');
+      expect(cleared).toContain("review readiness checklist open");
     });
 
     test("a title the author already fixed by hand is not sliced a second time", async () => {
@@ -1380,14 +3804,23 @@ describe("GitHub Actions hardening", () => {
       // the prefix — the author removed it themselves. Slicing anyway would eat
       // the first 15 characters of their title.
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
 
       expect(callsTo(result, "pulls.update")).toEqual([]);
       expect(methodsOf(result)).toEqual(readsAllowedBase([
         "graphql",
-        "issues.updateComment",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
     });
 
@@ -1404,14 +3837,11 @@ describe("GitHub Actions hardening", () => {
       const commentBody = lastEnforcerCommentBody(result);
       // Addressed to the PR author, so GitHub actually notifies them.
       expect(commentBody).toContain("@someone-else");
-      // Names every branch involved, so the instruction is actionable without
-      // context: where the PR is now and where it should go.
-      expect(commentBody).toContain("`main`");
-      expect(commentBody).toContain("`dev`");
-      // Points at the documentation rather than assuming the reader knows.
-      expect(commentBody).toContain("https://lidge-jun.github.io/opencodex/contributing/");
+      // Names the branch involved, so the instruction is actionable.
+      expect(commentBody).toContain("wrong target branch (main)");
+      expect(commentBody).toContain("Retarget this PR to `dev`");
       // And carries the state the next run needs.
-      expect(commentBody).toContain(MARKER);
+      expect(commentBody).toContain(GATE_MARKER);
       expect(commentBody).toContain('"version":1');
     });
 
@@ -1434,15 +3864,21 @@ describe("GitHub Actions hardening", () => {
       // nobody honours — the prefix stays on forever. Round ten bumped it to 2
       // and every test passed, because nothing asserted the value.
       const wrong = await run({ pr: { base: { ref: "main" }, draft: false } });
-      const [posted] = callsTo(wrong, "issues.createComment") as [{ body: string }];
+      const postedComments = callsTo(wrong, "issues.createComment") as [{ body: string }];
+      const posted = postedComments.find(call => call.body.includes(GATE_MARKER))!;
       expect(posted.body).toContain('"version":1');
 
       const cleared = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: true, titlePrefixedByBot: true })],
       });
-      const [done] = callsTo(cleared, "issues.updateComment") as [{ body: string }];
-      expect(done.body).toContain('"version":1');
+      const done = lastReadinessCommentBody(cleared);
+      expect(done).toContain('"version":1');
     });
 
     test("state written by an unknown version is still honoured on both paths", async () => {
@@ -1462,20 +3898,29 @@ describe("GitHub Actions hardening", () => {
         // changes are undone, and the marker is rewritten at the version this
         // workflow writes.
         const restored = await run({
-          pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+          pr: {
+            base: { ref: "dev" },
+            draft: true,
+            title: "[WRONG BRANCH] Add a thing",
+            body: readinessChecklistBody(4),
+          },
           comments: [botComment(active)],
         });
         expect(methodsOf(restored)).toEqual(readsAllowedBase([
-          "pulls.update",
-          "graphql",
-          "issues.updateComment",
-        ]));
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "pulls.update",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
         expect(callsTo(restored, "pulls.update")).toEqual([
           { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
         ]);
-        const [cleared] = callsTo(restored, "issues.updateComment") as [{ body: string }];
-        expect(cleared.body).toContain('"version":1');
-        expect(cleared.body).toContain('"active":false');
+        const cleared = lastReadinessCommentBody(restored);
+        expect(cleared).toContain('"version":1');
+        expect(cleared).toContain('"active":false');
 
         // Still wrong: enforcement proceeds, and the spread carries the
         // unknown version through untouched. Pinning that is what makes a
@@ -1485,14 +3930,13 @@ describe("GitHub Actions hardening", () => {
           comments: [botComment(active)],
         });
         expect(methodsOf(wrong)).toEqual(readsWrongBase([
-          "issues.updateComment",
           "pulls.update",
-          "issues.updateComment",
+          "pulls.update",
+          "issues.createComment",
+          "issues.deleteComment",
           "graphql",
-          "issues.updateComment",
-          "issues.updateComment",
         ]));
-        expect(lastEnforcerCommentBody(wrong)).toContain(`"version":${version}`);
+        expect(lastEnforcerCommentBody(wrong)).toContain('"version":1');
         expect(lastEnforcerCommentBody(wrong)).toContain('"active":true');
         expect(wrong.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
@@ -1512,13 +3956,22 @@ describe("GitHub Actions hardening", () => {
       // contributor-reachable. It is reachable across a migration, which is
       // exactly when the prefix must still come off.
       const loose = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [botComment({ version: 1, active: "true", autoDraftedByBot: 1, titlePrefixedByBot: "yes" })],
       });
       expect(methodsOf(loose)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
         "pulls.update",
         "graphql",
-        "issues.updateComment",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
       expect(callsTo(loose, "pulls.update")).toEqual([
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "Add a thing" },
@@ -1527,31 +3980,45 @@ describe("GitHub Actions hardening", () => {
       // And the falsy side is symmetric: `null` and `0` skip their own
       // restoration without stopping the run or the clearing write.
       const falsy = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [botComment({ version: 1, active: true, autoDraftedByBot: null, titlePrefixedByBot: 0 })],
       });
-      expect(methodsOf(falsy)).toEqual(readsAllowedBase(["issues.updateComment"]));
-      const [cleared] = callsTo(falsy, "issues.updateComment") as [{ body: string }];
-      expect(cleared.body).toContain('"active":false');
+      expect(methodsOf(falsy)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
+        "graphql",
+        "issues.createComment",
+        "issues.deleteComment",
+      ]));
+      const cleared = lastReadinessCommentBody(falsy);
+      expect(cleared).toContain('"active":false');
     });
 
     test("ownership comment is checkpointed before mutations and finalized after", async () => {
-      // Ownership is written before title/draft. autoDraftedByBot is claimed and
-      // checkpointed before convertToDraft so a successful convert followed by a
-      // failed comment still restores later.
+      // Ownership is written before the draft mutation. autoDraftedByBot is
+      // claimed and checkpointed in the consolidated comment BEFORE
+      // convertToDraft, so a successful convert followed by a failed comment
+      // write still leaves the bot-created draft owned and restorable.
       const result = await run({ pr: { base: { ref: "main" }, draft: false } });
+      // The exact call order pins the ownership discipline: the title is
+      // prefixed, the ownership comment is written (claiming
+      // `autoDraftedByBot`), then convertToDraft runs.
+      expect(methodsOf(result)).toEqual(readsWrongBase(CONTRIBUTOR_WRONG_BASE_TAIL));
+
       const methods = methodsOf(result);
-      const pending = methods.indexOf("issues.createComment");
-      const title = methods.indexOf("pulls.update");
-      const draftClaim = methods.indexOf("issues.updateComment");
-      const draft = methods.indexOf("graphql");
-      const finalUpdate = methods.lastIndexOf("issues.updateComment");
-      expect(pending).toBeGreaterThan(-1);
-      expect(pending).toBeLessThan(title);
-      expect(title).toBeLessThan(draftClaim);
-      expect(draftClaim).toBeLessThan(draft);
-      expect(draft).toBeLessThan(finalUpdate);
-      expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
+      const ownershipIndex = methods.indexOf("issues.createComment");
+      const draftIndex = methods.indexOf("graphql");
+      expect(ownershipIndex).toBeLessThan(draftIndex);
+
+      // The single comment records that the bot drafted.
+      const commentBody = lastReadinessCommentBody(result);
+      expect(commentBody).toContain('"autoDraftedByBot":true');
     });
 
     test("a title that is exactly the prefix is still enforced", async () => {
@@ -1565,13 +4032,18 @@ describe("GitHub Actions hardening", () => {
       });
 
       // Already prefixed, so no title write — but pending/draft/final still run.
-      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
+      ]);
       expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
         "issues.createComment",
-        "issues.updateComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       expect(lastEnforcerCommentBody(result)).toContain('"titlePrefixedByBot":false');
       expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
@@ -1586,12 +4058,18 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 42, title: "[WRONG BRANCH] " },
       ]);
       expect(methodsOf(result)).toEqual(readsWrongBase([
-        "issues.createComment",
         "pulls.update",
-        "issues.updateComment",
+        "pulls.update",
+        "issues.createComment",
       ]));
     });
 
@@ -1609,10 +4087,17 @@ describe("GitHub Actions hardening", () => {
       // reads, finds no prior state, and records that it changed nothing.
       // Asserting only the absent write would let an early return keyed on the
       // doubled prefix pass, since that skips the write too.
-      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
+      ]);
       expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
         "issues.createComment",
-        "issues.updateComment",
       ]));
       expect(lastEnforcerCommentBody(result)).toContain('"titlePrefixedByBot":false');
       expect(lastEnforcerCommentBody(result)).toContain('"active":true');
@@ -1630,14 +4115,19 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(methodsOf(result)).toEqual(readsWrongBase([
+        "pulls.update",
         "issues.createComment",
-        "issues.updateComment",
         "graphql",
-        "issues.updateComment",
-        "issues.updateComment",
       ]));
       // Already prefixed by the `startsWith` test, so no third prefix is added.
-      expect(callsTo(result, "pulls.update")).toEqual([]);
+      expect(callsTo(result, "pulls.update")).toEqual([
+        {
+          owner: "lidge-jun",
+          repo: "opencodex",
+          pull_number: 42,
+          body: expect.stringContaining(CHECKLIST_START),
+        },
+      ]);
       expect(lastEnforcerCommentBody(result)).toContain('"active":true');
       expect(lastEnforcerCommentBody(result)).toContain('"autoDraftedByBot":true');
     });
@@ -1659,20 +4149,33 @@ describe("GitHub Actions hardening", () => {
         body: [MARKER, `<!-- wrong-branch-enforcer-state:${JSON.stringify({ version: 1, active: false, autoDraftedByBot: false, titlePrefixedByBot: false })} -->`].join("\n"),
       };
       const result = await run({
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [first, second],
       });
 
       // The first comment's state is the one honoured: it says the bot
       // prefixed and drafted, so both are undone.
       expect(methodsOf(result)).toEqual(readsAllowedBase([
+        "graphql",
+        "pulls.listReviews",
+        "issues.addLabels",
         "pulls.update",
         "graphql",
-        "issues.updateComment",
+        "issues.createComment",
+        "issues.deleteComment",
       ]));
-      // And the first comment is the one rewritten, not the second.
-      const [updated] = callsTo(result, "issues.updateComment") as [{ comment_id: number }];
-      expect(updated.comment_id).toBe(7);
+      // The first legacy enforcer comment is migrated (deleted); the second
+      // `MARKER` comment is not matched by either legacy lookup. The
+      // consolidated gate comment carries the honoured (first) state.
+      const deletions = callsTo(result, "issues.deleteComment") as [{ comment_id: number }];
+      expect(deletions.map(d => d.comment_id).sort()).toEqual([7]);
+      const gateBody = lastReadinessCommentBody(result);
+      expect(gateBody).toContain(GATE_MARKER);
     });
 
     test("a failure reading the PR stops the run", async () => {
@@ -1755,7 +4258,10 @@ describe("GitHub Actions hardening", () => {
       // The mechanism the three round-eight mutations shared: a truthiness or
       // `typeof` check that answers one way on the runner and the other way
       // here. Assert the answers match production for every injected name.
-      const result = await run({ pr: { base: { ref: "dev" } } });
+      const result = await run({
+        pr: { base: { ref: "dev" } },
+        authorPermission: "write",
+      });
       const probe = await runProbe(`
         const seen = {};
         for (const [name, value] of Object.entries({
@@ -1832,15 +4338,18 @@ describe("GitHub Actions hardening", () => {
           failStatus: status,
         });
         expect(methodsOf(result)).toEqual(readsWrongBase([
-          "issues.createComment",
-          "pulls.update",
-          "issues.updateComment",
-          "graphql",
-          "issues.updateComment",
-        ]));
+        "pulls.update",
+        "pulls.update",
+        "issues.createComment",
+        "graphql",
+        "issues.updateComment",
+      ]));
         const commentBody = lastEnforcerCommentBody(result);
         expect(commentBody).toContain('"autoDraftedByBot":false');
         expect(commentBody).toContain("Automatic draft conversion failed");
+        expect(lastReadinessCommentBody(result)).toContain(
+          "Automatic draft conversion failed",
+        );
         expect(result.warnings.some((w) => w.includes("Could not convert pull request to draft"))).toBe(true);
         expect(result.warnings.some((w) => w.startsWith("setFailed:"))).toBe(true);
       }
@@ -1873,7 +4382,12 @@ describe("GitHub Actions hardening", () => {
     test("a failed ready-for-review conversion keeps ownership active for retry", async () => {
       const { script } = await readEnforcePrTarget();
       const result = await runEnforcePrTarget(script, {
-        pr: { base: { ref: "dev" }, draft: true, title: "[WRONG BRANCH] Add a thing" },
+        pr: {
+          base: { ref: "dev" },
+          draft: true,
+          title: "[WRONG BRANCH] Add a thing",
+          body: readinessChecklistBody(4),
+        },
         comments: [
           {
             id: 7,
@@ -1889,7 +4403,7 @@ describe("GitHub Actions hardening", () => {
             ].join("\n"),
           },
         ],
-        failOn: ["graphql"],
+        failGraphqlOn: ["markPullRequestReadyForReview"],
       });
       const commentBody = lastEnforcerCommentBody(result);
       expect(commentBody).toContain('"active":true');
@@ -1908,8 +4422,8 @@ describe("GitHub Actions hardening", () => {
     // that the `[WRONG BRANCH] ` prefix is never removed.
     expect(script).toMatch(/state\.autoDraftedByBot\s*=\s*true/);
     expect(script).toMatch(/state\.titlePrefixedByBot\s*=\s*true/);
-    expect(script).toMatch(/storedState\.autoDraftedByBot/);
-    expect(script).toMatch(/storedState\.titlePrefixedByBot/);
+    expect(script).toMatch(/gateState\.autoDraftedByBot/);
+    expect(script).toMatch(/gateState\.titlePrefixedByBot/);
     expect(script).toMatch(/await\s+convertToDraft\(\)/);
     expect(script).toMatch(/await\s+markReadyForReview\(\)/);
     expect(script).toMatch(/core\.setFailed\(/);
@@ -1937,21 +4451,47 @@ describe("GitHub Actions hardening", () => {
     // a draft forever, and every assertion above still passed because both
     // helpers and both state fields were still textually present. Presence of a
     // call proves nothing about whether it can be reached.
-    expect(script).toMatch(/\n\s*if \(!storedState\?\.active\) \{\n/);
+    expect(script).toMatch(/\n\s*if \(!checklistRequired\) \{\n/);
     expect(script).toMatch(/\n\s*if \(failures\.length > 0\) \{\n/);
 
-    // Pending ownership is written before mutations; convertToDraft runs next;
-    // a later upsertComment records autoDraftedByBot only after success (#631).
+    // The readiness gate: contributor drafts are owned by the checklist in the
+    // PR body, and the maintainer ping is recorded in the checklist message
+    // state so it happens once.
+    expect(script).toMatch(/const mustDraft =/);
+    expect(script).toMatch(/extractReviewReadiness\(pr\.body\)/);
+    expect(script).toMatch(/appendReviewReadinessSection\(pr\.body/);
+    expect(script).toMatch(/checklistComplete = readiness\.present && readiness\.complete/);
+    expect(script).toMatch(/Maintainers notified:/);
+    expect(script).toMatch(/maintainersPinged\s*=\s*true/);
+    expect(script).toMatch(/readMaintainerLogins\(\)/);
+    expect(script).toMatch(/fs\.readFileSync/);
+
+    // The readiness marker and the state serializers live in the shared
+    // modules the script loads; the script itself must import and use them.
+    const messagesModule = await readText(
+      ".github/scripts/pr-quality-messages.cjs",
+    );
+    expect(messagesModule).toMatch(
+      /READINESS_MARKER = "<!-- pr-quality-readiness -->"/,
+    );
+    expect(script).toMatch(/pr-quality-messages\.cjs/);
+
+    // Ownership is claimed and checkpointed in the consolidated comment BEFORE
+    // the draft mutation, so a successful convert followed by a failed comment
+    // write still leaves the bot-created draft owned and restorable. Only a
+    // failed conversion rewrites the comment with autoDraftedByBot:false.
     const branchStart = script.indexOf("if (failures.length > 0) {");
     expect(branchStart).toBeGreaterThan(-1);
     const branch = script.slice(branchStart);
-    const pendingWriteIndex = branch.indexOf("await upsertComment(");
+    const ownershipClaimIndex = branch.indexOf("state.autoDraftedByBot = true;");
     const draftCallIndex = branch.indexOf("await convertToDraft()");
-    const afterDraftWriteIndex = branch.indexOf("await upsertComment(", draftCallIndex);
-    expect(pendingWriteIndex).toBeGreaterThan(-1);
+    // The failure path writes the ownership checkpoint through the shared
+    // `draftComment` helper, which is defined before the draft mutation runs.
+    const gateWriteIndex = branch.indexOf("const draftComment = (notices) =>");
+    expect(ownershipClaimIndex).toBeGreaterThan(-1);
     expect(draftCallIndex).toBeGreaterThan(-1);
-    expect(pendingWriteIndex).toBeLessThan(draftCallIndex);
-    expect(afterDraftWriteIndex).toBeGreaterThan(draftCallIndex);
+    expect(ownershipClaimIndex).toBeLessThan(draftCallIndex);
+    expect(gateWriteIndex).toBeLessThan(draftCallIndex);
   });
 
   test("docs deployment is pinned, bounded, and scoped to Pages", async () => {
@@ -2021,8 +4561,13 @@ describe("GitHub Actions hardening", () => {
     expect(commentApply).toContain("omitted required field(s)");
 
     // Job-scoped permissions only (no top-level issues:write; no actions:write).
+    // The Copilot migration replaced `models: read` with `copilot-requests: write`
+    // as the inference credential; the job stays contents-read + issues-write.
     expect(workflow).toMatch(
-      /jobs:\s*\n\s*translate:[\s\S]*?permissions:\s*\n(?:\s*#.*\n)*\s*contents: read\s*\n(?:\s*#.*\n)*\s*issues: write\s*\n(?:\s*#.*\n)*\s*models: read/,
+      // dev resolved the same Copilot-migration drift with an alternation that
+      // also accepts the pre-migration `models: read`; take theirs so the gate
+      // holds on whichever branch supplies the workflow file.
+      /jobs:\s*\n\s*translate:[\s\S]*?permissions:\s*\n(?:\s*#.*\n)*\s*contents: read\s*\n(?:\s*#.*\n)*\s*issues: write\s*\n(?:\s*#.*\n)*\s*(?:copilot-requests: write|models: read)/,
     );
     const translateJob = workflow.split(/\n {2}translate:\n/)[1]!.split(/\n {2}[a-zA-Z]/)[0]!;
     expect(translateJob).not.toMatch(/actions:\s*write/);
@@ -2185,13 +4730,13 @@ describe("GitHub Actions hardening", () => {
     const workflow = await readText(".github/workflows/react-doctor.yml");
 
     expect(workflow).toContain("actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8");
-    expect(workflow).toContain("millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784");
+    expect(workflow).toContain("millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2");
     expect(workflow).not.toMatch(
       /^\s*-\s+uses:\s+\S+@(?![0-9a-f]{40}(?=[ \t]*(?:#.*)?$))\S+/m,
     );
 
     // Engine pin: the action wrapper would fetch react-doctor@latest without it.
-    expect(workflow).toContain('version: "0.9.2"');
+    expect(workflow).toContain('version: "0.9.11"');
 
     // Action pin must accept CLI JSON schemaVersion 3 (baseline reports from 0.9.x).
     // v2.1.0's ensure-json-report only knew schemas 1–2 and failed every PR scan.
@@ -2213,14 +4758,15 @@ describe("GitHub Actions hardening", () => {
     const rootPkg = await readText("package.json");
     const doctorConfig = await readText("gui/doctor.config.json");
 
-    expect(guiPkg).toContain("react-doctor@0.9.2");
+    expect(guiPkg).toContain("react-doctor@0.9.11");
     expect(guiPkg).not.toContain("react-doctor@latest");
     expect(rootPkg).not.toContain("react-doctor@latest");
     expect(doctorConfig).toContain('"blocking": "warning"');
     expect(rootPkg).toContain('"doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts"');
     expect(rootPkg).toContain('"lint:gui": "cd gui && bun run lint"');
-    // Gating steps include React Doctor after privacy scan on gui/ pushes.
-    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui && bun run test");
+    expect(rootPkg).toContain('"lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts"');
+    // Gating steps include lint and React Doctor only on gui/ pushes.
+    expect(rootPkg).toContain("bun run typecheck && bun run lint:gui:if-changed && bun run test");
     expect(rootPkg).toContain("bun run privacy:scan && bun run doctor:gui:if-changed");
   });
 });
@@ -2319,5 +4865,46 @@ describe("doctor-gui-if-changed", () => {
     });
     expect(run.exitCode).not.toBe(0);
     expect(run.stderr.toString()).toContain("exceeded buffer");
+  });
+});
+
+describe("lint-gui-if-changed", () => {
+  test("DRY_RUN prints the run/skip decision without spawning lint", () => {
+    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+      env: { ...process.env, LINT_DRY_RUN: "1", LINT_FILES: "gui/src/App.tsx\nscripts/x.ts" },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString()).toContain("lint:run");
+
+    const skip = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+      env: { ...process.env, LINT_DRY_RUN: "1", LINT_FILES: "scripts/x.ts\nREADME.md" },
+    });
+    expect(skip.exitCode).toBe(0);
+    expect(skip.stdout.toString()).toContain("lint:skip");
+  });
+
+  test("runs eslint when gui/ changed and fails the push on findings", () => {
+    // `bun run lint` in gui/ exits non-zero on findings; a fake command makes
+    // the spawn deterministic without depending on the real eslint output.
+    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        LINT_FILES: "gui/src/App.tsx",
+        LINT_CMD: "bun ../scripts/fixtures/lint-findings-exit.ts",
+      },
+    });
+    expect(run.exitCode).not.toBe(0);
+  });
+
+  test("skips eslint when gui/ did not change", () => {
+    const run = Bun.spawnSync(["bun", lintGuiIfChangedScript], {
+      env: {
+        ...process.env,
+        LINT_FILES: "scripts/x.ts\nREADME.md",
+        LINT_CMD: "bun ../scripts/fixtures/lint-findings-exit.ts",
+      },
+    });
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString()).toContain("lint:gui: skip");
   });
 });

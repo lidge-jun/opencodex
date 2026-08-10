@@ -18,6 +18,15 @@ export interface Cost4 {
   cacheWrite: number;
 }
 
+/**
+ * Upper bound for a user-configured USD-per-1M-token rate. Real prices are far
+ * below this (the most expensive published models cost a few hundred USD/M);
+ * the bound keeps `rate * tokens / 1e6` finite for any token count a usage log
+ * can plausibly hold, so an overlay cannot overflow the estimate to Infinity
+ * and serialize cost fields as null.
+ */
+export const MAX_COST4_RATE = 1_000_000;
+
 export type ExpectedPriceStatus = "verified" | "verified-derived" | "unverified";
 
 export interface ExpectedPriceOverlay {
@@ -30,6 +39,9 @@ export interface ExpectedPriceOverlay {
 }
 
 const GEMINI_31_PRO: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 };
+const GPT56_SOL: Cost4 = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
+const GPT56_TERRA: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 };
+const GPT56_LUNA: Cost4 = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
 const GEMINI_36_FLASH: Cost4 = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
@@ -37,7 +49,7 @@ const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWri
 const KIMI_K27_CODE_HIGHSPEED: Cost4 = { input: 1.9, output: 8, cacheRead: 0.38, cacheWrite: 1.9 };
 const KIMI_K26: Cost4 = { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
 const KIMI_K25: Cost4 = { input: 0.6, output: 3, cacheRead: 0.1, cacheWrite: 0.6 };
-const QWEN38_ROUTEWAY_TEMPORARY: Cost4 = { input: 1.5, output: 5, cacheRead: 0.15, cacheWrite: 0 };
+const QWEN38_MAX: Cost4 = { input: 2, output: 6, cacheRead: 0, cacheWrite: 0 };
 // Anthropic official list prices (USD / 1M tokens). Cache write uses the published 5-minute rate.
 const CLAUDE_SONNET_46: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const CLAUDE_OPUS_46: Cost4 = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
@@ -50,13 +62,19 @@ const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pric
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
+const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
 // Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
 // cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
 const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
-// TEMPORARY proxy only: Routeway's reseller API rate is not Alibaba Token Plan billing.
-// Replace these overlays when Alibaba publishes an official qwen3.8-max-preview token rate.
-const QWEN38_ROUTEWAY_PRICING = "https://routeway.ai/models/qwen3.8-max-preview (temporary reseller proxy; NOT Alibaba Token Plan billing; cacheWrite unpublished -> 0)";
+// 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
+// is the exit condition the previous Routeway reseller overlay named. Two caveats are
+// deliberately in the source string rather than dropped: the figure comes from Qwen's own
+// release announcement, NOT from an Alibaba Model Studio billing table (which still lists
+// qwen3.7-max and qwen3-max but has no qwen3.8-max row), and no cache rate is published
+// anywhere. Cache stays 0 rather than inheriting the reseller's 0.15 — a reseller number
+// under a vendor-price label would be a wrong value wearing a verified badge.
+const QWEN38_MAX_PRICING = "https://qwen.ai/blog?id=qwen3.8 (Qwen release announcement; no Model Studio billing row yet; cache rates unpublished -> 0)";
 
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // claude-opus-5 is exposed by three providers but absent from the jawcode bundle, so
@@ -77,6 +95,14 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // base model's standard rate per the official Billing FAQ).
   { provider: "google-antigravity", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: `collapsed base ID ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro", cost4: GEMINI_31_PRO, source: `collapsed base ID ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified" },
+  // OpenAI GPT-5.6 `-pro` virtual selections. The virtual resolver keeps the SELECTED id in
+  // the usage log and records the wire model separately, and cost resolution deliberately
+  // does not fall back through resolvedModel — so without these rows every `-pro` request
+  // resolved to null and rendered no cost estimate at all (#908 audit, runtime-verified).
+  // Pro reasoning bills at the base model's published API rate; the suffix is an effort knob.
+  { provider: "openai-apikey", modelId: "gpt-5.6-sol-pro", cost4: GPT56_SOL, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
+  { provider: "openai-apikey", modelId: "gpt-5.6-terra-pro", cost4: GPT56_TERRA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
+  { provider: "openai-apikey", modelId: "gpt-5.6-luna-pro", cost4: GPT56_LUNA, source: `collapsed base ID ${OPENAI_GPT56_PRICING}`, verifiedAt: "2026-08-03", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-low", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-high", cost4: GEMINI_31_PRO, source: `derived: gemini-3.1-pro (<=200k tier) ${GEMINI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "google-antigravity", modelId: "gemini-pro-agent", cost4: GEMINI_31_PRO, source: `wire id for gemini-3.1-pro high ${GEMINI_PRICING}`, verifiedAt: "2026-07-23", status: "verified-derived" },
@@ -120,10 +146,10 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  // Alibaba has not published a per-token Token Plan rate yet. Use Routeway's
-  // independently published reseller rate temporarily and keep estimates derived.
-  { provider: "alibaba-token-plan", modelId: "qwen3.8-max-preview", cost4: QWEN38_ROUTEWAY_TEMPORARY, source: QWEN38_ROUTEWAY_PRICING, verifiedAt: "2026-07-22", status: "verified-derived" },
-  { provider: "alibaba-token-plan-intl", modelId: "qwen3.8-max-preview", cost4: QWEN38_ROUTEWAY_TEMPORARY, source: QWEN38_ROUTEWAY_PRICING, verifiedAt: "2026-07-22", status: "verified-derived" },
+  // Qwen3.8-Max: vendor-published input/output rate (verified). See QWEN38_MAX_PRICING
+  // for what that source does and does not cover.
+  { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
+  { provider: "alibaba-token-plan-intl", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
 ];
@@ -151,8 +177,11 @@ export function findExpectedPriceOverlay(
  */
 export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
   "gpt-5.6-sol": 2,
-  "gpt-5.6-terra": 1.6,
-  "gpt-5.6-luna": 0.4,
+  // Post-price-cut Fast tables (https://openai.com/api-fast-mode/, 2026-08-05):
+  // Terra 4/24/0.40/5 and Luna 0.40/2.40/0.04/0.50 are both 2× the corrected
+  // standard tuples; the stale bases made these look like 1.6/0.4 (#907).
+  "gpt-5.6-terra": 2,
+  "gpt-5.6-luna": 2,
   "gpt-5.5": 2.5,
   "gpt-5.4-mini": 2,
   "gpt-5.4": 2,
@@ -161,4 +190,103 @@ export const PRIORITY_MULTIPLIERS: Readonly<Record<string, number>> = {
 /** Returns the priority-tier price multiplier for a model (1 if not listed). */
 export function resolvePriorityMultiplier(modelId: string): number {
   return PRIORITY_MULTIPLIERS[modelId] ?? 1;
+}
+
+/**
+ * Long-context pricing tiers (#908). Several vendors reprice the ENTIRE request
+ * once the prompt crosses a published input-token threshold, so a flat Cost4
+ * cannot express it.
+ *
+ * The threshold is measured on RAW `usage.inputTokens` (total prompt size,
+ * including cache reads/writes) — never on normalized billable input, which has
+ * already had cache tokens subtracted. A 280k prompt with a 200k cache read has
+ * 80k billable input and still crosses OpenAI's 272k boundary; deciding after
+ * normalization would under-bill exactly the cache-heavy long requests.
+ *
+ * Rules are exact provider+model matches. No case folding: the jawcode bundle
+ * carries BOTH `minimax-m3` and `MiniMax-M3` at different rates, so folding
+ * would select the wrong base row. No model-level fallback: routed resellers
+ * (Cursor, OpenRouter) share model slugs but price independently.
+ */
+export interface ContextTier {
+  provider: string;
+  modelId: string;
+  /** Long rates apply once raw input tokens pass this boundary. */
+  thresholdInputTokens: number;
+  /** true = `>=` threshold (xAI), false = `>` threshold (OpenAI, MiniMax). */
+  inclusive: boolean;
+  /** Per-field factor from the short rate to the published long rate. */
+  multiplier: Cost4;
+  source: string;
+  verifiedAt: string;
+}
+
+/**
+ * OpenAI GPT-5.6: "Prompts with >272K input tokens are priced at 2x input and
+ * 1.5x output for the full request." Cached input and cache writes also double,
+ * per the published short/long columns.
+ */
+const OPENAI_LONG_CONTEXT: Cost4 = { input: 2, output: 1.5, cacheRead: 2, cacheWrite: 2 };
+/** xAI and MiniMax double every rate uniformly past their thresholds. */
+const UNIFORM_DOUBLE: Cost4 = { input: 2, output: 2, cacheRead: 2, cacheWrite: 2 };
+
+const OPENAI_PRICING_DOC = "https://developers.openai.com/api/docs/pricing";
+const OPENAI_GPT56_CONTEXT_MODELS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  // Virtual `-pro` selections keep their own id in usage logs (the wire model is
+  // recorded separately), so they need their own rows or they silently skip the tier.
+  "gpt-5.6-sol-pro",
+  "gpt-5.6-terra-pro",
+  "gpt-5.6-luna-pro",
+];
+
+export const CONTEXT_TIERS: readonly ContextTier[] = [
+  ...["openai", "openai-apikey"].flatMap(provider =>
+    OPENAI_GPT56_CONTEXT_MODELS.map((modelId): ContextTier => ({
+      provider,
+      modelId,
+      thresholdInputTokens: 272_000,
+      inclusive: false,
+      multiplier: OPENAI_LONG_CONTEXT,
+      source: OPENAI_PRICING_DOC,
+      verifiedAt: "2026-08-03",
+    })),
+  ),
+  {
+    provider: "xai",
+    modelId: "grok-4.5",
+    thresholdInputTokens: 200_000,
+    inclusive: true,
+    multiplier: UNIFORM_DOUBLE,
+    source: "https://docs.x.ai/developers/pricing",
+    verifiedAt: "2026-08-03",
+  },
+  ...["minimax", "minimax-cn"].map((provider): ContextTier => ({
+    provider,
+    modelId: "MiniMax-M3",
+    thresholdInputTokens: 512_000,
+    inclusive: false,
+    multiplier: UNIFORM_DOUBLE,
+    source: "https://platform.minimax.io/docs/guides/pricing-paygo",
+    verifiedAt: "2026-08-03",
+  })),
+];
+
+/** Exact provider+model context-tier lookup. No fuzzy matching, no case folding. */
+export function findContextTier(
+  provider: string,
+  modelId: string,
+  tiers: readonly ContextTier[] = CONTEXT_TIERS,
+): ContextTier | undefined {
+  return tiers.find(tier => tier.provider === provider && tier.modelId === modelId);
+}
+
+/** Whether a raw input-token count crosses the tier's published boundary. */
+export function isLongContext(tier: ContextTier, rawInputTokens: number): boolean {
+  if (!Number.isFinite(rawInputTokens)) return false;
+  return tier.inclusive
+    ? rawInputTokens >= tier.thresholdInputTokens
+    : rawInputTokens > tier.thresholdInputTokens;
 }

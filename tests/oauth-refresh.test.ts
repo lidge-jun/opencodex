@@ -380,6 +380,24 @@ describe("oauth refresh hardening", () => {
     expect(getCredential("xai")?.source).toBe("local-cli");
   });
 
+  test("malformed Grok generation is not adopted and falls through to refresh-resolution", async () => {
+    await saveCredential("xai", {
+      access: "xai-old", refresh: "rt-old", expires: Date.now() - 1, accountId: "user-1", source: "local-cli",
+    });
+    // Disk auth.json carries an unparseable expires_at; before the NaN guard this
+    // generation was adopted as authoritative and never refreshed.
+    seedGrokAuth({
+      key: "xai-disk", refresh_token: "rt-disk", expires_at: "not-a-date", user_id: "user-1",
+    });
+    const mock = mockXaiRefreshFetch();
+
+    await expect(getValidAccessToken("xai")).resolves.toBe("xai-fresh");
+    expect(mock.discoveryCount()).toBe(1);
+    expect(mock.tokenCount()).toBe(1);
+    expect(new URLSearchParams(mock.tokenBodies[0]).get("refresh_token")).toBe("rt-old");
+    expect(getCredential("xai")?.source).toBe("oauth");
+  });
+
   test("newer-expiry Grok access token is adopted when refresh generation is unchanged", async () => {
     const mock = mockRefreshFetch([new Response("unexpected", { status: 500 })]);
     await saveCredential("xai", {

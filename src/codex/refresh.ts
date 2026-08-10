@@ -12,6 +12,8 @@ export interface CodexCatalogRefreshResult {
   catalogWritten: boolean;
   cacheSynced: boolean;
   comboOmissions: ComboCatalogOmission[];
+  /** Desired OFF observed under K during the catalog commit; no cache write either. */
+  skippedReason?: "desired_disabled";
 }
 
 interface RefreshDeps {
@@ -45,6 +47,11 @@ export async function refreshCodexModelCatalog(
   const catalogExists = deps.existsSync(result.path);
   const catalogWritten = result.catalogWritten === true;
   const comboOmissions = result.comboOmissions ?? [];
+  if (result.skippedReason === "desired_disabled") {
+    // The commit path observed OFF under K. Invalidate nothing: rewriting the
+    // models cache here would be exactly the routed-cache write the skip refused.
+    return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
+  }
   if (!catalogExists) {
     return { ...result, catalogExists, catalogWritten: false, cacheSynced: false, comboOmissions };
   }

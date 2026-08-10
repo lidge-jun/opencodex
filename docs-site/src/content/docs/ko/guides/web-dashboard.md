@@ -21,6 +21,12 @@ ocx start
 bun run dev:gui
 ```
 
+## 로그인
+
+`localhost`나 `127.0.0.1` 같은 loopback 주소에서 연 대시보드는 짧게 유지되는 GUI 세션을 자동으로 받으므로 보통 토큰을 입력할 필요가 없습니다. loopback이 아닌 호스트로 공개한 대시보드에는 `OPENCODEX_ADMIN_AUTH_TOKEN` 또는 자동 생성되는 `~/.opencodex/admin-api-token` 파일의 관리자 토큰이 필요합니다.
+
+원격 대시보드는 표준 비밀번호 폼을 표시하므로 브라우저 비밀번호 관리자가 토큰 저장과 자동 완성을 제안할 수 있습니다. 대시보드 자체는 토큰을 메모리에만 보관하며 `localStorage`나 `sessionStorage`에 쓰지 않습니다. 저장 여부는 전적으로 브라우저 또는 비밀번호 관리자가 결정합니다.
+
 ## 할 수 있는 일
 
 | 영역 | 기능 |
@@ -77,12 +83,22 @@ Dashboard의 **Sub-agent delegation** 선택기는 `injectionModel`과 선택적
 선택한 강도가 전역 단계에 있는지 검사하고, Codex는 다시 대상 카탈로그 항목이 그 강도를 지원하는지
 검사합니다.
 
+<a id="codex-auth-and-account-pools"></a>
+
 ## Codex Auth와 계정 풀
 
 **Codex Auth** 페이지는 네이티브 ChatGPT/Codex 라우트를 관리합니다.
 
-- 계정을 직접 고르면 다음 새 Codex 세션부터 바뀝니다. 이미 계정이 묶인 thread는 이 수동 전환만으로
-  중간에 이동하지 않습니다.
+- 계정을 직접 고르면 곧바로 적용됩니다. 이미 계정이 묶인 thread도 다음 요청에서 고른 계정으로
+  옮겨가고, 이미 전송 중인 요청만 가져간 계정을 그대로 씁니다. 직접 고른 계정은 고정되기도 합니다. 카드에 **고정됨** 배지가
+  붙고, 그 계정이 소진되거나, 다른 계정을 고르거나, 어느 계정의 선택 순서를 바꿀 때까지 더 높은 선택
+  순서가 끼어들지 못합니다. 계정이 제외되거나 삭제되거나 명시적으로 failover/promotion 되면 고정도 함께 풀립니다.
+- 각 계정 카드에는 **선택 순서** 컨트롤(가장 먼저 / 먼저 / 기본 / 나중에 / 가장 마지막)이 있습니다.
+  순서가 높은 계정부터 쓰이며, 그 위의 계정이 모두 소진되거나 사용할 수 없게 된 뒤에야 낮은 순서로
+  내려갑니다. 순서를 바꾸면 **다음 미바인딩 요청** 부터 적용되며, 이미 계정에 바인딩된 thread를 옮기지
+  않습니다. Codex Desktop(메인) 계정도 똑같이 정렬되므로 **가장 마지막**으로 두어 예비로 남길 수
+  있습니다. `ocx account priority`로 프리셋 밖의 값을 지정해도 카드에서 그대로 보이고 선택할 수
+  있습니다.
 - Thread affinity가 요청마다 계정이 흔들리는 일을 막습니다. 할당량 자동 전환이 켜져 있으면 오래
   실행되는 thread도 주기적으로 다시 평가합니다. 관련 사용량이 임계값 이상이고 사용량이 확실히 더 낮은
   정상 계정이 있으면 그 계정으로 다시 묶일 수 있습니다.
@@ -92,6 +108,19 @@ Dashboard의 **Sub-agent delegation** 선택기는 `injectionModel`과 선택적
   30일 창으로 분류합니다. 기간이 없는 기존 응답은 이전과 동일하게 주간 창으로 해석합니다.
 - **Refresh quotas**는 계정 사용량을 즉시 다시 읽어 라우팅과 화면의 계정 카드가 같은 값을 보게 합니다.
 - 풀 요청 로그에는 이메일 대신 `p3fa91c` 같은 불투명한 라벨을 사용합니다.
+- **모델 선택기에서 사용할 Codex 계정 지정**은 명시적 opt-in입니다. 활성화하면 일반 GPT picker 항목이
+  공개 account selector별 항목으로 대체됩니다. 선택한 대화는 해당 계정에 고정되며 Pool 순환이나
+  fallback이 일어나지 않고 active Pool account도 바뀌지 않습니다. 기본 Codex App 로그인에는 자체
+  selector가 있으며, 생성된 map에서는 보통 `main`, 충돌 시 `main-2` 같은 안전한 suffix를 사용합니다.
+  추가 계정에는 안정적인 privacy-safe label이 부여됩니다. 기존 대화와 저장된 모델 선택은 계속
+  라우팅됩니다. 비활성화해도 계정, selector, exact route는 삭제되지 않으며 일반 GPT id는 기존 Pool /
+  Direct 동작을 유지합니다.
+- 계정 추가·삭제와 picker 설정은 catalog refresh보다 먼저 저장됩니다. refresh가 끝나지 않으면 amber
+  복구 안내가 표시됩니다. 변경 자체는 저장되어 있으므로 `ocx sync`로 refresh를 다시 시도하십시오.
+
+Providers 개요는 Pool 모드 사용량을 표시 전용 가중 용량 추정치로 별도 요약하고, 현재 유효 계정의
+원본 quota와 다음 용량 회복도 함께 표시합니다. 표시 필드, 불완전한 범위의 의미, 라우팅 경계는
+[프로바이더 개요의 풀 용량](/ko/guides/providers/#프로바이더-개요의-풀-용량)을 참고하세요.
 
 ## 스타는 에이전트가 아니라 사용자가 결정합니다
 
@@ -119,7 +148,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 
 | 엔드포인트 | 용도 |
 | --- | --- |
-| `GET` / `PUT /api/settings` | 설정을 읽거나 Codex 자동 시작을 켜고 끕니다. |
+| `GET` / `PUT /api/settings` | 설정을 읽고 Codex 자동 시작, stream/memory, account-targeting picker 표시를 업데이트합니다. |
 | `GET` / `POST /api/github/star` | `gh`로 확인한 스타 상태를 읽거나 저장소에 스타를 남깁니다. 대시보드 세션 없이 에이전트가 POST하면 `403` `agent_consent_required`로 거절합니다. |
 | `GET /api/startup-health` | 비밀값 없이 라우팅, 서비스, shim, 재부팅 안전성 진단을 읽습니다. |
 | `GET` / `POST /api/windows-tray` | Windows 트레이 설치 및 표시 상태를 읽거나 `install`, `start`, `stop`, `uninstall` 작업을 수행합니다. |
@@ -135,6 +164,7 @@ GUI는 프록시의 JSON 관리 API를 사용하는 얇은 클라이언트입니
 | `POST /api/oauth/login` · `GET /api/oauth/status` | 프로바이더 OAuth 로그인을 시작하고 완료 여부를 확인합니다. |
 | `GET /api/codex-auth/accounts?refresh=1` | main 및 pool 계정을 조회하고 할당량을 강제로 갱신하며 main 계정의 `hasCredential` / terminal `needsReauth` 상태를 표시합니다. |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 다음 요청에 사용할 계정과 풀 라우팅 정책을 설정합니다. |
+| `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | 실효 계정(고정 여부를 나타내는 `pinned`와 고정된 계정을 알려주는 `pinnedAccountId` 포함)을 읽고 계정 하나의 선택 순서를 설정합니다. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 브라우저 로그인으로 pool 계정을 추가합니다. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | tail, 프로바이더, 정확한 상태 코드 또는 상태 등급으로 최근 요청 메타데이터를 조회합니다. `limit`/`offset`은 최신 행에서 과거 방향으로 페이지네이션합니다(`offset=0`이 최신 페이지). 응답은 `{ timeZone, total, logs }`이며 `total`은 페이지네이션 전 필터 일치 건수입니다. |
 | `GET` / `PUT /api/subagent-models` | `spawn_agent`에 우선 노출할 모델 5개를 읽거나 설정합니다. |

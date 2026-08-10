@@ -1,5 +1,6 @@
 import { IconInfo } from "../icons";
 import { useT } from "../i18n/shared";
+import { navigateHash } from "../hash-routing";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { discoveryFailureLabel } from "./models-shared";
 
@@ -22,7 +23,9 @@ export function EmptyProviderHint({
         {failed
           ? `${discoveryFailureLabel(t, failed)} `
           : `${t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")} `}
-        <a href="#providers">{t("models.openProviderSettings")}</a>
+        <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+          {t("models.openProviderSettings")}
+        </button>
       </span>
     </div>
   );

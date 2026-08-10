@@ -4,7 +4,7 @@ import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { loadConfig, resolveEnvValue, saveConfig } from "../config";
 import { maskEmail } from "../lib/privacy";
 import { KiroTokenRefreshError, environmentKiroRoutingMetadata, loginKiro, refreshKiroToken, settleKiroLoginTransaction } from "./kiro";
-import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, OAuthMutationBusyError } from "./store";
+import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredential, saveCredential, setActiveAccount, getCredential, credentialGeneration, createOAuthRefreshIntentLock, mergeAccountCredential, markAccountNeedsReauthIfGeneration, readOAuthRefreshIntent, writeOAuthRefreshIntent, markOAuthRefreshIntentStaleOwner, clearOAuthRefreshIntent, normalizeAuthStoreBuffer, OAuthMutationBusyError } from "./store";
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
@@ -12,6 +12,8 @@ import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
+import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
@@ -52,9 +54,25 @@ export interface OAuthAccessSnapshot {
   accountId: string;
   generation: string;
   accessToken: string;
+  /** Cloud Code Assist project selected during Antigravity login. */
+  projectId?: string;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
+
+export interface ObservedOAuthAccessSnapshot extends OAuthAccessSnapshot {
+  /** Allowlisted provider API origin consumed by GitHub Copilot model discovery. */
+  apiBaseUrl?: string;
+}
+
+export type OAuthActiveTokenObservation =
+  | { readonly kind: "available"; readonly snapshot: ObservedOAuthAccessSnapshot }
+  | { readonly kind: "missing" }
+  | { readonly kind: "malformed" }
+  | { readonly kind: "needs-reauth" }
+  | { readonly kind: "expired" }
+  | { readonly kind: "near-expiry" }
+  | { readonly kind: "unsupported" };
 
 const MAX_OAUTH_TOKEN_REFRESH_FLIGHTS = 32;
 const OAUTH_TOKEN_REFRESH_FLIGHT_STALE_MS = 120_000;
@@ -146,6 +164,14 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  "command-code": {
+    // Add-account/reauth must not reimport the current local CLI credential.
+    login: (ctrl, opts) => loginCommandCode(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
+    refresh: refreshCommandCodeToken,
+    providerConfig: oauthConfig("command-code"),
+    defaultModel: oauthDefaultModel("command-code"),
+    defaultRefreshPolicy: "disabled",
+  },
   xai: {
     // forceLogin skips the local grok-cli import so a SECOND account can be chosen in the browser.
     login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
@@ -181,7 +207,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("google-antigravity"),
   },
   cursor: {
-    login: (ctrl) => loginCursor(ctrl),
+    login: (ctrl, opts) => loginCursor(ctrl, undefined, { forceLogin: opts?.forceLogin }),
     refresh: refreshCursorToken,
     providerConfig: oauthConfig("cursor"),
     defaultModel: oauthDefaultModel("cursor"),
@@ -266,6 +292,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(cred.projectId ? { projectId: cred.projectId } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -275,6 +302,38 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
             : environmentKiroRoutingMetadata() ?? {},
         }
       : {}),
+  };
+}
+
+/**
+ * Observe the active OAuth token from an auth-store buffer supplied by its filesystem owner.
+ * Missing, malformed, reauth-required, and expiring credentials are typed no-token outcomes;
+ * this path never refreshes, locks, hardens, backs up, or persists credentials.
+ */
+export function observeActiveOAuthAccessToken(
+  provider: string,
+  authStoreBuffer: Uint8Array | null,
+  now = Date.now(),
+): OAuthActiveTokenObservation {
+  const authStore = normalizeAuthStoreBuffer(authStoreBuffer);
+  if (authStore.kind === "absent") return { kind: "missing" };
+  if (authStore.kind === "malformed") return { kind: "malformed" };
+  if (!isOAuthProvider(provider)) return { kind: "unsupported" };
+
+  const accountSet = authStore.store[provider];
+  const account = accountSet?.accounts.find(candidate => candidate.id === accountSet.activeAccountId);
+  if (!account) return { kind: "missing" };
+  if (account.needsReauth) return { kind: "needs-reauth" };
+  if (account.credential.expires <= now) return { kind: "expired" };
+  if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
+
+  const apiBaseUrl = validateCopilotApiBaseUrl(account.credential.apiBaseUrl);
+  return {
+    kind: "available",
+    snapshot: {
+      ...accessSnapshot(provider, account.id, account.credential),
+      ...(apiBaseUrl ? { apiBaseUrl } : {}),
+    },
   };
 }
 
@@ -573,23 +632,35 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
 }
 
 /**
- * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
+ * Provider-correct model-discovery request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
  * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` by default
  * (or `Authorization: Bearer` when `apiKeyTransport = "bearer"`), plus the OAuth beta for oauth
  * mode — not a bare Bearer. Google (ai-studio mode)
  * is the other special case: `x-goog-api-key` + `/v1beta/models`, returning `{ models: [...] }`.
  * The catalog authority gate intentionally degrades that non-OpenAI shape to stale/static data.
- * Everyone else uses the OpenAI-style `/models` + Bearer with a `{ data: [{ id, owned_by? }] }`
- * response.
+ * Antigravity uses its CCA `:fetchAvailableModels` RPC; everyone else uses the OpenAI-style
+ * `/models` + Bearer with a `{ data: [{ id, owned_by? }] }` response.
  */
-export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | undefined, providerName = ""): { url: string; headers: Record<string, string> } {
+export interface ModelsRequestObservedAuth {
+  readonly oauthApiBaseUrl?: string;
+}
+
+export function buildModelsRequest(
+  prov: OcxProviderConfig,
+  apiKey: string | undefined,
+  providerName = "",
+  observedAuth?: ModelsRequestObservedAuth,
+): { method?: "POST"; url: string; headers: Record<string, string> } {
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
+  const copilotApiBaseUrl = observedAuth === undefined
+    ? (providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined)
+    : observedAuth.oauthApiBaseUrl;
   const effectiveProvider = resolveProviderTransport(
     providerName,
     transportSeed,
     undefined,
-    providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined,
+    copilotApiBaseUrl,
   );
   const headers: Record<string, string> = { ...(effectiveProvider.headers ?? {}) };
   const discoveryUrl = (defaultUrl: string): string => resolveProviderModelDiscoveryUrl(
@@ -598,6 +669,17 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
     effectiveProvider.baseUrl,
     defaultUrl,
   );
+  if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
+    headers.Accept = "application/json";
+    headers["Content-Type"] = "application/json";
+    headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return {
+      method: "POST",
+      url: discoveryUrl(`${effectiveProvider.baseUrl.replace(/\/+$/, "")}/v1internal:fetchAvailableModels`),
+      headers,
+    };
+  }
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
@@ -629,8 +711,9 @@ export function buildModelsRequest(prov: OcxProviderConfig, apiKey: string | und
  * configs on the next `ocx start`, instead of only fresh installs. The live `/models` fetch stays
  * the primary source; this keeps the static fallback (and models-not-in-/models) current.
  *
- * Only touches providers that are registry-managed AND still `authMode: "oauth"`, and only the
- * preset fields (never apiKey/baseUrl/user toggles). Persists + returns true when anything changed.
+ * Only touches providers that are registry-managed AND still `authMode: "oauth"`. Preset fields
+ * are refreshed, while the registry's `liveModels` default is normally filled only when no value
+ * is stored. Persists + returns true when anything changed.
  */
 function cloneProviderField(value: unknown): unknown {
   if (Array.isArray(value)) return [...value];
@@ -657,11 +740,58 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
 ];
+// `requiresReasoningPlaceholderModels` is deliberately NOT reconciled here: no
+// OAuth preset seeds it, so the delete-when-preset-undefined branch would wipe
+// an explicit user opt-out (`[]`) on every startup. Registry seeds still reach
+// existing rows through enrichProviderFromRegistry, which is fill-only and
+// preserves explicit saved values.
+
+const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
+const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
+
+/** Only migrate the three-model experimental seed; an operator's later `liveModels: false` wins. */
+function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false
+    && provider.defaultModel === "deepseek-v4-flash"
+    && JSON.stringify(provider.models) === JSON.stringify(["deepseek-v4-flash", "kimi-k3", "glm-5.2"]);
+}
+
+function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false
+    && provider.adapter === "google"
+    && provider.baseUrl === "https://daily-cloudcode-pa.googleapis.com"
+    && provider.authMode === "oauth"
+    && provider.googleMode === "cloud-code-assist"
+    && provider.defaultModel === "gemini-3.6-flash"
+    && JSON.stringify(provider.models) === JSON.stringify([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "gemini-3.1-flash-image",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
+}
+
+/** Promote only the versioned canonical static seed; unmarked `liveModels: false` remains user intent. */
+function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
+  if (config.googleAntigravityStaticCatalogVersion !== 1) return false;
+  const provider = config.providers[GOOGLE_ANTIGRAVITY_PROVIDER];
+  if (provider && isLegacyAntigravityStaticCatalog(provider)) provider.liveModels = true;
+  config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION;
+  return true;
+}
 
 export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = false;
+  let changed = migrateLegacyAntigravityStaticCatalog(config);
   for (const [name, prov] of Object.entries(config.providers)) {
     const def = OAUTH_PROVIDERS[name];
+    if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
+      // The former experimental preset was the exact three-model seed above. It was not a user
+      // choice to disable discovery, so promote only that shape to the account live catalog.
+      prov.liveModels = true;
+      changed = true;
+    }
     if (!def || prov.authMode !== "oauth") continue;
     const preset = def.providerConfig;
     for (const field of OAUTH_RECONCILE_FIELDS) {
@@ -673,8 +803,15 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       }
       changed = true;
     }
+    if (prov.liveModels === undefined && preset.liveModels !== undefined) {
+      prov.liveModels = preset.liveModels;
+      changed = true;
+    }
     // Heal a defaultModel that no longer exists in the refreshed list (e.g. a deprecated snapshot).
-    if (prov.defaultModel && preset.defaultModel && !(prov.models ?? []).includes(prov.defaultModel)) {
+    // Skip providers without a static preset `models` list: for live-discovery providers
+    // (e.g. command-code OAuth) the account-scoped catalog is not enumerable here, so any
+    // persisted defaultModel is a user selection and must not be overwritten by the seed.
+    if (prov.defaultModel && preset.defaultModel && preset.models && preset.models.length > 0 && !(prov.models ?? []).includes(prov.defaultModel)) {
       prov.defaultModel = preset.defaultModel;
       changed = true;
     }
@@ -735,10 +872,28 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
+  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
+  // `liveModels` is a user-facing provider toggle. Preserve either explicit setting across login;
+  // Antigravity's CCA discovery now uses its real RPC, so legacy `true` remains a valid choice.
+  if (typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
+    next.liveModels = existing.liveModels;
+  }
+  // The Command Code protocol-version pin is an operator compatibility control. A re-login,
+  // add-account, or reauth rebuilds the row from the preset, which has no version; carry the
+  // existing pin so authentication changes do not silently revert the documented control.
+  if (existing?.commandCodeVersion !== undefined) {
+    next.commandCodeVersion = existing.commandCodeVersion;
+  }
+  // User-configured price overlays are operator data, not preset state; a
+  // re-login, add-account, or reauth must not silently drop them from the
+  // Logs/Usage estimates.
+  if (existing?.modelCosts !== undefined) {
+    next.modelCosts = existing.modelCosts;
+  }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
     let storedApiKey = sanitizeApiKeyValue(existing.apiKey);
@@ -889,11 +1044,15 @@ export async function runLogin(
   settleKiroTransaction(rawCred, true);
   if (provider !== "chatgpt") {
     try {
+      const { clearModelCache } = await import("../codex/model-cache");
+      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog");
+      clearModelCache(provider);
+      clearGatherRoutedModelsInflight();
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
       clearProviderQuotaCache();
       clearAccountQuotaCache(provider);
     } catch {
-      // Quota module may be unavailable in tightly scoped unit tests.
+      // Optional state modules may be unavailable in tightly scoped unit tests.
     }
   }
   return cred;
@@ -992,7 +1151,11 @@ export function submitManualLoginCode(provider: string, input: string): { ok: tr
   // protected. Early posts (flow not yet waiting, no expectedState) are stashed and
   // re-validated by the callback loop.
   const parsed = parseCallbackInput(trimmed);
-  if (!parsed.code) return { ok: false, error: "no authorization code found in input" };
+  // Command Code's manual fallback accepts a pasted JSON callback payload
+  // (`{ apiKey, state, ... }`) which has no `code` param. Let it through the
+  // shared gate so the provider-specific parser can validate it.
+  const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{") && !parsed.code;
+  if (!parsed.code && !isCommandCodeJson) return { ok: false, error: "no authorization code found in input" };
   if (parsed.kind !== "raw" && slot.expectedState !== undefined) {
     if (parsed.state === undefined) return { ok: false, error: "redirect URL is missing the state parameter" };
     if (parsed.state !== slot.expectedState) return { ok: false, error: "state mismatch — paste the redirect URL from THIS login attempt" };
@@ -1022,8 +1185,16 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,
   }));
+
+  // A stored credential counts as "logged in" when it exists and is not marked for
+  // re-authentication. An expired access token with a valid refresh token is still
+  // logged in: request resolution refreshes expired/near-expiry credentials lazily.
+  // Invalid/unknown local-import expiries are handled at parse/adoption time
+  // (local-token-detect.ts), never by over-reporting login state here.
+  const activeNeedsReauth = set?.accounts
+    .find(a => a.id === set.activeAccountId)?.needsReauth === true;
   return {
-    loggedIn: !!cred,
+    loggedIn: !!cred && !activeNeedsReauth,
     email: maskEmail(cred?.email) ?? undefined,
     source: cred?.source,
     error: st?.error,

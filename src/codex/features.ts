@@ -1,11 +1,14 @@
 /**
  * features.ts — codex feature-flag view for $CODEX_HOME/config.toml.
  *
- * Scope boundary: this module mirrors ONLY `multi_agent_v2`, because opencodex has
- * to migrate its concurrency value across the v1/v2 boundary and expose the
- * multi-agent config surface. Every other upstream feature flag is delegated to
- * the native `codex features` command (see src/cli/v2.ts) and must not be
- * hardcoded here.
+ * Scope boundary: this module mirrors only the flags opencodex has to READ
+ * directly from config.toml:
+ *   - `multi_agent_v2`, because opencodex migrates its concurrency value across
+ *     the v1/v2 boundary and exposes the multi-agent config surface;
+ *   - `default_mode_request_user_input` (Codex Auth page toggle), because the
+ *     management API needs a live reader for the flag it manages.
+ * Every other upstream feature flag is delegated to the native `codex features`
+ * command (see src/cli/v2.ts) and must not be hardcoded here.
  *
  * Upstream reshapes flags freely: in the 1f0566d3f..5a1097ed2 range alone,
  * `code_mode_host` changed from a boolean to a table (it is Stage::Stable and
@@ -30,8 +33,12 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { realpathSync } from "node:fs";
-import { atomicWriteFile, expandUserPath } from "../config";
+import { AtomicWriteResidualTempError, AtomicWriteSecretResidualError, atomicWriteFile, expandUserPath } from "../config";
+import { forgetEphemeralSecretPath } from "../lib/windows-secret-acl";
 import { CODEX_CONFIG_PATH } from "./paths";
+
+/** Upstream codex-rs feature key: allow `request_user_input` in Default mode. */
+export const DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY = "default_mode_request_user_input";
 
 // EOL preservation, local copies of inject.ts dominantEol/applyEol: importing
 // inject here would close a module cycle (features -> inject -> catalog -> features).
@@ -55,7 +62,7 @@ function mergeTrailingComments(existing?: string, migrated?: string): string {
   return `${existing}; ${migratedText}`;
 }
 
-function activeCodexConfigPath(): string {
+export function activeCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
   if (!raw) return CODEX_CONFIG_PATH;
   const path = resolve(expandUserPath(raw));
@@ -76,7 +83,23 @@ function readConfigText(configPath?: string): string | null {
   }
 }
 
-/** Body lines of a TOML table `[header]` up to (not including) the next table header. */
+/**
+ * Body lines of a TOML table `[header]` up to (not including) the next table header.
+ *
+ * The implementation body is deliberately unchanged by #1295 — only this comment
+ * is new. The scanner is line-based and string-unaware, so it ends the table at
+ * the first line matching `/^\s*\[/` even inside a multi-line value. Twenty call
+ * sites in this file consume its output, most of them by matching a regex
+ * against the returned text, so widening that text changes what they match. An
+ * earlier attempt at #1295 made this scanner string-aware and thereby gave
+ * `getAgentsEnabled`, `getAgentsMaxDepth`, and `getMaxConcurrentThreads` three
+ * new wrong answers.
+ *
+ * The readers that matter for #1295 use a real TOML parse instead (see
+ * `parsedTomlTable`). This stays as the fallback for documents that do not
+ * parse, and as the reader for the remaining call sites until they are migrated
+ * the same way.
+ */
 function tomlTableBody(content: string, header: string): string | null {
   const lines = content.split("\n");
   const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -102,7 +125,33 @@ function tomlBoolInBody(body: string, key: string): boolean | null {
  */
 export function isMultiAgentV2Enabled(configPath?: string): boolean {
   const content = readConfigText(configPath);
+  return multiAgentV2EnabledFromConfigText(content);
+}
+
+/** Parse `multi_agent_v2` from caller-owned config.toml text without consulting disk. */
+export function multiAgentV2EnabledFromConfigText(content: string | null): boolean {
   if (content === null) return false;
+
+  // Prefer a real parse. The hand-written table scanner below cannot distinguish
+  // an assignment from prose that looks like one — a `"""` value containing the
+  // line `enabled = true` reads as the key itself — and TOML has enough value
+  // shapes (multi-line arrays opening on the next line, escapes, comments) that
+  // each near-miss costs another special case (#1295).
+  //
+  // The scanner remains only for a document `Bun.TOML.parse` rejects. That is a
+  // statement about Bun's parser, not about Codex's — the two are separate
+  // implementations and no compatibility evidence is claimed here, so a document
+  // Bun rejects may still be one Codex loads. The fallback is therefore
+  // best-effort and inherits the ambiguity above. It exists because reporting a
+  // feature as disabled on account of an unreadable file presents a failure as
+  // a state.
+  const parsed = parsedTomlTable(content, "features");
+  if (parsed !== null) {
+    const table = plainTomlRecord(parsed.multi_agent_v2);
+    if (table !== null) return table.enabled === true;
+    if (typeof parsed.multi_agent_v2 === "boolean") return parsed.multi_agent_v2;
+    return false;
+  }
 
   const table = tomlTableBody(content, "features.multi_agent_v2");
   if (table !== null) {
@@ -127,6 +176,51 @@ export function isMultiAgentV2Enabled(configPath?: string): boolean {
   return false;
 }
 
+function plainTomlRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * A top-level table from a full TOML parse, or null when the document does not
+ * parse. A parsed document with no such table yields `{}` rather than null: that
+ * is a real answer ("no keys"), while null means "could not read, fall back".
+ */
+function parsedTomlTable(content: string, name: string): Record<string, unknown> | null {
+  const toml = (globalThis as { Bun?: { TOML?: { parse(input: string): unknown } } }).Bun?.TOML;
+  if (!toml) return null;
+  try {
+    const root = plainTomlRecord(toml.parse(content));
+    if (root === null) return null;
+    return plainTomlRecord(root[name]) ?? {};
+  } catch {
+    return null;
+  }
+}
+
+
+/**
+ * TRUE when the codex `default_mode_request_user_input` feature is enabled in
+ * config.toml — lets a Default-mode session pause and ask the user questions
+ * through `request_user_input` (upstream FeatureSpec: under development,
+ * default_enabled = false). Recognizes the shipped boolean form
+ * `[features] default_mode_request_user_input = true`.
+ * Missing file/key -> false.
+ */
+export function isDefaultModeRequestUserInputEnabled(configPath?: string): boolean {
+  const content = readConfigText(configPath);
+  if (content === null) return false;
+  // Same reason as the v2 reader: a `"""` value whose prose contains
+  // `default_mode_request_user_input = true` is not an assignment, and a raw
+  // regex over the table body cannot tell the difference (#1295).
+  const parsed = parsedTomlTable(content, "features");
+  if (parsed !== null) return parsed[DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY] === true;
+  const features = tomlTableBody(content, "features");
+  if (features === null) return false;
+  return tomlBoolInBody(features, DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE_KEY) === true;
+}
+
 /**
  * TRUE when config.toml still carries `[agents] max_threads` — codex-rs REFUSES to
  * boot with that key while multi_agent_v2 is enabled ("agents.max_threads cannot be
@@ -136,6 +230,8 @@ export function isMultiAgentV2Enabled(configPath?: string): boolean {
 export function hasAgentsMaxThreads(configPath?: string): boolean {
   const content = readConfigText(configPath);
   if (content === null) return false;
+  const parsed = parsedTomlTable(content, "agents");
+  if (parsed !== null) return Object.hasOwn(parsed, "max_threads");
   const agents = tomlTableBody(content, "agents");
   if (agents === null) return false;
   return /^\s*max_threads\s*=/m.test(agents);
@@ -145,6 +241,11 @@ export function hasAgentsMaxThreads(configPath?: string): boolean {
 export function getAgentsMaxThreads(configPath?: string): number | null {
   const content = readConfigText(configPath);
   if (content === null) return null;
+  const parsed = parsedTomlTable(content, "agents");
+  if (parsed !== null) {
+    const value = parsed.max_threads;
+    return typeof value === "number" && Number.isInteger(value) && value >= 1 ? value : null;
+  }
   const agents = tomlTableBody(content, "agents");
   if (agents === null) return null;
   const m = agents.match(/^\s*max_threads\s*=\s*(\d+)\s*(?:#.*)?$/m);
@@ -833,10 +934,20 @@ function activeThreadComment(content: string, v2Enabled: boolean): string | unde
 }
 
 let migrationEditSeq = 0;
+/** Both residual classes gate the memo release: a plain residual and a
+ * secret-bearing one alike keep their destination memo while the file
+ * remains on disk. Exported for the regression seam. */
+export function isAtomicResidualError(error: unknown): boolean {
+  return error instanceof AtomicWriteResidualTempError || error instanceof AtomicWriteSecretResidualError;
+}
+
 function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => ConfigEditResult): ConfigEditResult {
   const content = readConfigText(path);
   if (content === null) return { ok: false, error: `config.toml not readable at ${path}` };
   const tempPath = `${path}.ocx-migration.${process.pid}.${++migrationEditSeq}`;
+  // An inner residual temp (AtomicWriteResidualTempError) keeps its
+  // destination-keyed memo: fail-closed while the residual exists.
+  let innerResidual = false;
   try {
     atomicWriteFile(tempPath, content);
     const result = edit(tempPath);
@@ -846,8 +957,19 @@ function applyConfigEditsAtomically(path: string, edit: (tempPath: string) => Co
     if (edited === content) return { ok: true, changed: false };
     atomicWriteFile(path, edited);
     return { ok: true, changed: true };
+  } catch (error) {
+    if (isAtomicResidualError(error)) innerResidual = true;
+    throw error;
   } finally {
-    try { unlinkSync(tempPath); } catch { /* already absent */ }
+    try {
+      unlinkSync(tempPath);
+      if (!innerResidual) forgetEphemeralSecretPath(tempPath);
+    } catch (error) {
+      // Already absent is also proven-absent; other failures keep the memo.
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        if (!innerResidual) forgetEphemeralSecretPath(tempPath);
+      }
+    }
   }
 }
 

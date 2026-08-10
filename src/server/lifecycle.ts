@@ -20,6 +20,8 @@ import {
   beginBackgroundShellShutdown,
   terminateAllBackgroundShells,
 } from "../adapters/cursor/native-exec-shell";
+import type { CodexAccountSelectionAdmission } from "../codex/auth-context";
+import { releaseNativeMainStartupLifecycle } from "../codex/native-profile-startup";
 
 // ---------------------------------------------------------------------------
 // Active turn tracking + graceful shutdown drain
@@ -29,24 +31,138 @@ export const MAX_ACTIVE_TURNS = 256;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
   bindAbortController(ac: AbortController): void;
+  beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
 }
 const activeTurns = new Map<AbortController, ActiveTurnLease>();
 const admittedTurns = new Set<ActiveTurnLease>();
 const knownTurnControllers = new WeakSet<AbortController>();
 let turnReleaseMisses = 0;
-let draining = false;
+let shutdownDraining = false;
+const temporaryDrainOwners = new Set<symbol>();
+const nativeMainDrainOwners = new Set<symbol>();
+const temporaryDrainWaiters = new Set<() => void>();
+const nativeMainTurns = new Set<ActiveTurnLease>();
+let nativeMainSelections = 0;
+let legacyDrainLease: AdmissionLease | null = null;
 let recyclingForExit = false;
 let _serverRef: ReturnType<typeof Bun.serve> | undefined;
+let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
+let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
+let releaseServerStartupLifecycleImpl: typeof releaseNativeMainStartupLifecycle = releaseNativeMainStartupLifecycle;
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
-export function setDraining(value: boolean): void { draining = value; }
+/**
+ * Legacy/test-only drain control. Production scoped operations must use a lease,
+ * while process shutdown uses the irreversible shutdown latch.
+ */
+export function setDraining(value: boolean): void {
+  if (value) {
+    legacyDrainLease ??= acquireTemporaryDrain("legacy");
+  } else {
+    legacyDrainLease?.release();
+    legacyDrainLease = null;
+  }
+}
+
+function temporaryDrainCount(): number {
+  return temporaryDrainOwners.size + nativeMainDrainOwners.size;
+}
+
+function notifyTemporaryDrainsSettled(): void {
+  if (temporaryDrainCount() !== 0) return;
+  for (const resolve of temporaryDrainWaiters) resolve();
+  temporaryDrainWaiters.clear();
+}
+
+/** Acquire the single owner-scoped global data-plane fence. */
+export function acquireTemporaryDrain(owner: string): AdmissionLease | null {
+  if (shutdownDraining || temporaryDrainCount() > 0) return null;
+  const token = Symbol(owner);
+  temporaryDrainOwners.add(token);
+  let active = true;
+  return {
+    release() {
+      if (!active) return;
+      active = false;
+      temporaryDrainOwners.delete(token);
+      notifyTemporaryDrainsSettled();
+    },
+  };
+}
+
+/** Fence only turns that select the native Codex `__main__` account. */
+export function acquireNativeMainProfileDrain(owner: string): AdmissionLease | null {
+  if (shutdownDraining || temporaryDrainCount() > 0) return null;
+  const token = Symbol(owner);
+  nativeMainDrainOwners.add(token);
+  let active = true;
+  return {
+    release() {
+      if (!active) return;
+      active = false;
+      nativeMainDrainOwners.delete(token);
+      notifyTemporaryDrainsSettled();
+    },
+  };
+}
+
+/** Permanently fence this process for shutdown; scoped lease release cannot clear it. */
+export function beginShutdownDrain(): boolean {
+  if (shutdownDraining) return false;
+  shutdownDraining = true;
+  return true;
+}
+
+export function isShutdownDraining(): boolean { return shutdownDraining; }
+
+export function waitForTemporaryDrains(): Promise<void> {
+  if (temporaryDrainCount() === 0) return Promise.resolve();
+  return new Promise(resolve => temporaryDrainWaiters.add(resolve));
+}
+
+/** Wait for scoped drains without allowing them to outlive the shutdown deadline. */
+async function waitForTemporaryDrainsUntil(deadlineMs: number): Promise<boolean> {
+  if (temporaryDrainCount() === 0) return true;
+  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  if (remainingMs === 0) return false;
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (drained: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve(drained);
+    };
+    timer = setTimeout(() => finish(false), remainingMs);
+    void waitForTemporaryDrains().then(() => finish(true));
+  });
+}
+
+/** Test-only process-lifetime reset. Never call from production recovery paths. */
+export function resetLifecycleDrainStateForTests(): void {
+  legacyDrainLease?.release();
+  legacyDrainLease = null;
+  temporaryDrainOwners.clear();
+  nativeMainDrainOwners.clear();
+  nativeMainTurns.clear();
+  nativeMainSelections = 0;
+  for (const resolve of temporaryDrainWaiters) resolve();
+  temporaryDrainWaiters.clear();
+  shutdownDraining = false;
+  serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
+  serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
+  releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
+}
 export function tryAdmitTurn(): ActiveTurnLease | null {
+  if (isDraining()) return null;
   const gateLease = turnGate.tryAcquire();
   if (!gateLease) return null;
   const controllers = new Set<AbortController>();
   let active = true;
   let transferred = false;
+  let nativeMainClaimed = false;
   const lease: ActiveTurnLease = {
     bindAbortController(ac) {
       knownTurnControllers.add(ac);
@@ -58,6 +174,31 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
       controllers.add(ac);
       activeTurns.set(ac, lease);
     },
+    beginCodexAccountSelection() {
+      const mainProfileDraining = nativeMainDrainOwners.size > 0;
+      let selectionActive = !mainProfileDraining;
+      let released = false;
+      if (selectionActive) nativeMainSelections += 1;
+      return {
+        mainProfileDraining,
+        claimMainProfile() {
+          if (released || mainProfileDraining || !active) return false;
+          if (!nativeMainClaimed) {
+            nativeMainClaimed = true;
+            nativeMainTurns.add(lease);
+          }
+          return true;
+        },
+        release() {
+          if (released) return;
+          released = true;
+          if (selectionActive) {
+            selectionActive = false;
+            nativeMainSelections = Math.max(0, nativeMainSelections - 1);
+          }
+        },
+      };
+    },
     isTransferred() { return transferred; },
     release() {
       if (!active) return;
@@ -67,12 +208,43 @@ export function tryAdmitTurn(): ActiveTurnLease | null {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
       }
       controllers.clear();
+      nativeMainTurns.delete(lease);
       gateLease.release();
     },
   };
   admittedTurns.add(lease);
   return lease;
 }
+export function codexAccountSelectionForTurn(
+  lease?: AdmissionLease,
+): (() => CodexAccountSelectionAdmission | undefined) | undefined {
+  if (!lease || !("beginCodexAccountSelection" in lease)) return undefined;
+  const activeLease = lease as ActiveTurnLease;
+  return () => activeLease.beginCodexAccountSelection();
+}
+
+/** Promote a physical native-main credential read onto an already admitted turn. */
+export function tryClaimNativeMainProfileForTurn(lease?: AdmissionLease): boolean {
+  const beginSelection = codexAccountSelectionForTurn(lease);
+  if (!beginSelection) return false;
+  const selection = beginSelection();
+  if (!selection) return false;
+  try {
+    return !selection.mainProfileDraining && selection.claimMainProfile();
+  } finally {
+    selection.release();
+  }
+}
+
+/** Acquire standalone native-main ownership for management/background work. */
+export function tryAcquireNativeMainProfileClaim(): AdmissionLease | null {
+  const turn = tryAdmitTurn();
+  if (!turn) return null;
+  if (tryClaimNativeMainProfileForTurn(turn)) return turn;
+  turn.release();
+  return null;
+}
+
 export function registerTurn(ac: AbortController, lease?: AdmissionLease): void {
   if (lease && "bindAbortController" in lease) (lease as ActiveTurnLease).bindAbortController(ac);
 }
@@ -85,8 +257,11 @@ export function unregisterTurn(ac: AbortController): void {
   }
   lease.release();
 }
-export function isDraining(): boolean { return draining; }
+export function isDraining(): boolean { return shutdownDraining || temporaryDrainOwners.size > 0; }
 export function getActiveTurnCount(): number { return turnGate.metrics().active; }
+export function getNativeMainProfileRequestCount(): number {
+  return nativeMainSelections + nativeMainTurns.size;
+}
 export function activeRegistryMetrics(): Record<string, AdmissionMetrics> {
   const turns = turnGate.metrics();
   return {
@@ -110,6 +285,80 @@ export function abortAndReleaseAllTurns(reason: unknown = new Error("server shut
 export function getServerListenPort(): number | undefined {
   const port = _serverRef?.port;
   return typeof port === "number" && port > 0 ? port : undefined;
+}
+
+/**
+ * Stop one concrete listener exactly once. Deadline restart handoff can race the
+ * ordinary drain's finally block; both callers must observe the same stop result
+ * before any replacement process is allowed to bind the port.
+ */
+/**
+ * Run every shutdown step, then report whether any of them failed.
+ *
+ * Extracted from `startServer`'s composite `stop` because the two properties it has to hold
+ * pull in opposite directions and neither is testable in place:
+ *
+ * - Cleanup COMPLETES. A listener whose stop rejects cannot prevent the other listener, or the
+ *   native lifecycle release, from running.
+ * - Failure PROPAGATES. `stopServerListener` deliberately surfaces a stop rejection so every
+ *   caller sees the same result before a replacement binds the port. Swallowing it would let
+ *   `drainAndShutdown` report success while a socket is still held.
+ *
+ * `always` runs after the listeners regardless of their outcome, and its own failure joins the
+ * reported set rather than replacing it.
+ */
+export async function runListenerShutdown(
+  steps: Array<() => Promise<void>>,
+  always: () => Promise<void>,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    await always();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "listener shutdown failed");
+}
+
+export function stopServerListener(
+  server: ReturnType<typeof Bun.serve> | undefined = _serverRef,
+): Promise<void> {
+  if (!server) return Promise.resolve();
+  const existing = serverStopFlights.get(server);
+  if (existing) return existing;
+  // Bun's Server.stop returns Promise<void>; fire-and-forget races a
+  // follow-on listen and can leave the replacement seeing the old proxy.
+  const flight = Promise.resolve().then(() => server.stop(true));
+  serverStopFlights.set(server, flight);
+  return flight;
+}
+
+/** Native-main startup ownership cleanup, separate from the listen socket flight. */
+export function releaseServerStartupLifecycle(
+  server: ReturnType<typeof Bun.serve> | undefined = _serverRef,
+): Promise<void> {
+  if (!server) return Promise.resolve();
+  const existing = serverStartupReleaseFlights.get(server);
+  if (existing) return existing;
+  const flight = Promise.resolve().then(() => releaseServerStartupLifecycleImpl(server));
+  serverStartupReleaseFlights.set(server, flight);
+  return flight;
+}
+
+/** Test seam for a held/rejected startup lifecycle release. */
+export function setServerStartupLifecycleReleaseForTests(
+  release: typeof releaseNativeMainStartupLifecycle | undefined,
+): void {
+  releaseServerStartupLifecycleImpl = release ?? releaseNativeMainStartupLifecycle;
+  serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 }
 /**
  * Mark this process as a recycle (dashboard drain-and-restart). Exit cleanup
@@ -158,10 +407,16 @@ export async function drainAndShutdown(
   timeoutMs: number,
 ): Promise<void> {
   const s = server ?? _serverRef;
-  draining = true;
+  // One absolute budget covers both a pre-existing scoped profile drain and
+  // ordinary in-flight turns. A stuck scoped owner must not pin shutdown forever.
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  beginShutdownDrain();
+  const temporaryDrainsSettled = await waitForTemporaryDrainsUntil(deadline);
+  if (!temporaryDrainsSettled) {
+    console.warn("Temporary drain lease did not settle before the shutdown deadline; forcing shutdown");
+  }
   beginBackgroundShellShutdown();
   try {
-    const deadline = Date.now() + timeoutMs;
     while (admittedTurns.size > 0 && Date.now() < deadline) {
       await Bun.sleep(100);
     }
@@ -192,6 +447,12 @@ export async function drainAndShutdown(
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
     stopStateStoreSweeper();
+    // The overlay reconciler is owner-scoped: the startServer stop override
+    // releases THIS server's lease through runListenerShutdown →
+    // userCostOverlayReconciler.stop(), which also recomputes disk-only
+    // preservation for any remaining owners. A process-wide stop here would
+    // kill reconciliation for every other server in the process, so drain
+    // must not call stopUserCostOverlayReconciler().
     cancelQueuedStorageWorkerSpawns();
     const shutdownJoins = await Promise.allSettled([
       abortStorageCleanupPolicyJobAsync(),
@@ -217,11 +478,11 @@ export async function drainAndShutdown(
     setStorageCleanupPolicyJobLiveApply(null);
   } finally {
     try {
-      // Bun's Server.stop returns Promise<void>; fire-and-forget races the next
-      // isolate reclaim / follow-on listen the same way unterminated Workers did.
-      if (s) await s.stop(true);
+      await stopServerListener(s);
     } finally {
-      draining = false;
+      await releaseServerStartupLifecycle(s);
+      // shutdownDraining is a process-lifetime latch. A stopped server must
+      // never resume admission merely because shutdown cleanup returned.
     }
   }
 }

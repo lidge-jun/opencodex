@@ -22,6 +22,11 @@ import {
 } from "../src/codex/routing";
 import type { OcxConfig } from "../src/types";
 import { formatOAuthHealthForStatus } from "../src/cli/status-oauth";
+import {
+  LOCAL_ATTESTATION_CHALLENGE_HEADER,
+  LOCAL_ATTESTATION_PROOF_HEADER,
+  createLocalAttestationProof,
+} from "../src/lib/local-management-attestation";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -174,10 +179,17 @@ describe("collectOAuthHealthEntriesForCli", () => {
   test("uses management API Codex health and does not read CLI process maps", async () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    const attestationSecret = "A".repeat(43);
     let authorization: string | null = null;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
-      fetchImpl: async (_input, init) => {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
+      fetchImpl: async (input, init) => {
+        if (String(input).endsWith("/healthz")) {
+          const challenge = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+          const proof = createLocalAttestationProof(attestationSecret, challenge, 4242, 19191)!;
+          return new Response("ok", { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } });
+        }
         authorization = new Headers(init?.headers).get("authorization");
         return new Response(JSON.stringify({
           accounts: [{
@@ -201,6 +213,39 @@ describe("collectOAuthHealthEntriesForCli", () => {
       reason: "rate_limit",
     });
     expect(remote?.action).toContain("wait until");
+  });
+
+  test("never sends the admin token to a configured-port listener without runtime attestation", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    let fetchCalls = 0;
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "config" }),
+      readRuntimePortImpl: () => null,
+      fetchImpl: async (_input, init) => {
+        fetchCalls += 1;
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        return new Response("fake");
+      },
+    });
+    expect(fetchCalls).toBe(0);
+    expect(report.codexHealthSource).toBe("management-api-unavailable");
+  });
+
+  test("an invalid listener proof cannot unlock the bearer-bearing request", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    const attestationSecret = "A".repeat(43);
+    let apiCalls = 0;
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
+      fetchImpl: async (input, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        if (!String(input).endsWith("/healthz")) apiCalls += 1;
+        return new Response("fake", { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: "B".repeat(43) } });
+      },
+    });
+    expect(apiCalls).toBe(0);
+    expect(report.codexHealthSource).toBe("management-api-unavailable");
   });
 
   test("labels unavailable fallback and omits process-local Codex maps", async () => {

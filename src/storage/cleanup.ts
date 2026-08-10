@@ -51,6 +51,7 @@ export type CleanupErrorCode =
   | "fs_failed"
   | "db_reconcile_failed"
   | "referenced_history"
+  | "pinned_thread"
   | "restore_pending_overlap"
   | "cleanup_failed";
 
@@ -430,12 +431,61 @@ export function collectRestorePendingAcceptedDestRels(codexHome: string): Set<st
   return out;
 }
 
+/**
+ * Normalized rollout paths of pinned threads. Pinned threads are never
+ * cleanup candidates: a pin is the user's explicit "keep this" signal and
+ * deleting its rollout would be permanent task-data loss (#858).
+ *
+ * Selection-time use is advisory: on any DB problem this returns an empty
+ * set, and the write-locked re-check inside reconcileDeletedThreads stays
+ * the fail-closed gate. Older schemas without `is_pinned` keep prior
+ * behavior.
+ */
+function collectPinnedArchivedRolloutPaths(codexHome: string): Set<string> {
+  const statePath = discoverRuntimeDbPaths(codexHome).state;
+  if (!statePath || !existsSync(statePath)) return new Set();
+  let db: Database | undefined;
+  try {
+    db = new Database(statePath, { readonly: true });
+    if (!tableExists(db, "threads") || !columnExists(db, "threads", "is_pinned")) {
+      return new Set();
+    }
+    const rows = db.query<{ rollout_path: string }, []>(
+      `SELECT rollout_path FROM threads WHERE is_pinned = 1`,
+    ).all();
+    const out = new Set<string>();
+    for (const row of rows) {
+      const normalized = normalizeArchivedRolloutPath(row.rollout_path, codexHome);
+      if (normalized) out.add(normalized);
+    }
+    return out;
+  } catch {
+    return new Set();
+  } finally {
+    try { db?.close(); } catch { /* */ }
+  }
+}
+
+/** Drop candidates whose rollout belongs to a pinned thread (#858). */
+export function filterCandidatesExcludingPinned(
+  candidates: ArchivedCandidate[],
+  codexHome: string,
+): ArchivedCandidate[] {
+  const pinned = collectPinnedArchivedRolloutPaths(codexHome);
+  if (pinned.size === 0) return candidates;
+  return candidates.filter(c => !pinned.has(c.relPath));
+}
+
 export function previewArchivedCleanup(
   percent: number,
   codexHome: string = resolveCodexHomeDir(),
 ): CleanupPreview {
   const all = listArchivedCandidates(codexHome);
-  const safe = selectOldestPercentSkippingPendingRestore(all, percent, codexHome);
+  const safe = selectOldestPercentSkippingPendingRestore(
+    filterCandidatesExcludingPinned(all, codexHome),
+    percent,
+    codexHome,
+  );
   const pct = clampPercent(percent);
   return {
     codexHome,
@@ -452,7 +502,10 @@ export function previewExactArchivedCleanup(
   candidates: ArchivedCandidate[],
   codexHome: string = resolveCodexHomeDir(),
 ): CleanupPreview {
-  const safe = filterCandidatesExcludingPendingRestore(candidates, codexHome);
+  const safe = filterCandidatesExcludingPinned(
+    filterCandidatesExcludingPendingRestore(candidates, codexHome),
+    codexHome,
+  );
   return {
     codexHome,
     percent: 0,
@@ -561,6 +614,7 @@ interface ThreadSnapshot {
   rollout_path: string;
   archived: number | null;
   history_mode?: string | null;
+  is_pinned?: number | null;
 }
 
 /**
@@ -575,11 +629,13 @@ function loadMatchingThreads(db: Database, candidates: ArchivedCandidate[], code
   const logicalSet = new Set(candidates.map(c => c.relPath));
   const hasArchived = columnExists(db, "threads", "archived");
   const hasHistoryMode = columnExists(db, "threads", "history_mode");
+  const hasIsPinned = columnExists(db, "threads", "is_pinned");
   const selectCols = ["id", "rollout_path"];
   if (hasArchived) selectCols.push("archived");
   if (hasHistoryMode) selectCols.push("history_mode");
+  if (hasIsPinned) selectCols.push("is_pinned");
   const rows = db.query<
-    { id: string; rollout_path: string; archived?: number | null; history_mode?: string | null },
+    { id: string; rollout_path: string; archived?: number | null; history_mode?: string | null; is_pinned?: number | null },
     []
   >(`SELECT ${selectCols.join(", ")} FROM threads`).all();
 
@@ -597,6 +653,7 @@ function loadMatchingThreads(db: Database, candidates: ArchivedCandidate[], code
       rollout_path: row.rollout_path,
       archived: hasArchived ? (row.archived ?? null) : null,
       history_mode: hasHistoryMode ? (row.history_mode ?? null) : null,
+      is_pinned: hasIsPinned ? (row.is_pinned ?? null) : null,
     }));
 }
 
@@ -734,6 +791,8 @@ type SatelliteBackupRead =
   | { status: "invalid" };
 
 interface ReconcileTestHooks {
+  /** Runs at the top of reconcileDeletedThreads, before the write lock is taken. */
+  beforeReconcileLock?: () => void;
   failAfterLogsMutation?: boolean;
   failAfterMemoriesMutation?: boolean;
   failAfterGoalsMutation?: boolean;
@@ -1414,6 +1473,9 @@ function loadThreadsForCleanup(
   try {
     db = openDbWritable(stateDbPath, busyTimeoutMs);
     const threads = loadMatchingThreads(db, candidates, codexHome);
+    if (threads.some(t => Number(t.is_pinned ?? 0) === 1)) {
+      return { ok: false, error: "pinned_thread" };
+    }
     if (findReferencedHistory(db, threads)) {
       return { ok: false, error: "referenced_history" };
     }
@@ -1441,6 +1503,8 @@ function reconcileDeletedThreads(
   hooks?: ReconcileTestHooks,
 ): ReconcileOk | ReconcileErr {
   if (!paths.state || !existsSync(paths.state)) return { ok: true, threads: [] };
+
+  if (hooks?.beforeReconcileLock) hooks.beforeReconcileLock();
 
   let stateDb: Database | undefined;
   let backup: SatelliteBackup | undefined;
@@ -1474,6 +1538,12 @@ function reconcileDeletedThreads(
 
     // Freeze the exact delete set under the write lock before any satellite mutation.
     const threads = loadMatchingThreads(stateDb, candidates, codexHome);
+    // A pin applied after selection must stop the delete, even though the
+    // staged files are already in trash staging — the caller restores them.
+    if (threads.some(t => Number(t.is_pinned ?? 0) === 1)) {
+      stateDb.exec("ROLLBACK");
+      return { ok: false, error: "pinned_thread" };
+    }
     if (findReferencedHistory(stateDb, threads)) {
       stateDb.exec("ROLLBACK");
       return { ok: false, error: "referenced_history" };
@@ -1675,20 +1745,21 @@ export interface ExecuteCleanupOptions {
     failSatelliteBackupWrite?: boolean;
     failSatelliteBackupReplace?: boolean;
     afterSatelliteMutations?: () => void;
+    beforeReconcileLock?: () => void;
   };
 }
 
 /** Serializable cleanup test hooks allowed on the management API wire. */
 export type CleanupWireTestHooks = Omit<
   NonNullable<ExecuteCleanupOptions["_test"]>,
-  "afterSatelliteMutations"
+  "afterSatelliteMutations" | "beforeReconcileLock"
 >;
 
 function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(e => typeof e === "string");
 }
 
-/** Pick only allowlisted serializable hooks; drops afterSatelliteMutations and unknown keys. */
+/** Pick only allowlisted serializable hooks; drops function hooks (afterSatelliteMutations, beforeReconcileLock) and unknown keys. */
 export function pickWireCleanupTestHooks(raw: unknown): CleanupWireTestHooks | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const o = raw as Record<string, unknown>;

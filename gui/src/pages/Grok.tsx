@@ -56,7 +56,13 @@ function formatContext(value: number | undefined, t: TFn): string {
  * by injectGrokConfig — the same path `ocx start`/`ensure`/`restart` use. Aliases shown
  * here come from readGrokStatus (what the writer actually wrote), never computed.
  */
-export default function Grok({ apiBase }: { apiBase: string }) {
+/**
+ * `active` gates the status resource. Grok is one panel of the Integrations
+ * tab strip and stays mounted while hidden to preserve an unsaved selection,
+ * so the gate is what stops a hidden panel from polling. The `signal` makes a
+ * request in flight at deactivation abortable rather than orphaned.
+ */
+export default function Grok({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const t = useT();
   const cacheKey = `ocx.grok.status.v1:${apiBase}`;
   const cached = readSessionListCache<GrokStatus>(cacheKey);
@@ -70,8 +76,8 @@ export default function Grok({ apiBase }: { apiBase: string }) {
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [announcement, setAnnouncement] = useState("");
 
-  const fetchStatus = useCallback(async (): Promise<GrokStatus> => {
-    const response = await fetch(`${apiBase}/api/grok`);
+  const fetchStatus = useCallback(async (signal: AbortSignal): Promise<GrokStatus> => {
+    const response = await fetch(`${apiBase}/api/grok`, { signal });
     const payload = await readJsonOrThrow<GrokStatus & { error?: string }>(response, t("grok.loadFail"));
     if (!payload) throw new Error(t("grok.loadFail"));
     // Tolerate an older proxy that predates the selection routes: the page degrades
@@ -88,7 +94,7 @@ export default function Grok({ apiBase }: { apiBase: string }) {
     resourceKey,
     [apiBase],
     fetchStatus,
-    { isEmpty: () => false, initialData: cached ?? undefined },
+    { isEmpty: () => false, initialData: cached ?? undefined, enabled: active },
   );
   const { state } = resource;
   const load = resource.refresh;

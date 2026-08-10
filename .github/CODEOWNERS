@@ -1,6 +1,12 @@
 # Default reviewers
 * @lidge-jun @Ingwannu @Wibias
 
+# High-impact runtime behavior
+/src/adapters/ @lidge-jun @Ingwannu @Wibias
+/src/providers/ @lidge-jun @Ingwannu @Wibias
+/src/codex/ @lidge-jun @Ingwannu @Wibias
+/src/server/ @lidge-jun @Ingwannu @Wibias
+
 # Repository automation and release security
 /.github/ @lidge-jun @Ingwannu
 /scripts/release.ts @lidge-jun @Ingwannu

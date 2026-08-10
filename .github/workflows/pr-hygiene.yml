@@ -1,0 +1,209 @@
+name: PR hygiene
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+# Trusted scripts from the PR base revision only. Patches are read through the
+# GitHub API; PR-head code is never checked out or executed.
+# Least privilege: no default permissions; the hygiene job grants only what it needs.
+permissions: {}
+
+concurrency:
+  # Shared with the enforce-target gate: both workflows read-modify-write the
+  # same consolidated gate comment, so one stable PR-number group serializes
+  # old-head and new-head runs as well as hygiene and gate writes.
+  # A newer run queues behind the in-flight one instead of cancelling it.
+  group: pr-gate-comment-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    # contents: read for the trusted script checkout; issues/pull-requests write
+    # maintain the blocked label and one bot comment.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout trusted hygiene script
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Source trusted scripts from an integration branch, never from the
+          # PR's own base commit. A stacked child PR's base is another open
+          # PR's head, so `base.sha` let an unpromoted commit choose which code
+          # runs with this job's issues/pull-requests write token.
+          #
+          # The branch is chosen, not fixed: `pull_request_target` loads this
+          # workflow from the default branch, so a `main`-targeting PR must
+          # take its scripts from `main` too, or the gate runs a `main`
+          # workflow against `dev` scripts. Everything else, including stacked
+          # bases, resolves to `dev`, the single integration line.
+          ref: ${{ github.event.pull_request.base.ref == 'main' && 'main' || 'dev' }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Enforce deterministic PR hygiene
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const path = require("node:path");
+            const {
+              collectDeterministicHygieneFailures,
+              HYGIENE_FAILURE_HINTS,
+            } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
+            );
+            const { authorHasPushPermission } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
+            );
+            const {
+              GATE_MARKER,
+              HYGIENE_MARKER,
+              withHygieneSection
+            } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-quality-messages.cjs"),
+            );
+
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+            const marker = HYGIENE_MARKER;
+            const blockedLabel = "intake: hygiene-blocked";
+            const labelDefinitions = {
+              [blockedLabel]: ["b60205", "Deterministic PR hygiene checks failed"],
+              "test-exception-approved": ["5319e7", "Maintainer approved a non-automated regression-test exception"],
+              "suppression-approved": ["5319e7", "Maintainer approved a new type or lint suppression"],
+              "generated-change-approved": ["5319e7", "Maintainer approved committed generated output"],
+              "dependency-change-approved": ["5319e7", "Maintainer approved exceptional dependency or lockfile handling"],
+              "maintainer-sponsored": ["5319e7", "Maintainer sponsors this change to an auth, workflow, release, or dependency surface"],
+            };
+
+            async function ensureLabel(name) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                const [color, description] = labelDefinitions[name];
+                try {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                }
+              }
+            }
+            for (const name of Object.keys(labelDefinitions)) await ensureLabel(name);
+
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number });
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number, per_page: 100,
+            });
+            const labels = new Set(pr.labels.map((label) => label.name));
+            // Exception approvals are head-specific: a new commit invalidates
+            // them, so a contributor cannot obtain one narrow exception and
+            // then push unreviewed violations under the same label.
+            if (context.payload.action === "synchronize") {
+              for (const name of [
+                "test-exception-approved",
+                "suppression-approved",
+                "generated-change-approved",
+                "dependency-change-approved",
+              ]) {
+                if (labels.has(name)) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: pull_number, name,
+                  });
+                  labels.delete(name);
+                }
+              }
+            }
+            // Sponsorship is head-independent: it is about which surfaces the
+            // change touches, not about the state of a particular revision, so
+            // it is NOT cleared by the synchronize sweep above.
+            // author_association is not enough: a read/triage collaborator can
+            // be COLLABORATOR without write access. Match the PR quality gate.
+            let authorPermission = null;
+            let permissionLookupFailed = false;
+            try {
+              const { data: permissionData } =
+                await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner,
+                  repo,
+                  username: pr.user.login,
+                });
+              authorPermission = permissionData.permission;
+            } catch (error) {
+              permissionLookupFailed = true;
+              core.warning(
+                `Could not look up collaborator permission: ${error.message}`,
+              );
+            }
+            const failures = collectDeterministicHygieneFailures({
+              files,
+              labels: [...labels],
+              authorHasPushPermission:
+                !permissionLookupFailed &&
+                authorHasPushPermission(authorPermission),
+            });
+
+            async function setBlocked(blocked) {
+              if (blocked && !labels.has(blockedLabel)) {
+                await github.rest.issues.addLabels({
+                  owner, repo, issue_number: pull_number, labels: [blockedLabel],
+                });
+              } else if (!blocked && labels.has(blockedLabel)) {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: pull_number, name: blockedLabel,
+                });
+              }
+            }
+
+            async function upsert(body) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull_number, per_page: 100,
+              });
+              // The single consolidated bot comment is the one the PR gate
+              // owns (GATE_MARKER). Write the hygiene status into that same
+              // comment so there is one editable message, not two. Fall back
+              // to a standalone hygiene comment only when the gate has not
+              // posted yet (the next gate run absorbs it).
+              const gateComment = comments.find(
+                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(GATE_MARKER),
+              );
+              if (gateComment) {
+                // The hygiene block already carries the marker; strip the
+                // standalone body's own marker line before merging.
+                const hygieneLines = body
+                  .split("\n")
+                  .map(line => line.trim())
+                  .filter(line => line !== "" && line !== marker);
+                const merged = withHygieneSection(gateComment.body, hygieneLines);
+                await github.rest.issues.updateComment({ owner, repo, comment_id: gateComment.id, body: merged });
+                return;
+              }
+              const existingHygiene = comments.find(
+                (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
+              );
+              if (existingHygiene) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existingHygiene.id, body });
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pull_number, body });
+              }
+            }
+
+            if (failures.length === 0) {
+              await setBlocked(false);
+              await upsert(`${marker}\n\n✅ **Deterministic PR hygiene checks passed.**`);
+              return;
+            }
+
+            const lines = failures.map((failure) => {
+              const paths = failure.paths?.length
+                ? ` Paths: ${failure.paths.map((p) => `\`${p}\``).join(", ")}.`
+                : "";
+              return `- **${failure.code}** — ${HYGIENE_FAILURE_HINTS[failure.code] ?? failure.code}${paths}`;
+            });
+
+            await setBlocked(true);
+            await upsert([marker, "", "⚠️ **Deterministic hygiene checks failed.**", "", ...lines].join("\n"));
+            core.setFailed(`PR hygiene failed: ${failures.map((f) => f.code).join(", ")}`);

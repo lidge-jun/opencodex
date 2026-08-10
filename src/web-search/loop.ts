@@ -1,13 +1,15 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage } from "../types";
-import { namespacedToolName } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
 import { clearableDeadline } from "../lib/abort";
 import { redactSecretString } from "../lib/redact";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { fetchWithResetRetry } from "../lib/upstream-retry";
+import { fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   isTranslatorBudgetExceededError,
   TRANSLATOR_MAX_TURN_BYTES,
@@ -61,40 +63,68 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
   calls: WebSearchCall[];
   passthrough: AdapterEvent[];
   hasRealToolCall: boolean;
+  hasMalformedToolCall: boolean;
 } {
   const calls: WebSearchCall[] = [];
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
-  let pending: { name: string; id: string; argsBuf: string; events: AdapterEvent[] } | null = null;
+  let hasMalformedToolCall = false;
+  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[] } | null = null;
+  const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
+    // A pending call that never saw tool_call_end is structurally malformed.
+    if (pending && !pending.closed) hasMalformedToolCall = true;
     if (pending && pending.name !== WEB_SEARCH_TOOL_NAME) {
       passthrough.push(...pending.events);
-      hasRealToolCall = true;
+      if (pending.closed && !isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
     }
     pending = null;
   };
   for (const e of events) {
     if (e.type === "tool_call_start") {
       flushPending();
-      pending = { name: e.name, id: e.id, argsBuf: "", events: [e] };
-    } else if (e.type === "tool_call_delta" && pending) {
-      pending.argsBuf += e.arguments;
-      pending.events.push(e);
-    } else if (e.type === "tool_call_end" && pending) {
-      pending.events.push(e);
-      if (pending.name === WEB_SEARCH_TOOL_NAME) {
-        calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
-      } else {
-        passthrough.push(...pending.events);
-        hasRealToolCall = true;
+      if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
+      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e] };
+    } else if (e.type === "tool_call_delta") {
+      // Orphan delta (no open call) is malformed.
+      if (!pending) hasMalformedToolCall = true;
+      else {
+        pending.argsBuf += e.arguments;
+        pending.events.push(e);
       }
-      pending = null;
+    } else if (e.type === "tool_call_end") {
+      // Orphan end (no open call) is malformed.
+      if (!pending) {
+        hasMalformedToolCall = true;
+      } else {
+        pending.events.push(e);
+        pending.closed = true;
+        if (pending.name === WEB_SEARCH_TOOL_NAME) {
+          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
+        } else {
+          passthrough.push(...pending.events);
+          if (!isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
+        }
+        pending = null;
+      }
     } else {
       passthrough.push(e);
     }
   }
   flushPending();
-  return { calls, passthrough, hasRealToolCall };
+  return { calls, passthrough, hasRealToolCall, hasMalformedToolCall };
+}
+
+/**
+ * Visible final-answer text: a non-whitespace text_delta that is NOT commentary
+ * (#1001). Commentary streams early for progress and must not satisfy the
+ * forced-answer output check; thinking alone never counts either.
+ */
+export function hasVisibleAssistantText(events: AdapterEvent[]): boolean {
+  return events.some(event =>
+    event.type === "text_delta"
+    && event.phase !== "commentary"
+    && event.text.trim().length > 0);
 }
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -206,6 +236,10 @@ class LoopError extends Error {
   }
 }
 
+/**
+ * Dependencies for one web-search loop iteration: parsed request, active adapter,
+ * incoming metadata, and the configured search executor.
+ */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
   adapter: ProviderAdapter;
@@ -239,11 +273,15 @@ export interface WebSearchLoopDeps {
   onUsage?: (usage: OcxUsage | undefined) => void;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
+  /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
+  onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
    * 429 key-failover hook: rotate the provider's active pool key and return a rebuilt adapter,
    * or null when the pool is exhausted (same semantics as the normal routed path).
    */
   on429?: (retryAfterHeader: string | null) => ProviderAdapter | null;
+  /** Opt-in same-target 429 policy (key-auth providers). When present, 429 replays on the SAME key before on429 rotation. */
+  retryOn429Policy?: Required<RateLimitRetryPolicy> | null;
 }
 
 /**
@@ -259,6 +297,12 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const anthropicSidecar = deps.anthropicSidecar;
   // Mutable: 429 key-failover (deps.on429) can swap in a rebuilt adapter mid-loop.
   let adapter = deps.adapter;
+
+  // Bridge stall budget (seconds of silence before upstream_stall_timeout); the retry backoff
+  // heartbeat interval is derived from it so the watchdog is always fed during deliberate waits.
+  const stallTimeoutMs = typeof deps.stallTimeoutSec === "number" && Number.isFinite(deps.stallTimeoutSec) && deps.stallTimeoutSec > 0
+    ? Math.floor(deps.stallTimeoutSec * 1000)
+    : 300_000;
 
   const messages: OcxMessage[] = [...parsed.context.messages];
   const loopT0 = Date.now();
@@ -294,9 +338,20 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   }
   type IterationSplit = ReturnType<typeof scanEventsForWebSearch>;
 
+  // Same-target 429 budget is per REQUEST, not per model iteration: later search rounds inherit
+  // what earlier rounds left of `attempts`, so a bounded multi-round turn can never exceed the
+  // configured replay count in total (a per-round reset would multiply it by maxSearches).
+  const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
+  let rateLimitRetries = 0;
+
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial
   // connect/header/HTTP failure stays a non-2xx JSON response. Its successful BODY is deliberately
   // left unread until the downstream Responses SSE bridge exists.
+  /**
+   * Fetch one web-search iteration's final response headers, applying the response-header
+   * deadline and the same-target 429 retry policy (with awaited body release and deadline
+   * restart) before the `on429` key rotation.
+   */
   const prepareIterationEvents = async function* (forceAnswer: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
     // On the forced-answer pass the synthetic web_search tool is gone, so the model MUST answer
     // from the results already in `messages`. A weak model can still produce a thin answer that
@@ -313,30 +368,55 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     // One cumulative header deadline spans every pool-key 429 rotation in this model iteration.
     // clear() stops only its timer after final headers; the direct turn signal remains attached to
     // the returned response body through AbortSignal.any().
-    const headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     try {
-      const fetchOnce = async (requestAdapter: ProviderAdapter): Promise<IterationResponse> => {
-        const request = await requestAdapter.buildRequest(iterParsed, {
-          headers: selectedForwardHeaders,
-          abortSignal: headerDeadline.signal,
-          translatorBudget,
-        });
-        try {
-          deps.onRequestBuilt?.(request);
-        } catch {
-          // Diagnostics are best-effort and must never abort a web-search iteration.
+      /**
+       * Build and fetch one web-search iteration on the given adapter, under the iteration
+       * header deadline. The caller owns same-target 429 replays and key rotation around it.
+       * The outbound request is cached per adapter so a same-target replay reuses the EXACT
+       * URL, serialized body, and headers (builder runs once per target sequence).
+       */
+      let cachedRequest: AdapterRequest | undefined;
+      let cachedAdapter: ProviderAdapter | undefined;
+      /**
+       * Build and fetch one web-search iteration on the given adapter, under the iteration
+       * header deadline. The caller owns same-target 429 replays and key rotation around it.
+       */
+      const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        let request: AdapterRequest;
+        if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
+          request = cachedRequest;
+        } else {
+          request = await requestAdapter.buildRequest(iterParsed, {
+            headers: selectedForwardHeaders,
+            abortSignal: headerDeadline.signal,
+            translatorBudget,
+          });
+          try {
+            deps.onRequestBuilt?.(request);
+          } catch {
+            // Diagnostics are best-effort and must never abort a web-search iteration.
+          }
+          cachedRequest = request;
+          cachedAdapter = requestAdapter;
         }
         let response: Response;
         try {
-          response = requestAdapter.fetchResponse
-            ? await requestAdapter.fetchResponse(request, {
+          if (requestAdapter.fetchResponse) {
+            deps.onAttemptSend?.(recovery);
+            response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
-            })
-          : await fetchWithResetRetry(
-              () => {
+            });
+          } else {
+            response = await fetchWithResetRetry(
+              (retryRecovery) => {
+                // Record every helper-driven send (the callback runs for the first attempt and
+                // each connection-reset replay); preserve the caller's recovery kind
+                // (rate-limit-429 / key-429) when the retry layer supplies none.
+                deps.onAttemptSend?.(retryRecovery ?? recovery);
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                 return fetch(request.url, {
@@ -347,7 +427,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 });
               },
               { abortSignal: headerDeadline.signal, label: "web-search-loop" },
-              );
+            );
+          }
         } finally {
           request.releaseBodyObservation?.();
         }
@@ -355,6 +436,39 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       };
 
       let prepared = await fetchOnce(adapter);
+      // Same-target 429 wait-and-retry (opt-in `retryOn429`) BEFORE key rotation: a primary-key
+      // rate-limit blip replays on the SAME key; rotation only runs after attempts exhaust.
+      while (
+        prepared.response.status === 429
+        && rateLimitRetryPolicy !== null
+        && rateLimitRetries < rateLimitRetryPolicy.attempts
+      ) {
+        rateLimitRetries += 1;
+        // Release unread body + heartbeat-fed wait via the shared same-target helper.
+        const retryAfterHeader = prepared.response.headers.get("retry-after");
+        // The old header deadline must not stay armed across the deliberate wait: clear it
+        // before sleeping so a stale expiry can never race the client-cancel path.
+        headerDeadline.clear();
+        try {
+          yield* prepareSameTarget429Wait({
+            body: prepared.response.body,
+            signal,
+            delayMs: rateLimitRetryDelayMs(rateLimitRetryPolicy, retryAfterHeader, Date.now()),
+            heartbeatIntervalMs: Math.min(10_000, Math.max(250, stallTimeoutMs / 2)),
+          });
+        } catch {
+          throw new LoopError(499, "client closed request during web-search");
+        }
+        // Client cancellation wins over any stale-deadline edge: re-check before telemetry/replay.
+        if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+        // The deliberate backoff must not consume the cumulative response-header deadline:
+        // start a fresh one so the replay gets a new connect budget (504 stays reserved for real
+        // upstream latency).
+        headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+        // Stall-watchdog seam between bounded retry fetches.
+        yield { type: "heartbeat" };
+        prepared = await fetchOnce(adapter, "rate-limit-429");
+      }
       // 429 key-failover parity with the normal routed path: rotate pool keys until one responds
       // or the pool is exhausted (deps.on429 returns null — cooldown map guarantees termination).
       while (prepared.response.status === 429 && deps.on429) {
@@ -366,7 +480,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         adapter = rotated;
         // Stall-watchdog seam between bounded retry fetches (audit 011 B3).
         yield { type: "heartbeat" };
-        prepared = await fetchOnce(adapter);
+        prepared = await fetchOnce(adapter, "key-429");
       }
 
       // Final headers have arrived. Clear only the deadline timer before ANY body read.
@@ -579,7 +693,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    if (!toolAllowed(t)) continue;
     if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
@@ -607,6 +723,18 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           // calls reach Codex. forceAnswer also finalizes.
           const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
           if (!shouldLoop) {
+            // #1001: a forced-answer pass that ends `done` must have produced
+            // usable output — never a malformed tool call, and never silence.
+            if (forceAnswer) {
+              // An unterminated call flushes AFTER the terminal event, so find
+              // the terminal rather than assuming it is last (#1001).
+              const terminalEvent = split.passthrough.find(event => event.type === "done");
+              if (terminalEvent?.type === "done"
+                && (split.hasMalformedToolCall
+                  || (!split.hasRealToolCall && !hasVisibleAssistantText(split.passthrough)))) {
+                throw new LoopError(502, "forced-answer pass produced no usable assistant output");
+              }
+            }
             if (executedSearchCount > 0) {
               const failedCount = failedQueries.size;
               console.warn(
@@ -644,7 +772,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       const elapsed = Date.now() - loopT0;
       if (executedSearchCount > 0 || searchesExecuted > 0) {
         console.warn(`[web-search-loop] cancelled — ${executedSearchCount} real searches, ${searchesExecuted - executedSearchCount} placeholders, ${elapsed}ms`);
@@ -653,6 +781,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     }, undefined,
     {
       translatorBudget,
+      replayCacheScope: parsed._clientThreadId ?? "global",
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),

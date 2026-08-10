@@ -168,7 +168,7 @@ describe("Kiro completion through public server endpoints", () => {
       expect(upstream.requests[1].conversationState.history.at(-1).assistantResponseMessage.content)
         .toBe("Checking the workspace.");
     } finally {
-      proxy.stop(true);
+      await proxy.stop(true);
       upstream.server.stop(true);
     }
   });
@@ -212,7 +212,40 @@ describe("Kiro completion through public server endpoints", () => {
       expect(kiroToolNames(upstream.requests[0])).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
       expect(kiroToolNames(upstream.requests[1])).toEqual(["bash", KIRO_COMPLETION_TOOL_NAME]);
     } finally {
-      proxy.stop(true);
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+
+  test("routed compaction with text.format summarizes instead of tripping the capability guard", async () => {
+    const upstream = scriptedKiroUpstream([
+      [textFrame("Compaction summary of the earlier turns.")],
+    ]);
+    saveConfig(kiroConfig(upstream.server.url.toString()));
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "kiro-test/gpt-5.6-sol",
+          stream: false,
+          input: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] },
+            { type: "compaction_trigger" },
+          ],
+          // Routed compaction must strip the structured-output request; before the strip,
+          // Kiro's capability guard rejected the whole turn as unsupported text controls.
+          text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const json = await response.json() as { output?: Array<{ type?: string }> };
+      expect((json.output ?? []).filter(item => item.type === "compaction")).toHaveLength(1);
+      expect(upstream.requests).toHaveLength(1);
+    } finally {
+      await proxy.stop(true);
       upstream.server.stop(true);
     }
   });

@@ -3,14 +3,34 @@ import { isAccountNeedsReauth } from "./account-runtime-state";
 import { MAIN_CODEX_ACCOUNT_ID, isMainAccountTokenLive } from "./main-account";
 import { hasLegacyMainCodexPoolAccount, isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
+import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 
-export function isCodexAccountUsable(config: OcxConfig, accountId: string): boolean {
+export interface CodexAccountUsabilityOptions {
+  /** Route using cached runtime state only; the caller must reject selected main before auth. */
+  nativeMainSelectionOnly?: boolean;
+  /** Test seam for proving whether routing attempted a physical native-token read. */
+  isMainAccountTokenLive?: typeof isMainAccountTokenLive;
+}
+
+export function isCodexAccountUsable(
+  config: OcxConfig,
+  accountId: string,
+  options: CodexAccountUsabilityOptions = {},
+): boolean {
   if (accountId === MAIN_CODEX_ACCOUNT_ID) {
+    // Startup recovery owns the physical auth/vault boundary. Never parse or select
+    // native __main__ while an encrypted switch journal is pending or inconclusive.
+    if (!options.nativeMainSelectionOnly && isNativeMainTrafficBlocked()) return false;
     // A legacy pool row with the sentinel makes an active `__main__` ambiguous.
     // Fail closed until the authenticated compatibility-delete path removes it.
     if (hasLegacyMainCodexPoolAccount(config.codexAccounts)) return false;
+    if (isAccountNeedsReauth(accountId)) return false;
+    // A selection-only caller owns the recovery/drain fence and will reject main
+    // before reservation or token materialization. Treat cached main as a routing
+    // candidate without touching the credential file so affinity is not rebound.
+    if (options.nativeMainSelectionOnly) return true;
     // Main account: credential is the read-only ~/.codex/auth.json token (Option A).
-    return isMainAccountTokenLive() && !isAccountNeedsReauth(accountId);
+    return (options.isMainAccountTokenLive ?? isMainAccountTokenLive)();
   }
   const exists = (config.codexAccounts ?? [])
     .some(account => isSelectableCodexPoolAccount(account) && account.id === accountId);

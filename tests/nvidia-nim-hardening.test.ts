@@ -1,11 +1,17 @@
 // 260715 issue #126: NVIDIA NIM hardening — parallel_tool_calls opt-out, kimi
 // reasoning_effort suppression, and openai-chat formatErrorBody detail surfacing.
 // Plan/evidence: devlog/_plan/260715_issue126_nim_kimi.
+// 260804 issue #956: NIM vision classification — text-only models activate the sidecar,
+// natively image-capable models do not. Plan/evidence:
+// devlog/_fin/260804_stack7_service_vision (010 design, 011 per-id audit).
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter, formatOpenAIChatErrorBody } from "../src/adapters/openai-chat";
 import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { parseRequest } from "../src/responses/parser";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest, OcxTool } from "../src/types";
+import { planVisionSidecar } from "../src/vision";
 
 const tools: OcxTool[] = [{ name: "shell", description: "run", parameters: { type: "object" } }];
 
@@ -88,7 +94,161 @@ describe("nvidia NIM registry hardening (issue #126)", () => {
   });
 });
 
+/**
+ * 260804 issue #956. The reported defect: the `nvidia` entry declared no
+ * `noVisionModels`, so `planVisionSidecar` never fired and the catalog never advertised
+ * image input for text-only NIM models.
+ *
+ * PR #964 proposed a ~64-id text-only list. Six of its entries are natively
+ * image-capable per NVIDIA's own documentation, and listing those is a SILENT defect:
+ * the model could read the image, but the proxy substitutes another model's text
+ * description. These tests pin both directions.
+ */
+describe("nvidia NIM vision classification (issue #956)", () => {
+  const nvidia = () => PROVIDER_REGISTRY.find(entry => entry.id === "nvidia")!;
+
+  const openAiSidecar = {
+    providerName: "openai" as const,
+    provider: { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" as const },
+    accountMode: "direct" as const,
+    authContext: { kind: "main" as const, accountId: null },
+    headers: new Headers({ authorization: "Bearer chatgpt" }),
+  };
+
+  function withImage(modelId: string) {
+    return parseRequest({
+      model: `nvidia/${modelId}`,
+      input: [{
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "What is in this screenshot?" },
+          { type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" },
+        ],
+      }],
+    });
+  }
+
+  function plan(modelId: string) {
+    const route = routeModel(nvidiaConfig(), `nvidia/${modelId}`);
+    return planVisionSidecar(nvidiaConfig(), route.provider, route.modelId, withImage(modelId), openAiSidecar);
+  }
+
+  // The six ids PR #964 classified backwards. Each is documented by NVIDIA as accepting
+  // image input, so the sidecar must NOT intercept it. Ablate by adding any of them to
+  // NVIDIA_NIM_NO_VISION_MODELS and this goes red.
+  const REVERSED_IN_964 = [
+    "thinkingmachines/inkling",
+    "minimaxai/minimax-m3",
+    "moonshotai/kimi-k2.6",
+    "moonshotai/kimi-k2.5",
+    "stepfun-ai/step-3.7-flash",
+    "mistralai/mistral-medium-3.5-128b",
+  ];
+
+  test("natively image-capable NIM models never route through the sidecar", () => {
+    for (const id of [...REVERSED_IN_964, "meta/llama-3.2-11b-vision-instruct", "meta/llama-3.2-90b-vision-instruct"]) {
+      expect(nvidia().noVisionModels).not.toContain(id);
+      expect(plan(id)).toBeUndefined();
+    }
+  });
+
+  test("verified text-only NIM models do route through the sidecar", () => {
+    for (const id of [
+      "deepseek-ai/deepseek-v4-flash",
+      "z-ai/glm-5.2",
+      "nvidia/nemotron-3-ultra-550b-a55b",
+      "openai/gpt-oss-120b",
+      "moonshotai/kimi-k2-thinking",
+    ]) {
+      expect(nvidia().noVisionModels).toContain(id);
+      expect(plan(id)).toMatchObject({ backend: "openai" });
+    }
+  });
+
+  test("a text-only model without an image needs no sidecar", () => {
+    const config = nvidiaConfig();
+    const route = routeModel(config, "nvidia/deepseek-ai/deepseek-v4-flash");
+    const noImage = parseRequest({
+      model: "nvidia/deepseek-ai/deepseek-v4-flash",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(planVisionSidecar(config, route.provider, route.modelId, noImage, openAiSidecar)).toBeUndefined();
+  });
+
+  // The honest boundary. NIM publishes no modality metadata and serves non-chat
+  // endpoints (embeddings, rerankers, guards, OCR) that reach this same path, so an
+  // unclassified id is deliberately left alone rather than defaulted in either
+  // direction. If a future change defaults unknown ids, this test forces that to be a
+  // conscious decision instead of a side effect.
+  test("unclassified NIM ids stay unclassified, including non-chat endpoints", () => {
+    for (const id of [
+      "nvidia/nv-embedqa-e5-v5",
+      "nvidia/nemotron-ocr-v2",
+      "nvidia/llama-nemotron-rerank-1b-v2",
+      "brandnew/model-nobody-classified",
+    ]) {
+      expect(nvidia().noVisionModels).not.toContain(id);
+      expect(nvidia().modelInputModalities?.[id]).toBeUndefined();
+      expect(plan(id)).toBeUndefined();
+    }
+  });
+
+  // Both classes must advertise image input, by different mechanisms: text-only models
+  // via the noVisionModels hint (the sidecar describes the image), vision models via
+  // explicit modelInputModalities. Without the latter the Codex app blocks attachments
+  // client-side and the native path never runs.
+  test("the catalog advertises image input for both classes", () => {
+    const config = nvidiaConfig();
+    for (const id of ["deepseek-ai/deepseek-v4-flash", "z-ai/glm-5.2"]) {
+      const route = routeModel(config, `nvidia/${id}`);
+      const hinted = applyProviderConfigHints("nvidia", route.provider, { id, provider: "nvidia" });
+      expect(hinted.inputModalities).toContain("image");
+    }
+    for (const id of REVERSED_IN_964) {
+      const route = routeModel(config, `nvidia/${id}`);
+      const hinted = applyProviderConfigHints("nvidia", route.provider, { id, provider: "nvidia" });
+      expect(hinted.inputModalities).toEqual(["text", "image"]);
+    }
+  });
+
+  test("a bare persisted nvidia config inherits the classification from the registry", () => {
+    // The #956 reporter's exact config shape, which today needs a manual workaround.
+    const route = routeModel(nvidiaConfig(), "nvidia/deepseek-ai/deepseek-v4-flash");
+    expect(route.provider.noVisionModels).toContain("deepseek-ai/deepseek-v4-flash");
+    expect(route.provider.modelInputModalities?.["moonshotai/kimi-k2.6"]).toEqual(["text", "image"]);
+  });
+
+  test("a user's own noVisionModels entries are preserved alongside the registry's", () => {
+    // mergeStringArray unions registry and user arrays, so a user adds but cannot remove.
+    const config = nvidiaConfig();
+    config.providers.nvidia!.noVisionModels = ["some/private-endpoint"];
+    const route = routeModel(config, "nvidia/some/private-endpoint");
+    expect(route.provider.noVisionModels).toContain("some/private-endpoint");
+    expect(route.provider.noVisionModels).toContain("z-ai/glm-5.2");
+  });
+
+  test("the two classifications cannot overlap", () => {
+    const entry = nvidia();
+    const visionIds = Object.keys(entry.modelInputModalities ?? {});
+    expect(entry.noVisionModels?.filter(id => visionIds.includes(id))).toEqual([]);
+  });
+
+  test("kimi vision and reasoning classifications stay independent", () => {
+    const entry = nvidia();
+    // k2.5/k2.6 see images; k2-thinking/k2-instruct do not. All four keep reasoning
+    // suppression, because that is a separate axis.
+    for (const id of ["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5", "moonshotai/kimi-k2-thinking", "moonshotai/kimi-k2-instruct"]) {
+      expect(entry.noReasoningModels).toContain(id);
+      expect(entry.modelReasoningEfforts?.[id]).toEqual([]);
+    }
+    expect(entry.modelInputModalities?.["moonshotai/kimi-k2.5"]).toEqual(["text", "image"]);
+    expect(entry.noVisionModels).toContain("moonshotai/kimi-k2-thinking");
+  });
+});
+
 describe("formatOpenAIChatErrorBody (web-search sidecar detail surfacing)", () => {
+
   test("OpenAI error object shape", () => {
     expect(formatOpenAIChatErrorBody(400, new Headers(), '{"error":{"message":"This model only supports single tool-calls at once!"}}'))
       .toBe("This model only supports single tool-calls at once!");

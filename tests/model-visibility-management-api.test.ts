@@ -5,6 +5,7 @@ import { nativeModelRows } from "../src/codex/catalog";
 import { loadConfig, saveConfig } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 const TEST_DIR = join(import.meta.dir, `.tmp-model-visibility-management-${process.pid}`);
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -52,7 +53,7 @@ async function putWithConfig(body: unknown, config = loadConfig()): Promise<Resp
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
-  }), url, config, { refreshCodexCatalog: async () => { refreshes += 1; } });
+  }), url, config, { createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshes += 1; }) });
   if (!response) throw new Error("model visibility route was not handled");
   return response;
 }
@@ -256,6 +257,49 @@ describe("atomic model visibility management", () => {
     expect(loadConfig().disabledModels).toEqual(expect.arrayContaining(["combo/free", "combo/plain"]));
     expect((await put({ scope: "models", provider: "combo", targets: [{ id: "missing" }], enabled: true })).status).toBe(400);
     expect(refreshes).toBe(4);
+  });
+
+  test("native-alias toggles preserve the separate bare native disable key", async () => {
+    const config = loadConfig();
+    config.combos = {
+      nova: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+        targets: [{ provider: "google-antigravity", model: "gemini-3.1-pro" }],
+      },
+    };
+    config.disabledModels = ["gpt-5.6-sol", "gpt-5.5", "combo/nova", "other/keep"];
+    saveConfig(config);
+
+    expect((await put({
+      scope: "models",
+      provider: "combo",
+      targets: [{ id: "nova" }],
+      enabled: true,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual(["gpt-5.6-sol", "gpt-5.5", "other/keep"]);
+
+    expect((await put({
+      scope: "models",
+      provider: "combo",
+      targets: [{ id: "nova" }],
+      enabled: false,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual([
+      "gpt-5.6-sol", "gpt-5.5", "other/keep", "combo/nova",
+    ]);
+
+    const current = loadConfig();
+    const nativeTargets = nativeModelRows(current).map(row => ({ id: row.slug, native: true }));
+    expect(nativeTargets.some(target => target.id === "gpt-5.6-sol")).toBe(false);
+    expect((await put({
+      scope: "provider",
+      provider: "openai",
+      targets: nativeTargets,
+      enabled: true,
+    })).status).toBe(200);
+    expect(loadConfig().disabledModels).toEqual(["gpt-5.6-sol", "other/keep", "combo/nova"]);
   });
 
   test("uses raw allowlist ids, canonical routed slugs, and rejects invalid requests", async () => {

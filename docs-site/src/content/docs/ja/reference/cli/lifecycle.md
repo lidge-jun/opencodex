@@ -28,7 +28,9 @@ ocx start --port 8080
 
 ### `ocx restart`
 
-`stop` に続いて `ensure` を実行します。プロキシ/サービスを停止し、ネイティブ Codex を復元し、バックグラウンドでプロキシを起動し、ライブ ポートを Codex に同期します。
+プロキシが実行中の場合、検証済みの正確な PID とポートに対して in-place 再起動を要求し、通常のドレインを待ってから、同じポートに別のランタイム PID が起動したことを確認します。管理対象ルーティングとサービス監視は維持され、不確実な要求を別の stop/start として再実行しません。実行中のプロキシがない場合に限り、通常の `ensure` 起動にフォールバックします。
+
+稼働中のリスナーをランタイム PID に結び付けて検証できない場合（更新前のプロキシを含む）、`ensure` や stop/start へのフォールバックは行わず安全側で失敗します。所有権を確認してから `ocx stop`、`ocx start` の順に一度実行してください。
 
 ### `ocx ensure`
 
@@ -115,6 +117,19 @@ ocx status --json
 
 稼働中のプロキシの ID を確認します。ヒューマン出力は PID/ポートをレポートします。 `--json` は `{ok, pid, port}` を出力します。このコマンドは正常な場合のみ 0 で終了し、それ以外の場合は 1 で終了するため、サービス プローブに適しています。
 
+### `ocx ready [--json] [--wait [--timeout <seconds>]]`
+
+認証不要の `GET /readyz` エンドポイントで同期後の準備状態を確認します。準備完了時は `200`、
+`pending` または終端状態の `failed` では `Retry-After: 1` とともに `503` を返します。HTTP の
+サニタイズ済み識別フィールドは `{service, version, uptime, pid, port, status}` です。`/readyz` がない
+旧プロキシは `unreachable` として fail-closed し、`/healthz` は readiness ではなく別の liveness 確認です。
+デフォルトでは 1 回だけ probe します。`--wait` は準備完了または timeout まで polling しますが、
+終端 `failed` を確認すると即座に終了します。デフォルト timeout は 45 秒で、`--timeout <seconds>` には
+`--wait` が必要です（1〜300 秒の正の整数）。CLI JSON は
+`{ready, status, pid, port}` を出力し、`status` は `ready`、`pending`、`failed`、`unreachable` の
+いずれかです。終了コードは ready が 0、not-ready/pending/failed/timeout/unreachable が 1、
+不正な引数が 64 です。
+
 ### `ocx doctor`
 
 読み取り専用環境と接続の診断を実行します: 状態パスとファイル システム タイプ、WSL デュアル インストール、プロキシ環境/構成、ChatGPT の到達可能性、Codex プラグインとプロジェクト設定の警告、保留中の履歴の移行。 Codex のアプリとホームのターゲット設定セクションでは、Windows Orca ランタイムとホームの狭い不一致も検出し、該当する場合はサービスの移行について説明します。この診断によって表示されるパスでは、OS ユーザー名が編集されます。医師は修復ヒントを出力しますが、適用しません。
@@ -135,7 +150,7 @@ Codex のローカル モデル ピッカー キャッシュを無効にし、�
 
 ## バックグラウンドサービス
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 opencodex を、ログイン時に自動起動し、クラッシュ時に自動再起動するログイン管理バックグラウンド サービス (macOS **launchd**、Linux **systemd ユーザー ユニット**、Windows **タスク スケジューラ**) として実行します。サービスは `OCX_SERVICE=1` を設定して実行されるため、再起動によって Codex 設定が変更されることはありません。
 
@@ -143,6 +158,7 @@ opencodex を、ログイン時に自動起動し、クラッシュ時に自動�
 | --- | --- |
 |なし |サービスを作成/更新して開始します。 |
 | `install` |サービスを作成して開始します。 |
+| `repair` | 既存のサービスを再登録せずに更新して再起動します。 |
 | `start` |インストールされているサービスを開始します。 |
 | `stop` |サービスを停止し、ネイティブ Codex を復元します。 |
 | `status` |サービスとプロキシの診断とログ パスをレポートします。 |
@@ -152,6 +168,7 @@ opencodex を、ログイン時に自動起動し、クラッシュ時に自動�
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
 ```
@@ -197,7 +214,7 @@ Windows ステータス トレイ アイコンをインストールして制御�
 
 ### `ocx update [--tag latest|preview]`
 
-npm から opencodex を自己更新します。安定したインストールでは `@latest` を使用します。 `--tag latest|preview` を渡さない限り、プレビュー インストールは `@preview` に残ります。ソース チェックアウトを検出し、代わりに `git pull && bun install` を使用するように指示しますが、そのタグの最新バージョンをすでに使用している場合は何もしません。実行中のプロキシは、ファイルが置き換えられる前に停止されます。インストールされたサービスは再構築されて自動的に開始されますが、フォアグラウンド インストールでは次のステップとして `ocx start` が出力されます。
+npm から opencodex を自己更新します。安定したインストールでは `@latest` を使用します。 `--tag latest|preview` を渡さない限り、プレビュー インストールは `@preview` に残ります。ソース チェックアウトを検出し、代わりに `git pull && bun install` を使用するように指示しますが、そのタグの最新バージョンをすでに使用している場合は何もしません。npm インストールでは、何かを停止する前に Unix キャッシュの所有権とアクセスを上限付きで検査します。ネストされたシンボリックリンクは `lstat` で確認しますが追跡しません。Windows では、この Unix 専用検査を明示的にスキップします。検査に失敗した場合、トレイとプロキシを実行したまま更新を中止します。その後、実行中のプロキシはファイルが置き換えられる前に停止されます。インストールされたサービスは再構築されて自動的に開始されますが、フォアグラウンド インストールでは次のステップとして `ocx start` が出力されます。ダッシュボードの更新記録では、保存前にプロファイル／キャッシュのパスと UID/GID 値が秘匿されます。
 
 ```bash
 ocx update

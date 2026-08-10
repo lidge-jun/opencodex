@@ -106,6 +106,10 @@ function toolResultOutput(block: Rec): string | Rec[] {
       } else if (item.type === "image") {
         const img = imageBlockToInputImage(item);
         if (img) out.push(img);
+      } else if (item.type === "document") {
+        // Same marker as the user-message document case below: the model should see the
+        // attachment happened instead of an empty tool output.
+        out.push({ type: "input_text", text: `[document${typeof item.title === "string" ? `: ${item.title}` : ""}]` });
       }
     }
     if (isError) out.unshift({ type: "input_text", text: "[tool error]" });
@@ -494,7 +498,13 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   const thinking = raw.thinking;
   const outputConfigEffort = effortFromOutputConfig(raw.output_config);
   const thinkingDisabled = isRec(thinking) && thinking.type === "disabled";
-  if (!thinkingDisabled && (isRec(thinking) || outputConfigEffort !== undefined)) {
+  if (thinkingDisabled) {
+    // An explicit "disabled" is an instruction, not an absence. Dropping it made this
+    // indistinguishable from a request that never mentioned thinking — and for models that
+    // think by default, omission means thinking is ON, sharing the caller's max_tokens (#545).
+    // "none" is the parser's disable sentinel (parser.ts REASONING_EFFORTS).
+    body.reasoning = { effort: "none", summary: "none" };
+  } else if (isRec(thinking) || outputConfigEffort !== undefined) {
     const reasoning: Rec = { summary: "auto" };
     if (outputConfigEffort !== undefined) {
       // Adaptive wire: /effort arrives as output_config.effort (devlog 080).

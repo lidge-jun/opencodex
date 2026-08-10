@@ -4,7 +4,7 @@
  *
  * Usage:
  *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
- *       Preflight (clean tree + typecheck + tests + privacy scan) → bump package.json → commit → push →
+ *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json → commit → push →
  *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
  *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
  *       Pass --publish to publish.
@@ -298,6 +298,8 @@ if ((await capture(["git", "status", "--porcelain"])).trim()) { console.error("�
 const packageName = await readPackageName();
 console.log(`→ release metadata preflight (${packageName}@${version})`);
 await assertUnusedReleaseVersion(packageName, version);
+console.log("→ dependency audit");
+await runLoud(["bun", "run", "audit:high"]);
 console.log("→ typecheck");
 await runLoud(["bun", "x", "tsc", "--noEmit"]);
 console.log("→ test suite");

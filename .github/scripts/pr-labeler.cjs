@@ -56,6 +56,35 @@ function detectTypeLabelFromTitle(title) {
 }
 
 /**
+ * Type from the PR's own commits, for titles the title matcher cannot classify.
+ *
+ * A PR titled `stack 3/5: carry six contributor bug fixes` fails the
+ * conventional regex (the `3/5` sits between the word and the colon) and then
+ * reaches the sentence-case fallback, which extracts `stack`. That has no entry
+ * in PREFIX_TO_LABEL, so the sync skips — and a skip is not a failure, so the
+ * `label` check stays green while the PR carries no type label at all. The
+ * commits underneath are conventional (`fix(codex): ...`), so they can answer
+ * the question the title cannot.
+ *
+ * `chore` is supporting, not competing. `test:`, `ci:`, `chore:`, `style:`,
+ * `refactor:`, and `build:` all map to it, and none of them says what a PR is
+ * FOR. Requiring unanimity would abstain on almost every real PR: #955 is four
+ * `fix(codex):` commits plus one `test(codex):`, and it is a bug fix.
+ *
+ * Anything still ambiguous after that (`fix:` alongside `feat:`) stays
+ * unlabeled rather than guessed.
+ */
+function detectTypeLabelFromCommits(messages) {
+  const types = new Set();
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const detected = detectTypeLabelFromTitle(String(message || "").split("\n")[0]);
+    if (detected) types.add(detected);
+  }
+  if (types.size > 1) types.delete("chore");
+  return types.size === 1 ? [...types][0] : null;
+}
+
+/**
  * True when a human (any non-bot actor) has ever labeled or unlabeled a managed
  * type label on this PR. Mirrors issue-quality's sticky maintainerOverride:
  * once a person changes the bot's choice, later synchronize/edited runs must
@@ -105,7 +134,11 @@ function planTypeLabelSync(input) {
     return { skip: true, reason: "human-override" };
   }
 
-  const detected = detectTypeLabelFromTitle(title);
+  // The title is authoritative when it classifies. The commits only answer for
+  // titles it cannot (`stack 3/5: ...`), so a well-formed title is never
+  // overridden by what happens to be committed under it.
+  const detected =
+    detectTypeLabelFromTitle(title) ?? detectTypeLabelFromCommits(input?.commitMessages);
   if (!detected) {
     return { skip: true, reason: "no-prefix" };
   }
@@ -121,6 +154,7 @@ module.exports = {
   TYPE_LABELS,
   BOT_ACTORS,
   detectTypeLabelFromTitle,
+  detectTypeLabelFromCommits,
   hasHumanTypeLabelOverride,
   planTypeLabelSync,
 };

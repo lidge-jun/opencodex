@@ -152,6 +152,18 @@ describe("multi-account auth store", () => {
     expect(getCredential("cursor")?.access).toBe("access-b");
   });
 
+  test("cursor with a third distinct accountId appends without dropping prior accounts", async () => {
+    await saveCredential("cursor", cred({ accountId: "google-oauth2|user_a", access: "access-a" }));
+    await saveCredential("cursor", cred({ accountId: "auth0|user_b", access: "access-b" }));
+    await saveCredential("cursor", cred({ accountId: "google-oauth2|user_c", access: "access-c" }));
+    expect(listAccounts("cursor").map(a => a.credential.accountId)).toEqual([
+      "google-oauth2|user_a",
+      "auth0|user_b",
+      "google-oauth2|user_c",
+    ]);
+    expect(getCredential("cursor")?.access).toBe("access-c");
+  });
+
   test("chatgpt stays single-slot even with distinct identities", async () => {
     await saveCredential("chatgpt", cred({ email: "a@example.com", accountId: "one" }));
     await saveCredential("chatgpt", cred({ email: "b@example.com", accountId: "two", access: "b-access" }));

@@ -87,7 +87,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/config` | redacted된 management-safe configuration DTO를 반환합니다 | — |
 | `PUT /api/config` | 전체 구성 교체 방지 기능이 비활성화되어 있습니다 | 405; 대신 집중된 엔드포인트를 사용하십시오 |
-| `GET, PUT /api/settings` | 런타임/시작 설정을 읽거나 auto-start, stream mode, 앱 소유 memory budget을 업데이트합니다 | 400 잘못되었거나 비어 있는 업데이트 |
+| `GET, PUT /api/settings` | 런타임/시작 설정을 읽거나 auto-start, stream mode, 앱 소유 memory budget, `codexAccountPickerEnabled`를 업데이트합니다 | 400 잘못됨, object 아님, 또는 비어 있는 업데이트 |
 | `GET /api/startup-health` | 캐시된 서비스/shim 시작 상태를 읽습니다 | — |
 | `POST /api/startup-action` | 서비스 또는 Codex shim을 설치하거나 복구합니다 | 400 잘못된 작업; 500 작업 실패 |
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
@@ -130,7 +130,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음 |
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
-| `GET /api/client-config?client=...` | 읽기 전용 OpenCode 또는 Pi client-config 문서를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
+| `GET /api/client-config?client=...` | 지원되는 파일 연동의 읽기 전용 client config를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
 | `PUT /api/disabled-models` | 공유 disabled-model 목록을 교체합니다 | 400 잘못된 JSON |
 | `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문 |
 | `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |
@@ -166,7 +166,7 @@ Authorization: Bearer <admin-token>
 | --- | --- | --- |
 | `GET /api/providers` | redacted된 provider 구성과 discovery 상태를 나열합니다 | — |
 | `POST /api/providers` | 검증된 provider 하나를 추가하거나 교체하고, 선택적으로 기본 provider로 설정합니다 | 400 잘못되었거나 위험한 대상 또는 구성; 409 namespace 충돌 |
-| `PATCH /api/providers?name=...` | 허용된 provider 필드, enabled/default 상태, 또는 OpenAI account mode를 업데이트합니다 | 400 잘못된 필드 또는 전환; 404 알 수 없는 provider |
+| `PATCH /api/providers?name=...` | 허용된 provider 필드(병합되는 `headers` 블록 포함), enabled/default 상태, 또는 OpenAI account mode를 업데이트합니다 | 400 잘못된 필드 또는 전환; 404 알 수 없는 provider |
 | `DELETE /api/providers?name=...` | provider를 삭제하고, 가능하면 기본 provider를 재지정합니다 | 404 알 수 없는 provider; 409 `last_provider`; 409 `provider_has_dependent_combos` |
 | `POST /api/providers/test?name=...` | 제한된 live provider connectivity/model-discovery 탐색을 수행합니다 | 404 알 수 없는 provider; 실패는 보통 `ok: false` 증거로 반환됩니다 |
 | `GET /api/provider-quotas` | provider quota 보고서를 읽습니다. `refresh=1`은 새로 고침을 강제합니다 | — |
@@ -197,11 +197,16 @@ Authorization: Bearer <admin-token>
 
 ### Codex 인증 위임
 
+`GET /api/settings`는 유효한 `codexAccountPickerEnabled` boolean을 반환합니다. 이 strict boolean을
+`PUT`하면 빈 map을 활성화할 때 privacy-safe selector를 초기화하고 기존 label을 보존한 채 먼저
+영속화한 다음, 유효한 picker 표시가 바뀐 경우에만 bounded catalog convergence를 한 번 요청합니다.
+성공 응답의 `catalogRefreshPending: true`는 설정은 저장되었지만 `POST /api/sync` 재시도가 필요하다는 뜻입니다.
+
 루트 management dispatcher는 모든 `/api/codex-auth/*` 요청을 Codex account manager에 위임합니다. 해당 route는 다음과 같습니다.
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다 | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다. 성공한 POST/DELETE는 `catalogRefreshPending`를 포함합니다. | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
@@ -216,9 +221,19 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
-| `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다 | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+| `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
+
+새 account의 config row는 저장되었지만 credential setup을 완료하지 못하면 manual POST는 HTTP 500을
+반환하고 OAuth `login-status`는 `status: "error"`를 보고합니다. 두 응답 모두
+`code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, 필요한 경우
+`catalogRefreshPending: true`를 포함하며 storage error 세부 정보는 노출하지 않습니다. account row는
+저장된 상태이므로 account 생성을 다시 시도하기 전에 재인증하거나 삭제하십시오.
 
 이 위임된 계열에서 configuration-writer 또는 credential-refresh lock timeout이 발생하면 HTTP 503과 `CONFIG_MUTATION_LOCK_UNAVAILABLE` 코드가 반환됩니다. 클라이언트는 이를 영구적인 계정 실패로 보지 말고 곧바로 다시 시도해야 합니다.
+
+계정 생성과 삭제는 catalog convergence보다 먼저 영속화됩니다. 실패하거나 연기된 catalog 작업은 저장된
+mutation을 되돌리지 않고 내부 provider/account/path/credential 세부 정보도 반환하지 않습니다. 삭제된
+account의 selector binding은 남아 있어 계정이 없을 때 exact route가 fail closed하고 같은 id를 다시 추가하면 같은 selector가 복원됩니다.
 
 ## 클라이언트 선택
 

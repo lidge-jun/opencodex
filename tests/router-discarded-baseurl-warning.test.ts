@@ -158,7 +158,7 @@ test("alibaba-token-plan is pinned to Beijing and warns about a saved internatio
     adapter: "openai-chat",
     baseUrl: ALIBABA_INTL_BASE_URL,
   });
-  const warnings = routeCapturingWarnings(config, "alibaba-token-plan/qwen3.8-max-preview");
+  const warnings = routeCapturingWarnings(config, "alibaba-token-plan/qwen3.8-max");
 
   expect(warnings).toHaveLength(1);
   expect(warnings[0]).toContain("token-plan.ap-southeast-1.maas.aliyuncs.com");
@@ -167,7 +167,7 @@ test("alibaba-token-plan is pinned to Beijing and warns about a saved internatio
   const originalWarn = console.warn;
   console.warn = () => {};
   try {
-    expect(routeModel(config, "alibaba-token-plan/qwen3.8-max-preview").provider.baseUrl)
+    expect(routeModel(config, "alibaba-token-plan/qwen3.8-max").provider.baseUrl)
       .toBe(ALIBABA_BEIJING_BASE_URL);
   } finally {
     console.warn = originalWarn;

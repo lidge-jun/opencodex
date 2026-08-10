@@ -97,7 +97,7 @@ describe("xAI auth-mode transport selection", () => {
     });
   });
 
-  test("flattens nested root tool unions for xAI without changing other providers", () => {
+  test("flattens nested root tool unions for xAI while other providers get a root object type", () => {
     const schema = {
       oneOf: [
         { type: "object", properties: { mode: { type: "string", enum: ["view"] } } },
@@ -120,7 +120,22 @@ describe("xAI auth-mode transport selection", () => {
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
-    expect((JSON.parse(otherRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual(schema);
+    expect((JSON.parse(otherRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
+  });
+
+  test("non-xAI providers preserve nested nullable and annotation schema content", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        path: { anyOf: [{ type: "string" }, { type: "null" }] },
+        opts: { default: { type: "null" }, enum: [{ type: "null" }, "a"] },
+      },
+    };
+    const request = createOpenAIChatAdapter({ ...provider("key"), baseUrl: "https://example.test/v1" }).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "t", description: "T", parameters: schema }] },
+    });
+    expect((JSON.parse(request.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual(schema);
   });
 
   test("omits an xAI tool whose root schema cannot be normalized safely", () => {
@@ -294,12 +309,16 @@ describe("xAI outbound compatibility headers", () => {
     ]) expect(seen[0].has(name)).toBe(false);
   });
 
-  test("same resolved transport refreshes req-id but keeps conv-id stable", async () => {
+  test("same resolved transport pins one req-id per logical request (identical replays) and keeps conv-id stable", async () => {
     const { seen } = await capture("oauth", 2);
     expect(seen).toHaveLength(2);
     expect(seen[0].get("x-grok-req-id")).toMatch(UUID_V4);
     expect(seen[1].get("x-grok-req-id")).toMatch(UUID_V4);
-    expect(seen[1].get("x-grok-req-id")).not.toBe(seen[0].get("x-grok-req-id"));
+    // A same-target 429 replay must be byte-identical, including x-grok-req-id; a new resolve
+    // (e.g. after key rotation) produces a fresh transport and therefore a fresh id.
+    expect(seen[1].get("x-grok-req-id")).toBe(seen[0].get("x-grok-req-id"));
+    const freshTransport = await capture("oauth", 1);
+    expect(freshTransport.seen[0].get("x-grok-req-id")).not.toBe(seen[0].get("x-grok-req-id"));
     expect(seen[0].get("x-grok-conv-id")).toBe(deriveXaiConvId("codex-session-abc"));
     expect(seen[1].get("x-grok-conv-id")).toBe(seen[0].get("x-grok-conv-id"));
     expect(seen[1].get("x-grok-session-id")).toBe(seen[0].get("x-grok-session-id"));

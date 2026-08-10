@@ -72,6 +72,12 @@ function makeConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
   } as OcxConfig;
 }
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe("main account rotation (Option A)", () => {
   beforeEach(() => {
     prevOpencodexHome = process.env.OPENCODEX_HOME;
@@ -320,13 +326,17 @@ describe("main account rotation (Option A)", () => {
   test("discards an in-flight usage response after the main identity changes", async () => {
     expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
     const originalFetch = globalThis.fetch;
+    const firstUsageEntered = deferred();
     let resolveFirstUsage!: (response: Response) => void;
     const requestedAccountIds: string[] = [];
     globalThis.fetch = (async (input, init) => {
       if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
       requestedAccountIds.push(new Headers(init?.headers).get("ChatGPT-Account-Id") ?? "");
       if (requestedAccountIds.length === 1) {
-        return new Promise<Response>(resolve => { resolveFirstUsage = resolve; });
+        return new Promise<Response>(resolve => {
+          resolveFirstUsage = resolve;
+          firstUsageEntered.resolve();
+        });
       }
       return new Response(JSON.stringify({
         email: "b@example.test",
@@ -336,6 +346,7 @@ describe("main account rotation (Option A)", () => {
     }) as typeof fetch;
     try {
       const infoPromise = fetchMainAccountInfo(true);
+      await firstUsageEntered.promise;
       expect(requestedAccountIds).toEqual(["main_acct"]);
 
       writeFileSync(
@@ -366,16 +377,21 @@ describe("main account rotation (Option A)", () => {
   test("does not retry an in-flight usage response when the current identity is temporarily unknown", async () => {
     expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
     const originalFetch = globalThis.fetch;
+    const usageEntered = deferred();
     let resolveUsage!: (response: Response) => void;
     let usageCalls = 0;
     globalThis.fetch = (async (input, init) => {
       if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
       usageCalls++;
       expect(new Headers(init?.headers).get("ChatGPT-Account-Id")).toBe("main_acct");
-      return new Promise<Response>(resolve => { resolveUsage = resolve; });
+      return new Promise<Response>(resolve => {
+        resolveUsage = resolve;
+        usageEntered.resolve();
+      });
     }) as typeof fetch;
     try {
       const infoPromise = fetchMainAccountInfo(true);
+      await usageEntered.promise;
       rmSync(join(CODEX_DIR, "auth.json"));
       resolveUsage(new Response(JSON.stringify({
         email: "a@example.test",

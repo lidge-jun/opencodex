@@ -23,9 +23,14 @@ model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
 # Auto-injected by opencodex
 openai_base_url = "http://127.0.0.1:10100/v1"
 
+# only when fastMode is set; unset adds no [features] table
 [features]
 fast_mode = true
 ```
+
+The injected `fast_mode` follows the tri-state `fastMode` setting: `true` writes `fast_mode = true`,
+`false` writes `fast_mode = false`, and unset leaves an existing `fast_mode` untouched without
+adding a `[features]` table.
 
 The proxy listens on port `10100` by default and serves `POST /v1/responses`,
 `POST /v1/responses/compact`, `POST /v1/images/generations`, `POST /v1/images/edits`,
@@ -187,6 +192,25 @@ start and on `ocx sync`, opencodex:
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
+
+### Routed local tools
+
+Non-native routed catalog rows use `tool_mode: "code_mode_only"`. This lets Codex expose its official
+`exec` entrypoint and nested MCP tools, including Browser and Computer Use, while opencodex routes
+only the model's ordinary function call. Tool execution, permissions, and confirmations remain
+local to Codex; opencodex does not implement a second browser or desktop-control executor.
+
+For key-auth Responses providers that do not accept Codex's `exec` custom-tool grammar, opencodex
+encodes that declaration and its history as an upstream function tool, then restores the streamed
+function-call lifecycle to `custom_tool_call` before Codex sees it. Native OpenAI forward routing
+and the supported `apply_patch` custom tool stay unchanged.
+
+The selected provider must support function/tool calling. A text-only provider without tool-call
+support cannot use `exec`, Browser, or Computer Use. Native OpenAI rows keep their upstream tool
+mode unchanged.
+
+After `ocx sync` changes this metadata, restart Codex App and open a fresh task. Existing app-server
+processes and tasks may retain the catalog and tool plan they loaded at startup.
 
 ### Custom model display names
 

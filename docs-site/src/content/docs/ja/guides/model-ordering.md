@@ -13,7 +13,14 @@ Codex の models-manager はピッカーに表示されるカタログ項目を 
 カタログ配列順は捨てるため、生成された JSON 配列で項目を前に動かしてもピッカーでは前に移動しません。この制約は `src/codex/catalog/sync.ts` に直接記録されています。
 
 そのため opencodex は配列位置ではなくより低い priority を付与してフィーチャー位置を制御します。
-関連 priority は次のとおりです。
+この表の固定値と以下の例は、有効な account selector がない構成を説明します。`N` 個の selector が
+ある場合、設定 rank `i` の featured bare native は priority `i * N + j` の selector 行へ展開され、
+`j` は 0 から始まる selector の位置です。featured routed 行には `i * N`、exact
+account-qualified native id にはその selector の `i * N + j` が使用されます。Codex が公開するのは
+引き続きピッカーに表示される最初の 5 行だけです。選択されていない routed 行は、これらの selector
+グループの外へ移動されます。
+
+selector がない場合の priority は次のとおりです。
 
 | カタログ項目 | Priority | 根拠 |
  --- | ---: | --- |
@@ -53,7 +60,7 @@ Codex の priority ソートでもこの先頭順序は保存されます。
 
 ## 最終ピッカーパターン
 
-featured リストが空でないときの最終順序は次のとおりです。
+有効な account selector がなく、featured リストが空でない場合の最終順序は次のとおりです。
 
 1. 設定された `subagentModels` 順どおりに、priority `0` から `4` を受けたモデル
 2. 残りのすべてのルーティングモデル、プロバイダー順とモデル ID 順アルファベットソート、priority `5`
@@ -92,13 +99,19 @@ subagentModels = [
 
 最初の 5 項目は `spawn_agent` に広告されるオーバーライドで、残りは通常のピッカー順序に続きます。
 
+account selector がある場合、5 項目の制限は bare native の選択が selector-qualified グループへ
+展開された後に適用されます。
+
 ## 順序を変える方法
 
-先頭モデルの順序をユーザーが変えられる唯一のサポート手段は `subagentModels` を並び替えることです。
-ダッシュボードの **Sub-agents** ページまたは opencodex 設定で変更できます。一覧は最大 5 モデルを
-受け付け、配列順序に意味があります。
+先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。
+ダッシュボードの **Sub-agents** ページでは bare native id と routed id を並べ替えられます。
+設定と `ocx agent subagents set` は exact account-qualified
+`<selector>/<native-openai-model>` id も受け付けますが、ダッシュボードはこれらの id を表示せず、
+リストの保存時にも保持しません。設定する id は最大 5 つにしてください。account selector がある
+場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開
+される行は必ずしも一対一ではありません。
 
 現在 `OcxConfig` には一般 `modelOrder`、`providerOrder`、priority map 設定はありません。サポートされるソート
-フィールドは `subagentModels` です(`src/types.ts:238-246`)。`disabledModels` と各プロバイダーの
-`selectedModels` は公開フィールドです(`src/types.ts:276-282`、`src/types.ts:439-446`)。そのため残りの
-ピッカー順序を変えるには設定変更ではなくコード動作の変更が必要です。
+フィールドは `subagentModels` です。`disabledModels` と各プロバイダーの `selectedModels` は公開
+フィールドです。そのため残りのピッカー順序を変えるには設定変更ではなくコード動作の変更が必要です。

@@ -59,17 +59,26 @@ import { applySystemEnvToggle } from "./system-env";
 import type { ManagementApiDeps } from "./management/context";
 import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
+import { handleRequestHistoryRoutes } from "./management/request-history-routes";
+import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
+import { handleRoutingProfileRoutes } from "./management/routing-profile-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
+import { handleLabRoutes } from "./management/lab-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
+import { handleIntegrationRoutes } from "./management/integration-routes";
+import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
 import type { ManagementContext } from "./management/context";
+import type { ManagementPrincipal } from "./management-auth";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
+import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
+import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 
 // installed npm version instead of a stale hardcode.
@@ -81,7 +90,18 @@ export const VERSION = (() => {
   }
 })();
 
-export async function handleManagementAPI(req: Request, url: URL, config: OcxConfig, deps: ManagementApiDeps = {}): Promise<Response | null> {
+const managementConvergenceBindings = new WeakMap<object, Readonly<{
+  factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  converge: ConvergeCodex;
+}>>();
+
+export async function handleManagementAPI(
+  req: Request,
+  url: URL,
+  config: OcxConfig,
+  deps: ManagementApiDeps = {},
+  principal?: ManagementPrincipal,
+): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
   }
@@ -93,13 +113,41 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       return jsonResponse({ error: "request body too large" }, 413, req, config);
     }
   }
-  async function refreshCodexCatalogBestEffort(): Promise<void> {
-    if (deps.refreshCodexCatalog) return deps.refreshCodexCatalog();
+  async function convergeCodexCatalog(): Promise<CatalogDisposition> {
+    let convergenceInvoked = false;
+    let managementConvergeCodex: ConvergeCodex | undefined;
     try {
-      const { refreshCodexModelCatalog } = await import("../codex/refresh");
-      await refreshCodexModelCatalog(config);
+      if (!managementConvergeCodex) {
+        const factory = deps.createManagementConvergeCodex
+          ?? (await import("../codex/management-convergence")).createManagementConvergeCodex;
+        if (typeof factory !== "function") throw new TypeError("Catalog convergence factory is unavailable.");
+        let binding = managementConvergenceBindings.get(config);
+        if (!binding || binding.factory !== factory) {
+          const created = factory(config);
+          if (typeof created !== "function") throw new TypeError("Catalog convergence factory returned no function.");
+          binding = { factory, converge: created };
+          managementConvergenceBindings.set(config, binding);
+        }
+        managementConvergeCodex = binding.converge;
+      }
+      const { createCatalogConvergeRequest } = await import("../codex/catalog-admission");
+      convergenceInvoked = true;
+      const outcome = await managementConvergeCodex(createCatalogConvergeRequest({ deadlineMs: 1_000 }));
+      const catalogRefresh = outcome?.kind === "catalog-only"
+        ? normalizeCatalogDisposition(outcome.catalogRefresh)
+        : null;
+      if (!catalogRefresh) {
+        throw new TypeError("Catalog convergence returned an invalid outcome.");
+      }
+      return catalogRefresh;
     } catch {
-      /* catalog absent */
+      return {
+        status: "failed",
+        reason: "disk",
+        phase: convergenceInvoked ? "commit" : "gather",
+        retryable: false,
+        partialWrite: convergenceInvoked,
+      };
     }
   }
 
@@ -124,17 +172,23 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, refreshCodexCatalogBestEffort, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
   let routed: Response | null;
   try {
     routed = (await handleConfigRoutes(ctx))
     ??     (await handleLogsUsageRoutes(ctx))
+    ??     (await handleRequestHistoryRoutes(ctx))
+    ??     (await handleRoutingAnalyticsRoutes(ctx))
+    ??     (await handleRoutingProfileRoutes(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
+    ??     (await handleIntegrationRoutes(ctx))
+    ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
+    ??     (await handleLabRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
@@ -154,7 +208,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
   if (routed) return routed;
 
   if (url.pathname === "/api/stop" && req.method === "POST") {
-    const { restoreNativeCodex } = await import("../codex/inject");
+    const { restoreNativeCodexAsync } = await import("../codex/inject");
     const { stopServiceIfInstalled, isServiceOwnershipError } = await import("../service");
     try {
       stopServiceIfInstalled();
@@ -167,7 +221,7 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       }
       throw err;
     }
-    const restore = restoreNativeCodex();
+    const restore = await restoreNativeCodexAsync();
     // Both managed configs come down together on an explicit teardown. The daemon's own
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here.
@@ -183,12 +237,17 @@ export async function handleManagementAPI(req: Request, url: URL, config: OcxCon
       : { success: false, message: `Proxy stopping, but native Codex restore failed: ${restore.message}. Run \`ocx restore\`.${grokNote}` });
   }
 
+  if (url.pathname.startsWith("/api/native-main-profiles")) {
+    const { handleNativeProfileAPI } = await import("../codex/native-profile-api");
+    return handleNativeProfileAPI(req, url, config, deps.nativeProfileApi);
+  }
+
   if (url.pathname.startsWith("/api/codex-auth/")) {
     const { handleCodexAuthAPI } = await import("../codex/auth-api");
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {
-      return await handleCodexAuthAPI(req, url, config);
+      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog);
     } catch (error) {
       // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
       // treat both as the same retryable busy response.

@@ -1,9 +1,11 @@
 import { resolveEnvValue } from "../config";
 import {
+  CodexPoolAuthenticationError,
   headersForCodexAuthContext,
   hasCallerCodexBearer,
   isCodexAuthContextUsable,
   resolveCodexAuthContext,
+  type CodexAccountSelectionAdmission,
   type CodexAuthContext,
 } from "../codex/auth-context";
 import { recordCodexUpstreamOutcome, type CodexUpstreamOutcome } from "../codex/routing";
@@ -29,6 +31,17 @@ export interface ResolvedOpenAiForwardSidecar extends OpenAiForwardSidecarCandid
   recordOutcome?: (outcome: CodexUpstreamOutcome) => void;
 }
 
+/**
+ * Server-resolved exact account selection for a ChatGPT sidecar call.
+ * `accountId` must come from a validated account-qualified route; request headers
+ * are never trusted as account ids. `modelId` is the sidecar's actual upstream
+ * model so cooldown admission and outcome recording use the correct quota scope.
+ */
+export interface ExactOpenAiSidecarAccount {
+  accountId: string;
+  modelId: string;
+}
+
 export interface OpenAiImagesProviderSelection {
   forwardCandidates: OpenAiForwardSidecarCandidate[];
   keyed?: {
@@ -41,11 +54,18 @@ export interface OpenAiImagesProviderSelection {
 
 export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiForwardSidecarCandidate[] {
   const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
-  if (!provider || provider.disabled === true || !isCanonicalOpenAiForwardProvider(provider)) return [];
+  if (!provider || provider.disabled === true) return [];
+  // The built-in registry defaults an omitted authMode to forward. Normalize only that
+  // missing field before the strict adapter/destination check; explicit key mode and
+  // noncanonical destinations remain ineligible for ChatGPT credential injection.
+  const canonicalProvider = provider.authMode === undefined
+    ? { ...provider, authMode: "forward" as const }
+    : provider;
+  if (!isCanonicalOpenAiForwardProvider(canonicalProvider)) return [];
   return [{
     providerName: OPENAI_CODEX_PROVIDER_ID,
-    provider,
-    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, provider) ?? "pool",
+    provider: canonicalProvider,
+    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, canonicalProvider) ?? "pool",
   }];
 }
 
@@ -70,7 +90,12 @@ export async function resolveFirstUsableOpenAiSidecar(
   candidates: readonly OpenAiForwardSidecarCandidate[],
   incomingHeaders: Headers,
   config: OcxConfig,
+  options: {
+    exactAccount?: ExactOpenAiSidecarAccount;
+    beginCodexAccountSelection?: () => CodexAccountSelectionAdmission | undefined;
+  } = {},
 ): Promise<ResolvedOpenAiForwardSidecar | undefined> {
+  const { exactAccount } = options;
   let callerBearerMayBeForwarded = true;
   try {
     validateForwardAdmissionCredential(incomingHeaders, config);
@@ -79,6 +104,39 @@ export async function resolveFirstUsableOpenAiSidecar(
     callerBearerMayBeForwarded = false;
   }
   for (const candidate of candidates) {
+    if (exactAccount) {
+      // An account-qualified model is an explicit user choice. Resolve the stored
+      // credential directly even when the provider is globally Direct, and never
+      // consult Pool active state, affinity, probes, or alternates.
+      const authContext = await resolveCodexAuthContext(incomingHeaders, config, "pool", {
+        accountId: exactAccount.accountId,
+        modelId: exactAccount.modelId,
+        beginCodexAccountSelection: options.beginCodexAccountSelection,
+      });
+      if ((authContext.kind !== "pool" && authContext.kind !== "main-pool")
+        || !isCodexAuthContextUsable(authContext, config)) {
+        // Exact selection is fail-closed. A generation/runtime-state race must not fall through
+        // to the caller-bearer error or let a later candidate select another account.
+        throw new CodexPoolAuthenticationError("Selected Codex account is unavailable");
+      }
+      return {
+        ...candidate,
+        authContext,
+        headers: headersForCodexAuthContext(incomingHeaders, authContext),
+        recordOutcome: (outcome: CodexUpstreamOutcome) => recordCodexUpstreamOutcome(
+          config,
+          authContext.accountId,
+          outcome,
+          {
+            modelId: exactAccount.modelId,
+            fixedAccount: true,
+            probeLeaseId: authContext.probeLeaseId,
+            probeQuotaScope: authContext.probeQuotaScope,
+            writerGeneration: authContext.writerGeneration,
+          },
+        ),
+      };
+    }
     if (candidate.accountMode === "direct") {
       if (!callerBearerMayBeForwarded || !hasCallerCodexBearer(incomingHeaders)) continue;
       const headers = directSidecarHeaders(incomingHeaders);
@@ -89,7 +147,9 @@ export async function resolveFirstUsableOpenAiSidecar(
         headers,
       };
     }
-    const authContext = await resolveCodexAuthContext(incomingHeaders, config, candidate.accountMode);
+    const authContext = await resolveCodexAuthContext(incomingHeaders, config, candidate.accountMode, {
+      beginCodexAccountSelection: options.beginCodexAccountSelection,
+    });
     if (!isCodexAuthContextUsable(authContext, config)) continue;
     return {
       ...candidate,

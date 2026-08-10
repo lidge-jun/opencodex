@@ -113,7 +113,7 @@ test("PUT /api/grok/selection rejects a non-array body", async () => {
     });
     expect(res.status).toBe(400);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -130,7 +130,7 @@ test("PUT /api/grok/selection dedupes, sorts, and persists", async () => {
     expect(body.excluded).toEqual(["a", "b"]);
     expect(loadConfig().grokExcludedModels).toEqual(["a", "b"]);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -149,7 +149,7 @@ test("PUT /api/grok/selection with an empty list removes the field", async () =>
     expect(res.status).toBe(200);
     expect(loadConfig().grokExcludedModels).toBeUndefined();
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -171,7 +171,7 @@ test("GET /api/grok includes candidates and the saved exclusion list", async () 
     expect(Array.isArray(body.candidates)).toBe(true);
     expect(body.candidates.some(c => c.native)).toBe(true);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -188,7 +188,7 @@ test("GET /api/grok keeps native candidates when claudeCode.desktopNativeModels 
     };
     expect(body.candidates.some(c => c.native)).toBe(true);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -204,7 +204,7 @@ test("POST /api/grok/apply reports no-grok-home as a policy skip, not an error",
     expect(body.ok).toBe(true);
     expect(body.skippedReason).toBe("no-grok-home");
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });
 
@@ -223,6 +223,6 @@ test("POST /api/grok/apply writes through the guarded writer and is idempotent",
     expect(secondBody.ok).toBe(true);
     expect(secondBody.changed).toBe(false);
   } finally {
-    server.stop(true);
+    await server.stop(true);
   }
 });

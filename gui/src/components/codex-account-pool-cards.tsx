@@ -1,6 +1,7 @@
 import { useT } from "../i18n/shared";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
 import { displayAccountId } from "../lib/privacy";
+import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
@@ -26,6 +27,10 @@ export function CodexAccountPoolCards({
   onTogglePause,
   pauseUpdatingId,
   pauseBusy,
+  onPriorityChange,
+  priorityUpdatingId,
+  switchingId,
+  pinnedId = null,
   onReauth,
   onEditAlias,
   onRemove,
@@ -42,6 +47,17 @@ export function CodexAccountPoolCards({
   onTogglePause: (account: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
   pauseBusy: boolean;
+  onPriorityChange: (account: CodexAccountEntry, priority: number) => void;
+  priorityUpdatingId: string | null;
+  /** In-flight manual switch, which writes the same pin an order write clears. */
+  switchingId: string | null;
+  /**
+   * The account an operator pinned by hand, which is not always the selected one: under
+   * round-robin and fill-first the pin caps selection at its own tier while the cursor
+   * moves inside that tier. Marking the pinned card rather than the selected one keeps the
+   * badge on the account the operator actually chose.
+   */
+  pinnedId?: string | null;
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
@@ -71,6 +87,8 @@ export function CodexAccountPoolCards({
                   {t("codexAuth.paused")}
                 </span>
               )}
+              <AccountPriorityBadge value={a.priority} />
+              {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
@@ -132,6 +150,18 @@ export function CodexAccountPoolCards({
           {inCooldown && (
             <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
           )}
+          {a.id === pinnedId && !a.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
+          <AccountPriorityControl
+            value={a.priority}
+            selectId={`codex-account-priority-${a.id}`}
+            // Every row, not just the one being written: the controller serializes order
+            // writes behind one mutation ref, so a second row's pick would come back "busy"
+            // and be dropped with no toast. Same global lock the pause button uses.
+            // A pending switch counts too — it writes the same pin this clears, so the
+            // controller refuses to overlap them, and that refusal is equally silent.
+            disabled={priorityUpdatingId !== null || switchingId !== null}
+            onChange={(priority) => onPriorityChange(a, priority)}
+          />
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
             : !inCooldown && (

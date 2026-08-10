@@ -251,7 +251,7 @@ describe("OpenAI provider-option live policy and runtime isolation", () => {
     const shim = join(root, "codex");
     writeFileSync(tokenFile, "real-state-sentinel\n", { mode: 0o600 });
     writeFileSync(realCodex, "#!/bin/sh\nprintf '%s\\n' \"$OPENCODEX_API_AUTH_TOKEN\"\n", { mode: 0o700 });
-    writeFileSync(shim, buildUnixCodexShim(realCodex, process.execPath, "/fixture/cli.ts", tokenFile), { mode: 0o700 });
+    writeFileSync(shim, buildUnixCodexShim(realCodex, process.execPath, "/fixture/cli.ts", "bundled", tokenFile), { mode: 0o700 });
     chmodSync(realCodex, 0o700);
     chmodSync(shim, 0o700);
 

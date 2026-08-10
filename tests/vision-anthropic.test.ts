@@ -243,6 +243,7 @@ describe("Anthropic vision planning and management config", () => {
       expect((await put.json()).vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        reasoning: "low",
         maxDescriptionsPerTurn: 4,
       });
       expect(config.webSearchSidecar).toEqual({ model: "claude-search", backend: "anthropic", reasoning: "high" });
@@ -257,6 +258,7 @@ describe("Anthropic vision planning and management config", () => {
       expect(getBody.vision).toEqual({
         model: "claude-sonnet-5",
         backend: "anthropic",
+        reasoning: "low",
         maxDescriptionsPerTurn: 4,
       });
 
@@ -275,7 +277,7 @@ describe("Anthropic vision planning and management config", () => {
       expect(clear.status).toBe(200);
       const clearBody = await clear.json() as Record<string, any>;
       expect(clearBody.webSearch).toEqual({ model: "gpt-5.6-luna" });
-      expect(clearBody.vision).toEqual({ model: "gpt-5.6-luna", maxDescriptionsPerTurn: 4 });
+      expect(clearBody.vision).toEqual({ model: "gpt-5.4-mini", reasoning: "low", maxDescriptionsPerTurn: 4 });
       expect(config.webSearchSidecar).toEqual({ reasoning: "high" });
       expect(config.visionSidecar).toEqual({ maxDescriptionsPerTurn: 4 });
 

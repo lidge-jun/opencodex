@@ -17,6 +17,8 @@ const DEFAULT_DEPS: CodexShimAutoRestoreCliDeps = {
 
 export function skipsCodexShimAutoRestore(command: string | undefined, args: string[]): boolean {
   if (command === "uninstall" || command === "remove") return true;
+  // `lab` is read-only inspection; it must not trigger shim side effects.
+  if (command === "lab") return true;
   return command === "codex-shim" && ["install", "uninstall", "remove"].includes(args[1] ?? "");
 }
 

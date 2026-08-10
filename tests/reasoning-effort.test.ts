@@ -329,7 +329,28 @@ describe("provider-specific reasoning effort mapping", () => {
     expect(body).not.toHaveProperty("tool_choice");
   });
 
-  test("OpenAI-compatible chat keeps tool_choice when tools are present", () => {
+  test("OpenAI-compatible chat omits tools and tool_choice when tool_choice is none", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.neuralwatt.com/v1",
+    };
+
+    const req = createOpenAIChatAdapter(provider).buildRequest({
+      modelId: "glm-5.2",
+      context: {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [{ name: "read_secret", description: "Read", parameters: { type: "object" } }],
+      },
+      stream: false,
+      options: { toolChoice: "none" },
+    });
+    const body = JSON.parse(req.body as string) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("tool_choice");
+  });
+
+  test("OpenAI-compatible chat advertises only the named tool when the provider downgrades the selector", () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-chat",
       baseUrl: "https://api.moonshot.ai/v1",
@@ -340,14 +361,20 @@ describe("provider-specific reasoning effort mapping", () => {
       modelId: "kimi-k2.7-code",
       context: {
         messages: [{ role: "user", content: "hello", timestamp: 0 }],
-        tools: [{ name: "run_tests", description: "Run tests", parameters: { type: "object", properties: {} } }],
+        tools: [
+          { name: "run_tests", description: "Run tests", parameters: { type: "object", properties: {} } },
+          { name: "read_secret", description: "Read", parameters: { type: "object", properties: {} } },
+        ],
       },
       stream: false,
       options: { toolChoice: { name: "run_tests" } },
     });
-    const body = JSON.parse(req.body as string) as Record<string, unknown>;
+    const body = JSON.parse(req.body as string) as {
+      tools: Array<{ function: { name: string } }>;
+      tool_choice: string;
+    };
 
-    expect(body).toHaveProperty("tools");
+    expect(body.tools.map(tool => tool.function.name)).toEqual(["run_tests"]);
     expect(body.tool_choice).toBe("auto");
   });
 
@@ -411,18 +438,30 @@ describe("provider-specific reasoning effort mapping", () => {
       modelId: "umans-kimi-k2.7",
       context: {
         messages: [{ role: "user", content: "run it", timestamp: 0 }],
-        tools: [{
-          namespace: "functions",
-          name: "exec_command",
-          description: "Run a command",
-          parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
-        }],
+        tools: [
+          {
+            namespace: "functions",
+            name: "exec_command",
+            description: "Run a command",
+            parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
+          },
+          {
+            namespace: "mcp__secrets",
+            name: "read_secret",
+            description: "Read",
+            parameters: { type: "object" },
+          },
+        ],
       },
       stream: false,
       options: { toolChoice: { name: "functions.exec_command" } },
     });
-    const body = JSON.parse(req.body as string) as { tool_choice: { function: { name: string } } };
+    const body = JSON.parse(req.body as string) as {
+      tools: Array<{ function: { name: string } }>;
+      tool_choice: { function: { name: string } };
+    };
 
+    expect(body.tools.map(tool => tool.function.name)).toEqual(["functions__exec_command"]);
     expect(body.tool_choice.function.name).toBe("functions__exec_command");
   });
 
@@ -562,7 +601,7 @@ describe("thinking-toggle models (260707)", () => {
   });
 });
 
-describe("thinking-budget models (260709)", () => {
+describe("Qwen reasoning wire contracts", () => {
   const budgetProvider: OcxProviderConfig = {
     adapter: "openai-chat",
     baseUrl: "https://api.neuralwatt.com/v1",
@@ -628,7 +667,7 @@ describe("thinking-budget models (260709)", () => {
     expect(body).not.toHaveProperty("reasoning_effort");
   });
 
-  test("Alibaba Token Plan routes Qwen3.8 Max Preview with the Qwen thinking budget contract", () => {
+  test("Alibaba Token Plan repairs the exact stale generated Qwen3.8 budget list", () => {
     const config = {
       port: 10100,
       defaultProvider: "alibaba-token-plan",
@@ -637,18 +676,72 @@ describe("thinking-budget models (260709)", () => {
           adapter: "openai-chat",
           baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
           apiKey: "k",
+          // Exact generated preset shape from before Qwen3.8 documented its native effort field.
+          thinkingBudgetModels: ["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash"],
+          reasoningEffortMap: { xhigh: "max" },
         },
       },
     } as unknown as OcxConfig;
-    const route = routeModel(config, "alibaba-token-plan/qwen3.8-max-preview");
+    const route = routeModel(config, "alibaba-token-plan/qwen3.8-max");
 
     expect(route.provider.modelInputModalities?.[route.modelId]).toEqual(["text", "image"]);
-    expect(route.provider.thinkingBudgetModels).toContain(route.modelId);
-    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(route.provider.thinkingBudgetModels).not.toContain(route.modelId);
+    expect(route.provider.thinkingBudgetModels).toContain("qwen3.7-max");
+    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toEqual(["low", "medium", "xhigh"]);
+    expect(route.provider.modelDefaultReasoningEfforts?.[route.modelId]).toBe("xhigh");
+    expect(route.provider.modelReasoningEffortMap?.[route.modelId]).toEqual({});
 
-    const body = buildBody(route.provider, route.modelId, { reasoning: "max", maxOutputTokens: 65536 });
-    expect(body).toMatchObject({ model: "qwen3.8-max-preview", thinking_budget: 65536 });
-    expect(body).not.toHaveProperty("reasoning_effort");
+    const request = buildChatRequest(route.provider, route.modelId, { reasoning: "xhigh", maxOutputTokens: 65536 });
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+    expect(body).toMatchObject({ model: "qwen3.8-max", reasoning_effort: "xhigh" });
+    expect(body).not.toHaveProperty("thinking_budget");
+    expect(request.reasoningLog).toEqual({
+      effectiveEffort: "xhigh",
+      wireField: "reasoning_effort",
+      wireValue: "xhigh",
+    });
+
+    // Codex may advertise its synthetic compatibility tops; neither may leak an unsupported value.
+    const maxBody = buildBody(route.provider, route.modelId, { reasoning: "max" });
+    expect(maxBody.reasoning_effort).toBe("xhigh");
+    expect(maxBody).not.toHaveProperty("thinking_budget");
+
+    // A client with the old, already-cached high rung degrades to the nearest lower real tier.
+    expect(buildBody(route.provider, route.modelId, { reasoning: "high" }).reasoning_effort).toBe("medium");
+  });
+
+  test("Alibaba Token Plan preserves deliberate Qwen3.8 model overrides", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "alibaba-token-plan",
+      providers: {
+        "alibaba-token-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          apiKey: "k",
+          thinkingBudgetModels: ["QWEN3.8-MAX", "qwen3.7-max"],
+          modelReasoningEfforts: { "QWEN3.8-MAX": ["low", "high", "xhigh"] },
+          modelDefaultReasoningEfforts: { "QWEN3.8-MAX": "high" },
+          reasoningEffortMap: { xhigh: "max" },
+          modelReasoningEffortMap: { "QWEN3.8-MAX": { medium: "high" } },
+        },
+      },
+    } as unknown as OcxConfig;
+    const route = routeModel(config, "alibaba-token-plan/qwen3.8-max");
+
+    expect(route.provider.thinkingBudgetModels).toEqual([
+      "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash", "QWEN3.8-MAX",
+    ]);
+    expect(route.provider.modelReasoningEfforts?.[route.modelId]).toBeUndefined();
+    expect(route.provider.modelReasoningEfforts?.["QWEN3.8-MAX"]).toEqual(["low", "high", "xhigh"]);
+    expect(route.provider.modelDefaultReasoningEfforts?.[route.modelId]).toBeUndefined();
+    expect(route.provider.modelDefaultReasoningEfforts?.["QWEN3.8-MAX"]).toBe("high");
+    expect(route.provider.modelReasoningEffortMap?.[route.modelId]).toBeUndefined();
+    expect(route.provider.modelReasoningEffortMap?.["QWEN3.8-MAX"]).toEqual({ medium: "high" });
+
+    const request = buildChatRequest(route.provider, route.modelId, { reasoning: "xhigh" });
+    expect(JSON.parse(request.body)).toMatchObject({ reasoning_effort: "xhigh" });
+    expect(request.reasoningLog?.wireField).toBe("reasoning_effort");
   });
 
   test("opencode-go Qwen models are no longer pinned to the Anthropic wire", () => {

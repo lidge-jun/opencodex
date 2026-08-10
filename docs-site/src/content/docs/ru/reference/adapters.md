@@ -34,6 +34,9 @@ interface ProviderAdapter {
 - Преобразует внутренние сообщения в роли OpenAI; инструменты отображаются в
   `{type:"function", function:{…}}` и `tool_choice` (`auto`/`none`/`required` или именованная
   функция).
+- **Изображения из результатов инструментов** отправляются отдельным последующим user-сообщением
+  (части `image_url`) после закрытия раунда инструментов, так как содержимое `role:"tool"` может
+  быть только текстом; маркер `[image]` остаётся в сообщении инструмента как якорь.
 - **Переписывает идентификационный промпт Codex про GPT-5** в модельно-нейтральное вступление,
   чтобы маршрутизируемые модели не заявляли, что они от OpenAI.
 - **Прижимает `reasoning_effort`** к объявленному моделью подмножеству, когда точный уровень
@@ -41,12 +44,23 @@ interface ProviderAdapter {
   id из `provider.noReasoningModels` адаптер **полностью опускает** этот параметр.
 - Стримит `delta.content` (текст), `delta.reasoning_content` (thinking) и `delta.tool_calls[]`;
   собирает `usage`.
+- ClinePass использует проверенный на живом API формат шлюза
+  `reasoning: { enabled: true, effort: "low" }` (или `{ enabled: false }`, когда reasoning отключён);
+  в публичной документации API этот формат запроса пока не указан. Адаптер прижимает другие
+  уровни effort к проверенному `low`, принимает reasoning delta из `delta.reasoning_content` или
+  `delta.reasoning`, запрашивает usage потока через `stream_options.include_usage` и читает usage
+  из envelope нестримингового ответа.
 
 ## `openai-responses`
 
 **Назначение:** OpenAI **Responses API**. **`passthrough: true`** — пересылает исходное тело
 запроса и стримит ответ обратно **без преобразования**.
 **Аутентификация:** `forward` (ретрансляция заголовков вызывающей стороны) или `key`.
+
+При `key`-аутентификации [`retryOn429`](/ru/reference/configuration/) действует и здесь: 429 до
+начала потока ждёт и, до любой другой обработки или фейловера, повторяет идентичный запрос на
+том же ключе, как и в переводимом пути `openai-chat`/Anthropic. Пользовательские транспорты
+`runTurn` в цикл HTTP-повторов не входят.
 
 - URL для `forward` → `{baseUrl}/responses`. Провайдер с `key` по умолчанию сохраняет прежнее построение `{baseUrl}/v1/responses`.
 - Провайдер с `key` может задать проверенный относительный `responsesPath`: адаптер удаляет один завершающий `/` из `baseUrl` и отправляет запрос на `{trimmedBaseUrl}{responsesPath}`. Для Ark Agent Plan используйте `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` и `responsesPath: "/responses"`.
@@ -77,9 +91,9 @@ interface ProviderAdapter {
 
 - Системный промпт → `systemInstruction`; сообщения → `contents[]` (assistant → `model`);
   инструменты → `functionDeclarations`. Изображения из data-URL → `inline_data`.
-- Идентификаторы вызовов инструментов синтезируются, когда Gemini их опускает. Antigravity
-  сохраняет и повторно передаёт настоящие значения `thoughtSignature`, чтобы непрерывность
-  рассуждений сохранялась в последующих ходах.
+- Идентификаторы вызовов инструментов синтезируются, когда Gemini их опускает. Vertex и Antigravity
+  сохраняют и повторно передают настоящие значения `thoughtSignature`, чтобы непрерывность
+  рассуждений сохранялась после возврата результата инструмента.
 
 ## `kiro`
 
@@ -134,6 +148,8 @@ authorization.
 - Воспроизводит состояние диалога через content-addressed blob'ы, отображает серверные вызовы
   инструментов обратно в Codex, обнаруживает актуальные модели Cursor через protobuf RPC
   `GetUsableModels` и повторяет попытки только до того, как run-запрос зафиксирован на wire.
+- Сохраняет `cursor/grok-4.5-fast` доступной для выбора, но отправляет Cursor каноническую модель
+  `grok-4.5`, помещая отдельные значения `effort` и `fast=true` в `requested_model.parameters`.
 - Нативное для Cursor локальное выполнение операций с файловой системой/shell/сетью по умолчанию
   запрещено. Явные интеграции `mcpServers` и `desktopExecutor` включаются отдельно;
   `unsafeAllowNativeLocalExec` включает более широкий встроенный executor и обходит семантику

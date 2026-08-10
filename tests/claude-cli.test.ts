@@ -220,7 +220,7 @@ describe("ocx claude env assembly", () => {
       ANTHROPIC_BASE_URL: "http://my-own-gateway:9",
       ANTHROPIC_MODEL: "my-model",
       PATH: "/usr/bin",
-    });
+    }, {}, { preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] });
     expect(env.ANTHROPIC_BASE_URL).toBe("http://my-own-gateway:9");
     expect(env.ANTHROPIC_MODEL).toBe("my-model");
     expect(env.PATH).toBe("/usr/bin");

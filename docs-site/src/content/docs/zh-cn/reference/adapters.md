@@ -30,18 +30,29 @@ interface ProviderAdapter {
 
 - 把内部消息转换成 OpenAI role；工具映射为 `{type:"function", function:{…}}` 和
   `tool_choice`（`auto`/`none`/`required` 或具名函数）。
+- **工具结果中的图片**会在工具轮次结束后，作为后续 user vision 消息（`image_url` 部分）发送，
+  因为 `role:"tool"` 的内容只能是文本；`[image]` 标记仍保留在工具消息中作为锚点。
 - **重写 Codex 的 GPT-5 身份提示词**，改成与模型无关的介绍，避免路由模型自称 OpenAI。
 - 精确层级不可用时，**把 `reasoning_effort` 限制到模型公布的子集**。除非 provider 显式配置
   alias，`xhigh` 与 `max` 保持为不同标签。对于 `provider.noReasoningModels` 中的 id，则**完全
   省略**该参数。
 - 流式输出 `delta.content`（文本）、`delta.reasoning_content`（thinking）和
   `delta.tool_calls[]`，并收集 `usage`。
+- ClinePass 使用经实时验证的网关格式 `reasoning: { enabled: true, effort: "low" }`；关闭
+  reasoning 时使用 `{ enabled: false }`。其公开 API 文档目前没有说明这一请求格式。adapter 会把
+  其他 effort 请求限制到已验证的 `low`，把 `delta.reasoning_content` 或 `delta.reasoning`
+  作为 reasoning delta，通过 `stream_options.include_usage` 请求流式 usage，并从非流式响应
+  envelope 中读取 usage。
 
 ## `openai-responses`
 
 **目标：** OpenAI **Responses API**。**`passthrough: true`** —— 转发原始请求 body，并把响应
 **不经转换**地流式传回。
 **认证：** `forward`（转发调用方 header）或 `key`。
+
+使用 `key` 认证时，[`retryOn429`](/zh-cn/reference/configuration/) 同样适用：流开始前的 429
+会等待并先于其他处理或故障转移，在相同 key 上重放完全相同请求，与翻译后的
+`openai-chat`/Anthropic 请求路径一致。自定义 `runTurn` 传输不在 HTTP 重试循环之内。
 
 - `forward` URL → `{baseUrl}/responses`。`key` provider 默认保留原有的 `{baseUrl}/v1/responses` 构造。
 - `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
@@ -69,8 +80,8 @@ interface ProviderAdapter {
 
 - 系统提示词 → `systemInstruction`；消息 → `contents[]`（assistant → `model`）；工具 →
   `functionDeclarations`；data URL 图像 → `inline_data`。
-- Gemini 省略 tool-call id 时会合成 id。Antigravity 会保留并重放真实 `thoughtSignature`，使
-  reasoning continuity 延续到后续 turn。
+- Gemini 省略 tool-call id 时会合成 id。Vertex 与 Antigravity 会保留并重放真实
+  `thoughtSignature`，使 tool-result 后续 turn 保持 reasoning continuity。
 
 ## `kiro`
 
@@ -117,6 +128,8 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
   Connect message。
 - 经 content-addressed blob 重放对话状态，把 server tool call 映射回 Codex，用 protobuf
   `GetUsableModels` RPC 发现实时 Cursor 模型，并且只在 run request 尚未 commit 到 wire 前重试。
+- 保留 `cursor/grok-4.5-fast` 作为可选模型，但向 Cursor 发送规范的 `grok-4.5` 模型，并将独立的
+  `effort` 和 `fast=true` 值放入 `requested_model.parameters`。
 - Cursor 原生本地 filesystem/shell/network 执行默认被拒绝。显式 `mcpServers` 与
   `desktopExecutor` 集成分别需要 opt-in；`unsafeAllowNativeLocalExec` 会启用更广泛的内置
   executor，并绕过 Codex 审批和 sandbox 语义。

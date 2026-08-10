@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../src/config";
-import { handleManagementAPI } from "../src/server/management-api";
+import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import { invalidateStartupHealthCache } from "../src/server/startup-health-cache";
 import type { OcxConfig } from "../src/types";
 import {
@@ -28,6 +28,7 @@ import {
   setUsageSummaryCacheEntry,
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -47,13 +48,17 @@ function baseConfig(): OcxConfig {
   };
 }
 
-function putSettings(config: OcxConfig, body: unknown): Promise<Response | null> {
+function putSettings(
+  config: OcxConfig,
+  body: unknown,
+  deps: ManagementApiDeps = {},
+): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleManagementAPI(req, new URL(req.url), config);
+  return handleManagementAPI(req, new URL(req.url), config, deps);
 }
 
 function getSettings(config: OcxConfig): Promise<Response | null> {
@@ -102,6 +107,25 @@ describe("GET /api/settings", () => {
   test("reports appOwnedMemoryBudgetMb with the 256 MiB default", async () => {
     const body = await (await getSettings(baseConfig()))!.json() as { appOwnedMemoryBudgetMb?: number };
     expect(body.appOwnedMemoryBudgetMb).toBe(256);
+  });
+
+  test("reports the effective account-picker state", async () => {
+    const absent = await (await getSettings(baseConfig()))!.json() as {
+      codexAccountPickerEnabled?: boolean;
+    };
+    const inferred = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { side: "stored-account" },
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+    const hidden = await (await getSettings({
+      ...baseConfig(),
+      codexAccountNamespaces: { side: "stored-account" },
+      codexAccountPickerEnabled: false,
+    }))!.json() as { codexAccountPickerEnabled?: boolean };
+
+    expect(absent.codexAccountPickerEnabled).toBe(false);
+    expect(inferred.codexAccountPickerEnabled).toBe(true);
+    expect(hidden.codexAccountPickerEnabled).toBe(false);
   });
 
   test("reports redacted codexRuntime diagnostics and clamp correlation", async () => {
@@ -258,6 +282,202 @@ describe("PUT /api/settings", () => {
     const config = baseConfig();
     const res = await putSettings(config, {});
     expect(res!.status).toBe(400);
+  });
+
+  test.each([[null], [[]], ["settings"], [42]] as const)(
+    "rejects a non-object settings body with 400 (%j)",
+    async body => {
+      const response = await putSettings(baseConfig(), body);
+      expect(response!.status).toBe(400);
+      expect(await response!.json()).toEqual({ error: "settings body must be an object" });
+    },
+  );
+
+  test("account-picker enable persists before one catalog convergence", async () => {
+    const config = baseConfig();
+    let persisted = false;
+    let convergences = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: saved => {
+        persisted = true;
+        expect(saved.codexAccountPickerEnabled).toBe(true);
+        expect(saved.codexAccountNamespaces).toEqual({ main: "@main" });
+      },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => {
+        expect(persisted).toBe(true);
+        convergences += 1;
+      }),
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: false,
+    });
+    expect(convergences).toBe(1);
+    expect(config.codexAccountNamespaces).toEqual({ main: "@main" });
+  });
+
+  test("account-picker disable does not initialize an empty namespace map", async () => {
+    const config = baseConfig();
+    let convergences = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: false }, {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: false,
+      catalogRefreshPending: false,
+    });
+    expect(config.codexAccountNamespaces).toBeUndefined();
+    expect(convergences).toBe(0);
+  });
+
+  test("account-picker convergence failure remains a successful persisted mutation", async () => {
+    const config = {
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "@main" },
+      codexAccountPickerEnabled: false,
+    };
+    let persisted = false;
+    let convergences = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: () => { persisted = true; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => {
+        expect(persisted).toBe(true);
+        convergences += 1;
+        throw new Error("private refresh failure detail");
+      }),
+    });
+
+    expect(response!.status).toBe(200);
+    const payload = await response!.json();
+    expect(payload).toMatchObject({
+      ok: true,
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: true,
+    });
+    expect(JSON.stringify(payload)).not.toContain("private refresh failure detail");
+    expect(config.codexAccountPickerEnabled).toBe(true);
+    expect(convergences).toBe(1);
+  });
+
+  test.each([
+    ["unavailable", { status: "skipped", reason: "catalog-unavailable", retryable: false }],
+    ["busy", { status: "skipped", reason: "busy", retryable: true }],
+    ["disk failure", {
+      status: "failed",
+      reason: "disk",
+      phase: "commit",
+      retryable: false,
+      partialWrite: true,
+    }],
+  ] as const)("account-picker treats a non-committed %s catalog as pending", async (_state, result) => {
+    const config = {
+      ...baseConfig(),
+      codexAccountNamespaces: { main: "@main" },
+      codexAccountPickerEnabled: false,
+    };
+    let convergences = 0;
+    const response = await putSettings(config, { codexAccountPickerEnabled: true }, {
+      saveConfigPreservingClaudeCode: () => {},
+      createManagementConvergeCodex: catalogConvergenceFactory(
+        () => { convergences += 1; },
+        result,
+      ),
+    });
+
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      codexAccountPickerEnabled: true,
+      catalogRefreshPending: true,
+    });
+    expect(convergences).toBe(1);
+  });
+
+  test("account-picker disable and re-enable preserve custom namespace order", async () => {
+    const namespaces = { side: "stored-account", main: "@main" };
+    const config = { ...baseConfig(), codexAccountNamespaces: namespaces };
+    const persistedOrders: string[][] = [];
+    let convergences = 0;
+    const deps: ManagementApiDeps = {
+      saveConfigPreservingClaudeCode: saved => {
+        persistedOrders.push(Object.keys(saved.codexAccountNamespaces ?? {}));
+      },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences += 1; }),
+    };
+
+    const disabled = await putSettings(config, { codexAccountPickerEnabled: false }, deps);
+    expect(await disabled!.json()).toMatchObject({ codexAccountPickerEnabled: false });
+    const reenabled = await putSettings(config, { codexAccountPickerEnabled: true }, deps);
+    expect(await reenabled!.json()).toMatchObject({ codexAccountPickerEnabled: true });
+
+    expect(config.codexAccountNamespaces).toBe(namespaces);
+    expect(persistedOrders).toEqual([["side", "main"], ["side", "main"]]);
+    expect(convergences).toBe(2);
+  });
+
+  test("account-picker rejects non-boolean values before persistence or refresh", async () => {
+    let persisted = false;
+    let refreshed = false;
+    const response = await putSettings(baseConfig(), { codexAccountPickerEnabled: "yes" }, {
+      saveConfigPreservingClaudeCode: () => { persisted = true; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshed = true; }),
+    });
+
+    expect(response!.status).toBe(400);
+    expect(persisted).toBe(false);
+    expect(refreshed).toBe(false);
+  });
+
+  test("failed persistence rolls back picker and other settings", async () => {
+    const config = baseConfig();
+    const before = structuredClone(config);
+    let refreshed = false;
+    const request = putSettings(config, {
+      codexAutoStart: false,
+      streamMode: "legacy-tee",
+      appOwnedMemoryBudgetMb: 128,
+      codexAccountPickerEnabled: true,
+    }, {
+      saveConfigPreservingClaudeCode: () => { throw new Error("save failed"); },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshed = true; }),
+    });
+
+    await expect(request).rejects.toThrow("save failed");
+    expect(config).toEqual(before);
+    expect(refreshed).toBe(false);
+  });
+
+  test("selector allocation failure rolls back before persistence", async () => {
+    const config = baseConfig();
+    Object.defineProperty(config, "codexAccounts", {
+      configurable: true,
+      get: () => { throw new Error("selector allocation failed"); },
+    });
+    let persisted = false;
+    let refreshed = false;
+
+    const request = putSettings(config, {
+      codexAutoStart: false,
+      streamMode: "legacy-tee",
+      appOwnedMemoryBudgetMb: 128,
+      codexAccountPickerEnabled: true,
+    }, {
+      saveConfigPreservingClaudeCode: () => { persisted = true; },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshed = true; }),
+    });
+
+    await expect(request).rejects.toThrow("selector allocation failed");
+    expect(Object.hasOwn(config, "codexAutoStart")).toBe(false);
+    expect(Object.hasOwn(config, "streamMode")).toBe(false);
+    expect(Object.hasOwn(config, "appOwnedMemoryBudgetMb")).toBe(false);
+    expect(Object.hasOwn(config, "codexAccountNamespaces")).toBe(false);
+    expect(Object.hasOwn(config, "codexAccountPickerEnabled")).toBe(false);
+    expect(persisted).toBe(false);
+    expect(refreshed).toBe(false);
   });
 
   test("settings PUT rejects below above fractional and nonnumeric budget values", async () => {

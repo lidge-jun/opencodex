@@ -621,6 +621,11 @@ function buildPreparedCursorRunRequest(
     tools: request.tools?.length ?? 0,
   });
 
+  const requestedModelParameters = [
+    ...(request.requestedModelParameters ?? []),
+    ...(request.routingLevel ? [{ id: CURSOR_ROUTING_LEVEL_PARAMETER_ID, value: request.routingLevel }] : []),
+  ];
+  const hasExplicitModelParameters = (request.requestedModelParameters?.length ?? 0) > 0;
   const runRequest = create(AgentRunRequestSchema, {
     conversationId: request.conversationId,
     conversationState: create(ConversationStateStructureSchema, {
@@ -637,24 +642,24 @@ function buildPreparedCursorRunRequest(
       readPaths: [],
     }),
     action,
-    modelDetails: create(ModelDetailsSchema, {
-      modelId: request.modelId,
-      displayModelId: request.modelId,
-      displayName: request.modelId,
-      displayNameShort: request.modelId,
-      aliases: [],
-    }),
-    // requested_model is currently a Cursor Router-only surface. External model clients still
-    // send model_details alone; sending both makes external workers reach stepCompleted and then
-    // reject the turn with invalid_argument.
-    ...(request.routingLevel ? {
+    // Explicit model-picker parameters follow current Cursor clients and use requested_model alone.
+    // Keep legacy model_details for flat model ids and the already-live Router path; sending both for
+    // a parameterized external model can resolve conflicting selections and end in invalid_argument.
+    ...(!hasExplicitModelParameters ? {
+      modelDetails: create(ModelDetailsSchema, {
+        modelId: request.modelId,
+        displayModelId: request.modelId,
+        displayName: request.modelId,
+        displayNameShort: request.modelId,
+        aliases: [],
+      }),
+    } : {}),
+    ...(requestedModelParameters.length > 0 ? {
       requestedModel: create(RequestedModelSchema, {
         modelId: request.modelId,
         maxMode: false,
-        parameters: [create(RequestedModel_ModelParameterbytesSchema, {
-          id: CURSOR_ROUTING_LEVEL_PARAMETER_ID,
-          value: request.routingLevel,
-        })],
+        parameters: requestedModelParameters.map(parameter =>
+          create(RequestedModel_ModelParameterbytesSchema, parameter)),
       }),
     } : {}),
     // Mirror the client (Responses) tool definitions into the top-level AgentRunRequest.mcp_tools

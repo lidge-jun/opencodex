@@ -28,6 +28,20 @@ management credential for `/api/codex-auth/accounts`, never the service/data-pla
 output distinguishes a missing proxy, rejected management authentication, and an unexpected
 management response so a reachable `401` cannot be reported as "proxy not running."
 
+Before either CLI command attaches the management bearer, it challenges the listener and verifies
+an HMAC proof bound to the proxy PID and port. The per-process proof key lives only in the protected
+`runtime-port.json`; the public `/healthz` identity marker alone is never sufficient to receive a
+management credential. Legacy or configured-port-only listeners still satisfy ordinary liveness,
+but their account-health detail remains unavailable until an attested runtime record exists.
+
+[Decision Log]
+- 목적과 의도: Keep a lower-privileged local process from collecting the management bearer by impersonating `/healthz` on an unused port.
+- 기존 구현 및 제약 조건: Liveness must remain public and backward-compatible, but its service string and reported PID are assertions made by the listener itself.
+- 검토한 주요 대안: Require only a runtime source and non-null PID; stop showing account health; authenticate the listener with a protected per-process challenge secret.
+- 선택한 방식: Store a random secret in the mode-protected runtime record and require a challenge/PID/port HMAC before the CLI sends Authorization.
+- 다른 대안 대신 이 방식을 선택한 이유: PID and command-line checks are not cryptographic listener identity, while removing live account health would regress diagnostics unnecessarily.
+- 장점, 단점 및 영향: The long-lived token never reaches a listener without the runtime secret; an old running proxy remains visible but cannot provide detailed CLI account health until restarted on the new version.
+
 Management authentication never has a loopback bypass. If no management credential is available, or
 management token creation, validation, or permission hardening fails, every `/api/*` request returns
 503 while `/v1/*` and unauthenticated `/healthz` continue to operate. Windows ACL hardening results
@@ -65,7 +79,7 @@ this document owns is which module holds which area and what invariant that area
 
 | Endpoint area | Responsibility |
 | --- | --- |
-| Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, and/or integer `appOwnedMemoryBudgetMb` (64..4096; each optional, at least one required). Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; macOS eager relay is explicit-only). |
+| Config/settings | Read safe config/settings views; mutate supported settings only. Full `PUT /api/config` is disabled so masked secrets are not round-tripped. `PUT /api/settings` accepts `codexAutoStart`, `streamMode`, integer `appOwnedMemoryBudgetMb` (64..4096), and/or strict boolean `codexAccountPickerEnabled` (each optional, at least one required). Picker enable initializes an empty UI-managed selector map, persists before one bounded catalog convergence, and reports only `catalogRefreshPending`; allocation/save failure restores every touched live field and skips convergence. Budget changes synchronously enforce the process-wide evictable retained-state cap; this is separate from RSS/native memory. `streamMode` persists the #314 stream-shape selection in config.json (Windows services need persisted input; macOS eager relay is explicit-only). |
 | Startup safety | `GET /api/startup-health` reports whether injected Codex routing is restart-safe, with secret-free service/shim diagnostics. `POST /api/startup-action` provides allowlisted one-click installation for the background service or launcher shim. On Windows a healthy script shim is CLI-only; Codex Desktop requires the background service for full protection. |
 | Windows tray | `GET/POST /api/windows-tray` controls an owned, per-user HKCU login tray. The tray delegates fixed actions to the CLI and is never a proxy supervisor or restart-protection signal. |
 | Updates | `GET /api/update/check`, `POST /api/update/run`, and `GET /api/update/status` own dashboard self-update state. A launched worker PID is persisted in `update-job.json`; dead PIDs recover immediately, while legacy active records without a PID recover only after ten minutes. Live PIDs remain exclusive regardless of record age. `GET /api/update/badge` backs the sidebar badge: it reports that an update exists and links to the update surface rather than gating other actions. |
@@ -73,12 +87,12 @@ this document owns is which module holds which area and what invariant that area
 | Models | Fetch routed model lists, disabled model visibility, and catalog-facing ids. |
 | OAuth | Login/status/logout for OAuth-backed providers, plus multiauth account management: `GET /api/oauth/accounts`, `PUT /api/oauth/accounts/active`, `PUT /api/oauth/accounts/alias`, `DELETE /api/oauth/accounts` list masked accounts per provider, switch the active one, edit its display-only alias, and remove one. The login flow itself is `GET /api/oauth/providers`, `POST /api/oauth/login`, `POST /api/oauth/login/code`, `POST /api/oauth/login/cancel`, `POST /api/oauth/logout`, and `GET /api/oauth/status`; pool controls are `GET/PUT/PATCH /api/oauth/accounts/pool` and `POST /api/oauth/accounts/clear-cooldown`. Login accepts `addAccount: true` to force a fresh browser identity. Device flows return a structured `deviceCode`; the GUI highlights and copies it before the user opens the verification page. |
 | Key providers | `GET /api/key-providers` exposes API-key provider presets for setup and dashboard flows, and `GET/POST/DELETE /api/keys` owns the proxy's own admission keys. Multi-key pool per key-auth provider: `GET /api/providers/keys`, `POST /api/providers/keys`, `PUT /api/providers/keys/active`, `PUT /api/providers/keys/alias`, `DELETE /api/providers/keys` masked list, add (upsert + activate), switch, rename, and remove keys. `provider.apiKey` always mirrors the active pool entry so routing stays single-key. |
-| OpenAI account mode | Report one OpenAI Codex card with Pool/Direct controls and one API-key card. Mode PATCH persists live without restart or catalog identity changes; Pool owns account/quota controls and Direct uses caller/main login only. Main-account DTOs report real credential presence and terminal `needsReauth` state instead of treating missing/invalid native auth as an unknown quota. |
+| OpenAI account mode | Report one OpenAI Codex card with Pool/Direct controls and one API-key card. Mode PATCH persists live without restart or catalog identity changes; Pool owns account/quota controls and Direct uses caller/main login only. Main-account DTOs report real credential presence and terminal `needsReauth` state instead of treating missing/invalid native auth as an unknown quota. Selection order has its own route: `PUT /api/codex-auth/accounts/priority` takes `{ id, priority }`, where `priority` is an integer -100..100 or `null` to restore the default, accepts `__main__`, 404s an unknown id, and echoes the stored value. Re-ordering never clears thread affinity, so the response carries no `appliesImmediately`, but it does release any pin — see [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md) for why. `PUT /api/codex-auth/active` with a null id releases one too, but that drops the operator's account selection along with it, so this route is the only operator-facing way to clear a pin while leaving the selected account in place. `GET /api/codex-auth/active` reports `pinned`, true only while the manually selected account is still the effective active one, plus `pinnedAccountId`, which names the pinned account whether or not it is the active one. Surfaces should render `pinnedAccountId`: under round-robin and fill-first the pin caps the tier ceiling at its own tier while the strategy cursor moves freely inside that tier, so `pinned` goes false on a sibling's turn even though the pin is still suppressing every higher tier — which is why the dashboard badges `pinnedAccountId` and the GUI controller tracks only the id. `pinned` answers the narrower question of whether routing is *currently* on the operator's choice; no surface in this repo asks it, and a new one almost certainly wants the id instead. |
 | Subagents | Read/write the featured `subagentModels` list capped at five ids. `GET/PUT /api/injection-model` manages the shared delegation model/effort selection, the independent OpenCodex guidance switch, and the default-off `syncCodexSubagentDefaults` opt-in for native Codex subagent defaults. When OpenCodex owns the active Codex routing, native `[agents]` defaults apply to newly created Codex tasks after sync/restart; external user-managed provider configs remain untouched. The defaults do not cause delegation and preserve existing user-owned defaults rather than overwriting them. PUT is partial-update: absent keys are unchanged, `null` clears, and non-object bodies are rejected with 400 before field validation. `syncCodexSubagentDefaults: true` requires a nonblank `model` and a supported Codex reasoning effort when effort is set; clearing `model` (null/empty) always clears effort and disables native-default sync even when the stored effort was invalid. |
 | V2 / Multi-agent mode | `GET/PUT /api/v2` — reports/sets the codex `multi_agent_v2` feature flag, the 3-state `multiAgentMode` override (`v1`/`default`/`v2`), and the logical maximum thread count. Selecting `v2` enables the native flag and migrates `[agents] max_threads` to the v2 key; selecting `v1` disables it and migrates the same value back. `default` leaves the native flag unchanged. PUT accepts `enabled`, `multiAgentMode`, and/or the compatibility-named `maxConcurrentThreadsPerSession`; contradictory mode/flag pairs are rejected before writes. Every transition is rollback-safe and resyncs the catalog. |
 | Logs & Debug | One sidebar entry (`/#logs`) with two tabs. Logs tab: request/runtime logs for local diagnosis. Debug tab (`/#logs/debug`; legacy `/#debug` deep links redirect there): provider + usage toggles, refresh/follow log viewer. `GET/PUT /api/debug`; `GET /api/debug/logs` and `GET /api/debug/usage-logs` (monotonic `after` cursor, legacy `since` accepted). CLI: `ocx debug provider|usage …` (both streams via running proxy API). |
 | Usage | `GET /api/usage` aggregate read-only summary derived from `~/.opencodex/usage.jsonl`; measured / reported / unreported / unsupported / estimated counts, daily zero-filled grid, model and provider breakdowns. Never exposes prompts. |
-| System | `POST /api/system/restart` restarts the proxy in place. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + eager-relay gate decision, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; rides the standard management auth gate and must never move to unauthenticated `/healthz`. Consumed by `ocx doctor`'s Memory/runtime section and the dashboard Memory observability card. |
+| System | `POST /api/system/restart` restarts the proxy in place. Local CLI/tray callers first attest the exact runtime PID and port, then send a process-scoped HMAC capability bound to that method, path, PID, and port; the capability authorizes no other management route and is invalid after replacement. The caller observes one absolute deadline and accepts success only after a different runtime PID is healthy on the same port. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + eager-relay gate decision, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; rides the standard management auth gate and must never move to unauthenticated `/healthz`. Consumed by `ocx doctor`'s Memory/runtime section and the dashboard Memory observability card. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
 | Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync. The diagnostic reports the bypass; it does not rewrite the project file. |
 | Sidecar/shadow-call settings | `src/server/management/config-routes.ts` — `GET/PUT /api/sidecar-settings` and `GET/PUT /api/shadow-call-settings`. PUT accepts model and backend plus optional `webSearch.reasoning` and `vision.maxDescriptionsPerTurn`; the read and PUT-response payload reports model, backend, and the vision per-turn limit. Credentials live in the provider and OAuth stores instead. Both shadow-call responses also report the resolved `sourceModels` — the prefixes the runtime actually intercepts (`src/lib/shadow-call.ts`, default `gpt-5.4-mini` + `gpt-5.6-luna`), so no client hard-codes a helper slug that a Codex release can invalidate. |
@@ -88,7 +102,7 @@ this document owns is which module holds which area and what invariant that area
 | Effort and fallback | `src/server/management/agent-settings-routes.ts` — `GET/PUT /api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`. Caps clamp; they do not reject. |
 | Grok and Claude integrations | `src/server/management/agent-settings-routes.ts` — `GET /api/grok`, `PUT /api/grok/selection`, `POST /api/grok/apply`, `GET/PUT /api/claude-desktop`, `POST /api/claude-desktop/apply`, `GET /api/claude-desktop/status`, `GET/PUT /api/claude-code`. Apply writes an external app's profile, so its status probe must read the same resolved path it writes (see [`04_transports-and-sidecars.md`](04_transports-and-sidecars.md)). |
 | Combos | `src/server/management/combo-routes.ts` — `GET/PUT/DELETE /api/combos` own provider combination and failover definitions. |
-| Codex accounts | `src/codex/auth-api.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. |
+| Codex accounts | `src/codex/auth-api.ts` — `GET/POST/DELETE /api/codex-auth/accounts`, `PUT /api/codex-auth/accounts/alias`, `PUT /api/codex-auth/accounts/pause`, `PUT /api/codex-auth/accounts/pause-exhausted`, `POST /api/codex-auth/accounts/clear-cooldown`, `GET/PUT /api/codex-auth/active`, `PUT /api/codex-auth/auto-switch`, `PUT /api/codex-auth/pool-strategy`, `PUT /api/codex-auth/failover`, `GET /api/codex-auth/quota`, `GET /api/codex-auth/reset-credits` with `POST /api/codex-auth/reset-credits/consume`, and the login flow `POST /api/codex-auth/login`, `POST /api/codex-auth/login/code`, `POST /api/codex-auth/login/cancel`, `GET /api/codex-auth/login-status`. Account ids are opaque handles and are serialized so the GUI can address an account; emails are masked and tokens are never serialized. New-account config commits add UI-managed selector bindings in the same config save; deletion deliberately retains existing bindings for fail-closed exact routing and re-add stability. Account mutations request catalog convergence only after config durability and expose only the boolean `catalogRefreshPending` completion projection. |
 | Sidebar | `src/server/management/sidebar-routes.ts` — `GET/POST /api/github/star` and `GET /api/update/badge`. Sidebar state is cosmetic; a failed fetch degrades silently. |
 | Logs | `src/server/management/logs-usage-routes.ts` — `GET /api/logs`, `GET /api/claude/inbound-debug`, and `GET /api/debug/injection-logs` join the debug streams described above. |
 
@@ -106,11 +120,63 @@ User aliases are display metadata only. Codex pool aliases live on `CodexAccount
 identity, active selection, and routing never consult these fields. The matching CLI is
 `ocx account alias <provider> <id> <display-name|->` (`rename` is accepted as a synonym).
 
+Selection order is the opposite case and must not be folded into the alias route. `codexAccountPriorities`
+is routing metadata that Pool selection consults, it lives in config rather than on `CodexAccount` so the
+`__main__` Desktop login can carry one, and the alias route's rejection of `__main__` would be wrong for
+it. The matching CLI is `ocx account priority <provider> <id|main> [<value>]`, reading the current order
+when the value is omitted. Ordering invariants live in
+[`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
+
 ## Sidebar stop button
 
 The dashboard sidebar includes a stop button that calls `POST /api/stop`. The button shows a
 confirmation prompt, then fires the request and accepts the connection drop (the proxy exits). The
 endpoint restores native Codex config, stops any installed service to prevent respawn, and exits.
+
+## Bun runtime provenance
+
+`GET /api/system/memory` may report `bunRuntimeSource` — one of `override`, `bundled`, or
+`process` — describing how the **running service** obtained its Bun binary.
+
+The value is stamped into the launched process's environment as a pair —
+`OCX_BUN_RUNTIME_SOURCE` plus `OCX_BUN_RUNTIME_PATH`, the binary it was minted for — by whichever
+launcher selected that binary: the npm Node launcher, the Windows Task Scheduler wrapper, the
+native WinSW service, launchd, systemd, the Codex autostart shim, and the Windows tray host. Both
+halves come from a single `durableBunRuntime()` resolution at each site, so the marker can never
+describe a different binary than the one actually baked.
+
+Launchers that re-exec `process.execPath` instead of resolving a binary — `ocx ensure`, GUI/Claude/
+OpenCode start, `POST /api/system/restart`, and the update relaunch — go through
+`withProcessRuntimeProvenance()`. An inherited marker is carried forward only when its recorded
+path is the executable about to run, compared through `realpath` so symlinks, junctions, and
+Windows case differences do not break a valid match. The recorded path is what settles this rather
+than re-deriving the original selection: a service installed with a shell-local override keeps
+neither that shell nor its `OPENCODEX_BUN_PATH`, so re-deriving would demote a correct `override`
+to `process` on the first relaunch. A marker that describes some other binary — inheritance
+travels down a process tree and can outlive the binary it was minted for — is dropped in favor of
+what is actually executing.
+
+The Codex shims scope the pair to their `ensure` invocation (an assignment prefix in `sh`,
+`setlocal`/`endlocal` in `cmd`, save-and-restore in PowerShell) rather than exporting it. A shim
+wraps the real `codex`, so an exported marker would be inherited by Codex and everything it
+spawns.
+
+**Trust rule: a reporting surface must never resolve provenance for itself.** Calling
+`durableBunRuntime()` at report time answers "what would this process pick right now", which is
+a different question from "what was the service started with" — and the two diverge exactly when
+the answer matters, such as a `doctor` run in a shell whose `OPENCODEX_BUN_PATH` differs from the
+installed service's. Read-back goes through `reportedBunRuntimeSource()`, which allowlists the
+three values and returns `undefined` for anything else.
+
+**Backward compatibility: absent is a real answer.** A service installed before this marker
+existed reports no provenance, the endpoint omits the field, and consumers must say the origin is
+unknown rather than infer one. `ocx doctor` relies on this to avoid its previous behavior of
+telling a user to set `OPENCODEX_BUN_PATH` when the override was already active (#848). An
+unrecognized wire value is treated as absent rather than passed through.
+
+`bunRevision` remains informational and carries no capability meaning. Provenance does not feed
+the eager-relay decision: the conservative `auto-known-bad` result for canary and otherwise
+unvalidated Bun builds is unchanged (`src/lib/bun-stream-caps.ts`).
 
 ## Startup safety
 
@@ -119,7 +185,7 @@ sidebar entry: it is entered from the dashboard's startup-state row, which links
 current state needs remediation or merely reports how routing is protected. Its warning state is derived from active
 Codex routing plus the actual service and launcher-shim installation state; the
 `codexAutoStart` preference alone is never presented as proof of restart protection. The page shows
-copyable repair commands (`ocx service install`, `ocx codex-shim install`, and `ocx restore`). On
+copyable repair commands (`ocx service repair` for an installed service or `ocx service install` when none is registered, `ocx codex-shim install`, and `ocx restore`). On
 Windows it can also install an owned, per-user system tray. The resident tray owns only its icon,
 home-scoped singleton, and HKCU Run registration; fixed proxy actions delegate to the CLI so drain,
 service conflict handling, native restore, and PID identity remain centralized. Tray presence never
@@ -174,7 +240,7 @@ single forms, and the shell pattern is the part worth keeping stable:
 | Subagents | Featured-roster selection workspace (`gui/src/components/subagents-workspace/`). |
 | Combos | Rail, detail panel, and an add flow (`gui/src/components/ComboWorkspace.tsx`). |
 | Add provider | Catalog browser plus form and OAuth panes (`gui/src/components/provider-catalog/`, `gui/src/components/AddProviderModal.tsx`). |
-| Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`). |
+| Codex accounts | Account pool cards, add-account flow, switch and reset modals (`gui/src/components/CodexAccountPool.tsx`, `gui/src/components/AddCodexAccountModal.tsx`), plus the generic account-targeting picker opt-in on `gui/src/pages/CodexAuth.tsx`. Add/delete/login completion is projected to one boolean before presentation; pending catalog work is a warning, not a failed account mutation. |
 | Dashboard overview | Overview, Providers, and Models tabs at the page level (`gui/src/pages/Dashboard.tsx`), the 30-day token and coverage stats in the overview head (`gui/src/pages/dashboard-overview-head.tsx`), and the effort-cap, injection, maintenance, sidecar, and memory panels below it (`gui/src/pages/dashboard-overview-panels.tsx`). |
 
 Rail selection is component-local state today, so a reload returns to the workspace's default
@@ -186,6 +252,13 @@ OAuth polling API: submit request, waiting-for-login completion, and terminal su
 `POST /api/codex-auth/login/code` succeeds, the GUI must keep the input disabled, expose an
 `aria-live` status message that the code was accepted, and surface repeated `login-status` polling
 network failures as a visible warning instead of silently looking idle again.
+
+The account-targeting control reads the effective flag from `GET /api/settings`; it must not infer
+state from the redacted config DTO or expose selector mappings. It renders no actionable off switch
+before hydration, serializes rapid clicks, rejects stale poll results that started before a mutation,
+and accepts the server-confirmed state after PUT. Product copy describes arbitrary public selectors
+and exact account binding only—there are no built-in Personal/Work roles. A pending catalog refresh
+keeps the saved state and renders fixed `ocx sync` guidance without server/account detail.
 
 ## Usage accounting
 

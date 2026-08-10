@@ -3,14 +3,22 @@ title: Codex App モデル ピッカー
 description: opencodex モデルが、共有 Codex カタログを通じて Codex App、Codex CLI、Codex TUI にどのように表示されるか。
 ---
 
-opencodex は Codex アプリにパッチを適用しません。 Codex CLI/TUI が既に使用しているのと同じ Codex 設定とモデル カタログを書き込みます。 Codex アプリはその共有状態を読み取るため、ルーティングされたモデルは通常の Codex カタログ エントリとしてアプリのモデル ピッカーに表示されます。
+opencodex は Codex アプリにパッチを適用しません。Codex CLI/TUI と同じ Codex 設定とモデル
+カタログを書き込みます。app-server はその共有状態を読み取りますが、一部の Codex Desktop
+リリースは renderer 側で追加の remote allowlist を適用し、routed row を picker から除外する
+ことがあります。明示的な `nativeAlias: true` combo が、この上流不具合向けの互換モードです。
 
-OpenAI エントリには 2 つの安定した ID があります。1 つはプール (デフォルト) または直接アカウントの選択が `codexAccountMode` によって制御されるベア ネイティブ `openai` グループ、もう 1 つは名前空間付きの `openai-apikey/<model>` API キー トランスポートです。アカウント モードを変更してもピッカー ID は変更されません。 API GPT-5.6 エントリは 1,050,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。
+OpenAI エントリには、ネイティブ Codex ログインと、名前空間付きの `openai-apikey/<model>` API キーという 2 つの資格情報ルートがあります。`codexAccountMode` だけを Pool と Direct の間で変更しても、ピッカー ID は変わりません。ただし、`codexAccountPickerEnabled` によって account-qualified picker 行が有効で、`codexAccountNamespaces` に対象アカウントが存在する selector がある場合、opencodex は対応するアカウントごとに `<selector>/<native-openai-model>` 行を追加し、ピッカーでは bare native 行を非表示にします。Selector 名はユーザーが決める公開ラベルであり、組み込みのアカウント role の意味はありません。`selector` 付きの行を選択すると、対応付けられたアカウントだけが使用され、アクティブな Pool アカウントは変更されません。対象を利用できない場合、別のアカウントへ切り替えずにリクエストが失敗します。詳しくは [Codex アカウントの明示的な selector](/reference/configuration/routing/#exact-codex-account-selectors) を参照してください。
 
-資格情報ルートを明示的に選択します。 [プロバイダー] ページで [プール/ダイレクト] を変更します。
+`codexAccountNamespaces` map が空の場合、account-qualified picker 行は off です。空でない map で `codexAccountPickerEnabled` を省略すると、後方互換性のため有効として扱われます。`false` にすると、mapping を削除せず、明示的な `<selector>/<native-openai-model>` routing も無効にせずに、生成された qualified 行を非表示にして picker の bare native 行を復元します。
+
+API GPT-5.6 エントリは 1,050,000 コンテキスト / 922,000 最大入力を使用し、`*-pro` ピッカー ID は `reasoning.mode: "pro"` のベース ワイヤ モデルに解決されますが、ログ、使用状況、およびピッカー状態は仮想 ID を保持します。 API カタログは、`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、およびそれらの 3 つの Pro 仮想 ID の 8 つの ID に固定されています。汎用の `gpt-5.6-pro` エイリアスはありません。コンパクト リクエストは、選択された層を保持しますが、推論オブジェクトなしで基本モデルを送信します。
+
+ピッカー ID で資格情報ルートを明示的に選択します。Pool/Direct は Providers ページで変更します。以下の `<selector>` は、`codexAccountNamespaces` で対応付けたユーザー定義の公開ラベルです。
 
 ```text
-gpt-5.6-sol                         # openai (Pool or Direct option)
+gpt-5.6-sol                         # Pool または Direct による bare Codex ログイン ルート
+<selector>/gpt-5.6-sol              # その selector に対応付けられた保存済み Codex アカウント
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
@@ -44,7 +52,8 @@ visibility = "list"
 
 |ルート |ピッカー ID とカタログのメタデータ |
 | --- | --- |
-| Codex ログイン (プールまたは直接) | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` (372,000 トークンのカタログ ウィンドウ) |
+| Codex ログイン (account-qualified 行が無効) | `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna` などの bare native id を表示し、`codexAccountMode` に従って Pool または Direct を使用します。GPT-5.6 行のカタログ ウィンドウは 372,000 トークンです。 |
+| Codex ログイン (account-qualified 行が有効で、有効な selector あり) | 有効な selector とサポート対象 native model の各組み合わせに `<selector>/<native-openai-model>` 行を表示します。各行は対応付けられたアカウントだけを使用し、bare native 行はピッカーで非表示になります。Native metadata と context window は保持されます。 |
 | OpenAI (API キー) |正確に 8 つの名前空間行: `gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna、および 3 つの `*-pro` 仮想 ID (コンテキスト 1,050,000、8 つすべての最大入力 922,000) |
 |オープンルーター | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna` (1,050,000) |
 |カーソル |静的フォールバックには、`cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、および `cursor/gpt-5.6-luna` (1,000,000)、さらに `cursor/grok-4.5` および `cursor/grok-4.5-fast` (500,000) が含まれます。ライブアカウントの検出により、どれが表示されたままになるかが決まります。 |
@@ -54,12 +63,17 @@ visibility = "list"
 
 ## ネイティブモデルとルーティングモデルの切り替え
 
-ダッシュボードの「モデル」ページでは、両方のモデル ファミリで `disabledModels` を使用します。
+ダッシュボードの Models ページでは、bare native id と routed `provider/model` id の
+`disabledModels` を切り替えられます。Account-qualified
+`<selector>/<native-openai-model>` id も `disabledModels` でサポートされますが、ダッシュボードには
+exact selector 行が表示されず、切り替えることもできません。この id は設定に直接追加してください。
 
-- ルーティング ID は名前空間 (`provider/model`) です。いずれかを無効にすると、同期されたカタログから除外されます
-そして`/v1/models`。
-- ネイティブ GPT ID は裸のナメクジです。無効にすると、カタログ エントリは保持されますが、変更されます。
-`visibility` から `hide` へ。後で再度有効にするために正確なエントリを保存します。裸の OpenAI リスト形状は、無効になっている間は省略されます。
+- Routed provider id は名前空間付き (`provider/model`) です。無効にすると、同期済みカタログと
+  `/v1/models` から除外されます。
+- Account-qualified native id は `<selector>/<native-openai-model>` 形式です。この id を
+  `disabledModels` に設定すると、その selector 行だけが非表示になります。
+- Bare native GPT id は bare slug です。無効にすると、後で再び有効化できるようカタログ
+  エントリを保持したまま、bare 行とそのモデルの全 account-selector 複製行を非表示にします。
 - ネイティブ行はサポートされている静的セットから取得されるため、無効になったネイティブ モデルは引き続き表示されます。
 ダッシュボードに戻り、再びオンにすることができます。
 
@@ -86,13 +100,22 @@ service_tier = "fast"
 fast_mode = true
 ```
 
-ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。 opencodex はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされた非 OpenAI モデルはサービス層メタデータを削除するため、高速オプションが受け入れられない場合はアドバタイズされません。
+ただし、モデル カタログとランタイム リクエスト層 ID は `priority` を使用します。opencodex はその分割を保持します。ネイティブ OpenAI パススルー モデルは高速サポートを維持します。ルーティングされたプロバイダーはケイパビリティでゲートされ、`supportsServiceTier: false` と宣言された場合のみ `service_tier` が削除されます (レジストリは正規 OpenAI を `true`、DeepSeek と Volcengine Ark を `false` に分類します)。未分類のカスタム ゲートウェイは呼び出し元の値をそのまま保持し、注入もされません。そのため、受け入れられない場所で高速オプションがアドバタイズされることはなく、カスタム ゲートウェイは `true` で明示的にオプトインできます。
 
 ## サブエージェントの選択
 
-Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。 `subagentModels` またはダッシュボードのサブエージェント ページを通じて、最大 5 つのベア ネイティブ ID または名前空間付き `provider/model` ID を選択します。 opencodex は、これらのエントリに選択された順序で優先度 0 ～ 4 を与えます。他のモデルは引き続き正確な ID で呼び出すことができます。
+Codex は、ピッカーに表示されるカタログ エントリを `priority` の昇順で並べ替え、最初の 5 つを `spawn_agent` モデル オーバーライドとしてアドバタイズします。ダッシュボードの Subagents ページでは、bare native id または routed `provider/model` id を最大 5 つ選択して保存できます。手動で設定した `subagentModels` は account-qualified `<selector>/<native-openai-model>` id も受け付けますが、ダッシュボードにはこれらの exact id が表示されません。ページを保存すると、リストはダッシュボードに表示される選択肢で置き換えられます。opencodex は選択順に低いカタログ priority を割り当てます。account-qualified picker 行が有効な場合、bare native の選択は selector-qualified グループに展開されます。他のモデルは引き続き正確な ID で呼び出すことができます。
 
 注目モデルのリストは、ダッシュボードの **サブエージェント委任** の選択とは別のものです。 Codex が提供するものを最初にオーバーライドするものを制御します。モデルを選択したり、委任をトリガーしたりすることはありません。
+
+## Desktop リモートサーバー
+
+Codex Desktop のリモートサーバーモードでは、クライアント自身の `available_models` 許可リストでピッカーがフィルタリングされます(リモートの `use_hidden_models` 設定が有効な場合)。ルーティングされたカタログエントリは引き続きロードされ提供されます。`model/list` はそれらを返し、バンドルされた CLI も読み取れますが、Desktop レンダラーは表示前にこのネイティブのみの許可リストにないものを破棄します。opencodex はこのリストに介入できません。上流のバグは [openai/codex#19694](https://github.com/openai/codex/issues/19694) で追跡されています。
+
+Desktop が許可リストの制御を提供するまでは:
+
+- リモートマシンの `~/.codex/config.toml` でモデルを直接設定します(例: `model = "input/grok-4.5"`)。ピッカーには `Custom` と表示される場合がありますが、リクエストは設定されたルーティングモデルを使用します。
+- Desktop ピッカーの代わりに Codex CLI または TUI を使用します。これらは許可リストを適用せず、ルーティングモデルを通常どおり一覧表示します。
 
 ## モデルの状態を更新しています
 

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
 import { antigravitySessionId, isLikelyRealThoughtSignature } from "../src/adapters/google-antigravity-wire";
-import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel } from "../src/providers/antigravity-models";
+import { ANTIGRAVITY_MODELS, ANTIGRAVITY_MODEL_EFFORTS, canonicalAntigravityUsageModel, parseAntigravityAvailableModels } from "../src/providers/antigravity-models";
+import { MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, MODEL_DISCOVERY_MAX_MODELS } from "../src/providers/model-discovery";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -118,6 +119,81 @@ describe("antigravity CCA envelope", () => {
     }
   });
 
+  test("collapses a complete CCA Gemini tier set but retains partial sets as wire IDs", () => {
+    const payload = (modelIds: string[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-medium",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual(["gemini-3.6-flash"]);
+    expect(parseAntigravityAvailableModels(payload([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]))?.map(model => model.id)).toEqual([
+      "gemini-3.6-flash-low",
+      "gemini-3.6-flash-high",
+    ]);
+  });
+
+  test("rejects malformed and oversized CCA agent-model lists", () => {
+    const payload = (modelIds: unknown[]) => ({
+      models: Object.fromEntries(modelIds.map(id => [String(id), { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds }] }],
+    });
+
+    for (const invalidId of [" ", "bad\u0000id", "x".repeat(MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH + 1)]) {
+      expect(parseAntigravityAvailableModels(payload([invalidId]))).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{
+        modelIds: Array.from({ length: MODEL_DISCOVERY_MAX_MODELS + 1 }, (_, index) => `model-${index}`),
+      }] }],
+    })).toBeNull();
+  });
+
+  test("rejects malformed CCA agent-model containers and missing agent metadata", () => {
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{}],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: {} }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: {} }] }],
+    })).toBeNull();
+    expect(parseAntigravityAvailableModels({
+      models: {},
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+    })).toBeNull();
+  });
+
+  test("normalizes untrusted CCA model limits before publishing a catalog", () => {
+    const oversized = Array.from(
+      { length: MODEL_DISCOVERY_MAX_MODELS + 1 },
+      (_, index) => `model-${index}`,
+    );
+    const payload = {
+      models: Object.fromEntries(oversized.map(id => [id, { maxTokens: 1_048_576 }])),
+      agentModelSorts: [{ groups: [{ modelIds: oversized }] }],
+    };
+    for (const limit of [Number.NaN, Infinity, MODEL_DISCOVERY_MAX_MODELS + 1]) {
+      expect(parseAntigravityAvailableModels(payload, limit)).toBeNull();
+    }
+    expect(parseAntigravityAvailableModels({
+      models: { "agent-model": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["agent-model"] }] }],
+      imageGenerationModelIds: ["gemini-3.1-flash-image"],
+    }, 1)).toBeNull();
+  });
+
   test("throws when no project id is available", async () => {
     const noProj = { ...provider, project: undefined } as OcxProviderConfig;
     await expect(createGoogleAdapter(noProj).buildRequest(parsed())).rejects.toThrow(/project id/);
@@ -126,6 +202,86 @@ describe("antigravity CCA envelope", () => {
   test("sessionId is deterministic for the same first user text", () => {
     expect(antigravitySessionId(parsed("same"))).toBe(antigravitySessionId(parsed("same")));
     expect(antigravitySessionId(parsed("a"))).not.toBe(antigravitySessionId(parsed("b")));
+  });
+
+  // #1297. The id must be identical on consecutive turns or the replay cache stops
+  // finding thought signatures. First-user text only holds while that message
+  // survives verbatim, and Codex compacts long histories.
+  function threaded(text: string, threadId?: string): OcxParsedRequest {
+    const base = parsed(text) as OcxParsedRequest & { _clientThreadId?: string };
+    if (threadId) base._clientThreadId = threadId;
+    return base;
+  }
+
+  test("#1297: one thread keeps one session id after history compaction changes the first message", () => {
+    // Turn N and turn N+1 of the same conversation, where the client has dropped
+    // or summarised the earliest user message between them.
+    expect(antigravitySessionId(threaded("original first message", "thread-a")))
+      .toBe(antigravitySessionId(threaded("summary of earlier turns", "thread-a")));
+  });
+
+  test("#1297: distinct threads do not collide even with identical text", () => {
+    expect(antigravitySessionId(threaded("hi", "thread-a")))
+      .not.toBe(antigravitySessionId(threaded("hi", "thread-b")));
+  });
+
+  test("#1297: promptCacheKey does not influence the id", () => {
+    // Deliberately not the anchor: it is arbitrary Responses input and is shared
+    // across conversations for some clients, so it identifies a cache cohort.
+    const withKey = threaded("same text", "thread-a") as OcxParsedRequest;
+    (withKey.options as Record<string, unknown>).promptCacheKey = "cohort-1";
+    const otherKey = threaded("same text", "thread-a") as OcxParsedRequest;
+    (otherKey.options as Record<string, unknown>).promptCacheKey = "cohort-2";
+    expect(antigravitySessionId(withKey)).toBe(antigravitySessionId(otherKey));
+  });
+
+  test("#1297: the prefix separates a thread id from the bare same text", () => {
+    // Scope of the guarantee, stated exactly: prefixing stops the RAW-EQUAL case.
+    expect(antigravitySessionId(threaded("thread-a", undefined)))
+      .not.toBe(antigravitySessionId(threaded("anything", "thread-a")));
+    // It is not full domain separation — a first message that is literally the
+    // prefixed form still shares the preimage. Asserted rather than hidden,
+    // because tagging the text anchor too would change every existing
+    // Google-visible id for live conversations. Harmless here: signatures are
+    // keyed on functionCall identity, so a shared id misattributes nothing.
+    expect(antigravitySessionId(threaded("codex-thread:thread-a", undefined)))
+      .toBe(antigravitySessionId(threaded("anything", "thread-a")));
+  });
+
+  test("#1297: clients without the thread header keep the text anchor", () => {
+    // A scoped repair, not a universal one — this behaviour is unchanged.
+    expect(antigravitySessionId(threaded("same", undefined)))
+      .toBe(antigravitySessionId(threaded("same", undefined)));
+    expect(antigravitySessionId(threaded("a", undefined)))
+      .not.toBe(antigravitySessionId(threaded("b", undefined)));
+  });
+
+  test("#1297: the wire id shape is unchanged", () => {
+    // It is sent to Google as `request.sessionId`, so the format must not move:
+    // "-" followed by a masked uint63.
+    for (const id of [
+      antigravitySessionId(threaded("text only", undefined)),
+      antigravitySessionId(threaded("text", "thread-a")),
+    ]) {
+      expect(id).toMatch(/^-\d+$/);
+      expect(BigInt(id.slice(1))).toBeLessThanOrEqual(0x7fffffffffffffffn);
+    }
+  });
+
+  test("#1297: the built CCA envelope carries the stable sessionId across turns", async () => {
+    // The helper tests above prove the derivation; this one proves the value
+    // actually reaches `request.sessionId` on the wire, which is what Google
+    // sees and what the CCA replay path is keyed by.
+    const adapter = createGoogleAdapter(provider);
+    const turnOne = JSON.parse((await adapter.buildRequest(threaded("original first message", "thread-a"))).body);
+    const turnTwo = JSON.parse((await adapter.buildRequest(threaded("summary of earlier turns", "thread-a"))).body);
+
+    expect(turnOne.request.sessionId).toBe(antigravitySessionId(threaded("original first message", "thread-a")));
+    expect(turnTwo.request.sessionId).toBe(turnOne.request.sessionId);
+
+    // A different thread must still land on a different session.
+    const other = JSON.parse((await adapter.buildRequest(threaded("original first message", "thread-b"))).body);
+    expect(other.request.sessionId).not.toBe(turnOne.request.sessionId);
   });
 
   test("claude-on-antigravity forces toolConfig.functionCallingConfig.mode=VALIDATED", async () => {

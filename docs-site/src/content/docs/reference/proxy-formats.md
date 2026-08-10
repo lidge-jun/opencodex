@@ -65,6 +65,13 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
 
+Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
+SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
+with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket
+bridge, the same condition emits a 502 `websocket_protocol_error` and cancels the upstream reader.
+A complete Responses terminal frame is authoritative: oversized or malformed trailing bytes after
+that terminal are dropped rather than replacing the completed turn with a transport failure.
+
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
 
@@ -137,6 +144,13 @@ This endpoint accepts OpenAI-compatible Chat Completions requests with a require
 non-empty `messages` array. It translates system, user, assistant, and tool messages into internal
 Responses items; translates function tools, tool choice, images, reasoning effort, and supported
 response formats; runs the normal Responses routing pipeline; then translates the result back.
+
+Structured output is part of that translation: `response_format` with `json_object` or
+`json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
+equivalent request field is `text.format`: native Responses routes preserve it in the raw
+Responses body, and it is translated to `response_format` when the model routes to an
+`openai-chat` provider. A backend without structured-output support returns its own error
+instead of the proxy rejecting the request locally.
 
 Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE objects with
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and

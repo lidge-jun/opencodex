@@ -5,9 +5,16 @@ import { applyProxyEnv, loadConfig } from "../config";
 import type { OcxConfig } from "../types";
 import { collectOrcaCodexHomeDiagnostic } from "./home";
 import { summarizeComboCatalogOmissions, type ComboCatalogOmission } from "./catalog/aggregation";
+import { shouldSyncCodexOnStart } from "./desired-state";
+import { admitCodexWrite, type CodexAdmission } from "./admission";
 
 export interface CodexSyncResult {
+  /** `skipped` is policy truth, never evidence that Codex was written. */
+  status: "applied" | "skipped" | "refused";
   ok: boolean;
+  skippedReason?: "desired_disabled";
+  /** Present when unattended convergence refused another service's native home. */
+  authority?: "service-home";
   added: number;
   catalogPath: string | null;
   catalogExists: boolean;
@@ -21,9 +28,13 @@ export interface CodexSyncResult {
   projectConfigGrouped?: { path: string; issues: string[]; bypass: string }[];
 }
 
+type CodexSyncAdmission = Extract<CodexAdmission, { kind: "refused" }> | { readonly kind: "admitted" };
+
 interface CodexSyncDeps {
   refreshCodexModelCatalog: typeof refreshCodexModelCatalog;
   injectCodexConfig: typeof injectCodexConfig;
+  /** The sync entry only needs this admission's service-home verdict. */
+  admitCodexWrite?: () => CodexSyncAdmission;
   currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
   collectCodexHomeDiagnostic?: typeof collectOrcaCodexHomeDiagnostic;
 }
@@ -52,6 +63,40 @@ export async function syncModelsToCodex(
   log: Pick<Console, "log" | "error"> | null = console,
   deps: CodexSyncDeps = defaultDeps,
 ): Promise<CodexSyncResult> {
+  // `config` can be the server's startup object. The decision, however, is a
+  // durable user switch and must be read again at this production boundary: a
+  // PUT OFF while provider discovery is in flight cannot be allowed to commit
+  // through an older captured object.
+  if (!shouldSyncCodexOnStart(loadConfig())) {
+    return {
+      status: "skipped",
+      skippedReason: "desired_disabled",
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: "Codex integration is OFF; no Codex config, catalog, cache, or history was changed.",
+    };
+  }
+  // Catalog gathering precedes injection and can itself write the native
+  // catalog/cache. It therefore needs the same unattended service-home veto as
+  // the injector, before it gets a chance to create any artifact.
+  const admission = (deps.admitCodexWrite ?? admitCodexWrite)();
+  if (admission.kind === "refused" && admission.authority === "service-home") {
+    return {
+      status: "refused",
+      authority: "service-home",
+      ok: false,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: admission.message,
+    };
+  }
   const p = port ?? config.port ?? 10100;
   const externalProvider = (deps.currentExternalCodexModelProvider ?? currentExternalCodexModelProvider)();
   if (externalProvider) {
@@ -59,6 +104,7 @@ export async function syncModelsToCodex(
     log?.log(result.message);
     reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
     return {
+      status: "applied",
       ok: result.success,
       added: 0,
       catalogPath: null,
@@ -108,10 +154,25 @@ export async function syncModelsToCodex(
   }
 
   const result = await deps.injectCodexConfig(p, config, { catalogPath: catalogPathForInjection });
+  if (result.status === "skipped") {
+    return {
+      status: "skipped",
+      // The apply direction's only under-lock policy skip is desired OFF.
+      skippedReason: "desired_disabled",
+      ok: true,
+      added: 0,
+      catalogPath: null,
+      catalogExists: false,
+      catalogWritten: false,
+      cacheSynced: false,
+      message: result.message,
+    };
+  }
   log?.log(result.message);
   reportCodexHomeTarget(log, deps.collectCodexHomeDiagnostic ?? collectOrcaCodexHomeDiagnostic);
   const projectConfigWarnings = printProjectCodexConfigWarnings(log, { cwd: process.cwd() });
   return {
+    status: "applied",
     ok: result.success,
     added,
     catalogPath,

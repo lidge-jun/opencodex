@@ -32,7 +32,7 @@ test("supports1m is true at and above the threshold, false below it", async () =
     // Live-backed assertions against the real catalog: 1 MiB windows qualify.
     const oneMiB = state.models.find(m => m.route === "google-antigravity/gemini-3.1-pro");
     const exact1M = state.models.find(m => m.route === "alibaba-token-plan-intl/glm-5.2");
-    const below = state.models.find(m => m.route === "alibaba-token-plan-intl/qwen3.8-max-preview");
+    const below = state.models.find(m => m.route === "alibaba-token-plan-intl/qwen3.8-max");
     const blank = state.models.find(m => m.route === "anthropic/claude-opus-4-6");
 
     if (oneMiB) expect(oneMiB.supports1m).toBe(true);       // 1_048_576

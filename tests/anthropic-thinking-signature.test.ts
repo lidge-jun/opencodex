@@ -166,6 +166,39 @@ describe("parser ocxr1 decode + anthropic replay", () => {
     expect(thinking?.redacted).toEqual(["RED1"]);
   });
 
+  // Kiro emits its reasoningContentEvent at the END of an assistant turn (after content AND tool
+  // calls), so a krc-only envelope belongs to the turn BEFORE it. Folding it forward like ordinary
+  // reasoning would attach turn N's blob to turn N+1 and hand Kiro a mismatched blob.
+  test("krc-only reasoning attaches to the preceding assistant turn", async () => {
+    const parsed = parseRequest({
+      model: "kiro/gpt-5.6-sol",
+      input: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "first" }] },
+        { type: "reasoning", id: "rs_1", summary: [], encrypted_content: encodeReasoningEnvelope({ krc: "BLOB1" }) },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "more" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "second" }] },
+      ],
+    });
+    const assistants = parsed.context.messages.filter(m => m.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect((assistants[0] as { kiroRedactedReasoning?: string }).kiroRedactedReasoning).toBe("BLOB1");
+    expect((assistants[1] as { kiroRedactedReasoning?: string }).kiroRedactedReasoning).toBeUndefined();
+  });
+
+  test("krc-only reasoning with no preceding assistant turn is dropped, not mis-paired", async () => {
+    const parsed = parseRequest({
+      model: "kiro/gpt-5.6-sol",
+      input: [
+        { type: "reasoning", id: "rs_1", summary: [], encrypted_content: encodeReasoningEnvelope({ krc: "ORPHAN" }) },
+        { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+        { type: "message", role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+      ],
+    });
+    const assistant = parsed.context.messages.find(m => m.role === "assistant");
+    expect((assistant as { kiroRedactedReasoning?: string }).kiroRedactedReasoning).toBeUndefined();
+  });
+
   test("hidden signed text (txt) is restored as the thinking body", async () => {
     const encrypted = encodeReasoningEnvelope({ sig: "RealSig1234567890==", txt: "the hidden signed text" });
     const parsed = parseRequest({

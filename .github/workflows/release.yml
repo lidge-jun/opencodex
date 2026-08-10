@@ -60,7 +60,7 @@ jobs:
             exit 1
           fi
 
-      # opencodex is bun-native (the prepublishOnly GUI build + typecheck run under bun).
+      # opencodex is bun-native (the prepublishOnly audit, GUI build, and typecheck run under bun).
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -92,6 +92,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Dependency audit (high severity)
+        run: bun run audit:high
+
       - name: Verify version matches package.json
         env:
           RELEASE_VERSION: ${{ inputs.version }}
@@ -103,6 +106,8 @@ jobs:
             exit 1;
           }
 
+      # The exact-SHA CI gate includes the hosted Linux, Windows, and macOS
+      # keyring smoke matrix. Do not duplicate its Linux bootstrap here.
       - name: Require successful Cross-platform CI for this commit
         env:
           GH_TOKEN: ${{ github.token }}
@@ -140,22 +145,34 @@ jobs:
           ci_url="$(
             gh run list \
               --workflow ci.yml \
+              --branch "${GITHUB_REF#refs/heads/}" \
               --commit "$GITHUB_SHA" \
+              --event push \
               --status success \
               --limit 10 \
-              --json conclusion,headSha,url,workflowName \
+              --json url \
               --jq '.[0].url // ""'
           )"
 
           if [ -z "$ci_url" ]; then
-            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA}. Wait for CI to pass before releasing."
+            # Deliberately narrower than "any successful ci.yml run for this SHA".
+            # The release branch's own push run is the one whose trigger set,
+            # runner selection, and job graph match what is being published —
+            # a green PR run for the same SHA ran against a merge ref with a
+            # different trigger context. Accepting it here would let a publish
+            # proceed while the promotion run was still pending, or had failed.
+            echo "::error::No successful Cross-platform CI run found for ${GITHUB_SHA} on ${GITHUB_REF#refs/heads/} (push event). A pull-request run does not qualify. Wait for the promotion run to pass before releasing."
             gh run list --workflow ci.yml --commit "$GITHUB_SHA" --limit 10 || true
             exit 1
           fi
 
           echo "Cross-platform CI passed for ${GITHUB_SHA}: ${ci_url}"
 
-          # Notes / service baseline:
+          # Service baseline (lineage-relative): merged tags only, so the
+          # changed-files gate compares against the last release actually
+          # reachable from this commit. The release-notes baseline below uses the
+          # full tag set instead, so a stable on another lineage can anchor the
+          # changelog range.
           # - Preview: newest prior release of either channel (stable or preview). A
           #   preview→preview-only baseline skips a shipped stable and restates it.
           # - Stable: newest prior stable only (matching preview carry adjusts the
@@ -297,8 +314,14 @@ jobs:
 
           # Channel previous tag for Full Changelog + default notes baseline.
           # Preview baselines any prior release; stable baselines prior stable only.
+          # Read the FULL tag set: stable tags live on main's lineage, which the
+          # preview branch does not carry, and a trailing same-core preview
+          # (vX.Y.Z-preview.* shipped after vX.Y.Z) must not hide the stable from
+          # the compare range. The helper's semver ordering already ranks the
+          # stable above its own trailing preview, so the full tag list yields
+          # v2.9.1 → v2.10.0-preview instead of v2.9.1-preview → v2.10.0-preview.
           previous_tag="$(
-            git tag --merged HEAD --list 'v[0-9]*' |
+            git tag --list 'v[0-9]*' |
               bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
           )"
           npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
@@ -317,10 +340,8 @@ jobs:
           notes_file="$(mktemp)"
           carried_file="$(mktemp)"
           delta_file="$(mktemp)"
-          commits_file="$(mktemp)"
           : > "$carried_file"
           : > "$delta_file"
-          : > "$commits_file"
 
           # Stable releases after matching previews: aggregate every matching preview
           # changelog (oldest→newest; each preview body is incremental), then only
@@ -397,7 +418,7 @@ jobs:
           else
             # First release on this channel: never call generate-notes without previous_tag_name.
             # GitHub would baseline the newest repo tag, which may belong to the other channel.
-            echo "::notice::No previous channel tag; skipping generate-notes (commits-only notes)"
+            echo "::notice::No previous channel tag; skipping generate-notes (minimal notes)"
           fi
 
           # Rewrite takeover credits on both carried preview notes and the since-preview
@@ -416,36 +437,22 @@ jobs:
               --out "$delta_file"
           fi
 
-          if [ -n "$notes_range_start" ]; then
-            commit_range="${notes_range_start}..${GITHUB_SHA}"
-            git log --pretty=format:'- %s (%h)' "$commit_range" > "$commits_file"
-          else
-            # First release on a channel has no previous tag; cap history so the notes
-            # body stays within GitHub release size limits.
-            git log --pretty=format:'- %s (%h)' --max-count=100 "$GITHUB_SHA" > "$commits_file"
-          fi
-          # `--pretty=format:` omits the trailing newline; normalize for downstream readers.
-          if [ -s "$commits_file" ]; then
-            printf '\n' >> "$commits_file"
-          fi
-
-          assemble_args=(
-            bun scripts/release-notes.ts assemble
+          render_args=(
+            bun scripts/release-notes.ts render
             --npm-metadata "$npm_metadata"
             --carried "$carried_file"
             --delta "$delta_file"
-            --commits "$commits_file"
             --out "$notes_file"
             --compare-to "$release_tag"
             --repository "$GITHUB_REPOSITORY"
           )
           # Prefer the stable-channel previous tag for the compare link when present.
           if [ -n "$previous_tag" ]; then
-            assemble_args+=(--compare-from "$previous_tag")
+            render_args+=(--compare-from "$previous_tag")
           elif [ -n "$notes_range_start" ]; then
-            assemble_args+=(--compare-from "$notes_range_start")
+            render_args+=(--compare-from "$notes_range_start")
           fi
-          "${assemble_args[@]}"
+          "${render_args[@]}"
 
           if [ -z "$existing_tag_sha" ]; then
             git tag "$release_tag" "$GITHUB_SHA"

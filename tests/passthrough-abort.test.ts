@@ -46,16 +46,24 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
       capsSource.indexOf("export function selectEagerPath"),
     );
 
-    expect(sseBranch).toContain("upstreamResponse.body.tee()");
-    // win32 must receive the tee'd body untouched when no client rewrite is required — no JS pull
-    // wrapper on the default path (Bun#32111 segfault).
+    expect(sseBranch).toContain("const terminalRepairPolicy = providerModelResponsesTerminalRepair(");
+    expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
+    expect(sseBranch).toContain(": upstreamResponse.body;");
+    expect(sseBranch).toContain("passthroughSseBody.tee()");
+    // Rewrite traffic is derived from the finalized block chain so every
+    // provider-specific transform participates in the platform gate.
     expect(sseBranch).toContain("const repairConfig = route.provider.responsesItemIdRepair;");
-    expect(sseBranch).toContain("const needsClientRewrite = imageGenCallAliases.size > 0");
+    expect(sseBranch).toContain('const githubCopilotRepairEnabled = route.providerName === "github-copilot";');
+    expect(sseBranch).toContain("const needsClientRewrite = clientBlockRewrite !== undefined;");
     expect(sseBranch).toContain("new Response(eagerBody");
-    expect(sseBranch).toContain("const rewrittenBody = payloadRewrites.length > 0");
-    expect(sseBranch).toContain('process.platform === "win32"');
-    expect(sseBranch).toContain("&& !needsClientRewrite");
-    expect(sseBranch).toContain("? nativeBody");
+    expect(sseBranch).toContain("const rewrittenBody = clientBlockRewrite !== undefined");
+    expect(sseBranch).toContain("eagerPath?.useEagerRelay || win32EagerRewrite");
+    expect(sseBranch).not.toContain("win32TerminalRelay");
+    // #864: win32 traffic that DOES need a client rewrite takes the eager single
+    // reader with the payload rewrite applied inline — never the tee()+JS-pull
+    // chain that loses the terminal block on Windows (Bun#32111).
+    expect(sseBranch).toContain("win32EagerRewrite");
+    expect(sseBranch).toContain("rewriteBlocks: clientBlockRewrite");
     // Elsewhere the failed-tail relay converts mid-stream resets into a clean response.failed.
     expect(sseBranch).toContain("relaySseWithFailedTail(rewrittenBody, upstream");
     expect(sseBranch).toContain("new Response(clientBody");
@@ -66,7 +74,7 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("config.streamMode ?? \"auto\",");
     expect(selector).toContain('platform !== "win32" && platform !== "darwin"');
     expect(selector).toContain('decision.reason === "config-eager"');
-    expect(sseBranch).toContain("relaySseEagerBounded(upstreamResponse.body, turnAc,");
+    expect(sseBranch).toContain("relaySseEagerBounded(passthroughSseBody, turnAc,");
     expect(sseBranch).not.toContain("relaySseWithHeartbeat(");
     expect(sseBranch).not.toContain("trackStreamLifetime(");
     expect(logWrapper.indexOf("isNativePassthroughSseResponse(response)")).toBeGreaterThanOrEqual(0);

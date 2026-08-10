@@ -38,19 +38,19 @@ to GUI static serving.
 Native passthrough SSE has TWO shapes, selected per request in
 `src/server/responses/core.ts`:
 
-- **Default: tee + background inspection.** `upstreamResponse.body.tee()` sends
-  branch[0] to the client (pure native relay on win32 without any client-facing
-  rewrite — the Bun#32111 crash workaround; a JS relay elsewhere) while branch[1] is
+- **Default outside Windows: tee + background inspection.** `upstreamResponse.body.tee()` sends
+  branch[0] through a terminal-aware client relay while branch[1] is
   drained eagerly by `consumeForInspection`/`consumeForResponseLogMetadata`
   for terminal-outcome recording, quota, the passthrough continuation cache,
   and request logs. This remains the default shape on bundled Bun 1.3.14.
-- **Gated: eager bounded relay** (`src/server/relay-eager.ts`). win32 and darwin
-  no-client-rewrite traffic only (neither image-gen aliases nor item-id repair),
-  selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`. Windows `auto`
-  becomes eager only on runtimes proven to carry the Bun#32111 fix
-  (`MIN_FIXED_BUN_VERSION`, null until a bundle bump), while explicit
-  `streamMode: "eager-relay"` opts in today. Darwin is explicit-only: `auto`
-  stays tee even after a future threshold bump. One eager reader + byte-bounded
+- **Terminal-aware eager bounded relay** (`src/server/relay-eager.ts`). Windows
+  uses this single-reader shape for rewrite traffic and for no-rewrite traffic
+  selected by `selectEagerPath` in `src/lib/bun-stream-caps.ts`; the latter keeps
+  `legacy-tee` and known-bad-runtime `auto` on tee as documented. When selected,
+  `response.completed` closes the client stream even if upstream keeps HTTP/SSE
+  alive. Darwin uses it for no-client-rewrite traffic only (neither image-gen
+  aliases nor item-id repair) and is explicit-only: `auto` stays tee even after
+  a future threshold bump. One eager reader + byte-bounded
   client queue + post-cancel bounded discard-drain replaces the tee and goes
   directly to the response without a JS rewrite wrapper, preserving the full
   inspection side-effect set (shared `createSseInspector` factory in `relay.ts`)
@@ -60,6 +60,29 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
+
+Translated response request-log tracking and the heartbeat relay also reuse
+`createSseInspector`. This keeps every client-facing SSE observation path on
+the same byte-bounded, discard-and-resynchronize frame policy and ensures the
+request-log, first-output, and terminal observers share one payload parse.
+
+## Standalone Search and exact account selectors
+
+`POST /v1/alpha/search` retains the selected model in its request body. When that value is an
+account-qualified native selector, the server resolves the public namespace, uses only the mapped
+stored Codex credential, and sends the bare native model upstream. That exact path is fail-closed:
+it does not consult Pool active state or affinity when selecting, and its outcomes cannot rotate
+the active Pool account. An account-wide credential failure still quarantines that credential and
+clears stale ordinary Pool affinities so they cannot reappear after reauthentication. Quota and
+transient outcomes from an exact request leave Pool affinities untouched. Ordinary search requests
+keep the normal Direct/Pool sidecar behavior.
+
+Standalone Images and Live requests currently carry neither the account-qualified model selector
+nor a trustworthy thread correlation from the Codex client. They therefore retain normal provider
+routing. Do not infer an exact account from caller-supplied account headers, process-global last
+selection, connection identity, or other ambient state; concurrent threads could cross-route
+credentials. Extending exact routing to those endpoints requires an opaque client correlation that
+can be bound server-side to a previously validated selector.
 
 ## Standalone Images
 
@@ -96,6 +119,17 @@ image-gen declaration is replaced by a usable `image_gen__<inner-name>` alias, t
 hosted `image_generation` and deduplicates aliases in stable container order. Empty or malformed
 namespaces do not remove the hosted fallback. Discovery and normalization span both top-level
 `body.tools` and Codex Desktop Responses Lite `input[].type = "additional_tools"` containers.
+
+For a model explicitly listed in `modelPreferHostedTools`, a non-forward Responses provider may opt
+to remove colliding client `image_gen` declarations before this normalization and rewrite their
+selectors to hosted `image_generation`, so a provider-reserved hosted tool takes precedence without
+loosening a caller's tool-choice restriction. The opt-in is intentionally model-scoped: the default
+alias path remains safest for ordinary public Responses endpoints.
+
+For OpenAI API virtual `-pro` models, preference lookup checks the selected public ID first and
+uses the resolved base wire-model ID as a fallback. `modelAdapters` resolves the public ID first and
+the base ID second; the second pass selects the final adapter, and configuration validation mirrors
+both steps.
 
 Client-facing API-key responses perform the inverse mapping: JSON output and SSE function-call
 items restore `{ namespace: "image_gen", name: "<inner-name>" }` so Codex can dispatch the local
@@ -177,6 +211,34 @@ the upgrade with 426 so Codex falls back to HTTP cleanly.
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
+Registry-declared per-model compatibility hints (`modelResponsesUpstreamStreaming`) may ask the
+upstream Responses endpoint for bounded JSON on ANY client transport — WebSocket or ordinary
+HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
+(`src/server/responses-json-events.ts`): WS turns send the frames as WebSocket messages, while
+HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
+output_item.done → terminal → `[DONE]`). No production registry entry currently opts in:
+DeepSeek V4 Flash used this path while its public-beta Responses stream was suspected of not
+closing on the terminal event, but the official guide documents a
+`response.completed`/`response.incomplete`/`response.failed` terminal with no `data: [DONE]`
+sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal. The relay's
+terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
+`[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
+rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
+`tests/deepseek-inbound-wire.test.ts`.
+Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
+encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
+
+DeepSeek V4 Flash keeps native Responses streaming for progressive reasoning, text, and tool-call
+delivery. Its registry entry enables a model-scoped terminal repair before the existing
+inspection/client split. A real `response.completed`, `response.failed`, or `response.incomplete`
+event always passes through unchanged. If every opened output item has a structurally complete
+`output_item.done` and no real terminal arrives for five seconds, the repair emits exactly one
+`response.completed` snapshot and closes the upstream reader. EOF or `[DONE]` uses the same strict
+completion check; open, malformed, duplicate, contradictory, or unknown output graphs fail closed
+as `response.incomplete`, never synthetic success. The repair shares the per-turn translator byte
+budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
+WebSocket clients observe the same canonical lifecycle.
+
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
 `response.failed` frame is sent; otherwise `response.completed` carries through the original status.
@@ -218,6 +280,33 @@ deadline for the next client replay. Retries are bounded to three attempts; hard
 ordinary 5xx errors are not replayed. Completion fallback rebuilds only replayable text, preserves
 the original user/tool-result turn for reasoning-only attempts, supplies neutral non-empty carriers
 for empty tool output, and validates role alternation plus tool-use/result pairing before transport.
+
+Provider-level `retryOn429` (devlog 260802_429_same_target_retry) is the generic, opt-in
+same-target 429 retry for API-key providers (`authMode: "key"`), primarily single-key pools
+that cannot use multi-key failover. In the pre-stream recovery loop, a 429 waits (`Retry-After`
+or the fixed interval, capped at `maxIntervalMs`) and replays the identical request on the same
+key before any failover, up to `attempts` extra times per request (the budget lives outside the
+recovery loop, so a 413/401 replay cannot re-arm it). The same wait-and-replay applies to every
+other key-auth surface that bypasses that loop: the Responses passthrough wire (e.g. the
+built-in DeepSeek preset), the image/video bridge and web-search sidecar loops (before their
+`on429` key rotation), and Anthropic terminal-guard continuations (before key/account
+failover). The policy covers HTTP-capable adapters only: custom `runTurn` transports in the
+image loop run through an event queue and never receive an HTTP status, so they are outside
+the HTTP retry scope and cannot replay a 429. Codex never retries 429 client-side (openai/codex#30471), so this is the only
+defense for those providers; the final 429 still carries `Retry-After` for clients that honor
+it. Concurrent requests each honor their own policy — there is no process-wide shared cooldown
+(unlike the Kiro pattern), so a rate-limit storm multiplies upstream volume by at most
+`attempts + poolKeys` per request (same-key replays, then failover keys; the pool size is the
+operator-configured `apiKeyPool` length, fixed for the duration of the request). Every surface
+releases (and awaits the cancellation of) the unread 429 body before the backoff, records the
+`rate-limit-429` recovery kind on replay sends, and the bridge loops clear the old
+response-header deadline before the wait and start a fresh one afterward — client cancellation
+is re-checked after the wait, so 499 always wins over a stale-deadline edge, and backoffs never
+consume the connect budget or surface as a 504. The wait is abort-aware:
+once the server observes the client disconnect (Bun propagates it asynchronously, observed
+1–10 s), the sleep is interrupted, the unread 429 body is released, and the request is
+cancelled with 499 before any replay; because the propagation is async, a replay may precede
+the cancel if the interval elapses first (bounded by the same `attempts` budget).
 
 [Decision Log]
 - 목적과 의도: Prevent Kiro progress from becoming a false final answer, reject invalid empty completion retries, and stop concurrent transient 429s from consuming independent retry budgets.
@@ -267,7 +356,7 @@ replays are explicit and receive the same repair.
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
-## Cursor Router optimization levels
+## Cursor parameterized models
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
 `cursor/auto` preserves Cursor's team/account default, while `cursor/auto-cost`,
@@ -276,6 +365,12 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 `AgentRunRequest.requested_model.parameters` with the `optimization` parameter; this is the same
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
+
+`cursor/grok-4.5-fast` is also a stable Codex-facing row, but current Cursor clients do not request
+it as a flat model slug. OpenCodex sends `grok-4.5` through `requested_model` with separate `effort`
+and `fast=true` parameters, leaving legacy `model_details` unset for that parameterized external
+selection. Live discovery still recognizes Cursor's flattened `cursor-grok-4.5-{effort}-fast`
+variants, plus the older `grok-4.5-fast-{effort}` ordering, as availability evidence only.
 
 ## Cursor active-context usage
 
@@ -299,6 +394,26 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when historical markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
+
+## Google tool-call thought-signature replay
+
+Gemini may attach an opaque `thoughtSignature` to a `functionCall` and requires that exact value on
+the matching model turn when its tool result is submitted. Antigravity and Vertex share the existing
+bounded TTL/LRU replay store, keyed by compiled function-call name plus canonical arguments. Vertex
+prefixes its cache model key with the transport, project, and location identity, so a signature
+minted by Vertex cannot be sent to Antigravity even when both routes expose the same public model id.
+Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls back to the existing
+first-user-message derivation for clients that omit it; only the fixed hash is retained.
+Both streaming and non-streaming responses feed the store; request compilation happens before replay
+so matching uses the provider-visible tool name.
+
+[Decision Log]
+- 목적과 의도: Preserve Vertex Gemini tool-call continuation without exposing opaque signatures to Codex or another Google backend.
+- 기존 구현 및 제약 조건: Responses history does not carry a safe Gemini signature field; Antigravity already used a bounded in-process replay cache, while Vertex bypassed it and received HTTP 400 after the first tool call.
+- 검토한 주요 대안: Serialize the signature into Responses item ids or reasoning content; create an unbounded Vertex map; reuse the bounded cache with or without a transport namespace.
+- 선택한 방식: Reuse the bounded cache for Vertex, observe both response shapes, apply after wire-name compilation, and scope Vertex by transport/project/location plus the opaque client session key when available.
+- 다른 대안 대신 이 방식을 선택한 이유: Responses ids are not Gemini signatures and previously caused Base64/TYPE_BYTES failures; a second cache duplicates limits; an unscoped cache could send provider-private state across destinations.
+- 장점, 단점 및 영향: Tool loops continue with exact opaque state and bounded memory while cross-transport reuse fails closed. Replay remains process-local, matching the existing Antigravity contract.
 
 ## OpenRouter provider routing
 
@@ -358,6 +473,45 @@ Grounded in the open-sourced official client (xai-org/grok-build); unit + eviden
   compatibility profile const for the Grok client version (`src/providers/xai-transport.ts`);
   `fetchWithHeaderTimeout` takes an executor so provider fetch wrappers stay inside the
   timeout race.
+
+## Kiro reasoning round-trip (`redactedContent`)
+
+Kiro never returns plaintext reasoning for its **GPT-5.6 family** (`gpt-5.6-sol`, `-terra`,
+`-luna`): `reasoningContentEvent` carries a KMS-encrypted `redactedContent` blob, never `text`.
+Their `additionalModelRequestFieldsSchema` (`ListAvailableModels`) accepts only `reasoning.effort`
+with `additionalProperties: false` — there is no display/summary opt-in, so this is the only
+reasoning these models can return. Kiro's own CLI replays the blob on the matching
+`assistantResponseMessage.reasoningContent` to preserve model reasoning across turns; dropping it
+makes every turn restart without the previous turn's reasoning. Verified on kiro-cli 2.14.1 and
+2.16.0, all three models.
+
+The Claude 4.6+/5 entries advertise a different, richer contract (`thinking.type` adaptive/disabled,
+`thinking.display` summarized/omitted, `output_config.effort`, `max_tokens`) and are not covered by
+that measurement; older Claude, deepseek, minimax, glm, and qwen entries advertise no additional
+fields at all. The handling below keys off the wire field, not the model id, so any model that
+sends `redactedContent` round-trips.
+
+- The blob rides the existing `ocxr1:` envelope as `krc` (`src/responses/reasoning-envelope.ts`) on
+  an envelope-only reasoning item — `summary: []`, no text deltas — so it stays invisible in the
+  Codex app while round-tripping, exactly like the hidden-thinking path.
+- **Pairing is backwards.** Kiro emits `reasoningContentEvent` at the END of an assistant turn,
+  after content AND tool calls. A `krc`-only item therefore belongs to the turn that already
+  closed, so the parser attaches it to the PRECEDING assistant message rather than folding it into
+  the following turn like ordinary reasoning (`src/responses/parser.ts`). With no assistant turn to
+  own it, the blob is dropped rather than mis-paired.
+- The blob lives on `OcxAssistantMessage.kiroRedactedReasoning`, not on a thinking content part, so
+  no other adapter replays provider-private state if the conversation switches providers.
+
+Kiro reports context pressure in its own `contextUsageEvent`, which is the authoritative source. On
+every capture taken (2.14.1 and 2.16.0) `metadataEvent` carried only `stopReason` — which is why
+reading the percentage from `metadataEvent` alone never saw a value — but the parser still accepts a
+finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, so a value parsed
+from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
+positive value overwrites an earlier one.
+
+Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
+`tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
+ignored because a credit is not a token count.
 
 ## Parallel tool calls (default-on for chat providers)
 

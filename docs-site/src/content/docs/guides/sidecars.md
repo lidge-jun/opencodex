@@ -70,14 +70,20 @@ failures after response headers have started are delivered as `response.failed` 
 ## Vision sidecar
 
 When the routed model is listed in its provider's `noVisionModels` and a request carries an image,
-opencodex describes each image **before** the main call and replaces it with text. The Dashboard and
-management API present `gpt-5.6-luna` as the current default, and startup migrates an explicitly
-persisted legacy `gpt-5.4-mini` value to Luna. If the `visionSidecar.model` field is entirely absent,
-the vision execution path still has a `gpt-5.4-mini` code fallback.
+opencodex describes each image **before** the main call and replaces it with text. When
+`visionSidecar.model` is absent or blank, the OpenAI execution path, Dashboard, and management API
+use the `gpt-5.4-mini` fallback. Startup still migrates an explicitly persisted legacy
+`gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
+model field.
 
 - Images can come from user, developer, and tool-result messages, including Codex's `view_image`.
-- Each image is sent to the configured native vision model with `reasoning.effort: "low"`; its
-  description replaces the image part inline.
+- On the OpenAI path (ChatGPT-login passthrough), each image is sent to the configured vision model
+  over the Responses endpoint with the selected `reasoning.effort` (`low` by default), and its
+  description replaces the image part inline. The Anthropic path uses the Messages endpoint with its
+  own thinking-budget mapping and ignores this OpenAI-specific setting.
+- For native models with known capability metadata, unsupported reasoning is normalized to the
+  highest supported rung at or below the requested level; if none exists, the lowest supported rung
+  is used. Unknown or custom models remain permissive when reliable capability metadata is absent.
 - Descriptions run with bounded concurrency (3 at a time, input order preserved). User context sent
   to the describer is capped at 800 characters, and each injected description is capped at 2,000
   characters. The request does not send `max_output_tokens`, which the ChatGPT backend rejects.
@@ -90,14 +96,22 @@ the vision execution path still has a `gpt-5.4-mini` code fallback.
   available, the raw image is stripped rather than forwarded to a text-only backend.
 - `maxDescriptionsPerTurn` (default 8) limits new descriptions per main-model turn. Cache hits and
   same-turn duplicates do not consume it. Successful `data:` image descriptions are cached by
-  backend, model, detail, image bytes, and message context; mutable `https:` images are not cached.
+  backend, model, detail, image bytes, and message context — plus the reasoning effort on OpenAI
+  keys (Anthropic keys omit it, since that field is ignored there); mutable `https:` images are not
+  cached.
+
+The management API and Dashboard picker now list models that can actually accept image input.
+When the matching backend is available, `gpt-5.6-luna` (OpenAI) and `claude-haiku-4-5` (Anthropic)
+are always offered as baseline options. `PUT /api/sidecar-settings` rejects a model known to be
+text-only, but still accepts an unknown id so custom or ahead-of-catalog names keep working.
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }

@@ -9,6 +9,7 @@
  * src/cli/index.ts — only the published npm `bin` routes through here.)
  */
 import { spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -16,12 +17,18 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
+import {
+  npmCachePreflightFailureMessage,
+  runNpmCachePreflight,
+} from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
 
 const PKG = "@bitkyc08/opencodex";
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
 const cliPath = join(here, "..", "src", "cli", "index.ts");
+const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
+const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
 
 function isNodeModulesInstall() {
   return here.split(/[\\/]/).includes("node_modules");
@@ -133,20 +140,59 @@ function runNpmSelfUpdate() {
     process.exit(0);
   }
 
+  const cachePreflight = runNpmCachePreflight();
+  if (!cachePreflight.ok) {
+    console.error(`opencodex: ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+    process.exit(1);
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
-  // unloads it permanently, so a successful update must reinstall it afterwards.
+  // unloads it, so a successful update must refresh and restart it afterwards.
   const serviceStatePath = join(configDir(), "service-state.json");
   const serviceWasInstalled = existsSync(serviceStatePath);
   const trayBeforeUpdate = planWindowsTrayUpdate(
     process.platform === "win32" ? trayInstallState() : { installed: false, running: false },
   );
-  /** Read the backend from service-state.json so the update reinstalls the same one. */
-  function serviceReinstallArgs() {
+  /**
+   * Refresh the existing service without re-registering it. `service repair` discovers
+   * the installed backend itself and, on Windows scheduler installs, rewrites the wrapper
+   * assets and restarts the existing task without `schtasks /create` — the elevation a
+   * non-admin `ocx update` does not have.
+   */
+  function serviceRefreshArgs() {
+    return [launcher, "service", "repair"];
+  }
+  /** Register from scratch, preserving the recorded backend. Only for a genuinely absent service. */
+  function serviceInstallArgs() {
     try {
       const state = JSON.parse(readFileSync(serviceStatePath, "utf8"));
       if (state.backend === "native") return [launcher, "service", "install", "--native"];
     } catch { /* missing or corrupt — fall through to default */ }
     return [launcher, "service", "install"];
+  }
+  /**
+   * Structured "is a service actually registered?" answer.
+   *
+   * This file is plain Node ESM and cannot import `diagnoseService()` from the
+   * TypeScript runtime, so it asks the freshly-installed launcher — which runs that
+   * diagnostic under Bun — and reads `startup.serviceInstalled`.
+   *
+   * Returns `null` when the probe itself could not answer, which callers must treat as
+   * "unknown" rather than "absent": failing closed here means NOT re-registering.
+   */
+  function readServiceInstalledFromStatus(launcherPath) {
+    try {
+      const st = spawnSync(process.execPath, [launcherPath, "status", "--json"], {
+        encoding: "utf8",
+        timeout: 20_000,
+        windowsHide: true,
+      });
+      if (st.status !== 0 || typeof st.stdout !== "string" || !st.stdout.trim()) return null;
+      const installed = JSON.parse(st.stdout)?.startup?.serviceInstalled;
+      return typeof installed === "boolean" ? installed : null;
+    } catch {
+      return null;
+    }
   }
 
   // Capture listen target before stop clears runtime-port.json (mirrors GUI/CLI update worker).
@@ -241,15 +287,26 @@ function runNpmSelfUpdate() {
         if (trayBeforeUpdate.restoreOnFailure) runTrayLifecycle(launcher, "start");
       }
     }
-    // The stop above unloaded any managed service; reinstall via the freshly-installed
+    // The stop above unloaded any managed service; refresh via the freshly-installed
     // launcher so the new files write the baked paths and the service restarts.
     if (serviceWasInstalled) {
-      console.log("Reinstalling the background service with the updated files...");
+      console.log("Refreshing the background service with the updated files...");
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(bakePort);
       try {
-        const svcArgs = serviceReinstallArgs();
-        const svc = spawnSync(process.execPath, svcArgs, { stdio: "inherit", windowsHide: true });
+        let svc = spawnSync(process.execPath, serviceRefreshArgs(), { stdio: "inherit", windowsHide: true });
+        // `serviceWasInstalled` is inferred from service-state.json alone, which can be
+        // STALE — present while the registration is gone. Repair refuses that case by
+        // design, and its thrown Error is indistinguishable from any other failure at
+        // this layer (plain Error, inherited stdio, generic exit status). So ask for
+        // structured state instead of parsing the failure: install only when the
+        // diagnostic says the service is genuinely absent. Installing after ANY repair
+        // failure would resurrect the elevation prompt this change exists to avoid, and
+        // could re-register a service the user just uninstalled.
+        if (svc.status !== 0 && readServiceInstalledFromStatus(launcher) === false) {
+          console.log("No registered service found — installing it instead.");
+          svc = spawnSync(process.execPath, serviceInstallArgs(), { stdio: "inherit", windowsHide: true });
+        }
         let needDirectStart = svc.status !== 0;
         if (!needDirectStart) {
           // Exit 0 can still leave stale/missing assets that never bring the proxy
@@ -274,17 +331,15 @@ function runNpmSelfUpdate() {
           }
         }
         if (needDirectStart) {
-          // On Windows, schtasks /create requires elevation. The launcher inherits the
-          // user's (non-admin) token, so the service reinstall can fail with access
-          // denied — or exit 0 while leaving a non-viable manager. Fall back to a
-          // direct detached proxy start so the update never leaves the user without
-          // a running proxy.
+          // A repair needs no elevation, but it can still fail — or exit 0 while leaving
+          // a non-viable manager. Fall back to a direct detached proxy start so the
+          // update never leaves the user without a running proxy.
           console.warn(
             svc.status === 0
               ? "opencodex: service refresh left a non-viable manager — starting the proxy directly instead."
               : "opencodex: service refresh failed — starting the proxy directly instead.",
           );
-          console.warn("  Run 'ocx service install' as administrator to refresh the background service.");
+          console.warn("  Run 'ocx service repair' to see why the background service could not restart.");
           const env = { ...process.env };
           delete env.OCX_SERVICE;
           const child = spawn(process.execPath, [launcher, "start", "--port", String(bakePort)], {
@@ -317,6 +372,11 @@ function bunBinDir() {
 }
 
 const BUN_OVERRIDE_ENV = "OPENCODEX_BUN_PATH";
+// Mirrors BUN_RUNTIME_SOURCE_ENV in src/lib/bun-runtime.ts. This launcher is plain
+// Node and runs before any TypeScript is loaded, so the name is repeated rather than
+// imported; tests/ocx-launcher-source.test.ts pins the two together.
+const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";
+const BUN_RUNTIME_PATH_ENV = "OCX_BUN_RUNTIME_PATH";
 
 function findBunBinary(bunDir) {
   // The npm `bun` package ships the binary as bin/bun.exe on every platform;
@@ -347,7 +407,7 @@ function resolveBun() {
   const override = process.env[BUN_OVERRIDE_ENV]?.trim();
   if (override) {
     const overridePath = resolve(override);
-    if (isRealBunBinary(overridePath)) return overridePath;
+    if (isRealBunBinary(overridePath)) return { path: overridePath, source: "override" };
     console.error(
       `opencodex: ${BUN_OVERRIDE_ENV} is missing, unreadable, or not a complete Bun binary; falling back to the bundled runtime.`,
     );
@@ -361,7 +421,7 @@ function resolveBun() {
   }
 
   let bin = findBunBinary(bunDir);
-  if (bin) return bin;
+  if (bin) return { path: bin, source: "bundled" };
 
   // Lazy fallback: --ignore-scripts (or a failed postinstall) leaves the
   // ~450-byte placeholder stub. Run the bun package's own installer once.
@@ -371,7 +431,7 @@ function resolveBun() {
     if (r.status === 0) bin = findBunBinary(bunDir);
   }
   if (!bin) fail("Bun binary missing after install attempt.");
-  return bin;
+  return { path: bin, source: "bundled" };
 }
 
 // `ocx update --help` prints usage and exits WITHOUT side effects. The npm launcher
@@ -389,7 +449,8 @@ if (process.argv[2] === "update" && isNodeModulesInstall() && !isBunGlobalInstal
   runNpmSelfUpdate();
 }
 
-const bun = resolveBun();
+const bunRuntime = resolveBun();
+const bun = bunRuntime.path;
 
 // Run the Bun child asynchronously and FORWARD termination signals to it, then wait
 // for its graceful shutdown before this launcher exits. The previous blocking
@@ -401,20 +462,35 @@ const bun = resolveBun();
 // Provenance seam for issue #701: THIS launcher runs under Node, which does not
 // auto-load a project `.env`/`.env.local`; the Bun child does, before any opencodex
 // code evaluates. So this is the last point that can still tell a real shell export
-// from a working-directory dotenv value, and we record which Anthropic credential
-// slots already existed. `src/cli/claude.ts` then treats anything present in the Bun
-// child but missing from this list as ambient project pollution rather than user auth,
+// from a working-directory dotenv value, and we record which Anthropic credential or
+// destination slots already existed. The context is paired with a random proof carried
+// in argv, which project dotenv cannot modify during an ordinary `ocx` invocation.
+// `src/cli/claude.ts` treats anything present in the Bun child but missing from this
+// list as ambient project pollution rather than user auth or destination,
 // which stopped a project dotenv from silently moving a claude.ai subscriber onto API
-// billing. An EMPTY value is meaningful (the launcher ran and saw no slots) and is
-// distinct from the variable being absent (no launcher at all — change nothing), so
-// this must stay a plain assignment and never be collapsed to a falsy check.
+// billing and prevents it from redirecting the subscriber's OAuth bearer.
 // Disabling Bun's dotenv wholesale with --no-env-file is NOT an option: config
 // interpolation and provider settings legitimately read the project environment.
-const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
+const preBunAnthropicSlots = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]
   .filter(name => typeof process.env[name] === "string" && process.env[name] !== "");
-const child = spawn(bun, [cliPath, ...process.argv.slice(2)], {
+const launchProof = randomBytes(32).toString("base64url");
+const launchContext = JSON.stringify({
+  version: 1,
+  proof: launchProof,
+  anthropicEnvSlots: preBunAnthropicSlots,
+});
+const child = spawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2)], {
   stdio: "inherit",
-  env: { ...process.env, OCX_PRE_BUN_ANTHROPIC_ENV: preBunAnthropicSlots.join(",") },
+  // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no
+  // console to inherit. Without this flag Windows allocates a visible console for
+  // the long-running Bun child, and closing that window kills the proxy (#1236).
+  windowsHide: true,
+  env: {
+    ...process.env,
+    [NODE_LAUNCH_CONTEXT_ENV]: launchContext,
+    [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source,
+    [BUN_RUNTIME_PATH_ENV]: bunRuntime.path,
+  },
 });
 
 // Windows has no real POSIX signals (no SIGHUP); forwarding is best-effort there.

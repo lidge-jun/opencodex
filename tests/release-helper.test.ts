@@ -226,7 +226,7 @@ function runRelease(version: string, scenario: ReleaseScenario = {}) {
 }
 
 describe("release helper", () => {
-  test("preflight runs typecheck, test suite, and privacy scan before version bump on main dry-runs", () => {
+  test("preflight runs the shared audit, typecheck, test suite, and privacy scan before version bump", () => {
     const { calls, result } = runRelease("9.9.9");
 
     // Report what the script actually said. A bare status assertion turned a
@@ -234,6 +234,7 @@ describe("release helper", () => {
     // which cost a full CI round to diagnose.
     expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
 
+    const auditIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "run audit:high");
     const typecheckIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "x tsc --noEmit");
     const testIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "test --isolate tests");
     const privacyIndex = findCallIndex(calls, "bun", call => call.args.join(" ") === "run privacy:scan");
@@ -246,7 +247,8 @@ describe("release helper", () => {
       && call.args.includes("dry-run=true"),
     );
 
-    expect(typecheckIndex).toBeGreaterThanOrEqual(0);
+    expect(auditIndex).toBeGreaterThanOrEqual(0);
+    expect(typecheckIndex).toBeGreaterThan(auditIndex);
     expect(testIndex).toBeGreaterThan(typecheckIndex);
     expect(privacyIndex).toBeGreaterThan(testIndex);
     expect(versionIndex).toBeGreaterThan(privacyIndex);

@@ -23,8 +23,9 @@ import {
   sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "../src/server/request-log";
+import { handleResponses } from "../src/server/responses";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import type { AdapterEvent, OcxUsage } from "../src/types";
+import type { AdapterEvent, OcxConfig, OcxUsage } from "../src/types";
 import {
   appendUsageEntry,
   readUsageEntries,
@@ -53,6 +54,64 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("creates one ordinary attempt after the final adapter is resolved", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_attempt",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    })) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "unknown", provider: "unknown" };
+    const config = {
+      defaultProvider: "gateway",
+      providers: {
+        gateway: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-key",
+          baseUrl: "https://gateway.example/v1",
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gateway/test-model", input: "hello", stream: false }),
+      }), config, logCtx);
+
+      expect(response.status).toBe(200);
+      expect(logCtx.providerAdapter).toBe("openai-responses");
+      expect(logCtx.attempts).toEqual([expect.objectContaining({
+        ordinal: 1,
+        provider: "gateway",
+        model: "test-model",
+        adapter: "openai-responses",
+        sendCount: 1,
+      })]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("projects explicitly empty attempts from persisted usage", () => {
+    const projected = requestLogEntryFromPersistedUsage({
+      requestId: "ocx-empty-attempts",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+      attempts: [],
+    });
+
+    expect(projected.attempts).toEqual([]);
+  });
+
   test("records the adapter's exact outbound reasoning parameter", () => {
     const attempt = beginRequestAttempt(1, "xai", "grok-4.5", "openai-chat");
     const logCtx: RequestLogContext = {
@@ -150,6 +209,23 @@ describe("request log metadata", () => {
       expect(attempt.reasoningWireField).toBeUndefined();
       expect(attempt.reasoningWireValue).toBeUndefined();
     }
+  });
+
+  test("records a gateway reasoning disable as a boolean", () => {
+    const logCtx: RequestLogContext = { model: "m", provider: "cline-pass" };
+    recordAdapterReasoning(logCtx, {
+      url: "https://api.cline.bot/api/v1/chat/completions",
+      method: "POST",
+      headers: {},
+      body: "{}",
+      reasoningLog: {
+        effectiveEffort: "none",
+        wireField: "reasoning.enabled",
+        wireValue: false,
+      },
+    });
+
+    expect(logCtx.reasoningWireValue).toBe(false);
   });
 
   test("recordFirstOutput is one-shot for request and active attempt (WP4 TTFT)", () => {
@@ -600,6 +676,29 @@ describe("request log metadata", () => {
       resolvedModel: "gpt-5.5",
       usageStatus: "unreported",
     });
+  });
+
+  test("client-facing response selectors do not replace the physical routed model", async () => {
+    const entries: RequestLogEntry[] = [];
+    const logCtx: RequestLogContext = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      resolvedModel: "claude-sonnet-5",
+      preserveResolvedModelFromRoute: true,
+    };
+    const response = responseWithDeferredRequestLog(
+      new Response(JSON.stringify({
+        model: "anthropic/claude-sonnet-5",
+        status: "completed",
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+      "ocx-test-routed-model",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+    );
+
+    expect(await response.json()).toMatchObject({ model: "anthropic/claude-sonnet-5" });
+    expect(entries[0]?.resolvedModel).toBe("claude-sonnet-5");
   });
 
   test("deferred JSON logging captures reported usage", async () => {

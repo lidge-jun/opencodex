@@ -29,7 +29,14 @@ import {
 import { validateCopilotApiBaseUrl } from "./github-copilot";
 import type { OAuthCredentialSource, OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 
-type AuthStore = Record<string, ProviderAccountSet>;
+export type AuthStore = Record<string, ProviderAccountSet>;
+
+export type AuthStoreBufferSnapshot =
+  | { readonly kind: "ready"; readonly store: AuthStore }
+  | { readonly kind: "absent" }
+  | { readonly kind: "malformed" };
+
+const authStoreDecoder = new TextDecoder("utf-8", { fatal: true });
 let lastReconciledGeneration = 0;
 let liveOAuthAccountKeys = new Set<string>();
 
@@ -143,17 +150,35 @@ export function loadAuthStore(): AuthStore {
 }
 
 /**
+ * Pure normalization for auth-store bytes already read by another owner.
+ * This function performs no filesystem consultation, hardening, backup, or persistence.
+ */
+export function normalizeAuthStoreBuffer(buffer: Uint8Array | null): AuthStoreBufferSnapshot {
+  if (buffer === null) return { kind: "absent" };
+  try {
+    const parsed: unknown = JSON.parse(authStoreDecoder.decode(buffer));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { kind: "malformed" };
+    }
+    const { store } = normalizeAuthStore(parsed);
+    if (Object.keys(parsed).length > 0 && Object.keys(store).length === 0) {
+      return { kind: "malformed" };
+    }
+    return { kind: "ready", store };
+  } catch {
+    return { kind: "malformed" };
+  }
+}
+
+/**
  * Observe-only auth store read for diagnostics (`ocx doctor` / status).
  * Does not chmod paths or backup invalid JSON — corrupt files are treated as empty.
  */
 export function peekAuthStore(): AuthStore {
   const path = getAuthStorePath();
   if (!existsSync(path)) return {};
-  try {
-    return normalizeAuthStore(JSON.parse(readFileSync(path, "utf-8"))).store;
-  } catch {
-    return {};
-  }
+  const snapshot = normalizeAuthStoreBuffer(readFileSync(path));
+  return snapshot.kind === "ready" ? snapshot.store : {};
 }
 
 function persist(store: AuthStore): void {
@@ -495,6 +520,56 @@ export async function saveCredential(
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
     }
+  }, [provider, safe]);
+}
+
+/**
+ * Atomically insert or replace an identity-bearing credential and report the disposition.
+ * Importers use this instead of a read-then-save pair so duplicate detection and persistence
+ * happen inside the existing serialized temp-then-rename store mutation.
+ */
+export async function upsertCredentialByIdentity(
+  provider: string,
+  cred: OAuthCredentials,
+): Promise<"inserted" | "updated"> {
+  const safe = normalizeCredential(cred);
+  if (!safe || (!safe.accountId && !safe.email)) {
+    throw new Error("Refusing to persist OAuth credential without verified identity");
+  }
+  return await mutateStore(store => {
+    const set = store[provider];
+    const matches = (account: ProviderAccount): boolean => {
+      if (safe.accountId) {
+        if (account.credential.accountId) return account.credential.accountId === safe.accountId;
+        return Boolean(
+          safe.email
+          && account.credential.email
+          && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+        );
+      }
+      if (account.credential.accountId) return false;
+      return Boolean(
+        safe.email
+        && account.credential.email
+        && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+      );
+    };
+    const existing = set?.accounts.find(matches);
+    if (existing && set) {
+      existing.credential = safe;
+      delete existing.needsReauth;
+      set.activeAccountId ??= existing.id;
+      return "updated";
+    }
+    const id = newAccountId(safe);
+    const account: ProviderAccount = { id, credential: safe, addedAt: Date.now() };
+    if (set) {
+      set.accounts.push(account);
+      set.activeAccountId ??= id;
+    } else {
+      store[provider] = { activeAccountId: id, accounts: [account] };
+    }
+    return "inserted";
   }, [provider, safe]);
 }
 

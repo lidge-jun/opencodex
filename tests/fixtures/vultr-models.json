@@ -1,0 +1,20 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "kimi-k2-instruct",
+      "object": "model",
+      "owned_by": "vultr"
+    },
+    {
+      "id": "deepseek-r1",
+      "object": "model",
+      "owned_by": "vultr"
+    },
+    {
+      "id": "qwen2.5-coder-32b-instruct",
+      "object": "model",
+      "owned_by": "vultr"
+    }
+  ]
+}

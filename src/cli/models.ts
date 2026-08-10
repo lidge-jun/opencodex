@@ -102,9 +102,13 @@ function rejectUnexpectedArgs(args: string[], usage: string): void {
 async function syncCustomModelsIfLive(): Promise<void> {
   const live = await findLiveProxy();
   if (!live) return;
-  await syncModelsToCodex(live.port).catch(error => {
+  const synced = await syncModelsToCodex(live.port).catch(error => {
     console.error(`Warning: custom model saved, but catalog sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
   });
+  if (synced?.status === "skipped") {
+    console.log("Custom model saved; Codex integration is OFF, so its catalog was not changed.");
+  }
 }
 
 async function handleCustomAdd(args: string[]): Promise<void> {

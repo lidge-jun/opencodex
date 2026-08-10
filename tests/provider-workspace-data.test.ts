@@ -23,8 +23,10 @@ import {
   relativeTimeLabelsFromT,
 } from "../gui/src/provider-workspace/usage";
 import {
+  formatNamespacedModelId,
   formatProviderDisplayName,
   isCatalogProviderId,
+  providerIconSrc,
 } from "../gui/src/provider-icons";
 import { en } from "../gui/src/i18n/en";
 import { interpolate, type TFn } from "../gui/src/i18n/shared";
@@ -447,6 +449,28 @@ describe("provider-icons", () => {
     expect(formatProviderDisplayName("chatgpt", englishT)).toBe("ChatGPT");
   });
 
+  test("Command Code account and API-key presets use distinct display names", () => {
+    expect(formatProviderDisplayName("command-code", englishT)).toBe("Command Code - Auth");
+    expect(formatProviderDisplayName("commandcode", englishT)).toBe("Command Code - API");
+    expect(isCatalogProviderId("command-code")).toBe(true);
+    expect(isCatalogProviderId("commandcode")).toBe(true);
+    expect(providerIconSrc("command-code")).toBe("/provider-icons/commandcode-color.svg");
+    expect(providerIconSrc("commandcode")).toBe("/provider-icons/commandcode-color.svg");
+  });
+
+  test("namespaced model ids rewrite the Command Code provider prefix to a distinguishable slug", () => {
+    expect(formatNamespacedModelId("command-code/deepseek-v4-flash", englishT)).toBe("commandcode-auth/deepseek-v4-flash");
+    expect(formatNamespacedModelId("commandcode/deepseek-v4-flash", englishT)).toBe("commandcode-api/deepseek-v4-flash");
+    // Redundant vendor prefix in the encoded model id is dropped for display.
+    expect(formatNamespacedModelId("command-code/deepseek-deepseek-v4-flash", englishT)).toBe("commandcode-auth/deepseek-v4-flash");
+    expect(formatNamespacedModelId("commandcode/deepseek-deepseek-v4-pro", englishT)).toBe("commandcode-api/deepseek-v4-pro");
+    expect(formatNamespacedModelId("command-code/claude-fable-5", englishT)).toBe("commandcode-auth/claude-fable-5");
+    // Other providers keep the raw route untouched.
+    expect(formatNamespacedModelId("openai/gpt-5.5", englishT)).toBe("openai/gpt-5.5");
+    expect(formatNamespacedModelId("my-custom/thing", englishT)).toBe("my-custom/thing");
+    expect(formatNamespacedModelId("no-slash", englishT)).toBe("no-slash");
+  });
+
   test("unknown simple ids are title-cased; mixedCase custom names pass through", () => {
     expect(formatProviderDisplayName("my-proxy", englishT)).toBe("My Proxy");
     expect(formatProviderDisplayName("MyProxy", englishT)).toBe("MyProxy");
@@ -455,6 +479,11 @@ describe("provider-icons", () => {
   test("catalog membership excludes legacy Multi and custom ids", () => {
     expect(isCatalogProviderId("openai-multi")).toBe(false);
     expect(isCatalogProviderId("my-proxy")).toBe(false);
+  });
+
+  test("commandcode maps to its own brand mark and display name", () => {
+    expect(providerIconSrc("commandcode")).toBe("/provider-icons/commandcode-color.svg");
+    expect(formatProviderDisplayName("commandcode", englishT)).toBe("Command Code - API");
   });
 });
 

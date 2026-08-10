@@ -152,40 +152,49 @@ override, но файлы на диске никогда не меняются. 
 
 ## Экспорт client config
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
-Печатает client config, направленный на работающий прокси. opencode и [Pi](/guides/pi/) читают
-провайдеров из собственных JSON-конфигов, а не из переменных окружения, поэтому команда
-сериализует для вас блок провайдера `opencodex` — base URL, список моделей и env-reference
-конкретного клиента.
+Печатает client config, направленный на работающий прокси. Команда сериализует блок
+провайдера `opencodex` в нативном формате выбранного клиента: base URL, список моделей и,
+в зависимости от клиента, credential reference либо заглушку `opencodex-loopback`.
 
 Прокси должен быть запущен; команда определяет его живой порт, читает `/api/models` и выводит
 только те модели, которые сейчас видит Codex.
 
 | Флаг | Действие |
 | --- | --- |
-| `--client <opencode\|pi>` | Обязателен. Выбирает клиентский диалект: keyed-объект `provider` у opencode или массив `providers` у Pi. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | Обязателен. Выбирает формат конфигурации клиента. |
 | `--json` | Печатать только JSON-конфиг в stdout, чтобы redirect сохранял побайтно точный вывод. Вся диагностика, включая заметку о записи через `--out`, идёт в stderr. |
 | `--out <path>` | Записать конфиг в `<path>`. Перезаписывать существующий файл не позволит. |
 | `--force` | Разрешить `--out` заменить существующий файл. |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Без `--json` сначала идёт JSON, затем канонический путь назначения, предупреждение о merge, строка
-экспорта переменной окружения и количество моделей с указанием, сколько строк не имеют context
-limit'а (для них клиент применяет собственные default'ы).
+Без `--json` сначала идёт сгенерированная конфигурация в нативном формате выбранного клиента,
+затем канонический путь назначения, предупреждение о merge, клиентская подсказка перед запуском
+и количество моделей с указанием, сколько строк не имеют context limit'а (для них клиент применяет
+собственные default'ы).
 
 | Клиент | Канонический путь | Имя скачиваемого файла | Переменная окружения |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` имеет приоритет, если задан) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | нет — блок несёт литерал `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml` (по умолчанию; `OMP_PROFILE` имеет приоритет над `PI_PROFILE`, даже если пуст) | `omp-models.yaml` | нет — литерал `opencodex-loopback` |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | нет — loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 
-Имена этих двух env-переменных различаются, и каждый клиент интерполирует только свою. opencode
-читает `{env:OPENCODEX_OPENCODE_API_KEY}`; Pi читает `$OPENCODEX_API_KEY`.
+opencode интерполирует `{env:OPENCODEX_OPENCODE_API_KEY}`. Сгенерированный opencodex экспорт для
+Pi не требует переменной окружения и несёт литеральную заглушку `opencodex-loopback`. Это значение
+обязательно: Pi разрешает `apiKey`, когда строит список моделей, и прячет провайдера целиком, если
+существующий конфиг содержит ссылку на незаданную переменную окружения. На loopback прокси не
+проверяет сгенерированную заглушку.
 
 :::caution[Сливать, а не заменять]
 `ocx export` никогда не пишет в ваш реальный клиентский конфиг. Путь назначения лишь
@@ -194,12 +203,14 @@ limit'а (для них клиент применяет собственные d
 MCP-записи.
 :::
 
-Никакой ключ никогда не сериализуется. Конфиг несёт только env-reference клиента, так что секрет
-остаётся в вашем окружении. Loopback-прокси (`127.0.0.1`, по умолчанию) вообще не требует
-admission key — ссылка просто остаётся неиспользованной. Задавайте переменную только если прокси
-слушает не на loopback; как выдаются admission key, описано в
-[Удалённом доступе](/reference/configuration/#remote-access). Ключи upstream-провайдеров — это
-совсем отдельная история и настраиваются в [Провайдерах](/guides/providers/).
+Никакой ключ никогда не сериализуется. Конфиги opencode, Hermes и OpenClaw несут только
+env-reference, так что секрет остаётся в вашем окружении, а конфиги Pi, OMP, Kimi и Gajae несут
+loopback-заглушку вместо учётных данных. Loopback-прокси (`127.0.0.1`, по умолчанию) вообще не
+требует admission key. Если прокси слушает не на loopback, задайте соответствующую переменную
+`OPENCODEX_OPENCODE_API_KEY`, `OPENCODEX_HERMES_API_KEY` или `OPENCODEX_OPENCLAW_API_KEY`.
+Сгенерированные интеграции Pi, OMP, Kimi и Gajae работают только через loopback. Как выдаются
+admission key, описано в [Удалённом доступе](/reference/configuration/#remote-access). Ключи
+upstream-провайдеров — это совсем отдельная история и настраиваются в [Провайдерах](/guides/providers/).
 
 Тот же payload отдаётся через `GET /api/client-config` и показывается на вкладке API в дашборде,
 поэтому CLI, API и GUI используют в точности одни и те же байты.

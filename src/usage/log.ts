@@ -4,14 +4,20 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
+import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 
+/**
+ * Recovery kinds recorded per attempt in the usage log; the GUI renders localized labels
+ * for these wire values.
+ */
 export type AttemptRecoveryKind =
   | "transient-5xx"
   | "connection-reset"
   | "oauth-401"
   | "key-429"
+  | "rate-limit-429"
   | "anthropic-oauth-429"
   | "image-413";
 
@@ -35,7 +41,7 @@ export interface PersistedUsageAttempt {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
 }
 
 export interface PersistedUsageEntry {
@@ -59,7 +65,7 @@ export interface PersistedUsageEntry {
   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -81,6 +87,12 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+  /**
+   * Bounded route-decision trace (RI-01): why this provider/model/account was
+   * selected. Additive field; old rows without it parse unchanged. Never
+   * contains prompts, credentials, or hidden reasoning.
+   */
+  routeDecision?: RouteDecisionTraceV1;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -173,6 +185,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "connection-reset",
   "oauth-401",
   "key-429",
+  "rate-limit-429",
   "anthropic-oauth-429",
   "image-413",
 ]);
@@ -268,12 +281,27 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
       ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
       : {}),
-    ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
-      ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
-      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
-        ? { reasoningWireValue: attempt.reasoningWireValue }
-        : {}),
+    ...(isValidReasoningWireValue(attempt.reasoningWireField, attempt.reasoningWireValue)
+      ? typeof attempt.reasoningWireValue === "string"
+        ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+        : { reasoningWireValue: attempt.reasoningWireValue }
+      : {}),
   };
+}
+
+/**
+ * Pairing rule for reasoning diagnostics, shared with the live request-log capture path:
+ * a non-empty string, a non-negative finite number, or a boolean only for
+ * `reasoning.enabled`. The field name itself is validated separately at capture time;
+ * persisted rows may carry legacy field names, so this checks only the value shape.
+ */
+export function isValidReasoningWireValue(
+  wireField: unknown,
+  wireValue: unknown,
+): wireValue is string | number | boolean {
+  return (typeof wireValue === "string" && wireValue.length > 0)
+    || (typeof wireValue === "number" && Number.isFinite(wireValue) && wireValue >= 0)
+    || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
 }
 
 function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
@@ -294,6 +322,9 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
+  const routeDecision = entry.routeDecision
+    ? normalizeRouteDecisionTrace(entry.routeDecision)
+    : undefined;
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -323,11 +354,11 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
       ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
       : {}),
-    ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
-      ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
-      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
-        ? { reasoningWireValue: entry.reasoningWireValue }
-        : {}),
+    ...(isValidReasoningWireValue(entry.reasoningWireField, entry.reasoningWireValue)
+      ? typeof entry.reasoningWireValue === "string"
+        ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+        : { reasoningWireValue: entry.reasoningWireValue }
+      : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),
@@ -354,11 +385,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
-    ...(attempts.length > 0 ? { attempts } : {}),
+    ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(routeDecision ? { routeDecision } : {}),
   };
 }
 
@@ -388,8 +420,9 @@ export type UsageLogRevision = {
 
 let usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
 const MANAGEMENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
+const RECENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
 const MANAGEMENT_USAGE_READ_CHUNK_BYTES = 1024 * 1024;
-const MANAGEMENT_USAGE_MAX_ENTRIES = 200_000;
+const MANAGEMENT_USAGE_MAX_ENTRIES = 500_000;
 const MANAGEMENT_USAGE_FLIGHT_STALE_MS = 30_000;
 export interface ManagementUsageSnapshot {
   entries: PersistedUsageEntry[];
@@ -623,9 +656,11 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
     fd = openSync(path, "r");
     const size = fstatSync(fd).size;
     if (size <= 0) return [];
-    // ~4 KiB/row budget with a floor; expand once if the window yields too few lines.
-    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 4 * 1024));
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Trace-sized rows need a larger per-row budget than the pre-trace ledger,
+    // but startup hydration must never grow into an unbounded whole-file read.
+    const maxWindowBytes = Math.min(size, RECENT_USAGE_MAX_READ_BYTES);
+    let windowBytes = Math.min(maxWindowBytes, Math.max(64 * 1024, Math.ceil(limit) * 20 * 1024));
+    while (true) {
       const start = Math.max(0, size - windowBytes);
       const buf = Buffer.alloc(size - start);
       readSync(fd, buf, 0, buf.length, start);
@@ -633,8 +668,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       if (start > 0) {
         const nl = text.indexOf("\n");
         if (nl < 0) {
-          if (start === 0) break;
-          windowBytes = Math.min(size, windowBytes * 4);
+          if (start === 0 || windowBytes >= maxWindowBytes) break;
+          windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
           continue;
         }
         text = text.slice(nl + 1);
@@ -644,8 +679,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       // or partial lines are filtered out during parsing and we always return the
       // most recent N valid rows (not N physical lines minus corrupt ones).
       const entries = parseUsageLines(lines);
-      if (entries.length >= limit || start === 0 || windowBytes >= size) return entries.slice(-limit);
-      windowBytes = Math.min(size, windowBytes * 4);
+      if (entries.length >= limit || start === 0 || windowBytes >= maxWindowBytes) return entries.slice(-limit);
+      windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
     }
     return [];
   } catch {

@@ -63,6 +63,140 @@ describe("Codex catalog restore", () => {
     expect(slugs).toEqual(["gpt-5.5", "user-native"]);
   }, { timeout: 15_000 });
 
+  test("fallback restore repairs only enabled natives with unanimously visible account clones", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      disabledModels: ["gpt-5.4", "desktop/gpt-5.5"],
+    }), "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        { slug: "gpt-5.5", visibility: "hide", priority: 7 },
+        { slug: "gpt-5.4", visibility: "hide" },
+        { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+        { slug: "user-native", visibility: "hide" },
+        {
+          slug: "team/gpt-5.5",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        {
+          slug: "desktop/gpt-5.5",
+          visibility: "hide",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        {
+          slug: "team/gpt-5.4",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        { slug: "provider/gpt-5.3-codex-spark", visibility: "list" },
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
+      const first = restoreCodexCatalog();
+      const second = restoreCodexCatalog();
+      console.log(JSON.stringify({ first, second }));
+    `);
+
+    expect(r.status).toBe(0);
+    const resolvedCatalogPath = join(realpathSync.native(codexHome), "catalog.json");
+    expect(JSON.parse(r.stdout)).toEqual({
+      first: { removed: 4, kept: 4, path: resolvedCatalogPath },
+      second: { removed: 0, kept: 4, path: resolvedCatalogPath },
+    });
+    const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
+    expect(restored.find(model => model.slug === "gpt-5.5")).toMatchObject({
+      visibility: "list",
+      priority: 7,
+    });
+    expect(restored.find(model => model.slug === "gpt-5.4")?.visibility).toBe("hide");
+    expect(restored.find(model => model.slug === "gpt-5.3-codex-spark")?.visibility).toBe("hide");
+    expect(restored.find(model => model.slug === "user-native")?.visibility).toBe("hide");
+    expect(restored.some(model => String(model.slug).includes("/"))).toBe(false);
+  }, { timeout: 15_000 });
+
+  test("fallback restore leaves hidden natives untouched when current config is unreadable", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    const configPath = join(opencodexHome, "config.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(configPath, "{", "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        { slug: "gpt-5.5", visibility: "hide" },
+        {
+          slug: "team/gpt-5.5",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
+      console.log(JSON.stringify(restoreCodexCatalog()));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 1, kept: 1 });
+    expect(JSON.parse(readFileSync(catalogPath, "utf8")).models).toEqual([
+      { slug: "gpt-5.5", visibility: "hide" },
+    ]);
+    expect(readFileSync(configPath, "utf8")).toBe("{");
+  }, { timeout: 15_000 });
+
+  test("backup restore repairs only later native additions with trusted visible clones", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    const backupPath = backupPathForTestCatalog(codexHome, opencodexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(backupPath, JSON.stringify({
+      models: [{ slug: "gpt-5.4", visibility: "hide", priority: 50 }],
+    }, null, 2) + "\n");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        { slug: "gpt-5.4", visibility: "hide", priority: 0 },
+        { slug: "gpt-5.5", visibility: "hide", priority: 7 },
+        { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+        {
+          slug: "team/gpt-5.4",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        {
+          slug: "team/gpt-5.5",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        {
+          slug: "team/gpt-5.3-codex-spark",
+          visibility: "list",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+        {
+          slug: "desktop/gpt-5.3-codex-spark",
+          visibility: "hide",
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { restoreCodexCatalog } = require("./src/codex/catalog");
+      console.log(JSON.stringify(restoreCodexCatalog()));
+    `);
+
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ removed: 4, kept: 3 });
+    const restored = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
+    expect(restored).toEqual([
+      { slug: "gpt-5.4", visibility: "hide", priority: 50 },
+      { slug: "gpt-5.5", visibility: "list", priority: 7 },
+      { slug: "gpt-5.3-codex-spark", visibility: "hide" },
+    ]);
+  }, { timeout: 15_000 });
+
   test("uses pristine backup while preserving native entries added after sync", () => {
     const catalogPath = join(codexHome, "catalog.json");
     const backupPath = backupPathForTestCatalog(codexHome, opencodexHome, "catalog.json");

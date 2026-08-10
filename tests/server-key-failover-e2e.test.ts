@@ -109,7 +109,7 @@ describe("server 429 key failover (end-to-end)", () => {
         }
       }
     } finally {
-      server?.stop(true);
+      await server?.stop(true);
       globalThis.fetch = originalFetch;
     }
   });
@@ -188,7 +188,7 @@ describe("server 429 key failover (end-to-end)", () => {
       // Both attempts — the rotated retry especially — must carry the cache key.
       expect(seen.map(s => s.body.prompt_cache_key)).toEqual([promptCacheKey, promptCacheKey]);
     } finally {
-      server?.stop(true);
+      await server?.stop(true);
       globalThis.fetch = originalFetch;
     }
   });
@@ -241,7 +241,7 @@ describe("server 429 key failover (end-to-end)", () => {
       expect(seenAuth[0]).toBe("Bearer key-alpha-000111222333");
       expect(seenAuth[1]).toBe("Bearer key-beta-444555666777");
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -292,7 +292,7 @@ describe("server 429 key failover (end-to-end)", () => {
       expect(json.error?.message).toContain("rotated retry socket reset");
       expect(json.error?.message).not.toContain("original rate limit");
     } finally {
-      server.stop(true);
+      await server.stop(true);
       globalThis.fetch = originalFetch;
     }
   });
@@ -341,7 +341,7 @@ describe("server 429 key failover (end-to-end)", () => {
       expect(upstreamBody).toContain("[image omitted");
       expect(upstreamBody).not.toContain("aGVsbG8=");
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

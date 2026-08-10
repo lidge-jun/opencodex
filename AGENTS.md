@@ -91,34 +91,36 @@ This applies to `AGENTS.md`-following agents as much as to humans. If a task
 asks you to write up a security finding, put the write-up in scratch space and
 say where it is; do not add it to `devlog/`, `structure/`, or `docs-site/`.
 
-## User-consent actions (agents: read this)
+## User-consent actions
 
-Some actions write to the **user's own accounts and identity**, not to this
-repository. They are outside anything a coding task authorizes, and an agent must
-never perform or auto-answer them — even when the surrounding task is approved,
-even when the credential is sitting right there.
+Some actions write to the **user's own accounts and identity** rather than to
+this repository, and an agent must never perform or auto-answer them. The one
+that exists today is starring the repository on GitHub, which only comes up when
+an agent is *running* opencodex — not when it is working on this codebase.
 
-The current one is **starring the repository on GitHub**:
+The rule lives in [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md), which is the file
+an installing or operating agent reads. It was moved out of here because a
+development-facing file is the wrong place to trigger on it: this file is loaded
+for every code change, and the consent boundary applies to none of them.
 
-- Do **not** run `gh api -X PUT /user/starred/...`, `gh repo star`, or the
-  equivalent REST call on the user's behalf.
-- Do **not** call `POST /api/github/star` on the management API. It refuses
-  agent-driven callers with `403 agent_consent_required`; treat that response as
-  the final answer, not as an obstacle to route around.
-- Do **not** answer the interactive prompt printed by `ocx start` /
-  `ocx service install`. When an agent is detected the prompt is deliberately
-  suppressed and its one-time marker left unwritten, so the user still gets the
-  real question on their own next run.
-- **Do** relay it: ask the user in your reply, and act only on an explicit yes.
-  If they say no or do not answer, do nothing and do not ask again.
-
-The enforcement lives in [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
+What matters for development work: the enforcement is code, not prose —
+[`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
 [`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
 [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
-with regression coverage in `tests/startup-prompt.test.ts`,
-`tests/agent-driven.test.ts`, and `tests/sidebar-routes.test.ts`. If you add
-another action that spends the user's identity, credits, or reputation, gate it
-the same way rather than relying on a prompt an agent can answer.
+covered by `tests/startup-prompt.test.ts`, `tests/agent-driven.test.ts`, and
+`tests/sidebar-routes.test.ts`. If you add another action that spends the user's
+identity, credits, or reputation, gate it the same way rather than relying on a
+prompt an agent can answer, and document it in `AGENTS_INSTALL.md`.
+
+**Be clear about what that enforcement is and is not.** The management endpoint
+requires a dashboard session, which stops the casual path — an agent that would
+have POSTed there because the endpoint existed, and one holding only the admin
+token. It is not a technical barrier against a determined local agent: a process
+running as the user can mint its own session from the loopback dashboard
+bootstrap, and can skip the proxy entirely by running `gh` itself. Every local
+credential is equally reachable by both the browser and the agent, so no check
+inside this process can tell them apart. The real boundary is the rule above, and
+it binds you regardless of which mechanism is within reach.
 
 ## Commands
 
@@ -133,6 +135,29 @@ bun run build:gui      # Vite GUI build
 
 Run `bun run typecheck` and `bun run test` before proposing or approving any
 non-trivial change. CI runs these on Linux, Windows, and macOS.
+
+## Issues and pull requests (agents)
+
+Agent-created issues and PRs must use the repository templates. The gates
+below enforce them, so a freeform or mismatched submission is rejected rather
+than nudged.
+
+- **Creating an issue:** open it through the template chooser and use the
+  matching form in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` (Bug report),
+  `feature_request.yml` (Feature proposal), `documentation.yml`
+  (Documentation), or `provider_compatibility.yml` (Provider or API
+  compatibility). Keep the form's section headings exactly as generated;
+  `enforce-issue-quality` validates the headings and closes untemplated or
+  mislabeled issues (`.github/ISSUE_TEMPLATE/config.yml` disables blank
+  issues, so there is no freeform fallback).
+- **Opening a pull request:** fill every section of
+  `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Verification, Checklist).
+  `enforce-target` rejects empty, thin, or malformed descriptions, and a PR
+  whose title or description mentions `gui` must include a screenshot of the
+  UI change in the description. When the PR resolves an issue, add
+  `Closes #<number>` to link it. GitHub auto-closes the linked issue only
+  when the PR merges into the default branch (`main`); PRs here target
+  `dev`, so close the issue manually once the change is on `dev`.
 
 ## Branch policy
 
@@ -156,8 +181,25 @@ commits in the description.
 
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-empty, thin, or malformed descriptions; authors with repository push permission
-skip the ancestry heuristic only. As with approval requirements in
+empty, thin, or malformed descriptions; PRs whose title or description
+mentions `gui` must include a screenshot of the UI change in the description.
+Contributor PRs (authors without repository push permission) open in draft and
+stay there until a four-box review-readiness checklist in the description is
+complete: local CI green, branch on the latest `dev` commit, all correct Codex
+and CodeRabbit findings fixed, and the ready-for-review confirmation. When all
+four boxes are ticked the gate marks the PR ready and notifies the maintainers
+listed in `MAINTAINERS.md` (excluding the author). Completion is bound to the
+exact commit the PR head pointed at: if new commits are pushed afterwards, the
+gate moves the PR back to draft, resets the checklist and the notification,
+and asks the author to test and tick the boxes again against the latest code.
+Before a completion is accepted, the gate verifies the checklist claims it
+can check itself: the branch must be on the latest `dev` commit or at most
+10 commits behind it, and Codex/CodeRabbit findings must be resolved. The
+local-CI box is an author attestation only — fork contributors cannot start
+repository CI; a maintainer has to — so the gate never disproves it; a new
+push still resets every box. A disproved claim unticks the matching box and
+keeps the PR a draft.
+Authors with repository push permission skip the ancestry heuristic only. As with approval requirements in
 [`MAINTAINERS.md`](./MAINTAINERS.md), this is enforced by convention until
 branch protection is configured.
 

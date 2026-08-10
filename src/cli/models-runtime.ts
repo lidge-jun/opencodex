@@ -20,7 +20,7 @@ const USAGE = `Usage:
   ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
   ocx models provider <name> <on|off> [--json]
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
-  ocx models context <status|value <tokens>|provider <name> <on|off>|all <on|off>> [--json]
+  ocx models context <status|value <tokens> [--set-all]|provider <name> on [--value <tokens>]|provider <name> off|all <on|off>> [--json]
   ocx models shadow <status|set> [model|-] [--enabled <on|off>] [--json]`;
 
 type ModelRow = {
@@ -158,11 +158,23 @@ async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const value = Number(raw.replace(/[_,]/g, ""));
     if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("context value must be a positive integer", USAGE);
     body = { value };
+    // Explicit apply-to-all switch for headless use: re-points every routed provider to
+    // the new value, mirroring the dashboard's "apply to every routed provider" toggle.
+    // Without it the value only becomes the default for future toggles.
+    if (takeFlag(args, "--set-all")) body.setAll = true;
   } else if (action === "provider") {
     const provider = args.shift()?.trim();
     const state = args.shift()?.toLowerCase();
     if (!provider || (state !== "on" && state !== "off")) throw new CliUsageError("provider and on|off are required", USAGE);
     body = { provider, enabled: state === "on" };
+    // Optional explicit cap value for this provider only (`ocx models context provider
+    // openai on --value 128000`). Mirrors the dashboard's per-provider cap picker; the
+    // value never leaks to other providers.
+    const value = takeIntegerOption(args, "--value", { min: 1 });
+    if (value !== undefined && state !== "on") {
+      throw new CliUsageError("--value can only be used with on", USAGE);
+    }
+    if (value !== undefined) body.value = value;
   } else if (action === "all") {
     const state = args.shift()?.toLowerCase();
     if (state !== "on" && state !== "off") throw new CliUsageError("all requires on|off", USAGE);

@@ -172,13 +172,37 @@ async function defaultKiroCliRunner(args: string[], signal?: AbortSignal): Promi
   }
 }
 
-async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal): Promise<{ email?: string }> {
+/** Kiro profile ARN structure: arn:<partition>:codewhisperer:<region>:<account>:profile/<id> */
+const KIRO_PROFILE_ARN_PATTERN = /^arn:[a-z0-9-]+:codewhisperer:[a-z0-9-]+:\d{12}:profile\/[A-Za-z0-9-]+$/;
+const KIRO_PROFILE_ARN_MAX_LENGTH = 256;
+
+function parseKiroProfileArn(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > KIRO_PROFILE_ARN_MAX_LENGTH) return undefined;
+  return KIRO_PROFILE_ARN_PATTERN.test(trimmed) ? trimmed : undefined;
+}
+
+function profileArnFromWhoami(parsed: Record<string, unknown>): string | undefined {
+  // Only narrowly-named documented-ish shapes; never invent an ARN (#993).
+  return parseKiroProfileArn(parsed.profileArn)
+    ?? parseKiroProfileArn(parsed.profile_arn)
+    ?? (parsed.profile && typeof parsed.profile === "object" && !Array.isArray(parsed.profile)
+      ? parseKiroProfileArn((parsed.profile as Record<string, unknown>).arn)
+      : undefined);
+}
+
+async function readKiroCliIdentity(runner: KiroCliRunner, signal?: AbortSignal): Promise<{ email?: string; profileArn?: string }> {
   try {
     const result = await runner(["whoami", "--format", "json"], signal);
     if (result.exitCode !== 0) return {};
-    const parsed = JSON.parse(result.stdout) as { email?: unknown };
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
     const email = typeof parsed.email === "string" ? parsed.email.trim().toLowerCase() : "";
-    return email && email.length <= 320 ? { email } : {};
+    const profileArn = profileArnFromWhoami(parsed);
+    return {
+      ...(email && email.length <= 320 ? { email } : {}),
+      ...(profileArn ? { profileArn } : {}),
+    };
   } catch {
     return {};
   }
@@ -251,14 +275,34 @@ async function oauthCredentialFromImported(
   runner: KiroCliRunner,
   signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
-  const identity = imported.source === "sqlite" ? await readKiroCliIdentity(runner, signal) : {};
-  const metadata = metadataFromImported(imported);
+  let identity: { email?: string; profileArn?: string } = {};
+  if (imported.source === "sqlite") {
+    identity = await readKiroCliIdentity(runner, signal);
+    // Session-switch race (#993 review): another process may have switched the
+    // active Kiro CLI session between the SQLite read and whoami. Accept
+    // whoami's identity only when the session token STILL matches the import —
+    // refresh token, or access token when refresh is absent.
+    if (identity.profileArn !== undefined) {
+      const current = readKiroCliSqliteCredential();
+      const importedKey = imported.refresh || imported.access;
+      const currentKey = current ? current.refresh || current.access : "";
+      if (!current || currentKey !== importedKey) identity = {};
+    }
+  }
+  // Builder ID imports often lack a profileArn in SQLite; whoami against the
+  // SAME active CLI session can supply it (#993). Imported stays authoritative.
+  const resolvedProfileArn = imported.profileArn ?? identity.profileArn;
+  const metadata: KiroOAuthMetadata | undefined = (() => {
+    const base = metadataFromImported(imported) ?? {};
+    if (resolvedProfileArn && !base.profileArn) base.profileArn = resolvedProfileArn;
+    return Object.keys(base).length > 0 ? base : undefined;
+  })();
   return {
     access: imported.access,
     refresh: imported.refresh,
     expires: imported.expires,
     source: imported.source === "json" ? "credential-file" : "local-cli",
-    ...(imported.profileArn ? { accountId: imported.profileArn } : {}),
+    ...(resolvedProfileArn ? { accountId: resolvedProfileArn } : {}),
     ...(identity.email ? { email: identity.email } : {}),
     ...(metadata ? { kiro: metadata } : {}),
   };

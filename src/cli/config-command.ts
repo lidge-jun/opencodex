@@ -1,6 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { getConfigPath, readConfigDiagnostics, saveConfig, validateConfigCandidate } from "../config";
+import { clearCodexAccountPin } from "../codex/account-priority";
+import { getConfigPath, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate } from "../config";
+import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../reasoning-effort";
 import type { OcxConfig } from "../types";
+import { normalizeVisionReasoningForModel } from "../vision/reasoning";
 import { CliUsageError, printData, rejectArgs, runCliAction, takeFlag } from "./runtime-api";
 
 const USAGE = `Usage:
@@ -17,6 +20,9 @@ const BLOCKED_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 
 function redact(value: unknown, key = ""): unknown {
   if (SECRET_KEYS.test(key) && typeof value === "string") return value ? "********" : value;
+  // modelCosts rows are keyed by model id; a pasted API key in a key position
+  // must not be echoed back by config show/get (values are already redacted).
+  if (key === "modelCosts") return sanitizeModelCostsForDisplay(value);
   if (Array.isArray(value)) return value.map(item => redact(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [childKey, redact(child, childKey)]));
@@ -64,10 +70,36 @@ function loadInput(path: string): unknown {
   catch { throw new CliUsageError(`invalid JSON in ${path}`); }
 }
 
+function visionReasoningError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const vision = (value as Record<string, unknown>).visionSidecar;
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return null;
+  const reasoning = (vision as Record<string, unknown>).reasoning;
+  if (reasoning === undefined || isVisionReasoningEffort(reasoning)) return null;
+  return `schema_invalid: visionSidecar.reasoning: must be one of ${VISION_REASONING_EFFORTS.join(", ")}`;
+}
+
+function validateCandidate(value: unknown): ReturnType<typeof validateConfigCandidate> {
+  const error = visionReasoningError(value);
+  return error ? { ok: false, error } : validateConfigCandidate(value);
+}
+
+function normalizeVisionConfig(config: OcxConfig): OcxConfig {
+  const vision = config.visionSidecar;
+  if (!vision || vision.reasoning === undefined) return config;
+  // Keep CLI import/set semantics aligned with the execution path: an omitted or blank model means
+  // the bounded OpenAI vision default, gpt-5.4-mini, not the Dashboard's web-search default.
+  const model = vision.model || "gpt-5.4-mini";
+  const normalized = normalizeVisionReasoningForModel(model, vision.reasoning);
+  if (normalized === undefined) delete vision.reasoning;
+  else vision.reasoning = normalized;
+  return config;
+}
+
 function validate(value: unknown): OcxConfig {
-  const result = validateConfigCandidate(value);
+  const result = validateCandidate(value);
   if (!result.ok) throw new CliUsageError(result.error);
-  return result.config;
+  return normalizeVisionConfig(result.config);
 }
 
 export async function handleConfigCommand(argv: string[]): Promise<number> {
@@ -102,6 +134,14 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       setPath(candidate, path, raw === undefined ? undefined : parseValue(raw), action === "unset");
       const config = validate(candidate);
       const savedValue = action === "unset" ? null : getPath(config, path);
+      // Setting the order here is the operator restating it, exactly as through
+      // `ocx account priority` or the management route, so it releases the manual pin
+      // for the same reason those do: a pin made before any order existed would
+      // otherwise outrank every order set afterwards, capping the pool at the pinned
+      // account's tier with nothing on any surface explaining why. `import` is
+      // deliberately not covered — that file supplies its own pin, so there is no
+      // stale one to release.
+      if (pathSegments(path)[0] === "codexAccountPriorities") clearCodexAccountPin(config);
       saveConfig(config);
       printData({ ok: true, path, value: redact(savedValue, path.split(".").at(-1)) }, wantsJson,
         [`${action === "unset" ? "Unset" : "Set"} ${path}.`]);
@@ -110,9 +150,10 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "validate") {
       const path = args.shift();
       rejectArgs(args, USAGE);
-      const result = path ? validateConfigCandidate(loadInput(path)) : (() => {
+      const result = path ? validateCandidate(loadInput(path)) : (() => {
         const diagnostics = readConfigDiagnostics();
-        return diagnostics.error ? { ok: false as const, error: diagnostics.error } : { ok: true as const, config: diagnostics.config };
+        if (diagnostics.error) return { ok: false as const, error: diagnostics.error };
+        return validateCandidate(diagnostics.config);
       })();
       printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
         [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);

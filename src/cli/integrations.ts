@@ -27,6 +27,12 @@ const GROK_USAGE = `Usage:
   ocx grok clear [--json]
   ocx grok apply [--json]`;
 
+const CLIENT_USAGE = `Usage:
+  ocx integration client [status] [--client <id>] [--json]
+  ocx integration client <enable|disable> --client <id> [--json]
+  ocx integration client history [--client <id>] [--json]
+  ocx integration client restore --op <opId> [--confirm-drift] [--json]`;
+
 function parseMap(raw: string): Record<string, string> {
   if (raw === "-") return {};
   const map: Record<string, string> = {};
@@ -139,4 +145,81 @@ export async function handleGrokCommand(argv: string[], deps: RuntimeApiDeps = {
   });
 }
 
-export const INTEGRATION_USAGE = { claude: CLAUDE_USAGE, grok: GROK_USAGE };
+/**
+ * The headless half of the client-integration toggle.
+ *
+ * Every safety property lives behind the management API — ownership, the
+ * pre-write snapshot, the journal, the drift refusal — so this command is a
+ * thin caller and deliberately re-implements none of it. That is also why
+ * `restore` surfaces the drift refusal as an error telling the user to pass
+ * `--confirm-drift` rather than retrying on their behalf: replacing edits a
+ * user made after the snapshot is exactly the decision they have to make.
+ */
+export async function handleClientIntegrationCommand(
+  argv: string[],
+  deps: RuntimeApiDeps = {},
+): Promise<number> {
+  return runCliAction(async () => {
+    const args = [...argv];
+    const action = (args.shift() ?? "status").toLowerCase();
+    const wantsJson = takeFlag(args, "--json");
+
+    if (action === "status" || action === "show" || action === "list") {
+      const client = takeOption(args, "--client");
+      rejectArgs(args, CLIENT_USAGE);
+      const path = client
+        ? `/api/client-integrations/${encodeURIComponent(client)}`
+        : "/api/client-integrations";
+      const result = await runtimeRequest(path, {}, deps);
+      const rows = (result as { clients?: Array<Record<string, unknown>> }).clients;
+      printData(result, wantsJson, rows
+        ? rows.map(row => `${String(row.clientId)}: ${String(row.state)}${row.installed ? "" : " (not installed)"}`)
+        : summaryLines(result));
+      return;
+    }
+
+    if (action === "history" || action === "journal") {
+      const client = takeOption(args, "--client");
+      rejectArgs(args, CLIENT_USAGE);
+      const query = client ? `?client=${encodeURIComponent(client)}` : "";
+      const result = await runtimeRequest(`/api/client-integrations/journal${query}`, {}, deps);
+      const operations = (result as { operations?: Array<Record<string, unknown>> }).operations ?? [];
+      printData(result, wantsJson, operations.length === 0
+        ? ["No integration operations recorded yet."]
+        : operations.map(row => {
+          // `snapshot` is resolved against the disk by the route, so "expired"
+          // here means the bytes are genuinely gone, not merely old.
+          const backup = row.snapshot === "expired" ? "backup expired" : `op ${String(row.opId)}`;
+          return `${String(row.at)}  ${String(row.clientId)}  ${String(row.kind)}  (${backup})`;
+        }));
+      return;
+    }
+
+    if (action === "restore") {
+      const opId = takeOption(args, "--op") ?? takeOption(args, "--op-id");
+      const confirmDrift = takeFlag(args, "--confirm-drift");
+      rejectArgs(args, CLIENT_USAGE);
+      if (!opId) throw new CliUsageError("--op <opId> is required", CLIENT_USAGE);
+      const result = await runtimeRequest("/api/client-integrations/restore", {
+        method: "POST",
+        body: JSON.stringify({ opId, confirmDrift }),
+      }, deps);
+      printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? "Restored.")]);
+      return;
+    }
+
+    if (action !== "enable" && action !== "disable") {
+      throw new CliUsageError(`unknown client integration command ${action}`, CLIENT_USAGE);
+    }
+    const client = takeOption(args, "--client");
+    rejectArgs(args, CLIENT_USAGE);
+    if (!client) throw new CliUsageError("--client <id> is required", CLIENT_USAGE);
+    const result = await runtimeRequest(`/api/client-integrations/${encodeURIComponent(client)}`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled: action === "enable" }),
+    }, deps);
+    printData(result, wantsJson, [String((result as Record<string, unknown>).message ?? `${client} ${action}d.`)]);
+  });
+}
+
+export const INTEGRATION_USAGE = { claude: CLAUDE_USAGE, grok: GROK_USAGE, client: CLIENT_USAGE };

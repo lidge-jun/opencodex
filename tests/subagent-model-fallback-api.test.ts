@@ -54,7 +54,7 @@ describe("/api/subagent-model-fallback atomic validation", () => {
     const config = makeConfig({ subagentModelFallback: [...previous] });
 
     const res = await put(config, {
-      models: ["gpt-5.6-sol", 42, "alibaba-token-plan/qwen3.8-max-preview"],
+      models: ["gpt-5.6-sol", 42, "alibaba-token-plan/qwen3.8-max"],
     });
     expect(res.status).toBe(400);
     const body = await res.json() as { error: string; index: number; value: unknown };
@@ -82,7 +82,7 @@ describe("/api/subagent-model-fallback atomic validation", () => {
   test("accepts a fully valid chain after validation", async () => {
     isolatedHome();
     const config = makeConfig();
-    const next = ["gpt-5.6-sol", "alibaba-token-plan/qwen3.8-max-preview"];
+    const next = ["gpt-5.6-sol", "alibaba-token-plan/qwen3.8-max"];
     const res = await put(config, { models: next });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true, models: next });

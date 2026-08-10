@@ -60,15 +60,16 @@ Custom `injectionPrompt` text can use all four placeholders:
 
 | Placeholder | Replaced with |
 | --- | --- |
-| `{{model}}` | The configured `injectionModel`, or an empty string |
+| `{{model}}` | The effective preferred model for this request. A bare native `injectionModel` is account-qualified only when the request itself targets an explicit account selector. An unresolved or ambiguous bare value becomes an empty string; an unresolved explicit account-qualified or routed id remains unchanged |
 | `{{effort}}` | The configured `injectionEffort`, or an empty string |
 | `{{roster}}` | The resolved picker-visible, surface-compatible roster |
 | `{{fallback}}` | The configured global fallback guidance |
 
 The built-in v2 guidance has a 700-character budget. If it would exceed the budget, opencodex drops
-the roster first rather than truncating the core spawn instructions. Guidance fires only when a
-preferred model, eligible roster, or fallback chain resolves. A custom prompt does not bypass that
-gate.
+the roster first rather than truncating the core spawn instructions. Built-in guidance fires only
+when a preferred model, eligible roster, or fallback chain resolves. A configured `injectionModel`
+is sufficient to render a custom prompt; if a bare value cannot resolve uniquely, `{{model}}`
+expands to an empty string.
 
 On v1, opencodex injects only the upstream-style proactive delegation guidance at `max` or `ultra`
 effort. It does not add a preferred model, roster, fallback list, or custom prompt on v1.
@@ -85,8 +86,16 @@ write. External provider managers and user-owned root routing also remain author
 For a spawned worker, opencodex builds this priority order:
 
 1. The requested primary model.
-2. The role's `model_fallback` list from its `$CODEX_HOME/agents/*.toml` definition.
+2. A per-model chain from `subagentModelFallbackByModel` in opencodex config, keyed by
+   the requested primary model.
 3. The global `subagentModelFallback` list in opencodex config.
+
+Per-role fallback chains belong in opencodex config, not in
+`$CODEX_HOME/agents/*.toml`. Codex 0.146+ strictly deserializes agent role files and
+rejects `model_fallback` as an unknown field, which skips the entire role definition
+(#1190). opencodex can still read a legacy `model_fallback` line from the TOML for
+backwards compatibility, but `ocx doctor` warns about it and Codex itself will ignore
+the affected role.
 
 Duplicate model ids are removed while preserving the first occurrence. During selection, opencodex
 skips candidates that are disabled, unroutable, backed by a disabled provider, marked unhealthy,

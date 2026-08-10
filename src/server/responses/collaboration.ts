@@ -26,7 +26,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { modelInList, namespacedToolName } from "../../types";
+import { modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -96,7 +96,7 @@ import {
   sanitizePassthroughHeaders,
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
-import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import type { EffectiveSubagentModel, EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 
 
@@ -108,7 +108,10 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    // Upstream output is untrusted: only restore calls for tools the caller authorized.
+    if (!toolAllowed(t)) continue;
     if (t.namespace) {
       const wireName = namespacedToolName(t.namespace, t.name);
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
@@ -169,6 +172,7 @@ export function collabSurface(parsed: OcxParsedRequest): "v1" | "v2" | null {
 
 export interface MultiAgentGuidanceOptions {
   multiAgentGuidanceEnabled?: boolean;
+  codexAccountNamespace?: string;
   injectionModel?: string;
   injectionEffort?: string;
   subagentModels?: string[];
@@ -183,6 +187,18 @@ export interface MultiAgentGuidanceDeps {
     configuredModels: readonly string[],
     surface: SpawnAgentSurface,
   ) => EffectiveSubagentRoster | Promise<EffectiveSubagentRoster>;
+  collectCatalogState?: () => { state: "fresh" | "stale" | "not_running" | "unknown" };
+}
+
+async function defaultCollectCatalogState(): Promise<{ state: "fresh" | "stale" | "not_running" | "unknown" }> {
+  // Explicit override for tests and diagnostics: process state is global and
+  // would otherwise leak the host machine's app-server into hermetic tests.
+  const override = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  if (override === "fresh" || override === "stale" || override === "not_running" || override === "unknown") {
+    return { state: override };
+  }
+  const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
+  return collectCodexAppServerCatalogState();
 }
 
 
@@ -193,6 +209,16 @@ export async function resolveEffectiveSubagentRoster(
 ): Promise<EffectiveSubagentRoster> {
   const { effectiveSubagentRoster } = await import("../../codex/catalog");
   return effectiveSubagentRoster(configuredModels, surface);
+}
+
+/** Reuse one parsed catalog snapshot across every roster projection for this request. */
+async function createRequestScopedSubagentRosterResolver(): Promise<NonNullable<
+  MultiAgentGuidanceDeps["resolveEffectiveSubagentRoster"]
+>> {
+  const { effectiveSubagentRoster, readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
+  const catalogEntries = readCatalog(readCodexCatalogPath())?.models ?? [];
+  return (configuredModels, surface) =>
+    effectiveSubagentRoster(configuredModels, surface, catalogEntries);
 }
 
 
@@ -206,14 +232,27 @@ export async function multiAgentGuidanceText(
   const {
     injectionModel,
     injectionEffort,
+    codexAccountNamespace,
     subagentModels,
     subagentModelFallback,
     injectionPrompt,
   } = options;
+  const activeAccountNamespace = codexAccountNamespace?.length
+    ? codexAccountNamespace
+    : undefined;
   const surface = collabSurface(parsed);
   if (surface === null) return null;
 
   if (surface === "v2") {
+    // #857: the disk catalog may be newer than the running app-server's
+    // in-memory copy. Advertising preferred models or a roster the running
+    // Codex cannot actually spawn makes spawn_agent reject the override, so
+    // suppress positive model claims while the state is stale or unknown.
+    const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
+    if (catalogState.state === "stale" || catalogState.state === "unknown") {
+      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
+        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+    }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
     // injectionModel and/or a roster entry that resolves in the injected catalog.
@@ -221,15 +260,51 @@ export async function multiAgentGuidanceText(
       ...(subagentModels ?? []),
       ...(injectionModel ? [injectionModel] : []),
     ];
-    const resolveRoster = deps.resolveEffectiveSubagentRoster ?? resolveEffectiveSubagentRoster;
+    const resolveRoster = deps.resolveEffectiveSubagentRoster
+      ?? await createRequestScopedSubagentRosterResolver();
     const effective = await resolveRoster(configuredForGuidance, "v2");
-    const rosterModels = effective.advertised.filter(candidate =>
-      (subagentModels ?? []).some(model => slugsEquivalent(model, candidate.model))
-    );
-    const roster = subagentRosterText(rosterModels);
-    const preferred = injectionModel
-      ? effective.candidates.find(candidate => slugsEquivalent(injectionModel, candidate.model))
+    // Resolve the roster and preferred roles independently so a bare native can project onto its
+    // generated account rows without making an unrelated provider/gpt-* row look equivalent.
+    // The intersection keeps both projections inside Codex's one global five-model window.
+    const candidateModels = new Set(effective.candidates.map(candidate => candidate.model));
+    const withinCandidateWindow = (candidate: EffectiveSubagentModel): boolean =>
+      candidateModels.has(candidate.model);
+    const configuredSubagents = subagentModels ?? [];
+    const subagentEffective = configuredSubagents.length > 0
+      ? injectionModel
+        ? await resolveRoster(configuredSubagents, "v2")
+        : effective
       : undefined;
+    const preferredEffective = injectionModel
+      ? configuredSubagents.length > 0
+        ? await resolveRoster([injectionModel], "v2")
+        : effective
+      : undefined;
+    const explicitlyConfigured = (candidate: EffectiveSubagentModel): boolean =>
+      configuredSubagents.some(model =>
+        model.includes("/") && slugsEquivalent(model, candidate.model)
+      );
+    const allowedForCurrentRoute = (candidate: EffectiveSubagentModel): boolean =>
+      explicitlyConfigured(candidate)
+      || !candidate.model.includes("/")
+      || (activeAccountNamespace !== undefined
+        && candidate.model.startsWith(`${activeAccountNamespace}/`));
+    const rosterModels = (subagentEffective?.advertised ?? [])
+      .filter(withinCandidateWindow)
+      .filter(allowedForCurrentRoute);
+    const roster = subagentRosterText(rosterModels);
+    const preferredCandidates = (preferredEffective?.advertised ?? []).filter(withinCandidateWindow);
+    const soleBarePreferred = preferredCandidates.length === 1
+      && !preferredCandidates[0]!.model.includes("/")
+      ? preferredCandidates[0]
+      : undefined;
+    const preferred = injectionModel?.includes("/")
+      ? preferredCandidates[0]
+      : activeAccountNamespace
+        ? preferredCandidates.find(candidate =>
+          candidate.model.startsWith(`${activeAccountNamespace}/`)
+        ) ?? soleBarePreferred
+        : soleBarePreferred;
 
     if (isInjectionDebugEnabled() && effective.excluded.length > 0) {
       injectionDebugLog(`[opencodex] multi-agent guidance excluded: ${effective.excluded
@@ -239,7 +314,11 @@ export async function multiAgentGuidanceText(
     const fallbackGuidance = subagentFallbackGuidanceText({ subagentModelFallback } as OcxConfig);
     if (!injectionModel && roster === "" && fallbackGuidance === "") return null;
     if (injectionPrompt) {
-      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, injectionModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
+      // Bare ids must resolve to a unique/current-route candidate. Preserve the legacy raw
+      // fallback only for explicit routed/account-qualified ids.
+      const promptModel = preferred?.model
+        ?? (injectionModel?.includes("/") ? injectionModel : undefined);
+      return `<multi_agent_mode>${applyInjectionPlaceholders(injectionPrompt, promptModel, injectionEffort, roster, fallbackGuidance)}</multi_agent_mode>`;
     }
     if (!preferred && roster === "" && fallbackGuidance === "") return null;
     let text = "When the active spawn_agent tool supports optional \"model\" or \"reasoning_effort\" overrides, "

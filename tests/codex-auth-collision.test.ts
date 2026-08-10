@@ -46,6 +46,21 @@ function seedAccount(id: string, email: string, chatgptAccountId: string, plan?:
 }
 
 describe("codex auth account collision", () => {
+  test("treats a non-string plan as an unknown personal plan", () => {
+    saveConfig({
+      port: 10100,
+      providers: {},
+      defaultProvider: "openai",
+      codexAccounts: [],
+    } as OcxConfig);
+
+    expect(checkAccountIdCollision(
+      "malformed-plan-account",
+      "member@example.test",
+      { toString: 1 },
+    )).toEqual({ collision: false });
+  });
+
   test("allows different team members that share a ChatGPT account id", async () => {
     seedAccount("team-member-a", "member-a@example.test", "shared-team-account");
 

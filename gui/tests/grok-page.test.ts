@@ -27,13 +27,20 @@ test("the Grok page covers loading, absent and error states", async () => {
   expect(page).toContain("common.retry");
 });
 
-test("the Grok page is routable and present in the nav", async () => {
-  const routing = await read("../src/app-routing.ts");
-  const app = await read("../src/App.tsx");
-  expect(routing).toContain('| "grok"');
-  expect(routing).toContain('"grok",');
-  expect(app).toContain('{page === "grok" && <Grok apiBase={API_BASE} />}');
-  expect(app).toContain('{ id: "grok", tkey: "nav.grok"');
+/*
+ * Grok is no longer a top-level page. WP5 collapsed `api`, `claude` and `grok`
+ * into one Integrations route, so reachability now means: the nested hash is a
+ * registered route, and an old `#grok` bookmark still lands on the Grok tab
+ * rather than on Overview.
+ */
+test("the Grok surface is reachable through the Integrations route", async () => {
+  const { INTEGRATION_TAB_HASHES, readPageFromHash, resolveAppHashChange } =
+    await import("../src/app-routing");
+  expect(INTEGRATION_TAB_HASHES).toContain("integrations/grok");
+  expect(readPageFromHash("integrations/grok")).toBe("integrations");
+  expect(resolveAppHashChange("integrations/grok").replaceTo).toBeNull();
+  // The legacy bookmark keeps its destination.
+  expect(resolveAppHashChange("grok").replaceTo).toBe("integrations/grok");
 });
 
 test("every locale carries the Grok keys", async () => {

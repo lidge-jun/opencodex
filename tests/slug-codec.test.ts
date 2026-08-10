@@ -9,12 +9,13 @@ import {
   encodeRoutedModelId,
   routedSlug,
   slugEquals,
+  slugEquivalenceKey,
   slugsEquivalent,
 } from "../src/providers/slug-codec";
 import { knownModelIdsForProvider, routeModel } from "../src/router";
 import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
 import { clearModelCache } from "../src/codex/model-cache";
-import { getJawcodeModelMetadata } from "../src/generated/jawcode-model-metadata";
+import { getModelMetadata } from "../src/generated/model-metadata";
 import type { RawEntry } from "../src/codex/catalog";
 import type { OcxConfig } from "../src/types";
 
@@ -83,6 +84,23 @@ describe("slug-codec primitives", () => {
     expect(slugsEquivalent("zenmux/moonshotai/kimi-k3-free", "zenmux/moonshotai-kimi-k3-free")).toBe(true);
     expect(slugsEquivalent("a/b", "c/b")).toBe(false);
     expect(slugsEquivalent("gpt-5.5", "gpt-5.5")).toBe(true);
+  });
+
+  test("slugEquivalenceKey indexes exactly the same relation as slugsEquivalent", () => {
+    const pairs = [
+      ["gpt-5.5", "gpt-5.5"],
+      ["gpt-5.5", "gpt-5.4"],
+      ["p/org/model", "p/org-model"],
+      ["p/a-b", "p/a/b"],
+      ["p/model", "q/model"],
+      ["/invalid", "/invalid"],
+      ["/invalid/a", "/invalid-a"],
+    ] as const;
+
+    for (const [left, right] of pairs) {
+      expect(slugEquivalenceKey(left) === slugEquivalenceKey(right))
+        .toBe(slugsEquivalent(left, right));
+    }
   });
 });
 
@@ -164,7 +182,7 @@ describe("catalog emission (Codex-facing)", () => {
   });
 
   test("jawcode metadata resolves on the native id (template + null-template)", () => {
-    const meta = getJawcodeModelMetadata("openrouter", "anthropic/claude-sonnet-5");
+    const meta = getModelMetadata("openrouter", "anthropic/claude-sonnet-5");
     expect(meta?.contextWindow).toBe(1_000_000);
     const model = { provider: "openrouter", id: "anthropic/claude-sonnet-5" };
 

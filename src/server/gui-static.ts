@@ -56,16 +56,25 @@ function isFile(path: string): boolean {
   }
 }
 
-function htmlResponse(path: string, session?: GuiSessionBootstrap): Response {
-  let html = readFileSync(path, "utf8");
-  if (session) {
-    const bootstrap = [
-      `<meta name="opencodex-session-token" content="${session.token}">`,
-      `<meta name="opencodex-session-csrf" content="${session.csrfToken}">`,
-      `<meta name="opencodex-session-origin" content="${session.origin}">`,
-    ].join("");
-    html = html.includes("</head>") ? html.replace("</head>", `${bootstrap}</head>`) : `${bootstrap}${html}`;
-  }
+/** HTML-attribute escape for values interpolated into meta tags. */
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+/** Shared session meta-tag block, escaped for quoted attribute interpolation. */
+function sessionBootstrapMeta(session: GuiSessionBootstrap): string {
+  return [
+    `<meta name="opencodex-session-token" content="${escapeHtmlAttribute(session.token)}">`,
+    `<meta name="opencodex-session-csrf" content="${escapeHtmlAttribute(session.csrfToken)}">`,
+    `<meta name="opencodex-session-origin" content="${escapeHtmlAttribute(session.origin)}">`,
+  ].join("");
+}
+
+function htmlDocumentResponse(html: string): Response {
   return new Response(html, {
     headers: {
       "Content-Type": "text/html",
@@ -74,6 +83,26 @@ function htmlResponse(path: string, session?: GuiSessionBootstrap): Response {
       ...browserSecurityHeaders(),
     },
   });
+}
+
+function htmlResponse(path: string, session?: GuiSessionBootstrap): Response {
+  let html = readFileSync(path, "utf8");
+  if (session) {
+    const bootstrap = sessionBootstrapMeta(session);
+    html = html.includes("</head>") ? html.replace("</head>", `${bootstrap}</head>`) : `${bootstrap}${html}`;
+  }
+  return htmlDocumentResponse(html);
+}
+
+/**
+ * Minimal session-bootstrap document, independent of any packaged GUI build. The dev
+ * GUI (Vite) proxies /opencodex-session to the backend with the original host so the
+ * backend can mint an origin-bound loopback session even when gui/dist does not exist.
+ */
+export function serveSessionBootstrap(session: GuiSessionBootstrap): Response {
+  const bootstrap = sessionBootstrapMeta(session);
+  const html = `<!doctype html><html><head><meta charset="utf-8">${bootstrap}</head><body></body></html>`;
+  return htmlDocumentResponse(html);
 }
 
 export function serveGuiFile(

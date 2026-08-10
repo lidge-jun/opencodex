@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
 import { parseRequest } from "../src/responses/parser";
+import { anthropicToResponsesBody } from "../src/claude/inbound";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
@@ -136,11 +137,72 @@ describe("anthropic extended-thinking gate", () => {
     expect(b.output_config).toBeUndefined();
   });
 
+  // The adaptive-wire predicate shares the id parse with the #545 disable gate, so a
+  // slash-carrying id must still pick the ADAPTIVE shape. Getting this wrong sends obsolete
+  // manual `thinking.enabled` to a model that rejects it — a 400, not a silent truncation.
+  test.each([
+    "anthropic/claude-sonnet-5",
+    "claude-sonnet-5/variant",
+    "claude-opus-4-8/vendor-suffix",
+  ])("adaptive-thinking model %s keeps the adaptive wire shape", async (modelId) => {
+    const b = await bodyOf(parsed("high", {}, modelId));
+    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.output_config).toEqual({ effort: "high" });
+  });
+
   test("adaptive-thinking model with reasoning 'none' sends no thinking config", async () => {
     const b = await bodyOf(parsed("none", { temperature: 0.3 }, "claude-fable-5"));
     expect(b.thinking).toBeUndefined();
     expect(b.output_config).toBeUndefined();
     expect(b.temperature).toBe(0.3);
+  });
+
+  // #545: Claude Desktop's Auto Mode classifier sends thinking:{type:"disabled"} with
+  // max_tokens:64. Omitting the field lets a default-on model think anyway, and thinking
+  // shares that 64-token budget — so generation stopped before the stop sequence and the
+  // client retried. Say "disabled" out loud, but only where the vendor accepts it.
+  test.each([
+    "claude-sonnet-5",
+    "claude-sonnet-5-20260101",
+    "claude-sonnet-5[1m]",
+    // A modelMap entry can point at a routed destination, which custom-provider routing
+    // decodes back into a slash-carrying native id. An id-shape miss here is silent: the
+    // request simply goes out without the disable and the model thinks anyway.
+    "anthropic/claude-sonnet-5",
+    "openrouter/anthropic/claude-sonnet-5",
+    // The slash can also carry a vendor SUFFIX rather than a routing prefix, so the family
+    // segment is not reliably first or last. Both directions are real routed shapes.
+    "claude-sonnet-5/variant",
+  ])("%s + reasoning 'none' sends an explicit thinking disable (#545)", async (modelId) => {
+    const b = await bodyOf(parsed("none", { maxOutputTokens: 64, stopSequences: ["</block>"] }, modelId));
+    expect(b.thinking).toEqual({ type: "disabled" });
+    expect(b.output_config).toBeUndefined();
+    // The caller's own limits must survive untouched — they were never the defect.
+    expect(b.max_tokens).toBe(64);
+    expect(b.stop_sequences).toEqual(["</block>"]);
+  });
+
+  test("Sonnet 5 with reasoning OMITTED still omits thinking (#545)", async () => {
+    // Absence is not a disable instruction: only an explicit "none" earns the explicit field.
+    const b = await bodyOf(parsed(undefined, {}, "claude-sonnet-5"));
+    expect(b.thinking).toBeUndefined();
+  });
+
+  test.each([
+    "claude-fable-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "anthropic/claude-fable-5",
+    "claude-fable-5/foo",
+    "not-a-claude-model",
+  ])("%s + 'none' sends NO explicit disable (#545 gate stays narrow)", async (modelId) => {
+    // Fable always thinks and rejects an explicit disable; the Opus 4.7/4.8 adaptive wire
+    // leaves thinking off when omitted. Widening the gate to every adaptive family would
+    // trade a silent truncation for a 400.
+    const b = await bodyOf(parsed("none", {}, modelId));
+    expect(b.thinking).toBeUndefined();
   });
 
   test("drops reconstructed Responses reasoning signatures when switching into Anthropic", async () => {
@@ -167,5 +229,28 @@ describe("anthropic extended-thinking gate", () => {
     expect(JSON.stringify(messages)).not.toContain("rs_other_provider");
     expect(JSON.stringify(messages)).not.toContain("signature");
     expect(messages).toEqual([{ role: "user", content: "continue on anthropic" }]);
+  });
+});
+
+describe("Claude Desktop classifier round trip (#545)", () => {
+  test("thinking:disabled survives inbound translation to the outbound Anthropic body", async () => {
+    // The reporter's exact shape: a permission classifier with a 64-token budget that must
+    // close its XML tag. Before the fix, "disabled" was dropped at the inbound hop and the
+    // outbound request omitted `thinking` entirely, so Sonnet 5 thought anyway and spent the
+    // budget before emitting </block>. Claude Code then retried, up to five times.
+    const inbound = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 64,
+      stop_sequences: ["</block>"],
+      thinking: { type: "disabled" },
+      system: "decide whether this tool call is allowed",
+      messages: [{ role: "user", content: "<request>ls</request>" }],
+    });
+
+    const body = await bodyOf(parseRequest(inbound));
+
+    expect(body.thinking).toEqual({ type: "disabled" });
+    expect(body.max_tokens).toBe(64);
+    expect(body.stop_sequences).toEqual(["</block>"]);
   });
 });

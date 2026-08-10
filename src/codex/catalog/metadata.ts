@@ -9,7 +9,7 @@ import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
-import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
+import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
@@ -22,6 +22,7 @@ import {
   COMBO_NAMESPACE,
   comboModelId,
   getCombo,
+  isNativeAliasCombo,
   listComboIds,
   targetKey,
 } from "../../combos";
@@ -31,21 +32,51 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { filterSupportedNativeSlugs } from "./parsing";
 import type { RawEntry } from "./parsing";
 import { readCurrentCatalogOrCache, unique } from "./bundled";
-
-export const NATIVE_OPENAI_MODELS = [
-  "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark",
-  "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
-];
+import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
+export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+export { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
 
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 ];
 
-export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
+export function configuredNativeAliasSlugs(
+  config: Pick<OcxConfig, "combos">,
+): Set<string> {
+  const aliases = new Set<string>();
+  for (const raw of Object.values(config.combos ?? {})) {
+    if (!isNativeAliasCombo(raw)) continue;
+    const alias = raw.alias!.trim();
+    if (SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) aliases.add(alias);
+  }
+  return aliases;
+}
+
+/**
+ * Bare native rows that must be absent, rather than merely hidden, while Desktop native-alias
+ * compatibility is active. Codex Desktop's remote allowlist can ignore `visibility: "hide"`;
+ * omitting disabled native rows is therefore part of the explicit native-alias opt-in.
+ */
+export function desktopAllowlistSuppressedNativeSlugs(
+  config: Pick<OcxConfig, "combos" | "disabledModels">,
+): Set<string> {
+  const suppressed = configuredNativeAliasSlugs(config);
+  if (suppressed.size === 0) return suppressed;
+  const disabled = disabledNativeSlugs(config);
+  for (const slug of NATIVE_OPENAI_MODELS) {
+    if (disabled.has(slug)) suppressed.add(slug);
+  }
+  return suppressed;
+}
+
+export function isNativeAliasCatalogEntry(entry: RawEntry): boolean {
+  return entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
+}
 
 export function isUnsupportedOpenAiNativeSlug(slug: string): boolean {
   if (slug.includes("/")) return false;
@@ -64,15 +95,27 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   "gpt-5.6-luna": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
 };
 
+/**
+ * Pinned capability metadata is safe to use as a fallback for every supported native model.
+ * Keep it separate from UPSTREAM_NATIVE_ENTRIES: that narrower map also authorizes replacing
+ * persisted native rows during sync, which is currently intentional only for the GPT-5.6 family.
+ */
+const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
+  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
+    .filter(m => typeof m.slug === "string"
+      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
+    .map(m => [m.slug as string, m]),
+);
+
 export function nativeOpenAiContextWindow(slug: string): number | undefined {
   return NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow
-    ?? (typeof UPSTREAM_NATIVE_ENTRIES.get(slug)?.context_window === "number"
-      ? UPSTREAM_NATIVE_ENTRIES.get(slug)!.context_window as number
+    ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
+      ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
 }
 
 export function nativeInputModalities(slug: string): string[] {
-  const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
+  const upstream = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
   if (Array.isArray(upstream?.input_modalities) && upstream!.input_modalities!.length > 0) {
     return [...upstream!.input_modalities as string[]];
   }
@@ -82,7 +125,7 @@ export function nativeInputModalities(slug: string): string[] {
 }
 
 export function nativeReasoningEfforts(slug: string): string[] {
-  const upstream = UPSTREAM_NATIVE_ENTRIES.get(slug);
+  const upstream = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug);
   const levels = Array.isArray(upstream?.supported_reasoning_levels)
     ? upstream!.supported_reasoning_levels as Array<{ effort?: string }>
     : [];
@@ -97,12 +140,18 @@ export function nativeReasoningEfforts(slug: string): string[] {
 
 /** Upstream-pinned default for a native slug, when present and non-empty. */
 export function nativeDefaultReasoningEffort(slug: string): string | undefined {
-  const level = UPSTREAM_NATIVE_ENTRIES.get(slug)?.default_reasoning_level;
+  const level = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.default_reasoning_level;
   return typeof level === "string" && level.length > 0 ? level : undefined;
 }
 
+/** Upstream-pinned multi-agent surface for a supported native slug, when present. */
+export function nativeMultiAgentVersion(slug: string): string | undefined {
+  const version = PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.multi_agent_version;
+  return typeof version === "string" && version.length > 0 ? version : undefined;
+}
+
 export function nativeParallelToolCalls(slug: string): boolean {
-  return UPSTREAM_NATIVE_ENTRIES.get(slug)?.supports_parallel_tool_calls === true
+  return PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.supports_parallel_tool_calls === true
     || false;
 }
 
@@ -116,30 +165,67 @@ export function disabledNativeSlugs(config: Pick<OcxConfig, "disabledModels">): 
   return new Set((config.disabledModels ?? []).filter(id => !id.includes("/")));
 }
 
-export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels">): string[] {
+export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels" | "combos">): string[] {
   const disabled = disabledNativeSlugs(config);
-  return nativeOpenAiSlugs().filter(slug => !disabled.has(slug));
+  const shadowed = configuredNativeAliasSlugs(config);
+  return nativeOpenAiSlugs().filter(slug => !disabled.has(slug) && !shadowed.has(slug));
+}
+
+/** Whether an enabled canonical OpenAI provider can serve exact account-qualified routes. */
+export function shouldIncludeAccountBoundNativeOpenAi(
+  config: Pick<OcxConfig, "providers">,
+): boolean {
+  const provider = config.providers[OPENAI_CODEX_PROVIDER_ID];
+  if (!provider || provider.disabled === true) return false;
+  // Registry routing defaults an omitted authMode on the built-in OpenAI row to forward.
+  const canonical = provider.authMode === undefined
+    ? { ...provider, authMode: "forward" as const }
+    : provider;
+  return isCanonicalOpenAiForwardProvider(canonical);
+}
+
+/** Whether native ChatGPT/Codex rows belong in this provider configuration. */
+export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">): boolean {
+  const hasEnabledProvider = Object.values(config.providers)
+    .some(provider => provider.disabled !== true);
+  // Preserve the existing no-enabled-provider catalog bootstrap, but do not use that bootstrap
+  // exception for account-qualified rows: exact-account routing requires a live OpenAI provider.
+  return !hasEnabledProvider || shouldIncludeAccountBoundNativeOpenAi(config);
 }
 
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
-export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" | "disabledModels">): string[] {
+export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "combos">): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
   return visibleNativeSlugs(config);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
+export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
   const disabled = disabledNativeSlugs(config);
-  return NATIVE_OPENAI_MODELS.map(slug => {
+  const shadowed = configuredNativeAliasSlugs(config);
+  return NATIVE_OPENAI_MODELS.filter(slug => !shadowed.has(slug)).map(slug => {
     const contextWindow = nativeOpenAiContextWindow(slug);
     return { slug, disabled: disabled.has(slug), ...(contextWindow !== undefined ? { contextWindow } : {}) };
   });
 }
 
-export function applyNativeVisibility(entries: RawEntry[], disabledNative: Set<string>): RawEntry[] {
+export function applyNativeVisibility(
+  entries: RawEntry[],
+  disabledModels: ReadonlySet<string>,
+  hideBareNative = false,
+): RawEntry[] {
   for (const entry of entries) {
+    if (isNativeAliasCatalogEntry(entry)) continue;
     const slug = typeof entry.slug === "string" ? entry.slug : "";
-    if (!slug || slug.includes("/") || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) continue;
-    entry.visibility = disabledNative.has(slug) ? "hide" : "list";
+    const accountBoundSlug = trustedAccountBoundNativeCatalogSlug(entry);
+    const nativeSlug = accountBoundSlug ?? slug;
+    if (!nativeSlug
+      || (!accountBoundSlug && slug.includes("/"))
+      || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)) continue;
+    const disabled = disabledModels.has(nativeSlug)
+      || (accountBoundSlug !== undefined && disabledModels.has(slug));
+    entry.visibility = disabled || (!accountBoundSlug && hideBareNative)
+      ? "hide"
+      : "list";
   }
   return entries;
 }
@@ -167,14 +253,29 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 }
 
 export function nativeOpenAiSlugs(): string[] {
-  const live = listCatalogNativeSlugs();
+  const live = catalogNativeSlugs();
   return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
 }
 
-export function listCatalogNativeSlugs(): string[] {
+function catalogNativeSlugs(): string[] {
   const cat = readCurrentCatalogOrCache();
-  const live = filterSupportedNativeSlugs(cat?.models ?? []);
+  const models = cat?.models ?? [];
+  const live = models.flatMap(entry => {
+    const slug = typeof entry.slug === "string" ? entry.slug : "";
+    return !slug.includes("/") && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];
+  });
+  const accountBound = models.flatMap(entry => {
+    const slug = trustedAccountBoundNativeCatalogSlug(entry);
+    return slug !== undefined && SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug) ? [slug] : [];
+  });
+  // Deliberately ignore `visibility`: it is a rendered projection of disabledModels and account
+  // selectors, so treating it as fresh availability would shrink the supported set between syncs.
+  // visibleNativeSlugs applies the current disabledModels source of truth for public consumers.
+  return unique([...live, ...accountBound]);
+}
+
+export function listCatalogNativeSlugs(): string[] {
   // Ensure documented additions (e.g. gpt-5.3-codex-spark) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.
-  return unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+  return unique([...catalogNativeSlugs(), ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
 }

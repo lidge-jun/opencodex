@@ -11,5 +11,5 @@ root = "tests"
 # Sandboxes HOME/OPENCODEX_HOME/CODEX_HOME and arms the real-home write guard for EVERY
 # invocation, including a bare `bun test <file>` that skips `scripts/test.ts`. A test
 # once overwrote a real user config through that unwrapped path; see
-# devlog/_plan/260730_codex_rs_upstream_v2_live_handoff/070.
+# devlog/_fin/260730_codex_rs_upstream_v2_live_handoff/070.
 preload = ["./tests/preload.ts"]

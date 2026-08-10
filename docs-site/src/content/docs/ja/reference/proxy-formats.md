@@ -53,6 +53,8 @@ provider events → internal adapter events → client dialect
 
 `stream: false` を指定するか、`stream` を指定しないと、同じアダプター イベントが 1 つの Responses JSON オブジェクトに収集されます。どちらの形式でも、選択したモデル、出力項目、端末の状態、使用状況が保存されます。
 
+クライアント向け Responses SSE フレームは、SSE ブロック区切りの前の生バイトで測って 1 フレームあたり 4 MiB に制限されます。HTTP では、区切りなしでこの上限を超えたアップストリーム フレームは、合成 `response.failed` イベントと続く `data: [DONE]` でフェイルクローズします。Responses WebSocket ブリッジでは、同じ条件で 502 `websocket_protocol_error` を送信し、アップストリーム リーダーをキャンセルします。完全な Responses 終端フレームがすでに到着している場合はそれが優先され、その後のサイズ超過または不正なバイトは、完了したターンをトランスポート障害に置き換えず破棄されます。
+
 すべての端末応答使用状況オブジェクトには、プロバイダーが詳細を報告しなかった場合でも、両方の詳細オブジェクトが含まれます。
 
 ```json

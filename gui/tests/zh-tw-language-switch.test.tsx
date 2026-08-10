@@ -38,6 +38,7 @@ const REVIVED_WORKSPACE_KEYS = [
   "nav.providers",
   "nav.subagents",
   "nav.usage",
+  "nav.integrations",
   "nav.api",
   "api.clientConfig.title",
   "api.section.keys",
@@ -59,6 +60,7 @@ describe("zh-TW language switch renders the application surface", () => {
     expect(html).toContain("Providers");
     expect(html).toContain("Subagents");
     expect(html).toContain("Usage");
+    expect(html).toContain("Integrations");
     expect(html).toContain("Client config");
     expect(html).toContain("Keys");
   });
@@ -78,6 +80,7 @@ describe("zh-TW language switch renders the application surface", () => {
     expect(html).toContain("供應商");
     expect(html).toContain("子代理");
     expect(html).toContain("用量");
+    expect(html).toContain("整合");
     expect(html).toContain("用戶端設定");
     expect(html).toContain("金鑰");
     expect(html).toContain("連接");
@@ -86,6 +89,7 @@ describe("zh-TW language switch renders the application surface", () => {
     expect(html).not.toContain(">Providers<");
     expect(html).not.toContain(">Subagents<");
     expect(html).not.toContain(">Usage<");
+    expect(html).not.toContain(">Integrations<");
     expect(html).not.toContain(">Client config<");
     expect(html).not.toContain(">Keys<");
   });

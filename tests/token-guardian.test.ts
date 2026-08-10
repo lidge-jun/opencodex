@@ -7,6 +7,11 @@ import { getConfigPath } from "../src/config";
 import { markCodexAccountValidated, readCodexAccountRecord, saveCodexAccountCredential } from "../src/codex/account-store";
 import { __resetGuardianState, guardianSweep } from "../src/oauth/token-guardian";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import {
+  acquireNativeMainProfileDrain,
+  getNativeMainProfileRequestCount,
+  resetLifecycleDrainStateForTests,
+} from "../src/server/lifecycle";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -29,6 +34,7 @@ function writeConfig(partial: Partial<OcxConfig>): void {
 }
 
 beforeEach(() => {
+  resetLifecycleDrainStateForTests();
   tmp = join(tmpdir(), `token-guardian-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(tmp, { recursive: true });
   process.env.HOME = tmp;
@@ -40,6 +46,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetLifecycleDrainStateForTests();
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
   if (origOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = origOcxHome;
   if (origCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = origCodexHome;
@@ -213,5 +220,65 @@ describe("token guardian", () => {
     expect(res.warmed).toEqual(["codex:__main__"]);
     expect(mock.calls()).toBe(1);
     expect(readFileSync(accountStore, "utf8")).toBe("invalid-added-store");
+  });
+
+  test("main warmup owns native main through async work and defers while a switch fence is active", async () => {
+    writeFileSync(join(tmp, "codex", "auth.json"), JSON.stringify({
+      tokens: { access_token: "main-owned", account_id: "main-owned-account" },
+    }));
+    writeConfig({
+      tokenGuardian: {
+        enabled: true,
+        tickSeconds: 60,
+        leadSeconds: 60,
+        codexWarmupEnabled: true,
+      },
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+          refreshPolicy: "proactive",
+        },
+      },
+    });
+    let warmupCalls = 0;
+    let releaseWarmup!: () => void;
+    const warmupGate = new Promise<void>(resolve => { releaseWarmup = resolve; });
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input) === "https://chatgpt.com/backend-api/codex/responses") {
+        warmupCalls += 1;
+        markStarted();
+        await warmupGate;
+        return new Response('event: response.completed\ndata: {"type":"response.completed"}\n\n', {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      return origFetch(input);
+    }) as typeof fetch;
+
+    const pending = guardianSweep(Date.now());
+    await started;
+    expect(getNativeMainProfileRequestCount()).toBe(1);
+    const drain = acquireNativeMainProfileDrain("guardian-overlap");
+    expect(drain).not.toBeNull();
+    try {
+      const deferred = await guardianSweep(Date.now());
+      expect(deferred.warmed).toEqual([]);
+      expect(deferred.failed).toEqual([]);
+      expect(warmupCalls).toBe(1);
+
+      releaseWarmup();
+      const completed = await pending;
+      expect(completed.warmed).toEqual(["codex:__main__"]);
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    } finally {
+      releaseWarmup();
+      drain?.release();
+    }
   });
 });

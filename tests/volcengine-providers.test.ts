@@ -68,13 +68,15 @@ describe("Volcengine Ark providers", () => {
         "kimi-k2.6": ["text", "image"],
         "minimax-m3": ["text", "image"],
       },
+      // #1057: per-model ladders. Pro omits `low` because the vendor upgrades it to
+      // `high`; `xhigh` is an alias in both maps and advertised in neither.
       modelReasoningEfforts: {
-        "deepseek-v4-pro": ["high", "xhigh", "max"],
-        "deepseek-v4-flash": ["high", "xhigh", "max"],
+        "deepseek-v4-pro": ["high", "max"],
+        "deepseek-v4-flash": ["low", "high", "max"],
       },
       modelReasoningEffortMap: {
         "deepseek-v4-pro": { low: "high", medium: "high", high: "high", xhigh: "max", max: "max" },
-        "deepseek-v4-flash": { low: "high", medium: "high", high: "high", xhigh: "max", max: "max" },
+        "deepseek-v4-flash": { low: "low", medium: "high", high: "high", xhigh: "high", max: "max" },
       },
       preserveReasoningContentModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
     });
@@ -258,11 +260,17 @@ describe("Volcengine Ark providers", () => {
         };
       };
 
+      // #1057: `medium` is our own compatibility alias (no vendor row) and maps to
+      // `high` on both. `xhigh` is a vendor-documented alias that resolves
+      // DIFFERENTLY per model — max on Pro, high on Flash — so this cannot be a
+      // shared expectation.
       expect(buildBody("medium").reasoning_effort).toBe("high");
       const xhighBody = buildBody("xhigh");
-      expect(xhighBody.reasoning_effort).toBe("max");
+      expect(xhighBody.reasoning_effort).toBe(modelId === "deepseek-v4-flash" ? "high" : "max");
       expect(xhighBody.messages[1]?.reasoning_content).toBe("I need to inspect files first.");
       expect(xhighBody.messages[1]).toHaveProperty("tool_calls");
+      // Flash honors native `low`; Pro's `low` is upgraded to `high` upstream.
+      expect(buildBody("low").reasoning_effort).toBe(modelId === "deepseek-v4-flash" ? "low" : "high");
     },
   );
 

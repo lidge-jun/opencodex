@@ -8,10 +8,11 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
-import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
 import { selectImagesProvider } from "../src/providers/openai-sidecar";
 import { startServer } from "../src/server";
+import { handleImages, IMAGES_RESPONSE_MAX_BYTES, readImageResponseBytes } from "../src/server/images";
 import { saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 import { ANTIGRAVITY_REQUEST_UA } from "../src/adapters/google-antigravity-wire";
@@ -126,6 +127,33 @@ const canonicalOpenAiProvider = {
 function keyedProvider(_baseUrl = "") {
   return { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1", apiKey: "sk-platform-key" };
 }
+
+test("image response byte reader enforces the stream cap when Content-Length is understated", async () => {
+  const chunks = [
+    new Uint8Array(5),
+    new Uint8Array([0x01]),
+    new Uint8Array([0x7f]),
+    new Uint8Array([0x7e]),
+  ];
+  let canceled = false;
+  let tailPulled = false;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const chunk = chunks.shift();
+      if (!chunk) return controller.close();
+      if (chunk.byteLength === 1 && chunk[0] === 0x7e) tailPulled = true;
+      controller.enqueue(chunk);
+    },
+    cancel() { canceled = true; },
+  }), { headers: { "content-length": "1" } });
+
+  const observed = await readImageResponseBytes(response, { maxBytes: 5 });
+  expect(observed.oversized).toBe(true);
+  expect(observed.bytes.byteLength).toBe(0);
+  expect(canceled).toBe(true);
+  // One queued chunk may be prefetched; cancellation must stop later draining.
+  expect(tailPulled).toBe(false);
+});
 
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
@@ -716,6 +744,228 @@ test("relays upstream error status and body verbatim", async () => {
     await server.stop(true);
     await upstream.stop(true);
   }
+});
+
+test("relays arbitrary upstream image bytes with status and content-type unchanged", async () => {
+  const payload = new Uint8Array([0x00, 0xff, 0x80, 0x7f]);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(payload, {
+        status: 418,
+        headers: { "content-type": "application/octet-stream" },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(418);
+    expect(response.headers.get("content-type")).toContain("application/octet-stream");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(payload);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("relays a bodyless upstream image status without synthesizing a body", async () => {
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(null, {
+        status: 204,
+        headers: { "content-length": String(IMAGES_RESPONSE_MAX_BYTES + 1) },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(204);
+    expect((await response.arrayBuffer()).byteLength).toBe(0);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("records an oversized forward response status before returning the size error", async () => {
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(new ReadableStream<Uint8Array>({
+        cancel() { upstreamCanceled = true; },
+      }), {
+        status: 429,
+        headers: {
+          "content-length": String(IMAGES_RESPONSE_MAX_BYTES + 1),
+          "content-type": "application/json",
+          "retry-after": "60",
+        },
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    ...forwardConfig(),
+    providers: { openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" } },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    activeCodexAccountId: "pool-a",
+  } as OcxConfig);
+  saveCodexAccountCredential("pool-a", {
+    accessToken: "pool-access-token",
+    refreshToken: "pool-refresh-token",
+    expiresAt: Date.now() + 3_600_000,
+    chatgptAccountId: "acct-pool-a",
+  });
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer caller-token" },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: { message: string } }).error.message)
+      .toContain("response too large");
+    expect(upstreamCanceled).toBe(true);
+    expect(getCodexUpstreamHealth("pool-a")).toMatchObject({ lastFailureStatus: 429 });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("an image body that stalls after headers retains the 504 deadline", async () => {
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(new ReadableStream<Uint8Array>({
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({ ...forwardConfig(), images: { timeoutMs: 50 } } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/images/generations", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    });
+    expect(response.status).toBe(504);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain("timed out");
+    expect(upstreamCanceled).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+}, 5_000);
+
+test("a client abort during image body reading maps to 499 and cancels upstream", async () => {
+  let markReaderAttached: (() => void) | undefined;
+  const readerAttached = new Promise<void>(resolve => { markReaderAttached = resolve; });
+  let pulls = 0;
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulls++;
+          if (pulls === 1) {
+            // Fill the initial queue. The second pull only happens after the
+            // handler's reader consumes this chunk, proving reader attachment.
+            controller.enqueue(new Uint8Array([0x01]));
+            return;
+          }
+          markReaderAttached?.();
+        },
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const parent = new AbortController();
+  const request = new Request("http://127.0.0.1/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      "chatgpt-account-id": "acct-123",
+    },
+    body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    signal: parent.signal,
+  });
+  const reading = handleImages(request, forwardConfig(), "generations", { model: "", provider: "" });
+  await readerAttached;
+  parent.abort(new Error("client stopped"));
+
+  const response = await reading;
+  expect(response.status).toBe(499);
+  expect(upstreamCanceled).toBe(true);
+});
+
+test("a client abort before the image reader attaches cancels the untouched upstream body", async () => {
+  const parent = new AbortController();
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      const response = new Response(new ReadableStream<Uint8Array>({
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+      parent.abort(new Error("client stopped before body read"));
+      return response;
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const request = new Request("http://127.0.0.1/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      "chatgpt-account-id": "acct-123",
+    },
+    body: JSON.stringify({ prompt: "a cat", model: "gpt-image-2" }),
+    signal: parent.signal,
+  });
+  const response = await handleImages(request, forwardConfig(), "generations", { model: "", provider: "" });
+  expect(response.status).toBe(499);
+  expect(upstreamCanceled).toBe(true);
 });
 
 test("a hung upstream times out with 504 after config.images.timeoutMs", async () => {

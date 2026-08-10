@@ -23,10 +23,28 @@ see [The retired `dev2-go` line](#the-retired-dev2-go-line).
   `main` happens only from `dev`. The target-branch check accepts `dev` alone.
 - The **`enforce-target`** CI check rejects pull requests whose head
   ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-  empty, thin, or malformed descriptions; authors with repository push
-  permission skip the ancestry heuristic only. As with the approval requirement
-  above, this is enforced by convention until branch protection is configured
-  (see the note under the change log).
+  empty, thin, or malformed descriptions; PRs whose title or description
+  mentions `gui` must include a screenshot of the UI change in the description.
+  Contributor PRs (authors without repository push permission) open in draft
+  and stay there until a four-box review-readiness checklist in the
+  description is complete: local CI green, branch on the latest `dev` commit,
+  all correct Codex and CodeRabbit findings fixed, and the ready-for-review
+  confirmation. When all four boxes are ticked the gate marks the PR ready and
+  notifies the maintainers listed in `MAINTAINERS.md` (excluding the author).
+  Completion is bound to the exact commit the PR head pointed at: if new
+  commits are pushed afterwards, the gate moves the PR back to draft, resets
+  the checklist and the notification, and asks the author to test and tick the
+  boxes again against the latest code.
+  Before a completion is accepted, the gate verifies the checklist claims
+  it can check itself: the branch must be on the latest `dev` commit or at
+  most 10 commits behind it, and Codex/CodeRabbit findings must be resolved.
+  The local-CI box is an author attestation only — fork contributors cannot
+  start repository CI; a maintainer has to — so the gate never disproves it;
+  a new push still resets every box. A disproved claim unticks the matching
+  box and keeps the PR a draft.
+  Authors with repository push permission skip the ancestry heuristic only. As
+  with the approval requirement above, this is enforced by convention until
+  branch protection is configured (see the note under the change log).
 - A pull request requires approval from at least one maintainer and successful required CI checks
   before merge.
 - Authors do not approve their own pull requests.

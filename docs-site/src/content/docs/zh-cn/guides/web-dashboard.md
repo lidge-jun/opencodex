@@ -20,6 +20,12 @@ ocx start
 bun run dev:gui
 ```
 
+## 登录
+
+通过 `localhost`、`127.0.0.1` 等 loopback 地址打开仪表盘时，它会自动获得一个短期 GUI session，因此通常无需输入 token。在非 loopback 主机上公开仪表盘时，必须使用 `OPENCODEX_ADMIN_AUTH_TOKEN` 或自动生成的 `~/.opencodex/admin-api-token` 文件中的管理员 token。
+
+远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
+
 ## 可以完成哪些操作
 
 | 区域 | 作用 |
@@ -71,12 +77,21 @@ Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以
 选择器会列出已启用的原生与路由模型，以及全局 Codex reasoning 阶梯。API 会先验证所选强度是否
 属于全局阶梯；Codex 仍会根据目标目录条目再次校验该 spawn 强度。
 
+<a id="codex-auth-and-account-pools"></a>
+
 ## Codex Auth 与账号池
 
 **Codex Auth** 页面用于管理原生 ChatGPT/Codex 路由：
 
-- 手动选择账号会影响下一次新建的 Codex session；已经绑定账号的 thread 不会因为这次手动切换而
-  在中途转移。
+Pool 模式会在主账号和已添加的 Codex 账号之间选择；Direct 只使用调用者或主登录账号。进行中的请求会保留已获取的凭据，而 401/403 重新认证或 429 cooldown 可能清除亲和性并轮换到另一个合格的 Pool 账号。这与 `openai-apikey` 及其他 provider 相互独立。
+
+- 手动选择账号会立即生效：已经绑定账号的 thread 会在下一次请求时切换到所选账号，只有已经在传输中的
+  请求会继续使用它们捕获的账号。手动选择的账号还会被固定：卡片上会出现 **已固定** 徽章，在该账号被耗尽、你改选
+  其他账号，或你改动任意账号的选择顺序之前，更高的选择顺序都无法抢占它。
+- 每张账号卡片都带有 **选择顺序** 控件（最先 / 较先 / 默认 / 较后 / 最后）。顺序靠前的账号先被使用，
+  只有当它上面的账号全部耗尽或不可用时才会降到更靠后的顺序。改动顺序会从**下一个未绑定请求**起生效，
+  且不会移动已经绑定的 thread。Codex Desktop（主）账号同样参与排序，可以设为 **最后** 留作备用。
+  用 `ocx account priority` 设置的非预设值也会保留在卡片上，仍可选择。
 - Thread affinity 可避免每个请求都来回切换账号。启用配额自动切换后，长时间运行的 thread 会被
   定期重新评估；当相关 usage 达到阈值，并且存在使用率确实更低的可用账号时，该 thread 可能会
   重新绑定。
@@ -84,6 +99,20 @@ Dashboard 的 **Sub-agent delegation** 选择器会保存 `injectionModel`，以
   评分；Go/Free 计划只使用 30d 窗口。
 - **Refresh quotas** 会立即重新读取账号 usage，使路由逻辑与页面上的账号卡片使用同一份数据。
 - 池账号的请求日志使用 `p3fa91c` 这类不透明标签，不会记录账号邮箱。
+- **从模型选择器指定 Codex 账号** 是一项显式选择加入的设置。启用后，普通 GPT picker 条目会
+  替换为每个公开账号 selector 对应的条目。选择其中一项会把该对话锁定到映射账号：不会轮换、
+  fallback，也不会更改活跃 Pool 账号。内置 Codex App 登录有自己的 selector；生成的 map 通常
+  使用 `main`，发生冲突时会使用 `main-2` 这类安全后缀。新增账号会获得稳定且保护隐私的标签，
+  已有自定义 selector 标签则会保留。现有对话和已保存的模型选择会
+  继续路由。关闭此设置只会隐藏生成的 picker 项，不会删除账号、selector 或精确路由；普通 GPT
+  model id 继续使用已配置的 Pool 或 Direct 行为。
+- 添加、删除账号或更改 picker 设置时，会先保存变更再刷新模型目录。如果有界刷新未完成，
+  仪表盘会显示琥珀色的“成功但需要恢复”提示；运行 `ocx sync` 即可重试。账号或设置变更本身
+  仍已保存。
+
+Providers 概览会单独汇总 Pool 模式的显示专用加权容量估算，并同时显示当前有效账户的原始配额和
+下一次容量恢复。可见字段、覆盖不完整的含义以及路由边界，请参阅
+[提供商概览中的账户池容量](/zh-cn/guides/providers/#提供商概览中的账户池容量)。
 
 ## 仪表盘如何与代理通信
 
@@ -91,7 +120,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 
 | Endpoint | 用途 |
 | --- | --- |
-| `GET` / `PUT /api/settings` | 读取设置或切换 Codex 自动启动。 |
+| `GET` / `PUT /api/settings` | 读取设置，或更新 Codex 自动启动、流/内存设置以及账号定向 picker 的可见性。 |
 | `GET /api/startup-health` | 读取不含秘密信息的路由、服务、shim 和重启安全诊断。 |
 | `GET` / `POST /api/windows-tray` | 读取或更改 Windows 托盘安装和显示状态；POST 支持 `install`、`start`、`stop`、`uninstall`。 |
 | `POST /api/sync` | 重建共享模型目录，并把 Codex 模型缓存标记为过期。 |
@@ -106,6 +135,7 @@ GUI 是代理 JSON 管理 API 之上的轻量客户端。常用 endpoint 包括�
 | `POST /api/oauth/login` · `GET /api/oauth/status` | 启动 provider OAuth 流程并轮询完成状态。 |
 | `GET /api/codex-auth/accounts?refresh=1` | 列出主账号与池账号、强制刷新配额，并返回主账号的 `hasCredential` / terminal `needsReauth` 状态。 |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 选择下一次请求使用的账号并配置账号池路由。 |
+| `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | 读取实际生效的账号（含表示是否固定的 `pinned` 和指明被固定账号的 `pinnedAccountId`），并设置单个账号的选择顺序。 |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 通过浏览器登录添加池账号。 |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | 使用 tail、provider、精确状态码或状态类别筛选近期请求元数据。`limit`/`offset` 从最新一行向前分页（`offset=0` 为最新一页）。响应为 `{ timeZone, total, logs }`，其中 `total` 为分页前的匹配行数。 |
 | `GET` / `PUT /api/subagent-models` | 读取或设置五个置顶的 `spawn_agent` override 模型。 |

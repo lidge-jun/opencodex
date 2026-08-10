@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config";
-import { reconcileOAuthProviders } from "../src/oauth";
+import { OAUTH_PROVIDERS, reconcileOAuthProviders, upsertOAuthProvider } from "../src/oauth";
 import { getCredential, saveCredential } from "../src/oauth/store";
 import type { OcxConfig } from "../src/types";
 
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("OAuth provider reconciliation", () => {
-  test("migrates a saved Antigravity 3.5 preset without touching credentials or user fields", async () => {
+  test("refreshes a saved Antigravity 3.5 preset without touching credentials or user fields", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-gemini-36-reconcile-"));
     homes.push(home);
     process.env.OPENCODEX_HOME = home;
@@ -41,6 +41,7 @@ describe("OAuth provider reconciliation", () => {
           modelContextWindows: { "gemini-3.5-flash-low": 1_048_576 },
           project: "config-project-sentinel",
           note: "user-owned-note",
+          liveModels: true,
         },
       },
     } satisfies OcxConfig;
@@ -61,6 +62,7 @@ describe("OAuth provider reconciliation", () => {
     expect(provider.models).not.toContain("gemini-3.6-flash-medium");
     expect(provider.models).not.toContain("gemini-3.6-flash-high");
     expect(provider.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+    expect(provider.liveModels).toBe(true);
     expect(provider.project).toBe("config-project-sentinel");
     expect(provider.note).toBe("user-owned-note");
     expect(getCredential("google-antigravity")).toMatchObject({
@@ -71,6 +73,120 @@ describe("OAuth provider reconciliation", () => {
 
     const persisted = loadConfig();
     expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.6-flash");
+    expect(persisted.providers["google-antigravity"]?.liveModels).toBe(true);
     expect(reconcileOAuthProviders(config)).toBe(false);
+  });
+
+  test("migrates the version-1 canonical Antigravity static row to live discovery", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: {
+        "google-antigravity": {
+          ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          liveModels: false,
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(true);
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+    expect(config.googleAntigravityStaticCatalogVersion).toBe(2);
+
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+    expect(config.providers["google-antigravity"].models).toHaveLength(6);
+  });
+
+  test("preserves an explicit Antigravity static opt-out without the legacy migration marker", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          liveModels: false,
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(false);
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(false);
+  });
+
+  test("preserves explicit Antigravity live discovery when authMode is omitted or non-OAuth", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-authmode-reconcile-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const preset = OAUTH_PROVIDERS["google-antigravity"].providerConfig;
+
+    for (const authMode of [undefined, "key"] as const) {
+      const provider = {
+        ...structuredClone(preset),
+        liveModels: true,
+        defaultModel: "gemini-3.5-flash-low",
+        models: ["gemini-3.5-flash-low", "gemini-3.5-flash-high"],
+      };
+      if (authMode === undefined) delete provider.authMode;
+      else provider.authMode = authMode;
+      const config = {
+        port: 10100,
+        defaultProvider: "google-antigravity",
+        providers: { "google-antigravity": provider },
+      } satisfies OcxConfig;
+
+      expect(reconcileOAuthProviders(config)).toBe(false);
+      const migrated = config.providers["google-antigravity"];
+      expect(migrated.liveModels).toBe(true);
+      expect(migrated.defaultModel).toBe("gemini-3.5-flash-low");
+      expect(migrated.models).toEqual(["gemini-3.5-flash-low", "gemini-3.5-flash-high"]);
+      expect(migrated.authMode).toBe(authMode);
+    }
+  });
+
+  test("preserves Antigravity live discovery during re-login", () => {
+    const config = {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: {
+        "google-antigravity": {
+          ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          liveModels: true,
+        },
+      },
+    } satisfies OcxConfig;
+
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+
+    config.providers["google-antigravity"].liveModels = true;
+    config.providers["google-antigravity"].authMode = "key";
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+
+    config.providers["google-antigravity"].authMode = undefined;
+    upsertOAuthProvider(config, "google-antigravity");
+    expect(config.providers["google-antigravity"].liveModels).toBe(true);
+  });
+
+  test("preserves an explicit requiresReasoningPlaceholderModels opt-out on OAuth providers", () => {
+    // No OAuth preset seeds the new field, so reconcile must never delete an
+    // explicit `[]` opt-out on startup (chatgpt-codex-connector P2 on #1205).
+    const config = {
+      port: 10100,
+      defaultProvider: "kimi",
+      googleAntigravityStaticCatalogVersion: 1,
+      providers: {
+        kimi: {
+          ...structuredClone(OAUTH_PROVIDERS.kimi.providerConfig),
+          requiresReasoningPlaceholderModels: [],
+        },
+      },
+    } satisfies OcxConfig;
+
+    reconcileOAuthProviders(config);
+    expect(config.providers.kimi.requiresReasoningPlaceholderModels).toEqual([]);
   });
 });

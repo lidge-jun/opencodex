@@ -13,7 +13,15 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
-import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  parseExpectedSystemRestartPid,
+  verifySystemRestartCapability,
+} from "../lib/system-restart-contract";
+import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
   isAllowedManagementOrigin,
@@ -95,12 +103,17 @@ function readExistingToken(path: string): string {
 export function removeManagementTokenPathBestEffort(
   path: string,
   remove: (path: string) => void = unlinkSync,
+  options?: { ephemeral?: boolean },
 ): void {
+  // Temps get the full ephemeral release (success + both timeout namespaces);
+  // stable token paths drop only the success memo — destination-keyed timeout
+  // memos are intentional anti-restall state.
+  const forget = options?.ephemeral ? forgetEphemeralSecretPath : forgetHardenedSecretPath;
   try {
     remove(path);
-    forgetHardenedSecretPath(path);
+    forget(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") forgetHardenedSecretPath(path);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") forget(path);
     /* other failures retain fail-closed state for the caller */
   }
 }
@@ -120,7 +133,8 @@ function createTokenFile(path: string): string {
     chmodSync(temporary, 0o600);
     let temporaryHardened: { ok: boolean };
     try {
-      temporaryHardened = hardenSecretPath(temporary, { required: true });
+      // Destination-keyed timeout memo (the final token path), not the temp.
+      temporaryHardened = hardenSecretPath(temporary, { required: true, timeoutMemoKey: path });
     } catch {
       temporaryHardened = { ok: false };
     }
@@ -155,7 +169,7 @@ function createTokenFile(path: string): string {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
-    removeManagementTokenPathBestEffort(temporary);
+    removeManagementTokenPathBestEffort(temporary, unlinkSync, { ephemeral: true });
   }
 }
 
@@ -231,11 +245,83 @@ export function issueGuiSession(
   return { token, ...session };
 }
 
+/**
+ * Which credential actually authorized a management request.
+ *
+ * `admin-token` is the raw token from disk/env: anything running as the user can
+ * read it, including a coding agent. `gui-session` is a session token this process
+ * minted for a browser, and it only authorizes a mutation after the origin and the
+ * per-session CSRF token match. Consent-bearing routes must key off this value
+ * rather than off request headers, which the token holder can forge freely.
+ * `system-restart-capability` is a process-scoped HMAC accepted only for the exact
+ * restart route and bound to the current process PID and listening port.
+ */
+export type ManagementPrincipal = "admin-token" | "gui-session" | "system-restart-capability";
+
+export interface LocalManagementAuthContext {
+  attestationSecret: string;
+  pid: number;
+  port: number;
+}
+
+function hasSystemRestartCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (!local || req.method !== "POST") return false;
+  let path: string;
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    return false;
+  }
+  if (path !== SYSTEM_RESTART_PATH) return false;
+  const expectedPid = parseExpectedSystemRestartPid(
+    req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  return verifySystemRestartCapability(
+    local.attestationSecret,
+    req.headers.get(SYSTEM_RESTART_NONCE_HEADER),
+    req.method,
+    path,
+    local.pid,
+    local.port,
+    req.headers.get(SYSTEM_RESTART_CAPABILITY_HEADER),
+  );
+}
+
+/**
+ * The principal for a request that already passed `requireManagementAuth`. Kept as a
+ * separate resolution (rather than a changed return type) so every existing caller
+ * keeps its `Response | null` contract. Browser and admin principals are derived
+ * from the same session table and CSRF comparison the gate uses; the restart
+ * principal is derived from the same process-scoped capability check.
+ */
+export function managementPrincipal(
+  req: Request,
+  state: ManagementAuthState,
+  config?: OcxConfig,
+  local?: LocalManagementAuthContext,
+): ManagementPrincipal | null {
+  if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
+  if (!state.available) return null;
+  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!actual) return null;
+  if (equalSecret(actual, state.token)) return "admin-token";
+  if (!config) return null;
+  removeExpiredSessions(state);
+  return state.sessions.has(actual) ? "gui-session" : null;
+}
+
 export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): Response | null {
+  if (hasSystemRestartCapability(req, local)) return null;
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

@@ -15,14 +15,18 @@ export function clientBytes(message: Parameters<typeof create<typeof AgentClient
   return toBinary(AgentClientMessageSchema, create(AgentClientMessageSchema, message));
 }
 
-export function execBytes(execMsg: ExecServerMessage, messageCase: ExecClientMessage["message"]["case"], value: unknown): Uint8Array {
+export function execBytes<K extends ExecClientMessage["message"]["case"]>(
+  execMsg: ExecServerMessage,
+  messageCase: K,
+  value: Extract<ExecClientMessage["message"], { case: K }>["value"],
+): Uint8Array {
   return clientBytes({
     message: {
       case: "execClientMessage",
       value: create(ExecClientMessageSchema, {
         id: execMsg.id,
         execId: execMsg.execId,
-        message: { case: messageCase, value: value as never },
+        message: { case: messageCase, value } as ExecClientMessage["message"],
       }),
     },
   });

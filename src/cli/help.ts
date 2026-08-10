@@ -110,7 +110,7 @@ const helpEntries: Record<string, HelpEntry> = {
     ],
   },
   account: {
-    usage: "ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits> ...",
+    usage: "ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|main> ...",
     summary: "List and switch provider accounts and API-key pools (GUI parity).",
     details: [
       "list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).",
@@ -118,11 +118,14 @@ const helpEntries: Record<string, HelpEntry> = {
       "use <provider> <id> Switch the active credential; 'main' selects the Codex App login.",
       "refresh <provider>  Force-refresh Codex or provider quota reports.",
       "auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.",
+      "priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.",
       "remove <provider> <id> --yes  Remove a stored account or key after an existence check.",
       "add-key <provider> [--label <label>]  Add a key read only from piped stdin.",
       "login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.",
       "reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.",
-      "Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.",
+      "main <subcommand>     Manage the physical native Codex login separately from Pool routing.",
+      "Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.",
+      "A selection-order change applies from the next unbound request and never moves a bound thread.",
     ],
   },
   models: {
@@ -170,17 +173,17 @@ const helpEntries: Record<string, HelpEntry> = {
   },
   "api-key": { usage: "ocx api-key <list|create|remove> ...", summary: "Alias of ocx access key." },
   export: {
-    usage: "ocx export --client <opencode|pi> [--json] [--out <path>] [--force]",
-    summary: "Print a client config (opencode, Pi) wired to the running proxy.",
+    usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae> [--json] [--out <path>] [--force]",
+    summary: "Print a client config (opencode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code) wired to the running proxy.",
     details: [
-      "--json prints only the config JSON on stdout, so it is safe to redirect to a file.",
-      "--out <path> writes the config there and refuses to replace an existing file without --force.",
-      "The config never contains a key; it references the client's env var, which you export before launching.",
+      "--json prints the generated document as JSON on stdout; use --out for the client's native format.",
+      "--out <path> writes the native config there and refuses to replace an existing file without --force.",
+      "The config never contains a real key; it carries a documented env reference or a non-secret loopback placeholder.",
       "The destination path is printed for merging by hand — ocx never writes your real client config.",
     ],
   },
   grok: { usage: "ocx grok <status|exclude|include|set|clear|apply> ...", summary: "Manage and apply the Grok Build model fence." },
-  integration: { usage: "ocx integration <claude|grok> ...", summary: "Manage supported client integrations." },
+  integration: { usage: "ocx integration <claude|grok|client> ...", summary: "Manage supported client integrations." },
   system: {
     usage: "ocx system <status|settings|startup|diagnostics|sync|update> ...",
     summary: "Manage headless runtime settings, startup, sync, diagnostics, and updates.",
@@ -248,6 +251,33 @@ const helpEntries: Record<string, HelpEntry> = {
     summary: "Check proxy health. Exits 0 if healthy, 1 otherwise.",
     details: ["Use --json for structured output: {ok, pid, port}."],
   },
+  ready: {
+    usage: "ocx ready [--json] [--wait [--timeout <seconds>]]",
+    summary: "Check post-sync readiness. Exits 0 only when ready.",
+    details: [
+      "Exact unauthenticated GET /readyz returns HTTP 200 when ready, or 503 with Retry-After: 1 for pending or failed.",
+      "Its sanitized HTTP identity is {service, version, uptime, pid, port, status}; /healthz is separate liveness, not readiness.",
+      "Default is a single identity-checked /readyz probe; old proxies without /readyz fail closed as unreachable.",
+      "--wait polls until ready or timeout, but exits immediately on terminal failed (default 45s, max 300s).",
+      "--timeout requires --wait and accepts a positive integer (1..300).",
+      "--json emits {ready, status, pid, port}; status is one of ready|pending|failed|unreachable.",
+      "Invalid or unknown arguments exit 64. Not-ready, pending, failed, timeout, and unreachable exit 1.",
+    ],
+  },
+  lab: {
+    usage: "ocx lab <status|verdicts|subjects|subject|observations|events|event|artifacts|artifact|catalog> [options] [--json]",
+    summary: "Read-only Compatibility Lab projection inspection (local SQLite; no daemon).",
+    details: [
+      "status                Projection availability, schema versions, and row counts.",
+      "verdicts              Paginated derived compatibility verdicts with filters.",
+      "subjects              List subjects; subject <id> returns one typed subject.",
+      "observations          Paginated observation rows from the projection.",
+      "events                Event history; event <id> returns one safe typed event.",
+      "artifacts             Artifact metadata only (no content download).",
+      "catalog               Packaged protocol/live scenario catalog metadata.",
+      "Reads never rebuild the projection, trigger probes, or require the proxy.",
+    ],
+  },
 };
 
 function packageVersion(): string {
@@ -289,6 +319,7 @@ Usage:
   ocx restart                  Stop and restart the proxy
   ocx v2 <sub>                multi_agent_v2 surface (status|on|off|mode|threads)
   ocx health [--json]          Check proxy health (exit 0=healthy, 1=not)
+  ocx ready [--json] [--wait [--timeout <s>]]  Check post-sync readiness (exit 0 only when ready)
   ocx provider <sub>          Providers, connectivity, quota, and selected models
   ocx account <sub>           Accounts, login/reauth, key pools, and quota controls
   ocx models <sub>            Live/custom models, visibility, context, and shadow calls
@@ -296,10 +327,12 @@ Usage:
   ocx agent <sub>             Subagents, injection, effort caps, and sidecars
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx access <sub>            External API keys and endpoint information
-  ocx export --client <id>    Print an opencode/Pi config wired to the running proxy
+  ocx export --client <id>    Print a client config wired to the running proxy (7 clients)
+  ocx integration client <sub> Enable, disable, inspect or roll back a client integration
   ocx grok <sub>              Grok Build model selection and apply
   ocx system <sub>            Runtime settings, startup, sync, and updates
   ocx config <sub>            Validated configuration show/get/set/import/export
+  ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)

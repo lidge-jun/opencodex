@@ -226,8 +226,18 @@ describe("safeVertexHttpErrorMessage classification + redaction", () => {
   });
 
   test("redacts a bearer token and an absolute path in the detail", () => {
+    // A credential header quoted mid-sentence takes the remainder of the line
+    // with it: review of the credential-header rule established that anything
+    // after the credential is attacker-controlled and cannot be preserved.
+    // The scheme word still names which auth failed.
     const msg = safeVertexHttpErrorMessage(400, vertexError(400, "INVALID_ARGUMENT", "failed with Authorization: Bearer secret-abc123 at /Users/example/secret.json"));
     expect(msg).not.toContain("secret-abc123");
+    expect(msg).not.toContain("/Users/example/secret.json");
+    expect(msg).toContain("Authorization: Bearer [REDACTED]");
+  });
+
+  test("redacts an absolute path that is not trailing a credential", () => {
+    const msg = safeVertexHttpErrorMessage(400, vertexError(400, "INVALID_ARGUMENT", "failed reading /Users/example/secret.json"));
     expect(msg).not.toContain("/Users/example/secret.json");
     expect(msg).toContain("[REDACTED_PATH]");
   });

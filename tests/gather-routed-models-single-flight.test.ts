@@ -97,12 +97,22 @@ describe("gatherRoutedModels single-flight", () => {
 
     const omissionsA: ComboCatalogOmission[] = [];
     const omissionsB: ComboCatalogOmission[] = [];
+    const outcomesA: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+    const outcomesB: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
     await Promise.all([
-      gatherRoutedModels(config, { comboOmissions: omissionsA }),
-      gatherRoutedModels(config, { comboOmissions: omissionsB }),
+      gatherRoutedModels(config, {
+        comboOmissions: omissionsA,
+        providerModelOutcomes: outcomesA,
+      }),
+      gatherRoutedModels(config, {
+        comboOmissions: omissionsB,
+        providerModelOutcomes: outcomesB,
+      }),
     ]);
     expect(omissionsA.some(item => item.id === "incomplete")).toBe(true);
     expect(omissionsB).toEqual(omissionsA);
+    expect(outcomesA).toEqual([{ provider: "a", state: "authoritative" }]);
+    expect(outcomesB).toEqual(outcomesA);
   });
 
   test("distinct provider sets keep separate in-flight gathers (no slot eviction)", async () => {
@@ -162,6 +172,40 @@ describe("gatherRoutedModels single-flight", () => {
     expect(a1.map(m => `${m.provider}/${m.id}`)).toEqual(["a/model-a"]);
     expect(b1.map(m => `${m.provider}/${m.id}`)).toEqual(["b/model-b"]);
     expect(a2).toEqual(a1);
+  });
+
+  test("an omitted registry-static setting never shares a flight with explicit live discovery", async () => {
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      return new Response(JSON.stringify({ data: [{ id: "live-only" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const config = (liveModels?: true): OcxConfig => ({
+      port: 10100,
+      defaultProvider: "alibaba-token-plan",
+      providers: {
+        "alibaba-token-plan": {
+          adapter: "openai-chat",
+          baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+          apiKey: "test-key",
+          models: ["configured-static"],
+          ...(liveModels === undefined ? {} : { liveModels }),
+        },
+      },
+    });
+
+    const [registryStatic, explicitLive] = await Promise.all([
+      gatherRoutedModels(config()),
+      gatherRoutedModels(config(true)),
+    ]);
+
+    expect(fetchCount).toBe(1);
+    expect(registryStatic.map(model => model.id)).toEqual(["configured-static"]);
+    expect(explicitLive.map(model => model.id)).toEqual(["live-only"]);
   });
 
   test("concurrent distinct keys keep flight-local combo omissions", async () => {

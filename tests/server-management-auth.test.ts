@@ -1,16 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
-import { serveGuiFile } from "../src/server/gui-static";
+import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
   initializeManagementAuthState,
   issueGuiSession,
+  managementPrincipal,
   removeManagementTokenPathBestEffort,
   requireManagementAuth,
 } from "../src/server/management-auth";
@@ -20,8 +21,23 @@ import {
   resetHardenedStateForTests,
   setIcaclsRunnerForTests,
   setPlatformForTests,
+  timedOutSecretPathCountForTests,
   hardenSecretDir,
 } from "../src/lib/windows-secret-acl";
+import {
+  LOCAL_ATTESTATION_CHALLENGE_HEADER,
+  LOCAL_ATTESTATION_PROOF_HEADER,
+  verifyLocalAttestationProof,
+} from "../src/lib/local-management-attestation";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_METHOD,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  createSystemRestartCapability,
+} from "../src/lib/system-restart-contract";
+import { setSystemRestartIoForTests } from "../src/server/management/system-restart";
 
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -74,6 +90,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setSystemRestartIoForTests();
   setIcaclsRunnerForTests(null);
   setPlatformForTests(null);
   resetHardenedStateForTests();
@@ -88,6 +105,110 @@ afterEach(() => {
 });
 
 describe("management and data-plane credential separation", () => {
+  test("healthz proves the listener owns the protected runtime secret", async () => {
+    const secret = "A".repeat(43);
+    const challenge = "B".repeat(43);
+    const server = startServer(0, { localAttestationSecret: secret });
+    try {
+      const health = await fetch(new URL("/healthz", server.url), {
+        headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: challenge },
+      });
+      const proof = health.headers.get(LOCAL_ATTESTATION_PROOF_HEADER);
+      expect(verifyLocalAttestationProof(secret, challenge, process.pid, server.port, proof)).toBe(true);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a process-scoped capability authorizes only the exact restart operation", async () => {
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    let scheduled = 0;
+    // The capability contract is platform-independent. Avoid making this HTTP
+    // integration assertion depend on the host's live icacls policy; dedicated
+    // Windows ACL tests cover that boundary separately.
+    setPlatformForTests("linux");
+    setSystemRestartIoForTests({
+      isDraining: () => false,
+      schedule: () => { scheduled += 1; },
+      setDraining: () => {},
+    });
+    const unavailable = { available: false, reason: "injected unavailable state" } as const;
+    const server = startServer(0, {
+      localAttestationSecret: secret,
+      managementAuthState: unavailable,
+    });
+    try {
+      const capability = createSystemRestartCapability(
+        secret,
+        nonce,
+        SYSTEM_RESTART_METHOD,
+        SYSTEM_RESTART_PATH,
+        process.pid,
+        server.port,
+      );
+      const headers = {
+        [SYSTEM_RESTART_EXPECTED_PID_HEADER]: String(process.pid),
+        [SYSTEM_RESTART_NONCE_HEADER]: nonce,
+        [SYSTEM_RESTART_CAPABILITY_HEADER]: capability!,
+      };
+
+      const restart = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers,
+      });
+      expect(restart.status).toBe(202);
+      expect(scheduled).toBe(1);
+
+      const foreignRoute = await fetch(new URL("/api/config", server.url), {
+        method: "POST",
+        headers,
+      });
+      expect(foreignRoute.status).toBe(503);
+
+      const tampered = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers: { ...headers, [SYSTEM_RESTART_CAPABILITY_HEADER]: "C".repeat(43) },
+      });
+      expect(tampered.status).toBe(503);
+
+      const wrongMethod = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: "DELETE",
+        headers,
+      });
+      expect(wrongMethod.status).toBe(503);
+
+      const wrongPortCapability = createSystemRestartCapability(
+        secret,
+        nonce,
+        SYSTEM_RESTART_METHOD,
+        SYSTEM_RESTART_PATH,
+        process.pid,
+        server.port + 1,
+      );
+      const wrongPort = await fetch(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers: {
+          ...headers,
+          [SYSTEM_RESTART_CAPABILITY_HEADER]: wrongPortCapability!,
+        },
+      });
+      expect(wrongPort.status).toBe(503);
+      expect(scheduled).toBe(1);
+
+      const request = new Request(new URL(SYSTEM_RESTART_PATH, server.url), {
+        method: SYSTEM_RESTART_METHOD,
+        headers,
+      });
+      const local = { attestationSecret: secret, pid: process.pid, port: server.port };
+      expect(requireManagementAuth(request, unavailable, remoteConfig(), local)).toBeNull();
+      expect(managementPrincipal(request, unavailable, remoteConfig(), local))
+        .toBe("system-restart-capability");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("management-token temp cleanup forgets successful ACL memos and retains failed removals", () => {
     const temporary = join(testHome, ".admin-token.tmp");
     const previousUsername = process.env.USERNAME;
@@ -107,6 +228,65 @@ describe("management and data-plane credential separation", () => {
         throw Object.assign(new Error("injected unlink failure"), { code: "EPERM" });
       });
       expect(hardenedSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("stable-path cleanup drops only the success memo; temp cleanup releases all", () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(() => ({ success: false, exitCode: null, timedOut: true, stdout: "" }));
+    const stable = join(testHome, "admin-api-token");
+    const temp = join(testHome, ".admin-token.tmp");
+    writeFileSync(stable, "x", { mode: 0o600 });
+    writeFileSync(temp, "y", { mode: 0o600 });
+    try {
+      // Optional timeouts memoize by path (required:false soft-fails).
+      expect(hardenSecretPath(stable, { required: false }).ok).toBe(false);
+      expect(hardenSecretPath(temp, { required: false }).ok).toBe(false);
+      expect(timedOutSecretPathCountForTests()).toBe(2);
+      // Stable cleanup: success memo gone, timeout memos UNTOUCHED (anti-restall).
+      removeManagementTokenPathBestEffort(stable);
+      expect(timedOutSecretPathCountForTests()).toBe(2);
+      // Temp cleanup with the ephemeral flag: only the temp's memo is released;
+      // the stable destination memo still stands.
+      removeManagementTokenPathBestEffort(temp, unlinkSync, { ephemeral: true });
+      expect(timedOutSecretPathCountForTests()).toBe(1);
+    } finally {
+      setIcaclsRunnerForTests(null);
+      setPlatformForTests(null);
+      resetHardenedStateForTests();
+      if (previousUsername === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUsername;
+    }
+  });
+
+  test("final-path timeout memo survives stable-path cleanup (anti-restall)", async () => {
+    const previousUsername = process.env.USERNAME;
+    process.env.USERNAME = "ocx-test-user";
+    delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    // The temp harden succeeds; the FINAL path harden times out.
+    let calls = 0;
+    setIcaclsRunnerForTests(() => {
+      calls += 1;
+      // Production runs 3 icacls per harden: directory (1-3), temp (4-6),
+      // final token path (7-9) — the timeout must land on the FINAL path.
+      return calls <= 6
+        ? { success: true, exitCode: 0, timedOut: false, stdout: "" }
+        : { success: false, exitCode: null, timedOut: true, stdout: "" };
+    });
+    try {
+      initializeManagementAuthState(remoteConfig());
+      expect(timedOutSecretPathCountForTests()).toBe(1);
     } finally {
       setIcaclsRunnerForTests(null);
       setPlatformForTests(null);
@@ -321,6 +501,14 @@ describe("management and data-plane credential separation", () => {
     expect(html).toContain(`name="opencodex-session-token" content="${session?.token}"`);
     expect(html).toContain(`name="opencodex-session-csrf" content="${session?.csrfToken}"`);
 
+    // The dev GUI fetches /opencodex-session through Vite so the app shell stays
+    // Vite-owned. The backend answers that path without requiring gui/dist, so a fresh
+    // source checkout (no packaged build) can still mint an origin-bound session.
+    const bootstrapPage = serveSessionBootstrap(session!);
+    const bootstrapHtml = await bootstrapPage.text();
+    expect(bootstrapHtml).toContain(`name="opencodex-session-origin" content="${session?.origin}"`);
+    expect(bootstrapHtml).toContain(`name="opencodex-session-token" content="${session?.token}"`);
+
     const sameOriginRead = new Request("http://localhost:10100/api/config", {
       headers: {
         Host: "localhost:10100",
@@ -367,6 +555,31 @@ describe("management and data-plane credential separation", () => {
       headers: { Host: "attacker.test" },
     }), config, state)).toBeNull();
     expect(issueGuiSession(new Request("http://localhost:10100/"), config, state)).toBeNull();
+  });
+
+  test("GET /opencodex-session serves the bootstrap document from a live server", async () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/opencodex-session", server.url), {
+        headers: { Host: server.url.host },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("text/html");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("pragma")).toBe("no-cache");
+      expect(response.headers.get("x-frame-options")).toBe("DENY");
+      expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+
+      const html = await response.text();
+      expect(html).toContain('name="opencodex-session-token"');
+      expect(html).toContain('name="opencodex-session-csrf"');
+      expect(html).toContain('name="opencodex-session-origin"');
+    } finally {
+      await server.stop(true);
+    }
   });
 
   test("a non-loopback binding never issues a GUI session from a forged loopback Host", () => {
