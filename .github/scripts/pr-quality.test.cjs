@@ -9,6 +9,7 @@ const {
   authorHasPushPermission,
   assessPrDescription,
   hasGuiCue,
+  guiPathsChanged,
   hasGuiOverride,
   hasScreenshotEvidence,
   buildReviewReadinessSection,
@@ -137,6 +138,16 @@ describe("hasGuiCue", () => {
     );
   });
 
+  it("does not match negated gui phrases", () => {
+    assert.equal(hasGuiCue("", "no gui changes in this PR"), false);
+    assert.equal(hasGuiCue("", "Without gui changes"), false);
+    assert.equal(hasGuiCue("No GUI changes", ""), false);
+    assert.equal(
+      hasGuiCue("", "This does not change the API. Please add a gui screenshot."),
+      true,
+    );
+  });
+
   it("does not match gui inside other words", () => {
     assert.equal(hasGuiCue("Add contributor guidance", ""), false);
     assert.equal(hasGuiCue("", "Fix the guild invitation bug"), false);
@@ -146,6 +157,17 @@ describe("hasGuiCue", () => {
   it("does not match missing or non-string inputs", () => {
     assert.equal(hasGuiCue(undefined, undefined), false);
     assert.equal(hasGuiCue(null, null), false);
+  });
+});
+
+describe("guiPathsChanged", () => {
+  it("matches gui/ paths with a slash guard", () => {
+    assert.equal(guiPathsChanged(["gui/src/App.tsx"]), true);
+    assert.equal(guiPathsChanged(["gui"]), true);
+    assert.equal(guiPathsChanged(["scripts/foo.ts", "gui/package.json"]), true);
+    assert.equal(guiPathsChanged(["scripts/foo.ts"]), false);
+    assert.equal(guiPathsChanged(["guitools/x.ts"]), false);
+    assert.equal(guiPathsChanged([]), false);
   });
 });
 
@@ -792,7 +814,21 @@ describe("collectPrQualityFailures", () => {
     assert.ok(failures.some((f) => f.code === "wrong_base"));
   });
 
-  it("flags a gui title without a screenshot", () => {
+  it("flags gui/ file changes without a screenshot", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      title: "Fix dashboard spacing",
+      body: richBody,
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
+    });
+    assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
+  });
+
+  it("does not flag a gui title when no gui/ files changed", () => {
     const failures = collectPrQualityFailures({
       baseRef: "dev",
       allowedBases: allowed,
@@ -801,11 +837,32 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["scripts/foo.ts"],
     });
-    assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
+    assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
   });
 
-  it("flags a gui mention in the body without a screenshot", () => {
+  it("does not flag no gui changes text without gui/ file changes", () => {
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      title: "Fix proxy routing",
+      body: [
+        "## Summary",
+        "No gui changes in this PR; proxy routing only.",
+        "",
+        "## Test plan",
+        "- Ran bun test tests/ci-workflows.test.ts",
+      ].join("\n"),
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      changedFilePaths: ["scripts/foo.ts"],
+    });
+    assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
+  });
+
+  it("flags a gui mention in the body without a screenshot when gui/ changed", () => {
     const failures = collectPrQualityFailures({
       baseRef: "dev",
       allowedBases: allowed,
@@ -820,6 +877,7 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/styles.css"],
     });
     assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
   });
@@ -839,6 +897,7 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
       guiOverrideComments: [
         { author_association: "OWNER", body: "no gui changes here" },
       ],
@@ -861,6 +920,7 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
       guiOverrideComments: [
         { author_association: "CONTRIBUTOR", body: "no gui changes here" },
       ],
@@ -885,6 +945,7 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
     });
     assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
   });
@@ -908,11 +969,12 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
     });
     assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
   });
 
-  it("still flags a gui title when image syntax is only inside a code fence", () => {
+  it("still flags gui/ changes when image syntax is only inside a code fence", () => {
     const failures = collectPrQualityFailures({
       baseRef: "dev",
       allowedBases: allowed,
@@ -931,6 +993,7 @@ describe("collectPrQualityFailures", () => {
       behindMain: 0,
       behindBase: 0,
       authorPermission: "read",
+      changedFilePaths: ["gui/src/App.tsx"],
     });
     assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
   });

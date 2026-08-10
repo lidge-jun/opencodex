@@ -37,10 +37,10 @@ tells you exactly what to change:
 
 - **PR quality (`enforce-target`).** Pull requests must target `dev` and carry
   a real description: a **Summary** of what changed and why, plus a **Test
-  plan** (or equivalent substance). When the title or description mentions
-  `gui`, the description must include a screenshot of the UI change; the check
-  keeps the PR a draft and comments until the screenshot is present. A
-  maintainer can waive a false-positive GUI cue by adding the
+  plan** (or equivalent substance). When the diff changes files under `gui/`,
+  the description must include a screenshot of the UI change; the check keeps
+  the PR a draft and comments until the screenshot is present. A maintainer can
+  waive a false-positive GUI cue by adding the
   `gui-screenshot-waived` label; adding or removing that label immediately
   re-evaluates the gate. Legacy maintainer comments such as "no gui changes"
   are still recognised on the next PR event for compatibility, but comments

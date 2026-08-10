@@ -534,6 +534,14 @@ jobs:
               }
             }
 
+            const changedFiles = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner, repo, pull_number, per_page: 100 }
+            );
+            const changedFilePaths = changedFiles
+              .map(file => file.filename)
+              .filter(Boolean);
+
             let failures = collectPrQualityFailures({
               baseRef: pr.base.ref,
               allowedBases: ALLOWED_BASES,
@@ -548,17 +556,14 @@ jobs:
               stackedBase,
               // A maintainer issue comment ("not touching gui") waives the
               // GUI-screenshot gate; the comments are already fetched above.
-              guiOverrideComments: comments
+              guiOverrideComments: comments,
+              changedFilePaths
             });
 
             // Hygiene is a separate workflow that owns the blocked label and
             // the Hygiene comment section, but Ready / review-ready must not
             // clear while those checks fail. Re-assess here from the same
             // trusted scripts so the gate cannot race ahead of hygiene.
-            const changedFiles = await github.paginate(
-              github.rest.pulls.listFiles,
-              { owner, repo, pull_number, per_page: 100 }
-            );
             const labelNames = (pr.labels ?? []).map(label => label.name);
             failures = [
               ...failures,

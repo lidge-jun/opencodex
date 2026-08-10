@@ -169,15 +169,33 @@ function assessPrDescription(body) {
 }
 
 /**
+ * True when any changed path is the gui directory or inside it (slash-guarded).
+ * Mirrors `guiPathsChanged` in `scripts/doctor-gui-if-changed.ts`.
+ */
+function guiPathsChanged(files) {
+  return files.some(
+    (file) => file === "gui" || file.startsWith("gui/")
+  );
+}
+
+/**
  * True when the PR title or description names the GUI surface as a whole word.
  * The description is template-stripped first so the template's own screenshot
- * instruction cannot arm the gate on its own.
+ * instruction cannot arm the gate on its own. Negated phrases such as "no gui
+ * changes" are not treated as cues (see `segmentHasAffirmativeGuiCue`).
  */
+function segmentHasAffirmativeGuiCue(text) {
+  if (typeof text !== "string" || !text.trim()) return false;
+  const segments = text.split(/(?<=[.!?\n])/);
+  return segments.some((segment) => {
+    if (!GUI_CUE_RE.test(segment)) return false;
+    const withoutNegated = segment.replace(GUI_OVERRIDE_RE, "");
+    return GUI_CUE_RE.test(withoutNegated);
+  });
+}
+
 function hasGuiCue(title, body) {
-  return (
-    (typeof title === "string" && GUI_CUE_RE.test(title)) ||
-    (typeof body === "string" && GUI_CUE_RE.test(body))
-  );
+  return segmentHasAffirmativeGuiCue(title) || segmentHasAffirmativeGuiCue(body);
 }
 
 /**
@@ -447,7 +465,9 @@ function collectPrQualityFailures({
   /** True when baseRef is another open PR's head (stacked child). */
   stackedBase = false,
   /** Issue comments; a maintainer comment waives the GUI-screenshot gate. */
-  guiOverrideComments = []
+  guiOverrideComments = [],
+  /** Changed file paths from `pulls.listFiles` (repo-relative). */
+  changedFilePaths = []
 }) {
   const failures = [];
   const wrongBase = !allowedBases.includes(baseRef) && !stackedBase;
@@ -475,14 +495,12 @@ function collectPrQualityFailures({
     failures.push({ code: "bad_description", reason: desc.reason });
   }
 
-  // GUI-cued PRs must prove the UI change visually. The template's own
-  // screenshot instruction is boilerplate, so it cannot trigger this gate. A
-  // maintainer comment saying the change does not touch the GUI waives it.
+  // PRs that change gui/ must prove the UI change visually. Text cues in the
+  // title or description are not enough — "no gui changes" in the body must
+  // not arm the gate when the diff is backend-only. A maintainer comment saying
+  // the change does not touch the GUI still waives a gui/ diff false positive.
   if (
-    hasGuiCue(
-      title,
-      typeof body === "string" ? stripPrTemplateBoilerplate(body) : "",
-    ) &&
+    guiPathsChanged(changedFilePaths) &&
     !hasScreenshotEvidence(body) &&
     !hasGuiOverride({ comments: guiOverrideComments })
   ) {
@@ -500,6 +518,7 @@ module.exports = {
   isWrongAncestry,
   authorHasPushPermission,
   assessPrDescription,
+  guiPathsChanged,
   hasGuiCue,
   hasGuiOverride,
   hasScreenshotEvidence,
