@@ -249,9 +249,24 @@ export async function multiAgentGuidanceText(
     // Codex cannot actually spawn makes spawn_agent reject the override, so
     // suppress positive model claims while the state is stale or unknown.
     const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
+    // #1354 / #1395: `collectCodexAppServerCatalogState()` folds every app-server
+    // owned by the current user into ONE global observation, and the inbound
+    // request carries no sender PID or catalog fingerprint. So a stale process A
+    // makes the global state `stale` even when this request came from a fresh
+    // process B, and `unknown` can be reached by a process-enumeration failure
+    // that says nothing about any particular server.
+    //
+    // Emitting "do not set model or reasoning_effort overrides" off that global
+    // observation prohibits options the active `spawn_agent` tool legitimately
+    // advertises, for a request we cannot attribute to the stale process. The
+    // safe behaviour is to withhold OpenCodex's own disk-derived claims —
+    // preferred model, roster, fallback, custom guidance — and stay silent about
+    // overrides, leaving the active tool schema authoritative.
+    //
+    // `fresh` and `not_running` are unchanged: there we can positively describe
+    // the catalog, so the guidance below still applies.
     if (catalogState.state === "stale" || catalogState.state === "unknown") {
-      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
-        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+      return null;
     }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured

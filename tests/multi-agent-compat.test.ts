@@ -11,6 +11,7 @@ import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedConten
 import { parseRequest } from "../src/responses/parser";
 import type { OcxParsedRequest } from "../src/types";
 import { CODEX_ACCOUNT_BOUND_CATALOG_KIND, effectiveSubagentRoster } from "../src/codex/catalog";
+import { collectCodexAppServerCatalogState } from "../src/codex/app-server-processes";
 import { clearDebugSettings, setDebugSettings } from "../src/lib/debug-settings";
 import {
   getInjectionDebugLogEntries,
@@ -130,11 +131,75 @@ describe("multiAgentGuidanceText", () => {
       const text = await multiAgentGuidanceText(parsed, options, {
         collectCatalogState: () => ({ state }),
       });
-      expect(text).toContain("do not set");
-      expect(text).not.toContain("Preferred sub-agent");
-      expect(text).not.toContain("Available models");
+      // #1395: withhold OpenCodex's disk-derived claims, but do not prohibit
+      // options the active spawn_agent tool advertises — the global catalog
+      // observation cannot be attributed to the request that triggered it.
+      expect(text).toBeNull();
     }
 
+    for (const state of ["fresh", "not_running"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      expect(text).toContain("Preferred sub-agent");
+    }
+  });
+
+  test("a mixed stale/fresh process set does not produce a blanket no-override instruction (#1395)", async () => {
+    // The scoping bug this guards: `collectCodexAppServerCatalogState()` folds
+    // every current-user app-server into ONE global observation. Process 42
+    // predates the catalog and process 43 does not, so the global state is
+    // `stale` — but the inbound request carries no sender PID, so we cannot tell
+    // whether it came from the stale server or the fresh one.
+    const appServerCmd = "/usr/local/bin/codex app-server";
+    const global = collectCodexAppServerCatalogState({
+      listSnapshots: () => [
+        { pid: 42, commandLine: appServerCmd },
+        { pid: 43, commandLine: appServerCmd },
+      ],
+      readStartMs: pid => (pid === 42 ? 500 : 3_000),
+      catalogMtimeMs: () => 1_000,
+    });
+    expect(global.state).toBe("stale");
+
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const parsed = parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] });
+    const options = { injectionModel: "anthropic/claude-sonnet-5" };
+
+    const text = await multiAgentGuidanceText(parsed, options, {
+      collectCatalogState: () => ({ state: global.state }),
+    });
+
+    // A request we cannot attribute to the stale process must not be told to
+    // stop setting model or reasoning_effort — that prohibits options the active
+    // spawn_agent tool legitimately advertises, for a session that may be fresh.
+    expect(text).toBeNull();
+  });
+
+  test("stale and unknown withhold OpenCodex's own catalog claims (#1354, #1395)", async () => {
+    const dir = codexHomeFixture(V2_ON);
+    catalogFixture(dir, [{
+      slug: "anthropic/claude-sonnet-5",
+      efforts: ["low", "medium", "high", "xhigh"],
+    }]);
+    const parsed = parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] });
+    const options = { injectionModel: "anthropic/claude-sonnet-5" };
+
+    for (const state of ["stale", "unknown"] as const) {
+      const text = await multiAgentGuidanceText(parsed, options, {
+        collectCatalogState: () => ({ state }),
+      });
+      // No preferred model, no roster, no fallback, and no override prohibition.
+      // The active tool schema stays authoritative.
+      expect(text).toBeNull();
+    }
+
+    // `fresh` and `not_running` are unchanged: there the catalog can be
+    // positively described, so the designation guidance still applies.
     for (const state of ["fresh", "not_running"] as const) {
       const text = await multiAgentGuidanceText(parsed, options, {
         collectCatalogState: () => ({ state }),
