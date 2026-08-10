@@ -581,6 +581,38 @@ describe("combo validation and normalization", () => {
     }
   });
 
+  test("rejects non-finite or negative pricing fields and accepts forward-compatible keys", () => {
+    const providers = baseConfig().providers;
+    for (const bad of [
+      { inputUsdPerMillion: -1 },
+      { inputUsdPerMillion: Number.NaN },
+      { outputUsdPerMillion: Number.POSITIVE_INFINITY },
+      { fixedPerRequest: -0.5 },
+      { cachedInputUsdPerMillion: "1" },
+    ]) {
+      const issue = comboConfigIssues("free", { targets: [{ provider: "a", model: "m1", pricing: bad }] }, providers)
+        .find(candidate => candidate.path.slice(0, 3).join(".") === "targets.0.pricing");
+      expect(issue).toBeDefined();
+      expect(issue!.message).toContain("finite non-negative");
+    }
+    expect(comboConfigIssues("free", {
+      targets: [{ provider: "a", model: "m1", pricing: { inputUsdPerMillion: 0.5, outputUsdPerMillion: 2, futureKey: 3 } }],
+    }, providers)).toEqual([]);
+  });
+
+  test("normalized legacy combos do not gain economy metadata keys", () => {
+    const failover = normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] });
+    expect("economy" in failover).toBe(false);
+    const roundRobin = normalizeComboConfig({ strategy: "round-robin", targets: [{ provider: "a", model: "m1" }] });
+    expect("economy" in roundRobin).toBe(false);
+    const economy = normalizeComboConfig({
+      strategy: "economy",
+      economy: { unknownQuota: "reject" },
+      targets: [{ provider: "a", model: "m1", allowances: ["b"] }],
+    });
+    expect(economy.economy).toEqual({ unknownQuota: "reject" });
+  });
+
   test("normalizes valid values and returns defensive default efforts", () => {
     expect(normalizeComboConfig({
       defaultEffort: "high",

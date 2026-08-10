@@ -530,3 +530,97 @@ describe("combo-workspace-data", () => {
     )).toBe(false);
   });
 });
+
+describe("combo-workspace-data economy", () => {
+  const economyRow = {
+    id: "bulk",
+    model: "combo/bulk",
+    strategy: "economy",
+    defaultEffort: "high",
+    economy: { unknownQuota: "deprioritize", maxMarginalUsd: 0.1 },
+    targets: [
+      { provider: "a", model: "m1", weight: 3, allowances: ["weekly-cap"], pricing: { inputUsdPerMillion: 1.25 } },
+      { provider: "b", model: "m2", allowances: ["weekly-cap", "expiring-credits"], pricing: { outputUsdPerMillion: 2.5 } },
+    ],
+  };
+
+  test("parseComboList preserves economy policy, allowance references, pricing, and weights", () => {
+    const [item] = parseComboList({ combos: [economyRow] });
+    expect(item!.strategy).toBe("economy");
+    expect(item!.economy).toEqual({ unknownQuota: "deprioritize", maxMarginalUsd: 0.1 });
+    expect(item!.defaultEffort).toBe("high");
+    expect(item!.targets[0]).toMatchObject({
+      provider: "a",
+      model: "m1",
+      weight: 3,
+      allowances: ["weekly-cap"],
+      pricing: { inputUsdPerMillion: 1.25 },
+    });
+    expect(item!.targets[1]).toMatchObject({
+      allowances: ["weekly-cap", "expiring-credits"],
+      pricing: { outputUsdPerMillion: 2.5 },
+    });
+  });
+
+  test("groupCombos places economy combos in their own section", () => {
+    const sections = groupCombos(parseComboList({
+      combos: [
+        economyRow,
+        { id: "f", strategy: "failover", targets: [{ provider: "a", model: "m1" }] },
+      ],
+    }));
+    expect(sections.economy.map((c) => c.id)).toEqual(["bulk"]);
+    expect(sections.failover.map((c) => c.id)).toEqual(["f"]);
+    expect(sections.roundRobin).toEqual([]);
+  });
+
+  test("draftEquals distinguishes economy policy, allowance references, pricing, and weights", () => {
+    const baseline = parseComboList({ combos: [economyRow] })[0]!;
+    expect(draftEquals(baseline, { ...baseline })).toBe(true);
+    expect(draftEquals(baseline, { ...baseline, economy: { ...baseline.economy!, maxMarginalUsd: 5 } })).toBe(false);
+    expect(draftEquals(baseline, {
+      ...baseline,
+      targets: [{ ...baseline.targets[0]!, allowances: ["other"] }, baseline.targets[1]!],
+    })).toBe(false);
+    expect(draftEquals(baseline, {
+      ...baseline,
+      targets: [{ ...baseline.targets[0]!, pricing: { inputUsdPerMillion: 9 } }, baseline.targets[1]!],
+    })).toBe(false);
+    expect(draftEquals(baseline, {
+      ...baseline,
+      targets: [{ ...baseline.targets[0]!, weight: 8 }, baseline.targets[1]!],
+    })).toBe(false);
+  });
+
+  test("toPutBody round-trips economy policy, allowances, pricing, and explicit weights", () => {
+    const item = parseComboList({ combos: [economyRow] })[0]!;
+    const body = toPutBody(item);
+    expect(body.combo.strategy).toBe("economy");
+    expect(body.combo.economy).toEqual({ unknownQuota: "deprioritize", maxMarginalUsd: 0.1 });
+    expect(body.combo.defaultEffort).toBe("high");
+    expect(body.combo.targets[0]).toMatchObject({
+      provider: "a",
+      model: "m1",
+      weight: 3,
+      allowances: ["weekly-cap"],
+      pricing: { inputUsdPerMillion: 1.25 },
+    });
+    expect(body.combo.targets[1]).toMatchObject({
+      allowances: ["weekly-cap", "expiring-credits"],
+      pricing: { outputUsdPerMillion: 2.5 },
+    });
+
+    // A saved economy combo must reload with identical routing-relevant fields.
+    const [reloaded] = parseComboList({ combos: [{ id: body.id, ...body.combo }] });
+    expect(draftEquals(item, reloaded!)).toBe(true);
+  });
+
+  test("toPutBody omits empty economy policy and unset weights", () => {
+    const item = parseComboList({
+      combos: [{ id: "bare", strategy: "economy", targets: [{ provider: "a", model: "m1" }] }],
+    })[0]!;
+    const body = toPutBody(item);
+    expect(body.combo.economy).toBeUndefined();
+    expect(body.combo.targets[0]).toEqual({ provider: "a", model: "m1" });
+  });
+});
