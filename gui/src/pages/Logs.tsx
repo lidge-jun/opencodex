@@ -891,7 +891,8 @@ function LogDetailDialog({
       aria-labelledby="log-detail-title"
       onCancel={e => { e.preventDefault(); onClose(); }}
     >
-      <div className="modal-card log-detail-card">
+      <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onClose} />
+      <div className="modal-card log-detail-card" onClick={event => event.stopPropagation()} role="document">
         <div className="modal-head">
           <h3 id="log-detail-title">
             <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
