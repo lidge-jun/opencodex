@@ -724,6 +724,45 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
+/**
+ * Canonical identity used by replay-overlap detection. Volatile fields that differ between a
+ * stored response item and the client's later input resend (`id`, `status`, sequence numbers)
+ * are ignored; the remaining shape is what identifies "the same history item".
+ */
+function canonicalReplayValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalReplayValue);
+  if (value && typeof value === "object") {
+    // Null prototype so an own JSON `__proto__` key survives as a serializable property
+    // instead of being treated as a prototype assignment.
+    const out: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      out[key] = canonicalReplayValue((value as Record<string, unknown>)[key]);
+    }
+    return out;
+  }
+  return value;
+}
+
+function canonicalReplayItemKey(item: unknown): string | undefined {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+  const { id: _id, status: _status, sequence_number: _sequenceNumber, ...rest } = item as Record<string, unknown>;
+  // Sort every retained key (including nested objects and arrays) so equivalent items
+  // produce the same canonical string regardless of the original property order.
+  return JSON.stringify(canonicalReplayValue(rest));
+}
+
+/** Longest leading run of stored history items already present at the start of the request input. */
+function replayedPrefixOverlap(stored: unknown[], requestInput: unknown[]): number {
+  let n = 0;
+  while (n < stored.length && n < requestInput.length) {
+    const left = canonicalReplayItemKey(stored[n]);
+    const right = canonicalReplayItemKey(requestInput[n]);
+    if (left === undefined || left !== right) break;
+    n++;
+  }
+  return n;
+}
+
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
     if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
@@ -840,6 +879,13 @@ function materializeEntry(
   return { ok: true, state };
 }
 
+/**
+ * Expand a chained /v1/responses request's `previous_response_id` into the full stored
+ * history when the request carries only a delta, and never duplicate history the request
+ * already carries (stateless upstreams force full-body resends). Returns a new body so
+ * callers can tell expansion happened; an overlap-only request keeps its own input
+ * untouched and marks the leading stored-length items as the replay prefix.
+ */
 export function expandPreviousResponseInput(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const request = body as Record<string, unknown>;
@@ -854,11 +900,29 @@ export function expandPreviousResponseInput(body: unknown): unknown {
     replayFailures.set(request, materialized.failure);
     return body;
   }
+  const storedItems = materialized.state.items;
+  const requestItems = inputItems(request.input);
+  // A chained turn may already carry the full conversation (stateless upstreams such as
+  // DeepSeek force the client to resend it every turn). Prepending the stored history to a
+  // full-body request duplicates it, and remembering that duplicated body makes the bloat
+  // sticky across turns: 1x -> 2x -> 3x -> ... (observed 1,333,682 input tokens on
+  // 2026-08-10, ~10x the real ~127k conversation). Detect the overlap: ONLY a complete
+  // canonical stored-prefix overlap keeps the request untouched. Request length is not proof
+  // of a full resend — a genuine delta can be as long as the stored history, and returning it
+  // unchanged would drop the required prefix. Delta turns prepend the stored history and
+  // append the ENTIRE request input: request items are never dropped, because a repeated
+  // `context_compaction` marker or an identical message is a new occurrence that must survive.
+  const overlap = replayedPrefixOverlap(storedItems, requestItems);
+  if (overlap >= storedItems.length) {
+    const full = { ...request };
+    replayedInputPrefixLengths.set(full, Math.min(storedItems.length, requestItems.length));
+    return full;
+  }
   const expanded = {
     ...request,
-    input: [...materialized.state.items, ...inputItems(request.input)],
+    input: [...storedItems, ...requestItems],
   };
-  replayedInputPrefixLengths.set(expanded, materialized.state.items.length);
+  replayedInputPrefixLengths.set(expanded, storedItems.length);
   return expanded;
 }
 
