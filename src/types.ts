@@ -1394,6 +1394,12 @@ export interface OcxProviderConfig {
   /** Model ids that reject caller-specified presence/frequency penalty values. */
   noPenaltyModels?: string[];
   /**
+   * Model ids whose Chat Completions endpoint rejects `response_format`.
+   * Structured-output translation remains enabled by default; this is a narrow
+   * per-model compatibility escape hatch for mixed-capability gateways.
+   */
+  noStructuredOutputModels?: string[];
+  /**
    * Allow multiple tool calls per completion. DEFAULT-ON for openai-chat providers (the
    * buffered stream parser assembles interleaved/fragmented multi-call turns safely);
    * set `false` to force `parallel_tool_calls:false` upstream and drop the catalog's

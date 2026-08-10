@@ -106,6 +106,7 @@ cross-route credential fallback не существует. Строки API GPT-
 | `noTemperatureModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `temperature`. |
 | `noTopPModels?` | `string[]` | Модели, отвергающие переданный вызывающей стороной `top_p`. |
 | `noPenaltyModels?` | `string[]` | Модели, отвергающие penalty presence/frequency. |
+| `noStructuredOutputModels?` | `string[]` | Модели, чей endpoint `openai-chat` отклоняет `response_format`; поле structured output опускается только для совпавших моделей. |
 | `parallelToolCalls?` | `boolean` | Переключатель parallel tool call'ов. Для OpenAI Chat по умолчанию включено; не-chat adapter'ы рекламируют это только при явном `true`. |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean; repairInvalidIds?: boolean }` | По умолчанию выключенная downstream SSE-repair для exact placeholder-id, отсутствующих terminal-id и (с `repairInvalidIds`) message/reasoning id без канонического префикса `msg_`/`rs_`. Function-call id никогда не переписываются. Встроенный DeepSeek включает последние два по умолчанию. |
 | `responsesSnapshotRepair?` | `boolean` | По умолчанию выключенная клиентская repair для неполных lifecycle snapshot'ов Responses в SSE и JSON. Добавляет отсутствующие status, output и tool metadata, не меняя raw inspection и persistence. |

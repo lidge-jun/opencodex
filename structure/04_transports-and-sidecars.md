@@ -528,6 +528,24 @@ adapters advertise the catalog bit only on explicit `true`; cursor keeps its own
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
 ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
+## Chat structured-output compatibility
+
+The `openai-chat` adapter translates Responses `text.format` and Chat Completions
+`response_format` through one internal format, then emits `response_format` on the upstream chat
+wire. That remains the default because silently returning prose breaks clients that requested a
+JSON object or schema. A mixed-capability gateway may list exact native model ids in
+`noStructuredOutputModels`; only those models omit the wire field, while siblings keep the normal
+translation. The proxy does not infer this from provider names, localhost destinations, or a model
+family shared by unrelated upstreams.
+
+[Decision Log]
+- 목적과 의도: Recover chat models that reject `response_format` without removing structured output from models that support it.
+- 기존 구현 및 제약 조건: The adapter forwarded the field to every routed chat model after #1137, while the same model id may sit behind gateways with different capabilities.
+- 검토한 주요 대안: Revert translation globally; blacklist a model id globally; detect a proxy by name or URL; add an explicit provider/model opt-out.
+- 선택한 방식: Preserve default translation and omit it only for exact ids in `noStructuredOutputModels`.
+- 다른 대안 대신 이 방식을 선택한 이유: Global or heuristic rules regress supported providers and make custom gateway names part of the wire contract.
+- 장점, 단점 및 영향: Compatible siblings retain schema enforcement and explicitly incompatible models avoid the upstream 400; operators must classify each unsupported model they route.
+
 ## Reasoning display parity (hideThinkingSummary)
 
 `hideThinkingSummary` (request reasoning summary absent/"none" — the routed catalog default) is

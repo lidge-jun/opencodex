@@ -629,6 +629,7 @@ const providerConfigSchema = z.object({
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  noStructuredOutputModels: z.array(z.string().min(1)).optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   responsesItemIdRepair: z.object({
@@ -816,6 +817,17 @@ export function positiveIntegerConfigError(value: unknown, field: string): strin
   if (value === undefined) return null;
   if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value <= 0) {
     return `${field} must be a positive finite integer`;
+  }
+  return null;
+}
+
+export function nonBlankStringArrayConfigError(value: unknown, field: string): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return `${field} must be an array`;
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      return `${field}.${index} must be a nonblank model id`;
+    }
   }
   return null;
 }
@@ -1406,6 +1418,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelMaxOutputTokens"],
         message: maxOutputError,
+      });
+    }
+    const structuredOutputOptOutError = nonBlankStringArrayConfigError(
+      (provider as { noStructuredOutputModels?: unknown }).noStructuredOutputModels,
+      "noStructuredOutputModels",
+    );
+    if (structuredOutputOptOutError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "noStructuredOutputModels"],
+        message: structuredOutputOptOutError,
       });
     }
     if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {
