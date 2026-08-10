@@ -124,6 +124,129 @@ describe("Nous token-response wiring", () => {
   });
 });
 
+describe("Nous device-flow error handling", () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
+    process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
+    else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
+  });
+
+  function deviceFlowFetch(respond: (grant: string | null) => Response): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/oauth/device/code")) {
+        return new Response(JSON.stringify({
+          device_code: "dev-123",
+          user_code: "ABCD-EFGH",
+          verification_uri_complete: "https://portal.nousresearch.com/activate?code=ABCD-EFGH",
+          expires_in: 600,
+          interval: 1,
+        }), { status: 200 });
+      }
+      return respond(new URLSearchParams(init?.body as string).get("grant_type"));
+    }) as typeof fetch;
+  }
+
+  test("access_denied surfaces as a terminal NousTokenError", async () => {
+    globalThis.fetch = deviceFlowFetch(() =>
+      new Response(JSON.stringify({ error: "access_denied", error_description: "User denied the request" }), { status: 400 }),
+    );
+    const ctrl: OAuthController = { onAuth() {} };
+    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization denied");
+  });
+
+  test("expired_token surfaces as a terminal NousTokenError", async () => {
+    globalThis.fetch = deviceFlowFetch(() =>
+      new Response(JSON.stringify({ error: "expired_token", error_description: "Code expired" }), { status: 400 }),
+    );
+    const ctrl: OAuthController = { onAuth() {} };
+    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization expired");
+  });
+
+  test("slow_down backs off and resumes polling until success", async () => {
+    let pollCount = 0;
+    const access = jwtWithClaims({ sub: "device-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+    globalThis.fetch = deviceFlowFetch(() => {
+      pollCount += 1;
+      if (pollCount === 1) {
+        return new Response(JSON.stringify({ error: "slow_down", interval: 1 }), { status: 400 });
+      }
+      return new Response(JSON.stringify({
+        access_token: access,
+        refresh_token: "device-refresh",
+        expires_in: 3600,
+      }), { status: 200 });
+    });
+    const ctrl: OAuthController = { onAuth() {} };
+    const cred = await loginNous(ctrl);
+    expect(pollCount).toBe(2);
+    expect(cred.access).toBe(access);
+    expect(cred.refresh).toBe("device-refresh");
+    expect(cred.accountId).toBe("device-user");
+  }, 15_000);
+
+  test("device flow times out when the server never authorizes before the deadline", async () => {
+    // The deadline comes from the device-code response: keep it tiny so the
+    // polling loop exits quickly instead of running for the full server TTL.
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/oauth/device/code")) {
+        return new Response(JSON.stringify({
+          device_code: "dev-123",
+          user_code: "ABCD-EFGH",
+          verification_uri_complete: "https://portal.nousresearch.com/activate?code=ABCD-EFGH",
+          expires_in: 1,
+          interval: 1,
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: "authorization_pending" }), { status: 400 });
+    }) as typeof fetch;
+    const ctrl: OAuthController = { onAuth() {} };
+    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device flow timed out");
+  }, 15_000);
+});
+
+describe("Nous refresh fallback", () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
+    process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
+    else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
+  });
+
+  test("keeps the previous refresh token when the response omits a new one", async () => {
+    const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const observedHeader = (init?.headers as Record<string, string> | undefined)?.["x-nous-refresh-token"];
+      expect(observedHeader).toBe("old-refresh");
+      return new Response(JSON.stringify({
+        access_token: access,
+        expires_in: 3600,
+        // no refresh_token field on purpose
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const cred = await refreshNousToken("old-refresh");
+
+    expect(cred.access).toBe(access);
+    expect(cred.refresh).toBe("old-refresh");
+    expect(cred.accountId).toBe("wired-user");
+  });
+});
+
 describe("Nous multiauth via saveCredential", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
