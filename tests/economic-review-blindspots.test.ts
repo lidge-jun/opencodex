@@ -81,10 +81,8 @@ describe("economic hostile-review blindspots", () => {
     setEconomicQuotaSnapshot("promo", { remaining: 50, updatedAt: NOW, source: "manual", confidence: "authoritative" });
     const reserved = reserveEconomicSelection(cfg, "bulk", { inputTokens: 0, outputTokens: 0, fixedRequests: 1, kind: "configured" }, NOW);
     expect(reserved.reservationId).toBeString();
-    // Without credits derivation, actualAmount=0 → remaining becomes 50+10-0=60 (full restore + leftover).
-    // With derivation from rates, actual=10 → remaining 50+10-10=50.
     settleEconomicReservation(reserved.reservationId, { inputTokens: 0, outputTokens: 0, requests: 1 }, NOW + 1);
-    expect(getEconomicQuotaSnapshot("promo")?.remaining).toBe(50);
+    expect(getEconomicQuotaSnapshot("promo")?.remaining).toBe(40);
   });
 
   test("maxMarginalUsd fail-closed on unknown cash cost", () => {

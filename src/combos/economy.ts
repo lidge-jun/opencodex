@@ -100,11 +100,25 @@ interface Reservation {
 const snapshots = new Map<string, OcxEconomicSnapshot>();
 const reservations = new Map<string, Reservation>();
 const settledReservationIds = new Set<string>();
+const SETTLED_IDS_LIMIT = 10_000;
 let reservationSequence = 0;
 let lastReconciledGeneration = 0;
 let liveAllowanceIds = new Set<string>();
 const RESERVATION_TTL_MS = 10 * 60_000;
 const EPSILON = 1e-9;
+
+function rememberSettledId(id: string): void {
+  settledReservationIds.add(id);
+  if (settledReservationIds.size > SETTLED_IDS_LIMIT) {
+    const excess = settledReservationIds.size - SETTLED_IDS_LIMIT;
+    const iterator = settledReservationIds.values();
+    for (let i = 0; i < excess; i += 1) {
+      const oldest = iterator.next().value as string | undefined;
+      if (oldest === undefined) break;
+      settledReservationIds.delete(oldest);
+    }
+  }
+}
 
 function finiteNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -529,7 +543,6 @@ export function settleEconomicReservation(id: string | undefined, actual: Econom
   if (actualRecord) {
     for (const field of ECONOMIC_ACTUAL_FIELDS) {
       if (actualRecord[field] !== undefined && !finiteNonNegative(actualRecord[field])) {
-        // Do not let a validation failure strand the reservation until TTL expiry.
         releaseEconomicReservation(id);
         throw new TypeError(`Invalid economic actual usage: ${field}`);
       }
@@ -537,23 +550,21 @@ export function settleEconomicReservation(id: string | undefined, actual: Econom
   }
   const entries = [...reservations.entries()].filter(([, reservation]) => reservation.id === id);
   if (entries.length === 0) {
-    settledReservationIds.add(id);
+    rememberSettledId(id);
     return;
   }
   for (const [key, reservation] of entries) {
     const snapshot = snapshots.get(reservation.allowanceId);
-    if (snapshot) {
-      const actualAmount = actual ? actualForAllowance(reservation, actual) : undefined;
-      const remaining = safe(snapshot.remaining) + reservation.amount - (actualAmount ?? 0);
-      snapshots.set(reservation.allowanceId, { ...snapshot, remaining: Math.max(0, remaining), updatedAt: now });
+    if (snapshot && actual !== undefined) {
+      const actualAmount = actualForAllowance(reservation, actual);
+      if (actualAmount !== undefined) {
+        const remaining = Math.max(0, safe(snapshot.remaining) - actualAmount);
+        snapshots.set(reservation.allowanceId, { ...snapshot, remaining, updatedAt: now });
+      }
     }
     reservations.delete(key);
   }
-  settledReservationIds.add(id);
-  // Idempotency bookkeeping is defense-in-depth: a reservation whose entries were
-  // already deleted is a no-op regardless. Bound the set so a long-lived process
-  // cannot accumulate unbounded memory from historical ids.
-  if (settledReservationIds.size > 10_000) settledReservationIds.clear();
+  rememberSettledId(id);
 }
 
 export function setEconomicQuotaSnapshot(id: string, snapshot: OcxEconomicSnapshot): void {

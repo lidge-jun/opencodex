@@ -136,7 +136,7 @@ describe("economic reservation settlement", () => {
   test("settles smaller actual usage and releases excess", () => {
     const id = reserve("inputTokens");
     settleEconomicReservation(id, { inputTokens: 4 }, now + 1);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
   });
 
   test("clamps larger actual usage at zero", () => {
@@ -151,7 +151,7 @@ describe("economic reservation settlement", () => {
       setEconomicQuotaSnapshot("allowance", { remaining: 50, updatedAt: Date.now(), source: "manual", confidence: "authoritative" });
       const id = reserve(unit);
       settleEconomicReservation(id, { [unit]: 4 }, now + 1);
-      expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+      expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
     }
   });
 
@@ -159,7 +159,7 @@ describe("economic reservation settlement", () => {
     const id = reserve("inputTokens");
     settleEconomicReservation(id, { inputTokens: 4 }, now + 1);
     settleEconomicReservation(id, { inputTokens: 0 }, now + 2);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
   });
 
   test("rejects invalid actual usage and releases the reservation", () => {
@@ -177,7 +177,7 @@ describe("economic reservation settlement", () => {
   test("undefined actual releases the reservation", () => {
     const id = reserve("inputTokens");
     settleEconomicReservation(id, undefined, now + 1);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(60);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(50);
   });
 
   test("settles successful child usage exactly once", async () => {
@@ -185,7 +185,7 @@ describe("economic reservation settlement", () => {
     customFetchResponse = async () => Response.json({ id: "ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 4, total_tokens: 5 } });
     const response = await handleComboResponses(lifecycleRequest(), lifecycleBody(), "c", lifecycleConfig(), { model: "", provider: "" }, {});
     expect(response.status).toBe(200);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
   });
 
   test("settles credits from token rates through the response lifecycle", async () => {
@@ -193,7 +193,7 @@ describe("economic reservation settlement", () => {
     customFetchResponse = async () => Response.json({ id: "ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 4, total_tokens: 5 } });
     const response = await handleComboResponses(lifecycleRequest(), lifecycleBody(), "c", lifecycleConfig("credits"), { model: "", provider: "" }, {});
     expect(response.status).toBe(200);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(51);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(49);
   });
 
   test("settles usd from target pricing through the response lifecycle", async () => {
@@ -201,7 +201,7 @@ describe("economic reservation settlement", () => {
     customFetchResponse = async () => Response.json({ id: "ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 4, total_tokens: 5 } });
     const response = await handleComboResponses(lifecycleRequest(), lifecycleBody(), "c", lifecycleConfig("usd"), { model: "", provider: "" }, {});
     expect(response.status).toBe(200);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(51);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(49);
   });
 
   test("settles streamed success after body consumption", async () => {
@@ -226,7 +226,7 @@ data: [DONE]
     const response = await handleComboResponses(request, { model: "combo/c", input: "hello", max_output_tokens: 10, stream: true }, "c", lifecycleConfig("credits"), { model: "", provider: "" }, {});
     expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(50);
     await response.arrayBuffer();
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(51);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(49);
   });
 
   test("releases streamed reservation when cancelled before usage", async () => {
@@ -251,7 +251,7 @@ data: [DONE]
     customFetchResponse = async () => Response.json({ error: { code: "context_length_exceeded", message: "too long" }, usage: { input_tokens: 1, output_tokens: 4, total_tokens: 5 } }, { status: 400 });
     const response = await handleComboResponses(lifecycleRequest(), lifecycleBody(), "c", lifecycleConfig(), { model: "", provider: "" }, {});
     expect(response.status).toBe(400);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
   });
 
   test("settles retryable failure usage before failover", async () => {
@@ -264,7 +264,22 @@ data: [DONE]
     };
     const response = await handleComboResponses(lifecycleRequest(), lifecycleBody(), "c", lifecycleConfig(), { model: "", provider: "" }, {});
     expect(response.status).toBe(200);
-    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(56);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
+  });
+
+  test("recent id remains idempotent after bounded idempotency eviction", () => {
+    for (let i = 0; i < 10_000; i += 1) {
+      settleEconomicReservation(`pre-${i}`, { inputTokens: 1 }, now + i);
+    }
+    setEconomicQuotaSnapshot("allowance", { remaining: 50, updatedAt: now + 20_000, source: "manual", confidence: "authoritative" });
+    const recent = reserve("inputTokens", 10);
+    settleEconomicReservation(recent, { inputTokens: 4 }, now + 20_001);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
+    for (let i = 0; i < 5_000; i += 1) {
+      settleEconomicReservation(`post-${i}`, { inputTokens: 1 }, now + 30_000 + i);
+    }
+    settleEconomicReservation(recent, { inputTokens: 999 }, now + 40_000);
+    expect(getEconomicQuotaSnapshot("allowance")?.remaining).toBe(46);
   });
 
 });
