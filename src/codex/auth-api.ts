@@ -1723,16 +1723,24 @@ export async function handleCodexAuthAPI(
         const linkedSignal = signalWithTimeout(8000, req.signal);
         let detachBodyAbort = () => {};
         try {
-          const resp = await fetch(
-            "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
-            {
-              headers: {
-                Authorization: `Bearer ${auth.accessToken}`,
-                "ChatGPT-Account-Id": auth.chatgptAccountId,
+          let resp: Response;
+          try {
+            resp = await fetch(
+              "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+              {
+                headers: {
+                  Authorization: `Bearer ${auth.accessToken}`,
+                  "ChatGPT-Account-Id": auth.chatgptAccountId,
+                },
+                signal: linkedSignal.signal,
               },
-              signal: linkedSignal.signal,
-            },
-          );
+            );
+          } catch (error) {
+            if (linkedSignal.signal.aborted) {
+              return jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
+            }
+            throw error;
+          }
           // Own the response body before the bounded reader attaches. If the client
           // disconnects in that narrow window, Bun otherwise tears down the native
           // body off the awaited path and can report an unhandled rejection.

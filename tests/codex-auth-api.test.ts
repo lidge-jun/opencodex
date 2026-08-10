@@ -2059,6 +2059,39 @@ describe("codex-auth API", () => {
     expect(pulls).toBe(0);
   });
 
+  test("reset-credit lookup sanitizes cancellation before upstream response headers", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "credit-fetch-cancel", email: "fetch-cancel@example.test" });
+    const controller = new AbortController();
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>(resolve => { markFetchStarted = resolve; });
+    let upstreamSignal: AbortSignal | null = null;
+    globalThis.fetch = (async (_input, init) => {
+      upstreamSignal = init?.signal ?? null;
+      markFetchStarted();
+      return await new Promise<Response>((_resolve, reject) => {
+        const rejectForAbort = () => reject(upstreamSignal?.reason);
+        if (upstreamSignal?.aborted) {
+          rejectForAbort();
+          return;
+        }
+        upstreamSignal?.addEventListener("abort", rejectForAbort, { once: true });
+      });
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-fetch-cancel", {
+      signal: controller.signal,
+    });
+
+    const pending = handleCodexAuthAPI(req, new URL(req.url), config);
+    await fetchStarted;
+    controller.abort(new Error("private reset-credit abort detail"));
+    const resp = await pending;
+
+    expect(upstreamSignal?.aborted).toBe(true);
+    expect(resp?.status).toBe(502);
+    expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
+  });
+
   test.each([
     { label: "invalid UTF-8", body: new Uint8Array([0xff]) },
     { label: "malformed JSON", body: "{" },
