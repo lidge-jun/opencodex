@@ -283,7 +283,7 @@ API キーは [Scaleway console](https://console.scaleway.com/generative-api) �
 **Featherless の discovery:** 固定の OpenAI 互換ホストで認証し、chat と現在の plan に絞った人気順の
 先頭 100 model だけを取得します。各 row が plan で利用可能、Hugging Face gate なし、かつ
 `features.tool_use: true` と独立して報告しない限り fail closed で除外します。discovery は 128 KiB と
-raw 100 行が上限で、数万件の catalog 全体を download / cache しません。個人 plan は interactive / prototype
+raw 100 行が上限で、数万件の catalog 全体を download / cache しません。`/v1/models` は認証あり・なしの両方で呼び出せると文書化されているため、入力したキーの有効性は証明できませんが、chat request は設定済みの Bearer キーで認証されます。個人 plan は interactive / prototype
 用途に限られ、任意の application には Scale plan が必要です。キーは
 [Featherless dashboard](https://featherless.ai/account/api-keys) で作成します。
 

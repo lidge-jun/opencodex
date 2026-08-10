@@ -281,7 +281,7 @@ Project ID가 포함된 URL과 dedicated deployment는 custom provider로 설정
 **Featherless 검색:** 고정된 OpenAI 호환 호스트에서 인증하고, chat 및 현재 plan으로 필터링한 인기 모델의
 첫 100개만 요청합니다. 각 행이 plan 사용 가능, Hugging Face gate 없음, `features.tool_use: true`를
 독립적으로 보고하지 않으면 fail closed로 제외합니다. 검색은 128 KiB와 raw 100행으로 제한되어 수만 개의
-전체 catalog를 다운로드하거나 캐시하지 않습니다. 개인 plan은 interactive/prototype 용도로 제한되며 임의의
+전체 catalog를 다운로드하거나 캐시하지 않습니다. `/v1/models`는 문서상 인증 여부와 관계없이 호출할 수 있어 입력한 키의 유효성을 증명할 수 없지만, chat request는 설정된 Bearer 키로 인증됩니다. 개인 plan은 interactive/prototype 용도로 제한되며 임의의
 application에는 Scale plan이 필요합니다. 키는
 [Featherless dashboard](https://featherless.ai/account/api-keys)에서 생성합니다.
 

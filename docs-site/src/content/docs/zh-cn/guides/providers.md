@@ -261,7 +261,7 @@ dedicated deployment 需要配置为 custom provider。API 密钥可在
 **Featherless 发现：**该预设在固定的 OpenAI 兼容主机上鉴权，只请求按 chat 和当前 plan 过滤后的热门
 模型第一页，最多 100 条。registry 随后按 fail closed 原则要求每条记录分别报告当前 plan 可用、无需
 Hugging Face gate，且 `features.tool_use: true`。发现上限为 128 KiB 和 100 条原始记录，因此不会下载或
-缓存包含数万模型的完整目录。个人 plan 仅适用于 interactive/prototype 用途；任意 application 需要使用
+缓存包含数万模型的完整目录。由于 `/v1/models` 在文档中可带或不带鉴权调用，它无法证明输入的密钥有效；chat 请求仍会使用已配置的 Bearer 密钥认证。个人 plan 仅适用于 interactive/prototype 用途；任意 application 需要使用
 Scale plan。密钥可在 [Featherless dashboard](https://featherless.ai/account/api-keys) 创建。
 
 > **Baseten 范围：**该预设仅覆盖 Baseten 的共享 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)。
