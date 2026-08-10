@@ -214,6 +214,86 @@ describe("Codex autostart shim", () => {
     expect(script).toContain("OCX_SHIM_BYPASS");
   });
 
+  test("Unix shim stops same-process re-entry through a dynamic launcher", () => {
+    if (process.platform === "win32") return;
+
+    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-reentry-"));
+    const bunPath = join(dir, "bun");
+    const misePath = join(dir, "mise");
+    const realCodexPath = join(dir, "codex.opencodex-real");
+    const shimPath = join(dir, "codex");
+    try {
+      writeFileSync(bunPath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+      writeFileSync(misePath, `#!/usr/bin/env sh
+if [ "$1" = exec ] && [ "$2" = -- ] && [ "$3" = codex ]; then
+  shift 3
+  exec codex "$@"
+fi
+exit 64
+`, "utf8");
+      writeFileSync(realCodexPath, `#!/usr/bin/env sh\nexec "${misePath}" exec -- codex "$@"\n`, "utf8");
+      writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/cli.ts", "bundled"), "utf8");
+      chmodSync(bunPath, 0o755);
+      chmodSync(misePath, 0o755);
+      chmodSync(realCodexPath, 0o755);
+      chmodSync(shimPath, 0o755);
+      const env = { ...process.env, PATH: `${dir}:${process.env.PATH ?? ""}`, OCX_SHIM_BYPASS: "1" };
+      delete env.OCX_SHIM_ACTIVE_PID;
+
+      const result = spawnSync(shimPath, ["--help"], {
+        encoding: "utf8",
+        env,
+        timeout: 2_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(126);
+      expect(result.stderr).toContain("saved Codex launcher resolved back to the autostart shim");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("Unix shim permits a real Codex process to start a new child invocation", () => {
+    if (process.platform === "win32") return;
+
+    const dir = mkdtempSync(join(tmpdir(), "ocx-shim-child-"));
+    const bunPath = join(dir, "bun");
+    const realCodexPath = join(dir, "codex.opencodex-real");
+    const shimPath = join(dir, "codex");
+    try {
+      writeFileSync(bunPath, "#!/usr/bin/env sh\nexit 0\n", "utf8");
+      writeFileSync(realCodexPath, `#!/usr/bin/env sh
+if [ -z "$OCX_TEST_CHILD" ]; then
+  OCX_TEST_CHILD=1
+  export OCX_TEST_CHILD
+  "${shimPath}" --version
+  exit $?
+fi
+printf '%s\\n' child-codex
+`, "utf8");
+      writeFileSync(shimPath, buildUnixCodexShim(realCodexPath, bunPath, "/cli.ts", "bundled"), "utf8");
+      chmodSync(bunPath, 0o755);
+      chmodSync(realCodexPath, 0o755);
+      chmodSync(shimPath, 0o755);
+      const env = { ...process.env, OCX_SHIM_BYPASS: "1" };
+      delete env.OCX_SHIM_ACTIVE_PID;
+
+      const result = spawnSync(shimPath, ["--help"], {
+        encoding: "utf8",
+        env,
+        timeout: 2_000,
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("child-codex\n");
+      expect(result.stderr).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("Windows shim uses bypass env var to skip proxy start", () => {
     const script = buildWindowsCodexShim("C:\\codex.exe", "C:\\bun.exe", "C:\\cli.ts", "bundled");
     expect(script).toContain("OCX_SHIM_BYPASS");

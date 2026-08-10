@@ -383,6 +383,15 @@ export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPa
   const valueOptions = CODEX_GLOBAL_OPTIONS_WITH_VALUE.join("|");
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
+if [ "\${OCX_SHIM_ACTIVE_PID:-}" = "$$" ]; then
+  printf '%s\n' 'opencodex: saved Codex launcher resolved back to the autostart shim; run ocx restore and reinstall Codex before enabling codexAutoStart.' >&2
+  exit 126
+fi
+# Dynamic launchers such as mise exec -- codex may resolve the command name
+# back to this wrapper. An exec chain keeps the same PID; a legitimate nested
+# Codex invocation starts a new process and is allowed to establish a new guard.
+OCX_SHIM_ACTIVE_PID=$$
+export OCX_SHIM_ACTIVE_PID
 if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
   OPENCODEX_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
   export OPENCODEX_API_AUTH_TOKEN
