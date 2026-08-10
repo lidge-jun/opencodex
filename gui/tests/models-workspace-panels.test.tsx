@@ -91,8 +91,100 @@ async function mountModels(): Promise<{ container: HTMLElement; root: Root }> {
   return { container, root };
 }
 
+/**
+ * App owns `.main-inner` and the page-width rules that key off visible tab panels.
+ * happy-dom does not parse the multiline `:has()` selector in the shipped stylesheet,
+ * so the test injects a single-line form that matches the production rule.
+ */
+function injectModelsPageWidthCss(doc: Document): void {
+  const style = doc.createElement("style");
+  style.textContent = `
+    .main-inner { max-width: 980px; margin: 0 auto; }
+    .main-inner:has(#models-panel-catalog:not([hidden]), #models-panel-routing:not([hidden])) { max-width: 1200px; }
+  `;
+  doc.head.appendChild(style);
+}
+
+async function mountModelsInMainInner(hash = "http://localhost/#models"): Promise<{
+  container: HTMLElement;
+  mainInner: HTMLElement;
+  root: Root;
+}> {
+  testWindow.location.href = hash;
+  injectModelsPageWidthCss(document);
+  const { createRoot } = await import("react-dom/client");
+  const outer = document.createElement("div");
+  const mainInner = document.createElement("div");
+  mainInner.className = "main-inner";
+  outer.append(mainInner);
+  document.body.append(outer);
+  let root!: Root;
+  await act(async () => {
+    root = createRoot(mainInner);
+    root.render(
+      <LanguageProvider>
+        <Models apiBase={API_BASE} />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { await Promise.resolve(); });
+  return { container: mainInner, mainInner, root };
+}
+
+function mainInnerMaxWidth(mainInner: HTMLElement): string {
+  return testWindow.getComputedStyle(mainInner).maxWidth;
+}
+
+async function clickTab(container: HTMLElement, id: string): Promise<void> {
+  await act(async () => {
+    (container.querySelector(`#models-tab-${id}`) as HTMLButtonElement).click();
+  });
+  await act(async () => { await Promise.resolve(); });
+}
+
 const tabs = (container: HTMLElement) => [...container.querySelectorAll('[role="tab"]')] as HTMLButtonElement[];
 const panel = (container: HTMLElement, id: string) => container.querySelector(`#models-panel-${id}`);
+
+/*
+ * The layout drift bug: routing rendered at 980px while catalog used 1200px, and a
+ * mounted-but-hidden catalog could keep the wide rule latched via the old shell selector.
+ * Source-string CSS tests cannot see computed width; this one drives real tab switches.
+ */
+test("catalog and routing keep the same main-inner width across tab switches", async () => {
+  installFetch();
+  const { container, mainInner, root } = await mountModelsInMainInner();
+  try {
+    await act(async () => { await Promise.resolve(); });
+    expect(mainInnerMaxWidth(mainInner)).toBe("1200px");
+
+    await clickTab(container, "routing");
+    expect(mainInnerMaxWidth(mainInner)).toBe("1200px");
+    expect(panel(container, "catalog")?.hasAttribute("hidden")).toBe(true);
+
+    await clickTab(container, "catalog");
+    expect(mainInnerMaxWidth(mainInner)).toBe("1200px");
+    expect(panel(container, "routing")?.hasAttribute("hidden")).toBe(true);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+test("routing keeps the wide layout on a direct visit while catalog stays mounted hidden", async () => {
+  installFetch();
+  const { container, mainInner, root } = await mountModelsInMainInner("http://localhost/#models/routing");
+  try {
+    await act(async () => { await Promise.resolve(); });
+    expect(panel(container, "catalog")).toBeTruthy();
+    expect(panel(container, "catalog")?.hasAttribute("hidden")).toBe(true);
+    expect(mainInnerMaxWidth(mainInner)).toBe("1200px");
+
+    await clickTab(container, "catalog");
+    await clickTab(container, "routing");
+    expect(mainInnerMaxWidth(mainInner)).toBe("1200px");
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
 
 test("the strip renders all four tabs with the catalog selected on the bare hash", async () => {
   installFetch();
