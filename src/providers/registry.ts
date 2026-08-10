@@ -1690,6 +1690,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://featherless.ai/account/api-keys",
     liveModels: true,
     preserveCustomDestination: true,
+    // /v1/models is documented as callable authenticated or unauthenticated, so a 2xx catalog
+    // response cannot prove the supplied Bearer key is valid.
+    apiKeyValidation: "unknown",
     // Featherless documents tool calling, but not a provider-wide parallel tool-call contract.
     parallelToolCalls: false,
     // Reasoning controls use model-specific chat_template_kwargs, not OpenAI reasoning_effort.

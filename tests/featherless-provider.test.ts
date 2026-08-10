@@ -77,6 +77,7 @@ describe("Featherless provider", () => {
       dashboardUrl: "https://featherless.ai/account/api-keys",
       liveModels: true,
       preserveCustomDestination: true,
+      apiKeyValidation: "unknown",
       parallelToolCalls: false,
       reasoningEfforts: [],
       modelDiscovery: {
@@ -131,22 +132,15 @@ describe("Featherless provider", () => {
     expect(KEY_LOGIN_PROVIDERS.featherless).not.toHaveProperty("preserveCustomDestination");
   });
 
-  test("uses the documented Bearer catalog as a real key-validation boundary", async () => {
+  test("uses the documented Bearer endpoint without treating its catalog as key proof", async () => {
     const request = buildModelsRequest(providerConfig().providers.featherless!, TEST_KEY, "featherless");
     expectDiscoveryUrl(request.url);
     expect(request.headers).toEqual({ Authorization: `Bearer ${TEST_KEY}` });
 
-    let status = 200;
-    globalThis.fetch = (async (input, init) => {
-      expectDiscoveryUrl(input);
-      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${TEST_KEY}`);
-      expect(init?.redirect).toBe("error");
-      return new Response(status === 200 ? FEATHERLESS_FIXTURE : JSON.stringify({ error: "unauthorized" }), { status });
+    globalThis.fetch = (async () => {
+      throw new Error("catalog validation must not fetch");
     }) as typeof fetch;
-
-    expect(await validateApiKey("featherless", KEY_LOGIN_PROVIDERS.featherless!, TEST_KEY)).toBe(true);
-    status = 401;
-    expect(await validateApiKey("featherless", KEY_LOGIN_PROVIDERS.featherless!, TEST_KEY)).toBe(false);
+    expect(await validateApiKey("featherless", KEY_LOGIN_PROVIDERS.featherless!, TEST_KEY)).toBe("unknown");
   });
 
   test("reads bounded boolean feature metadata without trusting it for admission by itself", () => {

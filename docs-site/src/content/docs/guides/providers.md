@@ -373,7 +373,7 @@ deployments require a custom provider. Create an API key in the
 requests only the first 100 popular models filtered upstream to chat and the current plan. Registry
 rules then fail closed unless each row independently reports plan availability, no Hugging Face
 gate, and `features.tool_use: true`. Discovery is capped at 128 KiB and 100 raw rows, so the service's
-tens-of-thousands-model catalog is never downloaded or cached in full. Featherless terms reserve
+tens-of-thousands-model catalog is never downloaded or cached in full. Because `/v1/models` is documented as callable with or without authentication, it cannot prove a supplied key is valid; chat requests still use the configured Bearer key. Featherless terms reserve
 individual plans for interactive/prototyping use; arbitrary applications require a Scale plan.
 Create a key in the [Featherless dashboard](https://featherless.ai/account/api-keys).
 
