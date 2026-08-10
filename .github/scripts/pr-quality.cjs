@@ -179,6 +179,18 @@ function guiPathsChanged(files) {
 }
 
 /**
+ * True when the changed-file list from `pulls.listFiles` cannot be trusted to
+ * be complete for screenshot gating. Missing or non-integer counts, a head
+ * mismatch between the count snapshot and the paginated list, or a count above
+ * the returned list length all fail closed.
+ */
+function isChangedFileListTruncated(changedFilesCount, listedLength, headMatches = true) {
+  if (!headMatches) return true;
+  if (!Number.isInteger(changedFilesCount) || changedFilesCount < 0) return true;
+  return changedFilesCount > listedLength;
+}
+
+/**
  * True when the PR title or description names the GUI surface as a whole word.
  * The description is template-stripped first so the template's own screenshot
  * instruction cannot arm the gate on its own. Negated phrases such as "no gui
@@ -524,6 +536,7 @@ module.exports = {
   authorHasPushPermission,
   assessPrDescription,
   guiPathsChanged,
+  isChangedFileListTruncated,
   hasGuiCue,
   hasGuiOverride,
   hasScreenshotEvidence,

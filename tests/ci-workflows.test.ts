@@ -788,7 +788,9 @@ describe("GitHub Actions hardening", () => {
       "repos.getCollaboratorPermissionLevel",
       "repos.compareCommitsWithBasehead",
       "repos.compareCommitsWithBasehead",
+      "pulls.get",
       "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -801,7 +803,9 @@ describe("GitHub Actions hardening", () => {
       "issues.listComments",
       "repos.getCollaboratorPermissionLevel",
       "pulls.list",
+      "pulls.get",
       "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -818,8 +822,10 @@ describe("GitHub Actions hardening", () => {
       "repos.compareCommitsWithBasehead",
       // The harness walks every paginate call across the same page count, so
       // listFiles appears once per comment page even when the file list is empty.
+      "pulls.get",
       "pulls.listFiles",
       "pulls.listFiles",
+      "pulls.get",
       ...tail,
     ];
   }
@@ -1093,7 +1099,8 @@ describe("GitHub Actions hardening", () => {
     // The GUI screenshot gate reads changed file paths under gui/.
     expect(script).toContain("changedFilePaths");
     expect(script).toContain("filesTruncated");
-    expect(script).toContain("pr.changed_files");
+    expect(script).toContain("isChangedFileListTruncated");
+    expect(script).toContain("PR head moved while listing changed files");
     expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
     expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
     // The allow-list is the gate's whole policy, so it is pinned by value and
@@ -3091,6 +3098,8 @@ describe("GitHub Actions hardening", () => {
       });
 
       expect(callsTo(result, "pulls.get")).toEqual([
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
+        { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
         { owner: "lidge-jun", repo: "opencodex", pull_number: 4242 },
       ]);
       expect(callsTo(result, "repos.listPullRequestsAssociatedWithCommit")).toEqual([]);

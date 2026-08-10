@@ -10,6 +10,7 @@ const {
   assessPrDescription,
   hasGuiCue,
   guiPathsChanged,
+  isChangedFileListTruncated,
   hasGuiOverride,
   hasScreenshotEvidence,
   buildReviewReadinessSection,
@@ -168,6 +169,17 @@ describe("guiPathsChanged", () => {
     assert.equal(guiPathsChanged(["scripts/foo.ts"]), false);
     assert.equal(guiPathsChanged(["guitools/x.ts"]), false);
     assert.equal(guiPathsChanged([]), false);
+  });
+});
+
+describe("isChangedFileListTruncated", () => {
+  it("treats head drift, invalid counts, and oversized lists as truncated", () => {
+    assert.equal(isChangedFileListTruncated(10, 10, false), true);
+    assert.equal(isChangedFileListTruncated(undefined, 10, true), true);
+    assert.equal(isChangedFileListTruncated(10.5, 10, true), true);
+    assert.equal(isChangedFileListTruncated(11, 10, true), true);
+    assert.equal(isChangedFileListTruncated(10, 10, true), false);
+    assert.equal(isChangedFileListTruncated(5, 10, true), false);
   });
 });
 

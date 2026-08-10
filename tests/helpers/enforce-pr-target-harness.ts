@@ -653,6 +653,13 @@ export async function runEnforcePrTarget(
   const filePages: unknown[][] =
     options.filePages ??
     (options.files && options.files.length > 0 ? [options.files] : [[]]);
+  const listedFileCount = filePages.flat().length;
+  const prChangedFiles = (options.pr as { changed_files?: number }).changed_files;
+  if (Number.isInteger(prChangedFiles)) {
+    (pr as { changed_files: number }).changed_files = prChangedFiles!;
+  } else {
+    (pr as { changed_files: number }).changed_files = listedFileCount;
+  }
   const checkRunPages = (options.checkRunPages ?? [options.checkRuns ?? DEFAULT_GREEN_CHECKS])
     .map(page => page.map(check => ({
       ...check,
