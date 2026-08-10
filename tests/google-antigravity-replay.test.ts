@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getConfigDir } from "../src/config";
 import {
   antigravityCanonicalJsonBoundedForTests,
   antigravityFunctionCallKeyForTests,
@@ -12,6 +16,7 @@ import {
   applyAntigravityReplay,
   clearAntigravityReplay,
   evictOldestAntigravityReplayForBudget,
+  flushAntigravityReplay,
   observeAntigravityReplay,
   setAntigravityReplayLimitsForTests,
   sweepExpiredAntigravityReplay,
@@ -20,19 +25,35 @@ import { sanitizeAntigravityClaudeSignatures } from "../src/adapters/google-anti
 
 afterEach(() => setAntigravityReplayLimitsForTests());
 
+// Sandbox OPENCODEX_HOME: the replay cache now snapshots to disk, and these tests must
+// never touch the real ~/.opencodex.
+let replayTestHome: string;
+const priorOpenCodexHome = process.env["OPENCODEX_HOME"];
+
+beforeEach(() => {
+  replayTestHome = mkdtempSync(join(tmpdir(), "ocx-antigravity-replay-test-"));
+  process.env["OPENCODEX_HOME"] = replayTestHome;
+});
+
+afterEach(() => {
+  rmSync(replayTestHome, { recursive: true, force: true });
+  if (priorOpenCodexHome === undefined) delete process.env["OPENCODEX_HOME"];
+  else process.env["OPENCODEX_HOME"] = priorOpenCodexHome;
+});
+
 const SIG = "sig-1234567890abcdef"; // >= 16 chars
 const MODEL = "gemini-3-pro";
 const SESSION = "-12345";
 
-describe("antigravity reasoning-replay cache", () => {
-  // Signatures are keyed by functionCall identity (name + args), so observe/apply use functionCall parts.
-  const fcPart = (name: string, args: unknown, sig?: string, nested = false) => {
-    const part: Record<string, unknown> = { functionCall: { name, args } };
-    if (sig && nested) part.extra_content = { google: { thought_signature: sig } };
-    else if (sig) part.thoughtSignature = sig;
-    return part;
-  };
+// Signatures are keyed by functionCall identity (name + args), so observe/apply use functionCall parts.
+const fcPart = (name: string, args: unknown, sig?: string, nested = false) => {
+  const part: Record<string, unknown> = { functionCall: { name, args } };
+  if (sig && nested) part.extra_content = { google: { thought_signature: sig } };
+  else if (sig) part.thoughtSignature = sig;
+  return part;
+};
 
+describe("antigravity reasoning-replay cache", () => {
   test("observe then apply re-injects the signature onto the matching functionCall part", () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
     const contents = [
@@ -519,5 +540,108 @@ describe("antigravity replay fixed-size key identities", () => {
       clearAntigravityReplay(MODEL, `session-${session}`);
     }
     expect(antigravityReplayMetrics().totalBytes).toBe(0);
+  });
+});
+
+describe("durable antigravity replay snapshot", () => {
+  const snapshotPath = () => join(getConfigDir(), "antigravity-replay.json");
+
+  test("observed signatures survive a cache reset via the disk snapshot", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    expect(existsSync(snapshotPath())).toBe(true);
+    // Proxy-restart simulation: wipe the in-process cache, then reload lazily.
+    setAntigravityReplayLimitsForTests();
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("flush writes the pending snapshot without waiting for the debounce", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { version?: unknown; sessions?: unknown[] };
+    expect(raw.version).toBe(1);
+    expect(raw.sessions).toHaveLength(1);
+    expect((raw.sessions![0] as unknown[])[0]).toBe(antigravityReplayKeyForTests(MODEL, SESSION));
+  });
+
+  test("expired sessions are dropped when the snapshot is loaded", () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const staleCallKey = antigravityFunctionCallKeyForTests("get_stale", {});
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, "-stale"), {
+          expiresAtMs: now - 1_000,
+          byCall: [[staleCallKey, { signature: SIG, sizeBytes: SIG.length, touchedAtMs: now }]],
+        }],
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          byCall: [[callKey, { signature: SIG, sizeBytes: SIG.length, touchedAtMs: now }]],
+        }],
+      ],
+    }));
+    const staleContents = [{ role: "model", parts: [{ functionCall: { name: "get_stale", args: {} } }] }];
+    applyAntigravityReplay(MODEL, "-stale", staleContents);
+    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("loaded sessions are trimmed to the current per-session caps", () => {
+    setAntigravityReplayLimitsForTests({ maxBytesPerSession: 300 });
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const trimKey = antigravityFunctionCallKeyForTests("get_y", {});
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          // Oldest (get_y) is evicted first on load: only get_x survives the cap.
+          byCall: [
+            [trimKey, { signature: SIG, sizeBytes: 200, touchedAtMs: now }],
+            [callKey, { signature: SIG, sizeBytes: 200, touchedAtMs: now }],
+          ],
+        }],
+      ],
+    }));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.sessions).toBe(1);
+    expect(metrics.calls).toBe(1);
+    // 300-byte cap: one 200-byte call plus the 64-byte fixed session key.
+    expect(metrics.totalBytes).toBe(64 + 200);
+  });
+
+  test("corrupt or unknown-version snapshots start the cache empty", () => {
+    writeFileSync(snapshotPath(), "{not valid json");
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    setAntigravityReplayLimitsForTests();
+    writeFileSync(snapshotPath(), JSON.stringify({ version: 99, sessions: [] }));
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("clear-on-invalid removes the session from the next snapshot", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    clearAntigravityReplay(MODEL, SESSION);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    expect(raw.sessions).toHaveLength(0);
+  });
+
+  test("oversized snapshot files are refused before parsing", () => {
+    writeFileSync(snapshotPath(), "x".repeat(33 * 1024 * 1024));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
   });
 });
