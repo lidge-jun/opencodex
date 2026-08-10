@@ -92,6 +92,7 @@ function childEnd(
     if (isBlank(body)) return index;
     if (isComment(body)) return spaces <= indent ? index : null;
     if (spaces <= indent) return index;
+    if (hasInlineComment(body)) return null;
   }
   return parentEnd;
 }
