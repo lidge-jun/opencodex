@@ -467,7 +467,12 @@ function collectPrQualityFailures({
   /** Issue comments; a maintainer comment waives the GUI-screenshot gate. */
   guiOverrideComments = [],
   /** Changed file paths from `pulls.listFiles` (repo-relative). */
-  changedFilePaths = []
+  changedFilePaths = [],
+  /**
+   * True when `pulls.listFiles` returned fewer paths than `pulls.get`
+   * `changed_files` (GitHub caps the file list at 3,000 entries).
+   */
+  filesTruncated = false
 }) {
   const failures = [];
   const wrongBase = !allowedBases.includes(baseRef) && !stackedBase;
@@ -500,7 +505,7 @@ function collectPrQualityFailures({
   // not arm the gate when the diff is backend-only. A maintainer comment saying
   // the change does not touch the GUI still waives a gui/ diff false positive.
   if (
-    guiPathsChanged(changedFilePaths) &&
+    (guiPathsChanged(changedFilePaths) || filesTruncated) &&
     !hasScreenshotEvidence(body) &&
     !hasGuiOverride({ comments: guiOverrideComments })
   ) {

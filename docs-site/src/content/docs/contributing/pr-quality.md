@@ -40,7 +40,8 @@ tells you exactly what to change:
   plan** (or equivalent substance). When the diff changes files under `gui/`,
   the description must include a screenshot of the UI change; the check keeps
   the PR a draft and comments until the screenshot is present. A maintainer can
-  waive a false-positive GUI cue by adding the
+  waive the screenshot requirement for a `gui/` change, or for a false-positive
+  GUI-path classification, by adding the
   `gui-screenshot-waived` label; adding or removing that label immediately
   re-evaluates the gate. Legacy maintainer comments such as "no gui changes"
   are still recognised on the next PR event for compatibility, but comments

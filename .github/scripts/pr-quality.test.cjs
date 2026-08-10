@@ -842,6 +842,39 @@ describe("collectPrQualityFailures", () => {
     assert.ok(!failures.some((f) => f.code === "missing_ui_screenshot"));
   });
 
+  it("flags truncated file lists even when gui/ is not in the partial list", () => {
+    const truncatedPaths = Array.from({ length: 3000 }, (_, index) => `scripts/file-${index}.ts`);
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      title: "Large refactor",
+      body: richBody,
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      changedFilePaths: truncatedPaths,
+      filesTruncated: true,
+    });
+    assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
+  });
+
+  it("flags truncated file lists when gui/ appears in the partial list", () => {
+    const truncatedPaths = Array.from({ length: 2999 }, (_, index) => `scripts/file-${index}.ts`);
+    truncatedPaths.push("gui/src/App.tsx");
+    const failures = collectPrQualityFailures({
+      baseRef: "dev",
+      allowedBases: allowed,
+      title: "Large refactor with gui tweak",
+      body: richBody,
+      behindMain: 0,
+      behindBase: 0,
+      authorPermission: "read",
+      changedFilePaths: truncatedPaths,
+      filesTruncated: true,
+    });
+    assert.ok(failures.some((f) => f.code === "missing_ui_screenshot"));
+  });
+
   it("does not flag no gui changes text without gui/ file changes", () => {
     const failures = collectPrQualityFailures({
       baseRef: "dev",

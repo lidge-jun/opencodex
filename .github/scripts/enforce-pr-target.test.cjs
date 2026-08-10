@@ -198,6 +198,7 @@ describe("enforce-pr-target workflow", () => {
     assert.ok(qualityCall, "must call collectPrQualityFailures");
     assert.match(qualityCall[1], /stackedBase/);
     assert.match(qualityCall[1], /changedFilePaths/);
+    assert.match(qualityCall[1], /filesTruncated/);
   });
 
   it("strips stale WRONG BRANCH prefix on failure when base is corrected", () => {

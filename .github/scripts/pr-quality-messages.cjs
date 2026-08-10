@@ -229,7 +229,7 @@ function buildFailureSections(failures, { pr, allowedBases, defaultBase }) {
     sections.push(
       "⚠️ **UI screenshot required**",
       "",
-      `This pull request changes files under ${inlineCode("gui/")}, so it is treated as a GUI change.`,
+      `This pull request changes files under ${inlineCode("gui/")}, or GitHub returned an incomplete changed-file list for a large diff, so it is treated as a GUI change.`,
       "",
       `@${pr.user.login} Please add a screenshot of the UI change to the description — drag and drop the image into the description editor, or paste a markdown image such as ${inlineCode("![Screenshot](https://example.com/after.png)")}. The check re-runs automatically once the description is edited.`
     );

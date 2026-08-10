@@ -541,6 +541,9 @@ jobs:
             const changedFilePaths = changedFiles
               .map(file => file.filename)
               .filter(Boolean);
+            const filesTruncated =
+              typeof pr.changed_files === "number" &&
+              pr.changed_files > changedFiles.length;
 
             let failures = collectPrQualityFailures({
               baseRef: pr.base.ref,
@@ -557,7 +560,8 @@ jobs:
               // A maintainer issue comment ("not touching gui") waives the
               // GUI-screenshot gate; the comments are already fetched above.
               guiOverrideComments: comments,
-              changedFilePaths
+              changedFilePaths,
+              filesTruncated
             });
 
             // Hygiene is a separate workflow that owns the blocked label and

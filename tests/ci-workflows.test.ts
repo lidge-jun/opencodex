@@ -1092,6 +1092,8 @@ describe("GitHub Actions hardening", () => {
     expect(script).toContain("github.rest.pulls.listFiles");
     // The GUI screenshot gate reads changed file paths under gui/.
     expect(script).toContain("changedFilePaths");
+    expect(script).toContain("filesTruncated");
+    expect(script).toContain("pr.changed_files");
     expect(script).toContain("github.rest.repos.getCollaboratorPermissionLevel");
     expect(script).toContain("github.rest.repos.compareCommitsWithBasehead");
     // The allow-list is the gate's whole policy, so it is pinned by value and
