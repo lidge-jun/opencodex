@@ -23,8 +23,11 @@ import { statSync } from "node:fs";
 import { getConfigPath, readConfigDiagnostics } from "../config";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import {
+  refreshPreservedProviderOwner,
   refreshUserCostOverlays,
+  registerPreservedProviderOwner,
   setPreservedDiskOnlyProviders,
+  unregisterPreservedProviderOwner,
 } from "./user-cost-overlays";
 
 /** Default poll cadence for external config edits. */
@@ -90,6 +93,9 @@ function rememberDiskOnlyProviders(liveConfigs: readonly OcxConfig[], disk: OcxC
     }
   }
   setPreservedDiskOnlyProviders(Object.keys(preserved).length > 0 ? preserved : null);
+  // Update only registered server owners. One-shot callers without a lease do
+  // not become deletion authorities merely by asking for a reconciliation.
+  for (const live of liveConfigs) refreshPreservedProviderOwner(live, disk);
 }
 
 /**
@@ -218,13 +224,17 @@ export function startUserCostOverlayReconciler(
   options: { intervalMs?: number; liveConfig?: OcxConfig | null } = {},
 ): { stop(): void } {
   const token = Symbol("user-cost-overlay-reconciler");
-  owners.set(token, options.liveConfig ?? null);
+  const liveConfig = options.liveConfig ?? null;
+  owners.set(token, liveConfig);
   ownerIntervals.set(token, options.intervalMs ?? USER_COST_OVERLAY_RECONCILE_INTERVAL_MS);
+  if (liveConfig) registerPreservedProviderOwner(liveConfig);
   syncReconcileTimer();
   return {
     stop() {
+      const ownedConfig = owners.get(token) ?? null;
       owners.delete(token);
       ownerIntervals.delete(token);
+      if (ownedConfig) unregisterPreservedProviderOwner(ownedConfig);
       if (owners.size === 0) {
         if (reconcileTimer) clearInterval(reconcileTimer);
         reconcileTimer = null;
@@ -258,6 +268,9 @@ export function startUserCostOverlayReconciler(
  * other server still running in the same process.
  */
 export function stopUserCostOverlayReconciler(): void {
+  for (const config of owners.values()) {
+    if (config) unregisterPreservedProviderOwner(config);
+  }
   owners.clear();
   ownerIntervals.clear();
   if (reconcileTimer) clearInterval(reconcileTimer);
