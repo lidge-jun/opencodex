@@ -23,15 +23,34 @@ export function comboIdFromRawBody(body: unknown, config: OcxConfig): string | n
   return resolveComboId(config, model);
 }
 
+/**
+ * Detect image-bearing Responses *input* only.
+ *
+ * Must not walk the full request body: tool JSON schemas, metadata, or extension
+ * payloads can legally contain `{ "type": "input_image" }` without any image
+ * being dispatched. After previous_response_id expansion, scan the materialised
+ * `input` tree (message content and function_call_output.output).
+ */
 export function comboRequestHasImageInput(body: unknown): boolean {
-  const visit = (value: unknown): boolean => {
-    if (!value || typeof value !== "object") return false;
-    if (Array.isArray(value)) return value.some(visit);
-    const record = value as Record<string, unknown>;
-    if (record.type === "input_image") return true;
-    return Object.values(record).some(visit);
-  };
-  return visit(body);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  return responsesInputHasImage((body as { input?: unknown }).input);
+}
+
+function responsesInputHasImage(input: unknown): boolean {
+  if (typeof input === "string" || input == null) return false;
+  if (!Array.isArray(input)) return false;
+  return input.some(responsesInputNodeHasImage);
+}
+
+function responsesInputNodeHasImage(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(responsesInputNodeHasImage);
+  const record = value as Record<string, unknown>;
+  if (record.type === "input_image") return true;
+  // Message content parts and nested function_call_output content/output arrays.
+  if (record.content !== undefined && responsesInputNodeHasImage(record.content)) return true;
+  if (record.output !== undefined && responsesInputNodeHasImage(record.output)) return true;
+  return false;
 }
 
 export function concreteComboRequestBody(

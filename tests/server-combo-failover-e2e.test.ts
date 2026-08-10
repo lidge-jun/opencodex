@@ -1321,6 +1321,88 @@ describe("server combo failover 030 activation matrix", () => {
     expect(hits).toBe(0);
   });
 
+  test("disabled image input ignores tool schemas that only mention input_image", async () => {
+    let hits = 0;
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      hits += 1;
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("text only", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      input: [{ role: "user", content: "describe without images" }],
+      tools: [{
+        type: "function",
+        name: "classify",
+        parameters: {
+          type: "object",
+          properties: {
+            part: { type: "string", enum: ["input_image", "input_text"] },
+            example: { type: "input_image" },
+          },
+        },
+      }],
+      metadata: { sample: { type: "input_image" } },
+    });
+    expect(response.status).toBe(200);
+    expect(hits).toBe(1);
+    // openai-chat upstream receives the bare model id after concrete routing.
+    expect(bodies[0]?.model).toBe("m1");
+  });
+
+  test("disabled image input rejects unavailable previous_response_id before dispatch", async () => {
+    let hits = 0;
+    const a = serve(() => {
+      hits += 1;
+      return chatSuccess("unexpected", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      previous_response_id: "resp_missing_local_state",
+      input: [{ role: "user", content: "continue" }],
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain("Continuation state is unavailable");
+    expect(hits).toBe(0);
+  });
+
+  test("disabled image input expands text-only previous_response_id and dispatches once", async () => {
+    const { rememberResponseState } = await import("../src/responses/state");
+    rememberResponseState(
+      { model: "combo/free", input: [{ role: "user", content: "earlier text" }] },
+      {
+        id: "resp_combo_text_prev",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: "ack" }],
+      },
+    );
+    const bodies: Array<Record<string, unknown>> = [];
+    const a = serve(async request => {
+      bodies.push(await request.json() as Record<string, unknown>);
+      return chatSuccess("continued", "m1");
+    });
+    const config = comboConfig({ a: provider("openai-chat", baseUrl(a), "key-a") }, undefined, {
+      imageInput: "disabled",
+    });
+    const response = await post(config, {
+      previous_response_id: "resp_combo_text_prev",
+      input: [{ role: "user", content: "next turn" }],
+    });
+    expect(response.status).toBe(200);
+    expect(bodies).toHaveLength(1);
+    const child = bodies[0]!;
+    // Parent already expanded; child must not keep previous_response_id (would double-prepend).
+    expect(child.previous_response_id).toBeUndefined();
+    const inputText = JSON.stringify(child.input ?? child.messages ?? child);
+    expect(inputText).toContain("earlier text");
+    expect(inputText).toContain("next turn");
+  });
+
   test("fresh child reparsing recomputes vision and effort per target", async () => {
     const bodies: Array<{ provider: string; body: Record<string, unknown> }> = [];
     const a = serve(async request => {

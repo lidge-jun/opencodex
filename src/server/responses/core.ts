@@ -1176,11 +1176,15 @@ export async function handleComboResponses(
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     );
   }
-  // expandPreviousResponseInput leaves previous_response_id in place when state
-  // is missing (no failure marker). For image-disabled combos that would let a
-  // target resolve prior images out of band — reject unresolved continuations.
-  const unresolvedPrevious = typeof (body as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
-    && (body as { previous_response_id: string }).previous_response_id.trim().length > 0;
+  // Missing state returns the original body without a failure marker. Reject
+  // that unresolved continuation for image-disabled combos so a target cannot
+  // resolve prior images out of band. A successful expansion yields a new
+  // object (still carrying previous_response_id) and must not be treated as
+  // unresolved — text-only stored continuations remain allowed.
+  const requestedPreviousId = typeof (rawBody as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
+    ? (rawBody as { previous_response_id: string }).previous_response_id.trim()
+    : "";
+  const unresolvedPrevious = requestedPreviousId.length > 0 && body === rawBody;
   if (combo.imageInput === "disabled" && unresolvedPrevious) {
     return formatErrorResponse(
       400,
@@ -1190,6 +1194,11 @@ export async function handleComboResponses(
   }
   if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
     return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
+  }
+  // Expansion already materialised prior input. Drop the id so the child
+  // handleResponses path does not expand again and double-prepend history.
+  if (body !== rawBody && body && typeof body === "object" && !Array.isArray(body)) {
+    delete (body as Record<string, unknown>).previous_response_id;
   }
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent

@@ -245,7 +245,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `strategy` | 否 | `"failover"` | `"failover"` 或 `"round-robin"`。 |
 | `stickyLimit` | 否 | `1` | 每次轮询选择可连续处理的成功请求数，范围为 1 到 100。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
-| `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"disabled"` 会从对外能力中去掉图片，并在分发前拒绝带图请求；不能在目标不支持时强开图片。 |
+| `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias` | 否 | 无 | 可选的、已修剪的公开模型 id；使用上面的别名规则。空值会以“无别名”形式存储。 |
 | `nativeAlias` | 否 | `false` | 显式允许当前受支持的裸原生 alias 接管路由和 catalog 优先级；绝不会根据 alias 自动推断。 |
 | `displayName` | 否 | 无 | 仅用于 catalog 展示的有界标签；`nativeAlias` 为 true 时必须非空。 |
