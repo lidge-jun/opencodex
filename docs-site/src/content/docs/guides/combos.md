@@ -334,3 +334,147 @@ validation message.
 
 The error was terminal rather than target-specific. Fix invalid input, reduce an oversized context,
 handle a policy refusal, or correct the rejected request origin. Combos do not hop for those cases.
+
+## Economic routing
+
+Use `strategy: "economy"` when the targets in one combo are already known to be interchangeable and
+should be ranked by quota opportunity cost. It is not a task classifier; keep separate combos such as
+`bulk-code` and `frontier-review` for different capability classes. Existing `failover` and
+`round-robin` behavior is unchanged.
+
+**Day-one reality:** without operator-supplied snapshots (or a future provider adapter), included
+targets usually have unknown quota and are deprioritized (or rejected, if you set
+`unknownQuota: "reject"`). Expect traffic to fall through to priced PAYG targets until you feed
+snapshots. Snapshots are in-memory only and are lost on restart.
+
+Static shared allowance definitions live under `economicAllowances`. Runtime remaining values are
+cached snapshots, not config. A target may reference several buckets, so five-hour, weekly, monthly,
+and hard-balance constraints are enforced simultaneously. Windows may be rolling, calendar-based
+(with an explicit timezone), fixed expiry, or non-expiring balance. `source: "usage-log"` refreshes
+from bounded local usage history **off the request path**; `manual` accepts operator-provided
+snapshots. No provider quota-network call is made on the request hot path.
+
+Explain payloads split **hard exclusions** (disqualify) from **soft signals** (reserve pressure,
+unknown quota deprioritize, expiration pressure). Ranking ends with stable configuration order
+(`configIndex`). `maxMarginalUsd` is fail-closed: unknown cash cost is excluded when the guardrail
+is set. Client cancel releases reservations without burn; settlement derives credits/USD from rates
+when providers only report tokens.
+
+```json
+{
+  "economicAllowances": {
+    "subscription-5h": {
+      "unit": "credits", "capacity": 12,
+      "window": { "kind": "rolling", "durationMs": 18000000 },
+      "rollover": false, "reserveFraction": 0.05, "source": "usage-log",
+      "rates": { "inputPerMillion": 0.1, "outputPerMillion": 0.6 }
+    },
+    "subscription-month": {
+      "unit": "credits", "capacity": 60,
+      "window": { "kind": "calendar", "interval": "month", "timezone": "America/Vancouver" },
+      "rollover": false, "source": "usage-log",
+      "rates": { "inputPerMillion": 0.1, "outputPerMillion": 0.6 }
+    }
+  },
+  "combos": {
+    "bulk-code": {
+      "strategy": "economy",
+      "economy": { "unknownQuota": "deprioritize", "maxMarginalUsd": 0.10 },
+      "targets": [
+        { "provider": "included", "model": "code-fast", "allowances": ["subscription-5h", "subscription-month"] },
+        { "provider": "metered", "model": "code-fast", "pricing": { "inputUsdPerMillion": 0.10, "outputUsdPerMillion": 0.60 } }
+      ]
+    },
+    "frontier-review": {
+      "strategy": "failover", "targets": [{ "provider": "frontier", "model": "review" }]
+    }
+  }
+}
+```
+
+Run `ocx combo explain bulk-code --input-tokens 2000 --output-tokens 500 --json` (or
+`GET /api/combos/bulk-code/explain`) to see eligibility, soft signals, every bucket's remaining and
+reserved headroom, reserve threshold, expiry pressure, stale state, marginal/cash cost, and the
+selected target. Selections reserve predicted consumption locally before dispatch; races never return
+an allowance-backed target without a reservation. Completion settles actual usage (including stream
+EOF); cancellation releases without burn.
+
+### Configuring economy combos from the CLI
+
+`ocx combo set` accepts the whole combo as JSON so economy policy, allowance references, and pricing
+never need hand-editing `config.json`:
+
+```text
+ocx combo set bulk-code --combo-json '{
+  "strategy": "economy",
+  "economy": { "unknownQuota": "deprioritize", "maxMarginalUsd": 0.10 },
+  "targets": [
+    { "provider": "included", "model": "code-fast", "allowances": ["subscription-5h", "subscription-month"] },
+    { "provider": "metered", "model": "code-fast", "pricing": { "inputUsdPerMillion": 0.10, "outputUsdPerMillion": 0.60 } }
+  ]
+}'
+```
+
+`--targets-json` accepts the target array alone, and `--economy-json` supplies the policy alongside
+the legacy `--targets` form. Malformed JSON or mixed modes exit `2` with an actionable message, and
+`--json` remains output formatting only. Legacy `--targets provider/model[:weight]` and
+`--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`, and `--display-name` continue to
+work unchanged.
+
+> **Windows users:** POSIX single quotes do not protect JSON in `cmd.exe` or PowerShell. On
+> Windows, wrap the JSON argument in double quotes and escape inner double quotes, for example
+> `ocx combo set bulk-code --combo-json "{\"strategy\":\"economy\",\"targets\":[...]}"`, or pass the
+> JSON through a file with `--combo-json (Get-Content combo.json -Raw)` (PowerShell) /
+> `--combo-json "<combo.json"` (`cmd.exe`).
+
+### Managing runtime snapshots
+
+Runtime snapshots are operator-facing state: they are never written into `config.json` and are lost
+on restart.
+
+```text
+GET    /api/economic-allowances
+GET    /api/economic-allowances/<id>/snapshot
+PUT    /api/economic-allowances/<id>/snapshot
+DELETE /api/economic-allowances/<id>/snapshot
+```
+
+`GET /api/economic-allowances` lists configured allowances with snapshot state and active
+reservation counts (no secrets).
+
+CLI parity:
+
+```text
+ocx allowance list [--json]
+ocx allowance snapshot get <id> [--json]
+ocx allowance snapshot set <id> --snapshot-json '<obj>' [--clear-reservations] [--json]
+ocx allowance snapshot clear <id> [--clear-reservations] [--json]
+```
+
+A `PUT` accepts the normalized snapshot shape:
+
+```json
+{
+  "remaining": 7.5,
+  "updatedAt": 1754256000000,
+  "source": "manual",
+  "confidence": "authoritative",
+  "resetAt": 1754336000000,
+  "clearReservations": true
+}
+```
+
+If the allowance has in-flight reservations, `PUT`/`DELETE` return **409** unless you explicitly
+pass `clearReservations: true` (PUT body) or `?clearReservations=true` (DELETE). That avoids
+silently stomping live accounting.
+
+`remaining`, `updatedAt`, and the optional `windowStart`, `resetAt`, and `expiresAt` must be finite
+non-negative safe-integer timestamps where applicable; `source` is `usage-log` | `manual` |
+`codex-quota`; `confidence` is `authoritative` | `observed` | `estimated` | `unknown`. Unknown
+allowance ids return `404`, malformed bodies return `400`, other methods return `405`. Responses
+contain only normalized snapshot fields — never credentials or provider payloads.
+
+Provider scraping, automated pricing catalogs, a full GUI allowance editor, and
+native Codex quota integration are intentionally follow-up work. The GUI parser preserves economy
+fields on round-trip; use `ocx allowance` or the management API for allowance snapshots today.
+

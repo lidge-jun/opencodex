@@ -236,3 +236,65 @@ The history index is disposable - deleting `routing-history.sqlite` triggers
 an automatic rebuild from `usage.jsonl` on the next query; `ocx logs
 rebuild-index` forces one. Nothing in this system auto-tunes weights,
 budgets, or candidate sets.
+
+## Economic combo routing
+
+`strategy: "economy"` is an additive combo strategy. Shared static allowance buckets
+are configured under `economicAllowances` and referenced by target `allowances` arrays;
+remaining values are cached runtime snapshots. Selection is deterministic and applies
+hard eligibility first, then reserves, expiration pressure, marginal cost, snapshot
+freshness, and configured target order. It does not classify requests or synchronously
+contact provider quota APIs. Use `ocx combo explain <id> --json` for the full decision
+breakdown.
+
+### `economy` policy
+
+```json
+"economy": {
+  "unknownQuota": "deprioritize",
+  "maxMarginalUsd": 0.10
+}
+```
+
+- `unknownQuota` (`allow` | `deprioritize` | `reject`, default `deprioritize`): how a
+  target behaves when a referenced allowance has no cached snapshot.
+- `maxMarginalUsd` (optional, non-negative): the highest estimated per-request USD a
+  target may cost before it is excluded; unknown costs are treated as unknown, not
+  zero.
+
+### Target fields
+
+```json
+{
+  "provider": "included",
+  "model": "code-fast",
+  "allowances": ["subscription-5h", "subscription-month"],
+  "pricing": { "inputUsdPerMillion": 0.10, "outputUsdPerMillion": 0.60 }
+}
+```
+
+- `allowances`: one or more shared bucket IDs defined under `economicAllowances`.
+  Every referenced bucket is a binding constraint; the tightest wins.
+- `pricing`: optional per-million-token USD rates for metered targets. Finite and
+  non-negative.
+
+### `economicAllowances` entries
+
+```json
+{
+  "unit": "credits",
+  "capacity": 12,
+  "window": { "kind": "rolling", "durationMs": 18000000 },
+  "rollover": false,
+  "reserveFraction": 0.05,
+  "source": "usage-log",
+  "rates": { "inputPerMillion": 0.1, "outputPerMillion": 0.6 }
+}
+```
+
+- `unit`: `requests` | `inputTokens` | `outputTokens` | `totalTokens` | `credits` | `usd`.
+- `window`: rolling (`durationMs`), calendar (`interval` + `timezone`), fixed-expiry
+  (`expiresAt`), or non-expiring balance (`kind: "balance"`).
+- `source`: `usage-log` (bounded local history) | `manual` (operator snapshots) |
+  `codex-quota` (provider-derived, future adapters).
+- `rates`: conversion to the allowance unit for request estimation.
