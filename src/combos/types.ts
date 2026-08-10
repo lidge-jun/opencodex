@@ -43,7 +43,8 @@ export interface NormalizedComboConfig {
   nativeAlias: boolean;
   /** Display-only label for the catalog row, or null when unset. */
   displayName: string | null;
-  targets: Array<Required<OcxComboTarget>>;
+  economy?: OcxComboConfig["economy"];
+  targets: Array<OcxComboTarget & { weight: number }>;
 }
 
 /** True only for an explicitly opted-in bare native-family alias. */
@@ -166,6 +167,8 @@ export interface ComboValidationOptions {
   requireEnabledTarget?: boolean;
   /** Full combos map for alias uniqueness checks; omitted during early config load. */
   combos?: Record<string, OcxComboConfig>;
+  /** Shared economy allowance definitions used to validate target references. */
+  allowances?: Record<string, unknown>;
   /** Combo being renamed — its stored alias is excluded from uniqueness checks. */
   excludeComboId?: string;
 }
@@ -203,8 +206,26 @@ export function comboConfigIssues(
   const body = raw as Record<string, unknown>;
   if (body.strategy !== undefined
     && body.strategy !== "failover"
-    && body.strategy !== "round-robin") {
-    issues.push({ path: ["strategy"], message: 'strategy must be "failover" or "round-robin"' });
+    && body.strategy !== "round-robin"
+    && body.strategy !== "economy") {
+    issues.push({ path: ["strategy"], message: 'strategy must be "failover", "round-robin", or "economy"' });
+  }
+  if (body.economy !== undefined) {
+    if (!body.economy || typeof body.economy !== "object" || Array.isArray(body.economy)) {
+      issues.push({ path: ["economy"], message: "economy must be an object" });
+    } else {
+      const economy = body.economy as Record<string, unknown>;
+      if (economy.unknownQuota !== undefined
+        && economy.unknownQuota !== "allow"
+        && economy.unknownQuota !== "deprioritize"
+        && economy.unknownQuota !== "reject") {
+        issues.push({ path: ["economy", "unknownQuota"], message: "unknownQuota must be allow, deprioritize, or reject" });
+      }
+      if (economy.maxMarginalUsd !== undefined
+        && (typeof economy.maxMarginalUsd !== "number" || !Number.isFinite(economy.maxMarginalUsd) || economy.maxMarginalUsd < 0)) {
+        issues.push({ path: ["economy", "maxMarginalUsd"], message: "maxMarginalUsd must be a finite non-negative number" });
+      }
+    }
   }
   if (body.stickyLimit !== undefined
     && (typeof body.stickyLimit !== "number" || !Number.isInteger(body.stickyLimit)
@@ -302,6 +323,30 @@ export function comboConfigIssues(
         message: `targets[${i}].weight must be an integer from 1 to 10000`,
       });
     }
+    if (target.allowances !== undefined) {
+      if (!Array.isArray(target.allowances) || target.allowances.some(value => typeof value !== "string" || !value.trim())) {
+        issues.push({ path: ["targets", i, "allowances"], message: `targets[${i}].allowances must be an array of non-empty strings` });
+      } else if (new Set(target.allowances.map(value => value.trim())).size !== target.allowances.length) {
+        issues.push({ path: ["targets", i, "allowances"], message: `targets[${i}].allowances must not contain duplicates` });
+      } else {
+        for (const allowanceId of target.allowances) {
+          if (!options.allowances || !Object.hasOwn(options.allowances, allowanceId.trim())) {
+            issues.push({ path: ["targets", i, "allowances"], message: `unknown economic allowance "${allowanceId}"` });
+          }
+        }
+      }
+    }
+    if (target.pricing !== undefined && (!target.pricing || typeof target.pricing !== "object" || Array.isArray(target.pricing))) {
+      issues.push({ path: ["targets", i, "pricing"], message: `targets[${i}].pricing must be an object` });
+    } else if (target.pricing) {
+      const pricing = target.pricing as Record<string, unknown>;
+      for (const field of ["fixedPerRequest", "inputUsdPerMillion", "outputUsdPerMillion", "cachedInputUsdPerMillion"] as const) {
+        if (pricing[field] !== undefined
+          && (typeof pricing[field] !== "number" || !Number.isFinite(pricing[field]) || pricing[field] < 0)) {
+          issues.push({ path: ["targets", i, "pricing", field], message: `targets[${i}].pricing.${field} must be a finite non-negative number` });
+        }
+      }
+    }
 
     if (provider && model) {
       const key = targetKey({ provider, model });
@@ -342,10 +387,13 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,
     displayName: displayName || null,
+    ...(raw.economy !== undefined ? { economy: raw.economy } : {}),
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),
       weight: target.weight ?? 1,
+      ...(target.allowances ? { allowances: target.allowances.map(value => value.trim()) } : {}),
+      ...(target.pricing ? { pricing: { ...target.pricing } } : {}),
     })),
   };
 }

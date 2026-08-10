@@ -8,6 +8,7 @@ export interface GenerationContext {
   codexAccountIds: ReadonlySet<string>;
   oauthAccountKeys: ReadonlySet<string>;
   configRoots: ReadonlySet<string>;
+  allowanceIds?: ReadonlySet<string>;
 }
 
 export interface StateStoreRegistration {

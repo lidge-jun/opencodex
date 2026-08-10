@@ -20,6 +20,7 @@ import {
 } from "../combos/failover";
 import { reconcileComboWarningMemos } from "../combos/request";
 import { reconcileComboRotationState } from "../combos/resolve";
+import { reconcileEconomicState, sweepExpiredEconomicReservations } from "../combos/economy";
 import { listLiveComboTargetKeys } from "../combos/types";
 import {
   listLiveConfigOwnershipRoots,
@@ -43,9 +44,11 @@ import {
   type GenerationContext,
   reconcileStateGeneration,
   registerStateStore,
+  registerStateSweepAfterTick,
   setGenerationContextBuilder,
   type StateStoreRegistration,
 } from "./state-store-sweeper";
+import { refreshEconomicSnapshots } from "../combos/economy-refresh";
 
 let liveServerConfig: OcxConfig | null = null;
 
@@ -66,6 +69,7 @@ export function buildGenerationContext(): GenerationContext {
     providerNames,
     comboIds: new Set(Object.keys(liveServerConfig.combos ?? {})),
     comboTargets: listLiveComboTargetKeys(liveServerConfig),
+    allowanceIds: new Set(Object.keys(liveServerConfig.economicAllowances ?? {})),
     codexAccountIds: listLiveCodexAccountIds(liveServerConfig),
     oauthAccountKeys: listLiveOAuthAccountKeys(providerNames),
     configRoots: listLiveConfigOwnershipRoots(getConfigDir()),
@@ -75,11 +79,11 @@ export function buildGenerationContext(): GenerationContext {
 export const STATE_STORE_REGISTRATIONS = [
   { name: "subagent-model-health", sweepExpired: sweepExpiredSubagentModelHealth },
   { name: "api-key-cooldowns", sweepExpired: sweepExpiredApiKeyCooldowns },
-  {
-    name: "combo-target-cooldowns",
+  { name: "combo-target-cooldowns",
     sweepExpired: sweepExpiredComboTargetCooldowns,
     reconcileGeneration: reconcileComboTargetCooldowns,
   },
+  { name: "economic-reservations", sweepExpired: sweepExpiredEconomicReservations, reconcileGeneration: reconcileEconomicState },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
   { name: "responses-continuation", sweepExpired: sweepExpiredResponseStates },
@@ -105,5 +109,12 @@ export const STATE_STORE_REGISTRATIONS = [
 ] satisfies readonly StateStoreRegistration[];
 
 for (const registration of STATE_STORE_REGISTRATIONS) registerStateStore(registration);
+
+registerStateSweepAfterTick({
+  name: "economic-snapshot-refresh",
+  afterTick: () => {
+    if (liveServerConfig) void refreshEconomicSnapshots(liveServerConfig);
+  },
+});
 
 setGenerationContextBuilder(buildGenerationContext);

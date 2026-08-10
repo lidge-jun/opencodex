@@ -42,3 +42,27 @@ export {
   concreteComboRequestBody,
   resetComboEffortWarningStateForTests,
 } from "./request";
+export {
+  clearEconomicQuotaSnapshot,
+  clearEconomicReservationsForAllowance,
+  clearEconomicState,
+  countEconomicReservationsForAllowance,
+  economicConsumption,
+  explainEconomicCombo,
+  estimateEconomicRequest,
+  getEconomicQuotaSnapshot,
+  reconcileEconomicState,
+  releaseEconomicReservation,
+  reserveEconomicSelection,
+  selectEconomicTarget,
+  settleEconomicReservation,
+  setEconomicQuotaSnapshot,
+  sweepExpiredEconomicReservations,
+  type EconomicExplanation,
+  type EconomicHardExclusion,
+  type EconomicRequestEstimate,
+  type EconomicSelectionCandidate,
+  type EconomicSelectionResult,
+  type EconomicSoftSignal,
+} from "./economy";
+export { refreshEconomicSnapshots, resetEconomicSnapshotRefreshForTests, stopEconomicSnapshotRefresh } from "./economy-refresh";

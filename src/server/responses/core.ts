@@ -36,6 +36,9 @@ import {
   noteComboSuccess,
   parseRetryAfterMs,
   pickComboTarget,
+  releaseEconomicReservation,
+  settleEconomicReservation,
+  estimateEconomicRequest,
   targetKey,
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
@@ -1050,6 +1053,66 @@ async function applyFinalRouteRequestNormalization(args: {
 
 
 
+function settleComboReservation(reservationId: string | undefined, usage: OcxUsage | undefined): void {
+  if (!reservationId) return;
+  if (!usage) {
+    releaseEconomicReservation(reservationId);
+    return;
+  }
+  settleEconomicReservation(reservationId, {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(usage.totalTokens !== undefined ? { totalTokens: usage.totalTokens } : {}),
+    ...(usage.cachedInputTokens !== undefined ? { cachedInputTokens: usage.cachedInputTokens } : {}),
+    requests: 1,
+  });
+}
+
+function settleComboStream(
+  response: Response,
+  reservationId: string | undefined,
+  usage: () => OcxUsage | undefined,
+): Response {
+  if (!response.body || !reservationId) return response;
+  let settled = false;
+  const settle = (): void => {
+    if (settled) return;
+    settled = true;
+    settleComboReservation(reservationId, usage());
+  };
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          settle();
+          controller.close();
+        } else {
+          controller.enqueue(next.value);
+        }
+      } catch (error) {
+        settle();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      settle();
+      await reader.cancel(reason);
+    },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+async function responseUsage(response: Response): Promise<OcxUsage | undefined> {
+  try {
+    const payload = await response.clone().json() as { usage?: unknown; response?: { usage?: unknown } };
+    return usageFromResponsesPayload(payload.response?.usage ?? payload.usage);
+  } catch {
+    return undefined;
+  }
+}
+
 export async function handleComboResponses(
   req: Request,
   rawBody: unknown,
@@ -1107,7 +1170,9 @@ export async function handleComboResponses(
   }
 
   const initialNow = Date.now();
+  const requestEstimate = estimateEconomicRequest(rawBody, requestedModel);
   let pick = pickComboTarget(config, comboId, {
+    requestEstimate,
     eligible: target => payloadEligible(target)
       && !isComboTargetInCooldown(comboId, target, initialNow),
   });
@@ -1120,7 +1185,10 @@ export async function handleComboResponses(
 
   let lastFailure: Response | null = null;
   while (pick) {
-    if (options.abortSignal?.aborted) return clientCancelledResponse();
+    if (options.abortSignal?.aborted) {
+      releaseEconomicReservation(pick.reservationId);
+      return clientCancelledResponse();
+    }
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
@@ -1152,6 +1220,7 @@ export async function handleComboResponses(
     childLog.activeAttempt = attempt;
     let attemptRetained = false;
     const retainCancelledAttempt = (): void => {
+      releaseEconomicReservation(pick?.reservationId);
       if (attemptRetained) return;
       sealRequestAttemptIdentity(
         attempt,
@@ -1197,6 +1266,7 @@ export async function handleComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      releaseEconomicReservation(pick.reservationId);
       throw error;
     }
 
@@ -1207,6 +1277,10 @@ export async function handleComboResponses(
     }
 
     if (response.ok) {
+      const streamResponse = (rawBody as { stream?: unknown } | null)?.stream === true && response.body !== null;
+      if (!streamResponse) {
+        settleComboReservation(pick.reservationId, childLog.usage ?? logCtx.usage ?? attempt.usage ?? await responseUsage(response));
+      }
       sealRequestAttemptIdentity(
         attempt,
         childLog.provider,
@@ -1229,7 +1303,9 @@ export async function handleComboResponses(
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.(terminalRecorder);
       callbackGate.commit();
-      return response;
+      return streamResponse
+        ? settleComboStream(response, pick.reservationId, () => childLog.usage ?? logCtx.usage ?? attempt.usage)
+        : response;
     }
 
     callbackGate.discard();
@@ -1246,6 +1322,7 @@ export async function handleComboResponses(
         retainCancelledAttempt();
         return clientCancelledResponse();
       }
+      releaseEconomicReservation(pick.reservationId);
       throw error;
     }
     if (options.abortSignal?.aborted) {
@@ -1269,14 +1346,17 @@ export async function handleComboResponses(
     if (comboFailureDecision(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     }) === "stop") {
+      settleComboReservation(pick.reservationId, failure.usage);
       adoptFailedChildLog(childLog);
       return lastFailure;
     }
+    settleComboReservation(pick.reservationId, failure.usage);
     console.warn(
       `[combo] ${comboId}: ${targetKey(pick.target)} failed with ${response.status} after ${Date.now() - started}ms`,
     );
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
+      requestEstimate,
       now: Date.now(),
       eligible: payloadEligible,
     });

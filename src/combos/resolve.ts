@@ -2,6 +2,7 @@ import type { OcxComboTarget, OcxConfig } from "../types";
 import { coolComboTarget, isComboTargetInCooldown } from "./failover";
 import { getCombo, resolveComboId, targetKey } from "./types";
 import type { NormalizedComboConfig } from "./types";
+import { reserveEconomicSelection, type EconomicRequestEstimate } from "./economy";
 import {
   captureConfigGeneration,
   type GenerationContext,
@@ -9,10 +10,11 @@ import {
 
 export interface ComboPick {
   comboId: string;
-  target: Required<OcxComboTarget>;
+  target: OcxComboTarget & { weight: number };
   targetIndex: number;
   attempted: string[];
   writerGeneration: number;
+  reservationId?: string;
 }
 
 interface SelectionState {
@@ -56,9 +58,9 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget): bool
 }
 
 function smoothWeightedIndex(
-  targets: Required<OcxComboTarget>[],
+  targets: Array<OcxComboTarget & { weight: number }>,
   state: SelectionState,
-  eligible: (target: Required<OcxComboTarget>) => boolean,
+  eligible: (target: OcxComboTarget & { weight: number }) => boolean,
 ): number {
   let best = -1;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -87,20 +89,36 @@ export function pickComboTarget(
   comboId: string,
   options: {
     exclude?: Iterable<string>;
-    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    eligible?: (target: OcxComboTarget & { weight: number }) => boolean;
+    requestEstimate?: EconomicRequestEstimate;
+    now?: number;
   } = {},
 ): ComboPick | null {
   const writerGeneration = captureConfigGeneration();
   const combo = getCombo(config, comboId);
   if (!combo) throw new UnknownComboError(comboId);
   const excluded = new Set(options.exclude ?? []);
-  const eligible = (target: Required<OcxComboTarget>): boolean =>
+  const eligible = (target: OcxComboTarget & { weight: number }): boolean =>
     targetProviderIsUsable(config, target)
     && !excluded.has(targetKey(target))
     && (options.eligible?.(target) ?? true);
 
   let targetIndex = -1;
-  if (combo.strategy === "round-robin") {
+  let reservationId: string | undefined;
+  if (combo.strategy === "economy") {
+    if (!options.requestEstimate) return null;
+    const economic = reserveEconomicSelection(
+      config,
+      comboId,
+      options.requestEstimate,
+      options.now ?? Date.now(),
+      excluded,
+      eligible,
+    );
+    if (!economic.target || economic.targetIndex === null) return null;
+    targetIndex = economic.targetIndex;
+    reservationId = economic.reservationId;
+  } else if (combo.strategy === "round-robin") {
     let state = selectionState.get(comboId);
     if (!state) {
       state = { successes: 0, currentWeights: new Map() };
@@ -132,13 +150,14 @@ export function pickComboTarget(
     targetIndex,
     attempted: [...excluded, targetKey(target)],
     writerGeneration,
+    ...(reservationId ? { reservationId } : {}),
   };
 }
 
 export function noteComboSuccess(
   comboId: string,
   combo: NormalizedComboConfig,
-  target: Required<OcxComboTarget>,
+  target: OcxComboTarget & { weight: number },
   writerGeneration = captureConfigGeneration(),
 ): void {
   if (combo.strategy !== "round-robin") return;
@@ -172,16 +191,19 @@ export function advanceComboAfterFailure(
   options: {
     retryAfter?: string | null;
     now?: number;
-    eligible?: (target: Required<OcxComboTarget>) => boolean;
+    eligible?: (target: OcxComboTarget & { weight: number }) => boolean;
+    requestEstimate?: EconomicRequestEstimate;
   } = {},
 ): ComboPick | null {
   noteComboFailure(pick.comboId, pick.target, pick.writerGeneration);
+  // core.ts owns settle/release for the just-failed attempt; do not double-release here.
   coolComboTarget(pick.comboId, pick.target, {
     ...options,
     writerGeneration: pick.writerGeneration,
   });
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,
+    requestEstimate: options.requestEstimate,
     eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now)
       && (options.eligible?.(target) ?? true),
   });

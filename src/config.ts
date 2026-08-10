@@ -1432,6 +1432,108 @@ const configSchema = z.object({
       message: "defaultProvider must exist in providers",
     });
   }
+  const economicAllowancesRaw = (config as { economicAllowances?: unknown }).economicAllowances;
+  if (economicAllowancesRaw !== undefined) {
+    if (!economicAllowancesRaw || typeof economicAllowancesRaw !== "object" || Array.isArray(economicAllowancesRaw)) {
+      ctx.addIssue({ code: "custom", path: ["economicAllowances"], message: "economicAllowances must be an object" });
+    } else {
+      const economicAllowances = economicAllowancesRaw as Record<string, unknown>;
+      const allowanceProto = Object.getPrototypeOf(economicAllowances);
+      if (allowanceProto !== Object.prototype && allowanceProto !== null) {
+        ctx.addIssue({ code: "custom", path: ["economicAllowances"], message: "economicAllowances must be a plain object" });
+      } else {
+        for (const [id, rawAllowance] of Object.entries(economicAllowances)) {
+          const path = ["economicAllowances", id];
+          if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)
+            || id === "__proto__" || id === "prototype" || id === "constructor") {
+            ctx.addIssue({
+              code: "custom",
+              path,
+              message: "allowance id must be 1-64 letters, numbers, dots, underscores, or hyphens and must not be a reserved object key",
+            });
+            continue;
+          }
+          if (!rawAllowance || typeof rawAllowance !== "object" || Array.isArray(rawAllowance)) {
+            ctx.addIssue({ code: "custom", path, message: "allowance must be an object" });
+            continue;
+          }
+          const allowance = rawAllowance as Record<string, unknown>;
+          const unit = allowance.unit;
+          if (typeof unit !== "string" || !["requests", "inputTokens", "outputTokens", "totalTokens", "credits", "usd"].includes(unit)) {
+            ctx.addIssue({ code: "custom", path: [...path, "unit"], message: "unit must be one of: requests, inputTokens, outputTokens, totalTokens, credits, usd" });
+          }
+          if (!Number.isFinite(allowance.capacity as number) || (allowance.capacity as number) < 0) {
+            ctx.addIssue({ code: "custom", path: [...path, "capacity"], message: "capacity must be finite and non-negative" });
+          }
+          const windowRaw = allowance.window;
+          if (!windowRaw || typeof windowRaw !== "object" || Array.isArray(windowRaw)) {
+            ctx.addIssue({ code: "custom", path: [...path, "window"], message: "window must be an object" });
+          } else {
+            const window = windowRaw as Record<string, unknown>;
+            const kind = window.kind;
+            if (kind !== "rolling" && kind !== "calendar" && kind !== "expiresAt" && kind !== "balance") {
+              ctx.addIssue({ code: "custom", path: [...path, "window", "kind"], message: "window.kind must be one of: rolling, calendar, expiresAt, balance" });
+            } else if (kind === "rolling") {
+              if (!Number.isFinite(window.durationMs as number) || (window.durationMs as number) <= 0) {
+                ctx.addIssue({ code: "custom", path: [...path, "window", "durationMs"], message: "rolling durationMs must be greater than zero" });
+              }
+
+            } else if (kind === "expiresAt") {
+              if (!Number.isFinite(window.expiresAt as number) || (window.expiresAt as number) <= 0) {
+                ctx.addIssue({ code: "custom", path: [...path, "window", "expiresAt"], message: "expiresAt must be a positive timestamp" });
+              }
+
+            } else if (kind === "calendar") {
+              if (window.interval !== "day" && window.interval !== "week" && window.interval !== "month") {
+                ctx.addIssue({ code: "custom", path: [...path, "window", "interval"], message: "calendar interval must be one of: day, week, month" });
+              }
+              if (typeof window.timezone !== "string" || !window.timezone.trim()) {
+                ctx.addIssue({ code: "custom", path: [...path, "window", "timezone"], message: "timezone must be an IANA timezone" });
+              } else {
+                try { new Intl.DateTimeFormat("en-US", { timeZone: window.timezone as string }).format(); }
+                catch { ctx.addIssue({ code: "custom", path: [...path, "window", "timezone"], message: "timezone must be an IANA timezone" }); }
+              }
+            }
+          }
+          if (allowance.rollover !== undefined && typeof allowance.rollover !== "boolean") {
+            ctx.addIssue({ code: "custom", path: [...path, "rollover"], message: "rollover must be a boolean" });
+          }
+          if (allowance.reserveFraction !== undefined && (!Number.isFinite(allowance.reserveFraction as number) || (allowance.reserveFraction as number) < 0 || (allowance.reserveFraction as number) > 1)) {
+            ctx.addIssue({ code: "custom", path: [...path, "reserveFraction"], message: "reserveFraction must be between 0 and 1" });
+          }
+          if (allowance.reserveAmount !== undefined && (!Number.isFinite(allowance.reserveAmount as number) || (allowance.reserveAmount as number) < 0 || (typeof allowance.capacity === "number" && Number.isFinite(allowance.capacity) && (allowance.reserveAmount as number) > (allowance.capacity as number)))) {
+            ctx.addIssue({ code: "custom", path: [...path, "reserveAmount"], message: "reserveAmount must be finite, non-negative, and no greater than capacity" });
+          }
+          if (allowance.source !== undefined && typeof allowance.source !== "string") {
+            ctx.addIssue({ code: "custom", path: [...path, "source"], message: "source must be one of: usage-log, manual, codex-quota" });
+          } else if (allowance.source !== undefined && !["usage-log", "manual", "codex-quota"].includes(allowance.source as string)) {
+            ctx.addIssue({ code: "custom", path: [...path, "source"], message: "source must be one of: usage-log, manual, codex-quota" });
+          }
+          if (allowance.staleAfterMs !== undefined && (!Number.isFinite(allowance.staleAfterMs as number) || (allowance.staleAfterMs as number) < 0)) {
+            ctx.addIssue({ code: "custom", path: [...path, "staleAfterMs"], message: "staleAfterMs must be finite and non-negative" });
+          }
+          if (allowance.rates !== undefined) {
+            if (!allowance.rates || typeof allowance.rates !== "object" || Array.isArray(allowance.rates)) {
+              ctx.addIssue({ code: "custom", path: [...path, "rates"], message: "rates must be an object" });
+            } else {
+              const rates = allowance.rates as Record<string, unknown>;
+              const allowedRates = new Set(["fixedPerRequest", "inputPerMillion", "outputPerMillion", "cachedInputPerMillion", "cacheWritePerMillion"]);
+              for (const key of Object.keys(rates)) {
+                if (!allowedRates.has(key)) {
+                  ctx.addIssue({ code: "custom", path: [...path, "rates", key], message: `unknown rate "${key}"` });
+                }
+              }
+              for (const key of ["fixedPerRequest", "inputPerMillion", "outputPerMillion", "cachedInputPerMillion", "cacheWritePerMillion"] as const) {
+                if (rates[key] !== undefined && (!Number.isFinite(rates[key] as number) || (rates[key] as number) < 0)) {
+                  ctx.addIssue({ code: "custom", path: [...path, "rates", key], message: `${key} must be finite and non-negative` });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
   const combos = (config as { combos?: unknown }).combos;
   if (combos !== undefined) {
     if (!combos || typeof combos !== "object" || Array.isArray(combos)) {
@@ -1452,6 +1554,7 @@ const configSchema = z.object({
         // too, not just via the management API; each combo is excluded from its own check.
         for (const issue of comboConfigIssues(id, raw, config.providers, {
           combos: combos as Record<string, import("./types").OcxComboConfig>,
+          allowances: config.economicAllowances as Record<string, unknown> | undefined,
           excludeComboId: id,
         })) {
           ctx.addIssue({
@@ -1910,6 +2013,36 @@ function warnDegradedCodexAccountPicker(rawParsed: unknown): void {
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
+function sanitizeEconomicAllowancesForLoad(rawParsed: unknown): void {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "economicAllowances")) return;
+  const value = raw.economicAllowances;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    delete raw.economicAllowances;
+    console.warn("⚠️  config.json economicAllowances ignored: expected an object. Other settings were preserved.");
+    return;
+  }
+
+  const kept: Record<string, unknown> = {};
+  const dropped: string[] = [];
+  for (const [id, allowance] of Object.entries(value as Record<string, unknown>)) {
+    const probe = configSchema.safeParse({
+      ...getDefaultConfig(),
+      economicAllowances: { [id]: allowance },
+      combos: undefined,
+    });
+    const invalidAllowance = !probe.success
+      && probe.error.issues.some(issue => issue.path[0] === "economicAllowances");
+    if (invalidAllowance) dropped.push(id);
+    else kept[id] = allowance;
+  }
+  if (Object.keys(kept).length > 0) raw.economicAllowances = kept;
+  else delete raw.economicAllowances;
+  if (dropped.length > 0) {
+    console.warn(`⚠️  config.json ignored invalid economic allowance${dropped.length === 1 ? "" : "s"}: ${dropped.join(", ")}. Other settings were preserved.`);
+  }
+}
+
 function nativeSubagentSyncDisabledReason(config: OcxConfig, rawParsed?: unknown): string | null {
   if (config.syncCodexSubagentDefaults !== true) return null;
   const malformed = malformedNativeSubagentFields(rawParsed);
@@ -1960,6 +2093,7 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
+    sanitizeEconomicAllowancesForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       const config = normalizeApiKeyIds(result.data as OcxConfig);

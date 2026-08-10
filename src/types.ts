@@ -888,6 +888,8 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /** Shared static allowance definitions used by economy combos. Runtime snapshots stay in memory. */
+  economicAllowances?: Record<string, OcxEconomicAllowance>;
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**
@@ -905,7 +907,7 @@ export interface OcxConfig {
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
 
-export type OcxComboStrategy = "failover" | "round-robin";
+export type OcxComboStrategy = "failover" | "round-robin" | "economy";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export interface OcxComboTarget {
@@ -913,12 +915,15 @@ export interface OcxComboTarget {
   model: string;
   /** Relative SWRR batch weight. Default 1; valid range 1..10000. */
   weight?: number;
+  allowances?: string[];
+  pricing?: OcxEconomicPricing;
 }
 
 export interface OcxComboConfig {
   targets: OcxComboTarget[];
   /** Ordered failover (default) or deterministic smooth weighted round-robin. */
   strategy?: OcxComboStrategy;
+  economy?: OcxComboEconomyPolicy;
   /** Successful requests retained on one RR selection batch. Default 1; range 1..100. */
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
@@ -936,6 +941,54 @@ export interface OcxComboConfig {
   nativeAlias?: boolean;
   /** Display-only label for the public catalog row. Required for native aliases. */
   displayName?: string;
+}
+
+export type OcxEconomicUnit = "requests" | "inputTokens" | "outputTokens" | "totalTokens" | "credits" | "usd";
+export type OcxEconomicSource = "usage-log" | "manual" | "codex-quota";
+export type OcxEconomicConfidence = "authoritative" | "observed" | "estimated" | "unknown";
+export type OcxEconomicWindow =
+  | { kind: "rolling"; durationMs: number }
+  | { kind: "calendar"; interval: "day" | "week" | "month"; timezone: string }
+  | { kind: "expiresAt"; expiresAt: number }
+  | { kind: "balance" };
+export interface OcxEconomicRates {
+  fixedPerRequest?: number;
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cachedInputPerMillion?: number;
+  cacheWritePerMillion?: number;
+}
+export interface OcxEconomicPricing {
+  fixedPerRequest?: number;
+  inputUsdPerMillion?: number;
+  outputUsdPerMillion?: number;
+  cachedInputUsdPerMillion?: number;
+  cacheWriteUsdPerMillion?: number;
+}
+export interface OcxEconomicAllowance {
+  unit: OcxEconomicUnit;
+  capacity: number;
+  window: OcxEconomicWindow;
+  rollover?: boolean;
+  reserveFraction?: number;
+  reserveAmount?: number;
+  source?: OcxEconomicSource;
+  staleAfterMs?: number;
+  rates?: OcxEconomicRates;
+}
+export interface OcxEconomicSnapshot {
+  remaining: number;
+  updatedAt: number;
+  windowStart?: number;
+  resetAt?: number;
+  expiresAt?: number;
+  source: string;
+  confidence: OcxEconomicConfidence;
+  error?: string;
+}
+export interface OcxComboEconomyPolicy {
+  unknownQuota?: "allow" | "deprioritize" | "reject";
+  maxMarginalUsd?: number;
 }
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
