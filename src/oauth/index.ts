@@ -8,6 +8,7 @@ import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredenti
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
+import { loginNous, NousTokenError, refreshNousToken } from "./nous";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
@@ -193,6 +194,17 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshKimiToken,
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
+  },
+  nous: {
+    // Nous Portal device-grant login (RFC 8628) against portal.nousresearch.com.
+    // The access token is the per-request inference JWT (scope inference:invoke).
+    // Refresh tokens are single-use and rotated server-side on every refresh:
+    // keep background refresh lazy-only (the default) so concurrent refreshes
+    // cannot trip the Portal's token-reuse revocation.
+    login: (ctrl) => loginNous(ctrl),
+    refresh: (rt, signal) => refreshNousToken(rt, signal),
+    providerConfig: oauthConfig("nous"),
+    defaultModel: oauthDefaultModel("nous"),
   },
   kiro: {
     login: (ctrl, opts) => loginKiro(ctrl, { forceLogin: opts?.forceLogin }),
@@ -436,6 +448,7 @@ function terminal(error:unknown):boolean{
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
+  if(error instanceof NousTokenError)return ["invalid_grant","refresh_token_reused","revoked","revoked_token","expired_token"].includes(error.oauthError??"");
   return isTerminalRefreshError(error);
 }
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}

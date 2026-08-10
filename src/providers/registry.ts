@@ -1060,6 +1060,33 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
   },
   {
+    // Nous Portal — Nous Research subscription gateway (same backend Hermes Agent
+    // uses). OAuth is a device grant (src/oauth/nous.ts): the access token IS the
+    // per-request inference JWT (scope inference:invoke), refresh tokens are
+    // single-use and rotated on every refresh. Catalog is a mix of paid models
+    // (billed against the Portal subscription) and `:free` slugs (e.g.
+    // tencent/hy3:free, stepfun/step-3.7-flash:free, inclusionai/ling-3.0-flash:free);
+    // free-tier gating is decided live by the Portal per account, so discovery
+    // from the signed-in account is authoritative (no static model list).
+    id: "nous",
+    label: "Nous Portal",
+    adapter: "openai-chat",
+    baseUrl: "https://inference-api.nousresearch.com/v1",
+    authKind: "oauth",
+    oauthId: "nous",
+    featured: true,
+    freeTier: true,
+    dashboardUrl: "https://portal.nousresearch.com",
+    defaultModel: "tencent/hy3:free",
+    liveModels: true,
+    modelDiscovery: {
+      url: "https://inference-api.nousresearch.com/v1/models",
+      maxResponseBytes: 262_144,
+      maxModels: 512,
+    },
+    note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live.",
+  },
+  {
     id: "openai-apikey",
     label: "OpenAI API",
     adapter: "openai-responses",
