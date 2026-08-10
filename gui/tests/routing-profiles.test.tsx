@@ -40,6 +40,18 @@ const PROFILE_REFRESHED = {
   require: { tools: true, imageInput: true },
 };
 
+const PROFILE_SMART = {
+  ...PROFILE,
+  id: "smart",
+  model: "ocx/auto",
+  revision: "rev-smart",
+  promptRouting: { enabled: true },
+  candidates: [
+    { provider: "deepseek", model: "deepseek-chat", taskTiers: ["fast", "balanced"] },
+    { provider: "openai", model: "gpt-5", taskTiers: ["powerful"] },
+  ],
+};
+
 const ANALYTICS = {
   totalRequests: 12,
   successRate: 0.75,
@@ -198,6 +210,54 @@ test("routing page loads profiles, analytics, and marks the dry-run selection", 
     expect(container.textContent).toContain("selected");
     expect(container.textContent).toContain("unknown capability");
     expect(container.textContent).toContain("0.910");
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});
+
+test("smart profile renders tier assignments and sends task-tier dry-run evidence", async () => {
+  const dryRunBodies: unknown[] = [];
+  installFetch((url, init) => {
+    if (url.endsWith("/api/routing-profiles") && (init?.method ?? "GET") === "GET") {
+      return Response.json({ profiles: [PROFILE_SMART] });
+    }
+    if (url.endsWith("/api/routing-analytics")) {
+      return Response.json(ANALYTICS);
+    }
+    if (url.endsWith("/api/routing-profiles/dry-run") && init?.method === "POST") {
+      dryRunBodies.push(JSON.parse(String(init.body ?? "{}")));
+      return Response.json(DRY_RUN_OK);
+    }
+    return new Response("missing", { status: 404 });
+  });
+
+  const { container, root } = await mountPage();
+  try {
+    const promptRouting = [...container.querySelectorAll<HTMLLabelElement>("label")]
+      .find(label => label.textContent?.includes("Automatic prompt routing"))
+      ?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(promptRouting?.checked).toBe(true);
+    expect(container.textContent).toContain("Task tiers");
+    expect([...container.querySelectorAll<HTMLSelectElement>(".model-card select")]
+      .map(input => input.value)).toContain("deepseek");
+    expect([...container.querySelectorAll<HTMLInputElement>('.model-card input[list^="routing-model-options-"]')]
+      .map(input => input.value)).toContain("deepseek-chat");
+
+    const taskTier = container.querySelector<HTMLSelectElement>("#routing-task-tier");
+    expect(taskTier).toBeTruthy();
+    await act(async () => {
+      taskTier!.value = "powerful";
+      taskTier!.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+    });
+    await tick();
+
+    const evaluate = [...container.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent?.includes("Evaluate candidates"));
+    expect(evaluate).toBeTruthy();
+    await act(async () => { evaluate!.click(); });
+    await tick(3);
+
+    expect(dryRunBodies).toEqual([{ profile: "smart", evidence: { taskTier: "powerful" } }]);
   } finally {
     await act(async () => { root.unmount(); });
   }

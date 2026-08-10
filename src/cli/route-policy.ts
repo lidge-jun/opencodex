@@ -6,6 +6,7 @@ import {
   runtimeRequest,
   takeFlag,
   takeIntegerOption,
+  takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
 
@@ -13,9 +14,9 @@ const USAGE = `Usage:
   ocx route policy list [--json]
   ocx route policy show <id> [--json]
   ocx route policy dry-run <id> [--model-context <tokens>] [--tools]
-      [--image] [--structured-output] [--json]
+      [--image] [--structured-output] [--task-tier <fast|balanced|powerful>] [--json]
   ocx route policy evaluate <id> [--model-context <tokens>] [--tools]
-      [--image] [--structured-output] [--json]`;
+      [--image] [--structured-output] [--task-tier <fast|balanced|powerful>] [--json]`;
 
 interface ProfileRow {
   id?: string;
@@ -59,6 +60,10 @@ async function dryRun(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const tools = takeFlag(args, "--tools");
   const image = takeFlag(args, "--image");
   const structuredOutput = takeFlag(args, "--structured-output");
+  const taskTier = takeOption(args, "--task-tier");
+  if (taskTier !== undefined && !["fast", "balanced", "powerful"].includes(taskTier)) {
+    throw new CliUsageError("--task-tier must be fast, balanced, or powerful", USAGE);
+  }
   rejectArgs(args, USAGE);
   const result = await runtimeRequest(
     "/api/routing-profiles/dry-run",
@@ -72,6 +77,7 @@ async function dryRun(argv: string[], deps: RuntimeApiDeps): Promise<void> {
           ...(tools ? { toolsRequired: true } : {}),
           ...(image ? { imageInputRequired: true } : {}),
           ...(structuredOutput ? { structuredOutputRequired: true } : {}),
+          ...(taskTier ? { taskTier } : {}),
         },
       }),
     },

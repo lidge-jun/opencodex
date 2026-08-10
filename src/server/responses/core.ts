@@ -23,7 +23,7 @@ import {
   routeModel,
   type RouteResult,
 } from "../../router";
-import { evidenceFromBody } from "../../routing/request-evidence";
+import { evidenceForModelRequest } from "../../routing/request-evidence";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -1495,7 +1495,7 @@ async function handleResponsesInner(
   try {
     route = options.comboAttempt
       ? routeConcreteModel(config, parsed.modelId)
-      : routeModel(config, parsed.modelId, evidenceFromBody(parsed._rawBody));
+      : routeModel(config, parsed.modelId, evidenceForModelRequest(config, parsed.modelId, parsed._rawBody));
     logCtx.routeDecision = route.routeDecision;
   } catch (err) {
     if (err instanceof NoAvailableComboTargetsError) {
@@ -1572,7 +1572,7 @@ async function handleResponsesInner(
 
     if (fallback?.to && !slugsEquivalent(fallback.to, route.modelId)) {
       try {
-        route = routeModel(config, fallback.to, evidenceFromBody(parsed._rawBody));
+        route = routeModel(config, fallback.to, evidenceForModelRequest(config, fallback.to, parsed._rawBody));
         logCtx.routeDecision = route.routeDecision;
       } catch (err) {
         if (err instanceof NoAvailableComboTargetsError) {

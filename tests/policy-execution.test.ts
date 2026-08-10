@@ -6,7 +6,7 @@ import { NoEligiblePolicyCandidateError, routeModel } from "../src/router";
 import { isValidProviderName } from "../src/config";
 import { getRoutingProfile } from "../src/routing/profile";
 import { closeRequestHistoryIndex } from "../src/routing/history/indexer";
-import { evidenceFromBody } from "../src/routing/request-evidence";
+import { evidenceForModelRequest, evidenceFromBody } from "../src/routing/request-evidence";
 import type { OcxConfig } from "../src/types";
 
 let testDir = "";
@@ -248,6 +248,58 @@ describe("policy execution (RI-05)", () => {
     expect(first.providerName).toBe(second.providerName);
     expect(first.modelId).toBe(second.modelId);
     expect(first.routeDecision!.selected).toEqual(second.routeDecision!.selected);
+  });
+
+  test("one smart alias reclassifies and routes every prompt independently", () => {
+    const config = baseConfig({
+      providers: {
+        ...baseConfig().providers,
+        a: {
+          ...baseConfig().providers.a!,
+          models: ["fast-model", "balanced-model", "powerful-model"],
+        },
+      },
+      routingProfiles: {
+        smart: {
+          alias: "ocx/auto",
+          promptRouting: { enabled: true },
+          candidates: [
+            { provider: "a", model: "fast-model", taskTiers: ["fast"] },
+            { provider: "a", model: "balanced-model", taskTiers: ["balanced"] },
+            { provider: "a", model: "powerful-model", taskTiers: ["powerful"] },
+          ],
+        },
+      },
+    });
+    const routePrompt = (content: string) => routeModel(
+      config,
+      "ocx/auto",
+      evidenceForModelRequest(config, "ocx/auto", {
+        messages: [{ role: "user", content }],
+      }),
+    );
+
+    const fast = routePrompt("你好");
+    expect(fast.modelId).toBe("fast-model");
+    expect(fast.routeDecision?.selected.reason).toBe("prompt-tier-fast");
+
+    const balanced = routePrompt(
+      "Explain how an HTTP request moves through a web application, using a small example that a new developer can follow.",
+    );
+    expect(balanced.modelId).toBe("balanced-model");
+    expect(balanced.routeDecision?.selected.reason).toBe("prompt-tier-balanced");
+
+    const powerful = routePrompt(`
+Investigate the root cause in this repository and implement a safe architecture-level fix.
+1. Trace the request flow.
+2. Add regression tests.
+3. Verify the complete test suite.
+\`\`\`ts
+export function route(input: unknown) {}
+\`\`\`
+`);
+    expect(powerful.modelId).toBe("powerful-model");
+    expect(powerful.routeDecision?.selected.reason).toBe("prompt-tier-powerful");
   });
 
   test("evidenceFromBody detects nested image parts in real request shapes", () => {

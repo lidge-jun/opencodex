@@ -10,7 +10,7 @@ import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractC
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { NoEligiblePolicyCandidateError, routeModel } from "../../router";
-import { evidenceFromBody } from "../../routing/request-evidence";
+import { evidenceForModelRequest } from "../../routing/request-evidence";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -288,7 +288,7 @@ export async function handleResponsesCompact(
     // Compact requests route through the same policy evaluation as normal
     // turns, so body-derived evidence (tools/image) must reach the first
     // evaluation too - not only the later handleResponses dispatch.
-    route = routeModel(config, raw.model, evidenceFromBody(raw));
+    route = routeModel(config, raw.model, evidenceForModelRequest(config, raw.model, raw));
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the

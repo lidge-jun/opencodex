@@ -102,9 +102,13 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 
 ## 路由策略配置文件（`config.routingProfiles`）
 
-显式请求的 `policy/<id>`（或配置的别名）会在固定的候选白名单中，根据硬性能力要求与确定性、可解释的评分进行选择。现有模型 ID 永远不会隐式经过配置文件。支持 `candidates`（显式白名单）、可选 `alias`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota 权重）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）。未知不会被当作零或免费。
+显式请求的 `policy/<id>`（或配置的别名）会在固定的候选白名单中，根据硬性能力要求与确定性、可解释的评分进行选择。现有模型 ID 永远不会隐式经过配置文件。支持 `candidates`（显式白名单）、可选 `alias`、`promptRouting`、`require`（`minContextWindow`、`minQuotaHeadroom`、`tools`、`imageInput`、`structuredOutput`、`localOnly`、`remoteAllowed`、`encryptedCodexTasks`、`reasoningEffort`、`serviceTier`）、`optimize`（latency/health/cost/quota 权重）、`limits.maxEstimatedCostUsd`、`unknownEvidence`（allow/penalize/exclude）。未知不会被当作零或免费。
 
-CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
+设置 `"promptRouting": { "enabled": true }` 后，只需在 Codex 中选择一次该配置文件的别名（例如 `ocx/auto`）。OpenCodex 会在每次请求时重新分析最新一条用户提示词，把任务确定性地分为 `fast`、`balanced` 或 `powerful`，再从声明了对应 `taskTiers` 的候选中选择模型。所有三个等级都必须有候选覆盖。该分类在本地完成，不会额外调用模型，也不会把原始提示词写入路由元数据；能力、健康度、额度、成本限制和正常评分仍会继续生效。最终模型与 `prompt-tier-*` 原因可通过路由决策记录和 `ocx logs explain` 查看。
+
+任务等级筛选与提供商无关：任何已经在 OpenCodex 中配置好的模型都能参与，包括 DeepSeek、通义千问、Kimi、智谱 GLM 等国内模型；它们不是写死在路由器里的模型清单。
+
+CLI：`ocx route policy list`、`ocx route policy show <id>`、`ocx route policy dry-run <id> --task-tier powerful --model-context <tokens> --tools`、`ocx route policy evaluate <id>`。
 
 组合是显式的有序/加权目标路由与故障转移；策略配置文件是基于证据在候选之间进行选择。
 

@@ -940,9 +940,24 @@ export interface OcxComboConfig {
 
 export type OcxRoutingUnknownEvidenceMode = "allow" | "penalize" | "exclude";
 
+export type OcxRoutingTaskTier = "fast" | "balanced" | "powerful";
+
 export interface OcxRoutingProfileCandidate {
   provider: string;
   model: string;
+  /**
+   * Prompt-complexity tiers this candidate may serve when prompt routing is
+   * enabled for the profile.
+   */
+  taskTiers?: OcxRoutingTaskTier[];
+}
+
+export interface OcxRoutingPromptRouting {
+  /**
+   * Classify each request's latest user prompt and constrain selection to a
+   * matching candidate task tier.
+   */
+  enabled?: boolean;
 }
 
 export interface OcxRoutingProfileRequirements {
@@ -1008,6 +1023,8 @@ export interface OcxRoutingProfileConfig {
   /** Optimization weights; normalized deterministically. */
   optimize?: OcxRoutingProfileOptimize;
   limits?: OcxRoutingProfileLimits;
+  /** Optional deterministic per-prompt complexity routing. */
+  promptRouting?: OcxRoutingPromptRouting;
   /** How unknown evidence is handled per dimension. */
   unknownEvidence?: OcxRoutingProfileUnknownEvidence;
 }

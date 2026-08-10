@@ -237,7 +237,14 @@ describe("route explainability (RI-09)", () => {
   test("CLI route policy evaluate posts dry-run evidence and rejects option-like ids", async () => {
     const { handleRoutePolicyCommand } = await import("../src/cli/route-policy");
     const calls: Array<{ path: string; init?: RequestInit }> = [];
-    const ok = await handleRoutePolicyCommand(["evaluate", "fast", "--tools", "--json"], {
+    const ok = await handleRoutePolicyCommand([
+      "evaluate",
+      "fast",
+      "--tools",
+      "--task-tier",
+      "powerful",
+      "--json",
+    ], {
       baseUrl: "http://cli.test",
       fetchImpl: async (input, init) => {
         const path = String(input).replace("http://cli.test", "");
@@ -254,9 +261,12 @@ describe("route explainability (RI-09)", () => {
     expect(calls[0]!.init?.method).toBe("POST");
     const body = JSON.parse(String(calls[0]!.init?.body ?? "{}")) as {
       profile?: string;
-      evidence?: { toolsRequired?: boolean };
+      evidence?: { toolsRequired?: boolean; taskTier?: string };
     };
-    expect(body).toEqual({ profile: "fast", evidence: { toolsRequired: true } });
+    expect(body).toEqual({
+      profile: "fast",
+      evidence: { toolsRequired: true, taskTier: "powerful" },
+    });
 
     const bad = await handleRoutePolicyCommand(["evaluate", "--json"], {
       baseUrl: "http://cli.test",
@@ -265,5 +275,18 @@ describe("route explainability (RI-09)", () => {
       },
     });
     expect(bad).toBe(2);
+
+    const invalidTier = await handleRoutePolicyCommand([
+      "evaluate",
+      "fast",
+      "--task-tier",
+      "huge",
+    ], {
+      baseUrl: "http://cli.test",
+      fetchImpl: async () => {
+        throw new Error("should not request");
+      },
+    });
+    expect(invalidTier).toBe(2);
   });
 });

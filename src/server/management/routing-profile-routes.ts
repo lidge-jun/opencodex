@@ -37,6 +37,7 @@ function profileDto(config: Parameters<typeof getRoutingProfile>[0], id: string)
     model: policyPublicModelId(id, profile),
     revision: profile.revision,
     candidates: profile.candidates,
+    promptRouting: profile.promptRouting ?? null,
     require: profile.require,
     optimize: profile.optimize,
     limits: profile.limits,
@@ -58,6 +59,12 @@ function parseEvidence(raw: unknown): { evidence: PolicyRequestEvidence; ok: boo
   }
   if (typeof record.reasoningEffort === "string") evidence.reasoningEffort = record.reasoningEffort;
   if (typeof record.serviceTier === "string") evidence.serviceTier = record.serviceTier;
+  if (record.taskTier !== undefined) {
+    if (record.taskTier !== "fast" && record.taskTier !== "balanced" && record.taskTier !== "powerful") {
+      return { evidence: {}, ok: false };
+    }
+    evidence.taskTier = record.taskTier;
+  }
   return { evidence, ok: true };
 }
 

@@ -1,10 +1,12 @@
 export type UnknownEvidenceMode = "allow" | "penalize" | "exclude";
 export type UnknownCostCapMode = "allow" | "exclude";
 export type OptionalBoolean = "" | "true" | "false";
+export type RoutingTaskTier = "fast" | "balanced" | "powerful";
 
 export type RoutingProfileCandidate = {
   provider: string;
   model: string;
+  taskTiers?: RoutingTaskTier[];
 };
 
 /**
@@ -23,8 +25,9 @@ function newDraftCandidateKey(): string {
 export function newDraftCandidate(
   provider: string,
   model: string,
+  taskTiers: RoutingTaskTier[] = [],
 ): RoutingProfileDraftCandidate {
-  return { provider, model, key: newDraftCandidateKey() };
+  return { provider, model, taskTiers: [...taskTiers], key: newDraftCandidateKey() };
 }
 
 export type RoutingProfileDto = {
@@ -33,6 +36,7 @@ export type RoutingProfileDto = {
   model: string;
   revision: string;
   candidates: RoutingProfileCandidate[];
+  promptRouting?: { enabled?: boolean } | null;
   require: {
     minContextWindow?: number;
     minQuotaHeadroom?: number;
@@ -61,6 +65,7 @@ export type RoutingProfileDto = {
 export type RoutingProfileDraft = {
   id: string;
   alias: string;
+  promptRoutingEnabled: boolean;
   candidates: RoutingProfileDraftCandidate[];
   require: {
     minContextWindow: string;
@@ -123,6 +128,7 @@ export function newRoutingProfileDraft(
   return {
     id: "",
     alias: "",
+    promptRoutingEnabled: false,
     candidates: [newDraftCandidate(provider, model)],
     require: {
       minContextWindow: "",
@@ -146,7 +152,12 @@ export function routingProfileDraftFromDto(profile: RoutingProfileDto): RoutingP
   return {
     id: profile.id,
     alias: profile.alias ?? "",
-    candidates: profile.candidates.map(candidate => ({ ...candidate, key: newDraftCandidateKey() })),
+    promptRoutingEnabled: profile.promptRouting?.enabled === true,
+    candidates: profile.candidates.map(candidate => ({
+      ...candidate,
+      taskTiers: [...(candidate.taskTiers ?? [])],
+      key: newDraftCandidateKey(),
+    })),
     require: {
       minContextWindow: numberInput(profile.require.minContextWindow),
       minQuotaHeadroom: numberInput(profile.require.minQuotaHeadroom),
@@ -228,7 +239,9 @@ export function routingProfilePutBody(
       candidates: draft.candidates.map(candidate => ({
         provider: candidate.provider.trim(),
         model: candidate.model.trim(),
+        ...(draft.promptRoutingEnabled ? { taskTiers: [...(candidate.taskTiers ?? [])] } : {}),
       })),
+      ...(draft.promptRoutingEnabled ? { promptRouting: { enabled: true } } : {}),
       ...(Object.keys(require).length > 0 ? { require } : {}),
       optimize: {
         latency: Number(draft.optimize.latency),

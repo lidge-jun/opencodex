@@ -110,8 +110,9 @@ namespace, or reserved bare native families (`gpt-*`, `o1-*`, `o3-*`, `o4-*`, `c
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `candidates` | `{ provider: string; model: string }[]` | required | Explicit allowlist of `provider/model` refs. No implicit expansion. |
+| `candidates` | `{ provider: string; model: string; taskTiers?: ("fast" \| "balanced" \| "powerful")[] }[]` | required | Explicit allowlist of `provider/model` refs. `taskTiers` declares which prompt-complexity tiers a candidate may serve when automatic prompt routing is enabled. No implicit expansion. |
 | `alias?` | `string` | — | Optional public model id in place of `policy/<id>`. |
+| `promptRouting?` | `{ enabled?: boolean }` | disabled | Locally classify the latest user prompt on every request and restrict eligibility to candidates assigned to the resulting task tier. |
 | `require?` | object | `{}` | Hard capability requirements evaluated before scoring (see below). |
 | `optimize?` | object | latency 0.55, health 0.25, cost 0.10, quota 0.10 | Scoring weights, normalized deterministically. `health`, `quota`, and `cost` have score dimensions; the configured-priority share is `1 - health - quota - cost` (default 0.55), and `latency` folds into that priority share rather than scoring independently. |
 | `limits?` | object | — | Hard limits. `maxEstimatedCostUsd` excludes a candidate when its estimated cost is known and above the cap. When that cap is set, `onUnknownCost` (`"allow"` default, or `"exclude"`) controls unknown estimates: allow prevents a cap-specific exclusion and records `cost.capOutcome: "unknown-allowed"`; exclude emits `cost-limit-unknown` and `capOutcome: "unknown-excluded"`. `onUnknownCost` alone (no cap) is inert. Separate from `unknownEvidence.cost`, which can still exclude or penalize unknown prices via `unknown-price` / scoring. |
@@ -134,16 +135,44 @@ evidence surface for context-sensitive profiles.
 The CLI dry-run accepts request-evidence flags but cannot supply candidate capability evidence yet;
 candidate evidence is provided through the API (`POST /api/routing-profiles/dry-run`).
 
+### Automatic prompt routing
+
+With `promptRouting.enabled: true`, OpenCodex classifies the latest user prompt as `fast`,
+`balanced`, or `powerful` for every request. The classifier is deterministic and local: it makes no
+extra model call and adds only the resulting tier to routing evidence, not the raw prompt. Requests
+without usable text, such as image-only input, default to `balanced`. The requested reasoning effort
+can also raise or lower the tier.
+
+Every candidate must declare a non-empty `taskTiers` array, and the profile must cover all three
+tiers. Tier matching is an eligibility filter; the existing capability, health, quota, cost-limit,
+unknown-evidence, and scoring rules still decide among candidates eligible for that tier.
+
+Select the profile alias once in Codex. Each later request through that alias is classified again,
+so consecutive turns may use different providers or models. The selected trace reason is
+`prompt-tier-fast`, `prompt-tier-balanced`, or `prompt-tier-powerful`, visible through the
+route-decision API and `ocx logs explain`.
+
+The tier filter is provider-agnostic: any configured provider/model can participate. DeepSeek, Qwen,
+Kimi, GLM, and the ids in the example are illustrative rather than a hardcoded model catalog.
+
 ```json
 {
   "routingProfiles": {
-    "fast": {
-      "alias": "ocx/fast",
+    "smart": {
+      "alias": "ocx/auto",
+      "promptRouting": { "enabled": true },
       "candidates": [
-        { "provider": "anthropic", "model": "claude-sonnet-5" },
-        { "provider": "openai", "model": "gpt-5.6-sol" }
+        {
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "taskTiers": ["fast", "balanced"]
+        },
+        {
+          "provider": "openai",
+          "model": "gpt-5.6-sol",
+          "taskTiers": ["powerful"]
+        }
       ],
-      "require": { "tools": true, "minContextWindow": 128000 },
       "optimize": { "latency": 0.55, "health": 0.25, "cost": 0.10, "quota": 0.10 },
       "limits": { "maxEstimatedCostUsd": 0.50, "onUnknownCost": "allow" },
       "unknownEvidence": {
@@ -158,7 +187,7 @@ candidate evidence is provided through the API (`POST /api/routing-profiles/dry-
 ```
 
 CLI: `ocx route policy list [--json]`, `ocx route policy show <id> [--json]`, and
-`ocx route policy dry-run <id> [--model-context <tokens>] [--tools] [--image] [--structured-output] [--json]`.
+`ocx route policy dry-run <id> [--task-tier <fast|balanced|powerful>] [--model-context <tokens>] [--tools] [--image] [--structured-output] [--json]`.
 Dry-run evaluates candidates without sending any upstream request.
 
 Quota evidence (`optimize.quota`, `require.minQuotaHeadroom`, `unknownEvidence.quota`) comes from

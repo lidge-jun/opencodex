@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import type {
   OcxConfig,
   OcxRoutingProfileConfig,
+  OcxRoutingTaskTier,
   OcxRoutingUnknownEvidenceMode,
   OcxRoutingUnknownCostCapMode,
 } from "../types";
@@ -21,6 +22,7 @@ export { POLICY_NAMESPACE };
 export const POLICY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const POLICY_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
 export const NATIVE_OPENAI_FAMILY_PATTERN = /^(?:gpt-|o1-|o3-|o4-|codex-)/;
+export const ROUTING_TASK_TIERS: readonly OcxRoutingTaskTier[] = ["fast", "balanced", "powerful"];
 
 export const DEFAULT_PROFILE_WEIGHTS = {
   latency: 0.55,
@@ -58,10 +60,11 @@ export interface NormalizedRoutingProfileRequirements {
 export interface NormalizedRoutingProfile {
   id: string;
   alias: string | null;
-  candidates: Array<{ provider: string; model: string }>;
+  candidates: Array<{ provider: string; model: string; taskTiers?: OcxRoutingTaskTier[] }>;
   require: NormalizedRoutingProfileRequirements;
   optimize: { latency: number; health: number; cost: number; quota: number };
   limits: { maxEstimatedCostUsd?: number; onUnknownCost?: OcxRoutingUnknownCostCapMode };
+  promptRouting?: { enabled: true };
   unknownEvidence: Record<"capability" | "health" | "quota" | "cost", OcxRoutingUnknownEvidenceMode>;
   revision: string;
 }
@@ -244,7 +247,73 @@ export function routingProfileIssues(
           seen.add(key);
         }
       }
+      if (candidate.taskTiers !== undefined) {
+        if (!Array.isArray(candidate.taskTiers) || candidate.taskTiers.length === 0) {
+          issues.push({
+            path: ["candidates", index, "taskTiers"],
+            message: `candidates[${index}].taskTiers must be a non-empty array`,
+          });
+        } else {
+          const seenTiers = new Set<string>();
+          candidate.taskTiers.forEach((tier, tierIndex) => {
+            if (typeof tier !== "string" || !ROUTING_TASK_TIERS.includes(tier as OcxRoutingTaskTier)) {
+              issues.push({
+                path: ["candidates", index, "taskTiers", tierIndex],
+                message: `task tier must be "fast", "balanced", or "powerful"`,
+              });
+            } else if (seenTiers.has(tier)) {
+              issues.push({
+                path: ["candidates", index, "taskTiers", tierIndex],
+                message: `duplicate task tier "${tier}"`,
+              });
+            } else {
+              seenTiers.add(tier);
+            }
+          });
+        }
+      }
     });
+  }
+
+  let promptRoutingEnabled = false;
+  if (body.promptRouting !== undefined) {
+    if (!body.promptRouting || typeof body.promptRouting !== "object" || Array.isArray(body.promptRouting)) {
+      issues.push({ path: ["promptRouting"], message: "promptRouting must be an object" });
+    } else {
+      const promptRouting = body.promptRouting as Record<string, unknown>;
+      if (promptRouting.enabled !== undefined && typeof promptRouting.enabled !== "boolean") {
+        issues.push({ path: ["promptRouting", "enabled"], message: "enabled must be a boolean" });
+      }
+      promptRoutingEnabled = promptRouting.enabled === true;
+    }
+  }
+  if (promptRoutingEnabled && Array.isArray(body.candidates)) {
+    const covered = new Set<OcxRoutingTaskTier>();
+    body.candidates.forEach((rawCandidate, index) => {
+      if (!rawCandidate || typeof rawCandidate !== "object" || Array.isArray(rawCandidate)) return;
+      const tiers = (rawCandidate as Record<string, unknown>).taskTiers;
+      if (tiers === undefined) {
+        issues.push({
+          path: ["candidates", index, "taskTiers"],
+          message: "taskTiers is required when promptRouting.enabled is true",
+        });
+        return;
+      }
+      if (!Array.isArray(tiers) || tiers.length === 0) return;
+      tiers.forEach((tier) => {
+        if (typeof tier === "string" && ROUTING_TASK_TIERS.includes(tier as OcxRoutingTaskTier)) {
+          covered.add(tier as OcxRoutingTaskTier);
+        }
+      });
+    });
+    for (const tier of ROUTING_TASK_TIERS) {
+      if (!covered.has(tier)) {
+        issues.push({
+          path: ["promptRouting"],
+          message: `prompt routing must cover the "${tier}" task tier`,
+        });
+      }
+    }
   }
 
   if (body.require !== undefined) {
@@ -396,6 +465,9 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
     candidates: raw.candidates.map(candidate => ({
       provider: candidate.provider.trim(),
       model: candidate.model.trim(),
+      ...(candidate.taskTiers
+        ? { taskTiers: ROUTING_TASK_TIERS.filter(tier => candidate.taskTiers!.includes(tier)) }
+        : {}),
     })),
     require: normalizedRequirements(raw),
     optimize: {
@@ -412,6 +484,7 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
         ? { onUnknownCost: raw.limits.onUnknownCost }
         : {}),
     },
+    ...(raw.promptRouting?.enabled === true ? { promptRouting: { enabled: true as const } } : {}),
     unknownEvidence: normalizedUnknownEvidence(raw),
   };
   return { ...profile, revision: profileRevision(profile) };

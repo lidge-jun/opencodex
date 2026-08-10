@@ -39,13 +39,19 @@ describe("routing profile editor data", () => {
   test("creates a usable draft with one candidate and stable defaults", () => {
     const draft = newRoutingProfileDraft("openai", "gpt-5.6");
     expect(draft.candidates).toEqual([
-      { provider: "openai", model: "gpt-5.6", key: expect.stringMatching(/^candidate-\d+$/) },
+      {
+        provider: "openai",
+        model: "gpt-5.6",
+        taskTiers: [],
+        key: expect.stringMatching(/^candidate-\d+$/),
+      },
     ]);
     // Keys are unique per created candidate.
     expect(newRoutingProfileDraft("openai", "gpt-5.6").candidates[0]!.key)
       .not.toBe(draft.candidates[0]!.key);
     expect(draft.optimize).toEqual({ latency: "0.55", health: "0.25", cost: "0.1", quota: "0.1" });
     expect(draft.unknownEvidence.capability).toBe("exclude");
+    expect(draft.promptRoutingEnabled).toBe(false);
   });
 
   test("round-trips normalized DTO values into a PUT payload", () => {
@@ -80,6 +86,30 @@ describe("routing profile editor data", () => {
     const createBody = routingProfilePutBody(draft, "create");
     expect(createBody).toMatchObject({ mode: "create" });
     expect(createBody).not.toHaveProperty("expectedRevision");
+  });
+
+  test("round-trips prompt routing and candidate task tiers", () => {
+    const smartProfile: RoutingProfileDto = {
+      ...profile,
+      id: "smart",
+      alias: "ocx/auto",
+      promptRouting: { enabled: true },
+      candidates: [
+        { provider: "anthropic", model: "claude-sonnet-5", taskTiers: ["fast", "balanced"] },
+        { provider: "openai", model: "gpt-5.6", taskTiers: ["powerful"] },
+      ],
+    };
+    const draft = routingProfileDraftFromDto(smartProfile);
+    expect(draft.promptRoutingEnabled).toBe(true);
+    expect(draft.candidates.map(candidate => candidate.taskTiers)).toEqual([
+      ["fast", "balanced"],
+      ["powerful"],
+    ]);
+    expect(routingProfilePutBody(draft, "update", smartProfile.revision).profile).toMatchObject({
+      alias: "ocx/auto",
+      promptRouting: { enabled: true },
+      candidates: smartProfile.candidates,
+    });
   });
 
   test("omits blank optional fields while retaining explicit false", () => {

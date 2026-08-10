@@ -16,6 +16,34 @@ The **Models → Routing** tab in the OpenCodex dashboard can manage `config.rou
 
 Profile ids are immutable after creation. To use a different id, create a new profile and remove the old one after updating callers.
 
+## Route every prompt automatically
+
+Enable **Automatic prompt routing** when one picker entry should choose a different candidate for
+each request. Assign every candidate one or more task tiers:
+
+- **Fast** for greetings, short rewrites, translations, and other lightweight requests.
+- **Balanced** for ordinary questions and general work.
+- **Powerful** for implementation, debugging, architecture, security, multi-step work, and other
+  complex requests.
+
+All three tiers must be covered before the profile can be saved. A candidate may serve more than one
+tier, so the same model can be used for both balanced and powerful requests.
+
+After saving, select the profile's alias (for example `ocx/auto`) in Codex once. OpenCodex
+reclassifies the latest user prompt on **every request**, so a simple follow-up can use the fast
+candidate and the next complex coding request can use the powerful candidate without changing the
+picker again.
+
+Classification is local and deterministic: it does not make a separate model request and does not
+persist the raw prompt as routing metadata. Capability requirements, health, quota, cost limits, and
+the profile's normal scoring rules still apply after the task-tier filter. The selected provider,
+model, tier reason, and exclusions are available in the route-decision trace and
+`ocx logs explain`; OpenCodex does not modify the assistant response with a routing footer.
+
+Prompt routing is provider-agnostic. Any model already configured in OpenCodex can be assigned to a
+tier, including DeepSeek, Qwen, Kimi, GLM, and other OpenAI-compatible or native providers. The
+provider and model ids in the example below are illustrative.
+
 ## Validation and persistence
 
 The dashboard sends the same profile object used by `config.routingProfiles` to the management API. The server validates the complete candidate before writing it:
@@ -55,15 +83,23 @@ Example save payload:
 
 ```json
 {
-  "id": "fast",
+  "id": "smart",
   "mode": "create",
   "profile": {
-    "alias": "ocx/fast",
+    "alias": "ocx/auto",
+    "promptRouting": { "enabled": true },
     "candidates": [
-      { "provider": "anthropic", "model": "claude-sonnet-5" },
-      { "provider": "openai", "model": "gpt-5.6" }
+      {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "taskTiers": ["fast", "balanced"]
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-5.6",
+        "taskTiers": ["powerful"]
+      }
     ],
-    "require": { "tools": true, "minContextWindow": 128000 },
     "optimize": { "latency": 0.55, "health": 0.25, "cost": 0.1, "quota": 0.1 },
     "limits": { "maxEstimatedCostUsd": 0.5, "onUnknownCost": "allow" },
     "unknownEvidence": {

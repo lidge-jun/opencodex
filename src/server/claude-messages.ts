@@ -27,7 +27,7 @@ import {
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
 import { NoEligiblePolicyCandidateError, routeModel } from "../router";
-import { evidenceFromBody } from "../routing/request-evidence";
+import { evidenceForModelRequest } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
@@ -635,7 +635,11 @@ async function handleClaudeMessagesWithBudget(
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   let nativeRoute = false;
   try {
-    const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    const route = routeModel(
+      config,
+      internalBody.model as string,
+      evidenceForModelRequest(config, internalBody.model as string, internalBody),
+    );
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");

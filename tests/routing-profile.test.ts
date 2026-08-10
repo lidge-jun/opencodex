@@ -204,6 +204,40 @@ describe("routing profiles (RI-04)", () => {
     expect(duplicates.some(issue => issue.message.includes("duplicate"))).toBe(true);
   });
 
+  test("prompt routing validates tier assignments and complete coverage", () => {
+    const config = baseConfig();
+    const valid = {
+      candidates: [
+        { provider: "a", model: "m1", taskTiers: ["fast", "balanced"] as const },
+        { provider: "b", model: "m2", taskTiers: ["powerful"] as const },
+      ],
+      promptRouting: { enabled: true },
+    };
+    expect(routingProfileIssues("smart", valid, config)).toEqual([]);
+    expect(normalizeRoutingProfile("smart", valid)).toMatchObject({
+      promptRouting: { enabled: true },
+      candidates: [
+        { provider: "a", model: "m1", taskTiers: ["fast", "balanced"] },
+        { provider: "b", model: "m2", taskTiers: ["powerful"] },
+      ],
+    });
+
+    const missingTier = routingProfileIssues("smart", {
+      candidates: [
+        { provider: "a", model: "m1", taskTiers: ["fast"] },
+        { provider: "b", model: "m2", taskTiers: ["balanced"] },
+      ],
+      promptRouting: { enabled: true },
+    }, config);
+    expect(missingTier.some(issue => issue.message.includes('"powerful"'))).toBe(true);
+
+    const missingAssignment = routingProfileIssues("smart", {
+      candidates: [{ provider: "a", model: "m1" }],
+      promptRouting: { enabled: true },
+    }, config);
+    expect(missingAssignment.some(issue => issue.path.join(".") === "candidates.0.taskTiers")).toBe(true);
+  });
+
   test("require rejects the reserved unknown service tier", () => {
     const config = baseConfig();
     const reservedTier = routingProfileIssues("p", {
@@ -291,6 +325,30 @@ describe("routing profiles (RI-04)", () => {
     expect(result.trace.selected.model).toBe("m2");
   });
 
+  test("dry-run evaluator constrains candidates to the classified task tier", () => {
+    const config = baseConfig({
+      routingProfiles: {
+        smart: {
+          candidates: [
+            { provider: "a", model: "m1", taskTiers: ["fast", "balanced"] },
+            { provider: "b", model: "m2", taskTiers: ["powerful"] },
+          ],
+          promptRouting: { enabled: true },
+        },
+      },
+    });
+    const result = evaluatePolicyProfile(config, "smart", { taskTier: "powerful" }, [
+      { provider: "a", model: "m1" },
+      { provider: "b", model: "m2" },
+    ]);
+    expect(result.selectedIndex).toBe(1);
+    expect(result.candidates[0]!.exclusions).toContainEqual({
+      code: "task-tier-mismatch",
+      detail: "request-task-tier",
+    });
+    expect(result.trace.selected.reason).toBe("prompt-tier-powerful");
+  });
+
   test("dry-run evaluator: absent request flags add no requirements", () => {
     const config = baseConfig();
     const result = evaluatePolicyProfile(config, "fast", { toolsRequired: false }, [
@@ -367,6 +425,49 @@ describe("routing profiles (RI-04)", () => {
     expect(dryBody.trace?.selected?.provider).toBe("a");
   });
 
+  test("API exposes prompt routing and accepts task-tier dry-run evidence", async () => {
+    const config = baseConfig({
+      routingProfiles: {
+        smart: {
+          candidates: [
+            { provider: "a", model: "m1", taskTiers: ["fast", "balanced"] },
+            { provider: "b", model: "m2", taskTiers: ["powerful"] },
+          ],
+          promptRouting: { enabled: true },
+        },
+      },
+    });
+    const listReq = new ManagementRequest("http://localhost/api/routing-profiles", { method: "GET" });
+    const listResponse = await handleManagementAPI(
+      listReq,
+      new URL(listReq.url),
+      config,
+      { refreshCodexCatalog: async () => {} },
+    );
+    const listBody = await listResponse!.json() as {
+      profiles?: Array<{ promptRouting?: { enabled?: boolean } | null }>;
+    };
+    expect(listBody.profiles?.[0]?.promptRouting).toEqual({ enabled: true });
+
+    const dryReq = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profile: "smart", evidence: { taskTier: "powerful" } }),
+    });
+    const dryResponse = await handleManagementAPI(
+      dryReq,
+      new URL(dryReq.url),
+      config,
+      { refreshCodexCatalog: async () => {} },
+    );
+    const dryBody = await dryResponse!.json() as {
+      selectedIndex?: number | null;
+      trace?: { selected?: { reason?: string } };
+    };
+    expect(dryBody.selectedIndex).toBe(1);
+    expect(dryBody.trace?.selected?.reason).toBe("prompt-tier-powerful");
+  });
+
   test("API dry-run rejects unknown profiles and invalid evidence", async () => {
     const config = baseConfig();
     const unknownReq = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
@@ -384,6 +485,19 @@ describe("routing profiles (RI-04)", () => {
     });
     const badResponse = await handleManagementAPI(badReq, new URL(badReq.url), config, { refreshCodexCatalog: async () => {} });
     expect(badResponse!.status).toBe(400);
+
+    const badTierReq = new ManagementRequest("http://localhost/api/routing-profiles/dry-run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ profile: "fast", evidence: { taskTier: "powerfull" } }),
+    });
+    const badTierResponse = await handleManagementAPI(
+      badTierReq,
+      new URL(badTierReq.url),
+      config,
+      { refreshCodexCatalog: async () => {} },
+    );
+    expect(badTierResponse!.status).toBe(400);
   });
 
   test("API dry-run without explicit candidates fills the same evidence as execution", async () => {

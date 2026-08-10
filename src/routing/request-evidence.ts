@@ -7,7 +7,10 @@
  * remains the evidence-inspection surface for context-sensitive profiles.
  */
 
+import type { OcxConfig } from "../types";
 import type { PolicyRequestEvidence } from "./evaluator";
+import { getRoutingProfile, resolvePolicyProfileId } from "./profile";
+import { classifyPromptComplexity, reasoningEffortFromBody } from "./prompt-classifier";
 
 /**
  * Walk a body fragment for image parts. Real request shapes nest image blocks:
@@ -33,13 +36,64 @@ function inputContainsImage(input: unknown): boolean {
   return input.some(containsImagePart);
 }
 
-export function evidenceFromBody(body: unknown): PolicyRequestEvidence {
+function textFromContent(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object") return "";
+  if (Array.isArray(value)) return value.map(textFromContent).filter(Boolean).join("\n");
+  const record = value as Record<string, unknown>;
+  if ((record.type === "input_text" || record.type === "text") && typeof record.text === "string") {
+    return record.text;
+  }
+  return "";
+}
+
+function latestUserPrompt(record: Record<string, unknown>): string {
+  if (typeof record.input === "string") return record.input;
+  for (const collection of [record.input, record.messages]) {
+    if (!Array.isArray(collection)) continue;
+    for (let index = collection.length - 1; index >= 0; index--) {
+      const item = collection[index];
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const message = item as Record<string, unknown>;
+      if (message.role !== "user") continue;
+      const text = textFromContent(message.content);
+      if (text.trim()) return text;
+    }
+  }
+  return "";
+}
+
+export function evidenceFromBody(
+  body: unknown,
+  options: { classifyPrompt?: boolean } = {},
+): PolicyRequestEvidence {
   if (!body || typeof body !== "object" || Array.isArray(body)) return {};
   const record = body as Record<string, unknown>;
   const tools = Array.isArray(record.tools) && record.tools.length > 0;
   const image = inputContainsImage(record.input) || inputContainsImage(record.messages);
+  const prompt = options.classifyPrompt ? latestUserPrompt(record) : "";
+  const taskTier = options.classifyPrompt
+    ? prompt
+      ? classifyPromptComplexity(prompt, reasoningEffortFromBody(record)).tier
+      : "balanced"
+    : undefined;
   return {
     ...(tools ? { toolsRequired: true } : {}),
     ...(image ? { imageInputRequired: true } : {}),
+    ...(taskTier ? { taskTier } : {}),
   };
+}
+
+/**
+ * Request evidence for one requested model. Prompt classification is opt-in
+ * and runs only when that model resolves to a prompt-routing profile.
+ */
+export function evidenceForModelRequest(
+  config: Pick<OcxConfig, "routingProfiles">,
+  modelId: string,
+  body: unknown,
+): PolicyRequestEvidence {
+  const profileId = resolvePolicyProfileId(config, modelId);
+  const profile = profileId ? getRoutingProfile(config, profileId) : undefined;
+  return evidenceFromBody(body, { classifyPrompt: profile?.promptRouting?.enabled === true });
 }

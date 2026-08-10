@@ -6,7 +6,7 @@
  * upstream request; execution wiring arrives with RI-05.
  */
 
-import type { OcxConfig } from "../types";
+import type { OcxConfig, OcxRoutingTaskTier } from "../types";
 import {
   buildRouteDecisionTrace,
   MAX_REQUIREMENTS,
@@ -43,6 +43,8 @@ export interface PolicyRequestEvidence {
   reasoningEffort?: string;
   serviceTier?: string;
   encryptedCodexTask?: boolean;
+  /** Deterministic classification of the latest user prompt. */
+  taskTier?: OcxRoutingTaskTier;
 }
 
 export interface PolicyCandidateEvidence {
@@ -195,6 +197,8 @@ function configuredPriorityScore(index: number, total: number): number {
 function requestRequirementFor(
   request: PolicyRequestEvidence,
   capability: RouteCapabilityEvidence | undefined,
+  taskTiers: OcxRoutingTaskTier[] | undefined,
+  promptRoutingEnabled: boolean,
 ): RouteRequirementEvidence[] {
   const requirements: RouteRequirementEvidence[] = [];
   if (request.contextWindow !== undefined) {
@@ -257,6 +261,15 @@ function requestRequirementFor(
     );
     if (encrypted) requirements.push(encrypted);
   }
+  if (promptRoutingEnabled && request.taskTier !== undefined) {
+    const actual = taskTiers?.join(",");
+    requirements.push({
+      id: "request-task-tier",
+      expected: request.taskTier,
+      ...(actual ? { actual } : {}),
+      outcome: taskTiers?.includes(request.taskTier) ? "satisfied" : "unsatisfied",
+    });
+  }
   return requirements;
 }
 
@@ -284,13 +297,21 @@ export function evaluatePolicyProfile(
     ) ?? { provider: declared.provider, model: declared.model };
     const requirements = [
       ...requirementFor(profile.require, evidence.capability, evidence.quota),
-      ...requestRequirementFor(requestEvidence, evidence.capability),
+      ...requestRequirementFor(
+        requestEvidence,
+        evidence.capability,
+        declared.taskTiers,
+        profile.promptRouting?.enabled === true,
+      ),
     ];
     const exclusions: RouteExclusionReason[] = [];
     const bad = unsatisfiedOrUnknown(requirements);
     for (const requirement of bad) {
       if (requirement.outcome === "unsatisfied") {
-        exclusions.push({ code: "capability-unsatisfied", detail: requirement.id });
+        exclusions.push({
+          code: requirement.id === "request-task-tier" ? "task-tier-mismatch" : "capability-unsatisfied",
+          detail: requirement.id,
+        });
       } else {
         exclusions.push({ code: "unknown-capability", detail: requirement.id });
       }
@@ -476,7 +497,9 @@ export function evaluatePolicyProfile(
         candidateIndex: selectedIndex,
         provider: candidates[selectedIndex]!.provider,
         model: candidates[selectedIndex]!.model,
-        reason: "policy-selected",
+        reason: profile.promptRouting?.enabled === true && requestEvidence.taskTier
+          ? `prompt-tier-${requestEvidence.taskTier}`
+          : "policy-selected",
       },
   });
 

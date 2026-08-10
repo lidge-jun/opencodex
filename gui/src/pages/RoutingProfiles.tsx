@@ -11,6 +11,7 @@ import {
   type OptionalBoolean,
   type RoutingProfileDraft,
   type RoutingProfileDto,
+  type RoutingTaskTier,
   type UnknownCostCapMode,
   type UnknownEvidenceMode,
 } from "../routing-profile-editor-data";
@@ -72,6 +73,7 @@ const OPTIMIZE_KEYS = ["latency", "health", "cost", "quota"] as const;
 const UNKNOWN_EVIDENCE_KEYS = ["capability", "health", "quota", "cost"] as const;
 const UNKNOWN_EVIDENCE_OPTIONS: UnknownEvidenceMode[] = ["allow", "penalize", "exclude"];
 const UNKNOWN_COST_CAP_OPTIONS: UnknownCostCapMode[] = ["allow", "exclude"];
+const TASK_TIERS: RoutingTaskTier[] = ["fast", "balanced", "powerful"];
 
 function fmtMs(value: number | undefined, unavailable: string): string {
   return value === undefined ? unavailable : `${Math.round(value)}ms`;
@@ -104,6 +106,8 @@ function fmtExclusion(code: string, t: ReturnType<typeof useT>): string {
   switch (code) {
     case "capability-unsatisfied":
       return t("routing.exclusion.capability-unsatisfied");
+    case "task-tier-mismatch":
+      return t("routing.exclusion.task-tier-mismatch");
     case "unknown-capability":
       return t("routing.exclusion.unknown-capability");
     case "cost-limit":
@@ -213,6 +217,7 @@ export default function RoutingProfiles({
   const [status, setStatus] = useState<{ message: string; ok: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
   const [context, setContext] = useState("");
+  const [taskTier, setTaskTier] = useState<"" | RoutingTaskTier>("");
   const [tools, setTools] = useState(false);
   const [image, setImage] = useState(false);
   const [structured, setStructured] = useState(false);
@@ -472,13 +477,20 @@ export default function RoutingProfiles({
   };
 
   const addCandidate = () => {
-    setDraft(current => current ? {
-      ...current,
-      candidates: [
-        ...current.candidates,
-        newDraftCandidate(firstProvider, firstModel),
-      ],
-    } : current);
+    setDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        candidates: [
+          ...current.candidates,
+          newDraftCandidate(
+            firstProvider,
+            firstModel,
+            current.promptRoutingEnabled ? TASK_TIERS : [],
+          ),
+        ],
+      };
+    });
   };
 
   const removeCandidate = (index: number) => {
@@ -488,6 +500,45 @@ export default function RoutingProfiles({
     } : current);
   };
 
+  const setPromptRoutingEnabled = (enabled: boolean) => {
+    setDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        promptRoutingEnabled: enabled,
+        candidates: enabled
+          ? current.candidates.map(candidate => ({
+            ...candidate,
+            taskTiers: candidate.taskTiers?.length ? candidate.taskTiers : [...TASK_TIERS],
+          }))
+          : current.candidates,
+      };
+    });
+  };
+
+  const toggleCandidateTaskTier = (
+    index: number,
+    tier: RoutingTaskTier,
+    enabled: boolean,
+  ) => {
+    setDraft(current => {
+      if (!current) return current;
+      return {
+        ...current,
+        candidates: current.candidates.map((candidate, candidateIndex) => {
+          if (candidateIndex !== index) return candidate;
+          const tiers = new Set(candidate.taskTiers ?? []);
+          if (enabled) tiers.add(tier);
+          else tiers.delete(tier);
+          return {
+            ...candidate,
+            taskTiers: TASK_TIERS.filter(candidateTier => tiers.has(candidateTier)),
+          };
+        }),
+      };
+    });
+  };
+
   const runDryRun = async () => {
     if (!selected) return;
     const generation = ++dryRunGenerationRef.current;
@@ -495,7 +546,7 @@ export default function RoutingProfiles({
     setDryRunResult(null);
     setDryRunError("");
     try {
-      const evidence: Record<string, number | boolean> = {};
+      const evidence: Record<string, number | boolean | string> = {};
       const contextTokens = context.trim() ? Number(context.trim()) : NaN;
       if (Number.isFinite(contextTokens) && contextTokens > 0) {
         evidence.contextWindow = contextTokens;
@@ -503,6 +554,7 @@ export default function RoutingProfiles({
       if (tools) evidence.toolsRequired = true;
       if (image) evidence.imageInputRequired = true;
       if (structured) evidence.structuredOutputRequired = true;
+      if (taskTier) evidence.taskTier = taskTier;
       const response = await fetch(`${apiBase}/api/routing-profiles/dry-run`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -610,6 +662,18 @@ export default function RoutingProfiles({
             </label>
           </div>
 
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={draft.promptRoutingEnabled}
+              onChange={event => setPromptRoutingEnabled(event.target.checked)}
+            />
+            <span>
+              {t("routing.promptRouting")}
+              <small style={{ display: "block", opacity: 0.75 }}>{t("routing.promptRoutingHelp")}</small>
+            </span>
+          </label>
+
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
             <legend className="field-label">{t("routing.candidates")}</legend>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -645,6 +709,23 @@ export default function RoutingProfiles({
                         </datalist>
                       </label>
                     </div>
+                    {draft.promptRoutingEnabled ? (
+                      <fieldset style={{ border: 0, padding: 0, margin: "10px 0" }}>
+                        <legend className="field-label">{t("routing.taskTiers")}</legend>
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                          {TASK_TIERS.map(tier => (
+                            <label key={tier} className="checkbox">
+                              <input
+                                type="checkbox"
+                                checked={candidate.taskTiers?.includes(tier) === true}
+                                onChange={event => toggleCandidateTaskTier(index, tier, event.target.checked)}
+                              />
+                              {t(`routing.taskTier.${tier}` as const)}
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    ) : null}
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -835,6 +916,23 @@ export default function RoutingProfiles({
               clearDryRun();
             }}
           />
+        </label>
+        <label className="field-label" htmlFor="routing-task-tier">
+          {t("routing.dryRunTaskTier")}
+          <select
+            id="routing-task-tier"
+            className="input"
+            value={taskTier}
+            onChange={event => {
+              setTaskTier(event.target.value as "" | RoutingTaskTier);
+              clearDryRun();
+            }}
+          >
+            <option value="">{t("routing.none")}</option>
+            {TASK_TIERS.map(tier => (
+              <option key={tier} value={tier}>{t(`routing.taskTier.${tier}` as const)}</option>
+            ))}
+          </select>
         </label>
         <label className="checkbox">
           <input
