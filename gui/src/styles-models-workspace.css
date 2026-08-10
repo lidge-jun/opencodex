@@ -8,14 +8,17 @@
 /*
   The catalog wants a wider column than the 980px default.
 
-  Scoped to a VISIBLE catalog panel, not merely a present one: panels mount lazily and
-  then stay mounted so drafts survive a tab hop, so a bare `:has(.models-workspace-shell)`
-  keeps matching after the catalog has been opened once. Routing would then render at
-  980px on a direct visit and 1200px afterwards — a width that depends on browsing
-  history. No surface renders the shell outside a tabpanel any more, so the old
-  direct-child arm is gone with the standalone pages it served.
+  Scoped to a VISIBLE catalog or routing panel, not merely a present one: panels mount
+  lazily and then stay mounted so drafts survive a tab hop, so a bare
+  `:has(.models-workspace-shell)` keeps matching after the catalog has been opened once.
+  Routing must share the catalog's 1200px page width or switching between those tabs
+  shifts the content horizontally. No surface renders the shell outside a tabpanel any
+  more, so the old direct-child arm is gone with the standalone pages it served.
 */
-.main-inner:has(#models-panel-catalog:not([hidden]) .models-workspace-shell) {
+.main-inner:has(
+  #models-panel-catalog:not([hidden]),
+  #models-panel-routing:not([hidden])
+) {
   max-width: 1200px;
 }
 

@@ -31,6 +31,17 @@ test("Models workspace stacks via content-width container query before mobile dr
   expect(css).toContain("@media (max-width: 768px)");
 });
 
+test("Models catalog and routing tabs keep the same wide page width", async () => {
+  const css = await Bun.file(new URL("../src/styles-models-workspace.css", import.meta.url)).text();
+
+  // Both panels stay mounted after first visit, so the width rule must follow the
+  // visible panel rather than the catalog shell's historical presence in the DOM.
+  expect(css).toMatch(
+    /\.main-inner:has\(\s*#models-panel-catalog:not\(\[hidden\]\),\s*#models-panel-routing:not\(\[hidden\]\)\s*\)\s*\{\s*max-width:\s*1200px;/s,
+  );
+  expect(css).not.toContain("#models-panel-catalog:not([hidden]) .models-workspace-shell");
+});
+
 test("Models exposes provider and per-model context-window controls (#1073)", async () => {
   const page = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
   const groups = await Bun.file(new URL("../src/models-groups.ts", import.meta.url)).text();
