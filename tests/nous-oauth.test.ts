@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { identityFromNousTokens, loginNous, nousRefreshIntentIsUncertain, refreshNousToken } from "../src/oauth/nous";
+import { identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 
@@ -459,7 +459,7 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
   });
 
-  test("a rotated token is persisted and the intent is cleared", async () => {
+  test("a successful rotation leaves the intent submitted until the store persists", async () => {
     const access = jwtWithClaims({ sub: "atomic-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "inference:invoke" });
     globalThis.fetch = (async () => new Response(JSON.stringify({
       access_token: access,
@@ -468,47 +468,50 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     }), { status: 200 })) as typeof fetch;
     const cred = await refreshNousToken("old-refresh");
     expect(cred.refresh).toBe("rotated-refresh");
-    // Intent cleared after a successful rotation.
-    expect(nousRefreshIntentIsUncertain("old-refresh")).toBe(false);
+    // After a successful rotation the intent stays "submitted": it is only
+    // cleared once the store persists the rotated token (clearNousRefreshIntent).
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
   });
 
-  test("an uncertain prior outcome blocks replay of the consumed token (no silent reuse)", async () => {
+  test("an uncertain prior outcome (rotated token obtained but not persisted) blocks replay of the consumed token", async () => {
     const access = jwtWithClaims({ sub: "atomic-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "inference:invoke" });
-    // First attempt: server returns 200 but parse would fail to persist -> mark uncertain.
-    let firstCall = true;
-    globalThis.fetch = (async () => {
-      if (firstCall) {
-        firstCall = false;
-        return new Response(JSON.stringify({
-          access_token: access,
-          refresh_token: "rotated-refresh",
-          expires_in: 3600,
-        }), { status: 200 });
-      }
-      return new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 });
-    }) as typeof fetch;
-
-    // First refresh rotates successfully (intent cleared).
+    // First refresh rotates successfully (intent left "submitted").
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
     const cred = await refreshNousToken("old-refresh");
     expect(cred.refresh).toBe("rotated-refresh");
+    // Simulate a crash that lost the rotated token before the store persisted
+    // it: the local store still holds the OLD token. Replaying it must be
+    // refused by the guard (not silently reused, not relying on the server).
+    await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+  });
 
-    // Simulate a crash that lost the rotated token: re-submit the OLD token.
-    // Because we cannot re-clear the intent here (store persistence is what
-    // clears it), emulate the uncertain state the store would leave behind.
-    // We re-run a refresh that reaches the server but fails to persist: to
-    // exercise the guard we write the uncertain intent directly via a failed
-    // parse path.
+  test("a 200 with an unparseable body marks the intent uncertain and blocks replay", async () => {
+    // Server returns 200 but the body is not valid JSON -> parseTokenPayload
+    // throws, so we mark the intent uncertain rather than clear it.
     globalThis.fetch = (async () => new Response("not json", { status: 200 })) as typeof fetch;
-    // A non-JSON 200 body makes parseTokenPayload throw, marking the intent
-    // uncertain; the NEXT submission of the same token must be refused.
     await expect(refreshNousToken("old-refresh")).rejects.toThrow();
-    expect(nousRefreshIntentIsUncertain("old-refresh")).toBe(true);
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
 
+    // The next submission of the same (possibly consumed) token is refused.
     globalThis.fetch = (async () => new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 })) as typeof fetch;
     await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
       name: "NousTokenError",
       oauthError: "refresh_token_reused",
     });
+  });
+
+  test("a network failure leaves the token replayable (not consumed by the server)", async () => {
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
+    await expect(refreshNousToken("old-refresh")).rejects.toThrow("network down");
+    // No server response -> the token was not consumed -> safe to retry.
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(false);
   });
 
   test("invalid_token is a terminal error that forces re-authentication", async () => {

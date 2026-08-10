@@ -81,8 +81,16 @@ interface NousJwtPayload {
 // and whether we are certain the rotated token was persisted. It lives next to
 // the auth store (same config dir) and is keyed by a hash of the refresh
 // token, so it never contains the token in cleartext.
+//
+// States:
+//  - "submitted": we sent this token and the server responded (so it may have
+//    been consumed). We leave it set after a successful rotation until the
+//    store confirms persistence of the rotated token; if we crash before that,
+//    a later replay of the same token is refused.
+//  - "uncertain": the server responded 200 but we failed to parse/persist the
+//    rotated token. Replay is refused.
 
-type RefreshIntentStatus = "pending" | "uncertain";
+type RefreshIntentStatus = "submitted" | "uncertain";
 
 interface RefreshIntent {
   status: RefreshIntentStatus;
@@ -128,14 +136,14 @@ function clearRefreshIntent(refreshToken: string): void {
 }
 
 /**
- * True when we have already submitted this refresh token and were NOT able to
- * confirm the rotated token was persisted. In that uncertain state we must
- * never blindly replay it — the server may have already consumed it, and a
- * replay would trigger `refresh_token_reused` and revoke the session. The
- * caller should force a clean re-authentication instead.
+ * True when replaying this refresh token is unsafe: we previously submitted it
+ * and either got a response (so it may have been consumed) or failed to confirm
+ * the rotation persisted. In that uncertain state we must never blindly replay
+ * it — a replay could trigger `refresh_token_reused` and revoke the session.
+ * The caller should force a clean re-authentication instead.
  */
-export function nousRefreshIntentIsUncertain(refreshToken: string): boolean {
-  return readRefreshIntent(refreshToken)?.status === "uncertain";
+export function nousRefreshIntentBlocksReplay(refreshToken: string): boolean {
+  return readRefreshIntent(refreshToken)?.status !== undefined;
 }
 
 // ── Base URL hardening (review blocker #1, also flagged by multiple reviewers) ─
@@ -469,19 +477,23 @@ export async function loginNous(ctrl: OAuthController): Promise<OAuthCredentials
  * replay.
  */
 export async function refreshNousToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
-  // Never blindly replay a token whose outcome we could not confirm earlier.
-  if (nousRefreshIntentIsUncertain(refreshToken)) {
+  // Never blindly replay a token whose outcome we could not confirm earlier:
+  // a prior submission got a server response (so it may have been consumed) or
+  // failed to persist its rotation. Replaying it could trigger
+  // `refresh_token_reused` and revoke the session.
+  if (nousRefreshIntentBlocksReplay(refreshToken)) {
     throw new NousTokenError(
       undefined,
       "refresh_token_reused",
-      "Refusing to replay a refresh token with an uncertain prior outcome (previous rotation may not have persisted)",
+      "Refusing to replay a refresh token with an unconfirmed prior outcome (previous rotation may not have persisted)",
       { terminal: true },
     );
   }
-  // Mark that we are about to submit this token. It stays "pending" until we
-  // either obtain the rotated token (cleared) or confirm a server response
-  // while failing to persist (marked "uncertain").
-  writeRefreshIntent(refreshToken, "pending");
+  // Record that we are about to submit this token. It stays "submitted" after a
+  // successful rotation until the store confirms persistence of the rotated
+  // token (via clearNousRefreshIntent) — so a crash before persistence leaves
+  // the old token refused on replay instead of silently reused.
+  writeRefreshIntent(refreshToken, "submitted");
 
   let response: Response;
   try {
@@ -501,7 +513,8 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
     });
   } catch (netErr) {
     // Network-level failure: the server never saw the token, so it was not
-    // consumed. Leave the intent "pending" so a later retry can resubmit it.
+    // consumed. Clear the intent so a later retry can resubmit it.
+    clearRefreshIntent(refreshToken);
     throw netErr;
   }
 
@@ -513,14 +526,23 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   }
 
   // The server responded 200 — the submitted token may now be consumed. If we
-  // fail to parse/persist the rotated token, mark the intent uncertain so we
-  // never replay it.
+  // fail to parse the rotated token, mark the intent uncertain so we never
+  // replay it. On success we deliberately LEAVE the intent as "submitted"
+  // (the store clears it once the rotated token is persisted).
   try {
     const creds = parseTokenPayload((await response.json()) as NousTokenResponse, refreshToken);
-    clearRefreshIntent(refreshToken);
     return creds;
   } catch (e) {
     writeRefreshIntent(refreshToken, "uncertain");
     throw e;
   }
+}
+
+/**
+ * Clear the durable refresh-intent for a token. The account store calls this
+ * after `mergeAccountCredential` persists the rotated token, closing the
+ * uncertain-outcome window opened by `refreshNousToken`.
+ */
+export function clearNousRefreshIntent(refreshToken: string): void {
+  clearRefreshIntent(refreshToken);
 }
