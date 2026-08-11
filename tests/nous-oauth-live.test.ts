@@ -94,7 +94,11 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     const ids = models.flatMap((model) => {
       if (typeof model !== "object" || model === null) return [];
       const id = (model as { id?: unknown }).id;
-      return typeof id === "string" ? [id] : [];
+      // Reject empty and whitespace-only ids: a catalog of unusable model ids
+      // must not satisfy the non-empty assertion below.
+      if (typeof id !== "string") return [];
+      const normalizedId = id.trim();
+      return normalizedId ? [normalizedId] : [];
     });
     console.log(`[live] live catalog returned ${ids.length} models; free tier present: ${ids.some((id) => id.endsWith(":free"))}`);
     expect(ids.length).toBeGreaterThan(0);

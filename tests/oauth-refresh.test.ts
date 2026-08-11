@@ -8,6 +8,7 @@ import { RefreshIntentIOError, nousRefreshIntentBlocksReplay } from "../src/oaut
 import * as nousModule from "../src/oauth/nous";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
+import * as storeModule from "../src/oauth/store";
 import * as configModule from "../src/config";
 
 const origHome = process.env.HOME;
@@ -786,12 +787,12 @@ describe("oauth refresh hardening", () => {
     }
   });
 
-  function nousAccessJwt(sub: string): string {
+  function nousAccessJwt(sub: string, scope: string = "inference:invoke"): string {
     const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
     const payload = Buffer.from(JSON.stringify({
       sub,
       exp: Math.floor(Date.now() / 1000) + 3600,
-      scope: "inference:invoke",
+      scope,
     })).toString("base64url");
     return `${header}.${payload}.sig`;
   }
@@ -844,6 +845,132 @@ describe("oauth refresh hardening", () => {
       expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
       // The stale old-token intent may remain; it keys RT-A, which is no longer
       // stored, so it blocks nothing for the committed RT-B credential.
+      expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(true);
+    } finally {
+      cleanupSpy.mockRestore();
+    }
+  });
+
+  test("Nous terminal insufficient_scope preserves rotated RT-B, marks needsReauth, and blocks the unusable access", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-scope" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    // RT-A is consumed; the server returns RT-B but an access JWT WITHOUT the
+    // required inference:invoke scope.
+    const unusableAccess = nousAccessJwt("nous-scope", "billing:manage");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: unusableAccess,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    await expect(getValidAccessTokenForAccount("nous", id)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+
+    // RT-B was persisted generation-safely: the stored refresh token is rt-new.
+    const stored = getCredential("nous");
+    expect(stored?.refresh).toBe("rt-new");
+    // The unusable access token is NOT persisted as valid: the placeholder is
+    // empty and the expiry is in the past, so it can never be routed.
+    expect(stored?.access).toBe("");
+    expect(stored!.expires).toBe(0);
+    // RT-A's intent was cleared only after RT-B was durably persisted.
+    expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(false);
+    // The account requires reauthentication.
+    expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBe(true);
+  });
+
+  test("Nous RT-B persistence failure keeps RT-A intent blocking and still marks needsReauth", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-persist-fail" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    const unusableAccess = nousAccessJwt("nous-persist-fail", "billing:manage");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: unusableAccess,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    // Force the RT-B persistence (mergeAccountCredential) to fail.
+    const mergeSpy = spyOn(storeModule, "mergeAccountCredential").mockImplementation(() => {
+      throw new Error("forced RT-B persistence failure (disk full)");
+    });
+    try {
+      await expect(getValidAccessTokenForAccount("nous", id)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+      // RT-A was consumed; its intent must remain blocking (never cleared).
+      expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(true);
+      // The stored credential is untouched (still RT-A, still the old access).
+      expect(getCredential("nous")?.refresh).toBe("rt-old");
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBe(true);
+    } finally {
+      mergeSpy.mockRestore();
+    }
+  });
+
+  test("Nous RT-B preservation never overwrites a newer concurrent generation", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-superseded" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    const unusableAccess = nousAccessJwt("nous-superseded", "billing:manage");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: unusableAccess,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    // A concurrent refresh already committed a newer generation (RT-C) before
+    // this attempt's RT-B persistence runs; the merge must report superseded
+    // and never overwrite it.
+    const newerCredential = {
+      access: "newer-access",
+      refresh: "rt-concurrent",
+      expires: Date.now() + 3600_000,
+      accountId: "nous-superseded",
+    };
+    // The concurrent refresh commits RT-C through the real store write before
+    // this attempt's RT-B persistence is detected as superseded.
+    const realMerge = storeModule.mergeAccountCredential;
+    const mergeSpy = spyOn(storeModule, "mergeAccountCredential").mockImplementation(async (provider, accountId, cred, opts) => {
+      await realMerge(provider, accountId, newerCredential as never, { expectedGeneration: opts?.expectedGeneration });
+      return { superseded: true, stored: newerCredential as never };
+    });
+    try {
+      await expect(getValidAccessTokenForAccount("nous", id)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+      // The concurrent credential is untouched.
+      expect(getCredential("nous")?.refresh).toBe("rt-concurrent");
+      // RT-A's intent is not cleared (RT-A was consumed; a later refresh of the
+      // newer generation manages its own intent).
+      expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(true);
+      // The newer generation is NOT marked needsReauth (generation-safe no-op).
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+    } finally {
+      mergeSpy.mockRestore();
+    }
+  });
+
+  test("Nous RT-B cleanup failure after successful persistence keeps RT-B and marks needsReauth", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-cleanup-fail" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    const unusableAccess = nousAccessJwt("nous-cleanup-fail", "billing:manage");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: unusableAccess,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    const cleanupSpy = spyOn(nousModule, "clearNousRefreshIntent").mockImplementation(() => {
+      throw new Error("forced cleanup failure (EROFS)");
+    });
+    try {
+      await expect(getValidAccessTokenForAccount("nous", id)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+      // RT-B survived the cleanup failure.
+      expect(getCredential("nous")?.refresh).toBe("rt-new");
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBe(true);
+      // The stale RT-A intent may remain harmlessly (RT-A is no longer stored).
       expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(true);
     } finally {
       cleanupSpy.mockRestore();
