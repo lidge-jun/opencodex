@@ -90,6 +90,18 @@ export function labInstallationSaltPath(configDir = getConfigDir()): string {
   return join(labRoot(configDir), "installation-salt.bin");
 }
 
+export function labAutomationPolicyPath(configDir = getConfigDir()): string {
+  return join(labRoot(configDir), "automation-policy.json");
+}
+
+export function labAutomationStatePath(configDir = getConfigDir()): string {
+  return join(labRoot(configDir), "automation-state.json");
+}
+
+export function labAutomationRoutesPath(configDir = getConfigDir()): string {
+  return join(labRoot(configDir), "automation-routes.json");
+}
+
 /** Ensure lab directories exist with restrictive permissions where the platform allows. */
 export function ensureLabDirs(configDir = getConfigDir()): {
   root: string;
