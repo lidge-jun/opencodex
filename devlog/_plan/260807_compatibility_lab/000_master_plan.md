@@ -263,19 +263,23 @@ request path.
 
 ## Programme phases
 
-Only CL-00 is authorized by this document at present.
+Programme authorization is tracked below. CL-09 contract drafting is authorized by merged CL-08; CL-09 runtime implementation remains gated on acceptance of the CL-09 contract.
 
 | Phase | Purpose | Authorization |
 |---|---|---|
-| CL-00 | Architecture authority, contracts, scenario catalogue, incident corpus | This PR |
-| CL-01 | Deterministic protocol-conformance runner and fixtures | Not started; requires CL-00 to be accepted |
-| CL-02 | Immutable JSONL ledger, artifacts and SQLite projection | Not started |
-| CL-03 | Bounded live-route probes | Not started |
-| CL-04 | Lab CLI and management read surfaces | Not started |
-| CL-05 | Compatibility Matrix UI | Not started |
-| CL-06 | Existing Routing Profile compatibility controls and Router Intelligence consumption | **ACCEPTED/CLOSED** — merged #1394 at `b66e33ce7207d91014644d99317e456c992a3418` |
-| CL-07 | Agent Fabric task-effectiveness ingestion | **ACCEPTED/CLOSED** — merged #1438 at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600` |
-| CL-08 | Shadow/automatic/public evidence workflows | Not started |
+| CL-00 | Architecture authority, contracts, scenario catalogue, incident corpus | **ACCEPTED/CLOSED** - merged #1286 |
+| CL-01 | Deterministic protocol-conformance runner and fixtures | **ACCEPTED/CLOSED** - merged #1320 |
+| CL-02 | Immutable JSONL ledger, artifacts and SQLite projection | **ACCEPTED/CLOSED** - merged #1333 plus hardening/closure |
+| CL-03 | Bounded live-route probes | **ACCEPTED/CLOSED** - merged #1352 |
+| CL-04 | Lab CLI and management read surfaces | **MERGED** - #1378 |
+| CL-05 | Compatibility Matrix UI | **MERGED** - #1384 |
+| CL-06 | Existing Routing Profile compatibility controls and Router Intelligence consumption | **ACCEPTED/CLOSED** - merged #1394 at `b66e33ce7207d91014644d99317e456c992a3418` |
+| CL-07 | Agent Fabric task-effectiveness ingestion | **ACCEPTED/CLOSED** - merged #1438 at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600` |
+| CL-08 | Bounded automatic evidence refresh/orchestration | **ACCEPTED/CLOSED** - merged #1447 at `3b8f9487676fe258d76295e49e7db75aca26a4cb` |
+| CL-09 | Passive production-evidence correlation with zero extra traffic and no routing feedback | **CONTRACT DRAFT** - #1489; implementation not authorized |
+| CL-10 | Public export/publishing/community evidence | Not started; separate privacy/trust boundary |
+
+The original CL-00 planning bucket combined shadow, automatic, and public evidence workflows. Accepted later plans split that bucket deliberately: CL-08 owns bounded automation, CL-09 defines passive production evidence, and public publishing remains separate CL-10 work.
 
 Phase numbering after CL-01 is programme planning, not implementation
 authorization. A later accepted plan may split a phase while preserving these
