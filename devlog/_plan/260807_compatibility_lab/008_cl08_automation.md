@@ -440,7 +440,7 @@ It must never produce a route compatibility failure.
 
 Differentiate at minimum:
 
-### Attributable compatibility result
+## Attributable compatibility result
 
 Ordinary freshness rules apply.
 
@@ -681,7 +681,7 @@ missing
 already_queued
 already_running
 cooldown
-budget_exhausted
+budget_blocked
 route_ineligible
 scenario_inapplicable
 task_background_disabled
@@ -877,7 +877,7 @@ CL-08 must not implement:
 
 Recommended implementation sequence:
 
-### CL-08.0 — Audit and contract
+## CL-08.0 — Audit and contract
 
 - inspect current `dev`;
 - audit existing timers/background services/config persistence/API lifecycle;
