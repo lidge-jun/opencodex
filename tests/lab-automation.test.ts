@@ -19,6 +19,7 @@ import { recoverLabAutomationState } from "../src/lab/automation/recovery";
 import {
   buildLabAutomationStatus,
   cancelLabAutomationRun,
+  enqueueManualLabRun,
   runLabAutomationTick,
   setLabAutomationDispatchDeps,
   stopLabAutomationScheduler,
@@ -335,18 +336,21 @@ describe("CL-08 lab automation", () => {
   });
 
   test("task background execution stays disabled by default", () => {
-    const policy = {
-      ...enabledProtocolPolicy(),
-      layers: { protocolConformance: false, liveRouteCompatibility: false, taskEffectiveness: true },
-      taskEffectivenessBackgroundEnabled: false,
-    };
-    const planned = planLabAutomationRuns({
-      policy,
-      routes: { schemaVersion: 1, routes: [] },
-      state: loadLabAutomationState(tempHome()),
-      now: Date.now(),
+    withHome((home) => {
+      const policy = {
+        ...enabledProtocolPolicy(),
+        layers: { protocolConformance: false, liveRouteCompatibility: false, taskEffectiveness: true },
+        taskEffectivenessBackgroundEnabled: false,
+      };
+      const planned = planLabAutomationRuns({
+        policy,
+        routes: { schemaVersion: 1, routes: [] },
+        state: loadLabAutomationState(home),
+        now: Date.now(),
+        configDir: home,
+      });
+      expect(planned).toEqual([]);
     });
-    expect(planned).toEqual([]);
   });
 
   test("GET lab automation API does not start scheduler", async () => {
@@ -354,7 +358,8 @@ describe("CL-08 lab automation", () => {
       const config = { providers: {} } as OcxConfig;
       const req = new ManagementRequest("http://127.0.0.1/api/lab/automation");
       const res = await handleManagementAPI(req, new URL(req.url), config);
-      expect(res.status).toBe(200);
+      expect(res).not.toBeNull();
+      expect(res?.status).toBe(200);
       const status = buildLabAutomationStatus(home);
       expect(status.schedulerRunning).toBe(false);
     });
@@ -552,8 +557,16 @@ describe("CL-08 lab automation", () => {
 
   test("management PUT cannot inject trusted executor authority", async () => {
     await withHome(async (home) => {
+      prepareLiveRouteHome(home);
       const config = fixtureProviderConfig();
-      const fakeExecutor = { execute: async () => passObservation(), enforcedBoundaries: [] };
+      let fakeInvokes = 0;
+      const fakeExecutor = {
+        execute: async () => {
+          fakeInvokes += 1;
+          return passObservation();
+        },
+        enforcedBoundaries: [],
+      };
       const req = new ManagementRequest("http://127.0.0.1/api/lab/automation", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -563,10 +576,24 @@ describe("CL-08 lab automation", () => {
         }),
       });
       const res = await handleManagementAPI(req, new URL(req.url), config);
+      expect(res).not.toBeNull();
       expect(res?.status).toBe(200);
       const production = createProductionLabRouteExecutor({ loadConfig: () => config });
       expect(isTrustedLabRouteExecutor(production)).toBe(true);
       expect(isTrustedLabRouteExecutor(fakeExecutor)).toBe(false);
+
+      const plan = planManualLabRun({
+        evidenceLayer: "live_route_compatibility",
+        scenarioId: "responses-core.live.basic-turn",
+        providerName: "fixture-provider",
+        modelId: "fixture-model",
+        config,
+        configDir: home,
+      });
+      const record = await enqueueManualLabRun(plan, home);
+      expect(fakeInvokes).toBe(0);
+      expect(record?.state).toBe("blocked");
+      expect(record?.terminalCode).toBe("route_ineligible");
     });
   });
 
