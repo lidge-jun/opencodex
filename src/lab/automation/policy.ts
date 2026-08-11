@@ -6,6 +6,34 @@ import {
 import type { LabAutomationPolicyV1 } from "./types";
 import { LabAutomationError } from "./types";
 
+const POLICY_KEYS = new Set([
+  "schemaVersion",
+  "enabled",
+  "layers",
+  "refreshBeforeStaleMs",
+  "maxConcurrentRuns",
+  "maxConcurrentLiveRuns",
+  "maxConcurrentRunsPerRoute",
+  "maxRunsPerHour",
+  "maxLiveRequestsPerHour",
+  "failureCooldownMs",
+  "blockedCooldownMs",
+  "taskEffectivenessBackgroundEnabled",
+]);
+const LAYER_KEYS = new Set([
+  "protocolConformance",
+  "liveRouteCompatibility",
+  "taskEffectiveness",
+]);
+
+function assertClosedKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, field: string): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new LabAutomationError(`unknown ${field} field ${key}`, "invalid_policy");
+    }
+  }
+}
+
 function assertBoolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") throw new LabAutomationError(`invalid policy field ${field}`, "invalid_policy");
   return value;
@@ -21,12 +49,13 @@ function assertNonNegativeInt(value: unknown, field: string, max: number): numbe
   return value;
 }
 
-/** Validate and normalize automation policy with hard upper bounds. */
+/** Validate and normalize automation policy with a closed schema and hard upper bounds. */
 export function normalizeLabAutomationPolicyV1(raw: unknown): LabAutomationPolicyV1 {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new LabAutomationError("policy must be an object", "invalid_policy");
   }
   const obj = raw as Record<string, unknown>;
+  assertClosedKeys(obj, POLICY_KEYS, "policy");
   if (obj.schemaVersion !== LAB_AUTOMATION_POLICY_SCHEMA_VERSION) {
     throw new LabAutomationError("unsupported policy schemaVersion", "invalid_policy");
   }
@@ -35,6 +64,7 @@ export function normalizeLabAutomationPolicyV1(raw: unknown): LabAutomationPolic
     throw new LabAutomationError("invalid policy layers", "invalid_policy");
   }
   const layersObj = layersRaw as Record<string, unknown>;
+  assertClosedKeys(layersObj, LAYER_KEYS, "layers");
   const taskBackground = assertBoolean(obj.taskEffectivenessBackgroundEnabled, "taskEffectivenessBackgroundEnabled");
   const layers = {
     protocolConformance: assertBoolean(layersObj.protocolConformance, "layers.protocolConformance"),
