@@ -577,11 +577,24 @@ if [ "\${OCX_SHIM_ACTIVE_PID:-}" = "$$" ]; then
   printf '%s\n' ${shQuote(CODEX_SHIM_REENTRY_DIAGNOSTIC)} >&2
   exit ${CODEX_SHIM_REENTRY_EXIT_CODE}
 fi
+case "\${OCX_SHIM_ACTIVE_DEPTH:-0}" in
+  0)
+    OCX_SHIM_ACTIVE_DEPTH=1
+    ;;
+  1)
+    OCX_SHIM_ACTIVE_DEPTH=2
+    ;;
+  *)
+    printf '%s\n' ${shQuote(CODEX_SHIM_REENTRY_DIAGNOSTIC)} >&2
+    exit ${CODEX_SHIM_REENTRY_EXIT_CODE}
+    ;;
+esac
 # Dynamic launchers such as mise exec -- codex may resolve the command name
-# back to this wrapper. An exec chain keeps the same PID; a legitimate nested
-# Codex invocation starts a new process and is allowed to establish a new guard.
+# back to this wrapper. An exec chain keeps the same PID. A legitimate nested
+# Codex invocation may enter once with a new PID; repeated child-process
+# redispatch reaches depth 2 and is rejected before it can form an infinite chain.
 OCX_SHIM_ACTIVE_PID=$$
-export OCX_SHIM_ACTIVE_PID
+export OCX_SHIM_ACTIVE_PID OCX_SHIM_ACTIVE_DEPTH
 if [ -z "$OPENCODEX_API_AUTH_TOKEN" ] && [ -f ${shQuote(tokenFile)} ]; then
   OPENCODEX_API_AUTH_TOKEN="$(cat ${shQuote(tokenFile)})"
   export OPENCODEX_API_AUTH_TOKEN
@@ -683,6 +696,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
     OCX_SHIM_PROBE_REENTRY_PATH: reentryPath,
   };
   delete env.OCX_SHIM_ACTIVE_PID;
+  delete env.OCX_SHIM_ACTIVE_DEPTH;
   delete env.OCX_SHIM_PROBE_ACTIVE;
   let groupId = 0;
   try {

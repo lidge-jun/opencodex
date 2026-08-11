@@ -348,6 +348,46 @@ exit 64
     }
   });
 
+  test("Unix runtime guard stops argument-dependent child-process redispatch", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-runtime-child-reentry-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-runtime-child-reentry-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const original = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  exit 0
+fi
+codex "$@"
+`;
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(codexPath, 0o755);
+
+      expect(installCodexShim().installed).toBe(true);
+
+      const result = spawnSync(codexPath, ["--help"], {
+        encoding: "utf8",
+        env: { ...process.env, OCX_SHIM_BYPASS: "1" },
+        timeout: 3_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(126);
+      expect(result.stderr).toContain("saved Codex launcher resolved back to the autostart shim");
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("Unix install drains an immediate recursive diagnostic before classifying the probe", () => {
     if (process.platform === "win32") return;
 
