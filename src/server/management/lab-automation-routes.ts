@@ -40,7 +40,6 @@ const AUTOMATION_LAYERS: readonly LabAutomationLayer[] = [
   "live_route_compatibility",
   "task_effectiveness",
 ];
-const UPDATE_KEYS = new Set(["policy", "routes"]);
 const MANUAL_RUN_KEYS = new Set(["evidenceLayer", "scenarioId", "providerName", "modelId"]);
 
 function automationErrorResponse(code: string, message: string, status: number, ctx: ManagementContext): Response {
@@ -148,9 +147,8 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
     try {
       const body = await readManagementJsonBody(req);
       if (!isPlainRecord(body)) return automationErrorResponse("invalid_body", "body must be an object", 400, ctx);
-      if (hasUnknownKeys(body, UPDATE_KEYS)) {
-        return automationErrorResponse("invalid_body", "automation update contains unknown fields", 400, ctx);
-      }
+      // Only policy/routes are authoritative. Other top-level properties are ignored rather than
+      // treated as injectable process-local capabilities (for example a fake routeExecutor).
       let policy = loadLabAutomationPolicy(configDir);
       if (body.policy !== undefined) {
         if (!isPlainRecord(body.policy)) return automationErrorResponse("invalid_policy", "policy must be an object", 400, ctx);
