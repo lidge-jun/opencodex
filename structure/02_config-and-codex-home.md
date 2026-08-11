@@ -120,6 +120,17 @@ are consumed incrementally and at most 512 stale files are attempted per process
 
 ## Config surface
 
+[Decision Log]
+- Purpose and intent: Prevent a stale whole-config writer from resurrecting a provider, custom-model row, or another newer disk edit.
+- Existing implementation and constraints: `loadConfig()` returns a normalized snapshot, while CLI, management, request-path, and embedded writers may hold that object until a later save. The config mutation lock serializes cooperating writers but cannot identify a stale in-memory document by itself.
+- Baseline provenance: Every config returned by `loadConfig()` carries a private, per-object baseline. `armClaudeCodeBaseline()` refreshes that same baseline after startup-only migrations, before the server accepts requests. Config objects constructed from scratch have no provenance and retain replace-document semantics; they cannot claim that an omitted field was unchanged.
+- Recursive object semantics: A field changed only on disk is adopted; a field changed only in memory is retained; disjoint nested edits are merged. A same-leaf disagreement, or an edit on one side versus deletion on the other, is an explicit `CONFIG_WRITE_CONFLICT` and aborts before the atomic rename. An unreadable or malformed disk snapshot keeps the existing fail-open save behavior because there is no trustworthy merge input.
+- Stable-id array handling: `customModels` is treated as a keyed collection by `OcxCustomModel.id`, not by mutable provider/model slugs. Rows are merged recursively, independent row additions and edits survive, and a delete/edit collision is rejected. Array ordering follows live rows first, then disk-only rows; ordering alone is not a conflict.
+- Deletion and tombstones: A deletion with no competing edit is retained, including provider-map deletions and custom-model row deletions. There is no durable tombstone: the baseline plus the authoritative disk snapshot supplies the deletion evidence for one guarded write, and the successful save refreshes the baseline.
+- Covered writers: `saveConfig()` and `saveConfigPreservingClaudeCode()` share the rebase boundary, so loaded configs used by CLI, management, request-path, OAuth, routing, storage, and embedded callers receive the same protection. `mutatePersistedConfig()` remains field-scoped and independently revalidates its exact disk bytes. `saveConfigDuringStartup()` is the explicit pre-arm exception for startup migrations; scratch configs created without `loadConfig()` also retain replace-document semantics.
+- Chosen approach and alternatives: The common boundary was chosen over migrating every whole-document caller to field-scoped `mutatePersistedConfig()` because it closes the shared stale-document seam with one reviewable policy while preserving existing in-memory writer APIs. Field-scoped migrations remain preferable for new narrowly-owned mutations; the whole-document boundary rejects ambiguity rather than silently inventing ownership.
+- Benefits, drawbacks, and impact: Independent edits no longer disappear or resurrect deleted state, and ambiguous writes become visible retryable failures. A caller must reload after a conflict, and a caller that constructs a partial config without provenance still owns the replace-document risk.
+
 `src/types.ts` is the shape and `src/config.ts` is the loader; neither is reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 

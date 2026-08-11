@@ -15,7 +15,7 @@ import {
   applyProxyEnv,
   armClaudeCodeBaseline,
   loadConfig,
-  saveConfig,
+  saveConfigDuringStartup,
   websocketsEnabled,
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
@@ -473,13 +473,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // even [], is left alone so GUI removals persist.
   if (config.subagentModels === undefined) {
     config.subagentModels = [...DEFAULT_SUBAGENT_MODELS];
-    saveConfig(config);
+    saveConfigDuringStartup(config);
   }
   // authMode migration (devlog 260726_claude_auth_auto/015): before "auto" existed,
   // choosing Subscription DELETED the key, so a pre-upgrade block with no authMode is
   // indistinguishable from "never chose". Pin those to subscription once so an upgrade
   // never silently moves a deliberate subscriber onto proxy.
-  if (runClaudeAuthModeMigration(config)) saveConfig(config);
+  if (runClaudeAuthModeMigration(config)) saveConfigDuringStartup(config);
   // Sidecar model migration (KST 2026-07-10 06:00 = UTC 2026-07-09 21:00): auto-migrate the old
   // gpt-5.4-mini default to gpt-5.6-luna for both search and vision sidecars. Only touches configs
   // still on the old default — explicit user choices are preserved.
@@ -495,7 +495,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         config.visionSidecar = { ...config.visionSidecar, model: "gpt-5.6-luna" };
         migrated = true;
       }
-      if (migrated) saveConfig(config);
+      if (migrated) saveConfigDuringStartup(config);
     }
   }
   // Startup cache invalidation is best-effort and must never block the server from

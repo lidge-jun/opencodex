@@ -2041,6 +2041,10 @@ export function loadConfig(): OcxConfig {
 /** Refresh the user cost-overlay registry from `config` and return it unchanged. */
 function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
   refreshUserCostOverlays(config);
+  // Every config loaded from a real or default snapshot carries provenance into
+  // the common whole-document write boundary. This covers CLI, management, and
+  // embedded callers without relying on server startup to arm one special path.
+  rememberConfigWriteBaseline(config);
   return config;
 }
 
@@ -2597,14 +2601,38 @@ function persistConfigUnlocked(config: OcxConfig): boolean {
   return true;
 }
 
+function persistWholeConfigDocument(config: OcxConfig): void {
+  const onDisk = readRawConfigJson();
+  const projected = projectCustomModelCatalogMigration(onDisk, config);
+  if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
+  adoptCustomModelCatalogMigration(config, projected);
+}
+
+/**
+ * Persist a startup migration before the live server baseline is armed.
+ * Startup-only changes run before requests can arrive and intentionally retain
+ * the historical replace-document semantics; the guarded writers below cover
+ * every later live-config mutation.
+ */
+export function saveConfigDuringStartup(config: OcxConfig): void {
+  assertNotRealHomeUnderTest(getConfigDir());
+  withConfigMutationLockSync(() => {
+    const hadBaseline = liveConfigBaseline.has(config);
+    persistWholeConfigDocument(config);
+    if (hadBaseline) rememberConfigWriteBaseline(config);
+  });
+}
+
 /** Persist `config` to config.json under the config-mutation lock. */
 export function saveConfig(config: OcxConfig): void {
   // Keep the real-home assertion ahead of even lock-directory preparation.
   assertNotRealHomeUnderTest(getConfigDir());
   withConfigMutationLockSync(() => {
-    const projected = projectCustomModelCatalogMigration(readRawConfigJson(), config);
-    if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
-    adoptCustomModelCatalogMigration(config, projected);
+    const hadBaseline = liveConfigBaseline.has(config);
+    const onDisk = readRawConfigJson();
+    reconcileLoadedConfigBeforeWrite(config, onDisk);
+    persistWholeConfigDocument(config);
+    if (hadBaseline) rememberConfigWriteBaseline(config);
   });
 }
 
@@ -2735,13 +2763,17 @@ type PersistedServerBinding = Pick<OcxConfig, "port" | "hostname">;
 const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding>();
 
 /**
- * Arm the baseline for a long-lived config. MANDATORY at `startServer`, not lazy on
- * first save — arming lazily would lose exactly the hand edit made before that first
- * save, which is the case the guard exists for.
+ * Refresh the live-server baseline after startup-only migrations. `loadConfig()` already
+ * records provenance for every ordinary writer; this explicit arm keeps the long-lived
+ * server baseline scoped to the post-migration snapshot before requests can arrive.
  */
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+}
+
+function rememberConfigWriteBaseline(config: OcxConfig): void {
+  liveConfigBaseline.set(config, structuredClone(config));
 }
 
 /** Test seam only: is this instance armed? */
@@ -2773,6 +2805,22 @@ function deepEqual(a: unknown, b: unknown): boolean {
 
 const MISSING_CONFIG_VALUE = Symbol("missing-config-value");
 type ConfigMergeValue = unknown | typeof MISSING_CONFIG_VALUE;
+
+/**
+ * A loaded config was changed after another writer committed a different value.
+ * Whole-document persistence cannot safely choose a winner for this case, so
+ * the write is rejected before the atomic rename and the caller can retry from
+ * a fresh snapshot.
+ */
+export class ConfigWriteConflictError extends Error {
+  readonly code = "CONFIG_WRITE_CONFLICT";
+
+  constructor(readonly paths: readonly string[]) {
+    const location = paths.length > 0 ? paths.join(", ") : "config.json";
+    super(`config.json changed concurrently at ${location}; refusing to overwrite the newer disk state`);
+    this.name = "ConfigWriteConflictError";
+  }
+}
 
 function isPlainConfigRecord(value: ConfigMergeValue): value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -2817,7 +2865,8 @@ function reconcileCustomModels(
   baseline: ConfigMergeValue,
   live: ConfigMergeValue,
   persisted: ConfigMergeValue,
-): ConfigMergeValue | null {
+  path: string,
+): ConfigMergeResult | null {
   const baselineRows = indexCustomModels(baseline);
   const liveRows = indexCustomModels(live);
   const persistedRows = indexCustomModels(persisted);
@@ -2825,15 +2874,129 @@ function reconcileCustomModels(
 
   const order = [...liveRows.order, ...persistedRows.order.filter(id => !liveRows.byId.has(id))];
   const merged: Array<Record<string, unknown>> = [];
+  const conflicts: string[] = [];
   for (const id of order) {
-    const row = reconcileConfigValue(
+    const row = mergeConfigValue(
       baselineRows.byId.get(id) ?? MISSING_CONFIG_VALUE,
       liveRows.byId.get(id) ?? MISSING_CONFIG_VALUE,
       persistedRows.byId.get(id) ?? MISSING_CONFIG_VALUE,
+      path,
     );
-    if (row !== MISSING_CONFIG_VALUE) merged.push(row as Record<string, unknown>);
+    if (row.value !== MISSING_CONFIG_VALUE) merged.push(row.value as Record<string, unknown>);
+    conflicts.push(...row.conflicts);
   }
-  return merged;
+  return { value: merged, conflicts };
+}
+
+type ConfigMergeResult = {
+  value: ConfigMergeValue;
+  conflicts: string[];
+};
+
+function configPath(parent: string, key: string): string {
+  return parent.length > 0 ? `${parent}.${key}` : key;
+}
+
+function mergeConfigRecord(
+  baseline: Record<string, unknown>,
+  live: Record<string, unknown>,
+  persisted: Record<string, unknown>,
+  skippedKeys?: ReadonlySet<string>,
+  path = "",
+): ConfigMergeResult {
+  const keys = new Set([...Object.keys(baseline), ...Object.keys(live), ...Object.keys(persisted)]);
+  const merged: Record<string, unknown> = {};
+  const conflicts: string[] = [];
+  for (const key of keys) {
+    if (skippedKeys?.has(key)) {
+      const liveValue = ownConfigValue(live, key);
+      if (liveValue !== MISSING_CONFIG_VALUE) merged[key] = cloneConfigValue(liveValue);
+      continue;
+    }
+    const baselineValue = ownConfigValue(baseline, key);
+    const liveValue = ownConfigValue(live, key);
+    const persistedValue = ownConfigValue(persisted, key);
+    const result = key === "customModels"
+      ? reconcileCustomModels(baselineValue, liveValue, persistedValue, configPath(path, key))
+        ?? mergeConfigValue(baselineValue, liveValue, persistedValue, configPath(path, key))
+      : mergeConfigValue(baselineValue, liveValue, persistedValue, configPath(path, key));
+    if (result.value !== MISSING_CONFIG_VALUE) merged[key] = result.value;
+    conflicts.push(...result.conflicts);
+  }
+  return { value: merged, conflicts };
+}
+
+function mergeConfigValue(
+  baseline: ConfigMergeValue,
+  live: ConfigMergeValue,
+  persisted: ConfigMergeValue,
+  path: string,
+): ConfigMergeResult {
+  const liveChanged = !deepEqual(live, baseline);
+  const persistedChanged = !deepEqual(persisted, baseline);
+
+  if (!liveChanged) {
+    if (isPlainConfigRecord(live) && isPlainConfigRecord(persisted)) {
+      return mergeConfigRecord(
+        isPlainConfigRecord(baseline) ? baseline : {},
+        live,
+        persisted,
+        undefined,
+        path,
+      );
+    }
+    return { value: cloneConfigValue(persisted), conflicts: [] };
+  }
+
+  if (!persistedChanged) return { value: cloneConfigValue(live), conflicts: [] };
+
+  // Both writers reached the same value, so there is no ambiguity even though
+  // both values differ from the baseline.
+  if (deepEqual(live, persisted)) return { value: cloneConfigValue(live), conflicts: [] };
+
+  if (isPlainConfigRecord(live)
+    && isPlainConfigRecord(persisted)
+    && (baseline === MISSING_CONFIG_VALUE || isPlainConfigRecord(baseline))) {
+    return mergeConfigRecord(
+      isPlainConfigRecord(baseline) ? baseline : {},
+      live,
+      persisted,
+      undefined,
+      path,
+    );
+  }
+
+  // A deletion versus an edit, scalar disagreement, or opaque-array
+  // disagreement has no safe automatic winner. Keep the pending live value in
+  // the result for OAuth reconciliation, while guarded saves reject it before
+  // applying the result or touching disk.
+  return { value: cloneConfigValue(live), conflicts: [path || "config.json"] };
+}
+
+function applyMergedConfigValue(target: Record<string, unknown>, key: string, value: ConfigMergeValue): void {
+  if (value === MISSING_CONFIG_VALUE) {
+    delete target[key];
+    return;
+  }
+  const current = target[key];
+  if (isPlainConfigRecord(current) && isPlainConfigRecord(value)) {
+    applyMergedConfigRecord(current, value);
+    return;
+  }
+  if (Array.isArray(current) && Array.isArray(value)) {
+    current.splice(0, current.length, ...structuredClone(value));
+    return;
+  }
+  target[key] = structuredClone(value);
+}
+
+function applyMergedConfigRecord(target: Record<string, unknown>, merged: Record<string, unknown>): void {
+  for (const key of Object.keys(target)) {
+    if (!Object.hasOwn(merged, key)) delete target[key];
+  }
+  for (const [key, value] of Object.entries(merged)) {
+    applyMergedConfigValue(target, key, value);
+  }
 }
 
 function reconcileConfigRecord(
@@ -2841,60 +3004,12 @@ function reconcileConfigRecord(
   baseline: Record<string, unknown>,
   persisted: Record<string, unknown>,
   skippedKeys?: ReadonlySet<string>,
-): void {
-  const keys = new Set([...Object.keys(baseline), ...Object.keys(live), ...Object.keys(persisted)]);
-  for (const key of keys) {
-    if (skippedKeys?.has(key)) continue;
-    const baselineValue = ownConfigValue(baseline, key);
-    const liveValue = ownConfigValue(live, key);
-    const persistedValue = ownConfigValue(persisted, key);
-    const merged = key === "customModels"
-      ? reconcileCustomModels(baselineValue, liveValue, persistedValue)
-        ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
-      : reconcileConfigValue(baselineValue, liveValue, persistedValue);
-    if (merged === MISSING_CONFIG_VALUE) delete live[key];
-    else live[key] = merged;
-  }
+): string[] {
+  const result = mergeConfigRecord(baseline, live, persisted, skippedKeys);
+  applyMergedConfigRecord(live, result.value as Record<string, unknown>);
+  return result.conflicts;
 }
 
-function reconcileConfigValue(
-  baseline: ConfigMergeValue,
-  live: ConfigMergeValue,
-  persisted: ConfigMergeValue,
-): ConfigMergeValue {
-  const liveChanged = !deepEqual(live, baseline);
-  const persistedChanged = !deepEqual(persisted, baseline);
-
-  if (!liveChanged) {
-    if (live !== MISSING_CONFIG_VALUE && Array.isArray(live) && Array.isArray(persisted)) {
-      live.splice(0, live.length, ...structuredClone(persisted));
-      return live;
-    }
-    if (isPlainConfigRecord(live) && isPlainConfigRecord(persisted)) {
-      reconcileConfigRecord(
-        live,
-        isPlainConfigRecord(baseline) ? baseline : {},
-        persisted,
-      );
-      return live;
-    }
-    return cloneConfigValue(persisted);
-  }
-
-  if (!persistedChanged) return live;
-
-  if (isPlainConfigRecord(live)
-    && isPlainConfigRecord(persisted)
-    && (baseline === MISSING_CONFIG_VALUE || isPlainConfigRecord(baseline))) {
-    reconcileConfigRecord(
-      live,
-      isPlainConfigRecord(baseline) ? baseline : {},
-      persisted,
-    );
-  }
-  // Same-leaf conflicts prefer the pending live management mutation.
-  return live;
-}
 
 /**
  * Reconcile an async OAuth disk commit into the shared live config without erasing
@@ -2928,6 +3043,11 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     if (persisted.claudeCode === undefined) delete config.claudeCode;
     else config.claudeCode = structuredClone(persisted.claudeCode);
     claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+    const writeBaseline = liveConfigBaseline.get(config);
+    if (writeBaseline) {
+      if (persisted.claudeCode === undefined) delete writeBaseline.claudeCode;
+      else writeBaseline.claudeCode = structuredClone(persisted.claudeCode);
+    }
   }
   // The reconciliation may have adopted a providers.<name>.modelCosts edit made
   // by a cooperating process while the OAuth login was pending; keep the overlay
@@ -2948,6 +3068,33 @@ function readRawConfigJson(): Record<string, unknown> | undefined {
     // Unreadable or corrupt: behave exactly as before. Never fail a save over protection.
     return undefined;
   }
+}
+
+/**
+ * Rebase a config loaded earlier onto the authoritative disk snapshot before
+ * any whole-document serializer projects migrations or provider overlays.
+ * Missing provenance is deliberate for callers that construct a config from
+ * scratch; those callers retain the historical replace-document behaviour.
+ */
+function reconcileLoadedConfigBeforeWrite(
+  config: OcxConfig,
+  onDisk: Record<string, unknown> | undefined,
+  skippedKeys?: ReadonlySet<string>,
+): void {
+  const baseline = liveConfigBaseline.get(config);
+  if (!baseline || onDisk === undefined) return;
+
+  const persistedDiagnostics = configDiagnosticsFromRaw(JSON.stringify(onDisk));
+  if (persistedDiagnostics.source !== "file") return;
+
+  const result = mergeConfigRecord(
+    baseline as unknown as Record<string, unknown>,
+    config as unknown as Record<string, unknown>,
+    persistedDiagnostics.config as unknown as Record<string, unknown>,
+    skippedKeys,
+  );
+  if (result.conflicts.length > 0) throw new ConfigWriteConflictError(result.conflicts);
+  applyMergedConfigRecord(config as unknown as Record<string, unknown>, result.value as Record<string, unknown>);
 }
 
 /**
@@ -2977,12 +3124,12 @@ function readPersistedServerBinding(
  *
  * Conflict policy, chosen deliberately:
  * - disk changed, we did not → their hand edit wins;
- * - disk changed AND we changed → disjoint fields are merged, while a same-leaf
- *   conflict keeps the live value;
+ * - disk changed AND we changed → disjoint fields are merged;
+ * - a same-leaf or delete/edit conflict throws before the disk write;
  * - file missing/unreadable → save what we have, no throw.
  *
- * Custom-model rows are merged by their stable `id`, preserving independent
- * edits and deletions across stale whole-config saves.
+ * Custom-model rows are merged by their stable `id`, preserving independent edits
+ * while rejecting delete/edit conflicts.
  */
 export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   withConfigMutationLockSync(() => {
@@ -2990,18 +3137,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
     const onDisk = readRawConfigJson();
-    const baseline = liveConfigBaseline.get(config);
-    if (baseline && onDisk !== undefined) {
-      const persistedDiagnostics = configDiagnosticsFromRaw(JSON.stringify(onDisk));
-      if (persistedDiagnostics.source === "file") {
-        reconcileConfigRecord(
-          config as unknown as Record<string, unknown>,
-          baseline as unknown as Record<string, unknown>,
-          persistedDiagnostics.config as unknown as Record<string, unknown>,
-          new Set(["hostname", "port", "claudeCode"]),
-        );
-      }
-    }
+    reconcileLoadedConfigBeforeWrite(config, onDisk, new Set(["hostname", "port"]));
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -3034,7 +3170,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
     }
     if (liveConfigBaseline.has(config)) {
-      liveConfigBaseline.set(config, structuredClone(config));
+      rememberConfigWriteBaseline(config);
     }
   });
 }

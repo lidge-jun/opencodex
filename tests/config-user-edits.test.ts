@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  ConfigWriteConflictError,
   armClaudeCodeBaseline,
   getConfigPath,
   getDefaultConfig,
@@ -504,21 +505,22 @@ test("a 429 key rotation does not clobber the hand edit", async () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
 });
 
-// Both sides changed: ours wins and the baseline rebases, so the NEXT edit starts fresh.
-test("our own change wins a conflict and rebases the baseline", () => {
+// Different leaves in the same object can merge: disk owns authMode, while the live
+// writer owns its independent systemEnv edit. A later hand edit starts from that merge.
+test("disjoint nested edits merge and rebase the baseline", () => {
   const live = loadConfig();
   armClaudeCodeBaseline(live);
   writeDiskConfig({ claudeCode: { authMode: "proxy" } });
   live.claudeCode = { authMode: "subscription", systemEnv: true };
 
   saveConfigPreservingClaudeCode(live);
-  expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("subscription");
+  expect(diskConfig().claudeCode).toEqual({ authMode: "proxy", systemEnv: true });
 
-  // Rebased: a fresh hand edit on top of OUR value is preserved by the next save.
-  writeDiskConfig({ claudeCode: { authMode: "proxy", systemEnv: true } });
+  // Rebased: a fresh hand edit on top of the merged value is preserved by the next save.
+  writeDiskConfig({ claudeCode: { authMode: "proxy", systemEnv: false } });
   live.port = 10102;
   saveConfigPreservingClaudeCode(live);
-  expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
+  expect(diskConfig().claudeCode).toEqual({ authMode: "proxy", systemEnv: false });
 });
 
 test("OAuth reconciliation keeps a pending live Claude subtree authoritative", () => {
@@ -539,7 +541,7 @@ test("OAuth reconciliation keeps a pending live Claude subtree authoritative", (
   expect(live.contextCapValue).toBe(240_000);
 
   saveConfigPreservingClaudeCode(live);
-  expect(diskConfig().claudeCode).toEqual({ authMode: "subscription", systemEnv: true });
+  expect(diskConfig().claudeCode).toEqual({ authMode: "proxy", systemEnv: true });
   expect(diskConfig().disabledModels).toEqual(["pending/model"]);
   expect(diskConfig().contextCapValue).toBe(240_000);
 });
@@ -611,14 +613,48 @@ test("an unreadable config file never fails the save", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
 });
 
-// An UNARMED config (a short-lived CLI load) behaves exactly like the old saveConfig.
-test("an unarmed config saves without reconciliation", () => {
+test("an independently loaded config rebases a non-server save", () => {
+  const stale = loadConfig();
+  const otherWriter = loadConfig();
+  otherWriter.disabledModels = ["disk/model"];
+  saveConfig(otherWriter);
+
+  stale.contextCapValue = 240_000;
+  saveConfig(stale);
+
+  expect(diskConfig().disabledModels).toEqual(["disk/model"]);
+  expect(diskConfig().contextCapValue).toBe(240_000);
+});
+
+test("a same-leaf edit conflict refuses to overwrite newer disk state", () => {
   const live = loadConfig();
   writeDiskConfig({ claudeCode: { authMode: "proxy" } });
 
-  live.claudeCode = { authMode: "subscription" };
-  saveConfigPreservingClaudeCode(live);
-  expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("subscription");
+  live.claudeCode = { authMode: "auto" };
+  expect(() => saveConfigPreservingClaudeCode(live)).toThrow(ConfigWriteConflictError);
+  expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("proxy");
+});
+
+test("a provider deletion versus live edit conflict refuses the stale save", () => {
+  const live = loadConfig();
+  const original = structuredClone(live.providers.test);
+  writeDiskConfig({ defaultProvider: "alt", providers: { alt: original } });
+  live.providers.test!.baseUrl = "http://127.0.0.1:2/v1";
+
+  expect(() => saveConfig(live)).toThrow(ConfigWriteConflictError);
+  expect(diskConfig().providers).toEqual({ alt: original });
+});
+
+test("a custom-model deletion versus live edit conflict refuses the stale save", () => {
+  const live = loadConfig();
+  live.customModels = [customModel("one"), customModel("two")];
+  saveConfig(live);
+
+  writeDiskConfig({ customModels: [customModel("one")] });
+  live.customModels![1]!.modelId = "edited-after-delete";
+
+  expect(() => saveConfig(live)).toThrow(ConfigWriteConflictError);
+  expect(diskConfig().customModels).toEqual([customModel("one")]);
 });
 
 test("a provider deletion from a newer disk snapshot survives an unrelated live save", () => {

@@ -113,7 +113,7 @@ describe("provider deletion with disk-only preservation", () => {
     // Successful deletion converges every active owner so a third, older projection
     // that still had beta cannot recreate it on a later unrelated save.
     expect(liveConfigC.providers.beta).toBeUndefined();
-    liveConfigC.providers.acme!.models = ["model-x", "model-c"];
+    liveConfigC.disabledModels = ["acme/model-c"];
     saveConfig(liveConfigC);
     persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
     expect(persisted.providers.beta).toBeUndefined();

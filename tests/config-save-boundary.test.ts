@@ -8,8 +8,8 @@ import { join } from "node:path";
  * config, so ONE bare call on a live config re-clobbers a hand-edited `claudeCode` and
  * silently undoes the guard.
  *
- * Startup migrations are the documented exception: they run before the server serves
- * requests, against a config nobody else holds.
+ * Startup migrations are the documented exception: they use the explicit startup saver
+ * before the server serves requests, against a config nobody else holds.
  */
 
 const SRC = join(import.meta.dir, "..", "src");
@@ -67,9 +67,9 @@ test("startServer arms the baseline before it can serve a request", () => {
   expect(start).toBeGreaterThan(-1);
   const armIndex = text.indexOf("armClaudeCodeBaseline(config)", start);
   expect(armIndex).toBeGreaterThan(-1);
-  // Every bare save inside startServer is a startup migration and must precede arming.
+  // Every startup-only save inside startServer is explicit and must precede arming.
   const body = text.slice(start, armIndex);
   const after = text.slice(armIndex, text.indexOf("\n}\n", armIndex));
-  expect(bareSaveConfigCalls(body).length).toBeGreaterThan(0);
+  expect(body.match(/(?<![A-Za-z])saveConfigDuringStartup\s*\(/g)?.length ?? 0).toBeGreaterThan(0);
   expect(bareSaveConfigCalls(after)).toEqual([]);
 });
