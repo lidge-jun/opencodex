@@ -681,6 +681,35 @@ describe("durable antigravity replay snapshot", () => {
     expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
   });
 
+  test("duplicate call keys in a snapshot are collapsed to one admitted call", async () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          byCall: [
+            [callKey, { signature: SIG, touchedAtMs: now }],
+            [callKey, { signature: "sig-abcdef0123456789", touchedAtMs: now }],
+          ],
+        }],
+      ],
+    }));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.calls).toBe(1);
+    // 64-byte session key + one 64-byte call key + 20-byte signature: no double count.
+    expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
+    // The duplicate is cleaned from disk too.
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const session = raw.sessions![0] as [unknown, { byCall?: unknown[] }];
+    expect(session[1].byCall).toHaveLength(1);
+  });
+
   test("snapshot never serializes sizeBytes", async () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
     await flushAntigravityReplay();

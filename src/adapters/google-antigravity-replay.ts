@@ -114,6 +114,12 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
     if (signatureBytes > replayLimits.maxSignatureBytes) continue;
     const callBytes = utf8.encode(pair[0]).byteLength + signatureBytes;
     if (callBytes > replayLimits.maxBytesPerSession) continue;
+    // A duplicated call key would overstate entry.bytes (the map keeps only the
+    // last value) and could evict valid sessions; keep the first occurrence.
+    if (byCall.has(pair[0])) {
+      replaySnapshotLoadDiscarded = true;
+      continue;
+    }
     byCall.set(pair[0], {
       signature: call.signature,
       sizeBytes: callBytes,
