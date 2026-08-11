@@ -696,18 +696,22 @@ describe("durable antigravity replay snapshot", () => {
         }],
       ],
     }));
-    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
-    applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Metrics first: the load itself must collapse the duplicate and count once.
     const metrics = antigravityReplayMetrics();
     expect(metrics.calls).toBe(1);
     // 64-byte session key + one 64-byte call key + 20-byte signature: no double count.
     expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
-    // The duplicate is cleaned from disk too.
+    // Load-time cleanup is persisted back to the snapshot.
     await flushAntigravityReplay();
     const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
     const session = raw.sessions![0] as [unknown, { byCall?: unknown[] }];
     expect(session[1].byCall).toHaveLength(1);
+    // The surviving call still replays.
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Persist the apply-time touch so no debounced write is left pending.
+    await flushAntigravityReplay();
   });
 
   test("snapshot never serializes sizeBytes", async () => {
