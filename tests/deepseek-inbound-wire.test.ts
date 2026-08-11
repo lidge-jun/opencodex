@@ -906,6 +906,28 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
     expect(body.input).toEqual(input);
   });
 
+  test("DeepSeek fails closed when a collected call has no matching result", () => {
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+    const injected = { type: "message", role: "developer", content: [{ type: "input_text", text: "context" }] };
+    const input = [callA, callB, injected, outputB];
+
+    const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
+  });
+
+  test("DeepSeek fails closed when a collected call/result pair is backwards", () => {
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const input = [callB, callA, outputB, outputA];
+
+    const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
+  });
+
   test("tolerant Responses providers keep interleaved tool history unchanged", () => {
     const provider: OcxProviderConfig = {
       adapter: "openai-responses",

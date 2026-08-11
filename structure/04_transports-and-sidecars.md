@@ -384,7 +384,7 @@ Calls emitted before the first matched output stay together as one assistant bat
 their outputs in call order; hook-injected messages that split the batch move after it without being
 dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
 batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
-and duplicate or backwards call/result pairs are left for the upstream to reject rather than guessed.
+and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
 
 [Decision Log]
 - 목적과 의도: Preserve DeepSeek reasoning replay for parallel tool calls while retaining the provider-scoped repair for hook-interleaved results.

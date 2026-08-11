@@ -548,7 +548,7 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
  * - 검토한 주요 대안: Disable parallel calls (DeepSeek always enables them); duplicate reasoning per call; reorder each pair; or normalize the complete unambiguous call batch.
  * - 선택한 방식: Treat calls emitted before the first matched result as one batch, emit all calls followed by their matched outputs, and preserve intervening non-tool items immediately after the batch.
  * - 다른 대안 대신 이 방식을 선택한 이유: Batch normalization matches the Responses parallel-call shape without fabricating reasoning, while the provider gate and unique-pair requirement keep the blast radius narrow.
- * - 장점, 단점 및 영향: DeepSeek keeps one reasoning-bearing assistant turn for parallel calls and still accepts hook-interleaved single calls; tolerant providers stay byte/order equivalent, and ambiguous duplicate ids are not guessed.
+ * - 장점, 단점 및 영향: DeepSeek keeps one reasoning-bearing assistant turn for parallel calls and still accepts hook-interleaved single calls; tolerant providers stay byte/order equivalent, and duplicate, missing, or backwards call/result pairs are not guessed.
  */
 function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
@@ -579,7 +579,7 @@ function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
   const pairs: Array<{ callIndex: number; outputIndex: number }> = [];
   for (const [key, callIndices] of calls) {
     const outputIndices = outputs.get(key);
-    if (!outputIndices) continue;
+    if (!outputIndices) return body;
     if (callIndices.length !== 1 || outputIndices.length !== 1) return body;
     const callIndex = callIndices[0]!;
     const outputIndex = outputIndices[0]!;
