@@ -28,7 +28,10 @@
  * after the rotated token is obtained. If we ever receive a server response
  * but fail to persist the rotated token, the intent is marked "uncertain" and
  * the next refresh refuses to replay the (possibly consumed) token, forcing a
- * clean re-authentication instead of a silent session-revoking replay.
+ * clean re-authentication instead of a silent session-revoking replay. After
+ * dispatch, ANY non-2xx outcome (429, unknown/custom 4xx, 5xx, gateway errors)
+ * retains the durable intent: no HTTP status class proves the single-use token
+ * was not consumed, so the submitted token is never automatically replayed.
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -557,10 +560,12 @@ export async function loginNous(ctrl: OAuthController): Promise<OAuthCredentials
  *
  * Failure-atomicity contract (review blocker #2): a durable refresh-intent is
  * recorded before the request and cleared only after the rotated token is
- * obtained. If the server responds but we fail to persist the rotation, the
- * intent becomes "uncertain" and a later refresh refuses to replay the
- * possibly-consumed token, forcing re-auth instead of a session-revoking
- * replay.
+ * obtained. After dispatch, every non-2xx response (including 429 and unknown
+ * 4xx) leaves the intent "uncertain" — a client-class status does not prove the
+ * single-use token was not consumed, so the old token stays blocked and a later
+ * refresh refuses to replay it, forcing re-auth instead of a session-revoking
+ * replay. The intent is cleared only after the rotated credential is durably
+ * persisted by the store.
  */
 export async function refreshNousToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
   // Validate the OAuth base URL first (independent of the token): a malformed
@@ -633,30 +638,20 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   if (!response.ok) {
     const status = response.status;
     const payload = await response.json().catch(() => ({}));
-    if (status >= 500) {
-      // Ambiguous server/gateway/backend failure (5xx): the request may have
-      // reached the Portal and rotated the token before the error was returned.
-      // We cannot prove non-consumption, so leave the submitted token BLOCKED
-      // as uncertain — never clear the intent and make it replayable.
-      try {
-        writeRefreshIntent(refreshToken, "uncertain");
-      } catch {
-        // The pre-dispatch "submitted" intent is still on disk, which also
-        // blocks replay; surface the original HTTP error below.
-      }
-      throw tokenErrorFromPayload(status, payload);
-    }
-    // A 4xx client rejection definitively proves the presented token was NOT
-    // consumed (the server rejected the grant without rotating it). Clear the
-    // intent so a later retry can resubmit the still-valid token. Fail-closed:
-    // if clearing fails, surface an operational error rather than clearing blind.
+    // The request reached the Portal's token endpoint. A non-2xx response does
+    // NOT establish that the single-use refresh token was not consumed: 429
+    // rate limits, unknown/custom 4xx, and gateway-generated client-class
+    // errors can all be returned AFTER the remote side processed (and consumed)
+    // the token. Only a response whose documented OAuth semantics prove
+    // non-consumption would be safe to retry, and no such Nous contract is
+    // documented (invalid_grant/refresh_token_reused are explicitly terminal).
+    // Fail closed: retain the durable intent as uncertain so the submitted
+    // token is never automatically replayed.
     try {
-      clearRefreshIntent(refreshToken);
-    } catch (ioErr) {
-      throw new RefreshIntentIOError(
-        "Refresh failed and the refresh-intent could not be cleared for safe retry",
-        ioErr,
-      );
+      writeRefreshIntent(refreshToken, "uncertain");
+    } catch {
+      // The pre-dispatch "submitted" intent is still on disk, which also
+      // blocks replay; surface the original HTTP error below.
     }
     throw tokenErrorFromPayload(status, payload);
   }

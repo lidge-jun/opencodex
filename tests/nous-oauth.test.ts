@@ -772,19 +772,47 @@ describe("Nous HTTP refresh failure-atomicity classification", () => {
     expect(fetchCalls).toBe(1); // only the first (5xx) call ever hit the network
   });
 
-  test("a definitively safe 4xx client rejection clears the intent so a retry may resubmit", async () => {
-    const token = "http-4xx-token";
-    const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
-    // Server returns a definitive 400 invalid_request (token not consumed).
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      error: "invalid_request",
-      error_description: "malformed request",
-    }), { status: 400 })) as typeof fetch;
+  test("an HTTP 429 response leaves the old token blocked and the next attempt rejects before fetch", async () => {
+    const token = "http-429-token";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ error: "rate_limit", error_description: "slow down" }), { status: 429 });
+    }) as typeof fetch;
 
+    // First call: the request reached the token endpoint and got 429. The
+    // remote side may already have consumed RT-A, so the intent must remain
+    // blocking — the old token must not become locally reusable.
     await expect(refreshNousToken(token)).rejects.toThrow();
-    // The 4xx proves non-consumption: the intent is cleared, so a later retry
-    // with the still-valid token is not blocked.
-    expect(nousRefreshIntentBlocksReplay(token)).toBe(false);
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+
+    // Second call: rejected by the replay guard BEFORE any network request.
+    await expect(refreshNousToken(token)).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+    expect(fetchCalls).toBe(1); // only the first (429) call ever hit the network
+  });
+
+  test("an unknown/custom 4xx response leaves the old token blocked (no automatic replay)", async () => {
+    const token = "http-unknown-4xx-token";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response("custom gateway 418 payload", { status: 418 });
+    }) as typeof fetch;
+
+    // Request was dispatched; the response provides no definitive proof of
+    // non-consumption, so the intent must remain blocking and RT-A cannot be
+    // replayed.
+    await expect(refreshNousToken(token)).rejects.toThrow();
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+
+    await expect(refreshNousToken(token)).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+    expect(fetchCalls).toBe(1);
   });
 
   test("a durable-write failure before dispatch throws a non-terminal RefreshIntentIOError (no fetch)", async () => {
