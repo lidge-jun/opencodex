@@ -43,7 +43,8 @@ import {
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { providerContextCap } from "../providers/context-cap";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
 import {
@@ -911,7 +912,19 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           const catalogNativeSlugs = accountSelectors.length > 0
             ? NATIVE_OPENAI_MODELS
             : nativeSlugs;
-          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors, suppressedBareNativeSlugs);
+          const entries = buildCatalogEntries(
+            loadCatalogTemplate(),
+            catalogNativeSlugs,
+            goOrdered,
+            config.subagentModels,
+            websocketsEnabled(config),
+            maMode as "v1" | "default" | "v2",
+            exactComboCatalogSlugs(config),
+            accountSelectors,
+            suppressedBareNativeSlugs,
+            new Set(),
+            providerContextCap(config, OPENAI_CODEX_PROVIDER_ID),
+          );
           return jsonResponse({
             models: applyNativeVisibility(
               entries,

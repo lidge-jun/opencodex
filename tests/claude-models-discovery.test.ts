@@ -156,6 +156,37 @@ test("OpenAI list shape and Codex catalog shape stay unchanged", async () => {
   }
 });
 
+test("Codex discovery applies the OpenAI context cap to native rows (#1430)", async () => {
+  const config = configWithStaticModels();
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    liveModels: false,
+  };
+  config.providerContextCaps = { openai: 272_000 };
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/models?client_version=1.0.0", server.url));
+    expect(response.status).toBe(200);
+    const json = await response.json() as {
+      models: Array<{
+        slug: string;
+        context_window?: number;
+        max_context_window?: number;
+        auto_compact_token_limit?: number;
+      }>;
+    };
+    expect(json.models.find(model => model.slug === "gpt-5.6-sol")).toMatchObject({
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("exact account disables affect only the matching OpenAI and Codex discovery row", async () => {
   const config = configWithStaticModels();
   config.providers.openai = {
