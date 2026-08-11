@@ -40,36 +40,88 @@ const CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS = 1_000;
 const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
 const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.";
 const CODEX_SHIM_INSTALL_PROBE_SCRIPT = `
-set -m
-marker=$1
-group_file=$2
-wrapper=$3
-timeout_seconds=$4
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const [markerPath, groupPath, stderrPath, launcherShellPath, wrapperPath, timeoutRaw, stderrLimitRaw] = process.argv.slice(1);
+const timeoutMs = Number.parseInt(timeoutRaw, 10);
+const stderrLimit = Number.parseInt(stderrLimitRaw, 10);
+const stderrChunks = [];
+let stderrBytes = 0;
+let launcher;
+let timer;
+let marker = "";
+let finished = false;
 
-/bin/sh "$wrapper" --version &
-launcher_pid=$!
-printf '%s\n' "$launcher_pid" > "$group_file"
-(
-  /bin/sleep "$timeout_seconds" || exit 0
-  printf '%s\n' timeout > "$marker"
-  kill -KILL -"$launcher_pid" 2>/dev/null || true
-) &
-watchdog_pid=$!
+function writeExclusive(path, value) {
+  writeFileSync(path, value, { flag: "wx", mode: 0o600 });
+}
 
-wait "$launcher_pid"
-launcher_status=$?
-if [ -f "$marker" ]; then
-  wait "$watchdog_pid" 2>/dev/null || true
-  exit 124
-fi
-if kill -0 -"$launcher_pid" 2>/dev/null; then
-  printf '%s\n' descendants > "$marker"
-  kill -KILL -"$launcher_pid" 2>/dev/null || true
-fi
-kill -KILL -"$watchdog_pid" 2>/dev/null || true
-wait "$watchdog_pid" 2>/dev/null || true
-if [ -f "$marker" ]; then exit 125; fi
-exit "$launcher_status"
+function appendStderr(value) {
+  if (stderrBytes >= stderrLimit) return;
+  const bytes = Buffer.from(value);
+  const retained = bytes.subarray(0, stderrLimit - stderrBytes);
+  stderrChunks.push(retained);
+  stderrBytes += retained.byteLength;
+}
+
+function groupAlive() {
+  if (!launcher || !launcher.pid) return false;
+  try {
+    process.kill(-launcher.pid, 0);
+    return true;
+  } catch (error) {
+    return error && error.code !== "ESRCH";
+  }
+}
+
+function killGroup() {
+  if (!launcher || !launcher.pid) return;
+  try { process.kill(-launcher.pid, "SIGKILL"); } catch (error) {
+    if (!error || error.code !== "ESRCH") appendStderr(String(error));
+  }
+}
+
+function setMarker(value) {
+  if (marker) return;
+  marker = value;
+  try { writeExclusive(markerPath, value + "\\n"); } catch (error) { appendStderr(String(error)); }
+}
+
+function finish(status) {
+  if (finished) return;
+  finished = true;
+  if (timer) clearTimeout(timer);
+  if (!marker && groupAlive()) {
+    setMarker("descendants");
+    killGroup();
+  }
+  try { writeExclusive(stderrPath, Buffer.concat(stderrChunks)); } catch { /* parent fails closed */ }
+  process.exit(marker === "timeout" ? 124 : marker === "descendants" ? 125 : status);
+}
+
+try {
+  launcher = spawn(launcherShellPath, [wrapperPath, "--version"], {
+    detached: true,
+    env: process.env,
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  if (!launcher.pid) throw new Error("Codex shim probe launcher has no pid");
+  writeExclusive(groupPath, String(launcher.pid) + "\\n");
+  launcher.stderr.on("data", appendStderr);
+  launcher.once("error", error => {
+    appendStderr(String(error));
+    finish(127);
+  });
+  launcher.once("exit", code => finish(Number.isInteger(code) ? code : 127));
+  timer = setTimeout(() => {
+    setMarker("timeout");
+    killGroup();
+  }, timeoutMs);
+} catch (error) {
+  appendStderr(String(error));
+  killGroup();
+  finish(127);
+}
 `;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let lastShimDiscoveryError: string | null = null;
@@ -475,6 +527,30 @@ exec ${shQuote(realCodexPath)} "$@"
 
 type UnixShimProbeResult = "cleanup" | "descendants" | "failed" | "recursive" | "timeout" | null;
 
+let codexShimProbeHookForTests: (() => void) | null = null;
+let codexShimProbeShellForTests: string | null = null;
+
+/** Narrow deterministic seam for transaction rollback tests. */
+export function setCodexShimProbeHookForTests(hook: (() => void) | null): void {
+  codexShimProbeHookForTests = hook;
+}
+
+/** Selects a POSIX shell only for cross-shell probe regression tests. */
+export function setCodexShimProbeShellForTests(path: string | null): void {
+  codexShimProbeShellForTests = path;
+}
+
+function readProbeMetadata(path: string, maxBytes: number): string | null {
+  try {
+    if (!existsSync(path)) return "";
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
 function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   if (process.platform === "win32") return null;
   const env: NodeJS.ProcessEnv = { ...process.env, OCX_SHIM_BYPASS: "1" };
@@ -482,15 +558,19 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   const probeId = `${process.pid}-${randomUUID()}`;
   const markerPath = join(tmpdir(), `opencodex-shim-probe-${probeId}.result`);
   const groupPath = join(tmpdir(), `opencodex-shim-probe-${probeId}.group`);
+  const stderrPath = join(tmpdir(), `opencodex-shim-probe-${probeId}.stderr`);
+  let groupId = 0;
   try {
-    const result = spawnSync("/bin/sh", [
-      "-c",
+    const result = spawnSync(process.execPath, [
+      "-e",
       CODEX_SHIM_INSTALL_PROBE_SCRIPT,
-      "opencodex-shim-probe",
       markerPath,
       groupPath,
+      stderrPath,
+      codexShimProbeShellForTests ?? "/bin/sh",
       wrapperPath,
-      String(CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS / 1_000),
+      String(CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS),
+      String(MAX_DIAGNOSTIC_VALUE_BYTES),
     ], {
       encoding: "utf8",
       env,
@@ -498,24 +578,36 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
       killSignal: "SIGKILL",
     });
     const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
-    const marker = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
-    const groupId = existsSync(groupPath) ? Number.parseInt(readFileSync(groupPath, "utf8").trim(), 10) : 0;
-    if ((timedOut || marker) && Number.isInteger(groupId) && groupId > 0) {
+    const marker = readProbeMetadata(markerPath, 64);
+    const groupText = readProbeMetadata(groupPath, 64);
+    const launcherStderr = readProbeMetadata(stderrPath, MAX_DIAGNOSTIC_VALUE_BYTES);
+    groupId = groupText === null ? 0 : Number.parseInt(groupText, 10);
+    if (marker === null || groupText === null || launcherStderr === null
+      || !Number.isInteger(groupId) || groupId <= 0) return "cleanup";
+    const groupSurvived = unixProcessGroupAlive(groupId);
+    if (timedOut || marker || groupSurvived) {
       try {
         terminateUnixProcessGroup(groupId);
       } catch {
         return "cleanup";
       }
     }
+    if (result.error && !timedOut) return "cleanup";
     if (timedOut || marker === "timeout") return "timeout";
     if (marker === "descendants") return "descendants";
-    if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
+    if (groupSurvived) return "cleanup";
+    if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && launcherStderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
       return "recursive";
     }
     if (result.status !== 0) return "failed";
     return null;
+  } catch {
+    if (Number.isInteger(groupId) && groupId > 0) {
+      try { terminateUnixProcessGroup(groupId); } catch { /* cleanup classification below */ }
+    }
+    return "cleanup";
   } finally {
-    for (const path of [markerPath, groupPath]) {
+    for (const path of [markerPath, groupPath, stderrPath]) {
       try {
         if (existsSync(path)) unlinkSync(path);
       } catch { /* best-effort cleanup of non-sensitive probe metadata */ }
@@ -525,6 +617,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
 
 function probeUnixShimFiles(files: readonly ShimFileState[]): UnixShimProbeResult {
   if (process.platform === "win32") return null;
+  codexShimProbeHookForTests?.();
   return files
     .filter(file => !file.preserveOnly)
     .map(file => probeUnixShimInstall(file.wrapperPath))
@@ -839,8 +932,16 @@ function refreshShimFile(file: ShimFileState): boolean {
   }
   if (!existsSync(file.wrapperPath) && existsSync(file.backupPath)) {
     writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
-    if (probeUnixShimFiles([file]) !== null) {
+    let unsafe: UnixShimProbeResult = null;
+    let probeError: Error | null = null;
+    try {
+      unsafe = probeUnixShimFiles([file]);
+    } catch (error) {
+      probeError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (unsafe !== null || probeError) {
       if (existsSync(file.wrapperPath) && isShim(file.wrapperPath)) unlinkSync(file.wrapperPath);
+      if (probeError) throw probeError;
       return false;
     }
     return true;
@@ -862,7 +963,9 @@ interface GuardedRefreshOperation {
 interface GuardedRefreshJournalEntry {
   operation: GuardedRefreshOperation;
   stagedOldBackupPath?: string;
+  movedReplacementFingerprint?: ShimPathFingerprint;
   replacementMovedToBackup: boolean;
+  writtenWrapperFingerprint?: ShimPathFingerprint;
   wrapperWriteStarted: boolean;
 }
 
@@ -1054,14 +1157,33 @@ function rollbackGuardedRefresh(journal: readonly GuardedRefreshJournalEntry[]):
     }
   };
   for (const entry of [...journal].reverse()) {
+    let sourceOccupied = false;
     attempt(() => {
-      if (entry.wrapperWriteStarted && existsSync(entry.operation.file.wrapperPath)) {
+      const wrapper = stableShimPathProbe(entry.operation.file.wrapperPath);
+      const ownsWrapper = entry.wrapperWriteStarted
+        && entry.writtenWrapperFingerprint !== undefined
+        && wrapper !== null
+        && sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
+      if (ownsWrapper) {
         unlinkSync(entry.operation.file.wrapperPath);
+      } else {
+        try {
+          lstatSync(entry.operation.sourcePath);
+          sourceOccupied = true;
+        } catch (error) {
+          if (fileErrorCode(error) !== "ENOENT") sourceOccupied = true;
+        }
       }
     });
     attempt(() => {
       if (entry.replacementMovedToBackup && existsSync(entry.operation.file.backupPath)) {
-        renameSync(entry.operation.file.backupPath, entry.operation.sourcePath);
+        const movedReplacement = stableShimPathProbe(entry.operation.file.backupPath);
+        if (!movedReplacement || !entry.movedReplacementFingerprint
+          || !sameFingerprint(movedReplacement.fingerprint, entry.movedReplacementFingerprint)) {
+          throw new Error("Codex shim guarded refresh backup changed during rollback");
+        }
+        if (sourceOccupied) unlinkSync(entry.operation.file.backupPath);
+        else renameSync(entry.operation.file.backupPath, entry.operation.sourcePath);
       }
     });
     attempt(() => {
@@ -1082,6 +1204,7 @@ function applyGuardedRefreshTransaction(
   let applyError: Error | null = null;
   let fingerprintMismatch = false;
   let unsafeLauncher = false;
+  let wrapperChangedDuringProbe = false;
   const transactionId = `${process.pid}-${++guardedRefreshTransactionId}`;
 
   for (const [index, operation] of operations.entries()) {
@@ -1105,8 +1228,16 @@ function applyGuardedRefreshTransaction(
       }
       renameSync(operation.sourcePath, operation.file.backupPath);
       entry.replacementMovedToBackup = true;
+      const movedReplacement = stableShimPathProbe(operation.file.backupPath);
+      if (!movedReplacement) throw new Error("Codex shim guarded refresh could not fingerprint the staged launcher");
+      entry.movedReplacementFingerprint = movedReplacement.fingerprint;
       entry.wrapperWriteStarted = true;
       writeShim(operation.file.wrapperPath, operation.file.realPath ?? operation.file.backupPath);
+      const writtenWrapper = stableShimPathProbe(operation.file.wrapperPath);
+      if (!writtenWrapper || !writtenWrapper.prefix.includes(SHIM_MARKER)) {
+        throw new Error("Codex shim guarded refresh could not fingerprint the generated wrapper");
+      }
+      entry.writtenWrapperFingerprint = writtenWrapper.fingerprint;
     } catch (error) {
       applyError = error instanceof Error ? error : new Error(String(error));
       break;
@@ -1114,10 +1245,22 @@ function applyGuardedRefreshTransaction(
   }
 
   if (!fingerprintMismatch && !applyError) {
-    unsafeLauncher = probeUnixShimFiles(operations.map(operation => operation.file)) !== null;
+    try {
+      unsafeLauncher = probeUnixShimFiles(operations.map(operation => operation.file)) !== null;
+    } catch (error) {
+      applyError = error instanceof Error ? error : new Error(String(error));
+    }
   }
 
-  if (!fingerprintMismatch && !applyError && !unsafeLauncher && commitState) {
+  if (!fingerprintMismatch && !applyError && !unsafeLauncher) {
+    wrapperChangedDuringProbe = journal.some(entry => {
+      const wrapper = stableShimPathProbe(entry.operation.file.wrapperPath);
+      return !wrapper || !entry.writtenWrapperFingerprint
+        || !sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
+    });
+  }
+
+  if (!fingerprintMismatch && !applyError && !unsafeLauncher && !wrapperChangedDuringProbe && commitState) {
     try {
       commitState();
     } catch (error) {
@@ -1125,7 +1268,7 @@ function applyGuardedRefreshTransaction(
     }
   }
 
-  if (fingerprintMismatch || applyError || unsafeLauncher) {
+  if (fingerprintMismatch || applyError || unsafeLauncher || wrapperChangedDuringProbe) {
     const rollbackErrors = rollbackGuardedRefresh(journal);
     if (applyError || rollbackErrors.length > 0) {
       throw new AggregateError(
@@ -1223,7 +1366,21 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     if (!target.preserveOnly) writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
   }
   if (process.platform !== "win32") {
-    const unsafe = probeUnixShimFiles(targets);
+    let unsafe: UnixShimProbeResult = null;
+    let probeError: Error | null = null;
+    try {
+      unsafe = probeUnixShimFiles(targets);
+    } catch (error) {
+      probeError = error instanceof Error ? error : new Error(String(error));
+    }
+    if (probeError) {
+      try {
+        rollbackFreshShimInstall(targets);
+      } catch (rollbackError) {
+        throw new AggregateError([probeError, rollbackError], "Codex shim probe and install rollback failed");
+      }
+      throw probeError;
+    }
     if (unsafe) {
       rollbackFreshShimInstall(targets);
       const reason = unsafe === "recursive"
