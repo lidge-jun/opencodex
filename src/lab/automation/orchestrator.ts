@@ -1,4 +1,6 @@
 import { readConfigDiagnostics } from "../../config";
+import { queryLabStatus } from "../query";
+import { rebuildLabProjection } from "../projection/rebuild";
 import { planLabAutomationRuns } from "./planner";
 import {
   loadLabAutomationPolicy,
@@ -137,6 +139,22 @@ function loadPlannerConfig(): import("../../types").OcxConfig | undefined {
   }
 }
 
+/**
+ * Scheduled planning is projection-backed. Rebuild once when the disposable SQLite projection
+ * is missing/incompatible; if replay/rebuild cannot establish a readable projection, fail closed
+ * instead of treating every scenario as missing and generating provider traffic.
+ */
+function ensureAutomationProjection(configDir?: string): boolean {
+  const status = queryLabStatus(configDir);
+  if (status.projectionAvailable) return true;
+  try {
+    rebuildLabProjection(configDir);
+  } catch {
+    return false;
+  }
+  return queryLabStatus(configDir).projectionAvailable;
+}
+
 function claimNextRun(
   policy: LabAutomationPolicyV1,
   routes: LabAutomationRoutesV1,
@@ -151,8 +169,6 @@ function claimNextRun(
     if (policy.enabled && manualRunId === undefined && enqueuePlan) {
       state = enqueuePlannedRuns(state, planned, "scheduled", now);
     }
-    // Policy/route checks must happen after enqueue as well: a plan can become stale between
-    // the pure planning snapshot and this atomic state claim.
     state = reconcileQueuedState(state, policy, routes, now);
     if (isRunBudgetExhausted(policy, state, now)) {
       return { state: trimTerminalRuns(state, now), value: null };
@@ -222,6 +238,10 @@ async function runDispatchBatch(
   if (shutdownRequested) return;
   const initialPolicy = loadLabAutomationPolicy(configDir);
   const initialRoutes = loadLabAutomationRoutes(configDir);
+  if (initialPolicy.enabled && options.manualRunId === undefined && !ensureAutomationProjection(configDir)) {
+    reconcileLabAutomationQueue(configDir);
+    return;
+  }
   const config = loadPlannerConfig();
   const snapshot = loadLabAutomationState(configDir);
   const planned = initialPolicy.enabled && options.manualRunId === undefined
@@ -238,8 +258,6 @@ async function runDispatchBatch(
   const maxDispatches = options.manualRunId ? 1 : Math.max(1, initialPolicy.maxConcurrentRuns);
   for (let dispatched = 0; dispatched < maxDispatches; dispatched += 1) {
     if (shutdownRequested) break;
-    // Re-read operational policy before every claim so disabling a layer/route stops the next
-    // queued run immediately rather than after the whole batch.
     const policy = loadLabAutomationPolicy(configDir);
     const routes = loadLabAutomationRoutes(configDir);
     const run = claimNextRun(
