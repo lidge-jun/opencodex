@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimProbeHookForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const skipStabilityWait = () => {};
@@ -319,27 +319,93 @@ exit 64
     }
   });
 
-  test("Unix install accepts a valid launcher when the probe shell is dash", () => {
-    if (process.platform === "win32" || !existsSync("/bin/dash")) return;
+  test("Unix install drains an immediate recursive diagnostic before classifying the probe", () => {
+    if (process.platform === "win32") return;
 
-    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-dash-bin-"));
-    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-dash-home-"));
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-immediate-reentry-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-immediate-reentry-home-"));
     const oldPath = process.env.PATH;
     const oldHome = process.env.OPENCODEX_HOME;
     const codexPath = join(binDir, "codex");
+    const original = `#!/bin/sh
+printf '%s\\n' 'opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.' >&2
+exit 126
+`;
     try {
       process.env.PATH = prependPath(binDir, oldPath);
       process.env.OPENCODEX_HOME = home;
-      writeFileSync(codexPath, successfulLauncher("dash-valid-launcher"), "utf8");
+      writeFileSync(codexPath, original, "utf8");
       chmodSync(codexPath, 0o755);
-      setCodexShimProbeShellForTests("/bin/dash");
 
       const installed = installCodexShim();
 
-      expect(installed.installed).toBe(true);
-      expect(readFileSync(codexPath, "utf8")).toContain(SHIM_MARKER);
-      expect(readFileSync(`${codexPath}.opencodex-real`, "utf8")).toBe(successfulLauncher("dash-valid-launcher"));
-      expect(existsSync(join(home, "codex-shim.json"))).toBe(true);
+      expect(installed.installed).toBe(false);
+      expect(installed.message).toContain("saved launcher resolved back to the generated shim");
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32" || !existsSync("/bin/dash"))(
+    "Unix install accepts a valid launcher when the probe shell is dash",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-dash-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-dash-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, successfulLauncher("dash-valid-launcher"), "utf8");
+        chmodSync(codexPath, 0o755);
+        setCodexShimProbeShellForTests("/bin/dash");
+
+        const installed = installCodexShim();
+
+        expect(installed.installed).toBe(true);
+        expect(readFileSync(codexPath, "utf8")).toContain(SHIM_MARKER);
+        expect(readFileSync(`${codexPath}.opencodex-real`, "utf8")).toBe(successfulLauncher("dash-valid-launcher"));
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(true);
+      } finally {
+        setCodexShimProbeShellForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("Unix install honors the injected probe shell path", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-missing-shell-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-missing-shell-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const original = successfulLauncher("missing-probe-shell");
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(codexPath, 0o755);
+      setCodexShimProbeShellForTests(join(binDir, "does-not-exist"));
+
+      const installed = installCodexShim();
+
+      expect(installed.installed).toBe(false);
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
     } finally {
       setCodexShimProbeShellForTests(null);
       if (oldPath === undefined) delete process.env.PATH;
@@ -928,6 +994,32 @@ printf '%s\\n' child-codex
 
       expect(failure).toBeInstanceOf(AggregateError);
       expect((failure as AggregateError).errors.map(error => String(error))).toContain("Error: synthetic guarded probe failure");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
+  test("guarded auto-restore removes its unfingerprinted partial wrapper before rollback", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const replacement = successfulLauncher("guarded-partial-write-replacement");
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(wrappers[0], replacement, "utf8");
+      setCodexShimGuardedWriteHookForTests(() => { throw new Error("synthetic failure after wrapper write"); });
+
+      let failure: unknown;
+      try {
+        autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+      } catch (error) {
+        failure = error;
+      } finally {
+        setCodexShimGuardedWriteHookForTests(null);
+      }
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect((failure as AggregateError).errors.map(error => String(error))).toContain("Error: synthetic failure after wrapper write");
       expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
       expect(readFileSync(backups[0])).toEqual(oldBackup);
       expect(readFileSync(statePath)).toEqual(oldState);
