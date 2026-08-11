@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
+import { buildResponseJSON } from "../src/bridge";
 import { parseRequest } from "../src/responses/parser";
 import {
   clearReasoningReplayCacheForTests,
-  peekReasoningForCall,
-  rememberReasoningForCall,
+  peekReasoningForCall as peekReasoningForCallRaw,
+  rememberReasoningForCall as rememberReasoningForCallRaw,
 } from "../src/responses/reasoning-replay-cache";
 import { routeModel } from "../src/router";
-import type { OcxConfig, OcxParsedRequest } from "../src/types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest } from "../src/types";
 
 /**
  * Regression coverage for opencodex issue #950: OpenCode Go DeepSeek V4 Flash
@@ -25,6 +26,11 @@ import type { OcxConfig, OcxParsedRequest } from "../src/types";
 
 const MODEL = "opencode-go/deepseek-v4-flash";
 const REASONING = "I need to inspect files before answering.";
+const REPLAY_SCOPE = "test-thread";
+const rememberReasoningForCall = (callId: string, text: string, scope = REPLAY_SCOPE): void =>
+  rememberReasoningForCallRaw(callId, text, scope);
+const peekReasoningForCall = (callId: string, scope = REPLAY_SCOPE): string | undefined =>
+  peekReasoningForCallRaw(callId, scope);
 
 function configFor(): OcxConfig {
   return {
@@ -41,8 +47,12 @@ function configFor(): OcxConfig {
   };
 }
 
-function wireFor(input: unknown[]): { messages: Array<Record<string, unknown>> } {
+function wireFor(
+  input: unknown[],
+  replayScope: string | null = REPLAY_SCOPE,
+): { messages: Array<Record<string, unknown>> } {
   const parsed = parseRequest({ model: MODEL, input, stream: true });
+  if (replayScope !== null) parsed._clientThreadId = replayScope;
   const route = routeModel(configFor(), parsed.modelId);
   parsed.modelId = route.modelId;
   const req = createOpenAIChatAdapter(route.provider).buildRequest(parsed as OcxParsedRequest);
@@ -135,6 +145,31 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     expect(retry!["reasoning_content"]).toBe(REASONING);
   });
 
+  test("cross-request replay isolates threads and rejects an unscoped producer/consumer pair", () => {
+    rememberReasoningForCallRaw("call_1", "thread alpha reasoning", "thread-a");
+    rememberReasoningForCallRaw("call_1", "thread beta reasoning", "thread-b");
+    const unscopedProducer: AdapterEvent[] = [
+      { type: "reasoning_raw_delta", text: "unrelated private reasoning" },
+      { type: "tool_call_start", id: "call_1", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ];
+    buildResponseJSON(unscopedProducer, "routed/model", {});
+    const input = [
+      userMessage(),
+      { type: "compaction", encrypted_content: "ocx1:c3VtbWFyeQ==" },
+      functionCallItem(),
+      functionCallOutputItem(),
+    ];
+    const alpha = toolCallAssistant(wireFor(input, "thread-a").messages);
+    const beta = toolCallAssistant(wireFor(input, "thread-b").messages);
+    const unscoped = toolCallAssistant(wireFor(input, null).messages);
+    expect(alpha?.reasoning_content).toBe("thread alpha reasoning");
+    expect(beta?.reasoning_content).toBe("thread beta reasoning");
+    expect(unscoped?.reasoning_content).toBe(" ");
+  });
+
   test("GAP D (issue #1193): replay cache MISS on the main assistant path injects a placeholder", () => {
     // The replay cache is bounded (64 entries / 256 KiB / 1 h TTL) and always
     // misses on long sessions. DeepSeek thinking mode rejects ANY tool_call
@@ -195,6 +230,7 @@ describe("issue #950 — tool-call reasoning replay invariant (openai-chat wire)
     // reasoning still replays via preserveReasoningContentModels.
     const minimaxWire = (input: unknown[]) => {
       const parsed = parseRequest({ model: "minimax/MiniMax-M3", input, stream: true });
+      parsed._clientThreadId = REPLAY_SCOPE;
       const config: OcxConfig = {
         port: 10100,
         defaultProvider: "minimax",
@@ -292,7 +328,13 @@ describe("issue #950 — reasoning replay cache bounds", () => {
     expect(peekReasoningForCall("call_1", "thread-a")).toBe("thread alpha reasoning");
     expect(peekReasoningForCall("call_1", "thread-b")).toBe("thread beta reasoning");
     // An unscoped read must not see either scoped entry.
-    expect(peekReasoningForCall("call_1")).toBeUndefined();
+    expect(peekReasoningForCallRaw("call_1")).toBeUndefined();
+  });
+
+  test("unscoped entries are rejected instead of sharing a process-wide namespace", () => {
+    rememberReasoningForCallRaw("call_collision", "private reasoning");
+    expect(peekReasoningForCallRaw("call_collision")).toBeUndefined();
+    expect(peekReasoningForCallRaw("call_collision", "global")).toBeUndefined();
   });
 
   test("entries expire after the TTL", () => {

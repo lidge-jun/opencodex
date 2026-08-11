@@ -1185,8 +1185,10 @@ describe("web-search sidecar native web_search_call emission", () => {
       async parseResponse() { throw new Error("parseResponse must be unreachable"); },
     };
 
+    const parsed = parseRequest({ model: "routed/model", input: "look up docs", stream: true, tools: [{ type: "web_search" }] });
+    parsed._clientThreadId = "web-search-raw-replay";
     const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      parsed,
       adapter,
       forwardProvider,
       hostedTool: { type: "web_search" },
@@ -1382,8 +1384,10 @@ describe("web-search sidecar native web_search_call emission", () => {
       preserveReasoningContentModels: ["deepseek-v4-flash"],
     };
 
+    const parsed = parseRequest({ model: "deepseek-v4-flash", input: "look up docs", stream: true, tools: [{ type: "web_search" }] });
+    parsed._clientThreadId = "web-search-deepseek-replay";
     const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "deepseek-v4-flash", input: "look up docs", stream: true, tools: [{ type: "web_search" }] }),
+      parsed,
       adapter: createOpenAIChatAdapter(deepseekProvider),
       forwardProvider,
       hostedTool: { type: "web_search" },

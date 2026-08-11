@@ -197,7 +197,7 @@ export function bridgeToResponsesSSE(
     };
   },
 ): ReadableStream<Uint8Array> {
-  const replayCacheScope = options?.replayCacheScope ?? "global";
+  const replayCacheScope = options?.replayCacheScope;
   const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
@@ -1366,7 +1366,7 @@ function buildResponseJSONWithBudget(
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
-  const replayCacheScope = options?.replayCacheScope ?? "global";
+  const replayCacheScope = options?.replayCacheScope;
   const output: OutputItem[] = [];
   const budget = options?.translatorBudget;
   const encoder = new TextEncoder();

@@ -9,10 +9,10 @@
  * assistant message is about to serialize without thinking parts (compacted
  * history, lost assistant turn, orphan-repaired tool results).
  *
- * Entries are scoped by an optional conversation identity in addition to the
- * call id: provider-generated ids like `call_1` are not globally unique, so a
- * process-wide key would let one conversation's reasoning bleed into another
- * when ids collide (CodeRabbit P1 on #971).
+ * Entries require a conversation identity in addition to the call id:
+ * provider-generated ids like `call_1` are not globally unique, so an
+ * unscoped process-wide key would let one conversation's reasoning bleed into
+ * another when ids collide (CodeRabbit P1 on #971).
  *
  * Privacy: entries hold reasoning text in memory only — never logged,
  * serialized, or exported. Bounded by entry count, total bytes, and TTL, so a
@@ -34,8 +34,7 @@ let totalBytes = 0;
 let clockForTests: (() => number) | null = null;
 
 const now = (): number => clockForTests?.() ?? Date.now();
-const keyFor = (callId: string, scope: string | undefined): string =>
-  `${scope ?? "global"}\u0000${callId}`;
+const keyFor = (callId: string, scope: string): string => `${scope}\u0000${callId}`;
 
 /**
  * Record the raw reasoning text that preceded the given tool call.
@@ -44,8 +43,12 @@ const keyFor = (callId: string, scope: string | undefined): string =>
  * id is never read again.
  */
 export function rememberReasoningForCall(callId: string, text: string, scope?: string): void {
+  // Never fall back to a process-wide namespace. Call ids are supplied by
+  // clients/providers and are therefore neither unique nor trustworthy; an
+  // unscoped entry could be recovered by an unrelated request that reuses the
+  // same id.
   // Empty provider deltas are absence of new reasoning, not a request to erase a candidate.
-  if (!callId || typeof text !== "string" || text.length === 0) return;
+  if (!scope || !callId || typeof text !== "string" || text.length === 0) return;
   const bytes = Buffer.byteLength(text, "utf8");
   // A single entry larger than the whole budget would immediately evict itself.
   if (bytes > MAX_TOTAL_BYTES) return;
@@ -86,7 +89,7 @@ export function rememberReasoningForCall(callId: string, text: string, scope?: s
  * a failed continuation reuse the same fallback.
  */
 export function peekReasoningForCall(callId: string, scope?: string): string | undefined {
-  if (!callId) return undefined;
+  if (!scope || !callId) return undefined;
   const key = keyFor(callId, scope);
   const entry = entries.get(key);
   if (!entry) return undefined;

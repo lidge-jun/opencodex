@@ -781,7 +781,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     }, undefined,
     {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId ?? "global",
+      replayCacheScope: parsed._clientThreadId,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),

@@ -226,7 +226,7 @@ function toolResultImageChatParts(content: string | OcxContentPart[]): unknown[]
 function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] {
   const out: unknown[] = [];
   const { context, options } = parsed;
-  const replayCacheScope = parsed._clientThreadId ?? "global";
+  const replayCacheScope = parsed._clientThreadId;
 
   interface PendingToolCall { id: string; name: string }
   let pendingToolCalls: PendingToolCall[] = [];
