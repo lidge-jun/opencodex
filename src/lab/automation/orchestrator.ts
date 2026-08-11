@@ -53,6 +53,10 @@ function dispatchDepsFor(configDir?: string): AutomationDispatchDeps {
     ?? {};
 }
 
+function cancellationCooldownUntil(policy: LabAutomationPolicyV1, now: number): number {
+  return now + Math.max(policy.failureCooldownMs, LAB_AUTOMATION_HARD_MAX.schedulerTickMs);
+}
+
 export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): void {
   const key = configKey(deps.configDir);
   if (Object.keys(deps).length === 0) {
@@ -229,7 +233,7 @@ function finalizeRun(
         next = setCooldown(
           next,
           run.runKey,
-          cooldownForFailure(policy, "cancelled", completedAt),
+          cancellationCooldownUntil(policy, completedAt),
           completedAt,
         );
       }
@@ -420,7 +424,7 @@ export function cancelLabAutomationRun(runId: string, configDir?: string): boole
     if (!run || run.state !== "queued") return { state, value: false };
     let next = cancelQueuedRun(state, runId, now);
     if (run.trigger === "scheduled") {
-      next = setCooldown(next, run.runKey, cooldownForFailure(policy, "cancelled", now), now);
+      next = setCooldown(next, run.runKey, cancellationCooldownUntil(policy, now), now);
     }
     return { state: next, value: true };
   });
