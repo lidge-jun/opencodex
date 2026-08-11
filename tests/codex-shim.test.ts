@@ -788,6 +788,23 @@ printf '%s\\n' child-codex
     });
   });
 
+  test("guarded auto-restore rejects a replacement that fails its version probe", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const replacement = "#!/bin/sh\nexit 127\n";
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(wrappers[0], replacement, "utf8");
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("deferred");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
   test("direct refresh rejects a recursive replacement without replacing the owned backup", () => {
     if (process.platform === "win32") return;
     withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
@@ -799,6 +816,24 @@ printf '%s\\n' child-codex
       writeFileSync(wrappers[0], replacement, "utf8");
       chmodSync(dynamicLauncher, 0o755);
       chmodSync(wrappers[0], 0o755);
+
+      const result = installCodexShim();
+
+      expect(result.installed).toBe(false);
+      expect(result.message).toContain("Refusing to overwrite existing backup");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
+  test("direct refresh rejects a replacement that fails its version probe", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const replacement = "#!/bin/sh\nexit 127\n";
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(wrappers[0], replacement, "utf8");
 
       const result = installCodexShim();
 
