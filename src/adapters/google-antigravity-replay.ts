@@ -29,6 +29,8 @@ interface ReplayEntry {
   bytes: number;
   expiresAtMs: number;
   oldestAtMs: number | null;
+  /** Most recent observe/apply activity; orders sessions under the snapshot cap. */
+  lastActiveAtMs: number;
 }
 
 const MIN_SIGNATURE_LEN = 16;
@@ -78,6 +80,8 @@ let replayMutationGeneration = 0;
 /** Generation of the data the last successful snapshot write actually captured. */
 let replayWrittenGeneration = 0;
 let replaySnapshotWriteSeam: AtomicWriteAsyncTestSeam | undefined;
+let replaySnapshotLoadDiscarded = false;
+let replaySnapshotMaxBytes = REPLAY_SNAPSHOT_MAX_BYTES;
 
 function replaySnapshotPath(): string {
   return join(getConfigDir(), REPLAY_SNAPSHOT_FILE);
@@ -86,10 +90,13 @@ function replaySnapshotPath(): string {
 function loadReplaySnapshotEntry(key: string, value: unknown): void {
   if (!/^[0-9a-f]{64}$/.test(key)) return;
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const rec = value as { byCall?: unknown; expiresAtMs?: unknown };
+  const rec = value as { byCall?: unknown; expiresAtMs?: unknown; lastActiveAtMs?: unknown };
   if (typeof rec.expiresAtMs !== "number" || !Number.isFinite(rec.expiresAtMs)) return;
   // Expired sessions are dropped at load; a stale snapshot is self-healing.
-  if (rec.expiresAtMs <= Date.now()) return;
+  if (rec.expiresAtMs <= Date.now()) {
+    replaySnapshotLoadDiscarded = true;
+    return;
+  }
   if (!Array.isArray(rec.byCall)) return;
   const byCall = new Map<string, ReplayCall>();
   let bytes = REPLAY_SESSION_KEY_BYTES;
@@ -114,14 +121,22 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
     });
     bytes += callBytes;
   }
-  if (byCall.size === 0) return;
-  const entry: ReplayEntry = { byCall, bytes, expiresAtMs: rec.expiresAtMs, oldestAtMs: null };
+  if (byCall.size === 0) {
+    replaySnapshotLoadDiscarded = true;
+    return;
+  }
+  const lastActiveAtMs = typeof rec.lastActiveAtMs === "number" && Number.isFinite(rec.lastActiveAtMs)
+    ? rec.lastActiveAtMs
+    : rec.expiresAtMs;
+  const entry: ReplayEntry = { byCall, bytes, expiresAtMs: rec.expiresAtMs, oldestAtMs: null, lastActiveAtMs };
+  const loadedCallCount = entry.byCall.size;
   // Account BEFORE trimming: evictInnerCalls decrements the global byte count
   // through deleteReplayCall, so the entry must already be on the books.
   replayCache.set(key, entry);
   replayBytes += entry.bytes;
   // Same per-session caps as live writes, in case limits changed across versions.
   evictInnerCalls(entry);
+  if (entry.byCall.size < loadedCallCount) replaySnapshotLoadDiscarded = true;
   if (entry.byCall.size === 0) {
     deleteReplaySession(key);
     return;
@@ -138,6 +153,7 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
 function ensureReplaySnapshotLoaded(): void {
   if (replaySnapshotLoaded) return;
   replaySnapshotLoaded = true;
+  replaySnapshotLoadDiscarded = false;
   try {
     const path = replaySnapshotPath();
     if (!existsSync(path)) return;
@@ -154,8 +170,13 @@ function ensureReplaySnapshotLoaded(): void {
   } catch {
     // Missing/corrupt snapshot: start empty.
   }
+  const sessionsAfterLoad = replayCache.size;
   // Load-time admission must respect the same global caps as live writes.
   evictIfNeeded();
+  if (replayCache.size < sessionsAfterLoad) replaySnapshotLoadDiscarded = true;
+  // Persist the cleaned state once: expired/over-limit sessions must not stay
+  // on disk and be re-parsed (and re-dropped) after every restart.
+  if (replaySnapshotLoadDiscarded) markReplayDirty();
   enforceAppOwnedMemoryBudget();
 }
 
@@ -186,15 +207,20 @@ async function persistReplaySnapshotNow(): Promise<void> {
   try {
     const sessions: Array<[string, unknown]> = [];
     let total = 0;
-    // Newest-first so the most recent sessions survive the snapshot byte cap.
-    for (const [key, entry] of [...replayCache].reverse()) {
+    // Most-recently-active first so the sessions that survive the snapshot
+    // byte cap are the ones actually in use (Map order is insertion order).
+    for (const [key, entry] of [...replayCache].sort((a, b) => b[1].lastActiveAtMs - a[1].lastActiveAtMs)) {
       const byCall = [...entry.byCall].map(([callKey, call]) => [
         callKey,
         { signature: call.signature, touchedAtMs: call.touchedAtMs },
       ]);
-      const persistEntry: [string, unknown] = [key, { byCall, expiresAtMs: entry.expiresAtMs }];
+      const persistEntry: [string, unknown] = [key, {
+        byCall,
+        expiresAtMs: entry.expiresAtMs,
+        lastActiveAtMs: entry.lastActiveAtMs,
+      }];
       const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-      if (total + size > REPLAY_SNAPSHOT_MAX_BYTES) break;
+      if (total + size > replaySnapshotMaxBytes) break;
       total += size;
       sessions.push(persistEntry);
     }
@@ -552,6 +578,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     bytes: REPLAY_SESSION_KEY_BYTES,
     expiresAtMs: 0,
     oldestAtMs: null,
+    lastActiveAtMs: 0,
   };
   let inserted = false;
   let pendingThoughtSig: string | undefined;
@@ -598,6 +625,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     return;
   }
   entry.expiresAtMs = now + REPLAY_TTL_MS;
+  entry.lastActiveAtMs = now;
   replayCache.set(key, entry);
   refreshReplaySessionCandidate(key, entry);
   evictIfNeeded();
@@ -639,6 +667,7 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
     }
   }
   if (touched) {
+    entry.lastActiveAtMs = now;
     refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
     markReplayDirty();
   }
@@ -701,6 +730,11 @@ export function setAntigravityReplayWriteSeamForTests(seam: AtomicWriteAsyncTest
   replaySnapshotWriteSeam = seam;
 }
 
+/** Test-only snapshot byte cap (mirrors the limits seam). */
+export function setAntigravityReplaySnapshotMaxBytesForTests(maxBytes: number): void {
+  replaySnapshotMaxBytes = maxBytes;
+}
+
 /** Test seam. */
 export function __resetAntigravityReplayCache(): void {
   if (replaySnapshotPersistTimer) {
@@ -716,4 +750,6 @@ export function __resetAntigravityReplayCache(): void {
   replayMutationGeneration = 0;
   replayWrittenGeneration = 0;
   replaySnapshotWriteSeam = undefined;
+  replaySnapshotLoadDiscarded = false;
+  replaySnapshotMaxBytes = REPLAY_SNAPSHOT_MAX_BYTES;
 }

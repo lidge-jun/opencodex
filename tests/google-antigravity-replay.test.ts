@@ -19,6 +19,7 @@ import {
   flushAntigravityReplay,
   observeAntigravityReplay,
   setAntigravityReplayLimitsForTests,
+  setAntigravityReplaySnapshotMaxBytesForTests,
   setAntigravityReplayWriteSeamForTests,
   sweepExpiredAntigravityReplay,
 } from "../src/adapters/google-antigravity-replay";
@@ -567,7 +568,7 @@ describe("durable antigravity replay snapshot", () => {
     expect((raw.sessions![0] as unknown[])[0]).toBe(antigravityReplayKeyForTests(MODEL, SESSION));
   });
 
-  test("expired sessions are dropped when the snapshot is loaded", () => {
+  test("expired sessions are dropped when the snapshot is loaded", async () => {
     const now = Date.now();
     const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
     const staleCallKey = antigravityFunctionCallKeyForTests("get_stale", {});
@@ -590,6 +591,31 @@ describe("durable antigravity replay snapshot", () => {
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Load-time drops are persisted back, so the stale key leaves the file too.
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-stale"));
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+  });
+
+  test("snapshot cap keeps the most recently active sessions", async () => {
+    // A (two calls, ~899 serialized bytes) fits under the cap; A+B (~1,347)
+    // does not, so the cap must pick exactly one session by activity.
+    setAntigravityReplaySnapshotMaxBytesForTests(1_200);
+    const sigA = "a".repeat(200);
+    const sigB = "b".repeat(200);
+    // A is inserted first, B second, then A is re-observed: A is now the
+    // active session, so it must be the one retained under the byte cap.
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, sigA)]);
+    observeAntigravityReplay(MODEL, "-second", [fcPart("get_y", {}, sigB)]);
+    await Bun.sleep(2);
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_z", { c: 2 }, sigA)]);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-second"));
   });
 
   test("loaded sessions are trimmed to the current per-session caps", () => {
@@ -725,14 +751,19 @@ describe("durable antigravity replay snapshot", () => {
   });
 
   test("background snapshot failures log a redacted warning and keep the service running", async () => {
-    const warn = spyOn(console, "warn");
+    let warned!: () => void;
+    const warningSeen = new Promise<void>(resolve => { warned = resolve; });
+    const warn = spyOn(console, "warn").mockImplementation((...args) => {
+      if (String(args[0]).includes("antigravity")) warned();
+    });
     try {
       setAntigravityReplayWriteSeamForTests({
         afterTempWrite: async () => { throw new Error("simulated disk failure"); },
       });
       observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
-      // Let the 2s debounce timer fire and fail.
-      await Bun.sleep(2_100);
+      // Deterministic: wait until the debounced write actually failed and
+      // warned (bounded), instead of racing a fixed sleep against the timer.
+      await Promise.race([warningSeen, Bun.sleep(5_000)]);
       expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
       // The failure must not wedge the cache: a later mutation still works.
       observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
