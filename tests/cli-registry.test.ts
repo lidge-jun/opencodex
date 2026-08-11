@@ -27,10 +27,9 @@ describe("CLI command registry parity", () => {
   });
 
   test("every registry entry has a top-level switch case", () => {
-    const missing = CLI_COMMANDS.filter(entry => {
-      if (caseSet.has(entry.name)) return false;
-      return !(entry.aliases ?? []).some(alias => caseSet.has(alias));
-    }).map(entry => entry.name);
+    const missing = CLI_COMMANDS
+      .filter(entry => !caseSet.has(entry.name))
+      .map(entry => entry.name);
     expect(missing).toEqual([]);
   });
 
