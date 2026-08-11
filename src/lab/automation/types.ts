@@ -130,6 +130,8 @@ export interface AutomationDispatchDeps {
   patchExecutor?: import("../fabric/types").TrustedFabricPatchExecutor;
   loadConfig?: () => import("../../types").OcxConfig;
   abortSignal?: AbortSignal;
+  /** Orchestrator-set guard that requires the queued identity to match current frozen contracts. */
+  enforceRunIdentity?: boolean;
   /** Test-only DNS seam; production uses destination policy resolution when unset. */
   resolve?: import("../live/types").DnsResolver;
 }
