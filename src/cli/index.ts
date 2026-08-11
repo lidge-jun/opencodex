@@ -912,7 +912,7 @@ async function handleReady(args: ReadyArgs): Promise<never> {
   process.exit(await runReady(args));
 }
 
-await dispatchCommand(head, {
+process.exit(await dispatchCommand(head, {
   args,
   command,
   head,
@@ -941,4 +941,4 @@ await dispatchCommand(head, {
   handleStatus,
   handleRecoverHistory,
   handleReady,
-});
+}));

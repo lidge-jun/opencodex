@@ -48,9 +48,9 @@ export interface CliDispatchDeps {
   handleReady: (args: ReadyArgs) => Promise<never>;
 }
 
-type CommandRunner = (deps: CliDispatchDeps) => Promise<void>;
+type CommandRunner = (deps: CliDispatchDeps) => Promise<number>;
 
-async function runInternalTrayCommand(deps: CliDispatchDeps): Promise<void> {
+async function runInternalTrayCommand(deps: CliDispatchDeps): Promise<number> {
   await dispatchInternalCliCommand(deps.command as InternalCliCommand, {
     trayStart: async () => { await deps.handleTrayProxyStart(); },
     trayRestart: deps.handleTrayProxyRestart,
@@ -59,15 +59,18 @@ async function runInternalTrayCommand(deps: CliDispatchDeps): Promise<void> {
       console.log(JSON.stringify(collectStartupHealth(deps.loadConfig())));
     },
   });
+  return 0;
 }
 
 const commandRunners: Record<string, CommandRunner> = {
   init: async () => {
     const { runInit } = await import("./init");
     await runInit();
+    return 0;
   },
   start: async deps => {
     await deps.handleStart();
+    return 0;
   },
   stop: async deps => {
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
@@ -75,6 +78,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (await deps.handleStop()) {
       console.log("⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').");
     }
+    return 0;
   },
   restore: async deps => {
     const restoreJson = deps.args[1] === "--json";
@@ -85,32 +89,28 @@ const commandRunners: Record<string, CommandRunner> = {
       const live = await deps.findLiveProxy();
       if (!live) {
         console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
-        process.exit(1);
+        return 1;
       }
       const desired = setIntegrationEnabled("codex", true);
       if (!desired.ok) {
-        process.exitCode = desired.reason === "conflict" ? 2 : 1;
         console.error(`Codex desired state was not saved (${desired.reason}).`);
-        return;
+        return desired.reason === "conflict" ? 2 : 1;
       }
       const synced = await syncModelsToCodex(live.port);
       if (synced.status === "skipped") {
-        process.exitCode = 2;
         console.error("Codex integration is OFF; restore back did not change Codex. Retry after the competing integration change finishes.");
-        return;
+        return 2;
       }
       if (!synced.ok) {
-        process.exitCode = 1;
         console.error("Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.");
-        return;
+        return 1;
       }
       const target = collectOrcaCodexHomeDiagnostic();
       console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
-      return;
+      return 0;
     }
     const desired = setIntegrationEnabled("codex", false);
     if (!desired.ok) {
-      process.exitCode = desired.reason === "conflict" ? 2 : 1;
       if (restoreJson) {
         // Machine-readable contract: every restore --json outcome emits one
         // schema-complete envelope on stdout, including pre-machinery failures.
@@ -119,7 +119,7 @@ const commandRunners: Record<string, CommandRunner> = {
       } else {
         console.error(`Codex desired state was not saved (${desired.reason}).`);
       }
-      return;
+      return desired.reason === "conflict" ? 2 : 1;
     }
     // A repeated OFF on an already-clean home is a policy no-op. Do not enter
     // restore's native-profile machinery merely to prove there is nothing to
@@ -134,7 +134,7 @@ const commandRunners: Record<string, CommandRunner> = {
         } else {
           console.log(alreadyOff);
         }
-        return;
+        return 0;
       }
     }
     let r: { success: boolean; message: string };
@@ -148,20 +148,19 @@ const commandRunners: Record<string, CommandRunner> = {
       // history worker from a successful native restore. Keep stdout machine
       // readable; human framing remains the default command contract.
       console.log(JSON.stringify(r));
-      if (!r.success) process.exitCode = 1;
-      return;
+      return r.success ? 0 : 1;
     }
     if (r.success) console.log(`✅ ${r.message}`);
     else {
       console.error(`⚠️  ${r.message}`);
-      process.exitCode = 1;
     }
+    let code = r.success ? 0 : 1;
     try {
       const g = stripGrokConfig();
       if (g.changed) console.log(`✅ ${g.message}`);
       else if (!g.ok) {
         console.error(`⚠️  ${g.message}`);
-        process.exitCode = 1;
+        code = 1;
       }
     } catch { /* best-effort */ }
     if (r.success) {
@@ -169,44 +168,54 @@ const commandRunners: Record<string, CommandRunner> = {
     } else {
       console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
     }
+    return code;
   },
   "recover-history": async deps => {
     await deps.handleRecoverHistory();
+    return 0;
   },
   uninstall: async deps => {
     await deps.handleUninstall();
+    return 0;
   },
   status: async deps => {
     await deps.handleStatus();
+    return 0;
   },
   doctor: async deps => {
     const { runDoctor } = await import("./doctor");
     await runDoctor(deps.args.slice(1));
+    return 0;
   },
   debug: async deps => {
     const { handleDebugCommand } = await import("./debug");
     await handleDebugCommand(deps.args.slice(1));
+    return 0;
   },
   ensure: async deps => {
     await deps.handleEnsure();
+    return 0;
   },
   login: async deps => {
     const { handleLogin } = await import("../oauth/login-cli");
     await handleLogin(deps.args[1]);
+    return 0;
   },
   logout: async deps => {
     const { removeCredential } = await import("../oauth/store");
     const name = (deps.args[1] ?? "").trim().toLowerCase();
     await removeCredential(name);
     console.log(`Logged out of ${name || "(none)"}.`);
+    return 0;
   },
   sync: async deps => {
     const restartCodex = deps.args.slice(1).includes("--restart-codex");
     const synced = await syncModelsToCodex((await deps.findLiveProxy())?.port);
+    let code = 0;
     if (synced.status === "skipped") {
       console.log("Codex integration is OFF; sync skipped and no Codex files changed.");
     } else if (!synced.ok) {
-      process.exitCode = 1;
+      code = 1;
       console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
     }
     // Only warn/restart when a catalog or models_cache write actually happened. This is
@@ -216,16 +225,17 @@ const commandRunners: Record<string, CommandRunner> = {
     if (synced.catalogWritten || synced.cacheSynced) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }
+    return code;
   },
   v2: async deps => {
     const { cmdV2 } = await import("./v2");
-    process.exitCode = await cmdV2(deps.args.slice(1), {}, async () => (await deps.findLiveProxy())?.port);
+    return await cmdV2(deps.args.slice(1), {}, async () => (await deps.findLiveProxy())?.port);
   },
   "sync-cache": async deps => {
     const restartCodex = deps.args.slice(1).includes("--restart-codex");
     if (!shouldSyncCodexOnStart(deps.loadConfig())) {
       console.log("Codex integration is OFF; cache sync skipped and no Codex files changed.");
-      return;
+      return 0;
     }
     const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
     const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
@@ -237,6 +247,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (invalidated.kind === "completed" && invalidated.value) {
       afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
     }
+    return 0;
   },
   gui: async deps => {
     const config = deps.loadConfig();
@@ -249,7 +260,7 @@ const commandRunners: Record<string, CommandRunner> = {
       live = await deps.waitForProxy();
       if (!live) {
         console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
-        process.exit(1);
+        return 1;
       }
     }
     // Open the host the proxy actually binds — `localhost` only answers for
@@ -259,13 +270,16 @@ const commandRunners: Record<string, CommandRunner> = {
     console.log(`Opening ${guiUrl}`);
     const { openUrl } = await import("../lib/open-url");
     openUrl(guiUrl);
+    return 0;
   },
   service: async deps => {
     await serviceCommand(...deps.args.slice(1));
+    return 0;
   },
   tray: async deps => {
     const { windowsTrayCommand } = await import("../tray/windows");
     await windowsTrayCommand(deps.args.slice(1));
+    return 0;
   },
   "codex-shim": async deps => {
     const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
@@ -291,18 +305,20 @@ const commandRunners: Record<string, CommandRunner> = {
       }
       default:
         console.error("Usage: ocx codex-shim <install|status|uninstall|remove>");
-        process.exit(1);
+        return 1;
     }
+    return 0;
   },
   update: async deps => {
     // `ocx update --help` must print usage and exit WITHOUT side effects — running the
     // real self-update stops the proxy and drops in-flight routed streams (issue #168).
     if (hasHelpFlag(deps.args.slice(1))) {
       printSubcommandUsage("update");
-      return;
+      return 0;
     }
     const { runUpdate } = await import("../update");
     await runUpdate();
+    return 0;
   },
   "__refresh-version": async deps => {
     // Hidden, detached helper spawned by the update prompt to refresh the
@@ -310,6 +326,7 @@ const commandRunners: Record<string, CommandRunner> = {
     const { refreshVersionCache } = await import("../update/notify");
     const channel = deps.args[1] === "preview" ? "preview" : "latest";
     await refreshVersionCache(channel);
+    return 0;
   },
   "__tray-start": runInternalTrayCommand,
   "__tray-restart": runInternalTrayCommand,
@@ -317,17 +334,20 @@ const commandRunners: Record<string, CommandRunner> = {
   "__tray-host": async () => {
     const { runWindowsTrayHost } = await import("../tray/windows");
     await runWindowsTrayHost();
+    return 0;
   },
   "__gui-update-worker": async deps => {
     const jobId = deps.args[1];
-    if (!jobId) process.exit(1);
+    if (!jobId) return 1;
     const channel = normalizeUpdateChannel(deps.args[2]);
     await runGuiUpdateWorker(jobId, channel, deps.args[3] === "restart");
+    return 0;
   },
   restart: async deps => {
     // The running proxy owns its drain and replacement through /api/system/restart.
     // If nothing is live, restart degrades to the documented `ensure` start behavior.
     await deps.handleProxyRestart(deps.handleRestartStartWhenStopped);
+    return 0;
   },
   health: async deps => {
     const healthArgs = deps.args.slice(1);
@@ -338,7 +358,7 @@ const commandRunners: Record<string, CommandRunner> = {
     } else {
       console.log(live ? `Proxy healthy (PID ${live.pid}, port ${live.port})` : "Proxy not healthy");
     }
-    process.exit(live ? 0 : 1);
+    return live ? 0 : 1;
   },
   ready: async deps => {
     // Fail-closed impossible-state guard: readyArgs is populated by the
@@ -347,106 +367,107 @@ const commandRunners: Record<string, CommandRunner> = {
     // and perform NO I/O (no discovery/probe). process.exit is `never`,
     // narrowing below.
     const readyArgs = deps.head.readyArgs;
-    if (!readyArgs) process.exit(64);
-    await deps.handleReady(readyArgs);
+    if (!readyArgs) return 64;
+    return await deps.handleReady(readyArgs);
   },
   provider: async deps => {
     const { handleProviderCommand } = await import("./provider");
     await handleProviderCommand(deps.args.slice(1));
+    return 0;
   },
   account: async deps => {
     const { cmdAccount } = await import("./account");
-    process.exitCode = await cmdAccount(deps.args.slice(1));
+    return await cmdAccount(deps.args.slice(1));
   },
   models: async deps => {
     const { handleModels } = await import("./models");
     await handleModels(deps.args.slice(1));
+    return 0;
   },
   combo: async deps => {
     const { handleComboCommand } = await import("./combo");
-    process.exitCode = await handleComboCommand(deps.args.slice(1));
+    return await handleComboCommand(deps.args.slice(1));
   },
   route: async deps => {
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
       console.error("Usage: ocx route <combo|policy> <subcommand>");
-      process.exitCode = 2;
-      return;
+      return 2;
     }
     if (deps.args[1] === "combo") {
       const { handleComboCommand } = await import("./combo");
-      process.exitCode = await handleComboCommand(deps.args.slice(2));
+      return await handleComboCommand(deps.args.slice(2));
     } else {
       const { handleRoutePolicyCommand } = await import("./route-policy");
-      process.exitCode = await handleRoutePolicyCommand(deps.args.slice(2));
+      return await handleRoutePolicyCommand(deps.args.slice(2));
     }
   },
   agent: async deps => {
     const { handleAgentCommand } = await import("./agent");
-    process.exitCode = await handleAgentCommand(deps.args.slice(1));
+    return await handleAgentCommand(deps.args.slice(1));
   },
   observe: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand(deps.args.slice(1));
+    return await handleObserveCommand(deps.args.slice(1));
   },
   logs: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
   },
   usage: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
   },
   storage: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
   },
   memory: async deps => {
     const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
+    return await handleObserveCommand([deps.command!, ...deps.args.slice(1)]);
   },
   access: async deps => {
     const { handleAccessCommand } = await import("./access");
-    process.exitCode = await handleAccessCommand(deps.args.slice(1));
+    return await handleAccessCommand(deps.args.slice(1));
   },
   "api-key": async deps => {
     const { handleAccessCommand } = await import("./access");
-    process.exitCode = await handleAccessCommand(["key", ...deps.args.slice(1)]);
+    return await handleAccessCommand(["key", ...deps.args.slice(1)]);
   },
   export: async deps => {
     const { handleExportCommand } = await import("./export-command");
-    process.exitCode = await handleExportCommand(deps.args.slice(1));
+    return await handleExportCommand(deps.args.slice(1));
   },
   grok: async deps => {
     const { handleGrokCommand } = await import("./integrations");
-    process.exitCode = await handleGrokCommand(deps.args.slice(1));
+    return await handleGrokCommand(deps.args.slice(1));
   },
   integration: async deps => {
     const integration = deps.args[1];
     if (integration === "grok") {
       const { handleGrokCommand } = await import("./integrations");
-      process.exitCode = await handleGrokCommand(deps.args.slice(2));
+      return await handleGrokCommand(deps.args.slice(2));
     } else if (integration === "claude") {
       const { handleClaudeConfigCommand } = await import("./integrations");
-      process.exitCode = await handleClaudeConfigCommand(deps.args.slice(2));
+      return await handleClaudeConfigCommand(deps.args.slice(2));
     } else if (integration === "client") {
       const { handleClientIntegrationCommand } = await import("./integrations");
-      process.exitCode = await handleClientIntegrationCommand(deps.args.slice(2));
+      return await handleClientIntegrationCommand(deps.args.slice(2));
     } else {
       console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
-      process.exitCode = 2;
+      return 2;
     }
   },
   system: async deps => {
     const { handleSystemCommand } = await import("./system-command");
-    process.exitCode = await handleSystemCommand(deps.args.slice(1));
+    return await handleSystemCommand(deps.args.slice(1));
   },
   config: async deps => {
     const { handleConfigCommand } = await import("./config-command");
-    process.exitCode = await handleConfigCommand(deps.args.slice(1));
+    return await handleConfigCommand(deps.args.slice(1));
   },
   lab: async deps => {
     const { handleLabCommand } = await import("./lab");
-    process.exitCode = await handleLabCommand(deps.args.slice(1));
+    return await handleLabCommand(deps.args.slice(1));
   },
   claude: async deps => {
     const { cmdClaude } = await import("./claude");
@@ -454,28 +475,30 @@ const commandRunners: Record<string, CommandRunner> = {
     if (deps.args[1] === "desktop") {
       const { handleClaudeDesktopCommand } = await import("./claude-desktop");
       const exitCode = await handleClaudeDesktopCommand(deps.args.slice(2));
-      if (exitCode !== 0) process.exit(exitCode);
-      return;
+      if (exitCode !== 0) return exitCode;
+      return 0;
     }
     if (deps.args[1] === "config") {
       const { handleClaudeConfigCommand } = await import("./integrations");
-      process.exitCode = await handleClaudeConfigCommand(deps.args.slice(2));
-      return;
+      return await handleClaudeConfigCommand(deps.args.slice(2));
     }
-    process.exit(await cmdClaude(deps.args.slice(1)));
+    return await cmdClaude(deps.args.slice(1));
   },
   opencode: async deps => {
     const { cmdOpencode } = await import("./opencode");
-    process.exit(await cmdOpencode(deps.args.slice(1)));
+    return await cmdOpencode(deps.args.slice(1));
   },
   help: async () => {
     printUsage();
+    return 0;
   },
   "--help": async () => {
     printUsage();
+    return 0;
   },
   "-h": async () => {
     printUsage();
+    return 0;
   },
 };
 
@@ -488,17 +511,17 @@ for (const entry of CLI_COMMANDS) {
 export const DISPATCH_COMMANDS: ReadonlySet<string> = new Set(Object.keys(commandRunners));
 export const DISPATCH_ALIASES: ReadonlyMap<string, string> = aliasTargets;
 
-export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Promise<void> {
+export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Promise<number> {
   const command = head.command;
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     printUsage();
-    return;
+    return 0;
   }
   const runner = commandRunners[command] ?? commandRunners[aliasTargets.get(command) ?? ""];
   if (!runner) {
     console.error(`Unknown command: ${command}`);
     printUsage();
-    process.exit(1);
+    return 1;
   }
-  await runner(deps);
+  return await runner(deps);
 }

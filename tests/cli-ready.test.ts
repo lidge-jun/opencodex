@@ -731,8 +731,8 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
     // preflight inside root.ts) BEFORE dispatch.ts runs the ready runner.
     const runCliIdx = cliSource.indexOf("await runCli(process.argv.slice(2))");
     expect(runCliIdx, "index.ts must await runCli before dispatch").toBeGreaterThanOrEqual(0);
-    const dispatchIdx = cliSource.indexOf("await dispatchCommand(head");
-    expect(dispatchIdx, "index.ts must dispatch via dispatchCommand").toBeGreaterThanOrEqual(0);
+    const dispatchIdx = cliSource.indexOf("process.exit(await dispatchCommand(head");
+    expect(dispatchIdx, "index.ts must exit via dispatchCommand").toBeGreaterThanOrEqual(0);
     expect(runCliIdx).toBeLessThan(dispatchIdx);
     expect(rootSource).toContain("maybeAutoRestoreCodexShim(head.command, head.args)");
     // The ready runner lives in dispatch.ts (keyed "ready:"); slice its body
@@ -744,10 +744,11 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
     const nextCaseIdx = dispatchSource.indexOf("provider: async", readyCaseIdx + 1);
     const caseBody = dispatchSource.slice(readyCaseIdx, nextCaseIdx === -1 ? undefined : nextCaseIdx);
     // Passes the stashed readyArgs; fail-closed guard exits 64 with NO I/O if
-    // the impossible state (missing pre-parsed args) ever occurs.
+    // the impossible state (missing pre-parsed args) ever occurs. Phase 4 made
+    // the runner return 64; index.ts turns the returned code into process.exit.
     expect(caseBody).toContain("readyArgs");
     expect(caseBody).toContain("handleReady");
-    expect(caseBody).toContain("process.exit(64)");
+    expect(caseBody).toContain("return 64");
   });
 });
 
