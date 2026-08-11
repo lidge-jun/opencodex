@@ -45,16 +45,19 @@ const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved 
 const CODEX_SHIM_INSTALL_PROBE_SCRIPT = `
 const { spawn } = require("node:child_process");
 const { readFileSync, writeFileSync } = require("node:fs");
-const [markerPath, reentryPath, groupPath, stderrPath, launcherShellPath, wrapperPath, timeoutRaw, stderrLimitRaw, stderrDrainRaw] = process.argv.slice(1);
+const [markerPath, reentryPath, groupPath, stderrPath, launcherShellPath, wrapperPath, timeoutRaw, stderrLimitRaw, stderrDrainRaw, observationRaw] = process.argv.slice(1);
 const timeoutMs = Number.parseInt(timeoutRaw, 10);
 const stderrLimit = Number.parseInt(stderrLimitRaw, 10);
 const stderrDrainMs = Number.parseInt(stderrDrainRaw, 10);
+const observationMs = Number.parseInt(observationRaw, 10);
+const probeStartedAt = Date.now();
 const stderrChunks = [];
 let stderrBytes = 0;
 let launcher;
 let probeLease;
 let timer;
 let stderrDrainTimer;
+let observationTimer;
 let reentryPollTimer;
 let marker = "";
 let finished = false;
@@ -110,6 +113,7 @@ function finish(status) {
   finished = true;
   if (timer) clearTimeout(timer);
   if (stderrDrainTimer) clearTimeout(stderrDrainTimer);
+  if (observationTimer) clearTimeout(observationTimer);
   if (reentryPollTimer) clearInterval(reentryPollTimer);
   if (!marker && reentryDetected()) setMarker("recursive");
   if (!marker && groupAlive()) {
@@ -122,14 +126,19 @@ function finish(status) {
 
 function finishAfterStderr(status) {
   if (finished) return;
+  if (timer) {
+    clearTimeout(timer);
+    timer = undefined;
+  }
   if (!launcher || !launcher.stderr || !probeLease) {
     finish(status);
     return;
   }
   let stderrEnded = launcher.stderr.readableEnded;
   let leaseEnded = probeLease.readableEnded;
+  let observationElapsed = false;
   const finishWhenReady = () => {
-    if (stderrEnded && leaseEnded) finish(status);
+    if (stderrEnded && leaseEnded && observationElapsed) finish(status);
   };
   launcher.stderr.once("end", () => {
     stderrEnded = true;
@@ -149,6 +158,17 @@ function finishAfterStderr(status) {
     }
     finishWhenReady();
   }, stderrDrainMs);
+  const remainingObservationMs = Math.max(0, observationMs - (Date.now() - probeStartedAt));
+  observationTimer = setTimeout(() => {
+    observationElapsed = true;
+    if (!leaseEnded) {
+      setMarker(groupAlive() ? "descendants" : "timeout");
+      killGroup();
+      finish(marker === "descendants" ? 125 : 124);
+      return;
+    }
+    finishWhenReady();
+  }, remainingObservationMs);
   finishWhenReady();
 }
 
@@ -604,6 +624,7 @@ type UnixShimProbeResult = "cleanup" | "descendants" | "failed" | "recursive" | 
 let codexShimProbeHookForTests: (() => void) | null = null;
 let codexShimProbeShellForTests: string | null = null;
 let codexShimGuardedWriteHookForTests: (() => void) | null = null;
+let codexShimProbeObservationMs = CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS;
 
 /** Narrow deterministic seam for transaction rollback tests. */
 export function setCodexShimProbeHookForTests(hook: (() => void) | null): void {
@@ -613,6 +634,11 @@ export function setCodexShimProbeHookForTests(hook: (() => void) | null): void {
 /** Selects a POSIX shell only for cross-shell probe regression tests. */
 export function setCodexShimProbeShellForTests(path: string | null): void {
   codexShimProbeShellForTests = path;
+}
+
+/** Shortens the successful-launcher observation window only for focused tests. */
+export function setCodexShimProbeObservationMsForTests(value: number | null): void {
+  codexShimProbeObservationMs = value ?? CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS;
 }
 
 /** Narrow deterministic seam for guarded partial-write rollback tests. */
@@ -661,6 +687,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
       String(CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS),
       String(MAX_DIAGNOSTIC_VALUE_BYTES),
       String(CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS),
+      String(codexShimProbeObservationMs),
     ], {
       encoding: "utf8",
       env,

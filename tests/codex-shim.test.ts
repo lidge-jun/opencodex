@@ -1,9 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -11,6 +11,8 @@ const skipStabilityWait = () => {};
 const python3Path = process.platform === "win32"
   ? ""
   : spawnSync("/bin/sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+setCodexShimProbeObservationMsForTests(20);
+afterAll(() => setCodexShimProbeObservationMsForTests(null));
 
 function prependPath(dir: string, current: string | undefined): string {
   return [dir, current].filter(Boolean).join(delimiter);
@@ -478,7 +480,7 @@ exit 0
   });
 
   test.skipIf(process.platform === "win32" || !python3Path)(
-    "Unix install rejects recursive redispatch that escapes into a detached process group",
+    "Unix install rejects delayed detached redispatch after the launcher closes its lease fd",
     () => {
       const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-detached-reentry-bin-"));
       const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-detached-reentry-home-"));
@@ -489,14 +491,14 @@ exit 0
       const original = `#!${python3Path}
 import os
 import time
-os.set_inheritable(3, True)
+os.close(3)
 pid = os.fork()
 if pid == 0:
     os.setsid()
     stderr_fd = os.open(os.devnull, os.O_WRONLY)
     os.dup2(stderr_fd, 2)
     os.close(stderr_fd)
-    time.sleep(0.25)
+    time.sleep(0.5)
     os.execvpe("codex", ["codex", "--version"], os.environ)
 with open(${JSON.stringify(childPidPath)}, "w", encoding="utf-8") as handle:
     handle.write(str(pid))
@@ -505,6 +507,7 @@ os._exit(0)
       try {
         process.env.PATH = prependPath(binDir, oldPath);
         process.env.OPENCODEX_HOME = home;
+        setCodexShimProbeObservationMsForTests(1_500);
         writeFileSync(codexPath, original, "utf8");
         chmodSync(codexPath, 0o755);
 
@@ -519,6 +522,7 @@ os._exit(0)
         const childState = waitForProcessStop(childPid);
         expect(childState === "" || childState.startsWith("Z")).toBe(true);
       } finally {
+        setCodexShimProbeObservationMsForTests(20);
         if (oldPath === undefined) delete process.env.PATH;
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -1344,7 +1348,8 @@ exit 127
       const firstScript = `
         import { existsSync, readFileSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
         import { join } from "node:path";
-        const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
+        const { autoRestoreCodexShim, setCodexShimProbeObservationMsForTests } = await import(${JSON.stringify(shimModule)});
+        setCodexShimProbeObservationMsForTests(20);
         const result = autoRestoreCodexShim({
           enabled: () => true,
           stabilitySleep: () => {},
@@ -1361,7 +1366,8 @@ exit 127
         console.log(JSON.stringify(result));
       `;
       const secondScript = `
-        const { autoRestoreCodexShim } = await import(${JSON.stringify(shimModule)});
+        const { autoRestoreCodexShim, setCodexShimProbeObservationMsForTests } = await import(${JSON.stringify(shimModule)});
+        setCodexShimProbeObservationMsForTests(20);
         console.log(JSON.stringify(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} })));
       `;
       const childEnv = { ...process.env, PATH: binDir, OPENCODEX_HOME: home };
