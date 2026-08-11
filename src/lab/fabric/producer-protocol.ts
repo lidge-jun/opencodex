@@ -19,6 +19,9 @@ export interface ProducerParentRequest {
   executorModulePath?: string;
   scratchRoot: string;
   executorInput?: unknown;
+  /** Parent-owned budgets are passed through so synthetic harness timing can scale in tests. */
+  totalTimeoutMs?: number;
+  inactivityTimeoutMs?: number;
 }
 
 export interface IsolatedProducerResult {
