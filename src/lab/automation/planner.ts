@@ -9,10 +9,9 @@ import { isLiveCaseApplicableToRoute } from "../live/executor";
 import { buildAutomationLiveRouteContext } from "./route-context";
 import { liveSuiteManifestDigestForCase } from "../live/suite-manifest";
 import { suiteManifestDigestForCase } from "../conformance/suite-manifest";
-import { newestObservationByScenario, isScenarioApplicable } from "../projection/verification";
+import { isScenarioApplicable } from "../projection/verification";
 import { queryLabObservations } from "../query/queries";
 import { LabProjectionUnavailableError } from "../query/errors";
-import type { ObservationEvent } from "../events/types";
 import type { OcxConfig } from "../../types";
 import { resolvePolicyCompatibilitySubjects } from "../../routing/compatibility/subject";
 import type {
@@ -43,6 +42,17 @@ export interface PlannerInput {
   configDir?: string;
 }
 
+interface EvidenceIdentity {
+  layer: EvidenceLayer;
+  subjectId: string;
+  suiteId: string;
+  suiteVersion: string;
+  suiteManifestDigest: string;
+  scenarioId: string;
+  scenarioVersion: string;
+  scenarioManifestDigest: string;
+}
+
 function effectiveMaxAgeMs(suiteMax: number | null, scenarioMax: number | null): number | null {
   if (suiteMax === null) return scenarioMax;
   if (scenarioMax === null) return suiteMax;
@@ -68,22 +78,31 @@ function activeRunForKey(state: LabAutomationStateV1, runKey: string): LabAutoma
   return state.runs.find((row) => row.runKey === runKey && (row.state === "queued" || row.state === "running"));
 }
 
-function loadObservationEvents(layer: EvidenceLayer, configDir?: string): ObservationEvent[] {
+function latestMatchingObservationCompletedAt(identity: EvidenceIdentity, configDir?: string): number | undefined {
   try {
     const page = queryLabObservations(
-      { layer },
+      {
+        layer: identity.layer,
+        subjectId: identity.subjectId,
+        suiteId: identity.suiteId,
+        scenarioId: identity.scenarioId,
+      },
       undefined,
       LAB_AUTOMATION_HARD_MAX.maxPersistedRuns,
       configDir,
     );
-    return page.items.map((row) => ({
-      eventKind: "observation",
-      eventId: row.eventId,
-      scenarioId: row.scenarioId,
-      completedAt: row.completedAt,
-    } as ObservationEvent));
+    let latest: number | undefined;
+    for (const row of page.items) {
+      if (row.excluded) continue;
+      if (row.suiteVersion !== identity.suiteVersion) continue;
+      if (row.suiteManifestDigest !== identity.suiteManifestDigest) continue;
+      if (row.scenarioVersion !== identity.scenarioVersion) continue;
+      if (row.scenarioManifestDigest !== identity.scenarioManifestDigest) continue;
+      if (latest === undefined || row.completedAt > latest) latest = row.completedAt;
+    }
+    return latest;
   } catch (error) {
-    if (error instanceof LabProjectionUnavailableError) return [];
+    if (error instanceof LabProjectionUnavailableError) return undefined;
     throw error;
   }
 }
@@ -93,8 +112,6 @@ function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
   const authority = loadCaseAuthority();
   const scenarios = discoverScenarios(authority, CL01_SUITES);
   const planned: PlannedLabRunV1[] = [];
-  const observations = loadObservationEvents("protocol_conformance", input.configDir);
-  const byScenario = newestObservationByScenario(observations);
   for (const caseRecord of scenarios) {
     if (!isScenarioApplicable(caseRecord.id, "fixture", "protocol_conformance")) continue;
     let subject;
@@ -108,34 +125,45 @@ function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
     const expanded = expandScenario(caseRecord, authority);
     const scenarioDigest = scenarioManifestDigest(expanded);
     const suiteDigest = suiteManifestDigestForCase(caseRecord, authority);
+    const suiteVersion = authority.manifestDefaults.suiteVersion;
+    const scenarioVersion = authority.manifestDefaults.version;
     const runKey = buildLabAutomationRunKey({
       evidenceLayer: "protocol_conformance",
       subjectId,
       suiteId: caseRecord.suite,
-      suiteVersion: authority.manifestDefaults.suiteVersion,
+      suiteVersion,
       suiteManifestDigest: suiteDigest,
       scenarioId: caseRecord.id,
-      scenarioVersion: authority.manifestDefaults.version,
+      scenarioVersion,
       scenarioManifestDigest: scenarioDigest,
       executionContractDigest: protocolExecutionContractDigest(),
     });
     if (activeRunForKey(input.state, runKey)) continue;
     if (cooldownActive(input.state, runKey, input.now)) continue;
-    const latest = byScenario.get(caseRecord.id);
+    const latestCompletedAt = latestMatchingObservationCompletedAt({
+      layer: "protocol_conformance",
+      subjectId,
+      suiteId: caseRecord.suite,
+      suiteVersion,
+      suiteManifestDigest: suiteDigest,
+      scenarioId: caseRecord.id,
+      scenarioVersion,
+      scenarioManifestDigest: scenarioDigest,
+    }, input.configDir);
     const maxAge = effectiveMaxAgeMs(
       authority.manifestDefaults.freshness.maxAgeMs,
       authority.manifestDefaults.freshness.maxAgeMs,
     );
-    const freshness = freshnessReason(latest?.completedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
+    const freshness = freshnessReason(latestCompletedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
     if (freshness === "fresh") continue;
     planned.push({
       runKey,
       evidenceLayer: "protocol_conformance",
       suiteId: caseRecord.suite,
-      suiteVersion: authority.manifestDefaults.suiteVersion,
+      suiteVersion,
       suiteManifestDigest: suiteDigest,
       scenarioId: caseRecord.id,
-      scenarioVersion: authority.manifestDefaults.version,
+      scenarioVersion,
       scenarioManifestDigest: scenarioDigest,
       subjectId,
       reason: freshness,
@@ -149,12 +177,10 @@ function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
 function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
   if (!input.policy.enabled || !input.policy.layers.liveRouteCompatibility) return [];
   if (!input.config) return [];
-  if (isLiveRequestBudgetExhausted(input.policy, input.state)) return [];
+  if (isLiveRequestBudgetExhausted(input.policy, input.state, input.now)) return [];
   const authority = loadLiveCaseAuthority();
   const scenarios = discoverLiveScenarios(authority, CL03_LIVE_SUITES);
   const planned: PlannedLabRunV1[] = [];
-  const observations = loadObservationEvents("live_route_compatibility", input.configDir);
-  const byScenario = newestObservationByScenario(observations);
   for (const routeRef of input.routes.routes) {
     const routed = input.config.providers?.[routeRef.providerName];
     if (!routed) continue;
@@ -175,35 +201,46 @@ function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
       const expanded = expandLiveScenario(caseRecord, authority);
       const scenarioDigest = scenarioManifestDigest(expanded);
       const suiteDigest = liveSuiteManifestDigestForCase(caseRecord, authority);
+      const suiteVersion = authority.manifestDefaults.suiteVersion;
+      const scenarioVersion = authority.manifestDefaults.version;
       const subjectId = resolved.route.subjectId;
       const runKey = buildLabAutomationRunKey({
         evidenceLayer: "live_route_compatibility",
         subjectId,
         suiteId: caseRecord.suite,
-        suiteVersion: authority.manifestDefaults.suiteVersion,
+        suiteVersion,
         suiteManifestDigest: suiteDigest,
         scenarioId: caseRecord.id,
-        scenarioVersion: authority.manifestDefaults.version,
+        scenarioVersion,
         scenarioManifestDigest: scenarioDigest,
         executionContractDigest: liveExecutionContractDigest(),
       });
       if (activeRunForKey(input.state, runKey)) continue;
       if (cooldownActive(input.state, runKey, input.now)) continue;
-      const latest = byScenario.get(caseRecord.id);
+      const latestCompletedAt = latestMatchingObservationCompletedAt({
+        layer: "live_route_compatibility",
+        subjectId,
+        suiteId: caseRecord.suite,
+        suiteVersion,
+        suiteManifestDigest: suiteDigest,
+        scenarioId: caseRecord.id,
+        scenarioVersion,
+        scenarioManifestDigest: scenarioDigest,
+      }, input.configDir);
       const maxAge = effectiveMaxAgeMs(
         authority.manifestDefaults.freshness.maxAgeMs,
         authority.manifestDefaults.freshness.maxAgeMs,
       );
-      const freshness = freshnessReason(latest?.completedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
+      const freshness = freshnessReason(latestCompletedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
       if (freshness === "fresh") continue;
       planned.push({
         runKey,
         evidenceLayer: "live_route_compatibility",
         suiteId: caseRecord.suite,
-        suiteVersion: authority.manifestDefaults.suiteVersion,
+        suiteVersion,
         suiteManifestDigest: suiteDigest,
         scenarioId: caseRecord.id,
-        scenarioVersion: authority.manifestDefaults.version,
+        scenarioVersion,
         scenarioManifestDigest: scenarioDigest,
         subjectId,
         reason: freshness,
@@ -220,7 +257,7 @@ function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
 /** Deterministic planner — no execution side effects. */
 export function planLabAutomationRuns(input: PlannerInput): PlannedLabRunV1[] {
   if (!input.policy.enabled) return [];
-  if (isRunBudgetExhausted(input.policy, input.state)) return [];
+  if (isRunBudgetExhausted(input.policy, input.state, input.now)) return [];
   const protocol = planProtocolScenarios(input);
   const live = planLiveScenarios(input);
   const merged = [...protocol, ...live];
