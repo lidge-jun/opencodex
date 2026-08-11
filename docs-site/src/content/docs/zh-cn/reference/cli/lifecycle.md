@@ -180,6 +180,8 @@ ocx service uninstall
 
 提交安装或修复前，OpenCodex 会在跳过服务启动的情况下，用 `--version` 运行已保存的启动器。如果启动器把 `codex` 再次解析到 shim、以非零状态退出、运行超过五秒、留下仍在运行的子进程，或无法被安全验证和清理，OpenCodex 会拒绝并回滚更改。因此 `codex-shim install` 并不是无条件安装。若被拒绝，请重新安装 Codex，使 PATH 条目指向具体的可执行文件或启动器，然后重试；如果动态命令管理器的启动器无法满足这些检查，请改用 `ocx service install`。
 
+升级时，缺少当前验证保护的已安装 Unix shim 会被重新生成并接受探测。如果保存的启动器不安全，OpenCodex 会移除旧 shim 并恢复原始启动器，而不是保留不安全的 wrapper。
+
 仅安装启动器并不能证明 Codex 请求会经过 OpenCodex。完成健康安装后，命令会检查当前 Codex 路由；当路由由外部配置、用户自有网关管理或无法验证时，会显示警告而不是绿色成功。若出站代理变量只存在于当前进程，而 `config.proxy` 未设置或无法解析，也会给出警告，因为 Codex 启动器和后台服务未必继承该环境。这些检查只读且绝不会打印代理值；在依赖自动启动前，请先处理提示的交接配置并运行 `ocx doctor`。
 
 如果已完成的外部 Codex 更新覆盖了已安装的 shim，下一次普通的 `ocx` 命令会先备份稳定的新启动器，再在分发前恢复 shim。仍在变动中的启动器会保持不动，并在稍后重试。修复失败只会警告，不会让所请求的命令失败；手动回退：`ocx codex-shim install`。将 `codexShimAutoRestore` 设为 `false`，或设置 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`，即可在进程级别关闭自动恢复。

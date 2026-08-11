@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
+const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
 const skipStabilityWait = () => {};
 const python3Path = process.platform === "win32"
   ? ""
@@ -487,9 +488,15 @@ exit 0
       const childPidPath = join(home, "detached-reentry.pid");
       const original = `#!${python3Path}
 import os
+import time
+os.set_inheritable(3, True)
 pid = os.fork()
 if pid == 0:
     os.setsid()
+    stderr_fd = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(stderr_fd, 2)
+    os.close(stderr_fd)
+    time.sleep(0.25)
     os.execvpe("codex", ["codex", "--version"], os.environ)
 with open(${JSON.stringify(childPidPath)}, "w", encoding="utf-8") as handle:
     handle.write(str(pid))
@@ -963,6 +970,108 @@ printf '%s\\n' child-codex
         expect(readFileSync(snapshot.path)).toEqual(snapshot.bytes);
         expect(statSync(snapshot.path).mtimeMs).toBe(snapshot.mtimeMs);
       }
+    });
+  });
+
+  test("auto-restore upgrades an obsolete Unix shim and validates its saved launcher", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const current = readFileSync(wrappers[0], "utf8");
+      const obsolete = current.replace(`# ${UNIX_SHIM_REVISION_MARKER}\n`, "");
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      expect(obsolete).not.toBe(current);
+      writeFileSync(wrappers[0], obsolete, "utf8");
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("restored");
+      expect(result.message).toContain("Upgraded Codex autostart shim");
+      expect(readFileSync(wrappers[0], "utf8")).toContain(UNIX_SHIM_REVISION_MARKER);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+      expect(diagnoseCodexShim()).toMatchObject({ installed: true, healthy: true });
+    });
+  });
+
+  test("manual install removes an obsolete Unix shim when its saved launcher recurses", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
+      const current = readFileSync(wrappers[0], "utf8");
+      const obsolete = current.replace(`# ${UNIX_SHIM_REVISION_MARKER}\n`, "");
+      const dynamicLauncher = join(binDir, "obsolete-dynamic-launcher");
+      const recursiveLauncher = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
+      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
+      writeFileSync(backups[0], recursiveLauncher, "utf8");
+      writeFileSync(wrappers[0], obsolete, "utf8");
+      chmodSync(dynamicLauncher, 0o755);
+      chmodSync(backups[0], 0o755);
+
+      const result = installCodexShim();
+
+      expect(result.installed).toBe(false);
+      expect(result.message).toContain("Removed an obsolete Codex autostart shim");
+      expect(result.message).toContain("original launcher was restored");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(recursiveLauncher);
+      expect(existsSync(backups[0])).toBe(false);
+      expect(existsSync(statePath)).toBe(false);
+      expect(diagnoseCodexShim()).toMatchObject({ installed: false, healthy: false });
+    });
+  });
+
+  test("obsolete Unix shim upgrade rolls back when probe infrastructure throws", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const current = readFileSync(wrappers[0], "utf8");
+      const obsolete = current.replace(`# ${UNIX_SHIM_REVISION_MARKER}\n`, "");
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(wrappers[0], obsolete, "utf8");
+      setCodexShimProbeHookForTests(() => { throw new Error("synthetic obsolete upgrade probe failure"); });
+
+      let failure: unknown;
+      try {
+        installCodexShim();
+      } catch (error) {
+        failure = error;
+      } finally {
+        setCodexShimProbeHookForTests(null);
+      }
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(readFileSync(wrappers[0], "utf8")).toBe(obsolete);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
+  test("obsolete Unix shim upgrade preserves a concurrent wrapper replacement", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
+      const current = readFileSync(wrappers[0], "utf8");
+      const obsolete = current.replace(`# ${UNIX_SHIM_REVISION_MARKER}\n`, "");
+      const concurrent = successfulLauncher("obsolete upgrade concurrent replacement");
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(wrappers[0], obsolete, "utf8");
+      setCodexShimProbeHookForTests(() => {
+        writeFileSync(wrappers[0], concurrent, "utf8");
+        chmodSync(wrappers[0], 0o755);
+      });
+
+      let result!: ReturnType<typeof installCodexShim>;
+      try {
+        result = installCodexShim();
+      } finally {
+        setCodexShimProbeHookForTests(null);
+      }
+
+      expect(result.installed).toBe(false);
+      expect(result.message).toContain("upgrade deferred because tracked launchers changed");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+      expect(readdirSync(binDir).some(name => name.includes(".upgrade-"))).toBe(false);
     });
   });
 

@@ -293,6 +293,9 @@ service startup is bypassed. It refuses the change and rolls back when the launc
 cannot be validated and cleaned up safely. Therefore `codex-shim install` is not unconditional. If
 it is refused, reinstall Codex so the PATH entry is a concrete executable or launcher and retry;
 use `ocx service install` instead when a dynamic command-manager launcher cannot meet these checks.
+During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
+probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
+original launcher instead of leaving the unsafe wrapper installed.
 
 Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
 install, the command checks the current Codex routing and reports a warning instead of a green result
