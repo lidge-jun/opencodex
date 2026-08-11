@@ -371,6 +371,25 @@ describe("Nous Portal base URL hardening", () => {
       delete process.env.NOUS_PORTAL_BASE_URL;
     }
   });
+
+  test("a path in the override is discarded; requests still target the canonical endpoint", async () => {
+    // resolvePortalBaseUrl returns url.origin only, so a smuggled path/prefix in
+    // the override must not redirect the OAuth request to a non-canonical path.
+    process.env.NOUS_PORTAL_BASE_URL = "https://portal.test/evil/prefix";
+    const realFetch = globalThis.fetch;
+    let observedUrl: string | undefined;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      observedUrl = String(input);
+      return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    }) as typeof fetch;
+    try {
+      await expect(refreshNousToken("origin-only-token")).rejects.toThrow();
+      expect(observedUrl).toBe("https://portal.test/api/oauth/token");
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.NOUS_PORTAL_BASE_URL;
+    }
+  });
 });
 
 describe("Nous refresh token safety", () => {
