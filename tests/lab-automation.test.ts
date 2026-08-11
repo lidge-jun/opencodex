@@ -13,7 +13,7 @@ import {
   saveLabAutomationRoutes,
   saveLabAutomationState,
 } from "../src/lab/automation/persistence";
-import { planLabAutomationRuns } from "../src/lab/automation/planner";
+import { planLabAutomationRuns, planManualLabRun } from "../src/lab/automation/planner";
 import { enqueuePlannedRuns, selectDispatchableRuns } from "../src/lab/automation/queue";
 import { recoverLabAutomationState } from "../src/lab/automation/recovery";
 import {
@@ -447,41 +447,20 @@ describe("CL-08 lab automation", () => {
         schemaVersion: 1,
         routes: [{ providerName: "fixture-provider", modelId: "fixture-model" }],
       }, home);
-      const authority = loadLiveCaseAuthority();
-      const scenario = authority.cases.find((c) => c.id === "responses-core.live.basic-turn")!;
-      const now = Date.now();
-      saveLabAutomationState({
-        schemaVersion: 1,
-        runs: [{
-          runId: "live-run-1",
-          runKey: "live-run-key",
-          state: "queued",
-          evidenceLayer: "live_route_compatibility",
-          suiteId: scenario.suite,
-          suiteVersion: authority.manifestDefaults.suiteVersion,
-          suiteManifestDigest: "digest",
-          scenarioId: scenario.id,
-          scenarioVersion: authority.manifestDefaults.version,
-          scenarioManifestDigest: "digest",
-          subjectId: "pending",
-          reason: "missing",
-          priority: 0,
-          eligibleAt: now,
-          trigger: "scheduled",
-          createdAt: now,
-          updatedAt: now,
-          providerName: "fixture-provider",
-          modelId: "fixture-model",
-        }],
-        budgetWindowStartedAt: now,
-        runsThisHour: 0,
-        liveRequestsThisHour: 0,
-        cooldownUntilByKey: {},
-      }, home);
+      const plan = planManualLabRun({
+        evidenceLayer: "live_route_compatibility",
+        scenarioId: "responses-core.live.basic-turn",
+        providerName: "fixture-provider",
+        modelId: "fixture-model",
+        config,
+        configDir: home,
+      });
+      const state = enqueuePlannedRuns(loadLabAutomationState(home), [plan], "scheduled", Date.now());
+      saveLabAutomationState(state, home);
       await runLabAutomationTick(home);
       expect(invokes).toBe(1);
-      const state = loadLabAutomationState(home);
-      expect(state.runs[0]?.state === "completed" || state.runs[0]?.state === "failed").toBe(true);
+      const stored = loadLabAutomationState(home).runs.find((row) => row.runKey === plan.runKey);
+      expect(stored?.state === "completed" || stored?.state === "failed").toBe(true);
     });
   });
 
@@ -513,40 +492,23 @@ describe("CL-08 lab automation", () => {
         maxLiveRequestsPerHour: 0,
       };
       saveLabAutomationPolicy(policy, home);
-      const authority = loadLiveCaseAuthority();
-      const scenario = authority.cases.find((c) => c.id === "responses-core.live.basic-turn")!;
-      const now = Date.now();
-      saveLabAutomationState({
+      saveLabAutomationRoutes({
         schemaVersion: 1,
-        runs: [{
-          runId: "budget-live",
-          runKey: "budget-key",
-          state: "queued",
-          evidenceLayer: "live_route_compatibility",
-          suiteId: scenario.suite,
-          suiteVersion: authority.manifestDefaults.suiteVersion,
-          suiteManifestDigest: "digest",
-          scenarioId: scenario.id,
-          scenarioVersion: authority.manifestDefaults.version,
-          scenarioManifestDigest: "digest",
-          subjectId: "pending",
-          reason: "missing",
-          priority: 0,
-          eligibleAt: now,
-          trigger: "scheduled",
-          createdAt: now,
-          updatedAt: now,
-          providerName: "fixture-provider",
-          modelId: "fixture-model",
-        }],
-        budgetWindowStartedAt: now,
-        runsThisHour: 0,
-        liveRequestsThisHour: 0,
-        cooldownUntilByKey: {},
+        routes: [{ providerName: "fixture-provider", modelId: "fixture-model" }],
       }, home);
+      const plan = planManualLabRun({
+        evidenceLayer: "live_route_compatibility",
+        scenarioId: "responses-core.live.basic-turn",
+        providerName: "fixture-provider",
+        modelId: "fixture-model",
+        config,
+        configDir: home,
+      });
+      const state = enqueuePlannedRuns(loadLabAutomationState(home), [plan], "scheduled", Date.now());
+      saveLabAutomationState(state, home);
       await runLabAutomationTick(home);
       expect(invokes).toBe(0);
-      expect(loadLabAutomationState(home).runs[0]?.state).toBe("queued");
+      expect(loadLabAutomationState(home).runs.find((row) => row.runKey === plan.runKey)?.state).toBe("queued");
     });
   });
 
