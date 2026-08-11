@@ -14,7 +14,6 @@ import type { ReadyArgs } from "./ready";
 import type { LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
-import { dispatchInternalCliCommand, type InternalCliCommand } from "./internal-dispatch";
 import { setIntegrationEnabled, shouldSyncCodexOnStart } from "../codex/desired-state";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
@@ -49,18 +48,6 @@ export interface CliDispatchDeps {
 }
 
 type CommandRunner = (deps: CliDispatchDeps) => Promise<number>;
-
-async function runInternalTrayCommand(deps: CliDispatchDeps): Promise<number> {
-  await dispatchInternalCliCommand(deps.command as InternalCliCommand, {
-    trayStart: async () => { await deps.handleTrayProxyStart(); },
-    trayRestart: deps.handleTrayProxyRestart,
-    startupHealth: async () => {
-      const { collectStartupHealth } = await import("../codex/autostart-health");
-      console.log(JSON.stringify(collectStartupHealth(deps.loadConfig())));
-    },
-  });
-  return 0;
-}
 
 const commandRunners: Record<string, CommandRunner> = {
   init: async () => {
@@ -329,12 +316,19 @@ const commandRunners: Record<string, CommandRunner> = {
     await refreshVersionCache(channel);
     return 0;
   },
-  "__tray-start": runInternalTrayCommand,
+  "__tray-start": async deps => {
+    await deps.handleTrayProxyStart();
+    return 0;
+  },
   "__tray-restart": async deps => {
     await deps.handleTrayProxyRestart();
     return Number(process.exitCode ?? 0);
   },
-  "__startup-health": runInternalTrayCommand,
+  "__startup-health": async deps => {
+    const { collectStartupHealth } = await import("../codex/autostart-health");
+    console.log(JSON.stringify(collectStartupHealth(deps.loadConfig())));
+    return 0;
+  },
   "__tray-host": async () => {
     const { runWindowsTrayHost } = await import("../tray/windows");
     await runWindowsTrayHost();

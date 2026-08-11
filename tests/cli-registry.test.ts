@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { CLI_COMMANDS, findCommand } from "../src/cli/registry";
 import { DISPATCH_ALIASES, DISPATCH_COMMANDS } from "../src/cli/dispatch";
 
@@ -76,8 +78,51 @@ describe("CLI command registry parity", () => {
     }
   });
 
+  test("internal tray commands are dispatched as explicit runners", () => {
+    const internalRunners = [
+      "__tray-start",
+      "__tray-restart",
+      "__startup-health",
+      "__tray-host",
+      "__gui-update-worker",
+      "__refresh-version",
+    ];
+    for (const name of internalRunners) {
+      expect(DISPATCH_COMMANDS).toContain(name);
+      const entry = CLI_COMMANDS.find(command => command.name === name);
+      expect(entry?.hidden).toBe(true);
+    }
+  });
+
   test("entry names are unique", () => {
     const names = CLI_COMMANDS.map(entry => entry.name);
     expect(new Set(names).size).toBe(names.length);
+  });
+});
+
+describe("help banner command coverage", () => {
+  // The banner is curated (aliases shown inline, subcommands elided), so it is
+  // not required to match the registry exactly. It must never drop a visible
+  // command entirely: every visible canonical command has to appear.
+  test("every visible canonical command appears in the printUsage banner", () => {
+    const helpSrc = readFileSync(fileURLToPath(new URL("../src/cli/help.ts", import.meta.url)), "utf8");
+
+    // Commands whose `name` is only ever used as another entry's alias
+    // (setup/eject/remove/model) are shown inline as "(alias: ...)" rather
+    // than as their own banner line, so they are not required here.
+    const aliasNames = new Set<string>();
+    for (const entry of CLI_COMMANDS) {
+      for (const alias of entry.aliases ?? []) aliasNames.add(alias);
+    }
+
+    const missing = CLI_COMMANDS.filter(entry => {
+      if (entry.hidden) return false;
+      if (aliasNames.has(entry.name)) return false;
+      // A command counts as covered when the banner carries its full usage
+      // line or at least its canonical name.
+      return !helpSrc.includes(entry.usage) && !helpSrc.includes(entry.name);
+    }).map(entry => entry.name);
+
+    expect(missing).toEqual([]);
   });
 });
