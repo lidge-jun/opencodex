@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { OcxConfig } from "../src/types";
-import { LAB_SQLITE_DDL } from "../src/lab/projection/schema";
+import { LAB_PROJECTION_SPEC_VERSION } from "../src/lab/constants";
+import { ensureLabDirs, labSqlitePath } from "../src/lab/paths";
+import { LAB_SQLITE_DDL, LAB_SQLITE_SCHEMA_VERSION } from "../src/lab/projection/schema";
+import { queryLatestLabObservation } from "../src/lab/query/latest-observation";
 import { defaultLabAutomationPolicyV1 } from "../src/lab/automation/policy";
 import {
   defaultLabAutomationStateV1,
@@ -114,6 +118,46 @@ function scheduledRecord(plan: ReturnType<typeof planManualLabRun>, runId: strin
   };
 }
 
+function buildFreshnessProjection(home: string): void {
+  ensureLabDirs(home);
+  const db = new Database(labSqlitePath(home), { create: true });
+  try {
+    db.exec(LAB_SQLITE_DDL);
+    const insertMeta = db.query("INSERT INTO schema_meta(key, value) VALUES (?, ?)");
+    insertMeta.run("schema_version", String(LAB_SQLITE_SCHEMA_VERSION));
+    insertMeta.run("projection_spec_version", LAB_PROJECTION_SPEC_VERSION);
+    insertMeta.run("built_at_ms", "1");
+
+    const insertEvent = db.query(
+      "INSERT INTO events(event_id, event_kind, recorded_at, producer, producer_version, payload_json, excluded) VALUES (?, 'observation', ?, 'test', '1', '{}', 0)",
+    );
+    const insertObservation = db.query(
+      `INSERT INTO observations(
+        event_id, subject_id, evidence_layer, suite_id, suite_version, suite_manifest_digest,
+        scenario_id, scenario_version, scenario_manifest_digest, outcome, completed_at, execution_mode
+      ) VALUES (?, 'subject', 'protocol_conformance', 'suite', '1', ?, ?, '1', ?, 'pass', ?, 'fixture')`,
+    );
+
+    db.transaction(() => {
+      insertEvent.run("target", 10);
+      insertObservation.run("target", "suite-digest", "target-scenario", "target-digest", 10);
+      for (let index = 0; index < 2_000; index += 1) {
+        const eventId = `irrelevant-${index}`;
+        insertEvent.run(eventId, 1_000 + index);
+        insertObservation.run(
+          eventId,
+          `irrelevant-suite-${index}`,
+          `irrelevant-scenario-${index}`,
+          `irrelevant-digest-${index}`,
+          1_000 + index,
+        );
+      }
+    })();
+  } finally {
+    db.close();
+  }
+}
+
 afterEach(() => {
   requestLabAutomationShutdown();
   stopLabAutomationScheduler();
@@ -124,11 +168,23 @@ afterEach(() => {
 });
 
 describe("CL-08 final CodeRabbit regressions", () => {
-  test("freshness lookup is exact and index-backed instead of subject-wide pagination", () => {
+  test("freshness lookup stays exact and bounded across large irrelevant history", () => {
+    const home = tempHome();
+    buildFreshnessProjection(home);
     const plannerSource = readFileSync(join(import.meta.dir, "../src/lab/automation/planner.ts"), "utf8");
     expect(plannerSource).not.toContain("FRESHNESS_QUERY_PAGE_SIZE");
     expect(plannerSource).toContain("queryLatestLabObservation");
     expect(LAB_SQLITE_DDL).toContain("idx_observations_exact_identity");
+    expect(queryLatestLabObservation({
+      layer: "protocol_conformance",
+      subjectId: "subject",
+      suiteId: "suite",
+      suiteVersion: "1",
+      suiteManifestDigest: "suite-digest",
+      scenarioId: "target-scenario",
+      scenarioVersion: "1",
+      scenarioManifestDigest: "target-digest",
+    }, home)).toBe(10);
   });
 
   test("queued cancellation remains a planner-honored backoff when cooldown storage is saturated", () => {
