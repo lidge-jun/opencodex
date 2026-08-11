@@ -56,14 +56,33 @@ function LanguageSurface() {
 }
 
 const domGlobals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
-let previousDom: Record<(typeof domGlobals)[number], unknown>;
+type DomGlobal = (typeof domGlobals)[number];
+let previousDom: Record<DomGlobal, PropertyDescriptor | undefined>;
+let previousNavigator: object | undefined;
+let previousLanguageDescriptor: PropertyDescriptor | undefined;
+let testWindowLanguageDescriptor: PropertyDescriptor | undefined;
 let testWindow: Window;
 let mountedRoot: Root | null;
-let previousLanguage: unknown;
+let domIsSetup = false;
+
+function restoreOwnProperty(target: object, key: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) Object.defineProperty(target, key, descriptor);
+  else Reflect.deleteProperty(target, key);
+}
 
 function setupDom(): void {
-  previousDom = Object.fromEntries(domGlobals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previousDom;
+  previousDom = Object.fromEntries(
+    domGlobals.map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]),
+  ) as typeof previousDom;
+
+  const navigatorValue = Reflect.get(globalThis, "navigator");
+  previousNavigator = typeof navigatorValue === "object" && navigatorValue !== null ? navigatorValue : undefined;
+  previousLanguageDescriptor = previousNavigator
+    ? Object.getOwnPropertyDescriptor(previousNavigator, "language")
+    : undefined;
+
   testWindow = new Window({ url: "http://localhost/" });
+  testWindowLanguageDescriptor = Object.getOwnPropertyDescriptor(testWindow.navigator, "language");
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow },
@@ -72,28 +91,32 @@ function setupDom(): void {
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mountedRoot = null;
+  domIsSetup = true;
 }
 
 async function teardownDom(): Promise<void> {
+  if (!domIsSetup) return;
+
   if (mountedRoot) {
     await act(async () => mountedRoot?.unmount());
     mountedRoot = null;
   }
-  for (const k of domGlobals) {
-    Object.defineProperty(globalThis, k, { configurable: true, value: previousDom[k] });
-  }
+
+  restoreOwnProperty(testWindow.navigator, "language", testWindowLanguageDescriptor);
+  for (const k of domGlobals) restoreOwnProperty(globalThis, k, previousDom[k]);
+  if (previousNavigator) restoreOwnProperty(previousNavigator, "language", previousLanguageDescriptor);
+
+  domIsSetup = false;
   await testWindow.happyDOM?.close?.();
 }
 
 beforeEach(() => {
-  previousLanguage = (globalThis.navigator as { language?: unknown } | undefined)?.language;
   setupDom();
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
 });
 
 afterEach(async () => {
   await teardownDom();
-  Object.defineProperty(globalThis.navigator, "language", { configurable: true, value: previousLanguage });
 });
 
 async function mountSurface(): Promise<void> {
@@ -163,5 +186,23 @@ describe("zh-TW language switch on the real GUI surface", () => {
     expect(navLabels()).toContain("仪表盘");
     expect(navLabels()).toContain("子代理");
     expect(localStorage.getItem("ocx-lang")).toBe("zh");
+  });
+
+  test("teardown restores the original global property descriptors", async () => {
+    const expectedDom = Object.fromEntries(domGlobals.map((k) => [k, previousDom[k]])) as typeof previousDom;
+    const originalNavigator = previousNavigator;
+    const expectedLanguageDescriptor = previousLanguageDescriptor;
+    const smokeNavigator = testWindow.navigator;
+    const expectedSmokeLanguageDescriptor = testWindowLanguageDescriptor;
+
+    await teardownDom();
+
+    for (const k of domGlobals) {
+      expect(Object.getOwnPropertyDescriptor(globalThis, k)).toEqual(expectedDom[k]);
+    }
+    if (originalNavigator) {
+      expect(Object.getOwnPropertyDescriptor(originalNavigator, "language")).toEqual(expectedLanguageDescriptor);
+    }
+    expect(Object.getOwnPropertyDescriptor(smokeNavigator, "language")).toEqual(expectedSmokeLanguageDescriptor);
   });
 });
