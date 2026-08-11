@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CLI_COMMANDS } from "../src/cli/registry";
-import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand } from "../src/cli/dispatch";
+import { DISPATCH_ALIASES, DISPATCH_COMMANDS, dispatchCommand, resolveDispatchCommand } from "../src/cli/dispatch";
 import type { CliDispatchDeps } from "../src/cli/dispatch";
 
 /** Minimal fake deps. dispatchCommand only touches deps for real command
@@ -34,12 +34,26 @@ describe("CLI dispatch aliases", () => {
     expect(DISPATCH_ALIASES.get("remove")).toBe("uninstall");
     expect(DISPATCH_ALIASES.get("model")).toBe("models");
   });
+
+  test("resolveDispatchCommand maps each alias to its canonical runner key", () => {
+    // The same resolver dispatchCommand uses for runner selection, exercised
+    // at the resolution level so a regression in the lookup is caught.
+    expect(resolveDispatchCommand("setup")).toBe("init");
+    expect(resolveDispatchCommand("eject")).toBe("restore");
+    expect(resolveDispatchCommand("remove")).toBe("uninstall");
+    expect(resolveDispatchCommand("model")).toBe("models");
+    // Canonical names resolve to themselves; unknown names resolve undefined.
+    expect(resolveDispatchCommand("init")).toBe("init");
+    expect(resolveDispatchCommand("definitely-not-a-command")).toBeUndefined();
+    expect(resolveDispatchCommand(undefined)).toBeUndefined();
+  });
 });
 
 describe("dispatchCommand exit codes", () => {
   test("returns 0 for help forms", async () => {
     expect(await dispatchCommand({ kind: "help", command: "help", args: ["help"] }, fakeDeps)).toBe(0);
     expect(await dispatchCommand({ kind: "help", command: "--help", args: ["--help"] }, fakeDeps)).toBe(0);
+    expect(await dispatchCommand({ kind: "help", command: "-h", args: ["-h"] }, fakeDeps)).toBe(0);
     expect(await dispatchCommand({ kind: "command", command: undefined, args: [] }, fakeDeps)).toBe(0);
   });
 

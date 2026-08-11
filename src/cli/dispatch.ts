@@ -508,13 +508,21 @@ for (const entry of CLI_COMMANDS) {
 export const DISPATCH_COMMANDS: ReadonlySet<string> = new Set(Object.keys(commandRunners));
 export const DISPATCH_ALIASES: ReadonlyMap<string, string> = aliasTargets;
 
+/** Resolve the runner key for a command, following registry aliases to the
+ * canonical runner. Returns undefined when the command is unknown. */
+export function resolveDispatchCommand(command: string | undefined): string | undefined {
+  if (command === undefined) return undefined;
+  if (command in commandRunners) return command;
+  return aliasTargets.get(command);
+}
+
 export async function dispatchCommand(head: CliHead, deps: CliDispatchDeps): Promise<number> {
   const command = head.command;
   if (command === undefined || command === "help" || command === "--help" || command === "-h") {
     printUsage();
     return 0;
   }
-  const runner = commandRunners[command] ?? commandRunners[aliasTargets.get(command) ?? ""];
+  const runner = commandRunners[resolveDispatchCommand(command) ?? ""];
   if (!runner) {
     console.error(`Unknown command: ${command}`);
     printUsage();
