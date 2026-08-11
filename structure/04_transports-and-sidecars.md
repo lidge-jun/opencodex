@@ -33,6 +33,29 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+### Mixed-wire provider defaults
+
+Registry `modelWireDefaults` select an evidence-backed upstream protocol for an exact model without
+changing the provider-wide adapter. Explicit, allowed `modelAdapters` configuration always wins,
+including an entry that opts the model back into the provider-wide wire. Defaults are applied only
+while the configured provider still matches the registry transport, so reusing a preset name for a
+different custom destination does not inherit its upstream assumptions.
+
+OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
+Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
+keeps the provider-wide `openai-chat` default for other non-pinned models. This endpoint correction
+does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains real upstream
+streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
+policy.
+
+[Decision Log]
+- 목적과 의도: Match OpenCode Go's model-specific Luna endpoint without changing sibling model behavior.
+- 기존 구현 및 제약 조건: The preset had one Chat default even though the upstream publishes a mixed Chat, Responses, and Anthropic matrix; operators must retain explicit override precedence.
+- 검토한 주요 대안: Move the whole preset to Responses; infer from the model name; declare one exact registry default; also force bounded JSON from an older conditional terminal report.
+- 선택한 방식: Use one exact Luna wire default and leave upstream streaming unchanged.
+- 다른 대안 대신 이 방식을 선택한 이유: The endpoint mismatch is reproducible from current code and upstream documentation, whereas a current-dev live canary has not established the separate terminal-delivery policy.
+- 장점, 단점 및 영향: Luna reaches its documented endpoint across inbound surfaces and explicit opt-out still works; any future stream workaround remains a separately reviewed compatibility decision.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in
