@@ -249,6 +249,7 @@ exit 64
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(126);
       expect(result.stderr).toContain("saved Codex launcher resolved back to the autostart shim");
+      expect(result.stderr).toContain("ocx codex-shim uninstall");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -296,6 +297,56 @@ exit 64
     }
   });
 
+  test("Unix install rejects child-process redispatch and restores the original", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-child-reentry-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-child-reentry-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const launcherPath = join(binDir, "dynamic-launcher");
+    const childPidPath = join(home, "child-reentry.pid");
+    const original = `#!/bin/sh\nexec "${launcherPath}" "$@"\n`;
+    try {
+      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(launcherPath, `#!/bin/sh
+if [ -n "$OCX_TEST_CHILD_REENTRY" ]; then
+  /bin/sleep 30
+  exec codex "$@"
+fi
+OCX_TEST_CHILD_REENTRY=1
+export OCX_TEST_CHILD_REENTRY
+codex "$@" &
+child=$!
+printf '%s\\n' "$child" > "${childPidPath}"
+exit 0
+`, "utf8");
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(launcherPath, 0o755);
+      chmodSync(codexPath, 0o755);
+
+      const installed = installCodexShim();
+
+      expect(installed.installed).toBe(false);
+      expect(installed.message).toContain("left background descendants running after --version");
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      const childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
+      const childState = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(childPid)], { encoding: "utf8" }).stdout.trim();
+      expect(childState === "" || childState.startsWith("Z")).toBe(true);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("Unix install rolls back when launcher validation times out", () => {
     if (process.platform === "win32") return;
 
@@ -304,7 +355,15 @@ exit 64
     const oldPath = process.env.PATH;
     const oldHome = process.env.OPENCODEX_HOME;
     const codexPath = join(binDir, "codex");
-    const original = "#!/bin/sh\nexec /bin/sleep 30\n";
+    const childPidPath = join(home, "probe-child.pid");
+    const groupIdPath = join(home, "probe-group.pid");
+    const original = `#!/bin/sh
+/bin/sleep 30 &
+child=$!
+printf '%s\\n' "$child" > "${childPidPath}"
+printf '%s\\n' "$$" > "${groupIdPath}"
+wait "$child"
+`;
     try {
       process.env.PATH = `${binDir}:${oldPath ?? ""}`;
       process.env.OPENCODEX_HOME = home;
@@ -319,6 +378,13 @@ exit 64
       expect(readFileSync(codexPath, "utf8")).toBe(original);
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      const childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
+      const groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
+      expect(Number.isInteger(childPid)).toBe(true);
+      expect(Number.isInteger(groupId)).toBe(true);
+      expect(() => process.kill(-groupId, 0)).toThrow();
+      const childState = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(childPid)], { encoding: "utf8" }).stdout.trim();
+      expect(childState === "" || childState.startsWith("Z")).toBe(true);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
@@ -328,6 +394,41 @@ exit 64
       rmSync(home, { recursive: true, force: true });
     }
   }, 10_000);
+
+  test("Unix install preserves an existing backup without probing or mutation", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-backup-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-backup-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const backupPath = `${codexPath}.opencodex-real`;
+    const original = "#!/bin/sh\nprintf '%s\\n' original\n";
+    const backup = "#!/bin/sh\nprintf '%s\\n' preserved-backup\n";
+    try {
+      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      writeFileSync(backupPath, backup, "utf8");
+      chmodSync(codexPath, 0o755);
+      chmodSync(backupPath, 0o755);
+
+      const installed = installCodexShim();
+
+      expect(installed).toEqual({ installed: false, message: `Refusing to overwrite existing backup: ${backupPath}` });
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(readFileSync(backupPath, "utf8")).toBe(backup);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 
   test("Unix shim permits a real Codex process to start a new child invocation", () => {
     if (process.platform === "win32") return;

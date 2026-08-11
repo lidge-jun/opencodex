@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, extname, join, posix } from "node:path";
 import {
   chmodSync,
@@ -35,8 +36,41 @@ export const CODEX_SHIM_REPLACEMENT_STABLE_MS = 100;
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
 const CODEX_SHIM_RESTORE_LOCK_STALE_MS = 30_000;
 const CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS = 5_000;
+const CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS = 1_000;
 const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
-const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx restore and reinstall Codex before enabling codexAutoStart.";
+const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.";
+const CODEX_SHIM_INSTALL_PROBE_SCRIPT = `
+set -m
+marker=$1
+group_file=$2
+wrapper=$3
+timeout_seconds=$4
+
+"$wrapper" --version &
+launcher_pid=$!
+printf '%s\n' "$launcher_pid" > "$group_file"
+(
+  /bin/sleep "$timeout_seconds"
+  printf '%s\n' timeout > "$marker"
+  kill -KILL -"$launcher_pid" 2>/dev/null || true
+) &
+watchdog_pid=$!
+
+wait "$launcher_pid"
+launcher_status=$?
+if [ -f "$marker" ]; then
+  wait "$watchdog_pid" 2>/dev/null || true
+  exit 124
+fi
+if kill -0 -"$launcher_pid" 2>/dev/null; then
+  printf '%s\n' descendants > "$marker"
+  kill -KILL -"$launcher_pid" 2>/dev/null || true
+fi
+kill -KILL -"$watchdog_pid" 2>/dev/null || true
+wait "$watchdog_pid" 2>/dev/null || true
+if [ -f "$marker" ]; then exit 125; fi
+exit "$launcher_status"
+`;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let lastShimDiscoveryError: string | null = null;
 /** Last human-readable reason discovery returned null (exposed for doctor/tests). */
@@ -439,21 +473,68 @@ exec ${shQuote(realCodexPath)} "$@"
 `;
 }
 
-function probeUnixShimInstall(wrapperPath: string): "recursive" | "timeout" | null {
+function probeUnixShimInstall(wrapperPath: string): "descendants" | "recursive" | "timeout" | null {
   if (process.platform === "win32") return null;
   const env: NodeJS.ProcessEnv = { ...process.env, OCX_SHIM_BYPASS: "1" };
   delete env.OCX_SHIM_ACTIVE_PID;
-  const result = spawnSync("/bin/sh", [wrapperPath, "--version"], {
-    encoding: "utf8",
-    env,
-    timeout: CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS,
-    killSignal: "SIGKILL",
-  });
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return "timeout";
-  if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
-    return "recursive";
+  const probeId = `${process.pid}-${randomUUID()}`;
+  const markerPath = join(tmpdir(), `opencodex-shim-probe-${probeId}.result`);
+  const groupPath = join(tmpdir(), `opencodex-shim-probe-${probeId}.group`);
+  try {
+    const result = spawnSync("/bin/sh", [
+      "-c",
+      CODEX_SHIM_INSTALL_PROBE_SCRIPT,
+      "opencodex-shim-probe",
+      markerPath,
+      groupPath,
+      wrapperPath,
+      String(CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS / 1_000),
+    ], {
+      encoding: "utf8",
+      env,
+      timeout: CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+    const marker = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
+    const groupId = existsSync(groupPath) ? Number.parseInt(readFileSync(groupPath, "utf8").trim(), 10) : 0;
+    if ((timedOut || marker) && Number.isInteger(groupId) && groupId > 0) terminateUnixProcessGroup(groupId);
+    if (timedOut || marker === "timeout") return "timeout";
+    if (marker === "descendants") return "descendants";
+    if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
+      return "recursive";
+    }
+    return null;
+  } finally {
+    for (const path of [markerPath, groupPath]) {
+      try {
+        if (existsSync(path)) unlinkSync(path);
+      } catch { /* best-effort cleanup of non-sensitive probe metadata */ }
+    }
   }
-  return null;
+}
+
+function unixProcessGroupAlive(groupId: number): boolean {
+  try {
+    process.kill(-groupId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+function terminateUnixProcessGroup(groupId: number): void {
+  try {
+    process.kill(-groupId, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  const deadline = Date.now() + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline && unixProcessGroupAlive(groupId)) Atomics.wait(waiter, 0, 0, 10);
+  if (unixProcessGroupAlive(groupId)) {
+    throw new Error(`Codex shim install probe process group ${groupId} did not terminate`);
+  }
 }
 
 function rollbackFreshShimInstall(targets: readonly ShimFileState[]): void {
@@ -1117,7 +1198,9 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       rollbackFreshShimInstall(targets);
       const reason = unsafe === "recursive"
         ? "the saved launcher resolved back to the generated shim"
-        : `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`;
+        : unsafe === "timeout"
+          ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
+          : "the saved launcher left background descendants running after --version";
       return {
         installed: false,
         message: `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
