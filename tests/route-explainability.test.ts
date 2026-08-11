@@ -200,6 +200,38 @@ describe("route explainability (RI-09)", () => {
     expect(Object.prototype.hasOwnProperty.call(evidence, "encryptedCodexTasks")).toBe(false);
   });
 
+  test("providerContextCaps.openai ceilings native openai capability evidence (#1430)", () => {
+    const evidence = candidateCapabilityEvidence({
+      ...config(),
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+      providerContextCaps: { openai: 272_000 },
+    }, "openai", "gpt-5.6-sol");
+    expect(evidence.contextWindow).toBe(272_000);
+    expect(evidence.encryptedCodexTasks).toBe(true);
+  });
+
+  test("native openai capability evidence keeps the 372k default without a cap", () => {
+    const evidence = candidateCapabilityEvidence({
+      ...config(),
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "pool",
+        },
+      },
+    }, "openai", "gpt-5.6-sol");
+    expect(evidence.contextWindow).toBe(372_000);
+  });
+
   test("CLI logs explain encodes request ids and supports --json", async () => {
     const { handleObserveCommand } = await import("../src/cli/observe");
     const calls: Array<{ path: string; init?: RequestInit }> = [];

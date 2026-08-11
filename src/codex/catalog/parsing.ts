@@ -259,18 +259,34 @@ export function isNativeOpenAiEntry(entry: RawEntry): boolean {
   return typeof entry.slug === "string" && !entry.slug.includes("/");
 }
 
-export function applyNativeOpenAiContextOverride(entry: RawEntry): void {
+export function applyNativeOpenAiContextOverride(entry: RawEntry, contextCap?: number): void {
   const nativeSlug = trustedAccountBoundNativeCatalogSlug(entry)
     ?? (isNativeOpenAiEntry(entry) ? entry.slug as string : undefined);
   if (!nativeSlug) return;
   const override = NATIVE_OPENAI_CONTEXT_OVERRIDES[nativeSlug];
-  if (!override) return;
-  if (typeof override.contextWindow === "number") {
-    entry.context_window = override.contextWindow;
-    entry.auto_compact_token_limit = Math.floor(override.contextWindow * 0.9);
+  if (override) {
+    if (typeof override.contextWindow === "number") {
+      const contextWindow = applyProviderContextCap(override.contextWindow, contextCap) ?? override.contextWindow;
+      entry.context_window = contextWindow;
+      entry.auto_compact_token_limit = Math.floor(contextWindow * 0.9);
+    }
+    if (typeof override.maxContextWindow === "number") {
+      entry.max_context_window = applyProviderContextCap(override.maxContextWindow, contextCap) ?? override.maxContextWindow;
+    }
   }
-  if (typeof override.maxContextWindow === "number") {
-    entry.max_context_window = override.maxContextWindow;
+  // providerContextCaps.openai is a ceiling for native OpenAI rows regardless of where the
+  // advertised window came from (#1430): preserved rows without a hardcoded override (e.g.
+  // gpt-5.4-mini) must stay under the cap too, and auto-compaction follows the capped window.
+  const currentContext = typeof entry.context_window === "number" ? entry.context_window : undefined;
+  const cappedContext = applyProviderContextCap(currentContext, contextCap);
+  if (cappedContext !== currentContext && typeof cappedContext === "number") {
+    entry.context_window = cappedContext;
+    entry.auto_compact_token_limit = Math.floor(cappedContext * 0.9);
+  }
+  const currentMax = typeof entry.max_context_window === "number" ? entry.max_context_window : undefined;
+  const cappedMax = applyProviderContextCap(currentMax, contextCap);
+  if (cappedMax !== currentMax) {
+    entry.max_context_window = cappedMax;
   }
 }
 

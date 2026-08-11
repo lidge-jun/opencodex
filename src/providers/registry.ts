@@ -300,12 +300,6 @@ const MINIMAX_M3_REASONING_EFFORT_MAP: Record<string, string> = {
 const OPENAI_GPT56_MODELS = ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
 const OPENAI_GPT56_PRO_MODELS = ["gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro"];
 const OPENAI_API_GPT56_CONTEXT_WINDOW = 1_050_000;
-const OPENAI_CODEX_GPT56_CONTEXT_WINDOW = 372_000;
-const OPENAI_GPT56_CONTEXT_WINDOWS = {
-  "gpt-5.6-sol": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
-  "gpt-5.6-terra": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
-  "gpt-5.6-luna": OPENAI_CODEX_GPT56_CONTEXT_WINDOW,
-};
 const OPENAI_API_GPT56_CONTEXT_WINDOWS: Record<string, number> = {
   ...Object.fromEntries([...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS].map(id => [id, OPENAI_API_GPT56_CONTEXT_WINDOW])),
   "gpt-5.5": OPENAI_API_GPT56_CONTEXT_WINDOW,

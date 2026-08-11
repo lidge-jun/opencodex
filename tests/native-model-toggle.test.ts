@@ -66,6 +66,20 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
   });
 
+  test("nativeModelRows applies providerContextCaps.openai as a ceiling (#1430)", () => {
+    const rows = nativeModelRows({
+      disabledModels: [],
+      providerContextCaps: { openai: 272_000 },
+    });
+    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
+    expect(rows.find(r => r.slug === "gpt-5.6-luna")?.contextWindow).toBe(272_000);
+    // gpt-5.5 (272k native) is unchanged by the same cap.
+    expect(rows.find(r => r.slug === "gpt-5.5")?.contextWindow).toBe(272_000);
+    // A cap for another provider leaves natives untouched.
+    const other = nativeModelRows({ providerContextCaps: { "openai-apikey": 128_000 } });
+    expect(other.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+  });
+
   test("native aliases suppress their native dashboard row and activate Desktop allowlist pruning", () => {
     const config = makeConfig({
       disabledModels: ["gpt-5.6-sol", "gpt-5.5"],

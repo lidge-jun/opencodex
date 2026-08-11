@@ -1639,6 +1639,7 @@ async function gatherRoutedModelsUncached(
     // configs that will never need it.
   } else {
     const disabled = disabledNativeSlugs(config);
+    const openaiContextCap = providerContextCap(config, OPENAI_CODEX_PROVIDER_ID);
     const requiredNativeComboTargets = new Set(listComboIds(config).flatMap(id => {
       const combo = getCombo(config, id);
       return combo?.targets.flatMap(target => (
@@ -1649,7 +1650,7 @@ async function gatherRoutedModelsUncached(
       // A bare native disable key hides the native row, not a combo that targets it.
       // Keep synthetic native metadata available to those combos.
       if (disabled.has(slug) && !requiredNativeComboTargets.has(slug)) continue;
-      const contextWindow = nativeOpenAiContextWindow(slug);
+      const contextWindow = nativeOpenAiContextWindow(slug, openaiContextCap);
       if (contextWindow === undefined) continue;
       const synthetic: CatalogModel = {
         provider: "openai",

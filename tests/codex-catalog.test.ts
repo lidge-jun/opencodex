@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, nativeOpenAiContextWindow, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel } from "../src/codex/catalog";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -2400,6 +2400,123 @@ describe("Codex catalog routed normalization", () => {
     const sol = entries.find(e => e.slug === "gpt-5.6-sol");
     expect(sol?.prefer_websockets).toBe(true);
     expect(sol?.supports_websockets).toBe(true);
+  });
+
+  test("providerContextCaps.openai ceilings native GPT-5.6 catalog rows (#1430)", () => {
+    const cap = 272_000;
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+      [],
+      undefined,
+      false,
+      "default",
+      new Set(),
+      [],
+      new Set(),
+      new Set(),
+      cap,
+    );
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+      const entry = entries.find(e => e.slug === slug);
+      expect(entry?.context_window).toBe(cap);
+      expect(entry?.max_context_window).toBe(cap);
+      expect(entry?.auto_compact_token_limit).toBe(244_800);
+    }
+  });
+
+  test("mergeCatalogEntriesForSync re-applies the openai cap to preserved and upgraded native rows (#1430)", () => {
+    const cap = 272_000;
+    const template = nativeTemplate();
+    // A preserved genuine row and a fallback-quality row (display_name stamped with
+    // the bare slug) both pass through the final native-override pass on merge.
+    const genuineSol = {
+      ...template,
+      slug: "gpt-5.6-sol",
+      display_name: "GPT-5.6-Sol",
+      context_window: 372_000,
+      max_context_window: 372_000,
+      auto_compact_token_limit: 334_800,
+      supported_reasoning_levels: [
+        { effort: "low", description: "l" }, { effort: "high", description: "h" },
+        { effort: "max", description: "m" }, { effort: "ultra", description: "u" },
+      ],
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [genuineSol],
+      [],
+      new Map(),
+      [],
+      false,
+      new Set(),
+      template,
+      new Set(),
+      new Set(),
+      "default",
+      new Set(),
+      false,
+      true,
+      [],
+      new Set(),
+      new Set(),
+      cap,
+    );
+    const sol = merged.find(e => e.slug === "gpt-5.6-sol");
+    expect(sol?.context_window).toBe(cap);
+    expect(sol?.max_context_window).toBe(cap);
+    expect(sol?.auto_compact_token_limit).toBe(244_800);
+    // The backfilled luna row (upstream snapshot) is capped the same way.
+    const luna = merged.find(e => e.slug === "gpt-5.6-luna");
+    expect(luna?.context_window).toBe(cap);
+    expect(luna?.max_context_window).toBe(cap);
+    expect(luna?.auto_compact_token_limit).toBe(244_800);
+  });
+
+  test("preserved gpt-5.4-mini rows get the openai cap without a hardcoded override (#1430)", () => {
+    const cap = 200_000;
+    const template = nativeTemplate();
+    // gpt-5.4-mini has no NATIVE_OPENAI_CONTEXT_OVERRIDES entry; its windows come
+    // from the preserved disk row and must still be capped on merge.
+    const genuine54Mini = {
+      ...template,
+      slug: "gpt-5.4-mini",
+      display_name: "GPT-5.4-Mini",
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
+    };
+    const merged = mergeCatalogEntriesForSync(
+      [genuine54Mini],
+      [],
+      new Map(),
+      [],
+      false,
+      new Set(),
+      template,
+      new Set(),
+      new Set(),
+      "default",
+      new Set(),
+      false,
+      true,
+      [],
+      new Set(),
+      new Set(),
+      cap,
+    );
+    const mini = merged.find(e => e.slug === "gpt-5.4-mini");
+    expect(mini?.context_window).toBe(cap);
+    expect(mini?.max_context_window).toBe(cap);
+    expect(mini?.auto_compact_token_limit).toBe(180_000);
+  });
+
+  test("nativeOpenAiContextWindow applies the openai cap as a ceiling only when provided", () => {
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(372_000);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 272_000)).toBe(272_000);
+    // A cap above the native value is a ceiling, not a floor.
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(372_000);
+    // Non-5.6 natives are capped the same way.
+    expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBe(272_000);
   });
 
   test("catalog sync upgrades fallback-quality gpt-5.6 entries but preserves genuine ones", () => {

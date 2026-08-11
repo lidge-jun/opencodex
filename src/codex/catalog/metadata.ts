@@ -107,11 +107,12 @@ const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
     .map(m => [m.slug as string, m]),
 );
 
-export function nativeOpenAiContextWindow(slug: string): number | undefined {
-  return NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow
+export function nativeOpenAiContextWindow(slug: string, contextCap?: number): number | undefined {
+  const raw = NATIVE_OPENAI_CONTEXT_OVERRIDES[slug]?.contextWindow
     ?? (typeof PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)?.context_window === "number"
       ? PINNED_NATIVE_CAPABILITY_ENTRIES.get(slug)!.context_window as number
       : undefined);
+  return applyProviderContextCap(raw, contextCap) ?? raw;
 }
 
 export function nativeInputModalities(slug: string): string[] {
@@ -199,11 +200,12 @@ export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" |
   return visibleNativeSlugs(config);
 }
 
-export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
+export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
   const disabled = disabledNativeSlugs(config);
   const shadowed = configuredNativeAliasSlugs(config);
+  const openaiContextCap = providerContextCap(config, OPENAI_CODEX_PROVIDER_ID);
   return NATIVE_OPENAI_MODELS.filter(slug => !shadowed.has(slug)).map(slug => {
-    const contextWindow = nativeOpenAiContextWindow(slug);
+    const contextWindow = nativeOpenAiContextWindow(slug, openaiContextCap);
     return { slug, disabled: disabled.has(slug), ...(contextWindow !== undefined ? { contextWindow } : {}) };
   });
 }
