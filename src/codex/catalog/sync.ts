@@ -1186,6 +1186,23 @@ function revalidateRetainedCatalogSync(
   };
 }
 
+/**
+ * Exact bytes currently on disk at `path`, or null when unreadable/absent.
+ *
+ * Bytes, not a decoded string: `readFileSync(path, "utf8")` replaces every
+ * invalid sequence with `U+FFFD`, so a malformed byte on disk would compare
+ * equal to a legitimately encoded replacement character in the prepared
+ * content. The equal-content skip below would then preserve the corruption and
+ * report `catalogWritten: false` for a file that is not what we prepared.
+ */
+function currentCatalogFileBytes(path: string): Buffer | null {
+  try {
+    return readFileSync(path);
+  } catch {
+    return null;
+  }
+}
+
 function pristineCatalogBytes(read: RetainedCatalogSyncRead): string | null {
   if (read.onDiskCatalog && !catalogHasRoutedEntries(read.onDiskCatalog)) {
     try {
@@ -1355,12 +1372,30 @@ function writeRetainedCatalogSync({
   });
   clampCatalogModelsToCodexSupport(catalog.models);
 
+  const added = goEntries.length + accountBoundEntries.length;
+  const content = `${JSON.stringify(catalog, null, 2)}\n`;
+  // A byte-identical rewrite is not a catalog change, but every mtime-keyed reader
+  // has to treat it as one. The app-server staleness classifier (#857) is the one
+  // that matters: it compares this file's mtime against each running Codex's start
+  // time, so an ordinary `ocx start` — or any dashboard action that re-syncs an
+  // unchanged model set — marked every already-running Codex as holding an outdated
+  // in-memory catalog. Since #1407 that verdict silences opencodex's own model
+  // guidance entirely (no preferred model, no roster) for the rest of that Codex's
+  // lifetime, so a configured injectionModel stops reaching the session even though
+  // nothing about the catalog changed. Skipping the no-op write keeps both the mtime
+  // and `catalogWritten` honest; `added` still reports the routed rows the catalog
+  // carries, because they are on disk either way.
+  const onDiskBytes = currentCatalogFileBytes(catalogPath);
+  if (onDiskBytes !== null && onDiskBytes.equals(Buffer.from(content, "utf8"))) {
+    return { added, path: catalogPath, catalogWritten: false, comboOmissions };
+  }
+
   replaceActiveCodexCatalog(permit, owningCodexHome, {
     path: catalogPath,
-    content: `${JSON.stringify(catalog, null, 2)}\n`,
+    content,
   });
   return {
-    added: goEntries.length + accountBoundEntries.length,
+    added,
     path: catalogPath,
     catalogWritten: true,
     comboOmissions,

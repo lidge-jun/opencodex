@@ -968,6 +968,135 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("cursor/stale-model");
   });
 
+  test("an identical resync leaves the catalog file untouched, a real change still writes", () => {
+    // The app-server staleness classifier (#857) compares this file's mtime against
+    // each running Codex's start time, so a no-op rewrite would report every
+    // already-running Codex as holding an outdated catalog — and since #1407 that
+    // verdict withholds opencodex's model guidance for the rest of that Codex's
+    // lifetime, even though the advertised model set never changed.
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [
+        nativeEntry("gpt-5.5", 0),
+        nativeEntry("gpt-5.2", 104), // legacy -> dropped by the first sync
+      ],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { statSync, writeFileSync, readFileSync } = require("node:fs");
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const path = ${JSON.stringify(catalogPath)};
+      const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+      (async () => {
+        const first = await syncCatalogModels({ providers: {} });
+        const afterFirst = statSync(path).mtimeMs;
+        await sleep(1100);
+        const second = await syncCatalogModels({ providers: {} });
+        const afterSecond = statSync(path).mtimeMs;
+        // Not vacuous: a catalog that really differs must still be rewritten.
+        const catalog = JSON.parse(readFileSync(path, "utf8"));
+        catalog.models = catalog.models.filter(model => model.slug !== "gpt-5.5");
+        writeFileSync(path, JSON.stringify(catalog, null, 2) + "\\n");
+        const changedAt = statSync(path).mtimeMs;
+        await sleep(1100);
+        const third = await syncCatalogModels({ providers: {} });
+        console.log(JSON.stringify({
+          firstWritten: first.catalogWritten,
+          secondWritten: second.catalogWritten,
+          secondAdded: second.added,
+          identicalResyncKeptMtime: afterFirst === afterSecond,
+          thirdWritten: third.catalogWritten,
+          realChangeBumpedMtime: statSync(path).mtimeMs > changedAt,
+        }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+
+    const out = JSON.parse(r.stdout) as {
+      firstWritten: boolean;
+      secondWritten: boolean;
+      secondAdded: number;
+      identicalResyncKeptMtime: boolean;
+      thirdWritten: boolean;
+      realChangeBumpedMtime: boolean;
+    };
+    expect(out.firstWritten).toBe(true);
+    expect(out.secondWritten).toBe(false);
+    expect(out.identicalResyncKeptMtime).toBe(true);
+    expect(out.thirdWritten).toBe(true);
+    expect(out.realChangeBumpedMtime).toBe(true);
+  });
+
+  test("a malformed on-disk byte that decodes to the same string is still repaired", () => {
+    // The equal-content skip must compare bytes. `readFileSync(path, "utf8")`
+    // replaces an invalid sequence with U+FFFD, so a raw 0x80 on disk decodes to
+    // exactly what the prepared content re-encodes as EF BF BD: a decoded-string
+    // comparison would call that "identical", keep the corruption, and report
+    // `catalogWritten: false` for a file that is not what we prepared.
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0), nativeEntry("user-native", 10)],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { readFileSync, writeFileSync } = require("node:fs");
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      const path = ${JSON.stringify(catalogPath)};
+      (async () => {
+        // Settle the catalog first, so the only later difference is the encoding.
+        await syncCatalogModels({ providers: {} });
+        const settled = readFileSync(path);
+        // Corrupt one byte inside a preserved JSON string value.
+        const at = settled.lastIndexOf(Buffer.from("user-native", "utf8"));
+        const corrupted = Buffer.from(settled);
+        corrupted[at] = 0x80;
+        writeFileSync(path, corrupted);
+        const result = await syncCatalogModels({ providers: {} });
+        const after = readFileSync(path);
+        const decodes = bytes => {
+          try {
+            new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        console.log(JSON.stringify({
+          corruptedFound: at > 0,
+          corruptedFileWasInvalidUtf8: !decodes(corrupted),
+          written: result.catalogWritten,
+          // The repaired bytes differ from the corrupted file while decoding to the
+          // same string: exactly the pair a decoded-string comparison equates, and
+          // therefore the case that would have skipped the repair.
+          bytesDiffer: !corrupted.equals(after),
+          decodedStringsEqual: corrupted.toString("utf8") === after.toString("utf8"),
+          repairedFileIsValidUtf8: decodes(after),
+          replacementEncoded: after.includes(Buffer.from([0xef, 0xbf, 0xbd])),
+        }));
+      })();
+    `);
+    expect(r.status).toBe(0);
+
+    const out = JSON.parse(r.stdout) as {
+      corruptedFound: boolean;
+      corruptedFileWasInvalidUtf8: boolean;
+      written: boolean;
+      bytesDiffer: boolean;
+      decodedStringsEqual: boolean;
+      repairedFileIsValidUtf8: boolean;
+      replacementEncoded: boolean;
+    };
+    expect(out.corruptedFound).toBe(true);
+    expect(out.corruptedFileWasInvalidUtf8).toBe(true);
+    expect(out.written).toBe(true);
+    expect(out.bytesDiffer).toBe(true);
+    expect(out.decodedStringsEqual).toBe(true);
+    expect(out.repairedFileIsValidUtf8).toBe(true);
+    expect(out.replacementEncoded).toBe(true);
+  });
+
   test("readCodexCatalogPath honors CODEX_HOME at call time", () => {
     const alternateHome = join(codexHome, "alternate-codex-home");
     mkdirSync(alternateHome, { recursive: true });

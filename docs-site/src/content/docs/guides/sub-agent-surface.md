@@ -231,6 +231,10 @@ timestamp, an unreadable process start time, or a failed process enumeration —
 separately by `ocx doctor`. `stale` clears only after every detected Codex app-server starts after
 the final catalog write; it does not necessarily clear `unknown`.
 
+Only a real change counts. A sync whose result is byte-identical to the catalog already on disk
+leaves the file untouched, so restarting the proxy or re-syncing an unchanged model set does not
+make a running Codex look stale.
+
 ### Reasoning effort
 
 `injectionEffort` affects only delegated-worker guidance and, when explicitly enabled, native Codex

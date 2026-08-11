@@ -571,7 +571,12 @@ test("routed-only custom catalogs remain authoritative across convergence and re
   expect(catalog.models?.some(entry => entry.slug === "static/newer")).toBe(true);
 
   const convergenceBytes = readFileSync(catalogPath, "utf8");
-  expect((await syncCatalogModels(nextConfig)).catalogWritten).toBe(true);
+  // Agreement, not a rewrite: the retained sync runs to completion (no policy skip)
+  // and reports no write because convergence already produced these exact bytes.
+  // Rewriting them would move the catalog mtime and mark every running Codex stale (#857).
+  const resync = await syncCatalogModels(nextConfig);
+  expect(resync.skippedReason).toBeUndefined();
+  expect(resync.catalogWritten).toBe(false);
   expect(readFileSync(catalogPath, "utf8")).toBe(convergenceBytes);
 });
 
@@ -627,7 +632,9 @@ test("disabled-provider selections cannot delete a foreign row in either writer"
   expect((JSON.parse(convergenceBytes) as RawCatalog).models)
     .toContainEqual(expect.objectContaining({ slug: "disabled/foreign-model" }));
 
-  expect((await syncCatalogModels(nextConfig)).catalogWritten).toBe(true);
+  const resync = await syncCatalogModels(nextConfig);
+  expect(resync.skippedReason).toBeUndefined();
+  expect(resync.catalogWritten).toBe(false);
   expect(readFileSync(catalogPath, "utf8")).toBe(convergenceBytes);
 });
 
@@ -774,7 +781,9 @@ test("retained sync and convergence produce identical canonical bytes in either 
     await convergeCatalog(nextConfig);
     const convergenceFirst = readBytes();
     expectCanonicalContent(convergenceFirst, pickerEnabled);
-    expect((await syncCatalogModels(nextConfig)).catalogWritten).toBe(true);
+    const resync = await syncCatalogModels(nextConfig);
+    expect(resync.skippedReason).toBeUndefined();
+    expect(resync.catalogWritten).toBe(false);
     expect(readBytes()).toBe(convergenceFirst);
 
     seed();
