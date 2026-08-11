@@ -4,7 +4,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
-import { RefreshIntentIOError } from "../src/oauth/nous";
+import { RefreshIntentIOError, nousRefreshIntentBlocksReplay } from "../src/oauth/nous";
+import * as nousModule from "../src/oauth/nous";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 import * as configModule from "../src/config";
@@ -782,6 +783,70 @@ describe("oauth refresh hardening", () => {
       expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
     } finally {
       writeSpy.mockRestore();
+    }
+  });
+
+  function nousAccessJwt(sub: string): string {
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+    const payload = Buffer.from(JSON.stringify({
+      sub,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      scope: "inference:invoke",
+    })).toString("base64url");
+    return `${header}.${payload}.sig`;
+  }
+
+  test("Nous coordinator happy path: rotated RT-B is persisted and the old RT-A intent is cleared", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-happy" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    const access = nousAccessJwt("nous-happy");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    const resolved = await getValidAccessTokenForAccount("nous", id);
+    expect(resolved).toBe(access);
+    expect(getCredential("nous")?.refresh).toBe("rt-new");
+    // After the store durably persisted RT-B, the coordinator cleared the
+    // old-token intent: RT-A is no longer blocked.
+    expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(false);
+    expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+  });
+
+  test("Nous post-persist intent-cleanup failure is non-fatal: rotation still resolves with RT-B", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-cleanup" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    const access = nousAccessJwt("nous-cleanup");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    // Force the post-persist bookkeeping cleanup to fail. The rotated credential
+    // is already committed by mergeAccountCredential at this point, so the
+    // coordinator must still resolve with the fresh access token and must NOT
+    // mark the account needsReauth.
+    const cleanupSpy = spyOn(nousModule, "clearNousRefreshIntent").mockImplementation(() => {
+      throw new Error("forced cleanup failure (EROFS)");
+    });
+    try {
+      const resolved = await getValidAccessTokenForAccount("nous", id);
+      expect(resolved).toBe(access);
+      // The committed rotation survives the cleanup failure.
+      expect(getCredential("nous")?.refresh).toBe("rt-new");
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+      // The stale old-token intent may remain; it keys RT-A, which is no longer
+      // stored, so it blocks nothing for the committed RT-B credential.
+      expect(nousRefreshIntentBlocksReplay("rt-old")).toBe(true);
+    } finally {
+      cleanupSpy.mockRestore();
     }
   });
 });

@@ -1090,7 +1090,9 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     liveModels: true,
     models: ["tencent/hy3:free", "poolside/laguna-s-2.1:free", "stepfun/step-3.7-flash:free", "poolside/laguna-xs-2.1:free"],
     modelDiscovery: {
-      url: "https://inference-api.nousresearch.com/v1/models",
+      // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
+      // canonical endpoint https://inference-api.nousresearch.com/v1/models.
+      path: "models",
       maxResponseBytes: 262_144,
       maxModels: 512,
     },

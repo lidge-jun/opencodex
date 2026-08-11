@@ -589,7 +589,23 @@ export async function refreshGenericAccountWithLock(
         throw new OAuthLoginRequiredError(provider);
       }
       logOAuthEvent("OAuth credentials rotated and persisted", { provider, accountId });
-      if (provider === "nous") clearNousRefreshIntent(stored.refresh);
+      // Best-effort bookkeeping cleanup: the rotated credential is already
+      // durably persisted. A failure to unlink the old-token intent file
+      // (EACCES/EPERM/EBUSY/EROFS) must not turn a committed rotation into a
+      // failed refresh. The stale intent keys the OLD token, which is no longer
+      // stored, so leaving it behind blocks nothing and is safe. It must also
+      // never route through the generic refresh error path (no needsReauth).
+      if (provider === "nous") {
+        try {
+          clearNousRefreshIntent(stored.refresh);
+        } catch (cleanupErr) {
+          logOAuthEvent("OAuth refresh intent cleanup failed (non-fatal)", {
+            provider,
+            accountId,
+            cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+          });
+        }
+      }
       return fresh.access;
     } catch (error) {
       if (error instanceof OAuthMutationBusyError) throw error;

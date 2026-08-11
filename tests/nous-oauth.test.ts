@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken, RefreshIntentIOError } from "../src/oauth/nous";
+import { clearNousRefreshIntent, identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken, RefreshIntentIOError } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 import * as configModule from "../src/config";
@@ -555,6 +555,23 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     // After a successful rotation the intent stays "submitted": it is only
     // cleared once the store persists the rotated token (clearNousRefreshIntent).
     expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
+  });
+
+  test("clearNousRefreshIntent unblocks the submitted token after the store persists", async () => {
+    const access = jwtWithClaims({ sub: "atomic-user", exp: Math.floor(Date.now() / 1000) + 3600, scope: "inference:invoke" });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+    await refreshNousToken("old-refresh");
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
+
+    // The persistence layer commits the rotated credential and then closes the
+    // uncertain-outcome window. Without this step the account would be locked
+    // into re-authentication forever.
+    clearNousRefreshIntent("old-refresh");
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(false);
   });
 
   test("an uncertain prior outcome (rotated token obtained but not persisted) blocks replay of the consumed token", async () => {

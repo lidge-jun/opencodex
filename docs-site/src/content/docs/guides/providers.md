@@ -119,6 +119,8 @@ ocx logout <provider>
 | `cursor` | `cursor` | `https://api2.cursor.sh` | Experimental PKCE login, live HTTP/2 transport, and account-filtered model discovery. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
 
+After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
+
 For the canonical Kimi Coding Plan presets (`kimi` account login and `kimi-code` API key),
 opencodex forwards only a caller-supplied stable `prompt_cache_key` to the Chat Completions request;
 it never generates one. Kimi documents a stable session/task key as required to improve Code Plan

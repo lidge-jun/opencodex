@@ -1,10 +1,12 @@
 /**
  * Opt-in, NON-DESTRUCTIVE live verification for the Nous Portal provider.
  *
- * This file is skipped unless `NOUS_LIVE_TEST=1` is set, so it never runs in
- * CI and no credential ever travels off the local machine. It exists to let a
- * reviewer (or the author) prove the real-account refresh path and live
- * catalog discovery against the production Portal.
+ * This file is skipped unless `NOUS_LIVE_TEST=1` is set. CI runs it only when
+ * explicitly opted in. Credentials are sent only to the intended Nous
+ * endpoints (the OAuth token endpoint and the inference catalog endpoint) and
+ * token values are never printed. It exists to let a reviewer (or the author)
+ * prove the real-account refresh path and live catalog discovery against the
+ * production Portal.
  *
  * Safety rules (no provider API key is ever shared):
  *  - The refresh token is read ONLY from the local auth store on disk and is
@@ -78,10 +80,22 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as unknown;
-    const models = Array.isArray(body)
-      ? (body as Array<{ id?: string }>)
-      : ((body as { data?: Array<{ id?: string }> }).data ?? []);
-    const ids = models.map((m) => m.id).filter(Boolean) as string[];
+    // Parse defensively: only an array body or an object with a `data` array is
+    // accepted; anything else (including `{ data: {} }` or `[null]`) becomes an
+    // empty list so the length assertion below reports the invalid catalog.
+    const models: unknown[] = Array.isArray(body)
+      ? body
+      : typeof body === "object"
+          && body !== null
+          && "data" in body
+          && Array.isArray((body as { data?: unknown }).data)
+        ? (body as { data: unknown[] }).data
+        : [];
+    const ids = models.flatMap((model) => {
+      if (typeof model !== "object" || model === null) return [];
+      const id = (model as { id?: unknown }).id;
+      return typeof id === "string" ? [id] : [];
+    });
     console.log(`[live] live catalog returned ${ids.length} models; free tier present: ${ids.some((id) => id.endsWith(":free"))}`);
     expect(ids.length).toBeGreaterThan(0);
   }, 60_000);
