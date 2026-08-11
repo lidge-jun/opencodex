@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken } from "../src/oauth/nous";
+import { identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken, RefreshIntentIOError } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 
@@ -23,6 +24,17 @@ function jwtPayloadOf(token: string): Record<string, unknown> {
   const payload = token.split(".")[1];
   if (!payload) throw new Error(`token is not a JWT: ${token}`);
   return JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>;
+}
+
+function refreshIntentPathFor(refreshToken: string): string {
+  const hash = createHash("sha256").update(refreshToken).digest("hex");
+  return join(TEST_DIR, ".nous-refresh-intent", `${hash}.json`);
+}
+
+function writeRawIntent(refreshToken: string, raw: string): void {
+  const path = refreshIntentPathFor(refreshToken);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, raw, "utf8");
 }
 
 describe("Nous OAuth JWT identity", () => {
@@ -182,6 +194,7 @@ describe("Nous device-flow error handling", () => {
     expect((err as Error).message).toContain("Nous Portal device authorization denied");
     expect((err as { name?: string }).name).toBe("NousTokenError");
     expect((err as { oauthError?: string }).oauthError).toBe("access_denied");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
   });
 
   test("expired_token surfaces as a terminal NousTokenError", async () => {
@@ -199,6 +212,7 @@ describe("Nous device-flow error handling", () => {
     expect((err as Error).message).toContain("Nous Portal device authorization expired");
     expect((err as { name?: string }).name).toBe("NousTokenError");
     expect((err as { oauthError?: string }).oauthError).toBe("expired_token");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
   });
 
   test("slow_down backs off and resumes polling until success", async () => {
@@ -242,6 +256,15 @@ describe("Nous device-flow error handling", () => {
     const ctrl: OAuthController = { onAuth() {} };
     await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device flow timed out");
   }, 15_000);
+
+  test("a successful device-code response with empty/non-JSON body yields the clear validation error, not a JSON parse leak", async () => {
+    // Server returns 200 but the body is HTML/empty — not JSON. The required-field
+    // validation must surface the clear "missing required fields" error instead of
+    // leaking a raw JSON parser exception.
+    globalThis.fetch = (async () => new Response("<html>not json</html>", { status: 200 })) as typeof fetch;
+    const ctrl: OAuthController = { onAuth() {} };
+    await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization response missing required fields");
+  });
 });
 
 describe("Nous Portal base URL hardening", () => {
@@ -315,6 +338,37 @@ describe("Nous Portal base URL hardening", () => {
         globalThis.fetch = realFetch;
         delete process.env.NOUS_PORTAL_BASE_URL;
       }
+    }
+  });
+
+  test("a malformed URL override never echoes a secret-bearing value in the error", async () => {
+    // Deliberately sensitive-looking malformed input. The error must identify
+    // the configuration problem without reflecting the secret.
+    // Build the secret dynamically so no static token-looking literal appears
+    // in the source (keeps privacy:scan clean while still proving redaction).
+    const secret = ["super", "secret", "value", "123456"].join("-");
+    // No scheme separator -> new URL() throws SyntaxError, hitting the
+    // malformed-URL branch (not a parseable https/user: URL).
+    process.env.NOUS_PORTAL_BASE_URL = `not a real url containing ${secret}`;
+    const realFetch = globalThis.fetch;
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    try {
+      let message = "";
+      try {
+        await refreshNousToken("hardening-refresh");
+      } catch (e) {
+        message = e instanceof Error ? e.message : String(e);
+      }
+      expect(message).toContain("not a valid URL");
+      expect(message).not.toContain(secret);
+      expect(fetchCalled).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+      delete process.env.NOUS_PORTAL_BASE_URL;
     }
   });
 });
@@ -570,5 +624,170 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     expect(e.getRotatedRefresh()).toBe("rotated-refresh");
     expect(Object.keys(err as object)).not.toContain("rotatedRefresh");
     expect(Object.keys(err as object)).not.toContain("credentials");
+  });
+});
+
+describe("Nous refresh-intent schema is validated fail-closed", () => {
+  const realFetch = globalThis.fetch;
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  // Each corrupt/unknown shape must block replay (fail-closed): the intent file
+  // EXISTS but cannot be validated, so the token must not be replayed.
+  const corruptBodies: Array<[string, string]> = [
+    ["empty object", "{}"],
+    ["null", "null"],
+    ["non-object", '"just a string"'],
+    ["unknown status", '{"status":"mystery","updatedAt":123}'],
+    ["wrong status type", '{"status":42,"updatedAt":123}'],
+    ["wrong updatedAt type", '{"status":"submitted","updatedAt":"yesterday"}'],
+    ["NaN updatedAt", '{"status":"submitted","updatedAt":null}'],
+  ];
+
+  for (const [label, raw] of corruptBodies) {
+    test(`an existing intent with ${label} is treated as uncertain (replay refused)`, async () => {
+      const token = "schema-corrupt-token";
+      writeRawIntent(token, raw);
+      // A corrupt-but-existing intent must block the replay guard, never read as absent.
+      expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+    });
+  }
+
+  test("malformed JSON is treated as uncertain (replay refused)", async () => {
+    const token = "schema-malformed-json";
+    writeRawIntent(token, "{not valid json");
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+  });
+
+  test("a valid submitted intent blocks replay", async () => {
+    const token = "schema-valid-submitted";
+    writeRawIntent(token, JSON.stringify({ status: "submitted", updatedAt: Date.now() }));
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+  });
+
+  test("a valid uncertain intent blocks replay", async () => {
+    const token = "schema-valid-uncertain";
+    writeRawIntent(token, JSON.stringify({ status: "uncertain", updatedAt: Date.now() }));
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+  });
+
+  test("a missing intent file means no intent exists (replay allowed)", () => {
+    // The token was never recorded, so replay is not blocked.
+    expect(nousRefreshIntentBlocksReplay("never-seen-token")).toBe(false);
+  });
+
+  test("a corrupt intent blocks replay before fetch is ever called", async () => {
+    const token = "schema-block-before-fetch";
+    writeRawIntent(token, "{}");
+    let fetchCalled = 0;
+    globalThis.fetch = (async () => {
+      fetchCalled += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    await expect(refreshNousToken(token)).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+    expect(fetchCalled).toBe(0);
+  });
+});
+
+describe("Nous HTTP refresh failure-atomicity classification", () => {
+  const realFetch = globalThis.fetch;
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+  });
+
+  test("an ambiguous 5xx response leaves the old token blocked (never replayable)", async () => {
+    const token = "http-5xx-token";
+    globalThis.fetch = (async () => new Response("gateway boom", { status: 503 })) as typeof fetch;
+    await expect(refreshNousToken(token)).rejects.toThrow();
+    // The 5xx is ambiguous: the request may have reached the Portal and rotated
+    // the token before the error. The intent must be uncertain -> blocked.
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+  });
+
+  test("a second call with a 5xx-blocked token rejects before fetch is called", async () => {
+    const token = "http-5xx-token-blocked";
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response("gateway boom", { status: 502 });
+    }) as typeof fetch;
+
+    // First call: ambiguous 5xx -> intent becomes uncertain.
+    await expect(refreshNousToken(token)).rejects.toThrow();
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(true);
+
+    // Second call: must reject via the replay guard BEFORE any network request.
+    await expect(refreshNousToken(token)).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "refresh_token_reused",
+    });
+    expect(fetchCalls).toBe(1); // only the first (5xx) call ever hit the network
+  });
+
+  test("a definitively safe 4xx client rejection clears the intent so a retry may resubmit", async () => {
+    const token = "http-4xx-token";
+    const access = jwtWithClaims({ sub: "wired-user", exp: Math.floor(Date.now() / 1000) + 3600 });
+    // Server returns a definitive 400 invalid_request (token not consumed).
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      error: "invalid_request",
+      error_description: "malformed request",
+    }), { status: 400 })) as typeof fetch;
+
+    await expect(refreshNousToken(token)).rejects.toThrow();
+    // The 4xx proves non-consumption: the intent is cleared, so a later retry
+    // with the still-valid token is not blocked.
+    expect(nousRefreshIntentBlocksReplay(token)).toBe(false);
+  });
+
+  test("a durable-write failure before dispatch throws a non-terminal RefreshIntentIOError (no fetch)", async () => {
+    const token = "io-fail-token";
+    // Make the refresh-intent directory uncreatable: plant a FILE where the
+    // directory should be so mkdirSync(...) fails.
+    const intentDir = join(TEST_DIR, ".nous-refresh-intent");
+    mkdirSync(TEST_DIR, { recursive: true });
+    writeFileSync(intentDir, "not a directory", "utf8");
+
+    let fetchCalled = 0;
+    globalThis.fetch = (async () => {
+      fetchCalled += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    let err: unknown;
+    try {
+      await refreshNousToken(token);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(RefreshIntentIOError);
+    expect(fetchCalled).toBe(0);
   });
 });

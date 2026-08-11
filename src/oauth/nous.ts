@@ -105,7 +105,7 @@ interface RefreshIntent {
   updatedAt: number;
 }
 
-class RefreshIntentIOError extends Error {
+export class RefreshIntentIOError extends Error {
   constructor(message: string, cause?: unknown) {
     super(message, cause ? { cause } : undefined);
     this.name = "RefreshIntentIOError";
@@ -121,6 +121,36 @@ function refreshIntentPath(refreshToken: string): string {
   return join(refreshIntentDir(), `${hash}.json`);
 }
 
+/**
+ * Validate a persisted refresh-intent payload BEFORE trusting it. A syntactically
+ * valid JSON blob is not enough: `{}` or a wrong-shaped object must not silently
+ * produce `status === undefined` (which would bypass the replay guard). We only
+ * accept an object whose `status` is exactly one supported state and whose
+ * `updatedAt` is a finite number. Anything else is treated as `uncertain` —
+ * never as absent — so a corrupt intent can never make a possibly-consumed
+ * token replayable.
+ */
+function parseRefreshIntent(raw: string): RefreshIntent {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { status: "uncertain", updatedAt: Date.now() };
+  }
+  if (typeof value !== "object" || value === null) {
+    return { status: "uncertain", updatedAt: Date.now() };
+  }
+  const candidate = value as Record<string, unknown>;
+  const status = candidate.status;
+  if (status !== "submitted" && status !== "uncertain") {
+    return { status: "uncertain", updatedAt: Date.now() };
+  }
+  if (typeof candidate.updatedAt !== "number" || !Number.isFinite(candidate.updatedAt)) {
+    return { status: "uncertain", updatedAt: Date.now() };
+  }
+  return { status, updatedAt: candidate.updatedAt };
+}
+
 function readRefreshIntent(refreshToken: string): RefreshIntent | undefined {
   const path = refreshIntentPath(refreshToken);
   try {
@@ -128,7 +158,7 @@ function readRefreshIntent(refreshToken: string): RefreshIntent | undefined {
     // before reading, and treat any read/parse error as uncertain (fail-closed)
     // rather than silently absent.
     hardenExistingSecret(path);
-    return JSON.parse(readFileSync(path, "utf8")) as RefreshIntent;
+    return parseRefreshIntent(readFileSync(path, "utf8"));
   } catch (error) {
     // ENOENT means we never recorded an intent for this token -> safe to proceed.
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -200,7 +230,9 @@ function resolvePortalBaseUrl(): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new NousTokenError(undefined, undefined, `Nous Portal base URL is not a valid URL: ${raw}`);
+    // Do not echo the raw value: it may contain embedded credentials. Identify
+    // the configuration problem without reflecting secret-bearing input.
+    throw new NousTokenError(undefined, undefined, "Nous Portal base URL is not a valid URL");
   }
   if (url.protocol !== "https:") {
     throw new NousTokenError(undefined, undefined, `Nous Portal base URL must use HTTPS (got ${url.protocol})`);
@@ -237,8 +269,9 @@ function nonEmptyString(value: unknown): string | undefined {
 /**
  * Best-effort multiauth identity from the Nous inference JWT claims. The Portal
  * mints these tokens per login; `sub` is the stable subject and `email` is
- * lowercased when present. Opaque tokens yield no identity (account still
- * works, single-account only).
+ * lowercased when present. Opaque (non-JWT) tokens carry no identity and are
+ * rejected downstream by the `inference:invoke` scope gate (parseTokenPayload),
+ * so a usable access token is always a decodable JWT.
  */
 export function identityFromNousTokens(accessToken: string): { accountId?: string; email?: string } {
   const payload = decodeJwtPayload(accessToken);
@@ -429,7 +462,11 @@ async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
     signal: requestSignal(signal),
   });
   if (!response.ok) throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
-  const payload = (await response.json()) as NousDeviceAuthorizationResponse;
+  // A successful HTTP response may still carry an empty/HTML/non-JSON body.
+  // Fall back to an empty object so the required-field check below produces the
+  // clear "missing required fields" validation error instead of leaking a raw
+  // JSON parser exception.
+  const payload = (await response.json().catch(() => ({}))) as NousDeviceAuthorizationResponse;
   const userCode = nonEmptyString(payload.user_code);
   const deviceCode = nonEmptyString(payload.device_code);
   const verificationUri = nonEmptyString(payload.verification_uri_complete) ?? nonEmptyString(payload.verification_uri);
@@ -486,8 +523,12 @@ async function pollForToken(
       await sleep(waitMs, signal);
       continue;
     }
-    if (error === "expired_token") throw new NousTokenError(response.status, "expired_token", "Nous Portal device authorization expired");
-    if (error === "access_denied") throw new NousTokenError(response.status, "access_denied", "Nous Portal device authorization denied");
+    if (error === "expired_token") {
+      throw new NousTokenError(response.status, "expired_token", "Nous Portal device authorization expired", { terminal: true });
+    }
+    if (error === "access_denied") {
+      throw new NousTokenError(response.status, "access_denied", "Nous Portal device authorization denied", { terminal: true });
+    }
     // Unknown OAuth error: report it from the parsed payload, not by
     // re-reading the (already consumed) response body.
     if (error) {
@@ -547,11 +588,13 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   try {
     writeRefreshIntent(refreshToken, "submitted");
   } catch (ioErr) {
-    throw new NousTokenError(
-      undefined,
-      "refresh_intent_io",
+    // The write happens BEFORE dispatch, so the credential has not been
+    // rejected or consumed. Fail closed (abort the refresh) but surface a
+    // NON-terminal operational error: the coordinator must not mark the account
+    // needsReauth merely because local persistence infrastructure is broken.
+    throw new RefreshIntentIOError(
       "Refusing refresh: could not durably record the refresh-intent guard (fail-closed)",
-      { terminal: true, cause: ioErr },
+      ioErr,
     );
   }
 
@@ -588,19 +631,34 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   }
 
   if (!response.ok) {
-    // Error before any rotation: the token was not consumed. Clear the intent
-    // so a retry can resubmit it. Fail-closed: if clearing fails, surface it.
+    const status = response.status;
+    const payload = await response.json().catch(() => ({}));
+    if (status >= 500) {
+      // Ambiguous server/gateway/backend failure (5xx): the request may have
+      // reached the Portal and rotated the token before the error was returned.
+      // We cannot prove non-consumption, so leave the submitted token BLOCKED
+      // as uncertain — never clear the intent and make it replayable.
+      try {
+        writeRefreshIntent(refreshToken, "uncertain");
+      } catch {
+        // The pre-dispatch "submitted" intent is still on disk, which also
+        // blocks replay; surface the original HTTP error below.
+      }
+      throw tokenErrorFromPayload(status, payload);
+    }
+    // A 4xx client rejection definitively proves the presented token was NOT
+    // consumed (the server rejected the grant without rotating it). Clear the
+    // intent so a later retry can resubmit the still-valid token. Fail-closed:
+    // if clearing fails, surface an operational error rather than clearing blind.
     try {
       clearRefreshIntent(refreshToken);
     } catch (ioErr) {
-      throw new NousTokenError(
-        undefined,
-        "refresh_intent_io",
+      throw new RefreshIntentIOError(
         "Refresh failed and the refresh-intent could not be cleared for safe retry",
-        { terminal: true, cause: ioErr },
+        ioErr,
       );
     }
-    throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
+    throw tokenErrorFromPayload(status, payload);
   }
 
   // The server responded 200 — the submitted token may now be consumed. If we

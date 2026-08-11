@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock, seedOAuthTokenRefreshFlightsForTests } from "../src/oauth";
+import { RefreshIntentIOError } from "../src/oauth/nous";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
 
@@ -750,5 +751,34 @@ describe("oauth refresh hardening", () => {
     seedClaudeCredentials("recovered", "rt-new", Date.now() + 3600_000);
     await expect(getValidAccessToken("anthropic")).resolves.toBe("recovered");
     expect(getAccountSet("anthropic")!.accounts[0]!.needsReauth).toBeUndefined();
+  });
+
+  test("Nous refresh-intent pre-dispatch write failure is non-terminal: account stays valid, fetch never runs", async () => {
+    // Seed an expired Nous credential so the coordinator actually refreshes.
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-acct" });
+    const id = getAccountSet("nous")!.activeAccountId;
+    const credential = getAccountCredential("nous", id)!;
+
+    // Break the refresh-intent directory: the config dir is tmp/ocx, and the
+    // intent dir is configDir/.nous-refresh-intent. Plant a FILE at that path so
+    // mkdirSync(...) fails before any network dispatch.
+    const intentDir = join(process.env.OPENCODEX_HOME!, ".nous-refresh-intent");
+    mkdirSync(process.env.OPENCODEX_HOME!, { recursive: true });
+    writeFileSync(intentDir, "not a directory", "utf8");
+
+    let fetchCalled = 0;
+    globalThis.fetch = (async () => {
+      fetchCalled += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    // The refresh aborts with a non-terminal operational error (not
+    // OAuthLoginRequiredError), fetch is never called, and the account is NOT
+    // marked needsReauth — local persistence breakage is not credential death.
+    await expect(getValidAccessTokenForAccount("nous", id))
+      .rejects.toBeInstanceOf(RefreshIntentIOError);
+    expect(fetchCalled).toBe(0);
+    expect(getCredential("nous")?.refresh).toBe("rt-old");
+    expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
   });
 });
