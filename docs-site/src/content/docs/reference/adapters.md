@@ -91,7 +91,7 @@ of the HTTP retry loop.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
-  real `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
+  opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
   restarts.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs

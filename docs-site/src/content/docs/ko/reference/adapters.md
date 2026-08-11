@@ -86,7 +86,7 @@ interface ProviderAdapter {
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.
-- Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 실제
+- Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 불투명한
   `thoughtSignature` 값을 보존하고 재사용해 tool-result 후속 턴에서도 reasoning 연속성을 유지합니다.
   서명 캐시는 설정 디렉터리에 스냅샷되므로 프록시 재시작 후에도 후속 턴이 유지됩니다.
 

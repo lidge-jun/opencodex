@@ -74,7 +74,7 @@ HTTP リトライ ループの対象外です。
 
 - システムプロンプト → `systemInstruction`；メッセージ → `contents[]`（assistant → `model`）；ツール →
   `functionDeclarations`。data URL 画像 → `inline_data`。
-- Gemini が tool-call id を省略すると合成します。Vertex と Antigravity では実際の `thoughtSignature` 値を保存・再利用し、tool-result の継続ターンでも reasoning の連続性を保ちます。
+- Gemini が tool-call id を省略すると合成します。Vertex と Antigravity では不透明な `thoughtSignature` 値を保存・再利用し、tool-result の継続ターンでも reasoning の連続性を保ちます。
   署名キャッシュは設定ディレクトリにスナップショットされるため、プロキシ再起動後も継続ターンを維持できます。
 
 ## `kiro`
