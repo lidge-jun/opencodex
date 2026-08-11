@@ -23,6 +23,7 @@ import { planManualLabRun } from "../../lab/automation/planner";
 import {
   loadLabAutomationPolicy,
   loadLabAutomationState,
+  normalizeLabAutomationRoutesV1,
   saveLabAutomationPolicy,
   saveLabAutomationRoutes,
 } from "../../lab/automation/persistence";
@@ -66,7 +67,7 @@ function applySchedulerPolicy(policy: LabAutomationPolicyV1, configDir?: string)
   if (policy.enabled) {
     startLabAutomationScheduler(configDir);
   } else {
-    stopLabAutomationScheduler();
+    stopLabAutomationScheduler(configDir);
   }
 }
 
@@ -84,19 +85,31 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
     const limit = parseLimit(url.searchParams.get("limit"), ctx);
     if (limit instanceof Response) return limit;
     const cursor = url.searchParams.get("cursor")?.trim() || undefined;
-    const status = buildLabAutomationStatus(configDir);
-    const runsPage = listLabAutomationRuns(loadLabAutomationState(configDir), limit, cursor);
-    return jsonResponse({
-      runs: runsPage.items,
-      hasMore: runsPage.hasMore,
-      ...(runsPage.nextCursor ? { nextCursor: runsPage.nextCursor } : {}),
-      counters: status.counters,
-    }, 200, req, config);
+    try {
+      const status = buildLabAutomationStatus(configDir);
+      const runsPage = listLabAutomationRuns(loadLabAutomationState(configDir), limit, cursor);
+      return jsonResponse({
+        runs: runsPage.items,
+        hasMore: runsPage.hasMore,
+        ...(runsPage.nextCursor ? { nextCursor: runsPage.nextCursor } : {}),
+        counters: status.counters,
+      }, 200, req, config);
+    } catch (error) {
+      if (error instanceof LabAutomationError && error.code === "invalid_cursor") {
+        return automationErrorResponse(error.code, error.message, 400, ctx);
+      }
+      throw error;
+    }
   }
 
   const cancelMatch = url.pathname.match(/^\/api\/lab\/automation\/runs\/([^/]+)\/cancel$/);
   if (cancelMatch && req.method === "POST") {
-    const runId = decodeURIComponent(cancelMatch[1]!);
+    let runId: string;
+    try {
+      runId = decodeURIComponent(cancelMatch[1]!);
+    } catch {
+      return automationErrorResponse("invalid_run_id", "run id is not valid percent-encoding", 400, ctx);
+    }
     const cancelled = cancelLabAutomationRun(runId, configDir);
     if (!cancelled) return automationErrorResponse("not_found", "unknown or non-cancellable run", 404, ctx);
     return jsonResponse({ cancelled: true, runId }, 200, req, config);
@@ -131,9 +144,12 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
         config: ocxConfig,
         configDir,
       });
-      const record = await enqueueManualLabRun(planned, configDir);
+      // This endpoint is intentionally synchronous: completion is the acknowledgement boundary.
+      // Existing harness execution limits provide the route-level deadline, and disconnects cancel
+      // through Request.signal instead of leaving orphaned provider work running.
+      const record = await enqueueManualLabRun(planned, configDir, req.signal);
       if (!record) return automationErrorResponse("enqueue_failed", "manual run could not be enqueued", 500, ctx);
-      return jsonResponse({ run: record, trigger: "manual" }, 202, req, config);
+      return jsonResponse({ run: record, trigger: "manual" }, 200, req, config);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);
       if (error instanceof LabAutomationError) {
@@ -150,6 +166,7 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
       // Only policy/routes are authoritative. Other top-level properties are ignored rather than
       // treated as injectable process-local capabilities (for example a fake routeExecutor).
       let policy = loadLabAutomationPolicy(configDir);
+      let routes: LabAutomationRoutesV1 | undefined;
       if (body.policy !== undefined) {
         if (!isPlainRecord(body.policy)) return automationErrorResponse("invalid_policy", "policy must be an object", 400, ctx);
         const incoming = body.policy as Record<string, unknown>;
@@ -163,19 +180,16 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
           ...incoming,
           layers: mergedLayers,
         });
-        saveLabAutomationPolicy(policy, configDir);
       }
       if (body.routes !== undefined) {
         if (!isPlainRecord(body.routes)) return automationErrorResponse("invalid_routes", "routes must be an object", 400, ctx);
-        const routesPayload = body.routes as Record<string, unknown>;
-        if (routesPayload.schemaVersion !== 1 || !Array.isArray(routesPayload.routes)) {
-          return automationErrorResponse("invalid_routes", "routes must include schemaVersion 1 and routes array", 400, ctx);
-        }
-        saveLabAutomationRoutes({
-          schemaVersion: 1,
-          routes: routesPayload.routes as LabAutomationRoutesV1["routes"],
-        }, configDir);
+        routes = normalizeLabAutomationRoutesV1(body.routes);
       }
+
+      // Validate the complete requested update before persisting either file so an invalid routes
+      // payload cannot leave a valid policy half-applied.
+      if (body.routes !== undefined && routes) saveLabAutomationRoutes(routes, configDir);
+      if (body.policy !== undefined) saveLabAutomationPolicy(policy, configDir);
       applySchedulerPolicy(policy, configDir);
       return jsonResponse(buildLabAutomationStatus(configDir), 200, req, config);
     } catch (error) {
