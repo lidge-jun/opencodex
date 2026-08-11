@@ -46,11 +46,11 @@ group_file=$2
 wrapper=$3
 timeout_seconds=$4
 
-"$wrapper" --version &
+/bin/sh "$wrapper" --version &
 launcher_pid=$!
 printf '%s\n' "$launcher_pid" > "$group_file"
 (
-  /bin/sleep "$timeout_seconds"
+  /bin/sleep "$timeout_seconds" || exit 0
   printf '%s\n' timeout > "$marker"
   kill -KILL -"$launcher_pid" 2>/dev/null || true
 ) &
@@ -473,7 +473,9 @@ exec ${shQuote(realCodexPath)} "$@"
 `;
 }
 
-function probeUnixShimInstall(wrapperPath: string): "descendants" | "recursive" | "timeout" | null {
+type UnixShimProbeResult = "cleanup" | "descendants" | "recursive" | "timeout" | null;
+
+function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   if (process.platform === "win32") return null;
   const env: NodeJS.ProcessEnv = { ...process.env, OCX_SHIM_BYPASS: "1" };
   delete env.OCX_SHIM_ACTIVE_PID;
@@ -498,7 +500,13 @@ function probeUnixShimInstall(wrapperPath: string): "descendants" | "recursive" 
     const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
     const marker = existsSync(markerPath) ? readFileSync(markerPath, "utf8").trim() : "";
     const groupId = existsSync(groupPath) ? Number.parseInt(readFileSync(groupPath, "utf8").trim(), 10) : 0;
-    if ((timedOut || marker) && Number.isInteger(groupId) && groupId > 0) terminateUnixProcessGroup(groupId);
+    if ((timedOut || marker) && Number.isInteger(groupId) && groupId > 0) {
+      try {
+        terminateUnixProcessGroup(groupId);
+      } catch {
+        return "cleanup";
+      }
+    }
     if (timedOut || marker === "timeout") return "timeout";
     if (marker === "descendants") return "descendants";
     if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
@@ -512,6 +520,14 @@ function probeUnixShimInstall(wrapperPath: string): "descendants" | "recursive" 
       } catch { /* best-effort cleanup of non-sensitive probe metadata */ }
     }
   }
+}
+
+function probeUnixShimFiles(files: readonly ShimFileState[]): UnixShimProbeResult {
+  if (process.platform === "win32") return null;
+  return files
+    .filter(file => !file.preserveOnly)
+    .map(file => probeUnixShimInstall(file.wrapperPath))
+    .find(result => result !== null) ?? null;
 }
 
 function unixProcessGroupAlive(groupId: number): boolean {
@@ -812,12 +828,20 @@ function refreshShimFile(file: ShimFileState): boolean {
   }
   if (existsSync(file.wrapperPath) && !isShim(file.wrapperPath)) {
     if (file.wrapperPath !== file.originalPath) return false;
-    replaceOwnedBackup(file.wrapperPath, file.backupPath);
-    writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
-    return true;
+    const replacement = stableShimPathProbe(file.wrapperPath);
+    if (!replacement) return false;
+    return applyGuardedRefreshTransaction([{
+      file,
+      expectedReplacement: replacement.fingerprint,
+      sourcePath: file.wrapperPath,
+    }]);
   }
   if (!existsSync(file.wrapperPath) && existsSync(file.backupPath)) {
     writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
+    if (probeUnixShimFiles([file]) !== null) {
+      if (existsSync(file.wrapperPath) && isShim(file.wrapperPath)) unlinkSync(file.wrapperPath);
+      return false;
+    }
     return true;
   }
   if (file.originalPath !== file.wrapperPath && existsSync(file.originalPath) && existsSync(file.wrapperPath) && isShim(file.wrapperPath)) {
@@ -1056,6 +1080,7 @@ function applyGuardedRefreshTransaction(
   const journal: GuardedRefreshJournalEntry[] = [];
   let applyError: Error | null = null;
   let fingerprintMismatch = false;
+  let unsafeLauncher = false;
   const transactionId = `${process.pid}-${++guardedRefreshTransactionId}`;
 
   for (const [index, operation] of operations.entries()) {
@@ -1087,7 +1112,11 @@ function applyGuardedRefreshTransaction(
     }
   }
 
-  if (!fingerprintMismatch && !applyError && commitState) {
+  if (!fingerprintMismatch && !applyError) {
+    unsafeLauncher = probeUnixShimFiles(operations.map(operation => operation.file)) !== null;
+  }
+
+  if (!fingerprintMismatch && !applyError && !unsafeLauncher && commitState) {
     try {
       commitState();
     } catch (error) {
@@ -1095,7 +1124,7 @@ function applyGuardedRefreshTransaction(
     }
   }
 
-  if (fingerprintMismatch || applyError) {
+  if (fingerprintMismatch || applyError || unsafeLauncher) {
     const rollbackErrors = rollbackGuardedRefresh(journal);
     if (applyError || rollbackErrors.length > 0) {
       throw new AggregateError(
@@ -1193,14 +1222,16 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     if (!target.preserveOnly) writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
   }
   if (process.platform !== "win32") {
-    const unsafe = targets.map(target => probeUnixShimInstall(target.wrapperPath)).find(result => result !== null);
+    const unsafe = probeUnixShimFiles(targets);
     if (unsafe) {
       rollbackFreshShimInstall(targets);
       const reason = unsafe === "recursive"
         ? "the saved launcher resolved back to the generated shim"
         : unsafe === "timeout"
           ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
-          : "the saved launcher left background descendants running after --version";
+          : unsafe === "descendants"
+            ? "the saved launcher left background descendants running after --version"
+            : "the saved launcher's probe process group could not be terminated cleanly";
       return {
         installed: false,
         message: `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,

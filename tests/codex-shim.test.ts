@@ -8,6 +8,20 @@ import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildW
 const SHIM_MARKER = "opencodex codex autostart shim";
 const skipStabilityWait = () => {};
 
+function processState(pid: number): string {
+  return spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+}
+
+function expectProcessGroupMissing(groupId: number): void {
+  let code: string | undefined;
+  try {
+    process.kill(-groupId, 0);
+  } catch (error) {
+    code = (error as NodeJS.ErrnoException).code;
+  }
+  expect(code).toBe("ESRCH");
+}
+
 function withInstalledShim(run: (paths: {
   binDir: string;
   home: string;
@@ -23,7 +37,7 @@ function withInstalledShim(run: (paths: {
     ? [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")]
     : [join(binDir, "codex")];
   try {
-    process.env.PATH = binDir;
+    process.env.PATH = `${binDir}:${oldPath ?? ""}`;
     process.env.OPENCODEX_HOME = home;
     for (const wrapper of wrappers) {
       writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
@@ -307,20 +321,27 @@ exit 64
     const codexPath = join(binDir, "codex");
     const launcherPath = join(binDir, "dynamic-launcher");
     const childPidPath = join(home, "child-reentry.pid");
+    const grandchildPidPath = join(home, "child-reentry-grandchild.pid");
+    const groupIdPath = join(home, "child-reentry-group.pid");
     const original = `#!/bin/sh\nexec "${launcherPath}" "$@"\n`;
     try {
       process.env.PATH = `${binDir}:${oldPath ?? ""}`;
       process.env.OPENCODEX_HOME = home;
       writeFileSync(launcherPath, `#!/bin/sh
 if [ -n "$OCX_TEST_CHILD_REENTRY" ]; then
-  /bin/sleep 30
+  /bin/sleep 30 &
+  grandchild=$!
+  printf '%s\\n' "$grandchild" > "${grandchildPidPath}"
+  wait "$grandchild"
   exec codex "$@"
 fi
 OCX_TEST_CHILD_REENTRY=1
 export OCX_TEST_CHILD_REENTRY
+printf '%s\\n' "$$" > "${groupIdPath}"
 codex "$@" &
 child=$!
 printf '%s\\n' "$child" > "${childPidPath}"
+while [ ! -f "${grandchildPidPath}" ]; do /bin/sleep 0.01; done
 exit 0
 `, "utf8");
       writeFileSync(codexPath, original, "utf8");
@@ -335,8 +356,13 @@ exit 0
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
-      const childState = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(childPid)], { encoding: "utf8" }).stdout.trim();
+      const grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8").trim(), 10);
+      const groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
+      expectProcessGroupMissing(groupId);
+      const childState = processState(childPid);
+      const grandchildState = processState(grandchildPid);
       expect(childState === "" || childState.startsWith("Z")).toBe(true);
+      expect(grandchildState === "" || grandchildState.startsWith("Z")).toBe(true);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
@@ -382,8 +408,8 @@ wait "$child"
       const groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
       expect(Number.isInteger(childPid)).toBe(true);
       expect(Number.isInteger(groupId)).toBe(true);
-      expect(() => process.kill(-groupId, 0)).toThrow();
-      const childState = spawnSync("/bin/ps", ["-o", "stat=", "-p", String(childPid)], { encoding: "utf8" }).stdout.trim();
+      expectProcessGroupMissing(groupId);
+      const childState = processState(childPid);
       expect(childState === "" || childState.startsWith("Z")).toBe(true);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
@@ -698,6 +724,49 @@ printf '%s\\n' child-codex
       expect(result.status).toBe("restored");
       wrappers.forEach(wrapper => expect(readFileSync(wrapper, "utf8")).toContain(SHIM_MARKER));
       backups.forEach((backup, index) => expect(readFileSync(backup, "utf8")).toBe(replacements[index]));
+    });
+  });
+
+  test("guarded auto-restore rejects a recursive replacement and restores both launcher generations", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
+      const dynamicLauncher = join(binDir, "dynamic-codex-launcher");
+      const replacement = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
+      writeFileSync(wrappers[0], replacement, "utf8");
+      chmodSync(dynamicLauncher, 0o755);
+      chmodSync(wrappers[0], 0o755);
+
+      const result = autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait });
+
+      expect(result.status).toBe("deferred");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
+    });
+  });
+
+  test("direct refresh rejects a recursive replacement without replacing the owned backup", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ binDir, wrappers, backups, statePath }) => {
+      const dynamicLauncher = join(binDir, "dynamic-codex-launcher");
+      const replacement = `#!/bin/sh\nexec "${dynamicLauncher}" "$@"\n`;
+      const oldBackup = readFileSync(backups[0]);
+      const oldState = readFileSync(statePath);
+      writeFileSync(dynamicLauncher, "#!/bin/sh\nexec codex \"$@\"\n", "utf8");
+      writeFileSync(wrappers[0], replacement, "utf8");
+      chmodSync(dynamicLauncher, 0o755);
+      chmodSync(wrappers[0], 0o755);
+
+      const result = installCodexShim();
+
+      expect(result.installed).toBe(false);
+      expect(result.message).toContain("Refusing to overwrite existing backup");
+      expect(readFileSync(wrappers[0], "utf8")).toBe(replacement);
+      expect(readFileSync(backups[0])).toEqual(oldBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
     });
   });
 
