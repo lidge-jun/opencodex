@@ -490,7 +490,7 @@ async function preserveNousRotatedRefresh(
   rotatedRefresh: string,
   expectedGeneration: string,
   previous: OAuthCredentials,
-): Promise<"persisted" | "superseded" | "failed"> {
+): Promise<{ kind: "persisted"; generation: string } | { kind: "superseded" } | { kind: "failed" }> {
   try {
     const recovery: OAuthCredentials = {
       refresh: rotatedRefresh,
@@ -503,9 +503,17 @@ async function preserveNousRotatedRefresh(
       ...(previous.source ? { source: previous.source } : {}),
     };
     const outcome = await mergeAccountCredential(provider, accountId, recovery, { expectedGeneration });
-    return outcome.superseded ? "superseded" : "persisted";
-  } catch {
-    return "failed";
+    if (outcome.superseded) return { kind: "superseded" };
+    // Return the exact generation this write produced, so the caller never
+    // re-reads the store (a concurrent writer could otherwise supply a different
+    // credential generation and be marked needsReauth by mistake).
+    return { kind: "persisted", generation: credentialGeneration(recovery) };
+  } catch (error) {
+    // A store-mutation busy outcome is transient and retryable; surface it
+    // unchanged so the caller can retry rather than treating it as a permanent
+    // RT-B persistence failure.
+    if (error instanceof OAuthMutationBusyError) throw error;
+    return { kind: "failed" };
   }
 }
 
@@ -659,9 +667,7 @@ export async function refreshGenericAccountWithLock(
             generation,
             stored,
           );
-          if (outcome === "persisted") {
-            const persisted = getAccountCredential(provider, accountId);
-            const persistedGeneration = persisted ? credentialGeneration(persisted) : generation;
+          if (outcome.kind === "persisted") {
             // RT-A's intent is cleared only after RT-B is durably persisted;
             // cleanup itself stays best-effort (a stale RT-A intent keys a token
             // that is no longer stored).
@@ -674,7 +680,10 @@ export async function refreshGenericAccountWithLock(
                 cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
               });
             }
-            await markAccountNeedsReauthIfGeneration(provider, accountId, persistedGeneration, writerGeneration);
+            // Mark exactly the generation this write produced — never a
+            // credential written by a concurrent login between the merge and
+            // this step.
+            await markAccountNeedsReauthIfGeneration(provider, accountId, outcome.generation, writerGeneration);
           } else {
             // RT-B persistence failed or a newer generation superseded it:
             // never clear RT-A's intent (RT-A was consumed), and mark the old

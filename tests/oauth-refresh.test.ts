@@ -950,6 +950,42 @@ describe("oauth refresh hardening", () => {
     }
   });
 
+  test("Nous RT-B preservation does not mark a credential committed by a concurrent writer", async () => {
+    await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-toctou" });
+    const id = getAccountSet("nous")!.activeAccountId;
+
+    const unusableAccess = nousAccessJwt("nous-toctou", "billing:manage");
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: unusableAccess,
+      refresh_token: "rt-new",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    // The recovery write (RT-B) succeeds, then a concurrent login commits a
+    // fresh, fully usable credential before the coordinator marks needsReauth.
+    // The persisted-branch generation must be the one THIS write produced, so
+    // the newer credential is never marked needsReauth.
+    const realMerge = storeModule.mergeAccountCredential;
+    const mergeSpy = spyOn(storeModule, "mergeAccountCredential").mockImplementation(async (provider, accountId, cred, opts) => {
+      const outcome = await realMerge(provider, accountId, cred, opts);
+      await saveCredential("nous", {
+        access: nousAccessJwt("nous-toctou"),
+        refresh: "rt-fresh-login",
+        expires: Date.now() + 3600_000,
+        accountId: "nous-toctou",
+      });
+      return outcome;
+    });
+    try {
+      await expect(getValidAccessTokenForAccount("nous", id)).rejects.toBeInstanceOf(OAuthLoginRequiredError);
+      // The concurrently committed, usable credential must remain usable.
+      expect(getCredential("nous")?.refresh).toBe("rt-fresh-login");
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+    } finally {
+      mergeSpy.mockRestore();
+    }
+  });
+
   test("Nous RT-B cleanup failure after successful persistence keeps RT-B and marks needsReauth", async () => {
     await saveCredential("nous", { access: "old", refresh: "rt-old", expires: 1, accountId: "nous-cleanup-fail" });
     const id = getAccountSet("nous")!.activeAccountId;

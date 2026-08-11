@@ -398,7 +398,16 @@ function tokenErrorFromPayload(status: number, payload: unknown): NousTokenError
  */
 function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: string): OAuthCredentials {
   const access = nonEmptyString(payload.access_token);
-  if (!access) throw new Error("Nous Portal token response did not include an access token");
+  if (!access) {
+    // A response without a usable access token cannot be used for inference;
+    // classify it as terminal so the coordinator forces re-authentication.
+    throw new NousTokenError(
+      undefined,
+      "invalid_token",
+      "Nous Portal token response did not include an access token",
+      { terminal: true },
+    );
+  }
   const refresh = nonEmptyString(payload.refresh_token);
   if (!refresh) {
     throw new NousTokenError(

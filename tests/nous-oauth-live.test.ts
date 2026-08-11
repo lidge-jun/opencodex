@@ -21,7 +21,7 @@
  *    accepting either an OpenAI-style `{ data: [...] }` body or a bare array.
  */
 import { describe, expect, test } from "bun:test";
-import { getAccountCredential, getCredential } from "../src/oauth/store";
+import { getAccountCredential, getAccountSet, getCredential } from "../src/oauth/store";
 import { refreshNousToken } from "../src/oauth/nous";
 import { refreshGenericAccountWithLock } from "../src/oauth/index";
 import type { OAuthProviderDef } from "../src/oauth/types";
@@ -49,6 +49,10 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     const stored = getCredential("nous");
     expect(stored?.refresh, "expected a local nous refresh token; set NOUS_LIVE_TEST=1 with a logged-in account").toBeTruthy();
     expect(stored?.accountId, "stored nous credential must carry an accountId").toBeTruthy();
+    // The store keys accounts by a hashed row id, not the JWT `sub`; use the row
+    // id for account-scoped refresh and read-back.
+    const rowId = getAccountSet("nous")?.activeAccountId;
+    expect(rowId, "stored nous account set must have an active row id").toBeTruthy();
 
     console.log("[live] using locally stored nous credential (tokens withheld):");
     len("stored.access", stored!.access);
@@ -60,7 +64,7 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     // refresh-intent, and returns a usable access token.
     const access = await refreshGenericAccountWithLock(
       "nous",
-      stored!.accountId!,
+      rowId!,
       NOUS_DEF,
       stored!,
       {},
@@ -69,7 +73,7 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     expect(access.length).toBeGreaterThan(0);
 
     // Confirm rotation persisted a *different* refresh token (single-use contract).
-    const after = getAccountCredential("nous", stored!.accountId!);
+    const after = getAccountCredential("nous", rowId!);
     len("after.refresh", after?.refresh);
     expect(after?.refresh, "rotation should have persisted a new refresh token").toBeTruthy();
     expect(after!.refresh).not.toBe(stored!.refresh);
