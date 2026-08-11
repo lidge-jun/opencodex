@@ -11,6 +11,7 @@ export const LAB_AUTOMATION_HARD_MAX = Object.freeze({
   maxLiveRequestsPerHour: 30,
   failureCooldownMs: 24 * 60 * 60 * 1000,
   blockedCooldownMs: 7 * 24 * 60 * 60 * 1000,
+  terminalRunRetentionMs: 7 * 24 * 60 * 60 * 1000,
   maxQueuedRuns: 256,
   maxPersistedRuns: 512,
   maxAutomationRoutes: 64,
