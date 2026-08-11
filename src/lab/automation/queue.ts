@@ -26,13 +26,35 @@ function isRollingBudgetEvidence(run: LabAutomationRunRecordV1, now: number): bo
   return run.startedAt > cutoff && run.startedAt <= now;
 }
 
-/** Evict only disposable terminal history; trailing-window attempts are budget authority. */
+function isCancellationBackoffEvidence(run: LabAutomationRunRecordV1, now: number): boolean {
+  if (
+    run.trigger !== "scheduled"
+    || run.state !== "cancelled"
+    || run.terminalCode !== "cancelled"
+    || typeof run.completedAt !== "number"
+  ) {
+    return false;
+  }
+  const maxBackoffMs = Math.max(
+    LAB_AUTOMATION_HARD_MAX.failureCooldownMs,
+    LAB_AUTOMATION_HARD_MAX.schedulerTickMs,
+  );
+  return run.completedAt + maxBackoffMs > now;
+}
+
+/** Evict only disposable terminal history; budget and cancellation records remain authority. */
 function evictOldestTerminal(runs: LabAutomationRunRecordV1[], now: number): boolean {
   let oldestIndex = -1;
   let oldestTime = Number.POSITIVE_INFINITY;
   for (let index = 0; index < runs.length; index += 1) {
     const run = runs[index]!;
-    if (!isTerminal(run) || isRollingBudgetEvidence(run, now)) continue;
+    if (
+      !isTerminal(run)
+      || isRollingBudgetEvidence(run, now)
+      || isCancellationBackoffEvidence(run, now)
+    ) {
+      continue;
+    }
     const terminalAt = run.completedAt ?? run.updatedAt;
     if (terminalAt < oldestTime) {
       oldestTime = terminalAt;
@@ -172,9 +194,9 @@ export function trimTerminalRuns(state: LabAutomationStateV1, now: number): LabA
   const keepMs = LAB_AUTOMATION_HARD_MAX.terminalRunRetentionMs;
   const runs = state.runs.filter((row) => {
     if (!isTerminal(row)) return true;
-    // Retention is longer than the rolling budget window, but keep the authority check explicit
-    // so a future retention change cannot erase attempts that still bound provider traffic.
-    if (isRollingBudgetEvidence(row, now)) return true;
+    // Retention exceeds both the rolling budget window and maximum cancellation backoff.
+    // Keep both authority checks explicit so future retention changes cannot erase them.
+    if (isRollingBudgetEvidence(row, now) || isCancellationBackoffEvidence(row, now)) return true;
     const completedAt = row.completedAt ?? row.updatedAt;
     return now - completedAt < keepMs;
   });

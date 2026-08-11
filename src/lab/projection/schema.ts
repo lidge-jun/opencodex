@@ -2,7 +2,7 @@
  * Disposable SQLite projection schema for Compatibility Lab (CL-02).
  * Not canonical storage — rebuildable from JSONL + content-addressed artifacts.
  */
-export const LAB_SQLITE_SCHEMA_VERSION = 2;
+export const LAB_SQLITE_SCHEMA_VERSION = 3;
 
 export const LAB_SQLITE_DDL = `
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -48,6 +48,19 @@ CREATE TABLE IF NOT EXISTS observations (
 
 CREATE INDEX IF NOT EXISTS idx_observations_proj ON observations(
   subject_id, evidence_layer, suite_id, suite_version, suite_manifest_digest, completed_at
+);
+
+CREATE INDEX IF NOT EXISTS idx_observations_exact_identity ON observations(
+  evidence_layer,
+  subject_id,
+  suite_id,
+  suite_version,
+  suite_manifest_digest,
+  scenario_id,
+  scenario_version,
+  scenario_manifest_digest,
+  completed_at DESC,
+  event_id DESC
 );
 
 CREATE TABLE IF NOT EXISTS claims (
