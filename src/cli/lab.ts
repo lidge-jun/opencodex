@@ -59,7 +59,7 @@ import {
 } from "../lab/automation/persistence";
 import { planManualLabRun } from "../lab/automation/planner";
 import { listLabAutomationRuns } from "../lab/automation/runs-query";
-import type { LabAutomationLayer } from "../lab/automation/types";
+import { LabAutomationError, type LabAutomationLayer } from "../lab/automation/types";
 import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
 
 const USAGE = `Usage:
@@ -97,6 +97,7 @@ function labErrorMessage(err: unknown): string {
   if (err instanceof LabProjectionUnavailableError) return "lab projection is not available";
   if (err instanceof LabProjectionIncompatibleError) return "lab projection schema or spec version is incompatible";
   if (err instanceof InvalidCursorError) return "invalid cursor";
+  if (err instanceof LabAutomationError && err.code === "invalid_cursor") return "invalid cursor";
   return "lab read failed";
 }
 
@@ -189,11 +190,16 @@ function catalogLines(scenarios: ReturnType<typeof queryLabCatalogEntries>): str
 function automationStatusLines(status: ReturnType<typeof buildLabAutomationStatus>): string[] {
   return [
     `Automation enabled: ${status.policy.enabled}`,
-    `Scheduler running: ${status.schedulerRunning}`,
+    `Scheduler intent: ${status.policy.enabled ? "enabled" : "disabled"}`,
     `Layers: protocol=${status.policy.layers.protocolConformance} live=${status.policy.layers.liveRouteCompatibility} task=${status.policy.layers.taskEffectiveness}`,
     `Queued: ${status.counters.queued} | Running: ${status.counters.running}`,
     `Run budget remaining: ${status.counters.remainingRunBudget} | Live request budget: ${status.counters.remainingLiveRequestBudget}`,
   ];
+}
+
+function automationCliStatus(status: ReturnType<typeof buildLabAutomationStatus>) {
+  const { schedulerRunning: _processLocalSchedulerState, ...stable } = status;
+  return { ...stable, schedulerIntentEnabled: status.policy.enabled };
 }
 
 function runListLines(page: ReturnType<typeof listLabAutomationRuns>): string[] {
@@ -346,7 +352,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
             case "status": {
               rejectArgs(automationRest, USAGE);
               const status = buildLabAutomationStatus(configDir);
-              printData(status, wantsJson, automationStatusLines(status));
+              printData(automationCliStatus(status), wantsJson, automationStatusLines(status));
               return;
             }
             case "enable": {
@@ -354,12 +360,13 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               const enableLive = takeFlag(automationRest, "--live");
               rejectArgs(automationRest, USAGE);
               const selectionExplicit = enableProtocol || enableLive;
+              const current = loadLabAutomationPolicy(configDir);
               const policy = {
-                ...loadLabAutomationPolicy(configDir),
+                ...current,
                 enabled: true,
                 layers: {
-                  protocolConformance: selectionExplicit ? enableProtocol : true,
-                  liveRouteCompatibility: enableLive,
+                  protocolConformance: selectionExplicit ? enableProtocol : current.layers.protocolConformance,
+                  liveRouteCompatibility: selectionExplicit ? enableLive : current.layers.liveRouteCompatibility,
                   taskEffectiveness: false,
                 },
                 taskEffectivenessBackgroundEnabled: false,
@@ -368,7 +375,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               reconcileLabAutomationQueue(configDir);
               startLabAutomationScheduler(configDir);
               const status = buildLabAutomationStatus(configDir);
-              printData(status, wantsJson, automationStatusLines(status));
+              printData(automationCliStatus(status), wantsJson, automationStatusLines(status));
               return;
             }
             case "disable": {
@@ -376,9 +383,9 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               const policy = { ...loadLabAutomationPolicy(configDir), enabled: false };
               saveLabAutomationPolicy(policy, configDir);
               reconcileLabAutomationQueue(configDir);
-              stopLabAutomationScheduler();
+              stopLabAutomationScheduler(configDir);
               const status = buildLabAutomationStatus(configDir);
-              printData(status, wantsJson, automationStatusLines(status));
+              printData(automationCliStatus(status), wantsJson, automationStatusLines(status));
               return;
             }
             case "runs": {
