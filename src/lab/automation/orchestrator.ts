@@ -36,19 +36,34 @@ import { LabAutomationError } from "./types";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
 import { cancelQueuedRun } from "./queue";
 
-let schedulerTimer: ReturnType<typeof setInterval> | null = null;
-let tickInProgress = false;
+const schedulerTimers = new Map<string, ReturnType<typeof setInterval>>();
+const ticksInProgress = new Set<string>();
 let shutdownRequested = false;
-let dispatchDeps: AutomationDispatchDeps = {};
+const dispatchDepsByConfigDir = new Map<string, AutomationDispatchDeps>();
 const inFlightControllers = new Map<string, AbortController>();
 const cancellingRunIds = new Set<string>();
 
-export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): void {
-  dispatchDeps = deps;
+function configKey(configDir?: string): string {
+  return configDir ?? "";
 }
 
-export function isLabAutomationSchedulerRunning(): boolean {
-  return schedulerTimer !== null;
+function dispatchDepsFor(configDir?: string): AutomationDispatchDeps {
+  return dispatchDepsByConfigDir.get(configKey(configDir))
+    ?? dispatchDepsByConfigDir.get("")
+    ?? {};
+}
+
+export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): void {
+  const key = configKey(deps.configDir);
+  if (Object.keys(deps).length === 0) {
+    dispatchDepsByConfigDir.delete(key);
+    return;
+  }
+  dispatchDepsByConfigDir.set(key, deps);
+}
+
+export function isLabAutomationSchedulerRunning(configDir?: string): boolean {
+  return schedulerTimers.has(configKey(configDir));
 }
 
 export function requestLabAutomationShutdown(): void {
@@ -77,7 +92,7 @@ export function buildLabAutomationStatus(configDir?: string): LabAutomationStatu
       remainingRunBudget: runBudgetRemaining(policy, state, now),
       remainingLiveRequestBudget: liveRequestBudgetRemaining(policy, state, now),
     },
-    schedulerRunning: isLabAutomationSchedulerRunning(),
+    schedulerRunning: isLabAutomationSchedulerRunning(configDir),
   };
 }
 
@@ -131,9 +146,10 @@ export function reconcileLabAutomationQueue(configDir?: string): void {
   }));
 }
 
-function loadPlannerConfig(): import("../../types").OcxConfig | undefined {
+function loadPlannerConfig(configDir?: string): import("../../types").OcxConfig | undefined {
+  const runtimeDeps = dispatchDepsFor(configDir);
   try {
-    return dispatchDeps.loadConfig?.() ?? readConfigDiagnostics().config;
+    return runtimeDeps.loadConfig?.() ?? readConfigDiagnostics().config;
   } catch {
     return undefined;
   }
@@ -209,6 +225,14 @@ function finalizeRun(
     let next = state;
     if (cancelled || (error instanceof LabAutomationError && error.code === "cancelled")) {
       next = transitionRun(next, run.runId, "cancelled", completedAt, "cancelled");
+      if (run.trigger === "scheduled") {
+        next = setCooldown(
+          next,
+          run.runKey,
+          cooldownForFailure(policy, "cancelled", completedAt),
+          completedAt,
+        );
+      }
       return { state: trimTerminalRuns(next, completedAt), value: undefined };
     }
     if (result) {
@@ -220,20 +244,26 @@ function finalizeRun(
           next,
           run.runKey,
           cooldownForFailure(policy, result.cooldownCode, completedAt),
+          completedAt,
         );
       }
       return { state: trimTerminalRuns(next, completedAt), value: undefined };
     }
     const terminalCode = error instanceof LabAutomationError ? error.code : "dispatch_failure";
     next = transitionRun(next, run.runId, "failed", completedAt, terminalCode);
-    next = setCooldown(next, run.runKey, cooldownForFailure(policy, "harness_failure", completedAt));
+    next = setCooldown(
+      next,
+      run.runKey,
+      cooldownForFailure(policy, "harness_failure", completedAt),
+      completedAt,
+    );
     return { state: trimTerminalRuns(next, completedAt), value: undefined };
   });
 }
 
 async function runDispatchBatch(
   configDir?: string,
-  options: { manualRunId?: string } = {},
+  options: { manualRunId?: string; abortSignal?: AbortSignal } = {},
 ): Promise<void> {
   if (shutdownRequested) return;
   const initialPolicy = loadLabAutomationPolicy(configDir);
@@ -242,7 +272,7 @@ async function runDispatchBatch(
     reconcileLabAutomationQueue(configDir);
     return;
   }
-  const config = loadPlannerConfig();
+  const config = loadPlannerConfig(configDir);
   const snapshot = loadLabAutomationState(configDir);
   const planned = initialPolicy.enabled && options.manualRunId === undefined
     ? planLabAutomationRuns({
@@ -255,6 +285,8 @@ async function runDispatchBatch(
       })
     : [];
   let enqueuePlan = true;
+  // Dispatch is intentionally sequential inside one tick. The concurrency fields still bound
+  // atomic selection against already-running work and future parallel workers/processes.
   const maxDispatches = options.manualRunId ? 1 : Math.max(1, initialPolicy.maxConcurrentRuns);
   for (let dispatched = 0; dispatched < maxDispatches; dispatched += 1) {
     if (shutdownRequested) break;
@@ -272,14 +304,18 @@ async function runDispatchBatch(
     enqueuePlan = false;
     if (!run) break;
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort(options.abortSignal?.reason ?? new Error("cancelled"));
+    if (options.abortSignal?.aborted) abortFromCaller();
+    else options.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
     inFlightControllers.set(run.runId, controller);
     let result: DispatchResult | null = null;
     let error: unknown;
     try {
+      const runtimeDeps = dispatchDepsFor(configDir);
       const deps: AutomationDispatchDeps = {
-        ...dispatchDeps,
+        ...runtimeDeps,
         configDir,
-        loadConfig: dispatchDeps.loadConfig ?? (() => readConfigDiagnostics().config),
+        loadConfig: runtimeDeps.loadConfig ?? (() => readConfigDiagnostics().config),
         abortSignal: controller.signal,
         enforceRunIdentity: true,
       };
@@ -287,6 +323,7 @@ async function runDispatchBatch(
     } catch (caught) {
       error = caught;
     } finally {
+      options.abortSignal?.removeEventListener("abort", abortFromCaller);
       const cancelled = cancellingRunIds.has(run.runId) || controller.signal.aborted;
       finalizeRun(run, policy, configDir, result, error, cancelled);
       inFlightControllers.delete(run.runId);
@@ -298,17 +335,19 @@ async function runDispatchBatch(
 
 /** Single bounded scheduler tick — plan, enqueue, dispatch within concurrency limits. */
 export async function runLabAutomationTick(configDir?: string): Promise<void> {
-  if (tickInProgress) return;
-  tickInProgress = true;
+  const key = configKey(configDir);
+  if (ticksInProgress.has(key)) return;
+  ticksInProgress.add(key);
   try {
     await runDispatchBatch(configDir);
   } finally {
-    tickInProgress = false;
+    ticksInProgress.delete(key);
   }
 }
 
 export function startLabAutomationScheduler(configDir?: string): void {
-  if (schedulerTimer) return;
+  const key = configKey(configDir);
+  if (schedulerTimers.has(key)) return;
   shutdownRequested = false;
   const policy = loadLabAutomationPolicy(configDir);
   const routes = loadLabAutomationRoutes(configDir);
@@ -318,24 +357,32 @@ export function startLabAutomationScheduler(configDir?: string): void {
     next = reconcileQueuedState(next, policy, routes, now);
     return { state: trimTerminalRuns(next, now), value: undefined };
   });
-  schedulerTimer = setInterval(() => {
+  const timer = setInterval(() => {
     void runLabAutomationTick(configDir);
   }, LAB_AUTOMATION_HARD_MAX.schedulerTickMs);
-  schedulerTimer.unref?.();
+  timer.unref?.();
+  schedulerTimers.set(key, timer);
 }
 
 /** Stop periodic scheduling only. Process shutdown is a separate explicit signal. */
-export function stopLabAutomationScheduler(): void {
-  if (schedulerTimer) {
-    clearInterval(schedulerTimer);
-    schedulerTimer = null;
+export function stopLabAutomationScheduler(configDir?: string): void {
+  if (configDir !== undefined) {
+    const key = configKey(configDir);
+    const timer = schedulerTimers.get(key);
+    if (timer) clearInterval(timer);
+    schedulerTimers.delete(key);
+    return;
   }
+  for (const timer of schedulerTimers.values()) clearInterval(timer);
+  schedulerTimers.clear();
 }
 
 /** Test-only reset of scheduler globals between isolated automation tests. */
 export function resetLabAutomationSchedulerStateForTests(): void {
+  stopLabAutomationScheduler();
   shutdownRequested = false;
-  tickInProgress = false;
+  ticksInProgress.clear();
+  dispatchDepsByConfigDir.clear();
   inFlightControllers.clear();
   cancellingRunIds.clear();
 }
@@ -343,6 +390,7 @@ export function resetLabAutomationSchedulerStateForTests(): void {
 export async function enqueueManualLabRun(
   planned: import("./types").PlannedLabRunV1,
   configDir?: string,
+  abortSignal?: AbortSignal,
 ): Promise<LabAutomationRunRecordV1 | null> {
   const now = Date.now();
   const created = mutateLabAutomationState(configDir, (state) => {
@@ -354,7 +402,7 @@ export async function enqueueManualLabRun(
   });
   if (!created) return null;
   // Manual execution is independent of automation enablement/layer toggles.
-  await runDispatchBatch(configDir, { manualRunId: created.runId });
+  await runDispatchBatch(configDir, { manualRunId: created.runId, abortSignal });
   return loadLabAutomationState(configDir).runs.find((row) => row.runId === created.runId) ?? created;
 }
 
@@ -365,9 +413,15 @@ export function cancelLabAutomationRun(runId: string, configDir?: string): boole
     controller.abort(new Error("cancelled"));
     return true;
   }
+  const policy = loadLabAutomationPolicy(configDir);
+  const now = Date.now();
   return mutateLabAutomationState(configDir, (state) => {
     const run = state.runs.find((row) => row.runId === runId);
     if (!run || run.state !== "queued") return { state, value: false };
-    return { state: cancelQueuedRun(state, runId, Date.now()), value: true };
+    let next = cancelQueuedRun(state, runId, now);
+    if (run.trigger === "scheduled") {
+      next = setCooldown(next, run.runKey, cooldownForFailure(policy, "cancelled", now), now);
+    }
+    return { state: next, value: true };
   });
 }
