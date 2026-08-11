@@ -726,15 +726,19 @@ describe("durable antigravity replay snapshot", () => {
 
   test("background snapshot failures log a redacted warning and keep the service running", async () => {
     const warn = spyOn(console, "warn");
-    setAntigravityReplayWriteSeamForTests({
-      afterTempWrite: async () => { throw new Error("simulated disk failure"); },
-    });
-    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
-    // Let the 2s debounce timer fire and fail.
-    await Bun.sleep(2_100);
-    expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
-    // The failure must not wedge the cache: a later mutation still works.
-    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
-    expect(antigravityReplayMetrics().calls).toBe(2);
+    try {
+      setAntigravityReplayWriteSeamForTests({
+        afterTempWrite: async () => { throw new Error("simulated disk failure"); },
+      });
+      observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+      // Let the 2s debounce timer fire and fail.
+      await Bun.sleep(2_100);
+      expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
+      // The failure must not wedge the cache: a later mutation still works.
+      observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
+      expect(antigravityReplayMetrics().calls).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

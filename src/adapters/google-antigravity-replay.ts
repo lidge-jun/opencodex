@@ -44,6 +44,9 @@ const REPLAY_SESSION_KEY_BYTES = 64;
 const REPLAY_SNAPSHOT_FILE = "antigravity-replay.json";
 const REPLAY_SNAPSHOT_VERSION = 1;
 const REPLAY_SNAPSHOT_DEBOUNCE_MS = 2_000;
+/** Upper bound on flush retries: mutations arriving faster than writes complete
+ * must not let shutdown hang; the last completed write is already on disk. */
+const REPLAY_FLUSH_MAX_ATTEMPTS = 8;
 /** Write bound for the durable snapshot (mirrors the responses-state cap). */
 const REPLAY_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 /** Refuse-to-parse ceiling for an existing snapshot file. */
@@ -215,7 +218,7 @@ export async function flushAntigravityReplay(): Promise<void> {
   // Persist until the durable generation catches up with the latest mutation:
   // a change that lands while a writer is in flight must not be lost when
   // shutdown exits right after the first write completes.
-  for (;;) {
+  for (let attempt = 0; attempt < REPLAY_FLUSH_MAX_ATTEMPTS; attempt += 1) {
     if (replaySnapshotPersistTimer || replayMutationGeneration > replayWrittenGeneration) {
       await persistReplaySnapshotNow();
     }
