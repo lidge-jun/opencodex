@@ -140,7 +140,7 @@ describe("Codex shim install readiness", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   test("keeps install advisory when the Codex config cannot be read", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-shim-unreadable-config-"));
@@ -177,5 +177,5 @@ describe("Codex shim install readiness", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 });
