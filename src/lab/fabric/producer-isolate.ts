@@ -14,6 +14,13 @@ import { FabricTaskError } from "./types";
 
 const CHILD_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "producer-child.ts");
 
+type FabricProducerIsolationLimits = {
+  totalTimeoutMs: number;
+  inactivityTimeoutMs: number;
+};
+
+let testIsolationLimits: FabricProducerIsolationLimits | undefined;
+
 interface IsolateRequest {
   harnessKind?: FabricHarnessProducerKind;
   executorModulePath?: string;
@@ -181,6 +188,8 @@ export async function runIsolatedFabricProducer(request: IsolateRequest): Promis
       harnessKind: request.harnessKind,
       executorModulePath: request.executorModulePath,
       scratchRoot: request.scratchRoot,
+      totalTimeoutMs: request.totalTimeoutMs,
+      inactivityTimeoutMs: request.inactivityTimeoutMs,
       executorInput: request.executorInput
         ? {
             routeContext: request.executorInput.routeContext,
@@ -240,8 +249,26 @@ export async function runIsolatedFabricProducer(request: IsolateRequest): Promis
   });
 }
 
+/** Internal test seam. Production callers cannot arm it without the test-home guard. */
+export function setFabricProducerIsolationLimitsForTests(limits?: FabricProducerIsolationLimits): void {
+  if (process.env.OCX_TEST_HOME_GUARD !== "1") {
+    throw new Error("fabric isolation limits can only be overridden by the test harness");
+  }
+  if (limits && (
+    !Number.isFinite(limits.totalTimeoutMs)
+    || !Number.isFinite(limits.inactivityTimeoutMs)
+    || limits.totalTimeoutMs <= 0
+    || limits.inactivityTimeoutMs <= 0
+    || limits.inactivityTimeoutMs >= limits.totalTimeoutMs
+  )) {
+    throw new Error("invalid fabric test isolation limits");
+  }
+  testIsolationLimits = limits ? { ...limits } : undefined;
+}
+
 /** Default isolation limits for fabric producer child processes. */
-export function fabricProducerIsolationLimits(): { totalTimeoutMs: number; inactivityTimeoutMs: number } {
+export function fabricProducerIsolationLimits(): FabricProducerIsolationLimits {
+  if (testIsolationLimits) return { ...testIsolationLimits };
   return {
     totalTimeoutMs: FABRIC_LIMITS.totalTimeoutMs,
     inactivityTimeoutMs: FABRIC_LIMITS.inactivityTimeoutMs,
