@@ -6,7 +6,7 @@ import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../resp
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -1213,22 +1213,32 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let url: string;
 
       if (provider.authMode === "forward") {
+        const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
         // OAuth passthrough: ChatGPT backend path is `${baseUrl}/responses` (no /v1).
-        url = `${provider.baseUrl}/responses`;
+        const baseUrl = mayForwardCallerCredentials
+          ? CODEX_FORWARD_BASE_URL
+          : provider.baseUrl.replace(/\/+$/, "");
+        url = `${baseUrl}/responses`;
         if (provider.headers) Object.assign(headers, provider.headers); // static headers first…
         const runtimeProvider = provider as {
           _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
           _codexAccountRequired?: boolean;
         };
-        if (runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
+        if (
+          mayForwardCallerCredentials
+          && runtimeProvider._codexAccountRequired
+          && !runtimeProvider._codexAccountOverride
+        ) {
           throw new Error("Codex pool account auth is required but unavailable");
         }
-        for (const h of FORWARD_HEADERS) {
-          const v = incoming?.headers.get(h);
-          if (v) headers[h] = v;                                        // …so forwarded auth always wins.
+        if (mayForwardCallerCredentials) {
+          for (const h of FORWARD_HEADERS) {
+            const v = incoming?.headers.get(h);
+            if (v) headers[h] = v;                                      // …so forwarded auth always wins.
+          }
         }
         const override = runtimeProvider._codexAccountOverride;
-        if (override) {
+        if (override && mayForwardCallerCredentials) {
           headers["authorization"] = `Bearer ${override.accessToken}`;
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
