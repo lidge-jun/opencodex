@@ -8,6 +8,35 @@ import type {
 } from "./types";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
 
+const TERMINAL_STATES = new Set<LabAutomationRunState>([
+  "completed",
+  "blocked",
+  "failed",
+  "cancelled",
+  "abandoned",
+]);
+
+function isTerminal(run: LabAutomationRunRecordV1): boolean {
+  return TERMINAL_STATES.has(run.state);
+}
+
+function evictOldestTerminal(runs: LabAutomationRunRecordV1[]): boolean {
+  let oldestIndex = -1;
+  let oldestTime = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < runs.length; index += 1) {
+    const run = runs[index]!;
+    if (!isTerminal(run)) continue;
+    const terminalAt = run.completedAt ?? run.updatedAt;
+    if (terminalAt < oldestTime) {
+      oldestTime = terminalAt;
+      oldestIndex = index;
+    }
+  }
+  if (oldestIndex < 0) return false;
+  runs.splice(oldestIndex, 1);
+  return true;
+}
+
 export function countRunsByState(state: LabAutomationStateV1, runState: LabAutomationRunState): number {
   return state.runs.filter((row) => row.state === runState).length;
 }
@@ -36,9 +65,13 @@ export function enqueuePlannedRuns(
       .map((row) => row.runKey),
   );
   const runs = [...state.runs];
+  let queuedCount = runs.filter((row) => row.state === "queued").length;
   for (const plan of planned) {
     if (existingActiveKeys.has(plan.runKey)) continue;
-    if (runs.length >= LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) break;
+    if (queuedCount >= LAB_AUTOMATION_HARD_MAX.maxQueuedRuns) break;
+    while (runs.length >= LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
+      if (!evictOldestTerminal(runs)) return { ...state, runs };
+    }
     runs.push({
       runId: randomUUID(),
       runKey: plan.runKey,
@@ -60,6 +93,7 @@ export function enqueuePlannedRuns(
       ...(plan.providerName ? { providerName: plan.providerName } : {}),
       ...(plan.modelId ? { modelId: plan.modelId } : {}),
     });
+    queuedCount += 1;
     existingActiveKeys.add(plan.runKey);
   }
   return { ...state, runs };
@@ -97,44 +131,45 @@ export function selectDispatchableRuns(
   policy: LabAutomationPolicyV1,
   state: LabAutomationStateV1,
   now: number,
+  predicate: (run: LabAutomationRunRecordV1) => boolean = () => true,
 ): LabAutomationRunRecordV1[] {
   const running = countRunsByState(state, "running");
   if (running >= policy.maxConcurrentRuns) return [];
   const slots = policy.maxConcurrentRuns - running;
   const queued = state.runs
-    .filter((row) => row.state === "queued" && row.eligibleAt <= now)
+    .filter((row) => row.state === "queued" && row.eligibleAt <= now && predicate(row))
     .sort((a, b) => {
       if (a.priority !== b.priority) return a.priority - b.priority;
       if (a.eligibleAt !== b.eligibleAt) return a.eligibleAt - b.eligibleAt;
       return a.runId < b.runId ? -1 : 1;
     });
   const selected: LabAutomationRunRecordV1[] = [];
+  const selectedPerRoute = new Map<string, number>();
   let liveRunning = countRunningLive(state);
   for (const row of queued) {
     if (selected.length >= slots) break;
-    if (countRunsByState({ ...state, runs: [...state.runs, ...selected.map((s) => ({ ...s, state: "running" as const }))] }, "running") >= policy.maxConcurrentRuns) break;
+    const runningForRoute = countRunningForRoute(state, row.subjectId);
+    const selectedForRoute = selectedPerRoute.get(row.subjectId) ?? 0;
+    if (runningForRoute + selectedForRoute >= policy.maxConcurrentRunsPerRoute) continue;
     if (row.evidenceLayer === "live_route_compatibility") {
       if (liveRunning >= policy.maxConcurrentLiveRuns) continue;
-      if (countRunningForRoute(state, row.subjectId) >= policy.maxConcurrentRunsPerRoute) continue;
-    } else if (countRunningForRoute(state, row.subjectId) >= policy.maxConcurrentRunsPerRoute) {
-      continue;
     }
     selected.push(row);
+    selectedPerRoute.set(row.subjectId, selectedForRoute + 1);
     if (row.evidenceLayer === "live_route_compatibility") liveRunning += 1;
   }
   return selected;
 }
 
 export function trimTerminalRuns(state: LabAutomationStateV1, now: number): LabAutomationStateV1 {
-  const terminal = new Set<LabAutomationRunState>(["completed", "blocked", "failed", "cancelled", "abandoned"]);
   const keepMs = 7 * 24 * 60 * 60 * 1000;
   const runs = state.runs.filter((row) => {
-    if (!terminal.has(row.state)) return true;
+    if (!isTerminal(row)) return true;
     const completedAt = row.completedAt ?? row.updatedAt;
     return now - completedAt < keepMs;
   });
-  if (runs.length > LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
-    return { ...state, runs: runs.slice(-LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) };
+  while (runs.length > LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
+    if (!evictOldestTerminal(runs)) break;
   }
   return { ...state, runs };
 }
