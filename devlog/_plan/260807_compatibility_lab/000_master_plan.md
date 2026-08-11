@@ -273,8 +273,8 @@ Only CL-00 is authorized by this document at present.
 | CL-03 | Bounded live-route probes | Not started |
 | CL-04 | Lab CLI and management read surfaces | Not started |
 | CL-05 | Compatibility Matrix UI | Not started |
-| CL-06 | Existing Routing Profile compatibility controls and Router Intelligence consumption | Not started |
-| CL-07 | Agent Fabric task-effectiveness ingestion | Not started |
+| CL-06 | Existing Routing Profile compatibility controls and Router Intelligence consumption | **ACCEPTED/CLOSED** — merged #1394 at `b66e33ce7207d91014644d99317e456c992a3418` |
+| CL-07 | Agent Fabric task-effectiveness ingestion | **ACCEPTED/CLOSED** — merged #1438 at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600` |
 | CL-08 | Shadow/automatic/public evidence workflows | Not started |
 
 Phase numbering after CL-01 is programme planning, not implementation

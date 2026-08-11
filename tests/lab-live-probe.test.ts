@@ -12,6 +12,7 @@ import {
 import { createHostIssuedLabRouteExecutor } from "../src/lib/lab-live-host";
 import { replayLabLedger } from "../src/lab/ledger/store";
 import { clearMcpStub } from "../src/lab/live/mcp-loopback";
+import { TransportError } from "../src/lab/live/transport";
 import { expandLiveSuiteManifest } from "../src/lab/live/suite-manifest";
 import type { LabBehaviorValues, LabRouteContext, LiveScenarioRunResult } from "../src/lab/live/types";
 import type { ProtocolSubjectV1, RouteSubjectV1 } from "../src/lab/events/types";
@@ -181,5 +182,23 @@ describe("CL-03 live probe harness", () => {
     const home = tempHome(); process.env.OPENCODEX_HOME = home; const authority = loadLiveCaseAuthority(); const scenario = authority.cases.find((c) => c.id === "reasoning-core.live.replay")!;
     const result = await runLiveScenario(scenario, mockRoute({ requiredClaims: ["reasoning"] }), { configDir: home, resolve: async () => [{ address: "93.184.216.34", family: 4 }], routeExecutor: trustedObservation(reasoningObservation()) });
     expect(result.passed).toBe(true); const { event } = observationFromLiveResult(result, scenario, authority, { configDir: home }); expect(JSON.stringify(event)).not.toContain("PLAN");
+  });
+
+  test("inactivity_timeout failures attribute environment on observation", async () => {
+    const home = tempHome();
+    process.env.OPENCODEX_HOME = home;
+    const authority = loadLiveCaseAuthority();
+    const caseRecord = authority.cases[0]!;
+    const result = await runLiveScenario(caseRecord, mockRoute(), {
+      configDir: home,
+      resolve: async () => [{ address: "93.184.216.34", family: 4 }],
+      routeExecutor: createHostIssuedLabRouteExecutor(async () => {
+        throw new TransportError("inactivity_timeout", "inactivity timeout exceeded");
+      }),
+    });
+    expect(result.classification).toBe("inactivity_timeout");
+    const { event } = observationFromLiveResult(result, caseRecord, authority, { configDir: home });
+    expect(event.failure?.class).toBe("inactivity_timeout");
+    expect(event.failure?.attribution).toBe("environment");
   });
 });

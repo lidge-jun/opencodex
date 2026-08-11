@@ -371,7 +371,7 @@ Claude Code's `/effort` setting is preserved across the adapter:
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Effort passed directly (`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, above→`high` |
-| `thinking.type: "disabled"` | Reasoning parameters omitted entirely |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }`; summary omitted |
 
 The resolved value appears in the request log's **Reasoning effort** column.
 
@@ -389,7 +389,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `thinking` / `redacted_thinking` replay | Dropped |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

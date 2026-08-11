@@ -1257,6 +1257,29 @@ describe("GitHub Actions hardening", () => {
     }
 
     /**
+     * Run the read-only `resolve-pr` job's SHA-to-PR resolver in the same
+     * harness scope the write gate gets. The resolver is a separate inline
+     * script from `enforce-target`; compiling it on its own lets a test pin
+     * what `pull-number` it publishes for a given associated-PR / open-PR
+     * state. This is the exact surface where the stale-commit-index bug
+     * (PR #1441) lived, so the head-SHA fallback is asserted here.
+     */
+    async function runResolver(options: Parameters<typeof runEnforcePrTarget>[1]) {
+      const text = await readText(".github/workflows/enforce-pr-target.yml");
+      const workflow = Bun.YAML.parse(text) as {
+        jobs?: Record<string, { steps?: Array<{ name?: string; with?: { script?: string } }> }>;
+      };
+      const step = workflow.jobs?.["resolve-pr"]?.steps?.find(
+        s => s.name === "Resolve trusted gate event to PR",
+      );
+      const resolverScript = step?.with?.script;
+      if (typeof resolverScript !== "string") {
+        throw new Error("resolve-pr step has no inline script");
+      }
+      return runEnforcePrTarget(stripComments(resolverScript), options);
+    }
+
+    /**
      * Run an arbitrary body in the same scope the workflow script gets, and
      * hand back what it returned.
      *
@@ -2888,6 +2911,127 @@ describe("GitHub Actions hardening", () => {
       ]);
       expect(callsTo(result, "repos.listPullRequestsAssociatedWithCommit")).toEqual([]);
       expect(methodsOf(result)).toContain("issues.listComments");
+    });
+
+    test("the resolver falls back to the head SHA when the commit-PR index is empty", async () => {
+      const headSha = "6c42d17f213a632fc2def56053f0cd574b13d459";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 4242, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        // GitHub's commit-to-PR index can lag a fresh push (seen on #1441):
+        // the association endpoint returns no PR for a genuine current head.
+        associatedPullRequests: [],
+        openPulls: [
+          { number: 4242, state: "open", head: { sha: headSha } },
+          { number: 9999, state: "open", head: { sha: "other" } },
+          { number: 100, state: "closed", head: { sha: headSha } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([{ name: "pull-number", value: "4242" }]);
+      // The fallback must consult the live open-PR list exactly once.
+      expect(callsTo(result, "repos.listPullRequestsAssociatedWithCommit")).toHaveLength(1);
+      expect(callsTo(result, "pulls.list")).toHaveLength(1);
+      expect(result.logs.join(" ")).toContain("Associated-index fallback");
+      // A closed PR with the same head must not count as a candidate.
+      expect(result.logs.join(" ")).toContain("1 open PR(s) match head");
+    });
+
+    test("the resolver skips when the fallback finds no unique open head match", async () => {
+      const headSha = "6c42d17f213a632fc2def56053f0cd574b13d459";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 4242, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [],
+        // No open PR carries this head; the stale index is not a match.
+        openPulls: [
+          { number: 9999, state: "open", head: { sha: "other" } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([]);
+      // The fallback must actually have run: the resolver consults the live
+      // open-PR list exactly once. Without this assertion the test would still
+      // pass if the fallback were removed (the empty association index by
+      // itself already skips), silently losing coverage of the head-SHA
+      // reconciliation path.
+      expect(callsTo(result, "pulls.list")).toHaveLength(1);
+      expect(callsTo(result, "pulls.list")[0]).toMatchObject({
+        owner: "lidge-jun",
+        repo: "opencodex",
+        state: "open",
+      });
+      expect(result.logs.join(" ")).toContain("skipping ambiguous/stale revalidation");
+    });
+
+    test("the resolver fails closed when two open PRs share the head SHA", async () => {
+      const headSha = "6c42d17f213a632fc2def56053f0cd574b13d459";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 4242, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [],
+        // Two open PRs on the same head: the live lookup is ambiguous, so the
+        // resolver must fail closed rather than guess which PR to revalidate.
+        openPulls: [
+          { number: 4242, state: "open", head: { sha: headSha } },
+          { number: 7777, state: "open", head: { sha: headSha } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([]);
+      // The live fallback must actually have run before the ambiguity is
+      // detected: the resolver consults the open-PR list exactly once and
+      // weighs both same-head candidates before failing closed. Without this
+      // assertion the test would still pass if the fallback were removed (the
+      // empty association index by itself already skips), silently losing
+      // coverage of the head-SHA reconciliation path.
+      expect(callsTo(result, "pulls.list")).toHaveLength(1);
+      expect(callsTo(result, "pulls.list")[0]).toMatchObject({
+        owner: "lidge-jun",
+        repo: "opencodex",
+        state: "open",
+      });
+      expect(result.logs.join(" ")).toContain("skipping ambiguous/stale revalidation");
+    });
+
+    test("the resolver resolves via the association index when it is already fresh", async () => {
+      const headSha = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 42, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [
+          { number: 42, state: "open", head: { sha: headSha } },
+        ],
+      });
+
+      expect(result.outputs).toEqual([{ name: "pull-number", value: "42" }]);
+      // A unique index hit must not need the open-PR fallback.
+      expect(callsTo(result, "pulls.list")).toEqual([]);
+    });
+
+    test("the resolver fails closed when both resolution paths error", async () => {
+      const headSha = "6c42d17f213a632fc2def56053f0cd574b13d459";
+      const result = await runResolver({
+        pr: { base: { ref: "dev" }, number: 4242, head: { sha: headSha } },
+        eventName: "status",
+        statusSha: headSha,
+        associatedPullRequests: [],
+        failOn: [
+          "repos.listPullRequestsAssociatedWithCommit",
+          "pulls.list",
+        ],
+      });
+
+      expect(result.outputs).toEqual([]);
+      expect(result.logs.join(" ")).toContain("skipping ambiguous/stale revalidation");
+      expect(result.warnings.join(" ")).toContain(
+        "Could not list PRs associated with commit",
+      );
+      expect(result.warnings.join(" ")).toContain("Could not list open PRs");
     });
 
     test("a non-maintainer issue_comment does not re-run the gate", async () => {

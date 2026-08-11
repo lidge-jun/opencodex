@@ -204,6 +204,33 @@ to v1. A `"v2"`, `null`, or absent surface value is eligible; a real `"v1"` pin 
 No. Start a new Codex session after changing the mode. If a long-running App host still shows stale
 catalog state, run `ocx sync` and restart that Codex surface.
 
+### What happens when opencodex cannot trust the catalog?
+
+opencodex compares the on-disk model catalog against the start time of every Codex app-server owned
+by the current user, producing one of four states:
+
+| State | Meaning | v2 guidance |
+|---|---|---|
+| `fresh` | Every app-server started after the catalog was written | Full guidance: preferred model, roster, fallbacks |
+| `not_running` | No app-server detected | Full guidance |
+| `stale` | At least one app-server predates the catalog | **No opencodex-authored model guidance** |
+| `unknown` | The comparison could not be made | **No opencodex-authored model guidance** |
+
+For `stale` and `unknown`, opencodex withholds its own disk-derived claims — preferred model, roster,
+fallback and custom guidance — because the running Codex may not be able to spawn what the disk
+catalog advertises.
+
+It does **not** instruct the model to stop setting `model` or `reasoning_effort`. That observation is
+global across every app-server for the user, while an inbound request carries no sender identity, so
+a stale process cannot be attributed to the request in front of us. Prohibiting overrides on that
+basis would block options the active `spawn_agent` tool legitimately advertises, for a session that
+may well be fresh. The active tool schema stays authoritative.
+
+`unknown` is not a synonym for `stale`. It means the comparison itself failed — an unreadable catalog
+timestamp, an unreadable process start time, or a failed process enumeration — and it is reported
+separately by `ocx doctor`. `stale` clears only after every detected Codex app-server starts after
+the final catalog write; it does not necessarily clear `unknown`.
+
 ### Reasoning effort
 
 `injectionEffort` affects only delegated-worker guidance and, when explicitly enabled, native Codex

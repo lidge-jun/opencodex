@@ -125,6 +125,53 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("validates and exposes structured-output model opt-outs", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      noStructuredOutputModels: ["deepseek-v4-flash"],
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const noStructuredOutputModels of [
+      "deepseek-v4-flash",
+      [""],
+      ["   "],
+      [42],
+    ]) {
+      expect(providerManagementConfigError("relay", {
+        ...provider,
+        noStructuredOutputModels,
+      })).toContain("noStructuredOutputModels");
+    }
+
+    const dto = safeConfigDTO({
+      port: 10100,
+      defaultProvider: "relay",
+      providers: { relay: provider },
+    } as OcxConfig) as { providers: Record<string, { noStructuredOutputModels?: string[] }> };
+    expect(dto.providers.relay?.noStructuredOutputModels).toEqual(["deepseek-v4-flash"]);
+  });
+
+  test("normalizes hand-edited structured-output model opt-outs at load", () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          noStructuredOutputModels: [" deepseek-v4-flash ", "deepseek-v4-flash", " other-model "],
+        },
+      },
+    }));
+
+    expect(loadConfig().providers.relay?.noStructuredOutputModels)
+      .toEqual(["deepseek-v4-flash", "other-model"]);
+  });
+
   test("provider management rejects modelCosts rows with extra fields", () => {
     const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",
@@ -1058,6 +1105,68 @@ describe("provider management validation", () => {
         providers: Record<string, { liveModels?: boolean }>;
       };
       expect(saved.providers["discovery-toggle"].liveModels).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider PATCH persists and clears structured-output model opt-outs", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    try {
+      const createRes = await fetch(new URL("/api/providers", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "structured-output-toggle",
+          provider: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example/v1",
+            liveModels: false,
+            models: ["deepseek-v4-flash"],
+          },
+        }),
+      });
+      expect(createRes.status).toBe(200);
+
+      const invalid = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ noStructuredOutputModels: "deepseek-v4-flash" }),
+      });
+      expect(invalid.status).toBe(400);
+
+      const patchRes = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          noStructuredOutputModels: [" deepseek-v4-flash ", "deepseek-v4-flash"],
+        }),
+      });
+      expect(patchRes.status).toBe(200);
+
+      const providers = await fetch(new URL("/api/providers", server.url)).then(response => response.json()) as Array<{
+        name: string;
+        noStructuredOutputModels?: string[];
+      }>;
+      expect(providers.find(provider => provider.name === "structured-output-toggle")?.noStructuredOutputModels)
+        .toEqual(["deepseek-v4-flash"]);
+
+      const clearRes = await fetch(new URL("/api/providers?name=structured-output-toggle", server.url), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ noStructuredOutputModels: null }),
+      });
+      expect(clearRes.status).toBe(200);
+
+      const saved = await fetch(new URL("/api/config", server.url)).then(response => response.json()) as {
+        providers: Record<string, { noStructuredOutputModels?: string[] }>;
+      };
+      expect(saved.providers["structured-output-toggle"].noStructuredOutputModels).toBeUndefined();
     } finally {
       await server.stop(true);
     }

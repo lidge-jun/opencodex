@@ -476,7 +476,22 @@ describe("provider registry parity", () => {
     expect(nvidia?.freeTier).toBe(true);
     expect(nvidia?.authKind).toBe("key");
     expect(nvidia?.keyOptional).toBeUndefined();
+    // nous is a MIXED free/paid provider: the free tier is per-model (the
+    // `:free` slugs), not a property of the whole provider, so it is not in
+    // the provider-level freeTier list (see review feedback on PR #1397).
     expect(freeTierProviders).toEqual(["scaleway", "nvidia", "cloudflare-workers-ai"]);
+  });
+
+  test("nous exposes free models at model level, not provider level", () => {
+    const nous = PROVIDER_REGISTRY.find(entry => entry.id === "nous");
+    expect(nous?.freeTier).toBe(false);
+    const freeSlugs = (nous?.models ?? []).filter(m => m.endsWith(":free"));
+    expect(freeSlugs).toEqual([
+      "tencent/hy3:free",
+      "poolside/laguna-s-2.1:free",
+      "stepfun/step-3.7-flash:free",
+      "poolside/laguna-xs-2.1:free",
+    ]);
   });
 
   test("freeTier propagates through config seed, enrich backfill, and presets without overwriting user config", async () => {
@@ -687,7 +702,7 @@ describe("provider registry parity", () => {
   test("GUI preset projection preserves current featured set plus key catalog and custom", () => {
     const featured = deriveFeaturedProviderIds();
     expect(featured).toEqual([
-      "openai", "xai", "command-code", "anthropic", "anthropic-apikey", "kimi", "openai-apikey", "umans", "opencode-go", "openrouter",
+      "openai", "xai", "command-code", "anthropic", "anthropic-apikey", "kimi", "nous", "openai-apikey", "umans", "opencode-go", "openrouter",
       "groq", "google", "azure-openai", "ollama", "vllm", "lm-studio", "opencode-free",
       "mimo-free",
     ]);

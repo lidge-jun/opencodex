@@ -29,6 +29,7 @@ import {
   jcsStringify,
   subjectIdForSubject,
 } from "../digest";
+import { FAILURE_CLASSIFICATIONS } from "../conformance/types";
 import type {
   ArtifactRefV1,
   ClaimCapabilityFactsV1,
@@ -408,7 +409,7 @@ function validateObservation(raw: Record<string, unknown>): ObservationEvent {
   if (raw.failure !== undefined) {
     if (!isPlainObject(raw.failure)) throw new LabValidationError("invalid_failure", "failure");
     event.failure = {
-      class: assertString(raw.failure.class, "failure.class"),
+      class: assertClosed(raw.failure.class, "failure.class", FAILURE_CLASSIFICATIONS),
       code: assertString(raw.failure.code, "failure.code"),
       retryable: raw.failure.retryable === true,
       attribution: assertClosed(raw.failure.attribution, "failure.attribution", [

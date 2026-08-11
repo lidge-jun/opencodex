@@ -8,8 +8,8 @@ import { jcsStringify } from "../digest";
 import { redactSecretString } from "../../lib/redact";
 
 const FORBIDDEN_KEY = /^(?:authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|x-api-key|token|secret|password|email|prompt|messages|content|body|url|hostname|baseUrl|path|account|alias)$/i;
-const SECRETISH = /sk-[a-z0-9]{10,}|Bearer\s+[A-Za-z0-9._\-]+|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}/i;
-const SECRETISH_GLOBAL = /sk-[a-z0-9]{10,}|Bearer\s+[A-Za-z0-9._\-]+|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}/gi;
+const SECRETISH = /sk-[a-z0-9]{10,}|credential-canary-[a-z0-9]{10,}|Bearer\s+[A-Za-z0-9._\-]+|ghp_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}/i;
+const SECRETISH_GLOBAL = new RegExp(SECRETISH.source, "gi");
 
 export function redactForArtifact(artifactClass: ArtifactClass, payload: unknown): unknown {
   if (

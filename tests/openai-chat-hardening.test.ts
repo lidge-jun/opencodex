@@ -436,4 +436,27 @@ describe("openai-chat response_format emission", () => {
       json_schema: { name: "answer" },
     });
   });
+
+  test("omits response_format only for an explicitly opted-out model", () => {
+    const adapter = createOpenAIChatAdapter(provider({
+      noStructuredOutputModels: ["test-model"],
+    }));
+    const options: OcxParsedRequest["options"] = {
+      textFormat: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true },
+    };
+
+    const optedOut = adapter.buildRequest({ ...parsed(), options });
+    const supportedSibling = adapter.buildRequest({ ...parsed(), modelId: "supported-model", options });
+    const colonVariant = adapter.buildRequest({ ...parsed(), modelId: "test-model:structured", options });
+
+    expect(bodyOf(optedOut).response_format).toBeUndefined();
+    expect(bodyOf(supportedSibling).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+    expect(bodyOf(colonVariant).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+  });
 });

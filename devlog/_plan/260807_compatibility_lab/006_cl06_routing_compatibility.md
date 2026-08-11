@@ -336,4 +336,4 @@ Pressure-tested against CL-00/CL-05 codebase at `1072b9c`:
 - **State:** ACCEPTED / CLOSED
 - **Merge commit:** `b66e33ce7207d91014644d99317e456c992a3418`
 - **Source head:** `b96eae83f2a6d1654472aeeef84799070743aeb8`
-- **CL-07:** Not started (explicit non-goal)
+- **CL-07:** **ACCEPTED/CLOSED** (merged #1438)

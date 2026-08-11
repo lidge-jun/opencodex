@@ -8,6 +8,8 @@ import {
   hasOwnProvider,
   isValidProviderName,
   multiAgentGuidanceEnabled,
+  nonBlankStringArrayConfigError,
+  normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
@@ -205,6 +207,19 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
+    const value = rawBody.noStructuredOutputModels;
+    if (value === null) {
+      delete next.noStructuredOutputModels;
+    } else {
+      const error = nonBlankStringArrayConfigError(value, "noStructuredOutputModels");
+      if (error) return { error };
+      const models = normalizeNonBlankStringArray(value as string[]);
+      if (models.length > 0) next.noStructuredOutputModels = models;
+      else delete next.noStructuredOutputModels;
+    }
+    touched = true;
+  }
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -291,6 +306,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      noStructuredOutputModels: p.noStructuredOutputModels,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,

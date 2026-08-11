@@ -18,6 +18,7 @@ export * from "./ledger/artifact-refs";
 export * from "./projection/verification";
 export * from "./observe/from-conformance";
 export * from "./observe/from-live";
+export * from "./fabric";
 export * from "./live/manifest";
 export * from "./live/runner";
 export * from "./live/executor";

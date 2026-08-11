@@ -14,15 +14,31 @@ import {
 import {
   suiteManifestDigestForCase,
 } from "../conformance/suite-manifest";
+import {
+  discoverFabricScenarios,
+  expandFabricScenario,
+  fabricSuiteManifestDigest,
+  loadFabricCaseAuthority,
+} from "../fabric/manifest";
 import { scenarioManifestDigest } from "../digest";
-import type { CaseRecord } from "../conformance/types";
+import type { CaseRecord, EvidenceLayer, VerificationRole } from "../conformance/types";
 import type { CatalogFilters, CatalogScenarioDto } from "./types";
 
-function mapCaseToCatalogScenario(
+type CatalogAuthority = {
+  manifestDefaults: {
+    version: string;
+    suiteVersion: string;
+    evidenceLayer: EvidenceLayer;
+    verificationRole: VerificationRole;
+    freshness: { maxAgeMs: number | null };
+  };
+};
+
+function mapCaseToCatalogScenario<TAuthority extends CatalogAuthority>(
   caseRecord: CaseRecord,
-  authority: ReturnType<typeof loadCaseAuthority>,
-  suiteDigestFn: (caseRecord: CaseRecord, authority: ReturnType<typeof loadCaseAuthority>) => string,
-  expandFn: (caseRecord: CaseRecord, authority: ReturnType<typeof loadCaseAuthority>) => Record<string, unknown>,
+  authority: TAuthority,
+  suiteDigestFn: (caseRecord: CaseRecord, authority: TAuthority) => string,
+  expandFn: (caseRecord: CaseRecord, authority: TAuthority) => Record<string, unknown>,
 ): CatalogScenarioDto {
   const expanded = expandFn(caseRecord, authority);
   return {
@@ -60,6 +76,19 @@ export function queryLabCatalog(filters: CatalogFilters = {}): CatalogScenarioDt
     const scenarios = discoverLiveScenarios(authority, suites ?? undefined);
     for (const caseRecord of scenarios) {
       items.push(mapCaseToCatalogScenario(caseRecord, authority, liveSuiteManifestDigestForCase, expandLiveScenario));
+    }
+  }
+  if (!filters.layer || filters.layer === "task_effectiveness") {
+    const authority = loadFabricCaseAuthority();
+    const suites = filters.suiteId ? [filters.suiteId] : undefined;
+    const scenarios = discoverFabricScenarios(authority, suites ?? undefined);
+    for (const caseRecord of scenarios) {
+      items.push(mapCaseToCatalogScenario(
+        caseRecord,
+        authority,
+        (row, auth) => fabricSuiteManifestDigest(row.suite, auth),
+        expandFabricScenario,
+      ));
     }
   }
   return items.sort((a, b) => {

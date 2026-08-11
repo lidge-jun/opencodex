@@ -629,6 +629,9 @@ const providerConfigSchema = z.object({
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  noStructuredOutputModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   responsesItemIdRepair: z.object({
@@ -818,6 +821,26 @@ export function positiveIntegerConfigError(value: unknown, field: string): strin
     return `${field} must be a positive finite integer`;
   }
   return null;
+}
+
+export function nonBlankStringArrayConfigError(value: unknown, field: string): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return `${field} must be an array`;
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry !== "string" || !entry.trim()) {
+      return `${field}.${index} must be a nonblank model id`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Keep hand-edited config and management writes on one canonical model-id list.
+ * Validation happens separately so an all-whitespace value is rejected rather than
+ * normalized into a model id that can never match at runtime.
+ */
+export function normalizeNonBlankStringArray(value: readonly string[]): string[] {
+  return [...new Set(value.map(entry => entry.trim()))];
 }
 
 export function booleanRecordConfigError(value: unknown, field: string): string | null {
@@ -1406,6 +1429,17 @@ const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelMaxOutputTokens"],
         message: maxOutputError,
+      });
+    }
+    const structuredOutputOptOutError = nonBlankStringArrayConfigError(
+      (provider as { noStructuredOutputModels?: unknown }).noStructuredOutputModels,
+      "noStructuredOutputModels",
+    );
+    if (structuredOutputOptOutError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "noStructuredOutputModels"],
+        message: structuredOutputOptOutError,
       });
     }
     if (Object.hasOwn(provider, "codexAccountMode") && provider.codexAccountMode !== undefined) {

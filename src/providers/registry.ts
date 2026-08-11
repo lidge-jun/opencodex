@@ -1060,6 +1060,45 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: KIRO_MODEL_REASONING_EFFORTS,
   },
   {
+    // Nous Portal — Nous Research subscription gateway (same backend Hermes Agent
+    // uses). OAuth is a device grant (src/oauth/nous.ts): the access token IS the
+    // per-request inference JWT (scope inference:invoke), refresh tokens are
+    // single-use and rotated on every refresh. Catalog is a mix of paid models
+    // (billed against the Portal subscription) and `:free` slugs (e.g.
+    // tencent/hy3:free, stepfun/step-3.7-flash:free, inclusionai/ling-3.0-flash:free);
+    // free-tier gating is decided live by the Portal per account, so discovery
+    // from the signed-in account is authoritative; the static seed below is the
+    // logged-out fallback and only lists free models verified on a real account
+    // (2026-08-10): the Portal free list is authoritative and currently has
+    // exactly 4 :free models: tencent/hy3:free, poolside/laguna-s-2.1:free,
+    // stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free.
+    // inclusionai/ling-3.0-flash:free was removed from the Portal free list
+    // (404 on the inference API since 2026-08-07) and must not be seeded.
+    id: "nous",
+    label: "Nous Portal",
+    adapter: "openai-chat",
+    baseUrl: "https://inference-api.nousresearch.com/v1",
+    authKind: "oauth",
+    oauthId: "nous",
+    featured: true,
+    // Mixed free + paid provider: the free tier is per-model (the `:free`
+    // slugs), not a property of the whole provider, so freeTier stays false to
+    // avoid implying every model is free.
+    freeTier: false,
+    dashboardUrl: "https://portal.nousresearch.com",
+    defaultModel: "tencent/hy3:free",
+    liveModels: true,
+    models: ["tencent/hy3:free", "poolside/laguna-s-2.1:free", "stepfun/step-3.7-flash:free", "poolside/laguna-xs-2.1:free"],
+    modelDiscovery: {
+      // Resolves against effectiveBaseUrl (registry baseUrl .../v1) to the same
+      // canonical endpoint https://inference-api.nousresearch.com/v1/models.
+      path: "models",
+      maxResponseBytes: 262_144,
+      maxModels: 512,
+    },
+    note: "Nous Research subscription gateway. OAuth device login with your own Portal account; mixed paid + :free models discovered live (fallback seed 2026-08-10: tencent/hy3:free, poolside/laguna-s-2.1:free, stepfun/step-3.7-flash:free, poolside/laguna-xs-2.1:free).",
+  },
+  {
     id: "openai-apikey",
     label: "OpenAI API",
     adapter: "openai-responses",

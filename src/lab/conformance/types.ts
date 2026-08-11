@@ -9,7 +9,11 @@ export type VerificationRole = "required" | "supplemental" | "negative_control";
 export type FailureClassification =
   | "harness_failure"
   | "timeout"
+  | "inactivity_timeout"
   | "budget_exhausted"
+  | "sandbox_violation"
+  | "malformed_producer_outcome"
+  | "layer_subject_mismatch"
   | "protocol_failure"
   | "capability_failure"
   | "behavioral_failure"
@@ -19,6 +23,25 @@ export type FailureClassification =
   | "network_failure"
   | "provider_transient"
   | "inconclusive";
+
+export const FAILURE_CLASSIFICATIONS = [
+  "harness_failure",
+  "timeout",
+  "inactivity_timeout",
+  "budget_exhausted",
+  "sandbox_violation",
+  "malformed_producer_outcome",
+  "layer_subject_mismatch",
+  "protocol_failure",
+  "capability_failure",
+  "behavioral_failure",
+  "authentication_blocked",
+  "quota_blocked",
+  "region_blocked",
+  "network_failure",
+  "provider_transient",
+  "inconclusive",
+] as const satisfies readonly FailureClassification[];
 
 export interface FixtureRecord {
   id: string;

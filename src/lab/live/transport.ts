@@ -104,8 +104,10 @@ export function classifyTransportError(error: unknown): { classification: Failur
     case "network_blocked": return { classification: "network_failure", secondaryCode: code };
     case "region_blocked": return { classification: "region_blocked", secondaryCode: code };
     case "provider_transient": return { classification: "provider_transient", secondaryCode: code };
-    case "connect_timeout": case "first_byte_timeout": case "inactivity_timeout": case "total_timeout":
+    case "connect_timeout": case "first_byte_timeout": case "total_timeout":
       return { classification: "timeout", secondaryCode: code };
+    case "inactivity_timeout":
+      return { classification: "inactivity_timeout", secondaryCode: code };
     case "request_limit": case "input_byte_limit": case "output_byte_limit": case "output_token_limit":
     case "tool_call_limit": case "artifact_byte_limit": case "memory_limit": case "child_process_limit":
       return { classification: "budget_exhausted", secondaryCode: code };

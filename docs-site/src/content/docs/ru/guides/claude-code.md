@@ -266,7 +266,7 @@ Claude Code — это лишь учётные данные для доступ�
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Уровень передаётся напрямую (`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, выше→`high` |
-| `thinking.type: "disabled"` | Параметры рассуждений полностью опускаются |
+| `thinking.type: "disabled"` | Явно передаётся `reasoning: { effort: "none" }`, а `summary` опускается |
 
 Итоговое значение отображается в столбце **Reasoning effort** журнала запросов.
 
@@ -284,7 +284,7 @@ Claude Code — это лишь учётные данные для доступ�
 | `tool_result` пользователя | `function_call_output` (`is_error` → префикс `[tool error]`) |
 | Повтор `thinking` / `redacted_thinking` | Отбрасывается |
 | Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованный→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованная функция→`{type:"function",name}`, размещённый WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

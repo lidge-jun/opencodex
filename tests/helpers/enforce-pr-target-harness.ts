@@ -23,6 +23,13 @@ export type RecordedCall = { method: string; args: unknown };
 export type HarnessResult = {
   calls: RecordedCall[];
   /**
+   * Values the script wrote through `core.setOutput`, in write order. The
+   * write-capable gate consumes `RESOLVED_PULL_NUMBER` from the resolver, and
+   * the client sets it as a step output; exposing it lets a test assert the
+   * SHA-to-PR resolution directly instead of inferring it from later calls.
+   */
+  outputs: Array<{ name: string; value: unknown }>;
+  /**
    * Paths the script read through its `node:fs` stub. Kept separate from
    * `calls` so exact method-sequence assertions stay stable while the fs
    * capability stays recorded (round: the harness must not hand a write-capable
@@ -1197,6 +1204,7 @@ export async function runEnforcePrTarget(
 
   return {
     calls,
+    outputs,
     fsReads,
     logs,
     warnings,

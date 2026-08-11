@@ -73,15 +73,56 @@ jobs:
               }
 
               const statusSha = context.payload.sha;
-              const associatedPrs = await github.paginate(
-                github.rest.repos.listPullRequestsAssociatedWithCommit,
-                { owner, repo, commit_sha: statusSha, per_page: 100 }
-              );
-              const candidates = associatedPrs.filter(
-                candidate =>
-                  candidate.state === "open" &&
-                  candidate.head?.sha === statusSha
-              );
+              // Primary authority: GitHub's commit-to-PR index. This read can
+              // lag a fresh head push, so a non-match is not proof of absence.
+              let candidates = [];
+              try {
+                const associatedPrs = await github.paginate(
+                  github.rest.repos.listPullRequestsAssociatedWithCommit,
+                  { owner, repo, commit_sha: statusSha, per_page: 100 }
+                );
+                candidates = associatedPrs.filter(
+                  candidate =>
+                    candidate.state === "open" &&
+                    candidate.head?.sha === statusSha
+                );
+              } catch (error) {
+                core.warning(
+                  `Could not list PRs associated with commit ${statusSha}: ${error.message}`
+                );
+              }
+
+              if (candidates.length !== 1) {
+                // Fallback: reconcile directly against the live head SHA. The
+                // association index can be stale or empty for a very recent
+                // head (seen on PR #1441), so an empty/ambiguous index result
+                // must not silently drop the revalidation. Matching on the
+                // head SHA is the same authoritative identity the write gate
+                // uses, and `pulls.list` is a read — compatible with this
+                // job's `pull-requests: read` permission.
+                const priorCount = candidates.length;
+                try {
+                  const openPrs = await github.paginate(github.rest.pulls.list, {
+                    owner,
+                    repo,
+                    state: "open",
+                    per_page: 100
+                  });
+                  candidates = openPrs.filter(
+                    pr =>
+                      pr.state === "open" &&
+                      pr.head?.sha === statusSha
+                  );
+                  core.info(
+                    `Associated-index fallback: ${priorCount} index match(es), ${candidates.length} open PR(s) match head ${statusSha}.`
+                  );
+                } catch (error) {
+                  core.warning(
+                    `Could not list open PRs for head-${statusSha} fallback: ${error.message}`
+                  );
+                }
+              }
+
               if (candidates.length !== 1) {
                 core.info(
                   `CodeRabbit status ${statusSha} maps to ${candidates.length} open current-head PRs; skipping ambiguous/stale revalidation.`

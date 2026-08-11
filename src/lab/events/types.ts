@@ -9,6 +9,7 @@ import type {
   ObservationOutcome,
   PurgeAction,
 } from "../constants";
+import type { FailureClassification } from "../conformance/types";
 
 export interface LabProducer {
   name: string;
@@ -90,7 +91,7 @@ export interface AssertionRecordV1 {
 }
 
 export interface FailureRecordV1 {
-  class: string;
+  class: FailureClassification;
   code: string;
   retryable: boolean;
   attribution: "opencodex" | "route" | "environment" | "harness";

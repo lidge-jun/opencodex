@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
 import { chatCompletionsUsage } from "../src/chat/outbound";
@@ -136,12 +136,18 @@ function mockDualWireUpstream() {
   return { server, captured };
 }
 
-function mockConfig(baseUrl: string): OcxConfig {
+function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     port: 0,
     defaultProvider: "mock",
     providers: {
-      mock: { adapter: "openai-chat", baseUrl, apiKey: "k", allowPrivateNetwork: true },
+      mock: {
+        adapter: "openai-chat",
+        baseUrl,
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        ...providerOverrides,
+      },
     },
   } as OcxConfig;
 }
@@ -572,6 +578,60 @@ test("POST /v1/responses carries text.format onto the routed chat wire", async (
       type: "json_schema",
       json_schema: { name: "answer", schema: { type: "object" }, strict: true },
     });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/chat/completions honors the per-model response_format opt-out", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    noStructuredOutputModels: ["test-model"],
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+        response_format: { type: "json_schema", json_schema: { name: "answer", schema: { type: "object" } } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.response_format).toBeUndefined();
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/responses honors the per-model response_format opt-out", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    noStructuredOutputModels: ["test-model"],
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.response_format).toBeUndefined();
   } finally {
     await server.stop(true);
     upstream.stop(true);

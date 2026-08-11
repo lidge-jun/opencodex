@@ -8,6 +8,7 @@ import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredenti
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
+import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
@@ -193,6 +194,17 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: refreshKimiToken,
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
+  },
+  nous: {
+    // Nous Portal device-grant login (RFC 8628) against portal.nousresearch.com.
+    // The access token is the per-request inference JWT (scope inference:invoke).
+    // Refresh tokens are single-use and rotated server-side on every refresh:
+    // keep background refresh lazy-only (the default) so concurrent refreshes
+    // cannot trip the Portal's token-reuse revocation.
+    login: (ctrl) => loginNous(ctrl),
+    refresh: (rt, signal) => refreshNousToken(rt, signal),
+    providerConfig: oauthConfig("nous"),
+    defaultModel: oauthDefaultModel("nous"),
   },
   kiro: {
     login: (ctrl, opts) => loginKiro(ctrl, { forceLogin: opts?.forceLogin }),
@@ -436,6 +448,11 @@ function terminal(error:unknown):boolean{
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
+  if(error instanceof NousTokenError)return error.terminal===true||["invalid_grant","refresh_token_reused","revoked","revoked_token","expired_token"].includes(error.oauthError??"");
+  // Local durable-write/read/cleanup failures are operational, not credential
+  // death: the provider credential was never rejected or consumed. Never mark
+  // the account needsReauth for broken local persistence infrastructure.
+  if (error instanceof RefreshIntentIOError) return false;
   return isTerminalRefreshError(error);
 }
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
@@ -457,6 +474,39 @@ function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCred
   const disk = detectClaudeCodeToken();
   if (!disk || disk.expires <= now + REFRESH_SKEW_MS) return undefined;
   return credentialGeneration(disk) !== credentialGeneration(stored) ? disk : undefined;
+}
+
+/**
+ * Preserve an already-rotated Nous refresh token (RT-B) after a terminal refresh
+ * error (e.g. the returned access JWT lacked `inference:invoke`). The unusable
+ * access token is NOT persisted as valid: the recovery credential carries an
+ * empty access placeholder with a past expiry so it can never be routed, and the
+ * account is marked needsReauth by the caller. Generation-safe: a concurrent
+ * newer write wins and is never overwritten.
+ */
+async function preserveNousRotatedRefresh(
+  provider: string,
+  accountId: string,
+  rotatedRefresh: string,
+  expectedGeneration: string,
+  previous: OAuthCredentials,
+): Promise<"persisted" | "superseded" | "failed"> {
+  try {
+    const recovery: OAuthCredentials = {
+      refresh: rotatedRefresh,
+      // Never persist the unusable access token: an empty placeholder with a
+      // past expiry can never be observed as a valid credential.
+      access: "",
+      expires: 0,
+      ...(previous.accountId ? { accountId: previous.accountId } : {}),
+      ...(previous.email ? { email: previous.email } : {}),
+      ...(previous.source ? { source: previous.source } : {}),
+    };
+    const outcome = await mergeAccountCredential(provider, accountId, recovery, { expectedGeneration });
+    return outcome.superseded ? "superseded" : "persisted";
+  } catch {
+    return "failed";
+  }
 }
 
 export async function refreshAnthropicAccountWithLock(
@@ -572,10 +622,68 @@ export async function refreshGenericAccountWithLock(
         throw new OAuthLoginRequiredError(provider);
       }
       logOAuthEvent("OAuth credentials rotated and persisted", { provider, accountId });
+      // Best-effort bookkeeping cleanup: the rotated credential is already
+      // durably persisted. A failure to unlink the old-token intent file
+      // (EACCES/EPERM/EBUSY/EROFS) must not turn a committed rotation into a
+      // failed refresh. The stale intent keys the OLD token, which is no longer
+      // stored, so leaving it behind blocks nothing and is safe. It must also
+      // never route through the generic refresh error path (no needsReauth).
+      if (provider === "nous") {
+        try {
+          clearNousRefreshIntent(stored.refresh);
+        } catch (cleanupErr) {
+          logOAuthEvent("OAuth refresh intent cleanup failed (non-fatal)", {
+            provider,
+            accountId,
+            cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+          });
+        }
+      }
       return fresh.access;
     } catch (error) {
       if (error instanceof OAuthMutationBusyError) throw error;
       if (!terminal(error)) throw error;
+      // Nous-specific failure-atomicity: a terminal refresh error that carries
+      // an already-issued rotated refresh token (e.g. the access JWT lacked the
+      // required `inference:invoke` scope) means the server consumed RT-A and
+      // issued RT-B. RT-B must be preserved generation-safely BEFORE forcing
+      // reauthentication; discarding it would lose the only usable refresh
+      // material and force a full re-auth for no reason.
+      if (provider === "nous" && error instanceof NousTokenError) {
+        const rotated = error.getRotatedRefresh();
+        if (rotated !== undefined && rotated !== stored.refresh) {
+          const outcome = await preserveNousRotatedRefresh(
+            provider,
+            accountId,
+            rotated,
+            generation,
+            stored,
+          );
+          if (outcome === "persisted") {
+            const persisted = getAccountCredential(provider, accountId);
+            const persistedGeneration = persisted ? credentialGeneration(persisted) : generation;
+            // RT-A's intent is cleared only after RT-B is durably persisted;
+            // cleanup itself stays best-effort (a stale RT-A intent keys a token
+            // that is no longer stored).
+            try {
+              clearNousRefreshIntent(stored.refresh);
+            } catch (cleanupErr) {
+              logOAuthEvent("OAuth refresh intent cleanup failed (non-fatal)", {
+                provider,
+                accountId,
+                cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+              });
+            }
+            await markAccountNeedsReauthIfGeneration(provider, accountId, persistedGeneration, writerGeneration);
+          } else {
+            // RT-B persistence failed or a newer generation superseded it:
+            // never clear RT-A's intent (RT-A was consumed), and mark the old
+            // generation needsReauth (a no-op if a newer generation won).
+            await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
+          }
+          throw new OAuthLoginRequiredError(provider);
+        }
+      }
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       throw new OAuthLoginRequiredError(provider);
     }

@@ -20,7 +20,9 @@ function outcomeFromLiveResult(result: LiveScenarioRunResult): ObservationOutcom
   if (result.passed) return "pass";
   switch (result.classification) {
     case "timeout":
+    case "inactivity_timeout":
     case "budget_exhausted":
+    case "sandbox_violation":
     case "authentication_blocked":
     case "quota_blocked":
     case "region_blocked":
@@ -33,7 +35,13 @@ function outcomeFromLiveResult(result: LiveScenarioRunResult): ObservationOutcom
       return "fail";
     case "inconclusive":
     case "harness_failure":
+    case "malformed_producer_outcome":
+    case "layer_subject_mismatch":
       return "inconclusive";
+    default: {
+      const _never: never = result.classification;
+      throw new Error(`unmapped failure classification: ${String(_never)}`);
+    }
   }
 }
 
@@ -41,7 +49,7 @@ function failureFromLiveResult(result: LiveScenarioRunResult, retryable: boolean
   if (result.passed || result.classification === "inconclusive") return undefined;
   const attribution: FailureRecordV1["attribution"] = result.classification === "harness_failure"
     ? "harness"
-    : ["authentication_blocked", "quota_blocked", "region_blocked", "network_failure", "provider_transient", "timeout", "budget_exhausted"].includes(result.classification)
+    : ["authentication_blocked", "quota_blocked", "region_blocked", "network_failure", "provider_transient", "timeout", "inactivity_timeout", "budget_exhausted"].includes(result.classification)
       ? "environment"
       : "route";
   return {

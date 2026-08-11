@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as nodeFs from "node:fs";
 import { chmodSync, existsSync, mkdirSync, writeFileSync, symlinkSync, linkSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -30,6 +31,7 @@ import {
   LAB_PROJECTION_SPEC_VERSION,
   behaviorFingerprintForCase,
 } from "../src/lab";
+import { appendLabEventIfAbsent } from "../src/lab/ledger/store";
 import { ArtifactFsError, closeTrustedArtifactDir, putArtifactBytes, putNamedDigestBytes, readArtifactBytes, digestFileName } from "../src/lab/artifacts/secure-fs";
 import { expandSuiteManifest } from "../src/lab/conformance/suite-manifest";
 import { evaluateAllApplicableRequiredPassV1 } from "../src/lab/projection/verification";
@@ -277,6 +279,63 @@ describe("CL-02 ledger append/replay", () => {
       const replay = replayLabLedger(ledger);
       expect(replay.validLineCount).toBe(1);
       expect(replay.corruptions.some((c) => c.kind === "duplicate_event")).toBe(true);
+    });
+  });
+
+  test("ledger lock metadata write failure propagates without lock-timeout wait", () => {
+    withHome((home) => {
+      const event = baseObservation();
+      const ledger = join(home, "lab", "compatibility.jsonl");
+      mkdirSync(join(home, "lab"), { recursive: true, mode: 0o700 });
+      const metadataWriteError = new Error("simulated ledger lock metadata write failure");
+      const originalWriteSync = nodeFs.writeSync;
+      const writeSpy = spyOn(nodeFs, "writeSync").mockImplementation((...args: Parameters<typeof nodeFs.writeSync>) => {
+        const buffer = args[1];
+        if (
+          Buffer.isBuffer(buffer)
+          && buffer.includes('"pid"')
+          && buffer.includes('"createdAt"')
+          && buffer.includes('"token"')
+        ) {
+          throw metadataWriteError;
+        }
+        return originalWriteSync(...args);
+      });
+      try {
+        const start = Date.now();
+        expect(() => appendLabEventIfAbsent(ledger, event)).toThrow(metadataWriteError);
+        expect(Date.now() - start).toBeLessThan(500);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    });
+  });
+
+  test("incomplete ledger lock metadata write removes lock file", () => {
+    withHome((home) => {
+      const event = baseObservation();
+      const ledger = join(home, "lab", "compatibility.jsonl");
+      const lockPath = join(home, "lab", "compatibility.jsonl.lock");
+      mkdirSync(join(home, "lab"), { recursive: true, mode: 0o700 });
+      const originalWriteSync = nodeFs.writeSync;
+      const writeSpy = spyOn(nodeFs, "writeSync").mockImplementation((...args: Parameters<typeof nodeFs.writeSync>) => {
+        const buffer = args[1];
+        if (
+          Buffer.isBuffer(buffer)
+          && buffer.includes('"pid"')
+          && buffer.includes('"createdAt"')
+          && buffer.includes('"token"')
+        ) {
+          return 0;
+        }
+        return originalWriteSync(...args);
+      });
+      try {
+        expect(() => appendLabEventIfAbsent(ledger, event)).toThrow(LabValidationError);
+        expect(existsSync(lockPath)).toBe(false);
+      } finally {
+        writeSpy.mockRestore();
+      }
     });
   });
 });

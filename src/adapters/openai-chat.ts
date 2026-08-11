@@ -813,19 +813,25 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       if (provider.promptCacheKey && parsed.options.promptCacheKey !== undefined) {
         body.prompt_cache_key = parsed.options.promptCacheKey;
       }
-      const textFormat = parsed.options.textFormat;
-      if (textFormat?.type === "json_object") {
-        body.response_format = { type: "json_object" };
-      } else if (textFormat?.type === "json_schema") {
-        body.response_format = {
-          type: "json_schema",
-          json_schema: {
-            name: textFormat.name ?? "response",
-            ...(textFormat.description !== undefined ? { description: textFormat.description } : {}),
-            ...(textFormat.schema !== undefined ? { schema: textFormat.schema } : {}),
-            ...(textFormat.strict !== undefined ? { strict: textFormat.strict } : {}),
-          },
-        };
+      // Structured-output support varies by the physical upstream model even when one
+      // gateway exposes a uniform OpenAI-compatible endpoint. Keep the #1137 translation
+      // as the default, but let an exact model opt out instead of forcing a provider-wide
+      // rollback that would silently return prose for siblings that support JSON Schema.
+      if (!provider.noStructuredOutputModels?.includes(parsed.modelId)) {
+        const textFormat = parsed.options.textFormat;
+        if (textFormat?.type === "json_object") {
+          body.response_format = { type: "json_object" };
+        } else if (textFormat?.type === "json_schema") {
+          body.response_format = {
+            type: "json_schema",
+            json_schema: {
+              name: textFormat.name ?? "response",
+              ...(textFormat.description !== undefined ? { description: textFormat.description } : {}),
+              ...(textFormat.schema !== undefined ? { schema: textFormat.schema } : {}),
+              ...(textFormat.strict !== undefined ? { strict: textFormat.strict } : {}),
+            },
+          };
+        }
       }
 
       if (tools) {

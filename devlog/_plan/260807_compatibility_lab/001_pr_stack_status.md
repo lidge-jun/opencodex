@@ -26,7 +26,7 @@ independent review, blockers, and whether a later phase is authorized.
 | CL-04 | `feat/cl-04-lab-read-surfaces` | `68c71a4e9cdf882d812f09fd94783a28749db629` | NOT RECORDED | [#1378](https://github.com/lidge-jun/opencodex/pull/1378) | MERGED TO `dev` at `d517161aeaa3a974ad3c0360ff0c97b03b4c4520` |
 | CL-05 | `feat/cl-05-compatibility-matrix-ui` | `d517161aeaa3a974ad3c0360ff0c97b03b4c4520` | `2a159b8b7` (Models tab placement) | [#1384](https://github.com/lidge-jun/opencodex/pull/1384) | MERGED TO `dev` at `1072b9c39c48a4982229131613ac300560740742` |
 | CL-06 | `feat/cl-06-routing-profile-compatibility` | `1072b9c39c48a4982229131613ac300560740742` | `b96eae83f2a6d1654472aeeef84799070743aeb8` | [#1394](https://github.com/lidge-jun/opencodex/pull/1394) | MERGED TO `dev` at `b66e33ce7207d91014644d99317e456c992a3418`; ACCEPTED/CLOSED |
-
+| CL-07 | `feat/cl-07-task-effectiveness-producer` | `b66e33ce7207d91014644d99317e456c992a3418` | `0efe2c69514d3baefee686383fe740e4ecb37d83` | [#1438](https://github.com/lidge-jun/opencodex/pull/1438) | MERGED TO `dev` at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600`; ACCEPTED/CLOSED |
 The CL-01 starting SHA is the exact CL-00 tip recorded when CL-01 began. Its
 moving base-ref name is not a substitute for that historical SHA.
 
@@ -162,7 +162,35 @@ Claims cannot produce `PROBED`/`VERIFIED`.
 - CL-03: **ACCEPTED/CLOSED** via [#1352](https://github.com/lidge-jun/opencodex/pull/1352), merged to `dev` at `68c71a4e9cdf882d812f09fd94783a28749db629`.
 - CL-04: **MERGED** via #1378 at `d517161aeaa3a974ad3c0360ff0c97b03b4c4520`.
 - CL-05: **MERGED** via #1384 at `1072b9c39c48a4982229131613ac300560740742`.
-- CL-06: **AUTHORIZED / IN PROGRESS** from CL-05 merge `1072b9c39c48a4982229131613ac300560740742`; branch `feat/cl-06-routing-profile-compatibility`; plan `006_cl06_routing_compatibility.md`.
+- CL-06: **ACCEPTED/CLOSED** via [#1394](https://github.com/lidge-jun/opencodex/pull/1394), merged to `dev` at `b66e33ce7207d91014644d99317e456c992a3418`.
+- CL-07: **ACCEPTED/CLOSED** via [#1438](https://github.com/lidge-jun/opencodex/pull/1438), merged to `dev` at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600`; accepted head `0efe2c69514d3baefee686383fe740e4ecb37d83`; plan `007_cl07_task_effectiveness.md`.
+- CL-08: **not started**.
+
+## CL-06 closure log
+
+- **Merge commit on `dev`:** `b66e33ce7207d91014644d99317e456c992a3418` ([#1394](https://github.com/lidge-jun/opencodex/pull/1394))
+- **Accepted / source head:** `b96eae83f2a6d1654472aeeef84799070743aeb8`
+- **Starting/base SHA:** `1072b9c39c48a4982229131613ac300560740742` (CL-05 merge #1384)
+- **Scope delivered:** optional Routing Profile compatibility policy, Router Intelligence consumption, CL-06 routing regressions; no Fabric/task-effectiveness leakage.
+
+## CL-07 closure log
+
+- **Merge commit on `dev`:** `02e62fc8c7354c544ef71f8bb3db5ebba42cb600` ([#1438](https://github.com/lidge-jun/opencodex/pull/1438))
+- **Accepted / source head:** `0efe2c69514d3baefee686383fe740e4ecb37d83`
+- **Starting/base SHA:** `b66e33ce7207d91014644d99317e456c992a3418` (CL-06 merge #1394)
+- **Scope delivered:** bounded `src/lab/fabric/` task-effectiveness producer, exact-tree-diff verifier, scratch sandbox, trusted-route persistence boundary, isolated child producer with parent-owned IPC/timeouts.
+- **CL-08:** not started (explicit non-goal).
+
+## CL-07 start log
+
+- **Starting/base SHA:** `b66e33ce7207d91014644d99317e456c992a3418` (exact CL-06 merge #1394)
+- **Branch:** `feat/cl-07-task-effectiveness-producer`
+- **Scope:** bounded Lab-owned task-effectiveness producer for `fabric-core` /
+  `fabric-core.task.synthetic-patch@1.0.0`; `exact-tree-diff-v1` verifier;
+  scratch sandbox; observation ingestion with `executionMode: fabric`; catalog
+  discovery for the task layer. No general Agent Fabric product API.
+- **Explicitly out of scope:** CL-08 automation/background execution; CL-06
+  routing semantic changes; user repositories/prompts; arbitrary shell.
 
 ## CL-03 implementation log (2026-08-09)
 

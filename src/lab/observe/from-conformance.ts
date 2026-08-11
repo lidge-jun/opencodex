@@ -90,7 +90,9 @@ function outcomeFromResult(result: ScenarioRunResult): ObservationOutcome {
   if (result.passed) return "pass";
   switch (result.classification) {
     case "timeout":
+    case "inactivity_timeout":
     case "budget_exhausted":
+    case "sandbox_violation":
     case "authentication_blocked":
     case "quota_blocked":
     case "region_blocked":
@@ -99,6 +101,8 @@ function outcomeFromResult(result: ScenarioRunResult): ObservationOutcome {
       return "blocked";
     case "inconclusive":
     case "harness_failure":
+    case "malformed_producer_outcome":
+    case "layer_subject_mismatch":
       return "inconclusive";
     case "protocol_failure":
     case "capability_failure":
