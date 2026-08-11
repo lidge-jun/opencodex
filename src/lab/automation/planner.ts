@@ -29,9 +29,14 @@ import {
   liveExecutionContractDigest,
   protocolExecutionContractDigest,
 } from "./run-key";
-import { cooldownActive } from "./cooldown";
+import { cooldownActive, cooldownCapacityExhausted } from "./cooldown";
 import { isLiveRequestBudgetExhausted, isRunBudgetExhausted } from "./budgets";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
+
+const FRESHNESS_QUERY_PAGE_SIZE = 100;
+
+type FreshnessIndex = Map<string, number>;
+type FreshnessCache = Map<string, FreshnessIndex>;
 
 export interface PlannerInput {
   policy: LabAutomationPolicyV1;
@@ -53,12 +58,6 @@ interface EvidenceIdentity {
   scenarioManifestDigest: string;
 }
 
-function effectiveMaxAgeMs(suiteMax: number | null, scenarioMax: number | null): number | null {
-  if (suiteMax === null) return scenarioMax;
-  if (scenarioMax === null) return suiteMax;
-  return Math.min(suiteMax, scenarioMax);
-}
-
 function freshnessReason(
   latestCompletedAt: number | undefined,
   maxAgeMs: number | null,
@@ -78,36 +77,71 @@ function activeRunForKey(state: LabAutomationStateV1, runKey: string): LabAutoma
   return state.runs.find((row) => row.runKey === runKey && (row.state === "queued" || row.state === "running"));
 }
 
-function latestMatchingObservationCompletedAt(identity: EvidenceIdentity, configDir?: string): number | undefined {
+function freshnessIdentityKey(identity: Omit<EvidenceIdentity, "layer" | "subjectId">): string {
+  return [
+    identity.suiteId,
+    identity.suiteVersion,
+    identity.suiteManifestDigest,
+    identity.scenarioId,
+    identity.scenarioVersion,
+    identity.scenarioManifestDigest,
+  ].join("\u0000");
+}
+
+function freshnessIndexForSubject(
+  layer: EvidenceLayer,
+  subjectId: string,
+  cache: FreshnessCache,
+  configDir?: string,
+): FreshnessIndex {
+  const cacheKey = `${layer}\u0000${subjectId}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  const index: FreshnessIndex = new Map();
+  cache.set(cacheKey, index);
   try {
-    const page = queryLabObservations(
-      {
-        layer: identity.layer,
-        subjectId: identity.subjectId,
-        suiteId: identity.suiteId,
-        scenarioId: identity.scenarioId,
-      },
-      undefined,
-      LAB_AUTOMATION_HARD_MAX.maxPersistedRuns,
-      configDir,
-    );
-    let latest: number | undefined;
-    for (const row of page.items) {
-      if (row.excluded) continue;
-      if (row.suiteVersion !== identity.suiteVersion) continue;
-      if (row.suiteManifestDigest !== identity.suiteManifestDigest) continue;
-      if (row.scenarioVersion !== identity.scenarioVersion) continue;
-      if (row.scenarioManifestDigest !== identity.scenarioManifestDigest) continue;
-      if (latest === undefined || row.completedAt > latest) latest = row.completedAt;
-    }
-    return latest;
+    let cursor: string | undefined;
+    do {
+      const page = queryLabObservations(
+        { layer, subjectId },
+        cursor,
+        FRESHNESS_QUERY_PAGE_SIZE,
+        configDir,
+      );
+      for (const row of page.items) {
+        if (row.excluded) continue;
+        const key = freshnessIdentityKey({
+          suiteId: row.suiteId,
+          suiteVersion: row.suiteVersion,
+          suiteManifestDigest: row.suiteManifestDigest,
+          scenarioId: row.scenarioId,
+          scenarioVersion: row.scenarioVersion,
+          scenarioManifestDigest: row.scenarioManifestDigest,
+        });
+        // Query order is newest first, so first exact identity is authoritative for freshness.
+        if (!index.has(key)) index.set(key, row.completedAt);
+      }
+      cursor = page.hasMore ? page.nextCursor : undefined;
+    } while (cursor);
+    return index;
   } catch (error) {
-    if (error instanceof LabProjectionUnavailableError) return undefined;
+    if (error instanceof LabProjectionUnavailableError) return index;
     throw error;
   }
 }
 
-function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
+function latestMatchingObservationCompletedAt(
+  identity: EvidenceIdentity,
+  cache: FreshnessCache,
+  configDir?: string,
+): number | undefined {
+  return freshnessIndexForSubject(identity.layer, identity.subjectId, cache, configDir).get(
+    freshnessIdentityKey(identity),
+  );
+}
+
+function planProtocolScenarios(input: PlannerInput, freshnessCache: FreshnessCache): PlannedLabRunV1[] {
   if (!input.policy.enabled || !input.policy.layers.protocolConformance) return [];
   const authority = loadCaseAuthority();
   const scenarios = discoverScenarios(authority, CL01_SUITES);
@@ -149,11 +183,10 @@ function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
       scenarioId: caseRecord.id,
       scenarioVersion,
       scenarioManifestDigest: scenarioDigest,
-    }, input.configDir);
-    const maxAge = effectiveMaxAgeMs(
-      authority.manifestDefaults.freshness.maxAgeMs,
-      authority.manifestDefaults.freshness.maxAgeMs,
-    );
+    }, freshnessCache, input.configDir);
+    // CL-00 freezes one freshness default into both suite and scenario manifests; there is no
+    // independent case-level override in the current authority schema.
+    const maxAge = authority.manifestDefaults.freshness.maxAgeMs;
     const freshness = freshnessReason(latestCompletedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
     if (freshness === "fresh") continue;
     planned.push({
@@ -174,7 +207,7 @@ function planProtocolScenarios(input: PlannerInput): PlannedLabRunV1[] {
   return planned;
 }
 
-function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
+function planLiveScenarios(input: PlannerInput, freshnessCache: FreshnessCache): PlannedLabRunV1[] {
   if (!input.policy.enabled || !input.policy.layers.liveRouteCompatibility) return [];
   if (!input.config) return [];
   if (isLiveRequestBudgetExhausted(input.policy, input.state, input.now)) return [];
@@ -226,11 +259,8 @@ function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
         scenarioId: caseRecord.id,
         scenarioVersion,
         scenarioManifestDigest: scenarioDigest,
-      }, input.configDir);
-      const maxAge = effectiveMaxAgeMs(
-        authority.manifestDefaults.freshness.maxAgeMs,
-        authority.manifestDefaults.freshness.maxAgeMs,
-      );
+      }, freshnessCache, input.configDir);
+      const maxAge = authority.manifestDefaults.freshness.maxAgeMs;
       const freshness = freshnessReason(latestCompletedAt, maxAge, input.policy.refreshBeforeStaleMs, input.now);
       if (freshness === "fresh") continue;
       planned.push({
@@ -258,8 +288,12 @@ function planLiveScenarios(input: PlannerInput): PlannedLabRunV1[] {
 export function planLabAutomationRuns(input: PlannerInput): PlannedLabRunV1[] {
   if (!input.policy.enabled) return [];
   if (isRunBudgetExhausted(input.policy, input.state, input.now)) return [];
-  const protocol = planProtocolScenarios(input);
-  const live = planLiveScenarios(input);
+  // Cooldown persistence is bounded. If every slot contains an active backoff, fail closed rather
+  // than enqueueing work whose retry suppression could not be recorded.
+  if (cooldownCapacityExhausted(input.state, input.now)) return [];
+  const freshnessCache: FreshnessCache = new Map();
+  const protocol = planProtocolScenarios(input, freshnessCache);
+  const live = planLiveScenarios(input, freshnessCache);
   const merged = [...protocol, ...live];
   merged.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
