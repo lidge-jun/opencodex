@@ -1,9 +1,10 @@
 /**
- * `ocx lab` — read-only Compatibility Lab inspection (CL-04).
+ * `ocx lab` — Compatibility Lab inspection and explicit CL-08 automation controls.
  *
- * Local SQLite projection reads; no daemon, network, probes, or rebuilds.
+ * Read commands use the local SQLite projection. Automation mutations and manual runs are
+ * explicit operator actions; read commands never start probes or scheduler ticks.
  */
-import { getConfigDir } from "../config";
+import { getConfigDir, readConfigDiagnostics } from "../config";
 import {
   ARTIFACT_CLASSES,
   EVIDENCE_LAYERS,
@@ -43,10 +44,11 @@ import {
   takeIntegerOption,
   takeOption,
 } from "./runtime-api";
-import { readConfigDiagnostics } from "../config";
 import {
   buildLabAutomationStatus,
   enqueueManualLabRun,
+  reconcileLabAutomationQueue,
+  setLabAutomationDispatchDeps,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../lab/automation/orchestrator";
@@ -58,6 +60,7 @@ import {
 import { planManualLabRun } from "../lab/automation/planner";
 import { listLabAutomationRuns } from "../lab/automation/runs-query";
 import type { LabAutomationLayer } from "../lab/automation/types";
+import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
 
 const USAGE = `Usage:
   ocx lab status [--json]
@@ -236,14 +239,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           const limit = takeIntegerOption(rest, "--limit", { min: 1 });
           const cursor = takeOption(rest, "--cursor");
           rejectArgs(rest, USAGE);
-          const page = queryLabVerdicts({
-            subjectId,
-            layer,
-            suiteId,
-            verdict,
-            from,
-            to,
-          }, cursor, limit, configDir);
+          const page = queryLabVerdicts({ subjectId, layer, suiteId, verdict, from, to }, cursor, limit, configDir);
           printData(page, wantsJson, verdictLines(page));
           return;
         }
@@ -268,52 +264,23 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
         }
         case "observations": {
           const subjectId = takeOption(rest, "--subject");
-          const layer = takeEnumOption<EvidenceLayer>(
-            rest,
-            "--layer",
-            EVIDENCE_LAYERS,
-            "--layer must be a supported evidence layer",
-          );
+          const layer = takeEnumOption<EvidenceLayer>(rest, "--layer", EVIDENCE_LAYERS, "--layer must be a supported evidence layer");
           const suiteId = takeOption(rest, "--suite");
           const scenarioId = takeOption(rest, "--scenario");
-          const outcome = takeEnumOption<ObservationOutcome>(
-            rest,
-            "--outcome",
-            OUTCOMES,
-            "--outcome must be a supported observation outcome",
-          );
-          const executionMode = takeEnumOption<ExecutionMode>(
-            rest,
-            "--execution-mode",
-            EXECUTION_MODES,
-            "--execution-mode must be a supported execution mode",
-          );
+          const outcome = takeEnumOption<ObservationOutcome>(rest, "--outcome", OUTCOMES, "--outcome must be a supported observation outcome");
+          const executionMode = takeEnumOption<ExecutionMode>(rest, "--execution-mode", EXECUTION_MODES, "--execution-mode must be a supported execution mode");
           const from = takeIntegerOption(rest, "--from", { min: 0 });
           const to = takeIntegerOption(rest, "--to", { min: 0 });
           assertRange(from, to);
           const limit = takeIntegerOption(rest, "--limit", { min: 1 });
           const cursor = takeOption(rest, "--cursor");
           rejectArgs(rest, USAGE);
-          const page = queryLabObservations({
-            subjectId,
-            layer,
-            suiteId,
-            scenarioId,
-            outcome,
-            executionMode,
-            from,
-            to,
-          }, cursor, limit, configDir);
+          const page = queryLabObservations({ subjectId, layer, suiteId, scenarioId, outcome, executionMode, from, to }, cursor, limit, configDir);
           printData(page, wantsJson, observationLines(page));
           return;
         }
         case "events": {
-          const eventKind = takeEnumOption<LabEventKind>(
-            rest,
-            "--event-kind",
-            EVENT_KINDS,
-            "--event-kind must be a supported lab event kind",
-          );
+          const eventKind = takeEnumOption<LabEventKind>(rest, "--event-kind", EVENT_KINDS, "--event-kind must be a supported lab event kind");
           const subjectId = takeOption(rest, "--subject");
           const from = takeIntegerOption(rest, "--from", { min: 0 });
           const to = takeIntegerOption(rest, "--to", { min: 0 });
@@ -346,18 +313,8 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           return;
         }
         case "artifacts": {
-          const status = takeEnumOption<ArtifactStatus>(
-            rest,
-            "--status",
-            ARTIFACT_STATUSES,
-            "--status must be present, corrupt, or purged_unavailable",
-          );
-          const artifactClass = takeEnumOption<ArtifactClass>(
-            rest,
-            "--artifact-class",
-            ARTIFACT_CLASSES,
-            "--artifact-class must be a supported artifact class",
-          );
+          const status = takeEnumOption<ArtifactStatus>(rest, "--status", ARTIFACT_STATUSES, "--status must be present, corrupt, or purged_unavailable");
+          const artifactClass = takeEnumOption<ArtifactClass>(rest, "--artifact-class", ARTIFACT_CLASSES, "--artifact-class must be a supported artifact class");
           const limit = takeIntegerOption(rest, "--limit", { min: 1 });
           const cursor = takeOption(rest, "--cursor");
           rejectArgs(rest, USAGE);
@@ -376,12 +333,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           return;
         }
         case "catalog": {
-          const layer = takeEnumOption<EvidenceLayer>(
-            rest,
-            "--layer",
-            EVIDENCE_LAYERS,
-            "--layer must be a supported evidence layer",
-          );
+          const layer = takeEnumOption<EvidenceLayer>(rest, "--layer", EVIDENCE_LAYERS, "--layer must be a supported evidence layer");
           const suiteId = takeOption(rest, "--suite");
           rejectArgs(rest, USAGE);
           const scenarios = queryLabCatalogEntries({ layer, suiteId });
@@ -398,19 +350,22 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               return;
             }
             case "enable": {
+              const enableProtocol = takeFlag(automationRest, "--protocol");
               const enableLive = takeFlag(automationRest, "--live");
               rejectArgs(automationRest, USAGE);
+              const selectionExplicit = enableProtocol || enableLive;
               const policy = {
                 ...loadLabAutomationPolicy(configDir),
                 enabled: true,
                 layers: {
-                  protocolConformance: true,
+                  protocolConformance: selectionExplicit ? enableProtocol : true,
                   liveRouteCompatibility: enableLive,
                   taskEffectiveness: false,
                 },
                 taskEffectivenessBackgroundEnabled: false,
               };
               saveLabAutomationPolicy(policy, configDir);
+              reconcileLabAutomationQueue(configDir);
               startLabAutomationScheduler(configDir);
               const status = buildLabAutomationStatus(configDir);
               printData(status, wantsJson, automationStatusLines(status));
@@ -420,6 +375,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               rejectArgs(automationRest, USAGE);
               const policy = { ...loadLabAutomationPolicy(configDir), enabled: false };
               saveLabAutomationPolicy(policy, configDir);
+              reconcileLabAutomationQueue(configDir);
               stopLabAutomationScheduler();
               const status = buildLabAutomationStatus(configDir);
               printData(status, wantsJson, automationStatusLines(status));
@@ -449,12 +405,21 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           const modelId = takeOption(rest, "--model");
           rejectArgs(rest, USAGE);
           if (!layer || !scenarioId) throw new CliUsageError("--layer and --scenario are required", USAGE);
+          const configSnapshot = readConfigDiagnostics().config;
+          if (layer === "live_route_compatibility") {
+            const loadConfig = () => configSnapshot;
+            setLabAutomationDispatchDeps({
+              configDir,
+              loadConfig,
+              routeExecutor: createProductionLabRouteExecutor({ configDir, loadConfig }),
+            });
+          }
           const planned = planManualLabRun({
             evidenceLayer: layer,
             scenarioId,
             providerName,
             modelId,
-            config: readConfigDiagnostics().config,
+            config: configSnapshot,
             configDir,
           });
           const record = await enqueueManualLabRun(planned, configDir);
