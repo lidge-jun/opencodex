@@ -58,6 +58,14 @@ tracked sibling before mutation and rolls back earlier siblings in reverse order
 Failures warn without changing the requested command's exit behavior. The probe uses read-only config
 diagnostics only for a confirmed candidate and never reads adjacent auth state.
 
+[Decision Log]
+- 목적과 의도: Prevent a saved command-name launcher such as a mise trampoline from resolving back to the newly installed Codex shim and recursing indefinitely, while keeping native Codex usable after every failed install or repair.
+- 기존 구현 및 제약 조건: Unix installation accepted any non-OpenCodex PATH launcher and saved it behind the shim. Shell scripts, native executables, symlinks, and dynamic launchers are all valid, and static launcher contents cannot prove what a command-name redispatch will resolve to after the shim is installed.
+- 검토한 주요 대안: Reject launchers by content or known tool signatures; resolve one more executable path before installation; run an unbounded validation command; supervise every descendant across new sessions with platform-specific process enumeration.
+- 선택한 방식: Validate the generated wrapper with a bounded behavioral `--version` probe. Run it in an isolated process group, use a probe-only re-entry sentinel plus an inherited lease descriptor as evidence of recursion or surviving descendants, terminate the owned process group on an unsafe result, and commit state only while the generated wrapper still matches its recorded fingerprint. Probe failures and owned-wrapper changes roll back in reverse order while preserving an observed external replacement.
+- 다른 대안 대신 이 방식을 선택한 이유: Exercising the installed resolution path catches mise-style and other dynamic redispatch without parsing provider-specific launcher formats. A five-second observation window bounds installation latency and cleanup, while ownership fingerprints make rollback safe for the concurrent replacements the transaction can observe.
+- 장점, 단점 및 영향: Direct executables and symlinks remain supported, deterministic shim re-entry is rejected, and failed validation restores the prior launcher instead of leaving a committed recursive shim. Installation can take up to five additional seconds. Containment is deliberately process-group scoped: a descendant that intentionally creates a new session can escape group termination, so this probe is not a general OS process supervisor; sentinel evidence still rejects an escaped descendant that re-enters the generated shim during the bounded window.
+
 The bridge enforces a heartbeat stall deadline. It defaults to 300 seconds sampled on a 2 s tick
 (`src/stall-timeout.ts`) and is configurable, so treat the number as a default rather than an
 invariant; sidecars keep their own clocks. On expiry the stream is closed and the upstream request
