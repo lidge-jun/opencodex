@@ -640,8 +640,20 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
     return indeterminate("partial-write", unresolved, `CODEX_HOME cannot be resolved: ${errorReason(error)}`);
   }
 
-  const stateDatabasePath = resolveCodexStateDbPath({ codexHome });
   const configPath = join(codexHome, CONFIG_FILE_NAME);
+  let stateDatabasePath: string;
+  try {
+    stateDatabasePath = resolveCodexStateDbPath({ codexHome });
+  } catch (error) {
+    // Residue classification is a total, read-only safety boundary. An
+    // indeterminate SQLite authority must refuse coordination without escaping
+    // as an exception or falling through to a different state database.
+    return indeterminate(
+      "config",
+      configPath,
+      `SQLite home cannot be resolved: ${errorReason(error)}`,
+    );
+  }
   const profilePath = join(codexHome, PROFILE_FILE_NAME);
   const modelsCachePath = join(codexHome, MODELS_CACHE_FILE_NAME);
   const journalPath = join(codexHome, JOURNAL_FILE_NAME);

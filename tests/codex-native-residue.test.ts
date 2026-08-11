@@ -546,6 +546,16 @@ test("duplicate configured catalog paths are indeterminate", () => {
   });
 });
 
+test("an invalid sqlite_home is indeterminate instead of selecting a fallback database", () => {
+  writeFileSync(pathInCodexHome("config.toml"), "sqlite_home = 123\n");
+
+  expect(classifyNativeRoutedResidue()).toMatchObject({
+    kind: "indeterminate",
+    surface: "config",
+    path: canonicalPathInCodexHome("config.toml"),
+  });
+});
+
 const arbitraryComboAlias = randomUUID();
 
 test(`production-generated arbitrary bare combo alias ${arbitraryComboAlias} is routed residue`, async () => {
