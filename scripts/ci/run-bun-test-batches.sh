@@ -74,17 +74,23 @@ is_bun_runtime_crash() {
 
 LAST_FAILURE_KIND=""
 
-run_batch_once() {
+run_test_once() {
   local batch_number="$1"
-  local attempt="$2"
-  shift 2
+  local phase="$2"
+  local attempt="$3"
+  shift 3
   local -a files=("$@")
   local log_file
   local status
+  local label="shard ${SHARD_SPEC} batch ${batch_number}/${TOTAL_BATCHES}"
+
+  if [[ -n "$phase" ]]; then
+    label+=" ${phase}"
+  fi
 
   log_file="$(mktemp -t ocx-bun-test-batch.XXXXXX)"
 
-  echo "::group::shard ${SHARD_SPEC} batch ${batch_number}/${TOTAL_BATCHES} attempt ${attempt} (${#files[@]} files)"
+  echo "::group::${label} attempt ${attempt} (${#files[@]} files)"
   printf '  %s\n' "${files[@]}"
 
   set +e
@@ -104,22 +110,70 @@ run_batch_once() {
 
   if (( status == 124 )); then
     LAST_FAILURE_KIND="timeout"
-    echo "::warning::Bun batch timed out after ${BATCH_TIMEOUT_SECONDS}s in shard ${SHARD_SPEC} batch ${batch_number} (attempt ${attempt})."
+    echo "::warning::Bun test process timed out after ${BATCH_TIMEOUT_SECONDS}s in ${label} (attempt ${attempt})."
     rm -f -- "$log_file"
     return "$status"
   fi
 
   if is_bun_runtime_crash "$status" "$log_file"; then
     LAST_FAILURE_KIND="runtime"
-    echo "::warning::Bun runtime crash in shard ${SHARD_SPEC} batch ${batch_number} (exit ${status}, attempt ${attempt})."
+    echo "::warning::Bun runtime crash in ${label} (exit ${status}, attempt ${attempt})."
     rm -f -- "$log_file"
     return "$status"
   fi
 
   LAST_FAILURE_KIND="test"
-  echo "::error::Test failure in shard ${SHARD_SPEC} batch ${batch_number} (exit ${status}); not retrying assertion/test failures."
+  echo "::error::Test failure in ${label} (exit ${status}); not retrying assertion/test failures."
   rm -f -- "$log_file"
   return "$status"
+}
+
+recover_batch_file_by_file() {
+  local batch_number="$1"
+  local batch_failure_kind="$2"
+  shift 2
+  local -a files=("$@")
+  local file
+  local file_index=0
+  local status
+  local retry_kind
+
+  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} hit a ${batch_failure_kind}; rerunning its ${#files[@]} files one at a time in fresh Bun processes."
+
+  for file in "${files[@]}"; do
+    ((file_index += 1))
+    if run_test_once "$batch_number" "singleton ${file_index}/${#files[@]}" 1 "$file"; then
+      continue
+    else
+      status=$?
+    fi
+
+    if [[ "$LAST_FAILURE_KIND" != "runtime" && "$LAST_FAILURE_KIND" != "timeout" ]]; then
+      echo "::error::Singleton isolation identified ${file} as a failing test file."
+      return "$status"
+    fi
+
+    retry_kind="$LAST_FAILURE_KIND"
+    echo "Retrying ${file} once in another fresh Bun process after ${retry_kind} failure..."
+    if run_test_once "$batch_number" "singleton ${file_index}/${#files[@]}" 2 "$file"; then
+      echo "::warning::${file} passed on its single ${retry_kind} retry."
+      continue
+    else
+      status=$?
+    fi
+
+    if [[ "$LAST_FAILURE_KIND" == "timeout" ]]; then
+      echo "::error::${file} timed out twice under singleton isolation; failing after one retry."
+    elif [[ "$LAST_FAILURE_KIND" == "runtime" ]]; then
+      echo "::error::Bun runtime crash repeated for ${file} under singleton isolation; failing after one retry."
+    else
+      echo "::error::${file} failed during singleton retry."
+    fi
+    return "$status"
+  done
+
+  echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed under singleton isolation after the original ${batch_failure_kind}; continuing."
+  return 0
 }
 
 mapfile -d '' -t ALL_TEST_FILES < <(
@@ -146,14 +200,15 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
 fi
 
 readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
-echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} fresh Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
+echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
+echo "Runtime crashes and timeouts fall back to one-file-per-process isolation; assertion/test failures do not retry."
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
   start=$(( batch_index * BATCH_SIZE ))
   batch=("${SELECTED_FILES[@]:start:BATCH_SIZE}")
   batch_number=$(( batch_index + 1 ))
 
-  if run_batch_once "$batch_number" 1 "${batch[@]}"; then
+  if run_test_once "$batch_number" "" 1 "${batch[@]}"; then
     continue
   else
     status=$?
@@ -163,20 +218,10 @@ for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
     exit "$status"
   fi
 
-  retry_kind="$LAST_FAILURE_KIND"
-  echo "Retrying shard ${SHARD_SPEC} batch ${batch_number} once in a fresh Bun process after ${retry_kind} failure..."
-  if run_batch_once "$batch_number" 2 "${batch[@]}"; then
-    echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed on the single ${retry_kind} retry."
+  failure_kind="$LAST_FAILURE_KIND"
+  if recover_batch_file_by_file "$batch_number" "$failure_kind" "${batch[@]}"; then
     continue
   else
-    status=$?
+    exit $?
   fi
-
-  if [[ "$LAST_FAILURE_KIND" == "timeout" ]]; then
-    echo "::error::Bun batch timed out twice in shard ${SHARD_SPEC} batch ${batch_number}; failing after one retry."
-  elif [[ "$LAST_FAILURE_KIND" == "runtime" ]]; then
-    echo "::error::Bun runtime crash repeated in shard ${SHARD_SPEC} batch ${batch_number}; failing after one retry."
-  fi
-
-  exit "$status"
 done
