@@ -1,8 +1,73 @@
 import { describe, expect, test } from "bun:test";
+import { applyProviderConfigHints } from "../src/codex/catalog";
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import { mapReasoningEffort } from "../src/reasoning-effort";
 import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
+
+describe("Xiaomi MiMo public OpenAI Chat endpoint (#1483)", () => {
+  const baseUrl = "https://api.xiaomimimo.com/v1";
+  const entry = PROVIDER_REGISTRY.find(row => row.id === "xiaomi-mimo");
+
+  test("owns the official destination and advertises only its validated ladder", () => {
+    expect(entry).toMatchObject({
+      adapter: "openai-chat",
+      baseUrl,
+      dashboardUrl: "https://platform.xiaomimimo.com/console/balance",
+      defaultModel: "mimo-v2.5",
+      models: ["mimo-v2.5"],
+      preserveCustomDestination: true,
+      reasoningEfforts: ["low", "medium", "high"],
+    });
+    expect(KEY_LOGIN_PROVIDERS["xiaomi-mimo"]?.baseUrl).toBe(baseUrl);
+
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "xiaomi-mimo",
+      providers: {
+        "xiaomi-mimo": {
+          adapter: "openai-chat",
+          baseUrl,
+          authMode: "key",
+          apiKey: "test-key",
+          liveModels: true,
+        },
+      },
+    };
+    const route = routeModel(config, "xiaomi-mimo/mimo-v2.5");
+    const catalogModel = applyProviderConfigHints("xiaomi-mimo", route.provider, {
+      provider: "xiaomi-mimo",
+      id: route.modelId,
+    });
+
+    expect(catalogModel.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    for (const tier of ["xhigh", "max", "ultra"]) {
+      expect(mapReasoningEffort(route.provider, route.modelId, tier)).toBe("high");
+    }
+  });
+
+  test("does not claim a same-named provider at another destination", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "xiaomi-mimo",
+      providers: {
+        "xiaomi-mimo": {
+          adapter: "openai-chat",
+          baseUrl: "https://private.example/v1",
+          authMode: "key",
+          apiKey: "private-key",
+        },
+      },
+    };
+
+    const route = routeModel(config, "xiaomi-mimo/mimo-v2.5");
+    expect(route.provider.baseUrl).toBe("https://private.example/v1");
+    expect(route.provider.apiKey).toBe("private-key");
+    expect(route.provider.reasoningEfforts).toBeUndefined();
+    expect(route.provider.reasoningEffortMap).toBeUndefined();
+  });
+});
 
 describe("Xiaomi MiMo token plan (#1158)", () => {
   const entry = PROVIDER_REGISTRY.find(row => row.id === "mimo");
