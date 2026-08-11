@@ -49,6 +49,14 @@ function assertNonNegativeInt(value: unknown, field: string, max: number): numbe
   return value;
 }
 
+function assertPositiveInt(value: unknown, field: string, max: number): number {
+  const parsed = assertNonNegativeInt(value, field, max);
+  if (parsed === 0) {
+    throw new LabAutomationError(`policy field ${field} must be at least 1`, "invalid_policy");
+  }
+  return parsed;
+}
+
 /** Validate and normalize automation policy with a closed schema and hard upper bounds. */
 export function normalizeLabAutomationPolicyV1(raw: unknown): LabAutomationPolicyV1 {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -83,17 +91,17 @@ export function normalizeLabAutomationPolicyV1(raw: unknown): LabAutomationPolic
       "refreshBeforeStaleMs",
       LAB_AUTOMATION_HARD_MAX.refreshBeforeStaleMs,
     ),
-    maxConcurrentRuns: assertNonNegativeInt(
+    maxConcurrentRuns: assertPositiveInt(
       obj.maxConcurrentRuns,
       "maxConcurrentRuns",
       LAB_AUTOMATION_HARD_MAX.maxConcurrentRuns,
     ),
-    maxConcurrentLiveRuns: assertNonNegativeInt(
+    maxConcurrentLiveRuns: assertPositiveInt(
       obj.maxConcurrentLiveRuns,
       "maxConcurrentLiveRuns",
       LAB_AUTOMATION_HARD_MAX.maxConcurrentLiveRuns,
     ),
-    maxConcurrentRunsPerRoute: assertNonNegativeInt(
+    maxConcurrentRunsPerRoute: assertPositiveInt(
       obj.maxConcurrentRunsPerRoute,
       "maxConcurrentRunsPerRoute",
       LAB_AUTOMATION_HARD_MAX.maxConcurrentRunsPerRoute,
