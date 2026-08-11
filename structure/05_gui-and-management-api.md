@@ -253,6 +253,11 @@ OAuth polling API: submit request, waiting-for-login completion, and terminal su
 `aria-live` status message that the code was accepted, and surface repeated `login-status` polling
 network failures as a visible warning instead of silently looking idle again.
 
+Fixed provider redirect URIs keep their registered port. If that port is already in use, a login
+controller with `onManualCodeInput` enters manual-only mode: it must still publish the authorization
+URL and accept the final redirect URL or code through the same state/PKCE session. A controller
+without manual input must fail closed; it must not silently move a fixed redirect URI to another port.
+
 The account-targeting control reads the effective flag from `GET /api/settings`; it must not infer
 state from the redacted config DTO or expose selector mappings. It renders no actionable off switch
 before hydration, serializes rapid clicks, rejects stale poll results that started before a mutation,

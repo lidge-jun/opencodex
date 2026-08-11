@@ -5,7 +5,7 @@
  * Change vs source: the success/error page is an inline HTML constant. opencodex's GUI polls
  * GET /api/oauth/status, so it does not need OAuth state injected into the callback page.
  *
- * Handles: port allocation (preferred → random fallback), callback server, CSRF state,
+ * Handles: port allocation (preferred → random/manual-only fallback), callback server, CSRF state,
  * manual-input race, 300s timeout. Providers implement generateAuthUrl() + exchangeToken().
  */
 import { isAddrInUse } from "../server/ports";
@@ -131,8 +131,14 @@ export abstract class OAuthCallbackFlow {
       }
       const redirectUri = `http://${this.callbackHostname}:${this.preferredPort}${this.callbackPath}`;
       return { servers, redirectUri };
-    } catch {
+    } catch (error) {
       if (this.redirectUri) {
+        // Fixed OAuth redirect URIs cannot move to a random port. Remote dashboards can
+        // still complete the same state/PKCE flow by pasting the final redirect URL or
+        // authorization code, so do not make a local listener a prerequisite for that path.
+        if (this.ctrl.onManualCodeInput && isAddrInUse(error)) {
+          return { servers: [], redirectUri: this.redirectUri };
+        }
         throw new Error(
           `OAuth callback port ${this.preferredPort} unavailable; cannot fall back to a random port when redirectUri is set`,
         );
