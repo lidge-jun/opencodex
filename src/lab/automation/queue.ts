@@ -20,12 +20,19 @@ function isTerminal(run: LabAutomationRunRecordV1): boolean {
   return TERMINAL_STATES.has(run.state);
 }
 
-function evictOldestTerminal(runs: LabAutomationRunRecordV1[]): boolean {
+function isRollingBudgetEvidence(run: LabAutomationRunRecordV1, now: number): boolean {
+  if (typeof run.startedAt !== "number") return false;
+  const cutoff = now - LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
+  return run.startedAt > cutoff && run.startedAt <= now;
+}
+
+/** Evict only disposable terminal history; trailing-window attempts are budget authority. */
+function evictOldestTerminal(runs: LabAutomationRunRecordV1[], now: number): boolean {
   let oldestIndex = -1;
   let oldestTime = Number.POSITIVE_INFINITY;
   for (let index = 0; index < runs.length; index += 1) {
     const run = runs[index]!;
-    if (!isTerminal(run)) continue;
+    if (!isTerminal(run) || isRollingBudgetEvidence(run, now)) continue;
     const terminalAt = run.completedAt ?? run.updatedAt;
     if (terminalAt < oldestTime) {
       oldestTime = terminalAt;
@@ -70,7 +77,7 @@ export function enqueuePlannedRuns(
     if (existingActiveKeys.has(plan.runKey)) continue;
     if (queuedCount >= LAB_AUTOMATION_HARD_MAX.maxQueuedRuns) break;
     while (runs.length >= LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
-      if (!evictOldestTerminal(runs)) return { ...state, runs };
+      if (!evictOldestTerminal(runs, now)) return { ...state, runs };
     }
     runs.push({
       runId: randomUUID(),
@@ -162,14 +169,17 @@ export function selectDispatchableRuns(
 }
 
 export function trimTerminalRuns(state: LabAutomationStateV1, now: number): LabAutomationStateV1 {
-  const keepMs = 7 * 24 * 60 * 60 * 1000;
+  const keepMs = LAB_AUTOMATION_HARD_MAX.terminalRunRetentionMs;
   const runs = state.runs.filter((row) => {
     if (!isTerminal(row)) return true;
+    // Retention is longer than the rolling budget window, but keep the authority check explicit
+    // so a future retention change cannot erase attempts that still bound provider traffic.
+    if (isRollingBudgetEvidence(row, now)) return true;
     const completedAt = row.completedAt ?? row.updatedAt;
     return now - completedAt < keepMs;
   });
   while (runs.length > LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
-    if (!evictOldestTerminal(runs)) break;
+    if (!evictOldestTerminal(runs, now)) break;
   }
   return { ...state, runs };
 }
