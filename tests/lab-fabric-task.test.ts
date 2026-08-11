@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as nodeFs from "node:fs";
 import {
   existsSync,
@@ -54,6 +54,7 @@ import { ensureLabDirs, ensureRestrictedDir } from "../src/lab/paths";
 import { verifyExactTreeDiffV1 } from "../src/lab/fabric/verifier";
 import { parseSyntheticPatchV1 } from "../src/lab/fabric/patch";
 import { FABRIC_LIMITS } from "../src/lab/fabric/constants";
+import { setFabricProducerIsolationLimitsForTests } from "../src/lab/fabric/producer-isolate";
 import { taskSubjectApplicableToRequirements } from "../src/lab/projection/verification";
 import { createHostIssuedFabricPatchExecutor } from "../src/lib/fabric-task-host";
 import type { TrustedFabricPatchExecutor } from "../src/lab/fabric/types";
@@ -67,6 +68,10 @@ import {
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const CREDENTIAL_CANARY = "credential-canary-abcdefghijklmnopqrstuvwxyz1234567890";
+const FAST_FABRIC_ISOLATION = Object.freeze({
+  totalTimeoutMs: 2_000,
+  inactivityTimeoutMs: 750,
+});
 
 const HOMES: string[] = [];
 
@@ -101,7 +106,7 @@ import { SYNTHETIC_AFTER_UTF8, SYNTHETIC_VALUE_PATH } from "${repoImport("src/la
 export async function execute(input: FabricPatchExecutorInput): Promise<SyntheticPatchV1> {
   for (let i = 0; i < 3; i++) {
     input.reportActivity();
-    await Bun.sleep(Math.floor(${FABRIC_LIMITS.inactivityTimeoutMs} * 0.6));
+    await Bun.sleep(Math.floor(${FAST_FABRIC_ISOLATION.inactivityTimeoutMs} * 0.4));
   }
   return {
     schemaVersion: 1,
@@ -112,7 +117,7 @@ export async function execute(input: FabricPatchExecutorInput): Promise<Syntheti
   return createHostIssuedFabricPatchExecutor(modulePath, async (input) => {
     for (let i = 0; i < 3; i++) {
       input.reportActivity();
-      await Bun.sleep(Math.floor(FABRIC_LIMITS.inactivityTimeoutMs * 0.6));
+      await Bun.sleep(Math.floor(FAST_FABRIC_ISOLATION.inactivityTimeoutMs * 0.4));
     }
     return correctSyntheticPatch();
   });
@@ -127,7 +132,7 @@ import type { FabricPatchExecutorInput, SyntheticPatchV1 } from "${repoImport("s
 import { SYNTHETIC_AFTER_UTF8, SYNTHETIC_VALUE_PATH } from "${repoImport("src/lab/fabric/constants")}";
 
 export async function execute(_input: FabricPatchExecutorInput): Promise<SyntheticPatchV1> {
-  await Bun.sleep(${FABRIC_LIMITS.inactivityTimeoutMs} + 50);
+  await Bun.sleep(${FAST_FABRIC_ISOLATION.inactivityTimeoutMs} + 50);
   return {
     schemaVersion: 1,
     operations: [{ op: "replace", path: SYNTHETIC_VALUE_PATH, contentUtf8: SYNTHETIC_AFTER_UTF8 }],
@@ -135,7 +140,7 @@ export async function execute(_input: FabricPatchExecutorInput): Promise<Synthet
 }
 `);
   return createHostIssuedFabricPatchExecutor(modulePath, async () => {
-    await Bun.sleep(FABRIC_LIMITS.inactivityTimeoutMs + 50);
+    await Bun.sleep(FAST_FABRIC_ISOLATION.inactivityTimeoutMs + 50);
     return correctSyntheticPatch();
   });
 }
@@ -232,7 +237,12 @@ function linkDirectory(target: string, linkPath: string): boolean {
 
 const RESTRICTED_LINK_ERROR = /symbolic link|reparse-point substitution/i;
 
+beforeEach(() => {
+  setFabricProducerIsolationLimitsForTests(FAST_FABRIC_ISOLATION);
+});
+
 afterEach(() => {
+  setFabricProducerIsolationLimitsForTests();
   for (const dir of HOMES.splice(0)) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -525,7 +535,7 @@ describe("CL-07 task effectiveness producer", () => {
     expect(["blocked", "inconclusive"]).toContain(result.outcome.outcome);
     expect(["timeout", "inactivity_timeout", "harness_failure"]).toContain(result.outcome.failure?.code ?? "");
     const scratchBase = join(home, "lab", "scratch");
-    await Bun.sleep(6_000);
+    await Bun.sleep(FAST_FABRIC_ISOLATION.totalTimeoutMs + FAST_FABRIC_ISOLATION.inactivityTimeoutMs + 250);
     if (existsSync(scratchBase)) {
       expect(readdirSync(scratchBase).some((name) => name.startsWith("fabric-"))).toBe(false);
     }
