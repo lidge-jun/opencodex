@@ -586,17 +586,22 @@ describe("durable antigravity replay snapshot", () => {
       ],
     }));
     const staleContents = [{ role: "model", parts: [{ functionCall: { name: "get_stale", args: {} } }] }];
-    applyAntigravityReplay(MODEL, "-stale", staleContents);
-    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
-    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
-    applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
-    // Load-time drops are persisted back, so the stale key leaves the file too.
+    // Load alone drops the expired session and persists the cleanup, before any
+    // replay-induced dirty state exists.
+    expect(antigravityReplayMetrics().sessions).toBe(1);
     await flushAntigravityReplay();
     const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
     const keys = raw.sessions!.map(session => (session as unknown[])[0]);
     expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-stale"));
     expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    // The surviving session still replays.
+    applyAntigravityReplay(MODEL, "-stale", staleContents);
+    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Persist the apply-time touch so no debounced write is left pending.
+    await flushAntigravityReplay();
   });
 
   test("snapshot cap keeps the most recently active sessions", async () => {
@@ -784,6 +789,7 @@ describe("durable antigravity replay snapshot", () => {
   });
 
   test("background snapshot failures log a redacted warning and keep the service running", async () => {
+    const FAKE_SECRET = "FAKE_SECRET_antigravity_replay_12345";
     let warned!: () => void;
     const warningSeen = new Promise<void>(resolve => { warned = resolve; });
     const warn = spyOn(console, "warn").mockImplementation((...args) => {
@@ -791,13 +797,15 @@ describe("durable antigravity replay snapshot", () => {
     });
     try {
       setAntigravityReplayWriteSeamForTests({
-        afterTempWrite: async () => { throw new Error("simulated disk failure"); },
+        afterTempWrite: async () => { throw new Error(`simulated disk failure ${FAKE_SECRET}`); },
       });
       observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
       // Deterministic: wait until the debounced write actually failed and
       // warned (bounded), instead of racing a fixed sleep against the timer.
       await Promise.race([warningSeen, Bun.sleep(5_000)]);
       expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
+      // The warning is redacted: error payload must never reach the log.
+      expect(warn.mock.calls.every(call => !call.some(arg => String(arg).includes(FAKE_SECRET)))).toBe(true);
       // The failure must not wedge the cache: a later mutation still works.
       observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
       expect(antigravityReplayMetrics().calls).toBe(2);
