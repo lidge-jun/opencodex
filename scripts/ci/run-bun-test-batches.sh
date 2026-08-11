@@ -67,6 +67,16 @@ is_bun_runtime_crash() {
       ;;
   esac
 
+  # Bun 1.3.14 can surface a Linux epoll registration failure as exit 1,
+  # even though the failure comes from Bun's internal WriteStream setup rather
+  # than a test assertion. Treat only that narrow runtime signature as a crash.
+  if (( status == 1 )) \
+    && grep -Fq '# Unhandled error between tests' "$log_file" \
+    && grep -Fq 'error: EEXIST: file already exists, epoll_ctl' "$log_file" \
+    && grep -Fq 'at new WriteStream (internal:fs/streams:' "$log_file"; then
+    return 0
+  fi
+
   grep -Eqi \
     'oh no: Bun has crashed|Segmentation fault at address|Illegal instruction|Bus error|Aborted \(core dumped\)' \
     "$log_file"
