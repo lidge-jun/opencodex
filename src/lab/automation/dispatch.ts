@@ -48,6 +48,12 @@ function runIdentityMatches(run: LabAutomationRunRecordV1, expected: ExpectedRun
     && run.scenarioManifestDigest === expected.scenarioManifestDigest;
 }
 
+function shouldEnforceRunIdentity(run: LabAutomationRunRecordV1, deps: AutomationDispatchDeps): boolean {
+  // Production orchestration always sets the explicit guard. Canonical planned run keys also
+  // self-identify here so direct internal callers cannot accidentally bypass revalidation.
+  return deps.enforceRunIdentity === true || /^[0-9a-f]{64}$/i.test(run.runKey);
+}
+
 function contractChanged(): DispatchResult {
   return {
     terminalState: "blocked",
@@ -111,7 +117,7 @@ export async function dispatchLabAutomationRun(
         scenarioVersion,
         scenarioManifestDigest: scenarioDigest,
       };
-      if (!runIdentityMatches(run, expected)) return contractChanged();
+      if (shouldEnforceRunIdentity(run, deps) && !runIdentityMatches(run, expected)) return contractChanged();
       const result = await runScenario(caseRecord);
       assertNotCancelled(deps.abortSignal);
       persistConformanceResult(result, caseRecord, authority, { configDir });
@@ -170,7 +176,7 @@ export async function dispatchLabAutomationRun(
         scenarioVersion,
         scenarioManifestDigest: scenarioDigest,
       };
-      if (!runIdentityMatches(run, expected)) return contractChanged();
+      if (shouldEnforceRunIdentity(run, deps) && !runIdentityMatches(run, expected)) return contractChanged();
       const routeContext = buildAutomationLiveRouteContext(
         resolved.route,
         routed.allowPrivateNetwork === true,
