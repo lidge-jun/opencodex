@@ -372,6 +372,12 @@ function sameFingerprint(
           : false);
 }
 
+function sameFingerprintAfterRename(left: ShimPathFingerprint, right: ShimPathFingerprint): boolean {
+  // rename changes the outer directory entry ctime on macOS; every other field,
+  // including a symlink target fingerprint, must remain identical.
+  return sameFingerprint({ ...left, ctimeMs: 0 }, { ...right, ctimeMs: 0 });
+}
+
 function stableShimPathProbe(path: string): StableShimPathProbe | null {
   const before = statFingerprint(path, false);
   if (!before) return null;
@@ -624,6 +630,7 @@ type UnixShimProbeResult = "cleanup" | "descendants" | "failed" | "recursive" | 
 let codexShimProbeHookForTests: (() => void) | null = null;
 let codexShimProbeShellForTests: string | null = null;
 let codexShimGuardedWriteHookForTests: (() => void) | null = null;
+let codexShimFreshWriteHookForTests: (() => void) | null = null;
 let codexShimProbeObservationMs = CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS;
 
 /** Narrow deterministic seam for transaction rollback tests. */
@@ -644,6 +651,11 @@ export function setCodexShimProbeObservationMsForTests(value: number | null): vo
 /** Narrow deterministic seam for guarded partial-write rollback tests. */
 export function setCodexShimGuardedWriteHookForTests(hook: (() => void) | null): void {
   codexShimGuardedWriteHookForTests = hook;
+}
+
+/** Narrow deterministic seam for fresh-install partial-write rollback tests. */
+export function setCodexShimFreshWriteHookForTests(hook: (() => void) | null): void {
+  codexShimFreshWriteHookForTests = hook;
 }
 
 function readProbeMetadata(path: string, maxBytes: number): string | null {
@@ -756,8 +768,7 @@ function terminateUnixProcessGroup(groupId: number): void {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
   const deadline = Date.now() + CODEX_SHIM_INSTALL_PROBE_EXIT_TIMEOUT_MS;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-  while (Date.now() < deadline && unixProcessGroupAlive(groupId)) Atomics.wait(waiter, 0, 0, 10);
+  while (Date.now() < deadline && unixProcessGroupAlive(groupId)) Bun.sleepSync(10);
   if (unixProcessGroupAlive(groupId)) {
     throw new Error(`Codex shim install probe process group ${groupId} did not terminate`);
   }
@@ -780,9 +791,10 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
       const wrapper = stableShimPathProbe(target.wrapperPath);
       const ownsWrapper = !target.preserveOnly
         && entry.wrapperWriteStarted
-        && entry.writtenWrapperFingerprint !== undefined
         && wrapper !== null
-        && sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
+        && (entry.writtenWrapperFingerprint
+          ? sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint)
+          : wrapper.prefix.includes(SHIM_MARKER));
       if (ownsWrapper) unlinkSync(target.wrapperPath);
       else {
         try {
@@ -1491,9 +1503,13 @@ function rollbackObsoleteUnixShimRefresh(journal: readonly ObsoleteUnixShimJourn
   return errors;
 }
 
-function refreshObsoleteUnixShims(files: readonly ShimFileState[]): { installed: boolean; message: string } {
+type ObsoleteUnixShimRefreshResult =
+  | { installed: true; message: string }
+  | { installed: false; deferred: boolean; message: string };
+
+function refreshObsoleteUnixShims(files: readonly ShimFileState[]): ObsoleteUnixShimRefreshResult {
   if (process.platform === "win32") {
-    return { installed: false, message: "Codex autostart shim is already current." };
+    return { installed: false, deferred: false, message: "Codex autostart shim is already current." };
   }
   const candidates = files.filter(file => {
     if (file.preserveOnly || file.wrapperPath !== file.originalPath || !existsSync(file.wrapperPath)) return false;
@@ -1501,7 +1517,7 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): { installed:
     return probe !== null && probe.prefix.includes(SHIM_MARKER) && !isCurrentUnixShimProbe(probe);
   });
   if (candidates.length === 0) {
-    return { installed: false, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
+    return { installed: false, deferred: true, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
   }
 
   const journal: ObsoleteUnixShimJournalEntry[] = [];
@@ -1526,12 +1542,7 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): { installed:
       renameSync(file.wrapperPath, entry.stagedWrapperPath);
       const stagedWrapper = stableShimPathProbe(entry.stagedWrapperPath);
       if (!stagedWrapper
-        || stagedWrapper.fingerprint.dev !== entry.priorWrapperFingerprint.dev
-        || stagedWrapper.fingerprint.ino !== entry.priorWrapperFingerprint.ino
-        || stagedWrapper.fingerprint.kind !== entry.priorWrapperFingerprint.kind
-        || stagedWrapper.fingerprint.mode !== entry.priorWrapperFingerprint.mode
-        || stagedWrapper.fingerprint.size !== entry.priorWrapperFingerprint.size
-        || stagedWrapper.fingerprint.mtimeMs !== entry.priorWrapperFingerprint.mtimeMs) {
+        || !sameFingerprintAfterRename(stagedWrapper.fingerprint, entry.priorWrapperFingerprint)) {
         throw new Error("Codex autostart shim upgrade could not fingerprint the staged wrapper");
       }
       entry.wrapperWriteStarted = true;
@@ -1572,7 +1583,7 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): { installed:
         "Codex autostart shim upgrade failed",
       );
     }
-    return { installed: false, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
+    return { installed: false, deferred: true, message: "Codex autostart shim upgrade deferred because tracked launchers changed." };
   }
 
   if (unsafe) {
@@ -1601,6 +1612,7 @@ function refreshObsoleteUnixShims(files: readonly ShimFileState[]): { installed:
     if (existsSync(statePath())) unlinkSync(statePath());
     return {
       installed: false,
+      deferred: false,
       message: "Removed an obsolete Codex autostart shim because its saved launcher failed current validation. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.",
     };
   }
@@ -1720,6 +1732,7 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       if (!target.preserveOnly) {
         entry.wrapperWriteStarted = true;
         writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+        codexShimFreshWriteHookForTests?.();
         if (process.platform !== "win32") {
           const writtenWrapper = stableShimPathProbe(target.wrapperPath);
           if (!writtenWrapper || !writtenWrapper.prefix.includes(SHIM_MARKER)) {
@@ -1862,10 +1875,12 @@ export function autoRestoreCodexShim(options: {
         if (!secondProbe || isCurrentUnixShimProbe(secondProbe)
           || !sameStableShimPathProbe(firstProbe, secondProbe)) return { status: "deferred" };
       }
-      const result = installCodexShimInternal({ allowFreshInstall: false });
+      const result = refreshObsoleteUnixShims(files);
       return result.installed
         ? { status: "restored", message: result.message }
-        : { status: "ineligible", message: result.message };
+        : result.deferred
+          ? { status: "deferred", message: result.message }
+          : { status: "ineligible", message: result.message };
     }
     const expectedReplacements = new Map<string, ShimPathFingerprint>();
     for (const [path, firstProbe] of replacementProbes) {
