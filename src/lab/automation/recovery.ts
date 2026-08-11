@@ -17,6 +17,7 @@ export function recoverLabAutomationState(
       next,
       run.runKey,
       now + Math.min(policy.failureCooldownMs, LAB_AUTOMATION_HARD_MAX.failureCooldownMs),
+      now,
     );
   }
   return next;
