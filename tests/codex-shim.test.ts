@@ -560,6 +560,45 @@ wait "$child"
     }
   });
 
+  test("Unix fresh install preserves a concurrent wrapper replacement after a successful probe", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-concurrent-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-concurrent-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const concurrent = successfulLauncher("fresh concurrent updater replacement");
+    const original = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' '#!/bin/sh' '# fresh concurrent updater replacement' 'exit 0' > "${codexPath}"
+  chmod 755 "${codexPath}"
+fi
+exit 0
+`;
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(codexPath, 0o755);
+
+      const installed = installCodexShim();
+
+      expect(installed.installed).toBe(false);
+      expect(installed.message).toContain("generated wrapper changed during its validation probe");
+      expect(readFileSync(codexPath, "utf8")).toBe(concurrent);
+      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test("Unix shim permits a real Codex process to start a new child invocation", () => {
     if (process.platform === "win32") return;
 

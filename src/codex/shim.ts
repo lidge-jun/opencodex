@@ -647,16 +647,52 @@ function terminateUnixProcessGroup(groupId: number): void {
   }
 }
 
-function rollbackFreshShimInstall(targets: readonly ShimFileState[]): void {
+interface FreshShimInstallJournalEntry {
+  target: ShimFileState;
+  movedOriginalFingerprint?: ShimPathFingerprint;
+  originalMovedToBackup: boolean;
+  writtenWrapperFingerprint?: ShimPathFingerprint;
+  wrapperWriteStarted: boolean;
+}
+
+function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry[]): void {
   const errors: Error[] = [];
-  for (const target of [...targets].reverse()) {
+  for (const entry of [...journal].reverse()) {
+    const target = entry.target;
+    let sourceOccupied = false;
     try {
-      if (!target.preserveOnly && existsSync(target.wrapperPath) && isShim(target.wrapperPath)) unlinkSync(target.wrapperPath);
+      const wrapper = stableShimPathProbe(target.wrapperPath);
+      const ownsWrapper = !target.preserveOnly
+        && entry.wrapperWriteStarted
+        && entry.writtenWrapperFingerprint !== undefined
+        && wrapper !== null
+        && sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
+      if (ownsWrapper) unlinkSync(target.wrapperPath);
+      else {
+        try {
+          lstatSync(target.originalPath);
+          sourceOccupied = true;
+        } catch (error) {
+          if (fileErrorCode(error) !== "ENOENT") sourceOccupied = true;
+        }
+      }
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
     }
     try {
-      if (existsSync(target.backupPath) && !existsSync(target.originalPath)) renameSync(target.backupPath, target.originalPath);
+      if (entry.originalMovedToBackup && existsSync(target.backupPath)) {
+        const movedOriginal = stableShimPathProbe(target.backupPath);
+        if (!movedOriginal || !entry.movedOriginalFingerprint
+          || !sameFingerprint(movedOriginal.fingerprint, entry.movedOriginalFingerprint)) {
+          throw new Error("Codex shim fresh-install backup changed during rollback");
+        }
+        if (sourceOccupied) {
+          if (!entry.writtenWrapperFingerprint) {
+            throw new Error("Codex shim fresh-install wrapper ownership changed during rollback");
+          }
+          unlinkSync(target.backupPath);
+        } else renameSync(target.backupPath, target.originalPath);
+      }
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
     }
@@ -1361,11 +1397,50 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   for (const target of targets) {
     if (existsSync(target.backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
   }
+  const freshJournal: FreshShimInstallJournalEntry[] = [];
+  let freshApplyError: Error | null = null;
   for (const target of targets) {
-    if (existsSync(target.originalPath)) renameSync(target.originalPath, target.backupPath);
-    if (!target.preserveOnly) writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+    const entry: FreshShimInstallJournalEntry = {
+      target,
+      originalMovedToBackup: false,
+      wrapperWriteStarted: false,
+    };
+    freshJournal.push(entry);
+    try {
+      if (existsSync(target.originalPath)) {
+        renameSync(target.originalPath, target.backupPath);
+        entry.originalMovedToBackup = true;
+        if (process.platform !== "win32") {
+          const movedOriginal = stableShimPathProbe(target.backupPath);
+          if (!movedOriginal) throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
+          entry.movedOriginalFingerprint = movedOriginal.fingerprint;
+        }
+      }
+      if (!target.preserveOnly) {
+        entry.wrapperWriteStarted = true;
+        writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+        if (process.platform !== "win32") {
+          const writtenWrapper = stableShimPathProbe(target.wrapperPath);
+          if (!writtenWrapper || !writtenWrapper.prefix.includes(SHIM_MARKER)) {
+            throw new Error("Codex shim fresh install could not fingerprint the generated wrapper");
+          }
+          entry.writtenWrapperFingerprint = writtenWrapper.fingerprint;
+        }
+      }
+    } catch (error) {
+      freshApplyError = error instanceof Error ? error : new Error(String(error));
+      break;
+    }
   }
   if (process.platform !== "win32") {
+    if (freshApplyError) {
+      try {
+        rollbackFreshShimInstall(freshJournal);
+      } catch (rollbackError) {
+        throw new AggregateError([freshApplyError, rollbackError], "Codex shim installation and rollback failed");
+      }
+      throw freshApplyError;
+    }
     let unsafe: UnixShimProbeResult = null;
     let probeError: Error | null = null;
     try {
@@ -1375,15 +1450,23 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     }
     if (probeError) {
       try {
-        rollbackFreshShimInstall(targets);
+        rollbackFreshShimInstall(freshJournal);
       } catch (rollbackError) {
         throw new AggregateError([probeError, rollbackError], "Codex shim probe and install rollback failed");
       }
       throw probeError;
     }
-    if (unsafe) {
-      rollbackFreshShimInstall(targets);
-      const reason = unsafe === "recursive"
+    const wrapperChangedDuringProbe = freshJournal.some(entry => {
+      if (entry.target.preserveOnly) return false;
+      const wrapper = stableShimPathProbe(entry.target.wrapperPath);
+      return !wrapper || !entry.writtenWrapperFingerprint
+        || !sameFingerprint(wrapper.fingerprint, entry.writtenWrapperFingerprint);
+    });
+    if (unsafe || wrapperChangedDuringProbe) {
+      rollbackFreshShimInstall(freshJournal);
+      const reason = wrapperChangedDuringProbe
+        ? "the generated wrapper changed during its validation probe"
+        : unsafe === "recursive"
         ? "the saved launcher resolved back to the generated shim"
         : unsafe === "timeout"
           ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
@@ -1394,9 +1477,13 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
               : "the saved launcher failed its --version probe";
       return {
         installed: false,
-        message: `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
+        message: wrapperChangedDuringProbe
+          ? `Refusing Codex autostart shim because ${reason}. The concurrent launcher was preserved; retry after the Codex update finishes.`
+          : `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
       };
     }
+  } else if (freshApplyError) {
+    throw freshApplyError;
   }
   writeState(primaryState(targets));
   return {
