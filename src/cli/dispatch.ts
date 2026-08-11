@@ -45,7 +45,7 @@ export interface CliDispatchDeps {
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
-  handleReady: (args: ReadyArgs) => Promise<never>;
+  handleReady: (args: ReadyArgs) => Promise<number>;
 }
 
 type CommandRunner = (deps: CliDispatchDeps) => Promise<number>;

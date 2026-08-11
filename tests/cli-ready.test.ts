@@ -714,16 +714,21 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
   });
 
   test("handleReady accepts pre-parsed ReadyArgs and never re-parses", () => {
-    const sig = cliSource.match(/async\s+function\s+handleReady\s*\(\s*\w+\s*:\s*ReadyArgs\s*\)\s*:\s*Promise<never>/);
-    expect(sig, "handleReady(args: ReadyArgs): Promise<never> signature must exist").not.toBeNull();
+    const sig = cliSource.match(/async\s+function\s+handleReady\s*\(\s*\w+\s*:\s*ReadyArgs\s*\)\s*:\s*Promise<number>/);
+    expect(sig, "handleReady(args: ReadyArgs): Promise<number> signature must exist").not.toBeNull();
     // The handleReady body (up to the next top-level function/switch) must not
     // call parseReadyArgs and must call runReady with the passed args.
     const start = sig!.index!;
     const rest = cliSource.slice(start);
-    const bodyEnd = rest.search(/\n(?:async function |function |switch \(command\))/);
+    const bodyEnd = rest.search(/\nprocess\.exit\(await dispatchCommand\(head|switch \(command\)/);
     const body = rest.slice(0, bodyEnd === -1 ? undefined : bodyEnd);
     expect(body).not.toContain("parseReadyArgs");
     expect(body).toContain("runReady");
+    // The normal ready result must propagate through dispatchCommand to the
+    // single top-level process.exit — handleReady must return runReady's code,
+    // not call process.exit itself (CodeRabbit #1455).
+    expect(body).toContain("return runReady(args)");
+    expect(body).not.toContain("process.exit");
   });
 
   test("valid ready dispatch reaches handleReady AFTER maybeAutoRestoreCodexShim, with fail-closed guard", () => {

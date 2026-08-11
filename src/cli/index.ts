@@ -908,8 +908,8 @@ async function handleRecoverHistory() {
  * and exits with the returned code; it performs no parsing and no I/O of its
  * own. The full behavior is unit-testable without spawning a subprocess.
  */
-async function handleReady(args: ReadyArgs): Promise<never> {
-  process.exit(await runReady(args));
+async function handleReady(args: ReadyArgs): Promise<number> {
+  return runReady(args);
 }
 
 process.exit(await dispatchCommand(head, {
