@@ -31,10 +31,11 @@
  * clean re-authentication instead of a silent session-revoking replay.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { getAuthStorePath } from "./store";
+import { atomicWriteFile, hardenConfigDir, hardenExistingSecret } from "../config";
 
 export const NOUS_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const NOUS_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1";
@@ -82,13 +83,20 @@ interface NousJwtPayload {
 // the auth store (same config dir) and is keyed by a hash of the refresh
 // token, so it never contains the token in cleartext.
 //
+// The mechanism reuses the repository's hardened config IO (atomicWriteFile +
+// hardenConfigDir from ../config and ./store) and is FAIL-CLOSED: if we cannot
+// durably create or read the intent, we refuse the refresh rather than silently
+// disable the guard. An unreadable/corrupt intent is treated as "uncertain"
+// (replay refused), never as "absent".
+//
 // States:
-//  - "submitted": we sent this token and the server responded (so it may have
-//    been consumed). We leave it set after a successful rotation until the
-//    store confirms persistence of the rotated token; if we crash before that,
-//    a later replay of the same token is refused.
-//  - "uncertain": the server responded 200 but we failed to parse/persist the
-//    rotated token. Replay is refused.
+//  - "submitted": we sent this token and a server response was received (so it
+//    may have been consumed). We leave it set after a successful rotation until
+//    the store confirms persistence of the rotated token; if we crash before
+//    that, a later replay of the same token is refused.
+//  - "uncertain": the dispatch may have reached the server (we saw an error
+//    after sending, or failed to parse/persist the rotated token). Replay is
+//    refused.
 
 type RefreshIntentStatus = "submitted" | "uncertain";
 
@@ -97,9 +105,15 @@ interface RefreshIntent {
   updatedAt: number;
 }
 
+class RefreshIntentIOError extends Error {
+  constructor(message: string, cause?: unknown) {
+    super(message, cause ? { cause } : undefined);
+    this.name = "RefreshIntentIOError";
+  }
+}
+
 function refreshIntentDir(): string {
-  const base = join(getAuthStorePath(), "..", ".nous-refresh-intent");
-  return base;
+  return join(getAuthStorePath(), "..", ".nous-refresh-intent");
 }
 
 function refreshIntentPath(refreshToken: string): string {
@@ -108,30 +122,46 @@ function refreshIntentPath(refreshToken: string): string {
 }
 
 function readRefreshIntent(refreshToken: string): RefreshIntent | undefined {
+  const path = refreshIntentPath(refreshToken);
   try {
-    const raw = readFileSync(refreshIntentPath(refreshToken), "utf8");
-    return JSON.parse(raw) as RefreshIntent;
-  } catch {
-    return undefined;
+    // Mirror the repository's hardened read: chmod/ACL-harden the secret path
+    // before reading, and treat any read/parse error as uncertain (fail-closed)
+    // rather than silently absent.
+    hardenExistingSecret(path);
+    return JSON.parse(readFileSync(path, "utf8")) as RefreshIntent;
+  } catch (error) {
+    // ENOENT means we never recorded an intent for this token -> safe to proceed.
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    // Any other failure (corrupt JSON, permission, ACL) => uncertain: never
+    // assume the token is replayable.
+    return { status: "uncertain", updatedAt: Date.now() };
   }
 }
 
 function writeRefreshIntent(refreshToken: string, status: RefreshIntentStatus): void {
   const dir = refreshIntentDir();
+  // Hardened, owner-only directory + atomic (temp+rename) write. Throws on
+  // failure so the caller can fail closed instead of refreshing blind.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  hardenConfigDir();
+  const path = refreshIntentPath(refreshToken);
   try {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(refreshIntentPath(refreshToken), JSON.stringify({ status, updatedAt: Date.now() } satisfies RefreshIntent), "utf8");
-  } catch {
-    // Best-effort: if we cannot record the intent, the refresh still proceeds;
-    // we simply lose the uncertain-outcome guard for this single attempt.
+    atomicWriteFile(path, JSON.stringify({ status, updatedAt: Date.now() } satisfies RefreshIntent));
+  } catch (error) {
+    throw new RefreshIntentIOError(`Failed to durably record Nous refresh intent (${status}); refusing refresh to avoid replaying a possibly-consumed token`, error);
   }
 }
 
 function clearRefreshIntent(refreshToken: string): void {
   try {
     rmSync(refreshIntentPath(refreshToken), { force: true });
-  } catch {
-    // ignore
+  } catch (error) {
+    if (error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT") return;
+    // A non-ENOENT failure to clear is concerning but non-fatal for the caller;
+    // the next replay guard still keys off the (now possibly stale) file.
+    throw new RefreshIntentIOError("Failed to clear Nous refresh intent", error);
   }
 }
 
@@ -173,16 +203,16 @@ function resolvePortalBaseUrl(): string {
     throw new NousTokenError(undefined, undefined, `Nous Portal base URL is not a valid URL: ${raw}`);
   }
   if (url.protocol !== "https:") {
-    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must use HTTPS (got ${url.protocol}): ${raw}`);
+    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must use HTTPS (got ${url.protocol})`);
   }
   if (url.username || url.password) {
-    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain embedded credentials: ${raw}`);
+    throw new NousTokenError(undefined, undefined, "Nous Portal base URL must not contain embedded credentials");
   }
   if (url.search) {
-    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain a query string: ${raw}`);
+    throw new NousTokenError(undefined, undefined, "Nous Portal base URL must not contain a query string");
   }
   if (url.hash) {
-    throw new NousTokenError(undefined, undefined, `Nous Portal base URL must not contain a fragment: ${raw}`);
+    throw new NousTokenError(undefined, undefined, "Nous Portal base URL must not contain a fragment");
   }
   // Origin only — no path/query/fragment — so callers cannot smuggle a
   // non-canonical endpoint through the override.
@@ -239,8 +269,15 @@ function jwtGrantsInference(payload: NousJwtPayload | undefined): boolean {
 export class NousTokenError extends Error {
   /** When true, the token cannot be saved/used and the account needs re-auth. */
   public readonly terminal: boolean;
-  /** When set, the (already rotated) credentials to persist before re-auth. */
-  public readonly credentials?: OAuthCredentials;
+  /**
+   * When set, the (already rotated) refresh token to persist before re-auth, so
+   * the caller can drive a clean re-authentication without discarding the
+   * rotation the server already performed (review #5). Only the refresh token
+   * is retained (never the access token), and the property is non-enumerable so
+   * it is not leaked by structured logging/serialization (review: credentials
+   * must not be enumerable Error properties).
+   */
+  private readonly rotatedRefresh?: string;
 
   constructor(
     status: number | undefined,
@@ -251,7 +288,15 @@ export class NousTokenError extends Error {
     super(message, options);
     this.name = "NousTokenError";
     this.terminal = options?.terminal ?? false;
-    this.credentials = options?.credentials;
+    this.rotatedRefresh = options?.credentials?.refresh;
+    // Non-enumerable so JSON.stringify / util.inspect / logging sinks do not
+    // surface a live credential. Read it via getRotatedRefresh().
+    Object.defineProperty(this, "rotatedRefresh", { enumerable: false, configurable: true });
+  }
+
+  /** The rotated refresh token to persist before re-auth, if any. */
+  getRotatedRefresh(): string | undefined {
+    return this.rotatedRefresh;
   }
 }
 
@@ -477,6 +522,11 @@ export async function loginNous(ctrl: OAuthController): Promise<OAuthCredentials
  * replay.
  */
 export async function refreshNousToken(refreshToken: string, signal?: AbortSignal): Promise<OAuthCredentials> {
+  // Validate the OAuth base URL first (independent of the token): a malformed
+  // or non-HTTPS override must fail before we record any refresh intent, so a
+  // bad URL never leaves a "submitted" intent behind (which would otherwise
+  // make the next call refuse to replay the token).
+  const baseUrl = resolvePortalBaseUrl();
   // Never blindly replay a token whose outcome we could not confirm earlier:
   // a prior submission got a server response (so it may have been consumed) or
   // failed to persist its rotation. Replaying it could trigger
@@ -493,11 +543,21 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   // successful rotation until the store confirms persistence of the rotated
   // token (via clearNousRefreshIntent) — so a crash before persistence leaves
   // the old token refused on replay instead of silently reused.
-  writeRefreshIntent(refreshToken, "submitted");
+  // Fail-closed: if we cannot durably record the intent, refuse the refresh.
+  try {
+    writeRefreshIntent(refreshToken, "submitted");
+  } catch (ioErr) {
+    throw new NousTokenError(
+      undefined,
+      "refresh_intent_io",
+      "Refusing refresh: could not durably record the refresh-intent guard (fail-closed)",
+      { terminal: true, cause: ioErr },
+    );
+  }
 
   let response: Response;
   try {
-    response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
+    response = await fetch(`${baseUrl}/api/oauth/token`, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -512,16 +572,34 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
       signal: requestSignal(signal),
     });
   } catch (netErr) {
-    // Network-level failure: the server never saw the token, so it was not
-    // consumed. Clear the intent so a later retry can resubmit it.
-    clearRefreshIntent(refreshToken);
+    // The request may have reached the server and rotated the token even on a
+    // timeout/abort/connection error — we cannot prove it did NOT. Mark the
+    // intent uncertain so the submitted token is never replayed; the next
+    // refresh will force a clean re-auth instead of risking reuse.
+    try {
+      writeRefreshIntent(refreshToken, "uncertain");
+    } catch {
+      // If we cannot even mark uncertain, the worst case is a later blind
+      // replay; prefer surfacing the original network error so it is retried
+      // through the normal path, which will re-encounter the guard if the file
+      // later becomes readable.
+    }
     throw netErr;
   }
 
   if (!response.ok) {
     // Error before any rotation: the token was not consumed. Clear the intent
-    // so a retry can resubmit it.
-    clearRefreshIntent(refreshToken);
+    // so a retry can resubmit it. Fail-closed: if clearing fails, surface it.
+    try {
+      clearRefreshIntent(refreshToken);
+    } catch (ioErr) {
+      throw new NousTokenError(
+        undefined,
+        "refresh_intent_io",
+        "Refresh failed and the refresh-intent could not be cleared for safe retry",
+        { terminal: true, cause: ioErr },
+      );
+    }
     throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
   }
 
@@ -533,7 +611,11 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
     const creds = parseTokenPayload((await response.json()) as NousTokenResponse, refreshToken);
     return creds;
   } catch (e) {
-    writeRefreshIntent(refreshToken, "uncertain");
+    try {
+      writeRefreshIntent(refreshToken, "uncertain");
+    } catch {
+      // already throwing the parse error below; do not mask it
+    }
     throw e;
   }
 }

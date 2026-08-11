@@ -47,13 +47,23 @@ describe("Nous token-response wiring", () => {
 
   beforeEach(() => {
     previousPortalBase = process.env.NOUS_PORTAL_BASE_URL;
+    previousOpencodexHome = process.env.OPENCODEX_HOME;
     process.env.NOUS_PORTAL_BASE_URL = TEST_PORTAL;
+    // Isolate durable refresh-intent state so this block never leaves intent
+    // files in the developer/runner config tree (review: 1st wiring test must
+    // isolate OPENCODEX_HOME).
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
   });
 
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (previousPortalBase === undefined) delete process.env.NOUS_PORTAL_BASE_URL;
     else process.env.NOUS_PORTAL_BASE_URL = previousPortalBase;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
   });
 
   test("refreshNousToken posts the refresh token in the x-nous-refresh-token header and keeps the rotated token", async () => {
@@ -260,7 +270,7 @@ describe("Nous Portal base URL hardening", () => {
     try {
       const ctrl: OAuthController = { onAuth() {} };
       await expect(loginNous(ctrl)).rejects.toThrow(/must use HTTPS/);
-      await expect(refreshNousToken("old-refresh")).rejects.toThrow(/must use HTTPS/);
+      await expect(refreshNousToken("hardening-refresh")).rejects.toThrow(/must use HTTPS/);
       expect(fetchCalled).toBe(false);
     } finally {
       globalThis.fetch = realFetch;
@@ -277,7 +287,7 @@ describe("Nous Portal base URL hardening", () => {
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
     try {
-      await expect(refreshNousToken("old-refresh")).rejects.toThrow(/not a valid URL/);
+      await expect(refreshNousToken("hardening-refresh")).rejects.toThrow(/not a valid URL/);
       expect(fetchCalled).toBe(false);
     } finally {
       globalThis.fetch = realFetch;
@@ -299,7 +309,7 @@ describe("Nous Portal base URL hardening", () => {
         return new Response("{}", { status: 200 });
       }) as typeof fetch;
       try {
-        await expect(refreshNousToken("old-refresh")).rejects.toThrow(/base URL/);
+        await expect(refreshNousToken("hardening-refresh")).rejects.toThrow(/base URL/);
         expect(fetchCalled).toBe(false);
       } finally {
         globalThis.fetch = realFetch;
@@ -492,26 +502,30 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     });
   });
 
-  test("a 200 with an unparseable body marks the intent uncertain and blocks replay", async () => {
+  test("a 200 with an unparseable body marks the intent uncertain and the replay guard refuses before any fetch", async () => {
     // Server returns 200 but the body is not valid JSON -> parseTokenPayload
     // throws, so we mark the intent uncertain rather than clear it.
-    globalThis.fetch = (async () => new Response("not json", { status: 200 })) as typeof fetch;
+    let calls = 0;
+    globalThis.fetch = ((async () => { calls++; return new Response("not json", { status: 200 }); }) as typeof fetch);
     await expect(refreshNousToken("old-refresh")).rejects.toThrow();
     expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
 
-    // The next submission of the same (possibly consumed) token is refused.
-    globalThis.fetch = (async () => new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 })) as typeof fetch;
+    // The next submission of the same (possibly consumed) token is refused by
+    // the guard BEFORE any network call — prove fetch is never reached.
+    globalThis.fetch = ((async () => { calls++; return new Response(JSON.stringify({ error: "refresh_token_reused" }), { status: 400 }); }) as typeof fetch);
     await expect(refreshNousToken("old-refresh")).rejects.toMatchObject({
       name: "NousTokenError",
       oauthError: "refresh_token_reused",
     });
+    expect(calls).toBe(1); // only the first (unparseable) call ever hit the network
   });
 
-  test("a network failure leaves the token replayable (not consumed by the server)", async () => {
+  test("a network failure leaves the intent uncertain (fail-closed, never blindly replayable)", async () => {
     globalThis.fetch = (async () => { throw new Error("network down"); }) as typeof fetch;
     await expect(refreshNousToken("old-refresh")).rejects.toThrow("network down");
-    // No server response -> the token was not consumed -> safe to retry.
-    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(false);
+    // We cannot prove the server never received/rotated the token on a
+    // connection failure, so it must be treated as uncertain: replay refused.
+    expect(nousRefreshIntentBlocksReplay("old-refresh")).toBe(true);
   });
 
   test("invalid_token is a terminal error that forces re-authentication", async () => {
@@ -549,8 +563,12 @@ describe("Nous refresh failure-atomicity + terminal errors", () => {
     expect((err as { name?: string }).name).toBe("NousTokenError");
     expect((err as { oauthError?: string }).oauthError).toBe("insufficient_scope");
     expect((err as { terminal?: boolean }).terminal).toBe(true);
-    // The already-rotated refresh token is preserved so the caller can persist
-    // it and drive a clean re-auth without discarding the rotation.
-    expect((err as { credentials?: { refresh?: string } }).credentials?.refresh).toBe("rotated-refresh");
+    // The already-rotated refresh token is preserved (non-enumerable) so the
+    // caller can persist it and drive a clean re-auth without discarding the
+    // rotation. It must NOT be an enumerable property (no log/serialization leak).
+    const e = err as NousTokenError & { getRotatedRefresh(): string | undefined };
+    expect(e.getRotatedRefresh()).toBe("rotated-refresh");
+    expect(Object.keys(err as object)).not.toContain("rotatedRefresh");
+    expect(Object.keys(err as object)).not.toContain("credentials");
   });
 });

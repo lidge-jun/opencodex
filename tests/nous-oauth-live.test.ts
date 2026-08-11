@@ -10,15 +10,19 @@
  *  - The refresh token is read ONLY from the local auth store on disk and is
  *    NEVER printed. Only token *lengths* are reported.
  *  - No value derived from a token (access/refresh/JWT) is echoed.
- *  - This test REFRESHES and then PERSISTS the rotated token back through the
- *    same `mergeAccountCredential` path production uses, so the local session
- *    stays valid (it is not destructive — review blocker #1).
+ *  - The refresh runs through the production coordinator
+ *    (`refreshGenericAccountWithLock`) — the same generation-aware,
+ *    account-lock path production uses — so concurrent refreshes cannot
+ *    replay a single-use token. The rotated token is persisted by that path,
+ *    so the local session stays valid (non-destructive, review blocker #1).
  *  - It performs a single read-only GET against the live model catalog,
  *    accepting either an OpenAI-style `{ data: [...] }` body or a bare array.
  */
 import { describe, expect, test } from "bun:test";
-import { getCredential, mergeAccountCredential } from "../src/oauth/store";
+import { getCredential } from "../src/oauth/store";
 import { refreshNousToken } from "../src/oauth/nous";
+import { refreshGenericAccountWithLock } from "../src/oauth/index";
+import type { OAuthProviderDef } from "../src/oauth/types";
 
 const LIVE = process.env.NOUS_LIVE_TEST === "1";
 
@@ -31,6 +35,13 @@ function len(label: string, v: string | undefined): void {
   console.log(`  ${label}.len: ${v.length}`);
 }
 
+// Minimal provider def: refresh delegates to the Nous implementation; the
+// coordinator owns locking, generation checks, and persistence.
+const NOUS_DEF: OAuthProviderDef = {
+  id: "nous",
+  refresh: (rt: string, signal?: AbortSignal) => refreshNousToken(rt, signal),
+};
+
 describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", () => {
   test("real-account refresh rotates and persists; live catalog is reachable", async () => {
     const stored = getCredential("nous");
@@ -42,23 +53,28 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     len("stored.refresh", stored!.refresh);
     len("stored.accountId", stored!.accountId);
 
-    // Refresh against the production Portal. Tokens are read back but redacted.
-    const refreshed = await refreshNousToken(stored!.refresh);
-    len("refreshed.access", refreshed.access);
-    len("refreshed.refresh", refreshed.refresh);
-    expect(refreshed.access.length).toBeGreaterThan(0);
-    expect(refreshed.refresh.length).toBeGreaterThan(0);
-    // Rotation must have produced a different refresh token (single-use contract).
-    expect(refreshed.refresh).not.toBe(stored!.refresh);
+    // Refresh through the production, generation-aware, account-locked
+    // coordinator. It refreshes, persists the rotated token, clears the
+    // refresh-intent, and returns a usable access token.
+    const access = await refreshGenericAccountWithLock(
+      "nous",
+      stored!.accountId!,
+      NOUS_DEF,
+      stored!,
+      {},
+    );
+    len("refreshed.access", access);
+    expect(access.length).toBeGreaterThan(0);
 
-    // Persist the rotation through the production path so the local session
-    // stays valid (non-destructive).
-    const result = await mergeAccountCredential("nous", refreshed.accountId ?? stored!.accountId!, refreshed);
-    console.log(`[live] rotated token persisted (superseded=${"superseded" in result})`);
+    // Confirm rotation persisted a *different* refresh token (single-use contract).
+    const after = getCredential("nous", stored!.accountId);
+    len("after.refresh", after?.refresh);
+    expect(after?.refresh, "rotation should have persisted a new refresh token").toBeTruthy();
+    expect(after!.refresh).not.toBe(stored!.refresh);
 
     // Read-only live catalog discovery (same endpoint the adapter uses).
     const res = await fetch("https://inference-api.nousresearch.com/v1/models", {
-      headers: { Authorization: `Bearer ${refreshed.access}` },
+      headers: { Authorization: `Bearer ${access}` },
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as unknown;
