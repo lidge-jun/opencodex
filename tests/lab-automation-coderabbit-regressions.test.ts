@@ -14,7 +14,7 @@ import {
 import { LAB_AUTOMATION_HARD_MAX } from "../src/lab/automation/constants";
 import { enqueuePlannedRuns } from "../src/lab/automation/queue";
 import { runBudgetRemaining } from "../src/lab/automation/budgets";
-import { setCooldown } from "../src/lab/automation/cooldown";
+import { cooldownActive, setCooldown } from "../src/lab/automation/cooldown";
 import { listLabAutomationRuns } from "../src/lab/automation/runs-query";
 import {
   cancelLabAutomationRun,
@@ -144,8 +144,12 @@ describe("CL-08 CodeRabbit regressions", () => {
       now + 20_000,
       now,
     );
-    expect(Object.keys(saturated.cooldownUntilByKey)).toHaveLength(LAB_AUTOMATION_HARD_MAX.maxPersistedRuns);
+    expect(Object.keys(saturated.cooldownUntilByKey).length).toBeLessThanOrEqual(LAB_AUTOMATION_HARD_MAX.maxPersistedRuns);
     expect(saturated.cooldownUntilByKey.overflow).toBeUndefined();
+    expect(cooldownActive(saturated, "active-0", now)).toBe(true);
+    expect(cooldownActive(saturated, "overflow", now)).toBe(true);
+    expect(cooldownActive(saturated, "unrelated-key", now)).toBe(true);
+    expect(cooldownActive(saturated, "unrelated-key", now + 20_001)).toBe(false);
   });
 
   test("persisted state rejects duplicate identities and impossible lifecycle fields", () => {
