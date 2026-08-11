@@ -24,7 +24,7 @@ import {
 } from "../src/lab/automation/orchestrator";
 import type { LabAutomationRunRecordV1, PlannedLabRunV1 } from "../src/lab/automation/types";
 import { LabAutomationError } from "../src/lab/automation/types";
-import { labAutomationStatePath } from "../src/lab/paths";
+import { ensureLabDirs, labAutomationStatePath } from "../src/lab/paths";
 import { handleManagementAPI } from "../src/server/management-api";
 import { ManagementRequest } from "./helpers/management-auth";
 import { handleLabCommand } from "../src/cli/lab";
@@ -150,6 +150,7 @@ describe("CL-08 CodeRabbit regressions", () => {
 
   test("persisted state rejects duplicate identities and impossible lifecycle fields", () => {
     const home = tempHome();
+    ensureLabDirs(home);
     const writeState = (runs: unknown[]) => {
       writeFileSync(labAutomationStatePath(home), JSON.stringify({
         schemaVersion: 1,
