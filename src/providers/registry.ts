@@ -194,8 +194,8 @@ export interface ProviderRegistryEntry {
    */
   statelessResponses?: boolean;
   /**
-   * Responses parser requires a matched tool result directly after its call. This is
-   * seeded/backfilled like other fixed upstream wire-contract capabilities.
+   * Responses parser requires an unambiguous call batch and its matched result batch
+   * to stay contiguous. This is seeded/backfilled like other fixed wire capabilities.
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
@@ -1462,7 +1462,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // server." https://api-docs.deepseek.com/api/create-response/
     statelessResponses: true,
     // DeepSeek rejects a valid Codex continuation when hook-provided developer
-    // context is persisted between a call and its matching result (#1292).
+    // context splits a call from its result (#1292); parallel calls remain one
+    // reasoning-bearing assistant batch rather than being split per pair (#1477).
     requiresAdjacentResponsesToolResults: true,
     /* [Decision Log]
     - 목적: DeepSeek V4 thinking mode multi-turn/tool-call requests must replay prior assistant reasoning_content.

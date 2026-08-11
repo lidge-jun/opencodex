@@ -1227,9 +1227,9 @@ export interface OcxProviderConfig {
    */
   statelessResponses?: boolean;
   /**
-   * Responses upstream whose parser requires each tool result to immediately follow
-   * its matching call. When enabled, only unambiguous matched pairs are reordered;
-   * intervening messages are preserved after the result instead of being dropped.
+   * Responses upstream whose parser requires an unambiguous call batch and its matched
+   * result batch to remain contiguous. Intervening messages are preserved after the
+   * batch, and parallel calls stay together with the reasoning turn that produced them.
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
