@@ -6,7 +6,7 @@ import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
 const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
-const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const dispatchSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
 
 describe("update stops the running proxy before replacing files", () => {
   test("a failed cache pre-flight aborts before the stop callback can run", () => {
@@ -140,9 +140,9 @@ describe("update stops the running proxy before replacing files", () => {
 
 describe("ocx update --help has no side effects (#168)", () => {
   test("the Bun CLI short-circuits help before importing the update runner", () => {
-    const caseAt = cliSource.indexOf('case "update"');
-    const helpAt = cliSource.indexOf('printSubcommandUsage("update")');
-    const runAt = cliSource.indexOf("await runUpdate()");
+    const caseAt = dispatchSource.indexOf('update: async');
+    const helpAt = dispatchSource.indexOf('printSubcommandUsage("update")');
+    const runAt = dispatchSource.indexOf("await runUpdate()");
     expect(caseAt).toBeGreaterThan(-1);
     expect(helpAt).toBeGreaterThan(caseAt);
     expect(helpAt).toBeLessThan(runAt);

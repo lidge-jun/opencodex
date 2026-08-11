@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { isServiceOwnershipError, ServiceOwnershipError } from "../src/service";
 
 const CLI_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const DISPATCH_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
 const SERVICE_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "service.ts"), "utf8");
 const MANAGEMENT_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "server", "management-api.ts"), "utf8");
 const PROCESS_CONTROL_SOURCE = readFileSync(join(import.meta.dir, "..", "src", "lib", "process-control.ts"), "utf8");
@@ -92,8 +93,8 @@ describe("Grok fence lifecycle wiring", () => {
     expect(stopFn).toContain("return !stopFailed");
     expect(stopFn).not.toContain("process.exit(1)");
 
-    const restartCase = sliceFn(CLI_SOURCE, 'case "restart"', 'case "health"');
-    expect(restartCase).toContain("await handleProxyRestart(handleRestartStartWhenStopped)");
+    const restartCase = sliceFn(DISPATCH_SOURCE, "restart: async", "health: async");
+    expect(restartCase).toContain("await deps.handleProxyRestart(deps.handleRestartStartWhenStopped)");
     const trayRestart = sliceFn(CLI_SOURCE, "async function handleTrayProxyRestart(", "async function restoreSharedClientStateAfterStop(");
     const restartHelper = sliceFn(CLI_SOURCE, "async function handleProxyRestart(", "async function handleTrayProxyRestart(");
     expect(trayRestart).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");

@@ -30,7 +30,7 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     expect(src).toContain("runtimeTrusted");
     expect(read("src/cli/index.ts")).toContain("allowEphemeralFallback: !hardPin");
     expect(read("src/cli/index.ts")).toContain("preferRetryMs: hardPin ? 5_000 : 750");
-    expect(read("src/cli/index.ts")).toContain("Not opening the GUI");
+    expect(read("src/cli/dispatch.ts")).toContain("Not opening the GUI");
     expect(read("src/server/ports.ts")).toContain("allowEphemeralFallback");
   });
   test("Windows GUI update worker is launched without inheriting the proxy LISTEN socket", () => {

@@ -1,34 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { CLI_COMMANDS, findCommand } from "../src/cli/registry";
-
-const cliSource = readFileSync(join(import.meta.dir, "../src/cli/index.ts"), "utf8");
-
-/** Top-level switch case names in src/cli/index.ts.
- * Top-level cases sit at 2-4 space indent; the nested codex-shim sub-switch
- * cases (install/status/uninstall/remove) sit at 6+ and are not commands. */
-function topLevelSwitchCases(source: string): string[] {
-  const names: string[] = [];
-  for (const match of source.matchAll(/^ {2,4}case "([^"]+)"/gm)) names.push(match[1]!);
-  return names;
-}
+import { DISPATCH_ALIASES, DISPATCH_COMMANDS } from "../src/cli/dispatch";
 
 describe("CLI command registry parity", () => {
-  const cases = topLevelSwitchCases(cliSource);
+  /** Runner keys in src/cli/dispatch.ts (the dispatch table that replaced the
+   * top-level switch in src/cli/index.ts). */
+  const cases = [...DISPATCH_COMMANDS];
   const caseSet = new Set(cases);
   const registryNames = new Set(CLI_COMMANDS.flatMap(entry => [entry.name, ...(entry.aliases ?? [])]));
 
   test("every top-level switch case resolves in the registry", () => {
-    // `help`/`--help`/`-h` are head-handled pseudo-cases, not commands.
+    // `help`/`--help`/`-h` are head-handled pseudo-cases, not commands. They
+    // still exist as dispatch runners so a bare `ocx help` reaches printUsage,
+    // but they are not registry entries; exclude them only while dispatch does
+    // not list them as commands.
     const headHandled = new Set(["help", "--help", "-h"]);
-    const unresolvable = cases.filter(name => !headHandled.has(name) && !registryNames.has(name));
+    const unresolvable = cases.filter(name => !(headHandled.has(name) && !registryNames.has(name)) && !registryNames.has(name));
     expect(unresolvable).toEqual([]);
   });
 
   test("every registry entry has a top-level switch case", () => {
+    // Every canonical entry.name must be a direct runner key in the dispatch
+    // table (a missing canonical case must never pass via an alias). Alias
+    // entries (setup/eject/remove/model) are not standalone runner keys; they
+    // resolve through DISPATCH_ALIASES and are asserted separately below.
+    const aliasNames = new Set([...DISPATCH_ALIASES.keys()]);
     const missing = CLI_COMMANDS
-      .filter(entry => !caseSet.has(entry.name))
+      .filter(entry => !aliasNames.has(entry.name) && !caseSet.has(entry.name))
       .map(entry => entry.name);
     expect(missing).toEqual([]);
   });
@@ -51,6 +49,15 @@ describe("CLI command registry parity", () => {
     expect(aliasesOf("restore")).toContain("eject");
     expect(aliasesOf("uninstall")).toContain("remove");
     expect(aliasesOf("models")).toContain("model");
+  });
+
+  test("every declared alias resolves through DISPATCH_ALIASES to a runner key", () => {
+    for (const entry of CLI_COMMANDS) {
+      for (const alias of entry.aliases ?? []) {
+        expect(DISPATCH_ALIASES.get(alias), `alias ${alias} must resolve`).toBe(entry.name);
+        expect(caseSet.has(entry.name), `canonical ${entry.name} must be a runner key`).toBe(true);
+      }
+    }
   });
 
   test("hidden entries are flagged and do not appear in help lookups by accident", () => {

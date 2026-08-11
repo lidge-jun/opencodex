@@ -24,7 +24,7 @@ import {
   writeRuntimePort,
 } from "../config";
 import { collectStatus } from "./status";
-import { dispatchInternalCliCommand, type InternalCliCommand } from "./internal-dispatch";
+
 import {
   discoverStableProxyForRestart,
   isProxyReplacement,
@@ -35,7 +35,7 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
+import { dispatchCommand } from "./dispatch";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
@@ -56,8 +56,8 @@ import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
 import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
-import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
-import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
+
+
 import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { initializeNodeLauncherContext } from "./launcher-context";
@@ -912,469 +912,33 @@ async function handleReady(args: ReadyArgs): Promise<never> {
   process.exit(await runReady(args));
 }
 
-switch (command) {
-  case "init":
-  case "setup": {
-    const { runInit } = await import("./init");
-    await runInit();
-    break;
-  }
-  case "start":
-    await handleStart();
-    break;
-  case "stop": {
-    // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
-    // re-start the proxy immediately, so warning there would contradict the next line.
-    if (await handleStop()) {
-      console.log("⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').");
-    }
-    break;
-  }
-  case "restore":
-  case "eject": {
-    const restoreJson = args[1] === "--json";
-    if (args[1] === "back") {
-      // Reverse switch: re-point plain `codex` at the RUNNING proxy without touching its
-      // lifecycle — the counterpart of `ocx restore`. Start/stop triggers are unchanged;
-      // this only re-runs the same inject (config + catalog + history) `ocx start` does.
-      const live = await findLiveProxy();
-      if (!live) {
-        console.error("No running proxy found. Run 'ocx start' — it injects opencodex automatically.");
-        process.exit(1);
-      }
-      const desired = setIntegrationEnabled("codex", true);
-      if (!desired.ok) {
-        process.exitCode = desired.reason === "conflict" ? 2 : 1;
-        console.error(`Codex desired state was not saved (${desired.reason}).`);
-        break;
-      }
-      const synced = await syncModelsToCodex(live.port);
-      if (synced.status === "skipped") {
-        process.exitCode = 2;
-        console.error("Codex integration is OFF; restore back did not change Codex. Retry after the competing integration change finishes.");
-        break;
-      }
-      if (!synced.ok) {
-        process.exitCode = 1;
-        console.error("Plain `codex` was not switched back to opencodex. Fix the reported Codex config issue and retry.");
-        break;
-      }
-      const target = collectOrcaCodexHomeDiagnostic();
-      console.log(`Plain \`codex\` now routes through opencodex in ${target.effectiveCodexHome} (undo with: ocx restore).`);
-      break;
-    }
-    const desired = setIntegrationEnabled("codex", false);
-    if (!desired.ok) {
-      process.exitCode = desired.reason === "conflict" ? 2 : 1;
-      if (restoreJson) {
-        // Machine-readable contract: every restore --json outcome emits one
-        // schema-complete envelope on stdout, including pre-machinery failures.
-        const { skippedRestoreEnvelope } = await import("../codex/inject");
-        console.log(JSON.stringify(skippedRestoreEnvelope(false, `Codex desired state was not saved (${desired.reason}).`)));
-      } else {
-        console.error(`Codex desired state was not saved (${desired.reason}).`);
-      }
-      break;
-    }
-    // A repeated OFF on an already-clean home is a policy no-op. Do not enter
-    // restore's native-profile machinery merely to prove there is nothing to
-    // restore: those locks live in CODEX_HOME and a skip must create nothing.
-    if (desired.status === "unchanged") {
-      const { classifyNativeRoutedResidue } = await import("../codex/native-residue");
-      if (classifyNativeRoutedResidue().kind === "clean") {
-        const alreadyOff = "Codex integration is already OFF and native; no Codex files changed.";
-        if (restoreJson) {
-          const { skippedRestoreEnvelope } = await import("../codex/inject");
-          console.log(JSON.stringify(skippedRestoreEnvelope(true, alreadyOff)));
-        } else {
-          console.log(alreadyOff);
-        }
-        break;
-      }
-    }
-    let r: { success: boolean; message: string };
-    try {
-      r = await restoreNativeCodexAsync({ revalidateDesiredState: true });
-    } catch (err) {
-      r = { success: false, message: err instanceof Error ? err.message : String(err) };
-    }
-    if (restoreJson) {
-      // Spawned callers need the artifact-level result to distinguish a busy
-      // history worker from a successful native restore. Keep stdout machine
-      // readable; human framing remains the default command contract.
-      console.log(JSON.stringify(r));
-      if (!r.success) process.exitCode = 1;
-      break;
-    }
-    if (r.success) console.log(`✅ ${r.message}`);
-    else {
-      console.error(`⚠️  ${r.message}`);
-      process.exitCode = 1;
-    }
-    try {
-      const g = stripGrokConfig();
-      if (g.changed) console.log(`✅ ${g.message}`);
-      else if (!g.ok) {
-        console.error(`⚠️  ${g.message}`);
-        process.exitCode = 1;
-      }
-    } catch { /* best-effort */ }
-    if (r.success) {
-      console.log("Codex integration is OFF and plain `codex` now runs natively. Switch back with: ocx restore back");
-    } else {
-      console.error("Plain `codex` was not fully restored. Inspect $CODEX_HOME/config.toml before using native Codex.");
-    }
-    break;
-  }
-  case "recover-history":
-    await handleRecoverHistory();
-    break;
-  case "uninstall":
-  case "remove":
-    await handleUninstall();
-    break;
-  case "status":
-    await handleStatus();
-    break;
-  case "doctor": {
-    const { runDoctor } = await import("./doctor");
-    await runDoctor(args.slice(1));
-    break;
-  }
-  case "debug": {
-    const { handleDebugCommand } = await import("./debug");
-    await handleDebugCommand(args.slice(1));
-    break;
-  }
-  case "ensure":
-    await handleEnsure();
-    break;
-  case "login": {
-    const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(args[1]);
-    break;
-  }
-  case "logout": {
-    const { removeCredential } = await import("../oauth/store");
-    const name = (args[1] ?? "").trim().toLowerCase();
-    await removeCredential(name);
-    console.log(`Logged out of ${name || "(none)"}.`);
-    break;
-  }
-  case "sync": {
-    const restartCodex = args.slice(1).includes("--restart-codex");
-    const synced = await syncModelsToCodex((await findLiveProxy())?.port);
-    if (synced.status === "skipped") {
-      console.log("Codex integration is OFF; sync skipped and no Codex files changed.");
-    } else if (!synced.ok) {
-      process.exitCode = 1;
-      console.error("Codex sync did not complete. Fix the reported Codex config issue and retry.");
-    }
-    // Only warn/restart when a catalog or models_cache write actually happened. This is
-    // deliberately not an `else`: refreshCodexModelCatalog runs before injectCodexConfig,
-    // so a sync can fail (`ok: false`) after the catalog was already rewritten — which is
-    // exactly when a long-lived app-server is holding the stale list.
-    if (synced.catalogWritten || synced.cacheSynced) {
-      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
-      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
-    }
-    break;
-  }
-  case "v2": {
-    const { cmdV2 } = await import("./v2");
-    process.exitCode = await cmdV2(args.slice(1), {}, async () => (await findLiveProxy())?.port);
-    break;
-  }
-  case "sync-cache": {
-    const restartCodex = args.slice(1).includes("--restart-codex");
-    if (!shouldSyncCodexOnStart(loadConfig())) {
-      console.log("Codex integration is OFF; cache sync skipped and no Codex files changed.");
-      break;
-    }
-    const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
-    const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
-    const { getCodexHome } = await import("../codex/paths");
-    const owningCodexHome = getCodexHome();
-    const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, owningCodexHome));
-    // Only warn/restart when models_cache was actually rewritten from a readable catalog.
-    if (invalidated.kind === "completed" && invalidated.value) {
-      const { afterCatalogWriteHandleAppServers } = await import("../codex/app-server-processes");
-      afterCatalogWriteHandleAppServers({ restart: restartCodex, log: console });
-    }
-    break;
-  }
-  case "gui": {
-    const cfg = await import("../config");
-    const config = cfg.loadConfig();
-    // Identity-checked liveness (not the pid file + a fixed sleep): finds a fallback-port
-    // proxy and waits until the spawned one actually answers before opening the browser.
-    let live = await findLiveProxy();
-    if (!live) {
-      console.log("Proxy not running. Starting...");
-      const child = spawn(process.execPath, startArgv((config.port ?? 10100) > 0 ? (config.port ?? 10100) : undefined), {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: withProcessRuntimeProvenance(process.env),
-      });
-      child.unref();
-      live = await waitForProxy();
-      if (!live) {
-        console.error("❌ Proxy did not become healthy after starting. Not opening the GUI.");
-        process.exit(1);
-      }
-    }
-    // Open the host the proxy actually binds — `localhost` only answers for
-    // loopback/wildcard binds, not a concrete LAN/IPv6 hostname.
-    const guiHost = probeHostname(live?.hostname ?? config.hostname);
-    const guiUrl = `http://${guiHost === "127.0.0.1" ? "localhost" : guiHost}:${live?.port ?? config.port}`;
-    console.log(`Opening ${guiUrl}`);
-    const { openUrl } = await import("../lib/open-url");
-    openUrl(guiUrl);
-    break;
-  }
-  case "service":
-    await serviceCommand(...args.slice(1));
-    break;
-  case "tray": {
-    const { windowsTrayCommand } = await import("../tray/windows");
-    await windowsTrayCommand(args.slice(1));
-    break;
-  }
-  case "codex-shim": {
-    const { codexShimStatus, diagnoseCodexShim, installCodexShim, uninstallCodexShim } = await import("../codex/shim");
-    switch (args[1]) {
-      case "install": {
-        const r = installCodexShim();
-        const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
-        const warnings = diagnoseCodexShim().healthy
-          ? collectCodexShimReadinessWarnings()
-          : [];
-        console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
-        for (const warning of warnings) console.warn(`   ${warning}`);
-        break;
-      }
-      case "status":
-        console.log(codexShimStatus());
-        break;
-      case "uninstall":
-      case "remove": {
-        const r = uninstallCodexShim();
-        console.log(r.removed ? `✅ ${r.message}` : `⚠️  ${r.message}`);
-        break;
-      }
-      default:
-        console.error("Usage: ocx codex-shim <install|status|uninstall|remove>");
-        process.exit(1);
-    }
-    break;
-  }
-  case "update": {
-    // `ocx update --help` must print usage and exit WITHOUT side effects — running the
-    // real self-update stops the proxy and drops in-flight routed streams (issue #168).
-    if (hasHelpFlag(args.slice(1))) {
-      printSubcommandUsage("update");
-      break;
-    }
-    const { runUpdate } = await import("../update");
-    await runUpdate();
-    break;
-  }
-  case "__refresh-version": {
-    // Hidden, detached helper spawned by the update prompt to refresh the
-    // cached latest version without blocking the foreground start. Not in help.
-    const { refreshVersionCache } = await import("../update/notify");
-    const channel = args[1] === "preview" ? "preview" : "latest";
-    await refreshVersionCache(channel);
-    break;
-  }
-  case "__tray-start":
-  case "__tray-restart":
-  case "__startup-health":
-    await dispatchInternalCliCommand(command as InternalCliCommand, {
-      trayStart: async () => { await handleTrayProxyStart(); },
-      trayRestart: handleTrayProxyRestart,
-      startupHealth: async () => {
-        const { collectStartupHealth } = await import("../codex/autostart-health");
-        console.log(JSON.stringify(collectStartupHealth(loadConfig())));
-      },
+await dispatchCommand(head, {
+  args,
+  command,
+  head,
+  loadConfig,
+  findLiveProxy,
+  probeHostname,
+  waitForProxy,
+  startArgv,
+  spawnDetached: argv => {
+    const child = spawn(process.execPath, argv, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: withProcessRuntimeProvenance(process.env),
     });
-    break;
-  case "__tray-host": {
-    const { runWindowsTrayHost } = await import("../tray/windows");
-    await runWindowsTrayHost();
-    break;
-  }
-  case "__gui-update-worker": {
-    const jobId = args[1];
-    if (!jobId) process.exit(1);
-    const channel = normalizeUpdateChannel(args[2]);
-    await runGuiUpdateWorker(jobId, channel, args[3] === "restart");
-    break;
-  }
-  case "restart": {
-    // The running proxy owns its drain and replacement through /api/system/restart.
-    // If nothing is live, restart degrades to the documented `ensure` start behavior.
-    await handleProxyRestart(handleRestartStartWhenStopped);
-    break;
-  }
-  case "health": {
-    const healthArgs = args.slice(1);
-    const wantsHealthJson = healthArgs.includes("--json");
-    const live = await findLiveProxy();
-    if (wantsHealthJson) {
-      console.log(JSON.stringify({ ok: !!live, pid: live?.pid ?? null, port: live?.port ?? null }));
-    } else {
-      console.log(live ? `Proxy healthy (PID ${live.pid}, port ${live.port})` : "Proxy not healthy");
-    }
-    process.exit(live ? 0 : 1);
-  }
-  case "ready": {
-    // Fail-closed impossible-state guard: readyArgs is populated by the
-    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShim, so
-    // reaching here without it means dispatch diverged. Refuse with code 64
-    // and perform NO I/O (no discovery/probe). process.exit is `never`,
-    // narrowing below.
-    const readyArgs = head.readyArgs;
-    if (!readyArgs) process.exit(64);
-    await handleReady(readyArgs);
-    break;
-  }
-    case "provider": {
-    const { handleProviderCommand } = await import("./provider");
-    await handleProviderCommand(args.slice(1));
-    break;
-  }
-  case "account": {
-    const { cmdAccount } = await import("./account");
-    process.exitCode = await cmdAccount(args.slice(1));
-    break;
-  }
-  case "models":
-  case "model": {
-    const { handleModels } = await import("./models");
-    await handleModels(args.slice(1));
-    break;
-  }
-  case "combo": {
-    const { handleComboCommand } = await import("./combo");
-    process.exitCode = await handleComboCommand(args.slice(1));
-    break;
-  }
-  case "route": {
-    if (args[1] !== "combo" && args[1] !== "policy") {
-      console.error("Usage: ocx route <combo|policy> <subcommand>");
-      process.exitCode = 2;
-      break;
-    }
-    if (args[1] === "combo") {
-      const { handleComboCommand } = await import("./combo");
-      process.exitCode = await handleComboCommand(args.slice(2));
-    } else {
-      const { handleRoutePolicyCommand } = await import("./route-policy");
-      process.exitCode = await handleRoutePolicyCommand(args.slice(2));
-    }
-    break;
-  }
-  case "agent": {
-    const { handleAgentCommand } = await import("./agent");
-    process.exitCode = await handleAgentCommand(args.slice(1));
-    break;
-  }
-  case "observe": {
-    const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand(args.slice(1));
-    break;
-  }
-  case "logs":
-  case "usage":
-  case "storage":
-  case "memory": {
-    const { handleObserveCommand } = await import("./observe");
-    process.exitCode = await handleObserveCommand([command, ...args.slice(1)]);
-    break;
-  }
-  case "access": {
-    const { handleAccessCommand } = await import("./access");
-    process.exitCode = await handleAccessCommand(args.slice(1));
-    break;
-  }
-  case "api-key": {
-    const { handleAccessCommand } = await import("./access");
-    process.exitCode = await handleAccessCommand(["key", ...args.slice(1)]);
-    break;
-  }
-  case "export": {
-    const { handleExportCommand } = await import("./export-command");
-    process.exitCode = await handleExportCommand(args.slice(1));
-    break;
-  }
-  case "grok": {
-    const { handleGrokCommand } = await import("./integrations");
-    process.exitCode = await handleGrokCommand(args.slice(1));
-    break;
-  }
-  case "integration": {
-    const integration = args[1];
-    if (integration === "grok") {
-      const { handleGrokCommand } = await import("./integrations");
-      process.exitCode = await handleGrokCommand(args.slice(2));
-    } else if (integration === "claude") {
-      const { handleClaudeConfigCommand } = await import("./integrations");
-      process.exitCode = await handleClaudeConfigCommand(args.slice(2));
-    } else if (integration === "client") {
-      const { handleClientIntegrationCommand } = await import("./integrations");
-      process.exitCode = await handleClientIntegrationCommand(args.slice(2));
-    } else {
-      console.error("Usage: ocx integration <claude|grok|client> <subcommand>");
-      process.exitCode = 2;
-    }
-    break;
-  }
-  case "system": {
-    const { handleSystemCommand } = await import("./system-command");
-    process.exitCode = await handleSystemCommand(args.slice(1));
-    break;
-  }
-  case "config": {
-    const { handleConfigCommand } = await import("./config-command");
-    process.exitCode = await handleConfigCommand(args.slice(1));
-    break;
-  }
-  case "lab": {
-    const { handleLabCommand } = await import("./lab");
-    process.exitCode = await handleLabCommand(args.slice(1));
-    break;
-  }
-  case "claude": {
-    const { cmdClaude } = await import("./claude");
-    // "ocx claude desktop" → write Desktop 3P config
-    if (args[1] === "desktop") {
-      const { handleClaudeDesktopCommand } = await import("./claude-desktop");
-      const exitCode = await handleClaudeDesktopCommand(args.slice(2));
-      if (exitCode !== 0) process.exit(exitCode);
-      break;
-    }
-    if (args[1] === "config") {
-      const { handleClaudeConfigCommand } = await import("./integrations");
-      process.exitCode = await handleClaudeConfigCommand(args.slice(2));
-      break;
-    }
-    process.exit(await cmdClaude(args.slice(1)));
-  }
-  case "opencode": {
-    const { cmdOpencode } = await import("./opencode");
-    process.exit(await cmdOpencode(args.slice(1)));
-  }
-    case "help":
-  case "--help":
-  case "-h":
-  case undefined:
-    printUsage();
-    break;
-  default:
-    console.error(`Unknown command: ${command}`);
-    printUsage();
-    process.exit(1);
-}
+    child.unref();
+  },
+  handleStart,
+  handleStop,
+  handleEnsure,
+  handleTrayProxyStart,
+  handleTrayProxyRestart,
+  handleRestartStartWhenStopped,
+  handleProxyRestart,
+  handleUninstall,
+  handleStatus,
+  handleRecoverHistory,
+  handleReady,
+});

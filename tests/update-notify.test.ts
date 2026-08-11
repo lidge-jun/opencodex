@@ -135,8 +135,8 @@ describe("cli wiring", () => {
   });
 
   test("hidden __refresh-version subcommand is wired", async () => {
-    const cli = await readText("src/cli/index.ts");
-    expect(cli).toContain("case \"__refresh-version\"");
-    expect(cli).toContain("refreshVersionCache");
+    const dispatch = await readText("src/cli/dispatch.ts");
+    expect(dispatch).toContain("\"__refresh-version\": async");
+    expect(dispatch).toContain("refreshVersionCache");
   });
 });

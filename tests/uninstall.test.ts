@@ -14,9 +14,10 @@ describe("full uninstall command", () => {
   afterEach(() => setUninstallServiceHooksForTests(null));
 
   test("CLI exposes a one-shot local state cleanup command", async () => {
-    const cli = await readText("src/cli/index.ts");
+    const dispatch = await readText("src/cli/dispatch.ts");
 
-    expect(cli).toContain('case "uninstall"');
+    expect(dispatch).toContain("uninstall: async");
+    const cli = await readText("src/cli/index.ts");
     expect(cli).toContain("async function handleUninstall()");
     expect(cli).toContain("uninstallServiceIfInstalled");
     expect(cli).toContain("uninstallCodexShim");
@@ -26,8 +27,10 @@ describe("full uninstall command", () => {
   });
 
   test("CLI exposes explicit legacy history recovery command", async () => {
+    const dispatch = await readText("src/cli/dispatch.ts");
     const cli = await readText("src/cli/index.ts");
 
+    expect(dispatch).toContain('"recover-history": async');
     expect(cli).toContain("ocx recover-history --legacy-openai");
     expect(cli).toContain("async function handleRecoverHistory()");
     // The command still performs legacy recovery, but through the serialized

@@ -728,18 +728,21 @@ describe("ready pre-parse before maybeAutoRestoreCodexShim (source-level, P1)", 
 
   test("valid ready dispatch reaches handleReady AFTER maybeAutoRestoreCodexShim, with fail-closed guard", () => {
     // Ordering: index.ts awaits runCli (which runs parseCliHead and the shim
-    // preflight inside root.ts) BEFORE the switch dispatches the ready case.
+    // preflight inside root.ts) BEFORE dispatch.ts runs the ready runner.
     const runCliIdx = cliSource.indexOf("await runCli(process.argv.slice(2))");
     expect(runCliIdx, "index.ts must await runCli before dispatch").toBeGreaterThanOrEqual(0);
-    const switchIdx = cliSource.indexOf("switch (command)");
-    expect(switchIdx, "the command switch must exist").toBeGreaterThanOrEqual(0);
-    expect(runCliIdx).toBeLessThan(switchIdx);
+    const dispatchIdx = cliSource.indexOf("await dispatchCommand(head");
+    expect(dispatchIdx, "index.ts must dispatch via dispatchCommand").toBeGreaterThanOrEqual(0);
+    expect(runCliIdx).toBeLessThan(dispatchIdx);
     expect(rootSource).toContain("maybeAutoRestoreCodexShim(head.command, head.args)");
-    const readyCaseIdx = cliSource.indexOf('case "ready":');
-    expect(readyCaseIdx, 'a "ready" switch case must exist').toBeGreaterThanOrEqual(0);
-    // Slice the whole ready case body (up to the next case), not a fixed width.
-    const nextCaseIdx = cliSource.indexOf("case ", readyCaseIdx + 1);
-    const caseBody = cliSource.slice(readyCaseIdx, nextCaseIdx === -1 ? undefined : nextCaseIdx);
+    // The ready runner lives in dispatch.ts (keyed "ready:"); slice its body
+    // up to the next runner key, not a fixed width.
+    const dispatchSource = readFileSync(join(import.meta.dir, "../src/cli/dispatch.ts"), "utf8");
+    const readyCaseIdx = dispatchSource.indexOf("ready: async");
+    expect(readyCaseIdx, 'a "ready" runner must exist in dispatch.ts').toBeGreaterThanOrEqual(0);
+    // The ready runner is followed by the provider runner; slice to that key.
+    const nextCaseIdx = dispatchSource.indexOf("provider: async", readyCaseIdx + 1);
+    const caseBody = dispatchSource.slice(readyCaseIdx, nextCaseIdx === -1 ? undefined : nextCaseIdx);
     // Passes the stashed readyArgs; fail-closed guard exits 64 with NO I/O if
     // the impossible state (missing pre-parsed args) ever occurs.
     expect(caseBody).toContain("readyArgs");
