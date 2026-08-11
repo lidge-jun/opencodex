@@ -9,7 +9,7 @@ description: 在使用非 OpenAI 供應商時，將 image_generation hosted-tool
 
 ## 前置條件
 
-- 在設定中設定 `images.bridgeEnabled: true` 以**啟用 bridge**（預設關閉以避免非預期的 xAI 費用 — 見下方[設定](#configuration)）。
+- 在設定中設定 `images.bridgeEnabled: true` 以**啟用 bridge**（預設關閉以避免非預期的 xAI 費用 — 見下方[設定](#設定)）。
 - 一個帶有 **API key** 的 `xai` 供應商項目。Bridge 將履行釘選到 registry 的 xAI Images 端點（`https://api.x.ai/v1`）；任何已設定的 `baseUrl` 覆寫在圖片呼叫時會被忽略。單靠 OAuth / `ocx login xai` **不會**啟用 bridge（Grok CLI 的 OAuth transport 是聊天導向的，不用於 `/images/*`）。
 
   ```json

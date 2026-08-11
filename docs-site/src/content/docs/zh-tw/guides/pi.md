@@ -54,6 +54,7 @@ Pi 的全域模型設定為：
 ocx export --client pi --out ~/opencodex-pi-models.json
 ocx export --client pi --json > ~/opencodex-pi-models.json   # 或重導逐字元的 JSON
 ```
+
 :::
 
 匯出的區塊是靜態快照，非即時檢視。在新增供應商或改變模型可見性後，重新執行 `ocx export`，並將新區塊合併到舊區塊上。

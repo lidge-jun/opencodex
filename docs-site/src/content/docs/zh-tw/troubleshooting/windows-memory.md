@@ -21,7 +21,7 @@ opencodex 內嵌 Bun runtime（目前為 **1.3.14**）。記憶體成長由已�
 
 有界的緩解與可見性——**並非修復**。在內嵌的 1.3.14 runtime 上，洩漏本身仍是上游問題：
 
-- **RSS watchdog** — 代理程式每分鐘取樣自身記憶體，並在 RSS 超過 4 GiB 時以速率限制記錄警告。
+- **Memory watchdog** — 代理程式每分鐘取樣自身記憶體，並在觀察到的記憶體超過 4 GiB 時以速率限制記錄警告。觀察到的記憶體是 RSS、`external` 與 `arrayBuffers` 的最大值（非總和），因為 Windows working-set/RSS 計數器可能低估已提交的外部保留。
 - **`ocx doctor`** — 「Memory / runtime」區段會顯示*服務*程序的 Bun 版本、RSS、JS-heap 占比與 stream-mode 決策，並告訴你成長看起來是原生端（上游問題）還是 JS 端（你應回報的 opencodex 錯誤）。
 - **`GET /api/system/memory`** — 透過已驗證的管理 API 提供相同資料，供儀表板或腳本使用。除了 RSS/heap 數字外，它也會回報純量 `responseState` 區塊（項目數、總計/最大序列化位元組、最舊項目年齡），對應代理程式記憶體內的 `previous_response_id` 延續存放區。這可進一步歸因 *JS-heap* 成長：在 heap 上升時 `responseState.totalBytes` 也上升，指向對話保留（長 `store:false` 鏈在每回合重新展開）；而 `responseState` 持平但 RSS 上升，則指回原生 runtime。這些值僅為純量——沒有請求本體、token、路徑或帳號識別碼——且讀取無副作用（永不修剪或淘汰）。儀表板唯讀的 **Memory observability** 卡片會渲染相同欄位。
 - **受閘控的替代串流路徑** — 有界的 single-reader relay，徹底移除無界緩衝形態。一旦內嵌的 Bun 發行版可驗證承載 #32111 修復，它會自動成為預設；目前僅可選擇加入（見下方）。
@@ -34,7 +34,7 @@ opencodex 內嵌 Bun runtime（目前為 **1.3.14**）。記憶體成長由已�
 
 1. **等待內嵌 runtime 更新。** 一旦某個 Bun 發行版可驗證承載這些修復，opencodex 會升級內嵌 runtime，並自動啟用較安全的串流路徑。
 
-2. **以 `OPENCODEX_BUN_PATH` 執行你信任的 Bun runtime。** 這是未驗證領域——你是在我們尚未測試的 runtime 上執行 opencodex；風險自負。對服務安裝很重要：覆寫是在**服務產物產生時**讀取，而非服務啟動時。請設定環境變數，然後從同一個 shell 重新執行 `ocx service install`，讓路徑寫入持久的服務定義。僅設定環境變數對已安裝的服務無效。
+2. **以 `OPENCODEX_BUN_PATH` 執行你信任的 Bun runtime。** 這是未驗證領域——你是在我們尚未測試的 runtime 上執行 opencodex；風險自負。對服務安裝很重要：覆寫是在**服務產物產生時**讀取，而非服務啟動時。請設定環境變數，然後從同一個 shell 重新執行 `ocx service repair`，讓路徑寫入持久的服務定義。僅設定環境變數對已安裝的服務無效。
 
 3. **以 `streamMode: "eager-relay"` 選擇加入有界 relay。** 兩種方式：編輯 `config.json`（加入 `"streamMode": "eager-relay"`），或呼叫管理 API——`PUT /api/settings` 搭配 `{"streamMode":"eager-relay"}` 會套用到新回合且無需重啟。**當機風險警告：** 在 Bun 1.3.14 上，這會使用受 #32111 影響的串流形態，可能在串流中途讓程序當機（任何 OS，不限 Windows）。服務管理員會重啟它，但進行中的請求會失敗。`"legacy-tee"` 會釘住目前預設；`"auto"`（預設）讓 runtime 閘門決定。
 

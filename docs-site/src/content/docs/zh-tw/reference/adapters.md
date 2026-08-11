@@ -1,5 +1,5 @@
 ---
-title: Adapters
+title: 轉接器
 description: 七個 provider adapter 的目標、請求建置方式與各自特性。
 ---
 
@@ -84,6 +84,7 @@ token。
   JSON。上游不回傳 token 數量，因此 usage 採用估算值。
 - 經 `fetchResponse` 負責有界重試和分類/脫敏後的錯誤；非流式 parser 會排空同一 event stream，
   供 web-search loop 使用。
+
 ### 完成與原生 stop reason
 
 Kiro 的 assistant 文字本身沒有可靠的回合結束標記，但終止的 `metadataEvent` 可能帶有原生 `stopReason`。

@@ -33,6 +33,7 @@ npm install -g --allow-scripts=bun @bitkyc08/opencodex
 # 如果最初是用 sudo 安裝的，請繼續使用 sudo：
 sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
+
 :::
 
 確認兩個命令都已加入 `PATH`：

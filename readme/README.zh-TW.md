@@ -382,7 +382,7 @@ ocx start
 ```
 
 綁定到非迴環地址時若缺少該環境變數，代理會拒絕啟動。若為區網存取安裝背景服務，請在 `ocx service install`
-前，請在同一 shell 匯出同一個變數，讓服務管理器收得到。客戶端（腳本、遠端機器）每個請求都必須帶 token：
+前，於同一 shell 匯出同一個變數，讓服務管理器收得到。客戶端（腳本、遠端機器）每個請求都必須帶 token：
 
 ```
 x-opencodex-api-key: your-secret-token
