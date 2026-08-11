@@ -21,7 +21,7 @@
  *    accepting either an OpenAI-style `{ data: [...] }` body or a bare array.
  */
 import { describe, expect, test } from "bun:test";
-import { getCredential } from "../src/oauth/store";
+import { getAccountCredential, getCredential } from "../src/oauth/store";
 import { refreshNousToken } from "../src/oauth/nous";
 import { refreshGenericAccountWithLock } from "../src/oauth/index";
 import type { OAuthProviderDef } from "../src/oauth/types";
@@ -69,7 +69,7 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     expect(access.length).toBeGreaterThan(0);
 
     // Confirm rotation persisted a *different* refresh token (single-use contract).
-    const after = getCredential("nous", stored!.accountId);
+    const after = getAccountCredential("nous", stored!.accountId!);
     len("after.refresh", after?.refresh);
     expect(after?.refresh, "rotation should have persisted a new refresh token").toBeTruthy();
     expect(after!.refresh).not.toBe(stored!.refresh);
