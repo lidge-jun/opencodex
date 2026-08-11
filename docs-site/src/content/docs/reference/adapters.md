@@ -58,6 +58,11 @@ waits and replays the identical request on the same key before any other handlin
 the translated `openai-chat` / Anthropic request path. Custom `runTurn` transports are not part
 of the HTTP retry loop.
 
+- DeepSeek's stateless Responses parser receives provider-scoped history normalization: hook-injected
+  context moves after an unambiguous tool-call/result batch. Parallel calls remain grouped before
+  their matching outputs so every call stays in the reasoning-bearing assistant turn. Tolerant
+  providers and ambiguous duplicate call IDs keep their original input order.
+
 - `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to the legacy `{baseUrl}/v1/responses` construction.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,

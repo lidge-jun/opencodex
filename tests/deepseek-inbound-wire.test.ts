@@ -99,6 +99,10 @@ function deepseekProvider(): OcxProviderConfig {
   return { ...providerConfigSeed(getProviderRegistryEntry("deepseek")!), apiKey: "sk-test" };
 }
 
+function deepseekReasoningProvider(): OcxProviderConfig {
+  return { ...deepseekProvider(), preserveResponsesReasoningContent: true };
+}
+
 describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
   test("a Responses inbound rides the native Responses wire", () => {
     const resolved = resolveWireProtocolOverride("deepseek", MODEL, deepseekProvider(), "responses");
@@ -817,6 +821,89 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
 
     const body = buildBody(deepseekProvider(), { input: [call, injected, output, tail] }) as { input: unknown[] };
     expect(body.input).toEqual([call, output, injected, tail]);
+  });
+
+  test("DeepSeek keeps a parallel call batch attached to one reasoning turn", () => {
+    const reasoning = {
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "read both files" }],
+      summary: [],
+    };
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+
+    const body = buildBody(deepseekReasoningProvider(), {
+      input: [reasoning, callA, callB, outputA, outputB],
+    }) as { input: unknown[] };
+    expect(body.input).toEqual([reasoning, callA, callB, outputA, outputB]);
+  });
+
+  test("DeepSeek moves injected context after the complete parallel call and result batches", () => {
+    const reasoning = {
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "read both files" }],
+      summary: [],
+    };
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+    const injected = {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "[planning-with-files] ACTIVE PLAN" }],
+    };
+    const tail = { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] };
+
+    const body = buildBody(deepseekReasoningProvider(), {
+      input: [reasoning, callA, injected, callB, outputA, outputB, tail],
+    }) as { input: unknown[] };
+    expect(body.input).toEqual([
+      reasoning,
+      callA,
+      callB,
+      outputA,
+      outputB,
+      injected,
+      tail,
+    ]);
+  });
+
+  test("DeepSeek keeps sequential reasoning and tool rounds separate", () => {
+    const reasoningA = {
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "first" }],
+      summary: [],
+    };
+    const reasoningB = {
+      type: "reasoning",
+      content: [{ type: "reasoning_text", text: "second" }],
+      summary: [],
+    };
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+
+    const body = buildBody(deepseekReasoningProvider(), {
+      input: [reasoningA, callA, outputA, reasoningB, callB, outputB],
+    }) as { input: unknown[] };
+    expect(body.input).toEqual([reasoningA, callA, outputA, reasoningB, callB, outputB]);
+  });
+
+  test("DeepSeek leaves duplicate call ids unchanged rather than guessing a batch", () => {
+    const uniqueCall = { type: "function_call", call_id: "call_unique", name: "unique", arguments: "{}" };
+    const uniqueOutput = { type: "function_call_output", call_id: "call_unique", output: "unique" };
+    const firstCall = { type: "function_call", call_id: "call_dup", name: "first", arguments: "{}" };
+    const secondCall = { type: "function_call", call_id: "call_dup", name: "second", arguments: "{}" };
+    const injected = { type: "message", role: "developer", content: [{ type: "input_text", text: "context" }] };
+    const output = { type: "function_call_output", call_id: "call_dup", output: "ambiguous" };
+    const input = [uniqueCall, injected, uniqueOutput, firstCall, secondCall, output];
+
+    const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
   });
 
   test("tolerant Responses providers keep interleaved tool history unchanged", () => {

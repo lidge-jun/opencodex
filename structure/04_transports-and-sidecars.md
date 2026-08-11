@@ -356,6 +356,21 @@ replays are explicit and receive the same repair.
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
+Calls emitted before the first matched output stay together as one assistant batch, followed by
+their outputs in call order; hook-injected messages that split the batch move after it without being
+dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
+batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
+and duplicate or backwards call/result pairs are left for the upstream to reject rather than guessed.
+
+[Decision Log]
+- 목적과 의도: Preserve DeepSeek reasoning replay for parallel tool calls while retaining the provider-scoped repair for hook-interleaved results.
+- 기존 구현 및 제약 조건: Pair-by-pair adjacency fixed one call but split parallel calls into separate assistant turns; DeepSeek always enables parallel tool calling and merges adjacent reasoning and calls into one assistant message.
+- 검토한 주요 대안: Disable parallel calls, duplicate reasoning, remove the #1292 repair, or normalize one unambiguous call/output batch.
+- 선택한 방식: Group calls that occur before the first matched output, emit the call batch followed by outputs in call order, and retain intervening non-tool items after the batch.
+- 다른 대안 대신 이 방식을 선택한 이유: The batch shape matches the documented Responses contract without inventing reasoning or reintroducing hook-interleaving failures.
+- 장점, 단점 및 영향: Sequential and parallel tool continuations both retain their reasoning contract; only the declared strict provider changes order, and ambiguous histories still fail closed upstream.
+
 ## Cursor parameterized models
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:

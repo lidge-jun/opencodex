@@ -540,15 +540,15 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
 }
 
 /**
- * Make unambiguous Responses tool pairs adjacent for upstream parsers that require it.
+ * Make unambiguous Responses tool batches contiguous for upstream parsers that require it.
  *
  * [Decision Log]
- * - 목적과 의도: Keep Codex hook-injected developer context without letting it make a strict upstream reject the matching tool result.
- * - 기존 구현 및 제약 조건: The orphan repair verifies only pair presence; globally reordering valid history would change tolerant providers unnecessarily.
- * - 검토한 주요 대안: Reorder every Responses request, drop the intervening message, or gate a lossless reorder behind provider capability metadata.
- * - 선택한 방식: Reorder only unique call/result pairs for providers that explicitly require adjacency, preserving every intervening item immediately after the result.
- * - 다른 대안 대신 이 방식을 선택한 이유: The provider gate limits semantic blast radius, while refusing ambiguous duplicate ids avoids guessing which result belongs to which call.
- * - 장점, 단점 및 영향: DeepSeek receives the adjacency its parser requires; tolerant providers stay byte/order equivalent. Ambiguous duplicate ids still fail upstream rather than being silently rewritten.
+ * - 목적과 의도: Keep Codex hook-injected developer context without splitting a parallel tool-call turn away from its reasoning or making a strict upstream reject matching results.
+ * - 기존 구현 및 제약 조건: The orphan repair verifies only pair presence, while the original pair-by-pair reorder turned `reasoning, call A, call B, output A, output B` into two assistant turns and made DeepSeek reject call B for missing reasoning (#1477).
+ * - 검토한 주요 대안: Disable parallel calls (DeepSeek always enables them); duplicate reasoning per call; reorder each pair; or normalize the complete unambiguous call batch.
+ * - 선택한 방식: Treat calls emitted before the first matched result as one batch, emit all calls followed by their matched outputs, and preserve intervening non-tool items immediately after the batch.
+ * - 다른 대안 대신 이 방식을 선택한 이유: Batch normalization matches the Responses parallel-call shape without fabricating reasoning, while the provider gate and unique-pair requirement keep the blast radius narrow.
+ * - 장점, 단점 및 영향: DeepSeek keeps one reasoning-bearing assistant turn for parallel calls and still accepts hook-interleaved single calls; tolerant providers stay byte/order equivalent, and ambiguous duplicate ids are not guessed.
  */
 function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
@@ -576,24 +576,52 @@ function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
     }
   }
 
-  const movedOutputIndices = new Set<number>();
-  const outputAfterCall = new Map<number, unknown>();
+  const pairs: Array<{ callIndex: number; outputIndex: number }> = [];
   for (const [key, callIndices] of calls) {
     const outputIndices = outputs.get(key);
-    if (callIndices.length !== 1 || outputIndices?.length !== 1) continue;
+    if (!outputIndices) continue;
+    if (callIndices.length !== 1 || outputIndices.length !== 1) return body;
     const callIndex = callIndices[0]!;
     const outputIndex = outputIndices[0]!;
-    if (outputIndex === callIndex + 1) continue;
-    movedOutputIndices.add(outputIndex);
-    outputAfterCall.set(callIndex, input[outputIndex]);
+    if (outputIndex <= callIndex) return body;
+    pairs.push({ callIndex, outputIndex });
   }
-  if (movedOutputIndices.size === 0) return body;
+  pairs.sort((left, right) => left.callIndex - right.callIndex);
+
+  const movedIndices = new Set<number>();
+  const batchAt = new Map<number, unknown[]>();
+  for (let cursor = 0; cursor < pairs.length;) {
+    const group = [pairs[cursor]!];
+    let firstOutputIndex = pairs[cursor]!.outputIndex;
+    let next = cursor + 1;
+    while (next < pairs.length && pairs[next]!.callIndex < firstOutputIndex) {
+      group.push(pairs[next]!);
+      firstOutputIndex = Math.min(firstOutputIndex, pairs[next]!.outputIndex);
+      next += 1;
+    }
+
+    const batch = [
+      ...group.map(pair => input[pair.callIndex]),
+      ...group.map(pair => input[pair.outputIndex]),
+    ];
+    const anchor = group[0]!.callIndex;
+    const alreadyContiguous = batch.every((item, offset) => input[anchor + offset] === item);
+    if (!alreadyContiguous) {
+      batchAt.set(anchor, batch);
+      for (const pair of group) {
+        movedIndices.add(pair.callIndex);
+        movedIndices.add(pair.outputIndex);
+      }
+    }
+    cursor = next;
+  }
+  if (batchAt.size === 0) return body;
 
   const normalized: unknown[] = [];
   for (let index = 0; index < input.length; index += 1) {
-    if (movedOutputIndices.has(index)) continue;
-    normalized.push(input[index]);
-    if (outputAfterCall.has(index)) normalized.push(outputAfterCall.get(index));
+    const batch = batchAt.get(index);
+    if (batch) normalized.push(...batch);
+    if (!movedIndices.has(index)) normalized.push(input[index]);
   }
   return { ...body, input: normalized };
 }
