@@ -228,7 +228,8 @@ may well be fresh. The active tool schema stays authoritative.
 
 `unknown` is not a synonym for `stale`. It means the comparison itself failed — an unreadable catalog
 timestamp, an unreadable process start time, or a failed process enumeration — and it is reported
-separately by `ocx doctor`. Restarting Codex clears `stale`; it does not necessarily clear `unknown`.
+separately by `ocx doctor`. `stale` clears only after every detected Codex app-server starts after
+the final catalog write; it does not necessarily clear `unknown`.
 
 ### Reasoning effort
 
