@@ -168,7 +168,7 @@ export function keyedLiveUrl(baseUrl: string): string {
 }
 
 export function forwardLiveUrl(baseUrl: string, usesBackendShape: boolean): string {
-  const root = baseUrl.replace(/\/$/, "");
+  const root = baseUrl.replace(/\/+$/, "");
   if (usesBackendShape) return withAvasQuery(`${root}/realtime/calls`);
   // Frameless API shape posts to /live without the AVAS query (codex RealtimeCallClient).
   return `${root}/live`;

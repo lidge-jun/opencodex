@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { parseRequest } from "../src/responses/parser";
 import { planWebSearch, shouldResolveOpenAiWebSearchSidecar, webSearchStallTimeoutSec } from "../src/web-search";
 import { runWithWebSearch as runWithWebSearchProduction, type WebSearchLoopDeps } from "../src/web-search/loop";
+import { runWebSearch as runOpenAiWebSearch } from "../src/web-search/executor";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { headersForCodexAuthContext } from "../src/codex/auth-context";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../src/providers/openai-sidecar";
@@ -162,14 +163,17 @@ describe("web-search sidecar planning", () => {
       providers: {
         openai: {
           adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
+          baseUrl: "https://chatgpt.com/backend-api/codex///",
           codexAccountMode: "direct",
         },
       },
     };
     expect(listOpenAiForwardSidecarCandidates(canonicalWithoutAuthMode)).toMatchObject([{
       providerName: "openai",
-      provider: { authMode: "forward" },
+      provider: {
+        authMode: "forward",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
       accountMode: "direct",
     }]);
 
@@ -377,6 +381,40 @@ describe("web-search sidecar planning", () => {
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("OpenAI web-search execution uses the pinned canonical URL and selected credentials", async () => {
+  const cfg = config({
+    providers: {
+      routed: routedProvider,
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex///",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  });
+  const candidate = listOpenAiForwardSidecarCandidates(cfg)[0]!;
+  let observedUrl = "";
+  let observedHeaders = new Headers();
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    observedHeaders = new Headers(init?.headers);
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+
+  await runOpenAiWebSearch(
+    "current docs",
+    { type: "web_search" },
+    candidate.provider,
+    new Headers({ authorization: "Bearer selected-token", "chatgpt-account-id": "selected-account" }),
+    { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 1_000 },
+  );
+
+  expect(observedUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+  expect(observedHeaders.get("authorization")).toBe("Bearer selected-token");
+  expect(observedHeaders.get("chatgpt-account-id")).toBe("selected-account");
+});
 
 async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?: string; data: Record<string, unknown> }[]> {
   const reader = stream.getReader();

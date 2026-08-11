@@ -6,7 +6,7 @@ import { withTestTranslatorBudget } from "./helpers/translator-budget";
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
-const forwardProvider = { adapter: "openai-responses", baseUrl: "https://chat.openai.com/backend-api/codex", authMode: "forward" as const };
+const forwardProvider = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const };
 
 describe("passthrough token override", () => {
   test("buildRequest uses original auth when no override", () => {
