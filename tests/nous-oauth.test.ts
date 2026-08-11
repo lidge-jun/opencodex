@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { identityFromNousTokens, loginNous, nousRefreshIntentBlocksReplay, refreshNousToken, RefreshIntentIOError } from "../src/oauth/nous";
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
+import * as configModule from "../src/config";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-nous-oauth-test");
 const TEST_PORTAL = "https://portal.test";
@@ -788,25 +789,23 @@ describe("Nous HTTP refresh failure-atomicity classification", () => {
 
   test("a durable-write failure before dispatch throws a non-terminal RefreshIntentIOError (no fetch)", async () => {
     const token = "io-fail-token";
-    // Make the refresh-intent directory uncreatable: plant a FILE where the
-    // directory should be so mkdirSync(...) fails.
-    const intentDir = join(TEST_DIR, ".nous-refresh-intent");
-    mkdirSync(TEST_DIR, { recursive: true });
-    writeFileSync(intentDir, "not a directory", "utf8");
-
     let fetchCalled = 0;
     globalThis.fetch = (async () => {
       fetchCalled += 1;
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
 
-    let err: unknown;
+    // Force the durable intent write (atomicWriteFile) to fail, deterministically
+    // on every platform. The write happens BEFORE dispatch, so this must abort
+    // the refresh with a non-terminal operational error and never reach fetch.
+    const writeSpy = spyOn(configModule, "atomicWriteFile").mockImplementation(() => {
+      throw new Error("forced durable write failure (disk full)");
+    });
     try {
-      await refreshNousToken(token);
-    } catch (e) {
-      err = e;
+      await expect(refreshNousToken(token)).rejects.toBeInstanceOf(RefreshIntentIOError);
+      expect(fetchCalled).toBe(0);
+    } finally {
+      writeSpy.mockRestore();
     }
-    expect(err).toBeInstanceOf(RefreshIntentIOError);
-    expect(fetchCalled).toBe(0);
   });
 });

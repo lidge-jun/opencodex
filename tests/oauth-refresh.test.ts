@@ -7,6 +7,7 @@ import { getValidAccessToken, getValidAccessTokenForAccount, OAuthLoginRequiredE
 import { RefreshIntentIOError } from "../src/oauth/nous";
 import { AnthropicTokenError } from "../src/oauth/anthropic";
 import { credentialGeneration, getAccountCredential, getAccountSet, getAuthRefreshIntentPath, getCredential, markAccountNeedsReauth, readOAuthRefreshIntent, saveCredential, writeOAuthRefreshIntent } from "../src/oauth/store";
+import * as configModule from "../src/config";
 
 const origHome = process.env.HOME;
 const origLocalAppData = process.env.LOCALAPPDATA;
@@ -759,26 +760,28 @@ describe("oauth refresh hardening", () => {
     const id = getAccountSet("nous")!.activeAccountId;
     const credential = getAccountCredential("nous", id)!;
 
-    // Break the refresh-intent directory: the config dir is tmp/ocx, and the
-    // intent dir is configDir/.nous-refresh-intent. Plant a FILE at that path so
-    // mkdirSync(...) fails before any network dispatch.
-    const intentDir = join(process.env.OPENCODEX_HOME!, ".nous-refresh-intent");
-    mkdirSync(process.env.OPENCODEX_HOME!, { recursive: true });
-    writeFileSync(intentDir, "not a directory", "utf8");
-
     let fetchCalled = 0;
     globalThis.fetch = (async () => {
       fetchCalled += 1;
       return new Response("{}", { status: 200 });
     }) as typeof fetch;
 
-    // The refresh aborts with a non-terminal operational error (not
-    // OAuthLoginRequiredError), fetch is never called, and the account is NOT
-    // marked needsReauth — local persistence breakage is not credential death.
-    await expect(getValidAccessTokenForAccount("nous", id))
-      .rejects.toBeInstanceOf(RefreshIntentIOError);
-    expect(fetchCalled).toBe(0);
-    expect(getCredential("nous")?.refresh).toBe("rt-old");
-    expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+    // Force the durable intent write (atomicWriteFile) to fail, deterministically
+    // on every platform. The write happens BEFORE dispatch, so the coordinator
+    // must surface a non-terminal operational error (not OAuthLoginRequiredError),
+    // never call fetch, and NOT mark the account needsReauth — local persistence
+    // breakage is not credential death.
+    const writeSpy = spyOn(configModule, "atomicWriteFile").mockImplementation(() => {
+      throw new Error("forced durable write failure (disk full)");
+    });
+    try {
+      await expect(getValidAccessTokenForAccount("nous", id))
+        .rejects.toBeInstanceOf(RefreshIntentIOError);
+      expect(fetchCalled).toBe(0);
+      expect(getCredential("nous")?.refresh).toBe("rt-old");
+      expect(getAccountSet("nous")!.accounts[0]!.needsReauth).toBeUndefined();
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });
