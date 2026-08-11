@@ -20,6 +20,17 @@ ocx start
 bun run dev:gui
 ```
 
+## 登入
+
+在預設的 loopback 綁定（`localhost` / `127.0.0.1`）上，儀表板永遠不會要求 token：代理會將短期
+GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默續期。只有綁定到非 loopback 主機名稱的
+儀表板才需要 admin token（`OPENCODEX_ADMIN_AUTH_TOKEN`，或自動產生的
+`~/.opencodex/admin-api-token` 檔案）。
+
+當遠端儀表板需要該憑證時，它會顯示標準的密碼表單，讓瀏覽器密碼管理員可以提議儲存與自動填入。
+儀表板本身仍然只在記憶體中保留 token，不會寫入 `localStorage` 或 `sessionStorage`；是否儲存完全
+由瀏覽器或密碼管理員決定。
+
 ## 可以完成哪些操作
 
 | 區域 | 作用 |
@@ -32,7 +43,7 @@ bun run dev:gui
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
 | **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |
 | **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。 |
-| **Add provider** | 搜尋 registry preset，選擇帳號登入、API key 服務、本機伺服器或自定義 endpoint。 |
+| **Add provider** | 搜尋 registry preset，選擇帳號登入、API key 服務、本機伺服器或自訂 endpoint。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
 | **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |
 | **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 數量。 |
@@ -81,6 +92,25 @@ Dashboard 的 **Sub-agent delegation** 選擇器會儲存 `injectionModel`，以
 - **Refresh quotas** 會立即重新讀取帳號 usage，使路由邏輯與頁面上的帳號卡片使用同一份資料。
 - 池帳號的請求日誌使用 `p3fa91c` 這類不透明標籤，不會記錄帳號郵箱。
 
+## 星標是你的決定，不是 agent 的
+
+側邊欄的星標按鈕——以及 `ocx start` 在互動式終端機中詢問的一次性問題——都透過 **你自己的
+`gh` 登入** 執行。opencodex 不持有任何 GitHub token，它唯一得知的是你的 yes 或 no。
+
+由於這會寫入你的 GitHub 帳號，agent 驅動的呼叫者會被拒絕，而不是被允許替你回答：
+
+- `ocx start` 與 `ocx service install` 在 agent 或 CI harness 驅動時 **完全略過該提示**
+  （`CLAUDECODE`、`CODEX_THREAD_ID`、`CURSOR_TRACE_ID`、`CI` 等）。一次性 marker 保持未寫入，
+  因此真正的提示仍會在你下次手動輸入時出現。agent 會被要求改為詢問你——而且是以你必須回答的
+  簡單 Yes/No 選擇，而不是它可以繞過的軟性旁白。如果你一直沒有回答，agent 會被要求再次詢問，
+  而不是把你的沉默當成 no。
+- 當代理在 agent session 下執行且請求沒有 dashboard browser session 時，`POST /api/github/star`
+  會以 `code: "agent_consent_required"` 回覆 `403`。持有 admin token 不是同意：你機器上的 agent
+  可以讀取該檔案。
+- Dashboard 按鈕保持正常運作。真實點擊帶有 same-origin session 證據，因此即使代理啟動了
+  proxy，也會被辨識為你本人。
+- 說 no 就結束。不會持久化任何東西，也不會在任何模型 prompt 中加入任何東西來日後引導你。
+
 ## 儀表板如何與代理通訊
 
 GUI 是代理 JSON 管理 API 之上的輕量用戶端。常用 endpoint 包括：
@@ -100,7 +130,7 @@ GUI 是代理 JSON 管理 API 之上的輕量用戶端。常用 endpoint 包括�
 | `GET /api/selected-models` · `PUT /api/model-visibility` | 讀取 provider allowlist，並原子地更改單個模型或 provider 分組的最終可見狀態。 |
 | `GET /api/key-providers` · `GET /api/oauth/providers` | 讀取 API key 和 OAuth provider 目錄。 |
 | `POST /api/oauth/login` · `GET /api/oauth/status` | 啟動 provider OAuth 流程並輪詢完成狀態。 |
-| `GET /api/codex-auth/accounts?refresh=1` | 列出主帳號與池帳號、強制重新整理配額，並返回主帳號的 `hasCredential` / terminal `needsReauth` 狀態。 |
+| `GET /api/codex-auth/accounts?refresh=1` | 列出主帳號與池帳號、強制重新整理配額，並回傳主帳號的 `hasCredential` / terminal `needsReauth` 狀態。 |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | 選擇下一次請求使用的帳號並設定帳號池路由。 |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | 透過瀏覽器登入新增池帳號。 |
 | `GET /api/logs?tail=50&provider=...&status=5xx` | 使用 tail、provider、精確狀態碼或狀態類別篩選近期請求後設資料。 |

@@ -67,7 +67,7 @@ ocx export --client pi --json > ~/opencodex-pi-models.json   # 或重導逐字�
 | 代理認證 key | opencodex 自身的憑證，在儀表板的 **API** 分頁產生 | 由 `apiKey` 以 `$OPENCODEX_API_KEY` 參照；值留在你的環境中 |
 | 供應商 key | 你的 Anthropic / OpenAI / OpenRouter key | opencodex 自身的設定，見[供應商](/zh-tw/guides/providers/) |
 
-匯出的設定僅帶有參照，絕不帶密鑰。Pi 會插入裸 `$NAME`，因此該變數為：
+匯出的設定僅帶有參照，絕不帶金鑰。Pi 會插入裸 `$NAME`，因此該變數為：
 
 ```bash
 export OPENCODEX_API_KEY=<your key>

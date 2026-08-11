@@ -27,7 +27,7 @@ Anthropic OAuth provider。Sidecar 錯誤會轉換成長度受限的工具結果
    search 工具並強制生成最終答案。如果模型呼叫 `apply_patch` 或 shell 等真實用戶端工具，目前
    turn 會結束，以便這些呼叫到達 Codex。
 
-路由模型的每次迭代都會向上遊請求 `stream: true`，但 opencodex 會在決定搜尋還是返回最終答案前，
+路由模型的每次迭代都會向上遊請求 `stream: true`，但 opencodex 會在決定搜尋還是回傳最終答案前，
 在內部完整緩衝所有語義 event。只有第一次迭代的最終 header/status 和 429 key rotation 會被提前
 取得。因此，合成搜尋呼叫和中間輸出不會作為模型輸出暴露給用戶端。
 
@@ -58,7 +58,7 @@ Anthropic OAuth provider。Sidecar 錯誤會轉換成長度受限的工具結果
 `1..2147483647`）限制每次路由模型迭代中原始回應 byte 連續無活動的時間，並在收到每個非空 byte
 時重置。`webSearchSidecar.timeoutMs` 獨立限制單次託管搜尋請求。實際 bridge watchdog 為
 `max(基礎 stall, connect timeout, 路由模型 stall, sidecar timeout) + 30 秒`。路由模型 stall
-不是總生成 timeout。SSE 開始前的失敗會返回非 2xx JSON；回應 header 開始後發生的生成失敗則以
+不是總生成 timeout。SSE 開始前的失敗會回傳非 2xx JSON；回應 header 開始後發生的生成失敗則以
 `response.failed` SSE 傳遞。
 
 ## Vision sidecar
@@ -75,7 +75,7 @@ Anthropic OAuth provider。Sidecar 錯誤會轉換成長度受限的工具結果
   每張圖像注入的描述最多 2,000 個字元。請求不會傳送 ChatGPT 後端不支援的
   `max_output_tokens`。
 - 圖像 URL 會在轉發前校驗。data URL 必須是 `png` / `jpeg` / `jpg` / `webp` / `gif`，base64
-  資料限制在約 20 MB；只接受 `data:` 和 `https:` scheme。遠端 `https` 圖像由 OpenAI 後端獲取，
+  資料限制在約 20 MB；只接受 `data:` 和 `https:` scheme。遠端 `https` 圖像由 OpenAI 後端取得，
   而不是代理。
 - `noVisionModels` 匹配會忽略 Ollama 風格的 `:size` 字尾，因此一個 `gpt-oss` 條目也能覆蓋
   `gpt-oss:120b`。

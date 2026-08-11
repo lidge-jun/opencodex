@@ -80,7 +80,7 @@ Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已�
 
 7. **壓縮（按需）** —— Codex v1 會呼叫 `POST /v1/responses/compact`，v2 則在 Responses turn 中
    加入 `compaction_trigger`。原生直通路由會把壓縮請求傳送到上游；已路由模型則在停用工具的
-   情況下執行摘要，並返回 Codex 所需的替代歷史記錄格式。
+   情況下執行摘要，並回傳 Codex 所需的替代歷史記錄格式。
 
 8. **適配** —— 否則,所選 adapter 的 `buildRequest()` 會以 provider 的原生格式生成上游 HTTP 請求
    (URL、headers、body),由 opencodex 對其執行 `fetch`。

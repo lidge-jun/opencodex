@@ -40,12 +40,12 @@ OpenAI 上游：
   OAuth bearer。圖像請求遵循同一模式。
 - **OpenAI API key：** 僅當 forward 候選沒有擁有認證失敗時使用。不會用單獨計費的 API 呼叫掩蓋
   損壞或過期的 Pool 憑證。
-- **兩者都沒有：** proxy 返回明確的錯誤而不是含糊的 404。其他路由供應商（Cursor、Gemini、
+- **兩者都沒有：** proxy 回傳明確的錯誤而不是含糊的 404。其他路由供應商（Cursor、Gemini、
   Kiro 等）無法提供圖像生成；如果想完全關閉該工具，可在 Codex 中執行
   `codex features disable image_generation`（即 `config.toml` 的
   `[features] image_generation = false`）。
 
-如果 `hostname` 不是 loopback 地址，Codex 必須傳送自動生成的 API 認證請求頭。此時注入器會改用
+如果 `hostname` 不是 loopback 地址，Codex 必須傳送自動生成的 API 認證標頭。此時注入器會改用
 專用供應商：
 
 ```toml
@@ -100,7 +100,7 @@ shell 中安裝的，請先在原 shell 中解除安裝服務，再把 `CODEX_HO
 在專用供應商模式下，`requires_openai_auth = true` 會讓 Codex App/TUI 的帳號門控介面與原生
 Codex 保持一致。opencodex 也提供 `/v1/responses` WebSocket。專用供應商僅在
 `"websockets": true` 時宣告 `supports_websockets = true`；loopback 模式下，Codex 的內建供應商
-可能會先嚐試 WebSocket，如果功能未啟用，proxy 會返回 `426`，使 Codex 回退到 HTTP/SSE。
+可能會先嚐試 WebSocket，如果功能未啟用，proxy 會回傳 `426`，使 Codex 回退到 HTTP/SSE。
 
 ## 執行緒標識與歷史記錄
 
@@ -114,7 +114,7 @@ Codex 保持一致。opencodex 也提供 `/v1/responses` WebSocket。專用供�
 Codex 顯示的模型來自一個磁碟上的目錄（預設為 `$CODEX_HOME/opencodex-catalog.json`）。在啟動時以及執行 `ocx sync` 時，opencodex 會：
 
 1. **備份**一次原始目錄到 `~/.opencodex/catalog-backup.json`（以便置頂操作可逆）。
-2. **獲取**符合條件的供應商即時模型目錄（快取約 5 分鐘；失敗時先回退到上一份正常列表，再回退到
+2. **取得**符合條件的供應商即時模型目錄（快取約 5 分鐘；失敗時先回退到上一份正常列表，再回退到
    已設定的 `models[]`）。`forward` 認證沒有模型端點；Cursor 使用 `GetUsableModels` RPC，而不是
    `/models`。
 3. **合併**路由模型，作為帶名稱空間的條目（`provider/model`），從原生 Codex 目錄模板克隆而來，以便 Codex 嚴格的解析器接受它們。
@@ -124,6 +124,22 @@ Codex 顯示的模型來自一個磁碟上的目錄（預設為 `$CODEX_HOME/ope
 路由目錄條目還會把 GPT-5 身份文案改為真實的上游模型名稱。reasoning 選項會依據供應商和模型後設資料，
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 檔位；上游不支援的值會在傳送請求前完成
 對映或下調。
+
+### 路由的本機工具
+
+非原生的路由目錄列使用 `tool_mode: "code_mode_only"`。這讓 Codex 可以暴露其官方的 `exec` 入口點
+與巢狀 MCP 工具（包括 Browser 與 Computer Use），同時 opencodex 只路由模型的普通函式呼叫。工具執行、
+權限與確認都保持在 Codex 本機；opencodex 不會實作第二個瀏覽器或桌面控制執行器。
+
+對不接受 Codex `exec` 自訂工具語法的 key-auth Responses 供應商，opencodex 會把該宣告及其歷史編碼為
+上游 function tool，然後在 Codex 看到它之前，把串流的 function-call 生命週期還原成
+`custom_tool_call`。原生的 OpenAI 正向路由與受支援的 `apply_patch` 自訂工具保持不變。
+
+所選供應商必須支援 function/tool calling。不支援工具呼叫的純文字供應商無法使用 `exec`、Browser 或
+Computer Use。原生 OpenAI 列保留其上游工具模式不變。
+
+`ocx sync` 變更這份中繼資料之後，請重新啟動 Codex App 並開啟新任務。既有 app-server 程序與任務可能
+保留啟動時載入的目錄與工具計畫。
 
 ### 自訂模型顯示名稱
 
@@ -224,7 +240,7 @@ Codex 的 `spawn_agent` 會按優先順序排序，然後展示**前 5 個在選
 向 Codex 帳號池新增 ChatGPT 帳號時，opencodex 會在儲存前向 Codex Responses 後端傳送一個小型
 streaming 請求來驗證憑證。輸入使用真正的 Responses item 陣列
 （`input: [{ type: "message", ... }]`），並等待 `response.completed`。預設模型為
-`gpt-5.4-mini`；若該模型返回 HTTP 400，則改用 `gpt-5.5` 重試。結構化的上游錯誤詳情會顯示給使用者，
+`gpt-5.4-mini`；若該模型回傳 HTTP 400，則改用 `gpt-5.5` 重試。結構化的上游錯誤詳情會顯示給使用者，
 但不會洩露原始回應正文。後臺重新驗證是獨立功能，預設關閉；只有啟用 Token Guardian、將 `chatgpt`
 重新整理策略設為 `proactive`，並把 `tokenGuardian.codexWarmupEnabled` 設為 true 時才會執行。
 

@@ -61,6 +61,47 @@ ocx combo show main
 別名改變客戶端請求的公開名稱；不改變 combo 儲存的 id 或其背後的具體供應商/模型選擇器。
 :::
 
+## Codex Desktop 原生 allowlist 相容性
+
+某些 Codex Desktop 版本會在 app-server 已載入 `model_catalog_json` 之後，套用只允許原生的遠端
+`available_models` allowlist。因此 `Nova1/codex-gpt-5.6-sol` 這類正常路由 id 在 CLI 可用，卻不會
+出現在 Desktop 的選擇器中。這是上游的 [Codex Desktop bug](https://github.com/openai/codex/issues/19694)，
+由 [opencodex #241](https://github.com/lidge-jun/opencodex/issues/241) 追蹤。
+
+當你控制一個等效的路由目標時，combo 可以明確接管一個原生 slug：
+
+```bash
+ocx combo set nova-sol \
+  --targets Nova1/codex/gpt-5.6-sol \
+  --alias gpt-5.6-sol \
+  --native-alias \
+  --display-name 'Nova1 - codex-gpt-5.6-sol'
+```
+
+此模式刻意採 opt-in，而且必須同時具備 `--native-alias` 與非空的顯示標籤。別名必須是這個
+opencodex 版本支援的原生模型 id 之一；僅有原生系列前綴不會被接受，因為移除時必須能恢復具權威性的
+中繼資料。當路由目標的 discovery 回應只提供模型 id 時，相容性列會從它所取代的原生 id 補上缺少的
+context、modality 與 reasoning 中繼資料。明確的目標限制仍然優先，因此這個 fallback 永遠不會提高
+context 上限或覆寫已宣告的能力。它會改變精確路由的優先順序：`gpt-5.6-sol` 的請求會先解析到
+`combo/nova-sol`，然後才是規範的 OpenAI 原生系列路由。目錄只包含一個帶所設定顯示標籤的裸列，
+而不是重複的原生列與 combo 列。只會捕捉裸的 `gpt-5.6-sol` slug。帳號限定列（如
+`main/gpt-5.6-sol`）與供應商限定列（如 `openai-apikey/gpt-5.6-sol`）仍是不同的 OpenAI 路由；
+供應商限定的 API-key 路由永遠不會落到原生別名上。
+
+可見性鍵依然明確：
+
+- `combo/nova-sol` 把相容性 combo 從 discovery 中隱藏。
+- `disabledModels` 中的裸 `gpt-5.6-sol` 項目仍然指休眠的原生 OpenAI 列；它不會隱藏目前擁有該
+  公開 slug 的 combo。
+- 只要仍設定至少一個原生別名，被停用的裸原生列就會從有效 Codex 目錄中省略，而不是保留為
+  `visibility: "hide"`。這可以防止 Desktop 的 allowlist 復活不該顯示的列。Models 頁面仍會列出
+  未被遮蔽的原生開關，重新啟用其中一個會恢復其保留或目前的原生中繼資料。
+
+:::caution
+原生別名刻意接管一個看起來像第一方模型的 id。只有在目標營運上等效、且誠實標示選擇器列時才使用它。
+移除 combo 會在下次 sync 時恢復正常原生路由與目錄身份。
+:::
+
 ## 選擇策略
 
 ### Failover：有序的主與後備

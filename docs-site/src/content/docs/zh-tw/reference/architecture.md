@@ -59,7 +59,7 @@ src/
    路徑，則移除圖像，而不是把它傳送給純文字上游。
 5. `server/adapter-resolve.ts` 應用模型級 wire override，並構造七個 adapter 之一。Responses
    passthrough 直接轉發原始 body；Cursor 執行雙向 `runTurn` transport；其餘轉換型 adapter
-   則建置、獲取並解析上游請求。
+   則建置、取得並解析上游請求。
 6. 路由模型請求託管的 `web_search` 工具時，`web-search/` 會暴露一個合成函式，經 ChatGPT
    sidecar 執行真實搜尋，把結果送回路由模型，並在設定的迴圈上限內重複。
 7. `bridge.ts` 生成 Responses SSE 或 JSON。`server/request-log.ts` 與 `usage/` 在不改變回應的
@@ -74,7 +74,7 @@ src/
   assistant / toolResult。`reasoning` 條目變成 thinking block；`function_call`、
   `custom_tool_call`、`tool_search_call` 條目變成工具呼叫；對應的 `*_output` 條目變成工具結果。
 - **工具（Tools）** —— function 工具直接透傳；**帶名稱空間的（MCP）工具會被扁平化**為
-  `namespace__name`，並在返回時還原；**自由格式（freeform）**工具（如 `apply_patch`）和
+  `namespace__name`，並在回傳時還原；**自由格式（freeform）**工具（如 `apply_patch`）和
   **tool_search** 發現工具會被標記；**託管工具（hosted tools）**（`web_search`、圖像生成等）
   會被移除，只有 sidecar 確定會處理時才重新注入。
 - **圖像（Images）** —— 作為真實 content part（data URL 或遠端 https）保留，絕不會內聯成
@@ -120,7 +120,7 @@ quota、sidecar 設定、更新、生成用戶端 API key、OAuth 登入/狀態/
 `/api/*` 和 `/v1/*` 都提供 `OPENCODEX_API_AUTH_TOKEN`；設定的 `corsAllowOrigins` 會擴充套件本機
 origin allowlist。
 
-OAuth 實現在 `oauth/` 中；每次路由呼叫前都會即時載入或重新整理 access token，而
+OAuth 實作在 `oauth/` 中；每次路由呼叫前都會即時載入或重新整理 access token，而
 `oauth/token-guardian.ts` 只會主動重新整理策略允許的 provider。Codex/ChatGPT pool credential 與
 thread affinity 位於 `codex/` 下，不會出現在管理 API 回應中。請求用量會規範化為 `OcxUsage`，
 顯示在 Responses 終止 event 中，並由 `usage/` 彙總，供儀表板和可選的 JSONL 診斷使用。
@@ -128,19 +128,19 @@ thread affinity 位於 `codex/` 下，不會出現在管理 API 回應中。請�
 ## 傳輸與 compaction
 
 `server/index.ts` 預設在 `/v1/responses` 上提供 HTTP/SSE。當 `websockets` 為 `false` 而 Codex
-嘗試 Responses WebSocket upgrade 時，opencodex 會返回 `426 upgrade_required`，Codex 隨後在該
+嘗試 Responses WebSocket upgrade 時，opencodex 會回傳 `426 upgrade_required`，Codex 隨後在該
 session 中回退到 HTTP。設定 `"websockets": true` 後，同一 endpoint 會接受 upgrade 並使用
 WebSocket bridge。
 
 Codex context compaction 同樣適用於路由模型。`server/responses/compact.ts` 處理
-`POST /v1/responses/compact`，執行一次內部路由 summarization turn 並返回壓縮後的歷史；
+`POST /v1/responses/compact`，執行一次內部路由 summarization turn 並回傳壓縮後的歷史；
 `responses/parser.ts` 與 `bridge.ts` 則處理 remote compaction v2 的 `compaction_trigger` turn，
 準確發出一個合成的 `compaction` 輸出 item。
 
 ## 快取與目錄
 
 - `codex/model-cache.ts` 為每個 provider 維護即時 `/models` 結果的記憶體 TTL 快取（預設 5 分鐘，
-  與 Codex 自身快取一致），獲取失敗時會回退到舊資料。
+  與 Codex 自身快取一致），取得失敗時會回退到舊資料。
 - `codex/catalog.ts` facade 匯出的 `codex/catalog/sync.ts` 把路由模型作為帶名稱空間的條目
   合併進 Codex 目錄，優先排列精選的
   [subagent 模型](/zh-tw/guides/codex-integration/#subagent-選擇器)，過濾
@@ -154,7 +154,7 @@ Codex context compaction 同樣適用於路由模型。`server/responses/compact
 
 - 定義標準的 `CODEX_REASONING_LEVELS` 及其排序。
 - 精確級別不可用時，把請求的 effort 限制到最接近的支援層級。
-- 解析模型級和 provider 級 `reasoningEffortMap` override，用於自定義 wire 對映。
+- 解析模型級和 provider 級 `reasoningEffortMap` override，用於自訂 wire 對映。
 - 對 `noReasoningModels` 中的模型完全移除 effort。
 
 ## 核心型別

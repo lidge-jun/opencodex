@@ -92,7 +92,7 @@ subagentModels = [
 
 ## 更改順序
 
-自定義開頭模型順序的唯一受支援方式是重新排列 `subagentModels`。你可以在儀表板的
+自訂開頭模型順序的唯一受支援方式是重新排列 `subagentModels`。你可以在儀表板的
 **Sub-agents** 頁面或 opencodex 設定中修改它。該列表最多接受五個模型，其陣列順序有實際意義。
 
 目前 `OcxConfig` 中沒有通用的 `modelOrder`、`providerOrder` 或 priority map 設定。受支援的排序

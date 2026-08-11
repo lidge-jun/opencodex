@@ -58,6 +58,41 @@ Responses 與 Chat Completions 為可能的 Codex Direct passthrough 保留 `Aut
 `0.0.0.0` 綁定將代理與設定的供應商存取暴露給 LAN。僅在受信任的網路上搭配強 token 使用。
 :::
 
+### 無法接收 token 的本機用戶端
+
+遠端綁定要求每個呼叫者都要有憑證，包括本機呼叫者。這會破壞一個特定情境：由 host process 啟動、
+直接解析 Codex entrypoint（`require.resolve('@openai/codex/bin/codex.js')`）的 `codex app-server`
+永遠不會經過生成的 `codex` shim，因此它不會繼承 `OPENCODEX_API_AUTH_TOKEN`，每次模型呼叫都會在
+stream 開啟前以 `401` 失敗。
+
+`unauthenticatedLoopbackListener` 會開啟第二個綁定到 `127.0.0.1` 的 listener，不要求憑證即可
+放行。主 listener 不受影響——遠端呼叫者仍需要 token。
+
+```json
+{
+  "hostname": "0.0.0.0",
+  "port": 10100,
+  "unauthenticatedLoopbackListener": { "enabled": true, "port": 10200 }
+}
+```
+
+接著 `ocx sync` 會把 `base_url = "http://127.0.0.1:10200/v1"` 寫入受管的 Codex provider 區塊，
+並省略 auth header，因此直接生成的 app-server 不需要任何憑證管線即可運作。
+
+該 port 是必填的，且必須與 proxy port 不同。它絕不會由 OS 指派：臨時 port 會在重啟時改變，而
+已執行的 app-server 仍保留先前的 `base_url`。
+
+該 listener 只服務 `POST /v1/responses`、其 WebSocket upgrade、`POST /v1/responses/compact` 與
+`GET /v1/models`。其他一切，包括 `/api/*` 與儀表板，都會回傳 `404`。
+
+:::danger[這是一個未認證的介面]
+機器上的每個 process 都可以使用此 listener。它會耗用帳號配額與付費 provider 憑證，也可能耗盡
+已認證遠端用戶端依賴的共享 turn 容量。請勿在共用或多租戶主機上啟用。
+
+綁定到 `127.0.0.1` 表示 kernel 會拒絕遠端連線，但不會阻止瀏覽器：你造訪的頁面可以讓瀏覽器連到
+`127.0.0.1`。因此該 listener 套用與一般 loopback 綁定相同的 `Host` 與 `Origin` 檢查。預設關閉。
+:::
+
 ### SSH 連接埠轉發
 
 遠端使用不需要遠端綁定。保持回送並轉發它：

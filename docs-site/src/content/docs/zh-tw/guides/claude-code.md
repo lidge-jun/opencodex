@@ -7,6 +7,28 @@ opencodex 在 `/v1/responses` 之外還提供 `POST /v1/messages`（以及 `coun
 Code 可以使用每一個已路由的供應商——包括 OAuth 登入、帳號池、金鑰故障轉移和 sidecar——
 而無需進行任何額外的身分驗證設定。
 
+## Claude OAuth 帳號池（實驗性）
+
+你可以透過 Providers 儀表板登入多個 Claude 帳號（`ocx login anthropic` / add-account）。預設
+每個請求只使用**作用中**帳號。
+
+**實驗性、opt-in** 的 Claude 帳號池（`anthropicAccountPool.enabled`）會在這些 OAuth 帳號之間加入
+sticky session affinity 與 429 冷卻故障轉移。僅對**新**工作階段，`anthropicAccountPool.strategy`
+會在合格帳號之間選擇：`quota`（預設）在用量高於 `autoSwitchThreshold` 時挑選已知 5 小時用量最低者；
+`round-robin` 平均分散（`stickyLimit`，預設 `1`）；`fill-first` 一直使用作用中帳號直到冷卻、重新認證
+或達到閾值，然後前進。它**預設關閉**、會在 GUI 顯示警告，而且尚未經過實戰驗證——Anthropic 可能
+限制看起來像自動輪換的帳號；輪換並不能保護你免受供應商執行機制的處置。
+
+啟用時的營運契約：
+
+- 上游 **429** 會讓該帳號冷卻（有 `Retry-After` 時使用它，否則用預設 backoff）、清除其 affinity，
+  並可能在同一個請求內輪換到另一個合格帳號（有上限）。
+- Affinity 是**程序本機**的（proxy 重啟後就會遺失）。
+- **401/403** 憑證失敗會隔離該帳號（`needsReauth`），直到重新認證前都不會參與選擇。
+- 如果每個合格帳號都在冷卻，proxy 會回傳 **429**（不是 401），並在已知時附上 `Retry-After`。
+
+請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
+
 ## 快速入門
 
 ```bash
@@ -82,7 +104,7 @@ ocx claude desktop import <path> [--apply]
 系列，但移動路由不會改變它所呼叫的供應商或模型。舊版 apply 旗標 `--static`、`--hybrid` 與
 `--discovery-only` 仍可供既有腳本使用。
 
-## 系統環境整合（macOS）
+## 系統環境整合
 
 當 `claudeCode.systemEnv` 設定為 `true`（預設：**關閉**）時，`ocx start` 會使用 `launchctl setenv`
 在系統範圍內注入 `ANTHROPIC_BASE_URL` 和相關的 Claude Code 環境變數。因此，新開啟的終端視窗和
@@ -103,8 +125,8 @@ macOS；在其他平臺上，請使用 `ocx claude`。
 **原樣**轉發到 `api.anthropic.com`——beta、思考簽名、提示快取和計費身份都保持完全原生，
 而已路由模型仍可在同一會話中透過選擇器別名使用。
 
-**請求頭處理：**轉發前會移除逐跳請求頭以及 `host`、`content-length`、`accept-encoding`、
-`x-opencodex-api-key` 和 `origin`。其他所有請求頭（包括 `anthropic-beta` 和
+**標頭處理：**轉發前會移除逐跳標頭以及 `host`、`content-length`、`accept-encoding`、
+`x-opencodex-api-key` 和 `origin`。其他所有標頭（包括 `anthropic-beta` 和
 `anthropic-version`）都會透傳。
 
 只有同時滿足以下**四個**條件時才會觸發透傳：`nativePassthrough` 不為 `false`；模型以
@@ -344,7 +366,7 @@ role；`tool_result` 缺少 `tool_use_id`；`tool_use` 缺少 id/name；指定�
 自動 `cache_control`。穩定輪次通常能達到約 99.9% 的快取命中率。
 
 **原生 OpenAI/ChatGPT 路由：**派生會話範圍的 `prompt_cache_key`（存在時取自
-`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 請求頭。
+`metadata.user_id`，否則回退到系統內容雜湊）和用於快取親和性的 `session_id` 標頭。
 快取鍵包含模型和完整的工具 schema。
 
 **Token 計算：**Anthropic 輸出會從 `input_tokens` 中減去 `cached_tokens` 和

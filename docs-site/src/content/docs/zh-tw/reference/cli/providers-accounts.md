@@ -163,6 +163,77 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 檢查帳號的 Codex reset credits。消耗 credit 是破壞性的，需要同時提供 `--consume` 與 `--yes`。
 
+### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+
+讀取或設定某個 Codex pool account 的選擇順序：**數值越高越早使用**，預設為 `0`，範圍是
+`-100` 到 `100`。只有 `openai` Codex pool 有順序，其他 provider 會以 exit 1 結束。
+`main` 指定 Codex Desktop 登入，它與其他 pool account 一樣有順序——`ocx account priority
+openai main last` 就是把它保留為後備的方式。
+
+預設字詞代表小整數：`first` 是 `+2`、`earlier` 是 `+1`、`normal` 是 `0`、`later` 是
+`-1`、`last` 是 `-2`。`reset` 把帳號回復到預設並刪除其儲存條目。**省略數值時讀取**
+目前順序，而不是寫入一個。
+
+順序決定哪些帳號優先被考慮，而不是哪些可用：選取仍在合格帳號之間進行，取仍有配額
+餘裕的最高順序層級，並讓 `accountPoolStrategy` 在該層級內選擇。暫停、冷卻與重新認證
+不受影響。變更從**下一個未繫結請求**開始生效，而不只是新啟動的 session：一旦較高的
+順序恢復餘裕，preemption 就會優先移動未繫結的請求。已繫結到某個帳號的執行緒通常會
+保留到該帳號被耗盡；重新認證失敗、配額冷卻或一連串暫時失敗會提前解除繫結。任何接受的
+寫入也都會釋放手動「立即使用此帳號」的 pin——無論 pin 在哪個帳號上——包括寫入一個
+帳號已經持有的順序；這是清除 pin 同時保留目前選取帳號的唯一方式。（透過管理 API 清除
+active account 也會釋放 pin，但會一併丟掉該選取。）代理無法連線、未知的帳號 id 或超出
+接受集合的值會以 exit 1 結束。`--json` 回傳：
+
+```text
+{ ok: true, provider, id, priority: number, preset: string | null }
+```
+
+### `ocx account main <subcommand>`
+
+管理具名的原生 Codex main-login 設定檔，不變更 OpenCodex account-pool 路由：
+
+```text
+ocx account main doctor [--json]
+ocx account main list [--json]
+ocx account main register <label> [--json]
+ocx account main add <label>
+ocx account main switch <profile-id-or-label> --yes [--json]
+ocx account main recover [--rollback --yes] [--json]
+```
+
+每個會變更狀態的命令都會回報執行中代理回傳的 canonical 有效 `CODEX_HOME`。這個路徑可能與
+呼叫端的 `CODEX_HOME` 不同；支援 JSON 的命令以 `effectiveCodexHome` 暴露同一個值。
+
+Version 1 支援基於檔案的 Codex 認證，以 AES-256-GCM 加密儲存的設定檔，並把加密金鑰放在
+作業系統的憑證儲存中。`add` 在匯入產生的憑證之前先執行正式的 Codex 登入流程。切換設定檔
+前請先關閉 Codex；成功的切換會保留本機任務與歷史記錄，然後要求重新啟動 Codex。使用
+`doctor` 檢查設定檔狀態，使用 `recover` 完成或復原中斷的轉換。`switch` 接受設定檔 id
+或其 label。
+
+v1 復原矩陣涵蓋交易檔已透過 rename 發布後 OpenCodex 程序退出的情況。它不宣稱在 OS 或
+kernel 崩潰、突然斷電下仍具持久性：`atomicWriteFileAsync()` 不會 `fsync` 檔案或其父目錄。
+
+加密 vault、切換 journal、復原標記與 journal quarantine 位於 canonical
+`<real CODEX_HOME>/.opencodex-native-main-profiles` 目錄，因此共享該 Codex home 的每個
+OpenCodex 實例只看到一個 owner 與一個復原狀態。明文登入暫存保持隔離在各個
+`<OPENCODEX_HOME>/native-main-profile-staging` 目錄下。
+
+在原生 main 流量或 journal 復原被受理前，lifetime owner 取得獨佔的憑證請求，且只清除
+精確的 `auth.json.ocx.<pid>.<sequence>.tmp` crash 殘留。每個候選都必須是未變更 canonical
+`CODEX_HOME` 下的單一連結 regular file；它會被截斷、flush 再 unlink。link/reparse 替換、
+身分變更與其他歧義會讓原生 main 流量保持關閉，而近似名稱的檔案絕不會被自動移除。這保護
+的是合作的 OpenCodex 崩潰，不是已經以相同 OS 使用者身分執行的惡意程序。該使用者與含有
+`CODEX_HOME` 的檔案系統仍被視為可信，且截斷不保證從 copy-on-write 儲存、快照或 SSD
+殘留中實體抹除。
+
+Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不會被靜默匯入。如果
+`doctor` 回報舊版設定檔狀態，請停止共享相同 `CODEX_HOME` 的每個 OpenCodex proxy。然後
+把相符的 `*.vault.json`、`*.journal.json`、復原標記與任何被引用的 journal-quarantine
+檔案一起備份並移動到 canonical 目錄，同時保留 owner-only 權限；或移除舊 preview 組合並
+重新執行 `ocx account main register`。在多個舊 root 之間選擇，或在任何共享 proxy 作用中
+時同時執行兩種配置，都不被允許。在 Windows 上，以舊的大小寫摺疊 home 身分為鍵的 preview
+狀態必須重設而不是移動，因為其加密 AAD 與 OS keyring 身分刻意不重複使用。
+
 ## 模型
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`

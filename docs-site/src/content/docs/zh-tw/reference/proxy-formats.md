@@ -130,7 +130,7 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 合格的請求以 Anthropic 方言轉發，使原生 beta 標頭、thinking 簽章與訂閱身分保持端到端。否則它走 Responses 往返。
 
-`POST /v1/messages/count_tokens` 遵循相同的模型解析與 passthrough 決策。原生合格的請求被轉發到 Anthropic 的計數端點。其他請求使用基於 system 內容、訊息與工具的本機文件化估計並回傳：
+`POST /v1/messages/count_tokens` 遵循相同的模型解析與 passthrough 決策。原生合格的請求被轉發到 Anthropic 的計數端點。其他請求使用基於 system 內容、訊息與工具的本機檔案式估計並回傳：
 
 ```json
 { "input_tokens": 123 }

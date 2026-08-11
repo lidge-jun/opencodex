@@ -13,7 +13,7 @@ ocx init
 
 `ocx init` 會引導你完成:
 
-1. **選擇 provider** —— 從內建 registry 的 50 個預設中選擇一個，或選擇 `custom` 手動輸入
+1. **選擇 provider** —— 從內建 registry 的 79 個預設中選擇一個，或選擇 `custom` 手動輸入
    base URL 和 adapter。
 2. **API key** —— 貼上一個 key,或引用一個環境變數,例如 `${ANTHROPIC_API_KEY}`。
 3. **預設模型** —— 對於 API key、本機和 custom provider，可接受預設值或輸入模型 id。
@@ -25,10 +25,11 @@ ocx init
 
 結果會儲存到 `$OPENCODEX_HOME/config.json`（預設 `~/.opencodex/config.json`）。
 
-:::note[GPT-5.6 灰度釋出條目]
-穩定版 v2.7.1 會為 ChatGPT 直通、OpenAI API key、OpenRouter 和實驗性 Cursor adapter 預置
-GPT-5.6 Sol/Terra/Luna。只有上游帳號具備權限時才能實際呼叫。OpenAI API key 與 OpenRouter
-預設會宣告 372,000 token 的可用 context window；Cursor 則使用自身 adapter 提供的後設資料。
+:::note[GPT-5.6 釋出條目]
+目前的穩定版本會為 ChatGPT 直通、OpenAI API key、OpenRouter 以及實驗性 Cursor adapter
+預置 GPT-5.6 Sol/Terra/Luna。只有該上游帳號具備權限時才能實際呼叫。OpenAI API key 與
+OpenRouter 預設會宣告 372,000 token 的可用 context window；Cursor 則保留自身 adapter 的
+後設資料。
 :::
 
 ## 2. 啟動代理
@@ -69,21 +70,13 @@ codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
 
-如果你擁有 GPT-5.6 權限，原生 ChatGPT 路徑使用裸模型名，API key 和 OpenRouter 路徑使用顯式
-`provider/model` 形式：
-
-```bash
-codex -m "gpt-5.6-sol"                    "Plan a risky refactor"
-codex -m "openai-apikey/gpt-5.6-terra"    "Review this architecture"
-codex -m "openrouter/openai/gpt-5.6-luna" "Summarize this trace"
-```
-
 ## 選擇 sub-agent 模型（可選）
 
-新設定會在 Codex 的 sub-agent 選擇器中優先顯示 `gpt-5.5`、`gpt-5.6-sol`、
-`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-5.4-mini`。透過 `ocx gui`，你可以從原生或已路由模型中
-選擇並調整最多五個條目的順序。儀表板還可以設定一個首選 sub-agent 模型及 reasoning effort；
-opencodex 會把這項指引加入 v1 協作請求。
+新設定會讓 Codex 的 sub-agent 選擇器包含五個原生模型：`gpt-5.5`、`gpt-5.6-sol`、
+`gpt-5.6-terra`、`gpt-5.6-luna` 和 `gpt-5.4-mini`。開啟 `ocx gui` 即可替換或重新排序最多五個
+原生或已路由模型。儀表板也可以設定一個首選 sub-agent 模型及 reasoning effort。參見
+[子代理介面](/zh-tw/guides/sub-agent-surface/) 選擇 v1/base/v2，並了解指引、原生預設與回退
+何時生效。
 
 ## 登入而非貼上 key
 
@@ -94,10 +87,8 @@ ocx login xai          # 也可使用 anthropic、kimi、kiro、google-antigravi
 ocx logout xai
 ```
 
-預設 OpenAI 路徑**無需 key** —— 它會直接轉發你現有的 `codex login` 憑證。若要使用 OpenAI
-API key，請新增 `openai-apikey` provider。該預設包含 `gpt-5.6-sol`、`gpt-5.6-terra`、
-`gpt-5.6-luna`，但你的 API key 必須擁有實際使用權限
-(參見 [Provider](/zh-tw/guides/providers/))。
+OpenAI 本身**無需 key** —— 預設 provider 會直接轉發你現有的 `codex login` 憑證
+（參見 [Providers](/zh-tw/guides/providers/)）。
 
 ## 停止與恢復
 

@@ -122,7 +122,7 @@ npm 警告給的縮寫指令少了套件名，會把目前目錄重裝進去，
 - **為 preview-gated OpenAI rollout 做好準備。** GPT-5.6 Sol/Terra/Luna 保留 upstream effort 階梯。Direct/Multi 使用 372k Codex 契約，OpenAI API 與 OpenRouter 使用 1.05M 後設資料。
 - **給任意模型超能力。** 非 OpenAI 模型可透過 `gpt-5.4-mini` sidecar（使用你的 ChatGPT 登入）獲得真正的網頁搜尋與圖片理解。
 - **原生生成圖片。** Codex 的獨立 `image_gen` 工具透過 `POST /v1/images/generations` 生成圖片、透過 `POST /v1/images/edits` 編輯圖片；它獨立於 hosted Responses 的 `image_generation` 工具。
-- **看清正在發生什麼。** Web 儀表板展示 provider、OAuth 狀態、模型選擇和即時請求日誌；當上遊返回時，也會包含 cached/cache-write token 計數 —— 不用再猜請求為何失敗。
+- **看清正在發生什麼。** Web 儀表板展示 provider、OAuth 狀態、模型選擇和即時請求日誌；當上遊回傳時，也會包含 cached/cache-write token 計數 —— 不用再猜請求為何失敗。
 - **背景執行。** 安裝為系統服務（launchd / systemd / Task Scheduler）後開機自啟，無需操心。
 - **乾淨退出，零殘留。** `ocx stop`（或儀表板的 Stop 按鈕）會關閉代理、停止已安裝的背景服務，並將 Codex 恢復為原始配置。之後 `codex` 就像從沒安裝過 opencodex 一樣工作 —— 無殘留配置，無殭屍程序。
 

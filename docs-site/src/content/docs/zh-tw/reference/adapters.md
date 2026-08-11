@@ -4,7 +4,7 @@ description: 七個 provider adapter 的目標、請求建置方式與各自特�
 ---
 
 **adapter** 負責在 opencodex 的內部請求/回應模型與某個 provider 的 wire 格式之間轉換。每個
-adapter 都實現 `ProviderAdapter` 介面（`src/adapters/base.ts`）：
+adapter 都實作 `ProviderAdapter` 介面（`src/adapters/base.ts`）：
 
 ```ts
 interface ProviderAdapter {
@@ -81,7 +81,7 @@ token。
 
 - 建置 Kiro `conversationState`，對映 Codex 工具和工具結果，併傳送 Kiro wire 支援的 image block。
 - 解碼 `application/vnd.amazon.eventstream`，重建 text/thinking/tool event，檢測被截斷的工具
-  JSON。上游不返回 token 數量，因此 usage 採用估算值。
+  JSON。上游不回傳 token 數量，因此 usage 採用估算值。
 - 經 `fetchResponse` 負責有界重試和分類/脫敏後的錯誤；非流式 parser 會排空同一 event stream，
   供 web-search loop 使用。
 ### 完成與原生 stop reason
