@@ -208,12 +208,19 @@ describe("CL-08 CodeRabbit regressions", () => {
 
   test("management run listing rejects invalid limits and stale cursors", async () => {
     tempHome();
-    for (const suffix of ["?limit=0", "?limit=101", "?cursor=evicted"]) {
+    for (const suffix of ["?limit=0", "?limit=101"]) {
       const req = new ManagementRequest(`http://127.0.0.1/api/lab/automation/runs${suffix}`);
       const res = await handleManagementAPI(req, new URL(req.url), emptyConfig());
       expect(res).not.toBeNull();
       expect(res!.status).toBe(400);
+      expect((await res!.json()).error.code).toBe("invalid_limit");
     }
+
+    const staleReq = new ManagementRequest("http://127.0.0.1/api/lab/automation/runs?cursor=evicted");
+    const staleRes = await handleManagementAPI(staleReq, new URL(staleReq.url), emptyConfig());
+    expect(staleRes).not.toBeNull();
+    expect(staleRes!.status).toBe(400);
+    expect((await staleRes!.json()).error.code).toBe("invalid_cursor");
   });
 
   test("invalid routes cannot partially persist an otherwise valid policy update", async () => {
@@ -247,6 +254,7 @@ describe("CL-08 CodeRabbit regressions", () => {
     const res = await handleManagementAPI(req, new URL(req.url), emptyConfig());
     expect(res).not.toBeNull();
     expect(res!.status).toBe(400);
+    expect((await res!.json()).error.code).toBe("invalid_body");
   });
 
   test("CLI re-enable without layer flags preserves prior selections", async () => {
