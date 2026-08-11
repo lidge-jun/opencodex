@@ -16,6 +16,7 @@ import {
   armClaudeCodeBaseline,
   loadConfig,
   saveConfig,
+  getConfigDir,
   websocketsEnabled,
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
@@ -41,6 +42,12 @@ import {
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
+import {
+  setLabAutomationDispatchDeps,
+  startLabAutomationScheduler,
+} from "../lab/automation/orchestrator";
+import { loadLabAutomationPolicy } from "../lab/automation/persistence";
+import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
@@ -1645,6 +1652,20 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();
+
+  const labConfigDir = getConfigDir();
+  const productionLabRouteExecutor = createProductionLabRouteExecutor({
+    configDir: labConfigDir,
+    loadConfig: () => config,
+  });
+  setLabAutomationDispatchDeps({
+    configDir: labConfigDir,
+    loadConfig: () => config,
+    routeExecutor: productionLabRouteExecutor,
+  });
+  if (loadLabAutomationPolicy(labConfigDir).enabled) {
+    startLabAutomationScheduler(labConfigDir);
+  }
 
   return server;
 }

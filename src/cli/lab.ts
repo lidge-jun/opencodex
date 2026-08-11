@@ -43,6 +43,21 @@ import {
   takeIntegerOption,
   takeOption,
 } from "./runtime-api";
+import { readConfigDiagnostics } from "../config";
+import {
+  buildLabAutomationStatus,
+  enqueueManualLabRun,
+  startLabAutomationScheduler,
+  stopLabAutomationScheduler,
+} from "../lab/automation/orchestrator";
+import {
+  loadLabAutomationPolicy,
+  saveLabAutomationPolicy,
+  loadLabAutomationState,
+} from "../lab/automation/persistence";
+import { planManualLabRun } from "../lab/automation/planner";
+import { listLabAutomationRuns } from "../lab/automation/runs-query";
+import type { LabAutomationLayer } from "../lab/automation/types";
 
 const USAGE = `Usage:
   ocx lab status [--json]
@@ -54,7 +69,12 @@ const USAGE = `Usage:
   ocx lab event <eventId> [--json]
   ocx lab artifacts [--status <s>] [--artifact-class <c>] [--limit <n>] [--cursor <c>] [--json]
   ocx lab artifact <digest> [--json]
-  ocx lab catalog [--layer <layer>] [--suite <id>] [--json]`;
+  ocx lab catalog [--layer <layer>] [--suite <id>] [--json]
+  ocx lab automation status [--json]
+  ocx lab automation enable [--protocol] [--live] [--json]
+  ocx lab automation disable [--json]
+  ocx lab automation runs [--limit <n>] [--cursor <c>] [--json]
+  ocx lab run --layer <layer> --scenario <id> [--provider <name>] [--model <id>] [--json]`;
 
 const ARTIFACT_STATUSES = ["present", "corrupt", "purged_unavailable"] as const;
 type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
@@ -161,6 +181,23 @@ function catalogLines(scenarios: ReturnType<typeof queryLabCatalogEntries>): str
     `${s.evidenceLayer} ${s.suiteId} ${s.scenarioId} digest=${s.scenarioManifestDigest.slice(0, 12)}…`,
   );
   return lines.length > 0 ? lines : ["No catalog scenarios"];
+}
+
+function automationStatusLines(status: ReturnType<typeof buildLabAutomationStatus>): string[] {
+  return [
+    `Automation enabled: ${status.policy.enabled}`,
+    `Scheduler running: ${status.schedulerRunning}`,
+    `Layers: protocol=${status.policy.layers.protocolConformance} live=${status.policy.layers.liveRouteCompatibility} task=${status.policy.layers.taskEffectiveness}`,
+    `Queued: ${status.counters.queued} | Running: ${status.counters.running}`,
+    `Run budget remaining: ${status.counters.remainingRunBudget} | Live request budget: ${status.counters.remainingLiveRequestBudget}`,
+  ];
+}
+
+function runListLines(page: ReturnType<typeof listLabAutomationRuns>): string[] {
+  const lines = page.items.map((row) =>
+    `${row.runId} ${row.state} ${row.evidenceLayer} ${row.scenarioId} trigger=${row.trigger}`,
+  );
+  return lines.length > 0 ? lines : ["No automation runs"];
 }
 
 export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): Promise<number> {
@@ -349,6 +386,80 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           rejectArgs(rest, USAGE);
           const scenarios = queryLabCatalogEntries({ layer, suiteId });
           printData({ scenarios }, wantsJson, catalogLines(scenarios));
+          return;
+        }
+        case "automation": {
+          const [automationSub = "status", ...automationRest] = rest;
+          switch (automationSub) {
+            case "status": {
+              rejectArgs(automationRest, USAGE);
+              const status = buildLabAutomationStatus(configDir);
+              printData(status, wantsJson, automationStatusLines(status));
+              return;
+            }
+            case "enable": {
+              const enableLive = takeFlag(automationRest, "--live");
+              rejectArgs(automationRest, USAGE);
+              const policy = {
+                ...loadLabAutomationPolicy(configDir),
+                enabled: true,
+                layers: {
+                  protocolConformance: true,
+                  liveRouteCompatibility: enableLive,
+                  taskEffectiveness: false,
+                },
+                taskEffectivenessBackgroundEnabled: false,
+              };
+              saveLabAutomationPolicy(policy, configDir);
+              startLabAutomationScheduler(configDir);
+              const status = buildLabAutomationStatus(configDir);
+              printData(status, wantsJson, automationStatusLines(status));
+              return;
+            }
+            case "disable": {
+              rejectArgs(automationRest, USAGE);
+              const policy = { ...loadLabAutomationPolicy(configDir), enabled: false };
+              saveLabAutomationPolicy(policy, configDir);
+              stopLabAutomationScheduler();
+              const status = buildLabAutomationStatus(configDir);
+              printData(status, wantsJson, automationStatusLines(status));
+              return;
+            }
+            case "runs": {
+              const limit = takeIntegerOption(automationRest, "--limit", { min: 1 });
+              const cursor = takeOption(automationRest, "--cursor");
+              rejectArgs(automationRest, USAGE);
+              const page = listLabAutomationRuns(loadLabAutomationState(configDir), limit ?? 50, cursor);
+              printData(page, wantsJson, runListLines(page));
+              return;
+            }
+            default:
+              throw new CliUsageError(`unknown automation subcommand: ${automationSub}`, USAGE);
+          }
+        }
+        case "run": {
+          const layer = takeEnumOption<LabAutomationLayer>(
+            rest,
+            "--layer",
+            ["protocol_conformance", "live_route_compatibility", "task_effectiveness"] as const,
+            "--layer must be protocol_conformance, live_route_compatibility, or task_effectiveness",
+          );
+          const scenarioId = takeOption(rest, "--scenario");
+          const providerName = takeOption(rest, "--provider");
+          const modelId = takeOption(rest, "--model");
+          rejectArgs(rest, USAGE);
+          if (!layer || !scenarioId) throw new CliUsageError("--layer and --scenario are required", USAGE);
+          const planned = planManualLabRun({
+            evidenceLayer: layer,
+            scenarioId,
+            providerName,
+            modelId,
+            config: readConfigDiagnostics().config,
+            configDir,
+          });
+          const record = await enqueueManualLabRun(planned, configDir);
+          if (!record) throw new CliUsageError("manual run enqueue failed", USAGE);
+          printData({ run: record }, wantsJson, [`Manual run ${record.runId} -> ${record.state}`]);
           return;
         }
         default:

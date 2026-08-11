@@ -21,6 +21,8 @@ export interface LiveExecutorOptions {
   resolve?: DnsResolver;
   configDir?: string;
   env?: NodeJS.ProcessEnv;
+  /** Orchestration cancellation — must not produce route incompatibility evidence. */
+  cancelSignal?: AbortSignal;
 }
 
 interface TrustedLiveResultReceipt {
@@ -143,6 +145,11 @@ function pathForProtocol(protocol: string): string {
   return "/responses";
 }
 
+/** Upstream HTTP path for a trusted live-route request (CL-03 / CL-08 production dispatch). */
+export function liveUpstreamRequestPath(protocol: string): string {
+  return pathForProtocol(protocol);
+}
+
 function chatObservation(body: string, status: number): NormalizedObservation {
   const observation = emptyObservation();
   const output: unknown[] = [];
@@ -215,15 +222,33 @@ function normalizeTransportObservation(route: LabRouteContext, response: { statu
   return observation;
 }
 
-async function withTotalTimeout<T>(timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+/** Normalize a pinned provider response into a Lab observation (trusted-route production path). */
+export function normalizeLabLiveTransportObservation(
+  route: LabRouteContext,
+  response: { status: number; body: string },
+): NormalizedObservation {
+  return normalizeTransportObservation(route, response);
+}
+
+async function withTotalTimeout<T>(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+  cancelSignal?: AbortSignal,
+): Promise<T> {
+  if (cancelSignal?.aborted) throw cancelSignal.reason ?? new TransportError("harness_failure", "cancelled");
   const controller = new AbortController();
+  const abortFromCancel = () => controller.abort(cancelSignal?.reason ?? new TransportError("harness_failure", "cancelled"));
+  if (cancelSignal) cancelSignal.addEventListener("abort", abortFromCancel, { once: true });
   const timer = setTimeout(() => controller.abort(new TransportError("total_timeout", "live scenario total timeout")), timeoutMs);
   try {
     return await Promise.race([
       run(controller.signal),
       new Promise<T>((_, reject) => controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true })),
     ]);
-  } finally { clearTimeout(timer); }
+  } finally {
+    clearTimeout(timer);
+    if (cancelSignal) cancelSignal.removeEventListener("abort", abortFromCancel);
+  }
 }
 
 export async function runLiveScenario(caseRecord: CaseRecord, routeContext: LabRouteContext, opts: LiveExecutorOptions = {}): Promise<LiveScenarioRunResult> {
@@ -266,13 +291,13 @@ export async function runLiveScenario(caseRecord: CaseRecord, routeContext: LabR
       if (!isTrustedLabRouteExecutor(opts.routeExecutor)) throw new TransportError("untrusted_route_executor", "untrusted route executor capability");
       executionAuthority = "trusted_route";
       trustedExecutionStarted = true;
-      observation = await withTotalTimeout(limits.totalTimeoutMs, (signal) => opts.routeExecutor!.execute({ routeContext, destination, routeSubject: routeSubject!, scenarioId: activeCase.id, initiatingRequest: activeCase.initiatingRequest?.bytesUtf8, limits, signal, environment }));
+      observation = await withTotalTimeout(limits.totalTimeoutMs, (signal) => opts.routeExecutor!.execute({ routeContext, destination, routeSubject: routeSubject!, scenarioId: activeCase.id, initiatingRequest: activeCase.initiatingRequest?.bytesUtf8, limits, signal, environment }), opts.cancelSignal);
     } else if (opts.transport && activeCase.initiatingRequest) {
       executionAuthority = "test_transport";
       const body = activeCase.initiatingRequest.bytesUtf8;
       const inputBytes = new TextEncoder().encode(body).byteLength;
       enforceSandboxLimits(state, limits, { requests: 1, inputBytes });
-      const response = await withTotalTimeout(limits.totalTimeoutMs, (signal) => opts.transport!.request({ method: "POST", path: pathForProtocol(routeContext.upstreamProtocol), body, signal }));
+      const response = await withTotalTimeout(limits.totalTimeoutMs, (signal) => opts.transport!.request({ method: "POST", path: pathForProtocol(routeContext.upstreamProtocol), body, signal }), opts.cancelSignal);
       if (response.status === 401 || response.status === 403) throw new TransportError("auth_blocked", `HTTP ${response.status}`);
       if (response.status === 429) throw new TransportError("quota_blocked", "HTTP 429");
       if (response.status === 451) throw new TransportError("region_blocked", "HTTP 451");
