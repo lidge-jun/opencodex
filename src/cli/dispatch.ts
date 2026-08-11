@@ -317,8 +317,7 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   "__tray-start": async deps => {
-    await deps.handleTrayProxyStart();
-    return 0;
+    return (await deps.handleTrayProxyStart()) ? 0 : 1;
   },
   "__tray-restart": async deps => {
     await deps.handleTrayProxyRestart();

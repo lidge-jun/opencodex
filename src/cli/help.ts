@@ -53,6 +53,9 @@ Usage:
   ocx observe <sub>           Logs, usage, storage, memory, and debug data
   ocx route <sub>             Routing features (combo, policy)
   ocx logs [filters]          Alias of ocx observe logs
+  ocx usage [--range <7d|30d|all>]  Alias of ocx observe usage
+  ocx storage [--json]        Alias of ocx observe storage
+  ocx memory [--json]         Alias of ocx observe memory
   ocx api-key <sub>           Alias of ocx access key
   ocx access <sub>            External API keys and endpoint information
   ocx export --client <id>    Print a client config wired to the running proxy (7 clients)

@@ -119,8 +119,10 @@ describe("help banner command coverage", () => {
       if (entry.hidden) return false;
       if (aliasNames.has(entry.name)) return false;
       // A command counts as covered when the banner carries its full usage
-      // line or at least its canonical name.
-      return !helpSrc.includes(entry.usage) && !helpSrc.includes(entry.name);
+      // line or its canonical name at the start of an `ocx <name>` banner line.
+      const escaped = entry.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const commandLine = new RegExp(`^\\s*ocx\\s+${escaped}(?:\\s|$)`, "m");
+      return !helpSrc.includes(entry.usage) && !commandLine.test(helpSrc);
     }).map(entry => entry.name);
 
     expect(missing).toEqual([]);
