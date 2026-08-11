@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
+  fsyncSync,
+  linkSync,
   openSync,
   readFileSync,
   renameSync,
@@ -198,25 +200,45 @@ function reclaimDeadStateLock(lockPath: string): boolean {
   }
 }
 
+function cleanupPrivateLockFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch {
+    /* absent or already cleaned */
+  }
+}
+
 function acquireStateLock(configDir?: string): () => void {
   ensureLabDirs(configDir);
   const lockPath = stateLockPath(configDir);
   const deadline = Date.now() + STATE_LOCK_WAIT_MS;
   while (true) {
     const token = randomUUID();
+    const privatePath = `${lockPath}.${process.pid}.${token}.tmp`;
+    let publicationAttempted = false;
     try {
-      const fd = openSync(lockPath, "wx", 0o600);
+      const fd = openSync(privatePath, "wx", 0o600);
       try {
         const meta: StateLockMeta = { pid: process.pid, token };
         writeFileSync(fd, JSON.stringify(meta), { encoding: "utf8" });
+        fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
+
+      // Publish only a fully written metadata inode. A hard-link create is atomic and fails
+      // with EEXIST when another owner already published the canonical lock path.
+      publicationAttempted = true;
+      linkSync(privatePath, lockPath);
+      cleanupPrivateLockFile(privatePath);
       return () => releaseStateLock(lockPath, token);
     } catch (error) {
+      cleanupPrivateLockFile(privatePath);
       const code = error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : undefined;
+      // A UUID-named private file collision is not ownership contention; retry with a new token.
+      if (code === "EEXIST" && !publicationAttempted) continue;
       if (code !== "EEXIST") throw new LabAutomationError("automation state lock failed", "state_lock_failed");
       if (reclaimDeadStateLock(lockPath)) continue;
       if (Date.now() >= deadline) {
