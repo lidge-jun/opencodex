@@ -51,12 +51,19 @@ export interface CodexSqliteHomeDeps {
 export function resolveCodexSqliteHome(deps: CodexSqliteHomeDeps = {}): string {
   const codexHome = deps.codexHome ?? getCodexHome();
   const readConfig = deps.readConfig ?? (path => readFileSync(path, "utf8"));
+  const configPath = join(codexHome, "config.toml");
   let configured = "";
   try {
-    configured = readRootTomlString(readConfig(join(codexHome, "config.toml")), "sqlite_home")?.trim() ?? "";
-  } catch {
-    // Missing/unreadable config has no sqlite_home override; environment and
-    // CODEX_HOME retain their documented precedence below.
+    configured = readRootTomlString(readConfig(configPath), "sqlite_home")?.trim() ?? "";
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      throw new Error(
+        `Codex config could not be read while resolving sqlite_home: ${configPath}`,
+        { cause },
+      );
+    }
+    // A genuinely absent config cannot contain the authoritative root override,
+    // so only ENOENT may continue to the documented environment/home fallback.
   }
   const raw = configured || (deps.env ?? process.env).CODEX_SQLITE_HOME?.trim() || "";
   if (!raw) return codexHome;

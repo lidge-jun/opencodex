@@ -31,7 +31,9 @@ describe("Codex SQLite home resolution", () => {
     expect(resolveCodexSqliteHome({
       codexHome: "/state/codex-home",
       env,
-      readConfig: () => { throw new Error("missing"); },
+      readConfig: () => {
+        throw Object.assign(new Error("missing"), { code: "ENOENT" });
+      },
     })).toBe(resolve("/state/from-env"));
 
     expect(resolveCodexSqliteHome({
@@ -39,6 +41,15 @@ describe("Codex SQLite home resolution", () => {
       env: {},
       readConfig: () => "",
     })).toBe("/state/codex-home");
+  });
+
+  test("fails closed when the authoritative config cannot be read", () => {
+    const readError = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    expect(() => resolveCodexSqliteHome({
+      codexHome: "/state/codex-home",
+      env: { CODEX_SQLITE_HOME: "/state/from-env" },
+      readConfig: () => { throw readError; },
+    })).toThrow("Codex config could not be read while resolving sqlite_home");
   });
 
   test("resolves relative SQLite homes from the current working directory", () => {
