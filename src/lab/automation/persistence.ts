@@ -1,10 +1,10 @@
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
   openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -60,6 +60,7 @@ const RUN_KEYS = new Set([
   "modelId",
 ]);
 const RUN_STATES = new Set(["queued", "running", "completed", "blocked", "failed", "cancelled", "abandoned"]);
+const TERMINAL_RUN_STATES = new Set(["completed", "blocked", "failed", "cancelled", "abandoned"]);
 const RUN_REASONS = new Set([
   "automation_disabled",
   "layer_disabled",
@@ -75,8 +76,12 @@ const RUN_REASONS = new Set([
   "task_background_disabled",
 ]);
 const STATE_LOCK_WAIT_MS = 5_000;
-const STATE_LOCK_STALE_MS = 30_000;
 const LOCK_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+
+interface StateLockMeta {
+  pid: number;
+  token: string;
+}
 
 function assertClosedKeys(
   value: Record<string, unknown>,
@@ -145,34 +150,75 @@ function stateLockPath(configDir?: string): string {
   return `${labAutomationStatePath(configDir)}.lock`;
 }
 
+function readStateLockMeta(lockPath: string): StateLockMeta | null {
+  try {
+    const parsed = JSON.parse(readFileSync(lockPath, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const row = parsed as Record<string, unknown>;
+    if (!Number.isSafeInteger(row.pid) || (row.pid as number) <= 0) return null;
+    if (typeof row.token !== "string" || row.token.length < 16 || row.token.length > 128) return null;
+    return { pid: row.pid as number, token: row.token };
+  } catch {
+    return null;
+  }
+}
+
+function pidDefinitelyDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error
+      ? String((error as { code?: unknown }).code)
+      : undefined;
+    return code === "ESRCH";
+  }
+}
+
+function releaseStateLock(lockPath: string, token: string): void {
+  try {
+    if (readStateLockMeta(lockPath)?.token === token) unlinkSync(lockPath);
+  } catch {
+    /* already released/cleaned */
+  }
+}
+
+function reclaimDeadStateLock(lockPath: string): boolean {
+  const observed = readStateLockMeta(lockPath);
+  if (!observed || !pidDefinitelyDead(observed.pid)) return false;
+  // Re-check ownership immediately before deletion. A live/paused process is never reclaimed;
+  // token-checked release also prevents an old owner from deleting a successor's lock.
+  const current = readStateLockMeta(lockPath);
+  if (!current || current.pid !== observed.pid || current.token !== observed.token) return false;
+  try {
+    unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function acquireStateLock(configDir?: string): () => void {
   ensureLabDirs(configDir);
   const lockPath = stateLockPath(configDir);
   const deadline = Date.now() + STATE_LOCK_WAIT_MS;
   while (true) {
+    const token = randomUUID();
     try {
       const fd = openSync(lockPath, "wx", 0o600);
       try {
-        writeFileSync(fd, `${process.pid}:${Date.now()}`, { encoding: "utf8" });
+        const meta: StateLockMeta = { pid: process.pid, token };
+        writeFileSync(fd, JSON.stringify(meta), { encoding: "utf8" });
       } finally {
         closeSync(fd);
       }
-      return () => {
-        try { unlinkSync(lockPath); } catch { /* already released/cleaned */ }
-      };
+      return () => releaseStateLock(lockPath, token);
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)
         : undefined;
       if (code !== "EEXIST") throw new LabAutomationError("automation state lock failed", "state_lock_failed");
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > STATE_LOCK_STALE_MS) {
-          unlinkSync(lockPath);
-          continue;
-        }
-      } catch {
-        continue;
-      }
+      if (reclaimDeadStateLock(lockPath)) continue;
       if (Date.now() >= deadline) {
         throw new LabAutomationError("automation state is busy", "state_lock_busy");
       }
@@ -195,7 +241,7 @@ export function saveLabAutomationPolicy(policy: LabAutomationPolicyV1, configDir
   atomicWriteJson(labAutomationPolicyPath(configDir), normalized);
 }
 
-function normalizeRoutes(raw: unknown): LabAutomationRoutesV1 {
+export function normalizeLabAutomationRoutesV1(raw: unknown): LabAutomationRoutesV1 {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new LabAutomationError("automation routes must be an object", "invalid_routes");
   }
@@ -231,12 +277,12 @@ export function loadLabAutomationRoutes(configDir?: string): LabAutomationRoutes
   ensureLabDirs(configDir);
   const raw = readJsonFile(labAutomationRoutesPath(configDir), "invalid_routes");
   if (raw === undefined) return defaultLabAutomationRoutesV1();
-  return normalizeRoutes(raw);
+  return normalizeLabAutomationRoutesV1(raw);
 }
 
 export function saveLabAutomationRoutes(routes: LabAutomationRoutesV1, configDir?: string): void {
   ensureLabDirs(configDir);
-  atomicWriteJson(labAutomationRoutesPath(configDir), normalizeRoutes(routes));
+  atomicWriteJson(labAutomationRoutesPath(configDir), normalizeLabAutomationRoutesV1(routes));
 }
 
 function optionalTimestamp(row: Record<string, unknown>, key: "startedAt" | "completedAt", index: number): number | undefined {
@@ -283,9 +329,12 @@ function normalizeRunRecord(raw: unknown, index: number): LabAutomationRunRecord
   const completedAt = optionalTimestamp(row, "completedAt", index);
   if (updatedAt < createdAt) throw new LabAutomationError(`updatedAt precedes createdAt at ${index}`, "invalid_state");
   if (startedAt !== undefined && startedAt < createdAt) throw new LabAutomationError(`startedAt precedes createdAt at ${index}`, "invalid_state");
+  if (completedAt !== undefined && completedAt < createdAt) throw new LabAutomationError(`completedAt precedes createdAt at ${index}`, "invalid_state");
   if (completedAt !== undefined && startedAt !== undefined && completedAt < startedAt) {
     throw new LabAutomationError(`completedAt precedes startedAt at ${index}`, "invalid_state");
   }
+  if (startedAt !== undefined && updatedAt < startedAt) throw new LabAutomationError(`updatedAt precedes startedAt at ${index}`, "invalid_state");
+  if (completedAt !== undefined && updatedAt < completedAt) throw new LabAutomationError(`updatedAt precedes completedAt at ${index}`, "invalid_state");
   const terminalCode = row.terminalCode === undefined
     ? undefined
     : assertBoundedString(row.terminalCode, `terminalCode at ${index}`, "invalid_state", 256);
@@ -295,6 +344,17 @@ function normalizeRunRecord(raw: unknown, index: number): LabAutomationRunRecord
   const modelId = row.modelId === undefined
     ? undefined
     : assertBoundedString(row.modelId, `modelId at ${index}`, "invalid_state", 512);
+
+  if (state === "queued" && (startedAt !== undefined || completedAt !== undefined || terminalCode !== undefined)) {
+    throw new LabAutomationError(`queued run has lifecycle terminal fields at ${index}`, "invalid_state");
+  }
+  if (state === "running" && (completedAt !== undefined || terminalCode !== undefined)) {
+    throw new LabAutomationError(`running run has terminal fields at ${index}`, "invalid_state");
+  }
+  if (TERMINAL_RUN_STATES.has(state) && completedAt === undefined) {
+    throw new LabAutomationError(`terminal run missing completedAt at ${index}`, "invalid_state");
+  }
+
   return {
     runId,
     runKey,
@@ -321,6 +381,18 @@ function normalizeRunRecord(raw: unknown, index: number): LabAutomationRunRecord
   };
 }
 
+function assertStateRunInvariants(runs: LabAutomationRunRecordV1[]): void {
+  const runIds = new Set<string>();
+  const activeRunKeys = new Set<string>();
+  for (const run of runs) {
+    if (runIds.has(run.runId)) throw new LabAutomationError(`duplicate runId ${run.runId}`, "invalid_state");
+    runIds.add(run.runId);
+    if (run.state !== "queued" && run.state !== "running") continue;
+    if (activeRunKeys.has(run.runKey)) throw new LabAutomationError(`duplicate active runKey ${run.runKey}`, "invalid_state");
+    activeRunKeys.add(run.runKey);
+  }
+}
+
 function normalizeState(raw: unknown): LabAutomationStateV1 {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new LabAutomationError("automation state must be an object", "invalid_state");
@@ -333,6 +405,7 @@ function normalizeState(raw: unknown): LabAutomationStateV1 {
     throw new LabAutomationError("too many persisted runs", "invalid_state");
   }
   const runs = obj.runs.map((row, index) => normalizeRunRecord(row, index));
+  assertStateRunInvariants(runs);
   const cooldownUntilByKey: Record<string, number> = {};
   if (!obj.cooldownUntilByKey || typeof obj.cooldownUntilByKey !== "object" || Array.isArray(obj.cooldownUntilByKey)) {
     throw new LabAutomationError("invalid cooldownUntilByKey", "invalid_state");
