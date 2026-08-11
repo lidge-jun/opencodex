@@ -181,20 +181,21 @@ describe("CL-08 CodeRabbit regressions", () => {
     }
   });
 
-  test("operator cancellation gives scheduled work a positive backoff", () => {
+  test("operator cancellation gives scheduled work a positive backoff even when failure cooldown is zero", () => {
     const home = tempHome();
     const policy = {
       ...defaultLabAutomationPolicyV1(),
       enabled: true,
       layers: { protocolConformance: true, liveRouteCompatibility: false, taskEffectiveness: false },
-      failureCooldownMs: 5_000,
+      failureCooldownMs: 0,
     };
     saveLabAutomationPolicy(policy, home);
     saveLabAutomationState({ ...defaultLabAutomationStateV1(), runs: [queuedRun()] }, home);
+    const before = Date.now();
     expect(cancelLabAutomationRun("run-1", home)).toBe(true);
     const state = loadLabAutomationState(home);
     expect(state.runs[0]?.state).toBe("cancelled");
-    expect(state.cooldownUntilByKey["key-1"]).toBeGreaterThan(Date.now());
+    expect(state.cooldownUntilByKey["key-1"]).toBeGreaterThanOrEqual(before + LAB_AUTOMATION_HARD_MAX.schedulerTickMs);
   });
 
   test("management cancel rejects malformed percent encoding", async () => {
