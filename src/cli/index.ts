@@ -35,11 +35,12 @@ import {
 } from "./tray-proxy";
 import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
-import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
+import { hasHelpFlag, printSubcommandUsage, printUsage } from "./help";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import { createReadinessGate } from "../server/readiness";
-import { parseReadyArgs, runReady, type ReadyArgs } from "./ready";
+import { runReady, type ReadyArgs } from "./ready";
+import { runCli } from "./root";
 import { ProxyOwnershipRefusedError, stopProxy } from "../lib/process-control";
 import { loadServiceTokenFromFile } from "../lib/service-secrets";
 import { diagnoseService, isServiceOwnershipError, serviceCommand, serviceEnvironmentOwnedHere, serviceStartableFromTray, serviceStatusSummary, stopServiceIfInstalled, uninstallServiceIfInstalled } from "../service";
@@ -50,7 +51,6 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
-import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
@@ -65,43 +65,15 @@ import { createLocalAttestationSecret } from "../lib/local-management-attestatio
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
 initializeNodeLauncherContext();
-const args = process.argv.slice(2);
-const command = args[0];
 
-if (command === "--version" || command === "-v" || command === "version") {
-  printVersion();
-  process.exit(0);
-}
-
-if (command === undefined || command === "help" || command === "--help" || command === "-h") {
-  if (command === "help" && args[1]) printSubcommandUsage(args[1]);
-  else printUsage();
-  process.exit(0);
-}
-
-if (command !== undefined && command !== "help" && hasHelpFlag(args.slice(1))) {
-  printSubcommandUsage(command);
-  process.exit(0);
-}
-
-// P1: pre-parse `ocx ready` and reject invalid arguments with exit 64 BEFORE
-// maybeAutoRestoreCodexShim (or any discovery/probe/filesystem-capable global
-// preflight) runs. `ready --help` / `help ready` already exited above, so this
-// only sees ready args without a help flag. Valid args are stashed so the
-// switch dispatch can call runReady without a second parse.
-let readyArgs: ReadyArgs | undefined;
-if (command === "ready") {
-  const parsed = parseReadyArgs(args.slice(1));
-  if (!parsed.ok) {
-    console.error("Usage: ocx ready [--json] [--wait [--timeout <seconds>]]");
-    console.error("  --timeout requires --wait; <seconds> must be a positive integer (1..300).");
-    console.error("  Default wait timeout is 45 seconds.");
-    process.exit(parsed.code);
-  }
-  readyArgs = parsed.args;
-}
-
-maybeAutoRestoreCodexShim(command, args);
+// Head: version/help early exits, `ready` pre-parse (exit 64 before any
+// preflight), and the bounded Codex-shim auto-restore preflight live in
+// src/cli/root.ts (Phase 1 of the CLI deepening). runCli exits for
+// version/help and returns the dispatchable head otherwise; the switch below
+// owns command dispatch.
+const head = await runCli(process.argv.slice(2));
+const args = head.args;
+const command = head.command;
 
 function parsePortOption(): number | undefined {
   if (args.length === 1) return undefined;
@@ -1258,14 +1230,17 @@ switch (command) {
     }
     process.exit(live ? 0 : 1);
   }
-  case "ready":
+  case "ready": {
     // Fail-closed impossible-state guard: readyArgs is populated by the
-    // preparse block before maybeAutoRestoreCodexShim, so reaching here
-    // without it means dispatch diverged. Refuse with code 64 and perform
-    // NO I/O (no discovery/probe). process.exit is `never`, narrowing below.
+    // preparse block in src/cli/root.ts before maybeAutoRestoreCodexShim, so
+    // reaching here without it means dispatch diverged. Refuse with code 64
+    // and perform NO I/O (no discovery/probe). process.exit is `never`,
+    // narrowing below.
+    const readyArgs = head.readyArgs;
     if (!readyArgs) process.exit(64);
     await handleReady(readyArgs);
     break;
+  }
     case "provider": {
     const { handleProviderCommand } = await import("./provider");
     await handleProviderCommand(args.slice(1));
