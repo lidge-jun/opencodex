@@ -45,7 +45,7 @@ opencodex --version
 ### 釋出渠道
 
 穩定的 `latest` 渠道已經包含 ChatGPT、OpenAI API key、OpenRouter 以及實驗性 Cursor 路由所需的
-GPT-5.6 Sol/Terra/Luna 目錄資訊，但這些條目本身不會授予上游模型許可權。只有在測試尚未正式釋出的
+GPT-5.6 Sol/Terra/Luna 目錄資訊，但這些條目本身不會授予上游模型權限。只有在測試尚未正式釋出的
 opencodex 建置時，才需要使用 preview 渠道：
 
 ```bash

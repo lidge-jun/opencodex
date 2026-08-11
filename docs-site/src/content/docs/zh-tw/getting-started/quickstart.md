@@ -27,7 +27,7 @@ ocx init
 
 :::note[GPT-5.6 灰度釋出條目]
 穩定版 v2.7.1 會為 ChatGPT 直通、OpenAI API key、OpenRouter 和實驗性 Cursor adapter 預置
-GPT-5.6 Sol/Terra/Luna。只有上游帳號具備許可權時才能實際呼叫。OpenAI API key 與 OpenRouter
+GPT-5.6 Sol/Terra/Luna。只有上游帳號具備權限時才能實際呼叫。OpenAI API key 與 OpenRouter
 預設會宣告 372,000 token 的可用 context window；Cursor 則使用自身 adapter 提供的後設資料。
 :::
 
@@ -69,7 +69,7 @@ codex -m "anthropic/claude-opus-5" "Explain this stack trace"
 codex -m "ollama-cloud/glm-5.2"      "Write a SQL migration"
 ```
 
-如果你擁有 GPT-5.6 許可權，原生 ChatGPT 路徑使用裸模型名，API key 和 OpenRouter 路徑使用顯式
+如果你擁有 GPT-5.6 權限，原生 ChatGPT 路徑使用裸模型名，API key 和 OpenRouter 路徑使用顯式
 `provider/model` 形式：
 
 ```bash
@@ -96,7 +96,7 @@ ocx logout xai
 
 預設 OpenAI 路徑**無需 key** —— 它會直接轉發你現有的 `codex login` 憑證。若要使用 OpenAI
 API key，請新增 `openai-apikey` provider。該預設包含 `gpt-5.6-sol`、`gpt-5.6-terra`、
-`gpt-5.6-luna`，但你的 API key 必須擁有實際使用許可權
+`gpt-5.6-luna`，但你的 API key 必須擁有實際使用權限
 (參見 [Provider](/zh-tw/guides/providers/))。
 
 ## 停止與恢復

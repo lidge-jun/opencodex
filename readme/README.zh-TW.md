@@ -1,5 +1,5 @@
 <h3 align="center">make codex open!</h3>
-<p align="center"><b>適用於 OpenAI Codex 與 Claude Code 的通用 provider 代理</b><br>
+<p align="center"><b>適用於 OpenAI Codex 與 Claude Code 的通用供應商代理</b><br>
 兩條命令，Codex 和 Claude Code 就能用任何 LLM 跑起來。</p>
 
 <p align="center">
@@ -25,7 +25,7 @@ ocx start        # 代理 + 儀表板: localhost:10100
 </p>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>繁體中文</b> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · 📖 <a href="https://opencodex.me/zh-tw/"><b>完整文件 →</b></a>
+  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <b>繁體中文</b> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/zh-tw/"><b>完整文件 →</b></a>
 </p>
 
 <p align="center">
@@ -232,7 +232,7 @@ opencodex 保持兩種獨立行為：
 | Ollama / vLLM / LM Studio（本機） | `openai-chat` | key（通常留空） |
 | 任意 OpenAI 相容端點 | `openai-chat` | key |
 
-此外還有 DeepSeek、Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、Qwen Cloud、騰訊雲 Coding Plan、SiliconFlow 等等。完整清單可用 `ocx init` 檢視，或見 [provider 文件](https://opencodex.me/zh-tw/reference/configuration/)。
+此外還有 DeepSeek、Groq、OpenRouter、Together、Fireworks、Cerebras、Mistral、Hugging Face、NVIDIA NIM、MiniMax、Qwen Cloud、騰訊雲 Coding Plan、SiliconFlow 等等。完整清單可用 `ocx init` 檢視，或見[供應商文件](https://opencodex.me/zh-tw/reference/configuration/)。
 
 ## CLI
 

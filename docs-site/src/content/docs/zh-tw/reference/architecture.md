@@ -9,7 +9,7 @@ opencodex 執行在單個 Bun 程序中。請求以 OpenAI Responses 格式進�
 
 ## 模組圖
 
-```
+```text
 src/
 ├── cli/                # ocx command dispatch, init, status, provider commands
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge

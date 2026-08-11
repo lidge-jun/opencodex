@@ -117,6 +117,10 @@ ocx status --json
 
 對即時代理進行身分檢查。人類可讀輸出回報 PID/連接埠；`--json` 輸出 `{ok, pid, port}`。此指令僅在健康時離開 0，否則離開 1，使其適合服務探測。
 
+### `ocx ready [--json] [--wait [--timeout <seconds>]]`
+
+透過免認證的 `GET /readyz` 端點檢查同步後的就緒狀態。就緒時回傳 `200`，或 `pending` 與終端 `failed` 時回傳附帶 `Retry-After: 1` 的 `503`。其淨化的 HTTP 身分為 `{service, version, uptime, pid, port, status}`。沒有 `/readyz` 的舊代理會以 `unreachable` 方式 fail closed；`/healthz` 是分開的存活檢查，而非就緒檢查。此指令預設執行一次探測；`--wait` 輪詢直到就緒或逾時，但在觀察到終端 `failed` 狀態時立即退出。預設逾時為 45 秒；`--timeout <seconds>` 需要 `--wait`，接受 1–300 的正整數秒。CLI JSON 輸出 `{ready, status, pid, port}`，其中 `status` 為 `ready`、`pending`、`failed` 或 `unreachable`。離開碼為：就緒 0；未就緒、pending、failed、逾時或 unreachable 1；無效引數 64。
+
 ### `ocx doctor`
 
 執行唯讀環境與連線診斷：狀態路徑與檔案系統類型、WSL 雙重安裝、代理環境／設定、ChatGPT 可達性、Codex plugin 與專案設定警告，以及待處理的歷史遷移。Codex app-home 定向區段也會偵測窄義的 Windows Orca runtime-home 不符，並在適用時說明服務遷移。此診斷顯示的路徑會遮罩 OS 使用者名稱。Doctor 印出修復提示但不套用它們。
@@ -137,14 +141,15 @@ ocx status --json
 
 ## 背景服務
 
-### `ocx service [install|start|stop|status|uninstall|remove]`
+### `ocx service [install|repair|start|stop|status|uninstall|remove]`
 
 將 opencodex 作為登入管理的背景服務執行（macOS **launchd**、Linux **systemd user unit**、Windows **Task Scheduler**），在登入時自動啟動並在崩潰時自動重啟。服務執行時設定 `OCX_SERVICE=1`，使重啟不會折騰 Codex 設定。
 
 | 子指令 | 動作 |
 | --- | --- |
 | 無 | 建立／更新並啟動服務。 |
-| `install` | 建立並啟動服務。 |
+| `install` | 建立並啟動服務。註冊它，在 Windows 上需要提高權限。 |
+| `repair` | 就地重新整理已安裝的服務並重啟它，而不重新註冊。 |
 | `start` | 啟動已安裝的服務。 |
 | `stop` | 停止服務並還原原生 Codex。 |
 | `status` | 回報服務與代理診斷及日誌路徑。 |
@@ -154,8 +159,24 @@ ocx status --json
 ```bash
 ocx service
 ocx service install
+ocx service repair
 ocx service status
 ocx service uninstall
+```
+
+`install`、`start` 與 `repair` 會確認代理實際在已安裝服務內建的連接埠上回應，之後才回報成功——在三種平台上皆如此。它們等待最多 20 秒，然後印出伺服連接埠：
+
+```
+✅ opencodex service installed and serving on port 10100.
+```
+
+若沒有回應，它們會發出警告並**以非零離開**：
+
+```
+⚠️  Service installed, but no proxy answered on port 10100 within 20s.
+   The manager registered the job; that is not the same as serving.
+   Log:       ~/.opencodex/service.log
+   Meanwhile: ocx start   (serves in the foreground)
 ```
 
 在 Windows 上，`ocx service status` 將 Task Scheduler 註冊與身分驗證過的 OpenCodex 代理可達性分開回報。它不印出本地化的 `schtasks` 表格，使摘要在各 Windows code page 中保持可讀。

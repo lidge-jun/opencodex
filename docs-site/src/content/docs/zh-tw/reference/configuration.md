@@ -123,7 +123,7 @@ ocx start
 同一變數，再執行 `ocx service install`，讓 launchd、systemd 或 Task Scheduler 收到 token。
 用戶端必須在每個請求的 `x-opencodex-api-key` header 中提供 token：
 
-```
+```text
 x-opencodex-api-key: your-secret-token
 ```
 

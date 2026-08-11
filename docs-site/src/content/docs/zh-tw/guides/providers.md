@@ -23,6 +23,16 @@ shipped v1 設定自動遷移到 marker 2 的單一選項行。原設定只保�
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`；恢復命令：
 `cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json`。
 
+### Providers 總覽的池容量
+
+對於池模式的 Codex 登入，Providers 總覽顯示池已使用容量的設定權重估計，而非將一個任意的帳號呈現為供應商總量。同一列還顯示目前有效帳號的原始配額百分比，因此你可以區分池估計與新請求會使用的帳號。
+
+當重置資訊可用時，總覽以 `+N% pool capacity` 顯示下一個重置時間與該重置預期恢復的容量。**Incomplete coverage**（不完整覆蓋）表示一個或多個池帳號無法安全貢獻到估計，例如其 plan 或配額未知、讀取過時，或帳號已暫停或需要重新認證。
+
+**Partial window coverage**（部分視窗覆蓋）警告表示某些被包含的帳號回報了一個配額視窗但沒有回報另一個。總覽將這些視窗分開，並將每個受影響的視窗標記為不完整，而非將缺失讀取視為該視窗的用量。
+
+此估計僅供顯示。它不變更帳號選擇、session 親和性、自動切換、冷卻或任何其他路由決策。請使用 [Codex Auth 帳號池](/zh-tw/guides/web-dashboard/#codex-auth-and-account-pools)查看個別帳號狀態與路由控制。
+
 ## 認證模式
 
 供應商設定支援三種 `authMode`，預設值為 `key`。內建登入檔還會單獨標記本機預設；這類預設通常會
@@ -87,9 +97,59 @@ OAuth 憑證中帶有穩定帳號 id 或郵箱的供應商可以儲存多個登�
 目前 active slot；`chatgpt` 始終只有一個 slot，因為 Codex 帳號池使用獨立儲存。權杖仍儲存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脫敏後的 metadata。
 
+### Cockpit Tools Antigravity 匯入
+
+目前（v1）OpenCodex 僅為 `google-antigravity` 供應商匯入 **Cockpit Tools Antigravity** JSON 匯出。在 Providers 儀表板中，從該供應商的 Accounts 分頁選擇本機 JSON 檔案。儀表板不會顯示檔案內容或憑證值；它僅回報已匯入、已更新、失敗與不支援的計數。其他 Cockpit 供應商在 v1 中被拒絕。
+
+CLI 僅接受檔案或標準輸入的匯出——絕不要把它貼進指令參數：
+
+```bash
+ocx account import google-antigravity --format cockpit-tools --file <path> [--json]
+cat accounts.json | ocx account import google-antigravity --format cockpit-tools --stdin [--json]
+```
+
+內嵌 JSON 與額外的位置參數會被拒絕。請將匯出檔案保持私密，並在匯入後安全地刪除或存放。
+
+### OAuth 可靠度
+
+opencodex 協調 token 重新整理與 Codex 池路由，使並行請求不會競爭憑證存放。這是可靠度與診斷工作——它**不**保證免受供應商強制執行、速率限制或帳號動作的保護。
+
+**重新整理協調。** 在路由呼叫前，過期的 access token 每個 `(provider, account)` 重新整理一次：
+
+1. In-process single-flight——並行呼叫者共享一個重新整理 promise。
+2. Per-account 檔案鎖——跨行程寫入器在同一帳號上序列化。
+3. Generation CAS——僅在已儲存憑證的 generation 仍相符時持久化；較新的寫入器勝出，較舊的重新整理結果不能覆寫它。
+
+終端重新整理失敗會將帳號標記為需要重新認證，而非無限重試。
+
+**冷卻（Codex 池）。** 上游 `429`／配額回應會從 `Retry-After`、配額 `reset` 標頭（有上限）或短預設 backoff 設定硬性冷卻。處於明確 `Retry-After` 冷卻的帳號不會被提前探測；reset 衍生的冷卻可能收到有節奏的探測租約，以便在不淹沒供應商的情況下偵測復原。Reset 衍生的原生模型冷卻也保留已知的獨立配額群組：`gpt-5.3-codex-spark` 不會阻止同一帳號嘗試共享的 GPT-5.6 Terra/Luna 配額，而該共享群組中的模型仍會互相保護。明確 `Retry-After` 與預設冷卻恆為帳號範圍。
+
+**Session 親和性。** Codex 執行緒→帳號親和性是行程本地的（僅記憶體；不會跨代理重啟持久化）。在憑證失敗（`401`／`403`）時，帳號被隔離等待重新認證，並清除該帳號的親和性。在 `429` 時，帳號進入冷卻、親和性被清除，池選擇可能輪換——執行緒不會被 pin 在速率限制回應上。
+
+**Codex 用戶端中繼資料。** ChatGPT forward 路徑透傳策展的 `FORWARD_HEADERS` 允許清單（authorization、`chatgpt-account-id`、originator、session/thread id 與相關 Codex 標頭——見 [Adapter](/zh-tw/reference/adapters/)）。池模式僅覆寫 auth 與 `chatgpt-account-id` 以符合所選憑證。opencodex 在呼叫者未發送時**不會**偽造官方用戶端身分（例如 `originator`、session 或 thread 標頭）。
+
+### Kiro 憑證匯入
+
+Kiro 登入期待 Kiro CLI：在 Unix 上以 `curl -fsSL https://cli.kiro.dev/install | bash` 安裝；在 Windows PowerShell 上使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；然後以 `kiro-cli login` 登入。沒有 `kiro-cli` session 時，`ocx login kiro` 後退到貼上的 access token 或 `KIRO_ACCESS_TOKEN` 環境變數。
+
+`ocx login kiro` 匯入路徑搜尋平台 Kiro CLI 存放並以唯讀方式開啟 SQLite 資料庫。兩個環境變數使來源與 token 列選擇明確：
+
+- `KIROCLI_DB_PATH` 選擇非標準的 Kiro CLI SQLite 資料庫。該路徑必須已存在；在此匯入路徑中，opencodex 不會建立或修改資料庫、WAL 或 SHM 檔案。
+- `KIROCLI_TOKEN_KEY` 在資料庫包含多個其他方面模糊的 token 列時選擇精確的 `auth_kv` token key。缺失選擇會使登入失敗而非猜測。
+
+在 Windows 上，匯入會尋找 `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`。強制／新增帳號登入還需要本機 CLI 二進位檔：opencodex 先使用 `PATH`，然後後退到 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` 與 `C:\Program Files\Kiro-Cli\kiro-cli.exe`。
+
+成功匯入後，opencodex 將匯入的憑證持久化到 `~/.opencodex/auth.json`。
+
+請將這些變數與所選資料庫保持私密。不要將資料庫檔案或原始登入診斷附加到 bug 報告。
+
+**Add account**（新增帳號）是獨立的寫入流程：它快照目前 session、登出 `kiro-cli` 並匯入新的瀏覽器登入。若登入被取消或失敗（包含在 OpenCodex 持久化憑證期間），復原會在發布先前 session 快照前替換 Kiro CLI 資料庫並移除其目前的 WAL、SHM 與 journal sidecar。
+
+由於該復原只能從快照進行，**Add account** 在 session 存放存在但無法被擷取（不可讀檔案、schema 不符或模糊的 token 選擇）、`KIROCLI_DB_PATH`／`KIRO_CLI_DB_FILE` 將匯入讀取重定向離開即時 CLI 存放，或既有主 CLI 資料庫沒有可識別 token 列時，拒絕登出 `kiro-cli`。請在一般 `kiro-cli` 資料路徑下修復或移除不可讀的資料庫、取消設定那些匯入選擇器後重試。從沒有既有 `kiro-cli` session 的機器登入不受影響。
+
 ## 3. API 金鑰目錄
 
-opencodex v2.7.1 內建 50 個預設：40 個金鑰預設、6 個 OAuth 預設、3 個本機預設，以及預設的
+opencodex 內建 79 個預設：67 個金鑰預設、8 個 OAuth 預設、3 個本機預設，以及預設的
 ChatGPT 轉發預設。儀表板的 **Add provider** 選擇器會開啟金鑰供應商的儀表板，驗證並儲存金鑰。
 主要條目包括：
 
@@ -125,6 +185,25 @@ ChatGPT 轉發預設。儀表板的 **Add provider** 選擇器會開啟金鑰供
 
 > **騰訊雲 Coding Plan 使用限制：**騰訊將此訂閱限定為互動式程式設計工具使用。禁止通用 API
 > 自動化、自定義應用後端和非互動式批次呼叫；違規使用可能導致套餐金鑰被停用。
+
+### A6API 信用額度
+
+使用 `authMode: "key"` 與標準 `https://api.a6api.com` 或 `https://api.a6api.com/v1` base URL 的自訂 `openai-chat` 供應商，會在儀表板與 `ocx account refresh <provider>` 中收到 A6API 信用額度計量表。供應商名稱任意；偵測使用標準 HTTPS 端點。計量表使用帳號的硬性信用上限將 A6API token 單位轉換為 USD，並顯示已消耗百分比與剩餘信用。Token 到期不會顯示為配額重置，因為到期不代表信用會補充。
+
+```json
+{
+  "providers": {
+    "my-a6": {
+      "adapter": "openai-chat",
+      "authMode": "key",
+      "baseUrl": "https://api.a6api.com/v1",
+      "apiKey": "${A6API_API_KEY}"
+    }
+  }
+}
+```
+
+配額探測僅向標準 A6API 主機發送現用金鑰並拒絕重新導向。格式錯誤、負數或內部不一致的計費總額不產生報告，而非誤導的條。
 
 ### 多個 API 金鑰
 
@@ -167,7 +246,7 @@ GPT-5.6 Sol/Terra/Luna 會預置在供應商的回退列表中，因此即使即
 
 Cursor 作為單獨的實驗性 adapter 進行跟蹤。`adapter: "cursor"` 會作為實驗性本機設定出現在
 `ocx init` 和 dashboard Add Provider picker 中，並儲存 Cursor 的靜態回退模型目錄 metadata。設定
-Cursor access token 後，opencodex 會使用 Cursor live HTTP/2 transport。v2.7.1 回退列表包含上下文為
+Cursor access token 後，opencodex 會使用 Cursor live HTTP/2 transport。回退列表包含上下文為
 1M 的 `gpt-5.6-sol` / `terra` / `luna`，以及上下文為 500K 的
 `grok-4.5` / `grok-4.5-fast`；最終顯示哪些模型由帳號的即時發現結果決定。Cursor 伺服器直接發起的
 native read/write/delete/ls/grep/shell/fetch 執行預設停用，因為它會繞過 Codex 的 approval 和
@@ -196,3 +275,9 @@ Ollama Cloud 是託管（而非本機）的 Ollama，在 `https://ollama.com/v1`
 ## 任意 OpenAI 相容端點
 
 如果某個供應商使用 Chat Completions，`openai-chat` adapter 即可處理它——在儀表板中選擇 **Custom**，或在 `ocx init` 中選擇 `custom` 並輸入基礎 URL。每個供應商欄位（`headers`、`noReasoningModels`、`noVisionModels`、`models`……）請參見 [設定參考](/zh-tw/reference/configuration/)。
+
+## Providers 總覽的速率限制
+
+Providers 總覽的 **Rate limits**（速率限制）區段在存在時，顯示從每個供應商自身的使用量／計費端點重新整理的即時使用量條。這些條顯示一個視窗（5 小時、週、月或供應商專屬）中已消耗的量。
+
+具有即時探測的供應商：OpenAI/Codex、Anthropic、xAI、Cursor、Kimi、Google Antigravity、OpenRouter、DeepSeek、ClinePass、Z.AI、MiniMax、Moonshot、Venice、Synthetic、DeepInfra、Neuralwatt，以及任何 a6api 支援的自訂供應商。

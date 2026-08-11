@@ -80,7 +80,7 @@ GPT-5.6，以便提供每個模型真實的身份和後設資料，而不是套�
 固定的 GPT-5.6 條目會保留精確的上游 reasoning 階梯。Sol 和 Terra 從 `low` 到 `ultra`，Luna
 最高到 `max`。Sol 預設使用 `low`，Terra 和 Luna 預設使用 `medium`。`ultra` 是用戶端側的
 “最大 reasoning + 主動委派”選項，到達後端時會轉換為 `max`。模型出現在選擇器中只表示目錄已經
-準備好；關聯的帳號或 API key 仍需具備該模型的實際許可權。
+準備好；關聯的帳號或 API key 仍需具備該模型的實際權限。
 
 ## 原生與路由模型開關
 
