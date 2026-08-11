@@ -41,6 +41,31 @@ export interface CodexSqliteHomeDeps {
   readConfig?: (path: string) => string;
 }
 
+type RootTomlStringState =
+  | { kind: "absent" }
+  | { kind: "value"; value: string }
+  | { kind: "invalid" };
+
+/**
+ * Parse the authoritative SQLite setting without changing the tolerant helper
+ * used by injection/catalog readers. History ownership must distinguish a
+ * missing key from a present value that Codex cannot interpret as a path.
+ */
+function readAuthoritativeRootTomlString(content: string, key: string): RootTomlStringState {
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(content);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "invalid" };
+  const root = parsed as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(root, key)) return { kind: "absent" };
+  const value = root[key];
+  if (typeof value !== "string" || value.trim() === "") return { kind: "invalid" };
+  return { kind: "value", value: value.trim() };
+}
+
 /**
  * Resolve Codex's SQLite state root at call time.
  *
@@ -52,9 +77,9 @@ export function resolveCodexSqliteHome(deps: CodexSqliteHomeDeps = {}): string {
   const codexHome = deps.codexHome ?? getCodexHome();
   const readConfig = deps.readConfig ?? (path => readFileSync(path, "utf8"));
   const configPath = join(codexHome, "config.toml");
-  let configured = "";
+  let configured: RootTomlStringState = { kind: "absent" };
   try {
-    configured = readRootTomlString(readConfig(configPath), "sqlite_home")?.trim() ?? "";
+    configured = readAuthoritativeRootTomlString(readConfig(configPath), "sqlite_home");
   } catch (cause) {
     if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
       throw new Error(
@@ -65,7 +90,12 @@ export function resolveCodexSqliteHome(deps: CodexSqliteHomeDeps = {}): string {
     // A genuinely absent config cannot contain the authoritative root override,
     // so only ENOENT may continue to the documented environment/home fallback.
   }
-  const raw = configured || (deps.env ?? process.env).CODEX_SQLITE_HOME?.trim() || "";
+  if (configured.kind === "invalid") {
+    throw new Error(`Codex config has an invalid sqlite_home setting: ${configPath}`);
+  }
+  const raw = configured.kind === "value"
+    ? configured.value
+    : (deps.env ?? process.env).CODEX_SQLITE_HOME?.trim() || "";
   if (!raw) return codexHome;
   const expanded = expandUserPath(raw);
   return isAbsolute(expanded)

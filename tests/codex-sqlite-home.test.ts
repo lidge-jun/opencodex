@@ -52,6 +52,29 @@ describe("Codex SQLite home resolution", () => {
     })).toThrow("Codex config could not be read while resolving sqlite_home");
   });
 
+  test("fails closed when sqlite_home is present but invalid", () => {
+    for (const config of [
+      "sqlite_home = 123\n",
+      "sqlite_home = [\"/state/a\"]\n",
+      "sqlite_home = \"\"\n",
+      "sqlite_home = \"unterminated\n",
+    ]) {
+      expect(() => resolveCodexSqliteHome({
+        codexHome: "/state/codex-home",
+        env: { CODEX_SQLITE_HOME: "/state/from-env" },
+        readConfig: () => config,
+      })).toThrow("Codex config has an invalid sqlite_home setting");
+    }
+  });
+
+  test("accepts a valid quoted root sqlite_home key", () => {
+    expect(resolveCodexSqliteHome({
+      codexHome: "/state/codex-home",
+      env: { CODEX_SQLITE_HOME: "/state/from-env" },
+      readConfig: () => '"sqlite_home" = "/state/from-quoted-key"\n',
+    })).toBe(resolve("/state/from-quoted-key"));
+  });
+
   test("resolves relative SQLite homes from the current working directory", () => {
     const deps = {
       codexHome: "/state/codex-home",

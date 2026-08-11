@@ -42,14 +42,16 @@ call time, and admission/residue checks consume the same database path. Storage 
 owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
 root from this resolver alone. Durable service launchers preserve an explicitly supplied
 `CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
-An absent `config.toml` permits the environment/home fallback. Any other read failure is
-indeterminate and fails closed so history code cannot select a different database by accident.
+An absent `config.toml` or absent root `sqlite_home` permits the environment/home fallback. Any
+other read failure, malformed TOML, wrong-typed or blank `sqlite_home` is indeterminate and fails
+closed so history code cannot select a different database by accident. This strict parse is scoped
+to SQLite ownership; the tolerant root-string helper used by injection and catalog reads is unchanged.
 
 [Decision Log]
 - 목적과 의도: Make every history safety check and mutation address the SQLite database Codex actually opened.
 - 기존 구현 및 제약 조건: History code rebuilt `CODEX_HOME/state_5.sqlite`, while Codex supports a config or environment-selected SQLite root for split Windows/WSL layouts.
 - 검토한 주요 대안: Copy the database into CODEX_HOME, teach only the writer about the override, or centralize the call-time target.
-- 선택한 방식: Add one Codex-compatible SQLite resolver, fail closed when its authoritative config is unreadable, and share it across history jobs, provider defaults, admission, and residue classification.
+- 선택한 방식: Add one Codex-compatible SQLite resolver, fail closed when its authoritative config is unreadable or its present `sqlite_home` cannot be parsed as a non-empty string, and share it across history jobs, provider defaults, admission, and residue classification.
 - 다른 대안 대신 이 방식을 선택한 이유: A writer-only override would let ownership checks authorize one database while the mutation touched another.
 - 장점, 단점 및 영향: Split-home history remains correct and backup identities stay database-specific; storage cleanup of an external root remains out of scope.
 
