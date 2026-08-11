@@ -629,7 +629,9 @@ const providerConfigSchema = z.object({
   supportsServiceTier: z.boolean().optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
-  noStructuredOutputModels: z.array(z.string().min(1)).optional(),
+  noStructuredOutputModels: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   responsesItemIdRepair: z.object({
@@ -830,6 +832,15 @@ export function nonBlankStringArrayConfigError(value: unknown, field: string): s
     }
   }
   return null;
+}
+
+/**
+ * Keep hand-edited config and management writes on one canonical model-id list.
+ * Validation happens separately so an all-whitespace value is rejected rather than
+ * normalized into a model id that can never match at runtime.
+ */
+export function normalizeNonBlankStringArray(value: readonly string[]): string[] {
+  return [...new Set(value.map(entry => entry.trim()))];
 }
 
 export function booleanRecordConfigError(value: unknown, field: string): string | null {

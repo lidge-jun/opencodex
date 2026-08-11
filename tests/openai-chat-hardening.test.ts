@@ -447,9 +447,14 @@ describe("openai-chat response_format emission", () => {
 
     const optedOut = adapter.buildRequest({ ...parsed(), options });
     const supportedSibling = adapter.buildRequest({ ...parsed(), modelId: "supported-model", options });
+    const colonVariant = adapter.buildRequest({ ...parsed(), modelId: "test-model:structured", options });
 
     expect(bodyOf(optedOut).response_format).toBeUndefined();
     expect(bodyOf(supportedSibling).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+    expect(bodyOf(colonVariant).response_format).toEqual({
       type: "json_schema",
       json_schema: { name: "answer", schema: { type: "object" }, strict: true },
     });

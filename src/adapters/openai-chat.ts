@@ -817,7 +817,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // gateway exposes a uniform OpenAI-compatible endpoint. Keep the #1137 translation
       // as the default, but let an exact model opt out instead of forcing a provider-wide
       // rollback that would silently return prose for siblings that support JSON Schema.
-      if (!modelInList(provider.noStructuredOutputModels, parsed.modelId)) {
+      if (!provider.noStructuredOutputModels?.includes(parsed.modelId)) {
         const textFormat = parsed.options.textFormat;
         if (textFormat?.type === "json_object") {
           body.response_format = { type: "json_object" };

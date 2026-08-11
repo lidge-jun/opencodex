@@ -152,6 +152,26 @@ describe("provider management validation", () => {
     expect(dto.providers.relay?.noStructuredOutputModels).toEqual(["deepseek-v4-flash"]);
   });
 
+  test("normalizes hand-edited structured-output model opt-outs at load", () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          noStructuredOutputModels: [" deepseek-v4-flash ", "deepseek-v4-flash", " other-model "],
+        },
+      },
+    }));
+
+    expect(loadConfig().providers.relay?.noStructuredOutputModels)
+      .toEqual(["deepseek-v4-flash", "other-model"]);
+  });
+
   test("provider management rejects modelCosts rows with extra fields", () => {
     const error = providerManagementConfigError("blsc", {
       adapter: "openai-chat",

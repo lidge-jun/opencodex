@@ -9,6 +9,7 @@ import {
   isValidProviderName,
   multiAgentGuidanceEnabled,
   nonBlankStringArrayConfigError,
+  normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
@@ -213,7 +214,7 @@ function applyProviderPatchFields(
     } else {
       const error = nonBlankStringArrayConfigError(value, "noStructuredOutputModels");
       if (error) return { error };
-      const models = [...new Set((value as string[]).map(model => model.trim()))];
+      const models = normalizeNonBlankStringArray(value as string[]);
       if (models.length > 0) next.noStructuredOutputModels = models;
       else delete next.noStructuredOutputModels;
     }
