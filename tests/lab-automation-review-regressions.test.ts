@@ -412,7 +412,7 @@ describe("CL-08 independent review regressions", () => {
       runsThisHour: 2,
     };
     const rolled = rollBudgetWindow(state, now);
-    expect(runBudgetRemaining(policy, rolled)).toBe(4);
+    expect(runBudgetRemaining(policy, rolled, now)).toBe(4);
   });
 
   test("harness failures receive the stronger blocked cooldown and successful runs clear stale cooldown", async () => {
