@@ -191,8 +191,8 @@ opencodex 會將磁碟上的模型目錄與目前使用者擁有的每個 Codex 
 |---|---|---|
 | `fresh` | 每個 app-server 都在目錄寫入之後啟動 | 完整指引：偏好模型、roster、fallback |
 | `not_running` | 未偵測到 app-server | 完整指引 |
-| `stale` | 至少一個 app-server 早於目錄 | **沒有 opencodex 撰寫的模型指引** |
-| `unknown` | 無法進行比較 | **沒有 opencodex 撰寫的模型指引** |
+| `stale` | 至少一個 app-server 早於目錄 | **不新增或覆寫 opencodex 撰寫的模型指引** |
+| `unknown` | 無法進行比較 | **不新增或覆寫 opencodex 撰寫的模型指引** |
 
 對 `stale` 與 `unknown`，opencodex 會保留其自身的磁碟衍生宣稱——偏好模型、roster、fallback 與自訂指引——因為執行中的 Codex 可能無法生成磁碟目錄所廣告的內容。
 
