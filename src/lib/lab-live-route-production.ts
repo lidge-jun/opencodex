@@ -8,7 +8,11 @@
  * @internal host integration only
  */
 import { resolveEnvValue } from "../config";
-import { getValidAccessTokenSnapshot } from "../oauth";
+import {
+  getValidAccessTokenSnapshot,
+  OAuthLoginRequiredError,
+  UnsupportedOAuthProviderError,
+} from "../oauth";
 import type { OcxConfig } from "../types";
 import { createCredentialLease } from "../lab/live/credential-lease";
 import {
@@ -50,11 +54,25 @@ async function buildLabProviderAuthHeaders(
   };
 
   if (provider.authMode === "oauth") {
+    let protocol: string;
+    try {
+      protocol = new URL(routeContext.baseUrl).protocol;
+    } catch {
+      throw new TransportError("auth_blocked", "invalid OAuth provider destination");
+    }
+    if (protocol !== "https:") {
+      throw new TransportError("auth_blocked", "OAuth lab probes require HTTPS");
+    }
     try {
       const snapshot = await getValidAccessTokenSnapshot(routeContext.providerId);
       headers.Authorization = `Bearer ${snapshot.accessToken}`;
-    } catch {
-      throw new TransportError("auth_blocked", "oauth unavailable");
+    } catch (error) {
+      if (error instanceof OAuthLoginRequiredError || error instanceof UnsupportedOAuthProviderError) {
+        throw new TransportError("auth_blocked", "oauth unavailable");
+      }
+      // Non-terminal refresh failures (network, lock contention, provider transient errors)
+      // are harness/infrastructure failures rather than evidence that credentials are invalid.
+      throw new TransportError("harness_failure", "oauth refresh unavailable");
     }
   } else {
     const apiKey = resolveEnvValue(provider.apiKey)?.trim();
@@ -82,6 +100,9 @@ export function createProductionLabRouteExecutor(
   deps: ProductionLabRouteExecutorDeps,
 ): TrustedLabRouteExecutor {
   return createHostIssuedLabRouteExecutor(async (input) => {
+    if (!input.initiatingRequest) {
+      throw new TransportError("harness_failure", "live scenario missing initiating request");
+    }
     const config = deps.loadConfig();
     const lease = createCredentialLease({
       destination: input.destination,
@@ -97,9 +118,6 @@ export function createProductionLabRouteExecutor(
       limits: input.limits,
       transportId: "lab-automation",
     });
-    if (!input.initiatingRequest) {
-      throw new TransportError("harness_failure", "live scenario missing initiating request");
-    }
     const path = liveUpstreamRequestPath(input.routeContext.upstreamProtocol);
     const response = await transport.request({
       method: "POST",
