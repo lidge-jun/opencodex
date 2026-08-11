@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFileAsync, getConfigDir } from "../config";
+import { atomicWriteFileAsync, getConfigDir, type AtomicWriteAsyncTestSeam } from "../config";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 /**
@@ -70,6 +70,11 @@ let replayOldestAt: number | null = null;
 let replaySnapshotLoaded = false;
 let replaySnapshotPersistTimer: ReturnType<typeof setTimeout> | null = null;
 let replaySnapshotPersistGate: Promise<void> = Promise.resolve();
+/** Mutation generation: bumped on every cache change that needs persisting. */
+let replayMutationGeneration = 0;
+/** Generation of the data the last successful snapshot write actually captured. */
+let replayWrittenGeneration = 0;
+let replaySnapshotWriteSeam: AtomicWriteAsyncTestSeam | undefined;
 
 function replaySnapshotPath(): string {
   return join(getConfigDir(), REPLAY_SNAPSHOT_FILE);
@@ -88,18 +93,23 @@ function loadReplaySnapshotEntry(key: string, value: unknown): void {
   for (const pair of rec.byCall) {
     if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") continue;
     if (!/^[0-9a-f]{64}$/.test(pair[0])) continue;
-    const call = pair[1] as { signature?: unknown; sizeBytes?: unknown; touchedAtMs?: unknown } | null;
+    const call = pair[1] as { signature?: unknown; touchedAtMs?: unknown } | null;
     if (!call || typeof call !== "object" || Array.isArray(call)) continue;
     if (typeof call.signature !== "string" || call.signature.length < MIN_SIGNATURE_LEN) continue;
-    if (typeof call.sizeBytes !== "number" || !Number.isSafeInteger(call.sizeBytes) || call.sizeBytes < 0) continue;
     if (typeof call.touchedAtMs !== "number" || !Number.isFinite(call.touchedAtMs)) continue;
-    if (call.sizeBytes > replayLimits.maxSignatureBytes) continue;
+    // Never trust a serialized sizeBytes: a forged snapshot could claim a tiny
+    // size for a huge signature and bypass every byte cap. Recompute from the
+    // signature itself, exactly like the live write path.
+    const signatureBytes = utf8.encode(call.signature).byteLength;
+    if (signatureBytes > replayLimits.maxSignatureBytes) continue;
+    const callBytes = utf8.encode(pair[0]).byteLength + signatureBytes;
+    if (callBytes > replayLimits.maxBytesPerSession) continue;
     byCall.set(pair[0], {
       signature: call.signature,
-      sizeBytes: call.sizeBytes,
+      sizeBytes: callBytes,
       touchedAtMs: call.touchedAtMs,
     });
-    bytes += call.sizeBytes;
+    bytes += callBytes;
   }
   if (byCall.size === 0) return;
   const entry: ReplayEntry = { byCall, bytes, expiresAtMs: rec.expiresAtMs, oldestAtMs: null };
@@ -146,10 +156,15 @@ function ensureReplaySnapshotLoaded(): void {
   enforceAppOwnedMemoryBudget();
 }
 
-function scheduleReplaySnapshotPersist(): void {
+function markReplayDirty(): void {
+  replayMutationGeneration += 1;
   if (replaySnapshotPersistTimer) return;
   replaySnapshotPersistTimer = setTimeout(() => {
-    void persistReplaySnapshotNow();
+    void persistReplaySnapshotNow().catch(() => {
+      // Redacted static message only: never echo the underlying error, which
+      // can carry paths or other environment details.
+      console.warn("[antigravity] replay snapshot persist failed; cached signatures will not survive a restart");
+    });
   }, REPLAY_SNAPSHOT_DEBOUNCE_MS);
   (replaySnapshotPersistTimer as { unref?: () => void }).unref?.();
 }
@@ -164,6 +179,7 @@ async function persistReplaySnapshotNow(): Promise<void> {
   let release!: () => void;
   replaySnapshotPersistGate = new Promise<void>(resolve => { release = resolve; });
   await previous;
+  const writeGeneration = replayMutationGeneration;
   try {
     const sessions: Array<[string, unknown]> = [];
     let total = 0;
@@ -171,7 +187,7 @@ async function persistReplaySnapshotNow(): Promise<void> {
     for (const [key, entry] of [...replayCache].reverse()) {
       const byCall = [...entry.byCall].map(([callKey, call]) => [
         callKey,
-        { signature: call.signature, sizeBytes: call.sizeBytes, touchedAtMs: call.touchedAtMs },
+        { signature: call.signature, touchedAtMs: call.touchedAtMs },
       ]);
       const persistEntry: [string, unknown] = [key, { byCall, expiresAtMs: entry.expiresAtMs }];
       const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
@@ -182,9 +198,13 @@ async function persistReplaySnapshotNow(): Promise<void> {
     sessions.reverse();
     mkdirSync(dirname(replaySnapshotPath()), { recursive: true, mode: 0o700 });
     try { chmodSync(dirname(replaySnapshotPath()), 0o700); } catch { /* best-effort (e.g. Windows) */ }
-    await atomicWriteFileAsync(replaySnapshotPath(), JSON.stringify({ version: REPLAY_SNAPSHOT_VERSION, sessions }));
-  } catch {
-    // The snapshot is a cache, not a source of truth: every failure is swallowed.
+    await atomicWriteFileAsync(
+      replaySnapshotPath(),
+      JSON.stringify({ version: REPLAY_SNAPSHOT_VERSION, sessions }),
+      undefined,
+      replaySnapshotWriteSeam,
+    );
+    replayWrittenGeneration = writeGeneration;
   } finally {
     release();
   }
@@ -192,12 +212,17 @@ async function persistReplaySnapshotNow(): Promise<void> {
 
 /** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
 export async function flushAntigravityReplay(): Promise<void> {
-  if (replaySnapshotPersistTimer) {
-    await persistReplaySnapshotNow();
-    return;
+  // Persist until the durable generation catches up with the latest mutation:
+  // a change that lands while a writer is in flight must not be lost when
+  // shutdown exits right after the first write completes.
+  for (;;) {
+    if (replaySnapshotPersistTimer || replayMutationGeneration > replayWrittenGeneration) {
+      await persistReplaySnapshotNow();
+    }
+    // No pending timer: still await any in-flight write so shutdown does not race it.
+    await replaySnapshotPersistGate;
+    if (replayMutationGeneration === replayWrittenGeneration && replaySnapshotPersistTimer === null) return;
   }
-  // No pending timer: still await any in-flight write so shutdown does not race it.
-  await replaySnapshotPersistGate;
 }
 
 /**
@@ -563,7 +588,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     // instead of retaining an unevictable shell.
     if (existing) {
       deleteReplaySession(key);
-      scheduleReplaySnapshotPersist();
+      markReplayDirty();
     } else {
       replayBytes -= REPLAY_SESSION_KEY_BYTES;
     }
@@ -574,7 +599,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
   refreshReplaySessionCandidate(key, entry);
   evictIfNeeded();
   enforceAppOwnedMemoryBudget();
-  scheduleReplaySnapshotPersist();
+  markReplayDirty();
 }
 
 /**
@@ -612,7 +637,7 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
   }
   if (touched) {
     refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
-    scheduleReplaySnapshotPersist();
+    markReplayDirty();
   }
   return contents;
 }
@@ -620,7 +645,7 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
 /** Drop the cache entry when upstream rejects a signature (clear-on-invalid). */
 export function clearAntigravityReplay(model: string, sessionId: string): void {
   ensureReplaySnapshotLoaded();
-  if (deleteReplaySession(replayKey(model, sessionId)) > 0) scheduleReplaySnapshotPersist();
+  if (deleteReplaySession(replayKey(model, sessionId)) > 0) markReplayDirty();
 }
 
 export function antigravityReplayMetrics(): {
@@ -659,13 +684,18 @@ export function antigravityReplayRetainedStoreSnapshot(): {
 export function evictOldestAntigravityReplayForBudget(): number {
   ensureReplaySnapshotLoaded();
   const removed = replayOldestSessionKey === undefined ? 0 : deleteReplaySession(replayOldestSessionKey);
-  if (removed > 0) scheduleReplaySnapshotPersist();
+  if (removed > 0) markReplayDirty();
   return removed;
 }
 
 export function setAntigravityReplayLimitsForTests(limits?: Partial<ReplayLimits>): void {
   __resetAntigravityReplayCache();
   replayLimits = limits ? { ...DEFAULT_REPLAY_LIMITS, ...limits } : { ...DEFAULT_REPLAY_LIMITS };
+}
+
+/** Test-only write seam (mirrors AtomicWriteAsyncTestSeam usage elsewhere). */
+export function setAntigravityReplayWriteSeamForTests(seam: AtomicWriteAsyncTestSeam | undefined): void {
+  replaySnapshotWriteSeam = seam;
 }
 
 /** Test seam. */
@@ -680,4 +710,7 @@ export function __resetAntigravityReplayCache(): void {
   replayBytes = 0;
   replayOldestSessionKey = undefined;
   replayOldestAt = null;
+  replayMutationGeneration = 0;
+  replayWrittenGeneration = 0;
+  replaySnapshotWriteSeam = undefined;
 }

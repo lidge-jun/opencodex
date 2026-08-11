@@ -19,6 +19,7 @@ import {
   flushAntigravityReplay,
   observeAntigravityReplay,
   setAntigravityReplayLimitsForTests,
+  setAntigravityReplayWriteSeamForTests,
   sweepExpiredAntigravityReplay,
 } from "../src/adapters/google-antigravity-replay";
 import { sanitizeAntigravityClaudeSignatures } from "../src/adapters/google-antigravity-wire";
@@ -596,6 +597,10 @@ describe("durable antigravity replay snapshot", () => {
     const now = Date.now();
     const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
     const trimKey = antigravityFunctionCallKeyForTests("get_y", {});
+    // 100-byte signatures: one call (64+64+100 = 228) fits the 300-byte cap,
+    // two calls (392) do not, so the oldest is evicted on load.
+    const sigA = "a".repeat(100);
+    const sigB = "b".repeat(100);
     writeFileSync(snapshotPath(), JSON.stringify({
       version: 1,
       sessions: [
@@ -603,9 +608,41 @@ describe("durable antigravity replay snapshot", () => {
           expiresAtMs: now + 60_000,
           // Oldest (get_y) is evicted first on load: only get_x survives the cap.
           byCall: [
-            [trimKey, { signature: SIG, sizeBytes: 200, touchedAtMs: now }],
-            [callKey, { signature: SIG, sizeBytes: 200, touchedAtMs: now }],
+            [trimKey, { signature: sigB, sizeBytes: 200, touchedAtMs: now }],
+            [callKey, { signature: sigA, sizeBytes: 200, touchedAtMs: now }],
           ],
+        }],
+      ],
+    }));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(sigA);
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.sessions).toBe(1);
+    expect(metrics.calls).toBe(1);
+    // Recomputed from the signature: 64-byte session key + 64-byte call key + 100-byte signature.
+    expect(metrics.totalBytes).toBe(64 + 64 + 100);
+  });
+
+  test("load recomputes call sizes from the signature and ignores serialized sizeBytes", () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          // Forged tiny sizeBytes must not shrink the accounted bytes.
+          byCall: [[callKey, { signature: SIG, sizeBytes: 1, touchedAtMs: now }]],
+        }],
+        [antigravityReplayKeyForTests(MODEL, "-forged"), {
+          expiresAtMs: now + 60_000,
+          // Oversized signature with a forged tiny sizeBytes must be dropped.
+          byCall: [[antigravityFunctionCallKeyForTests("get_y", {}), {
+            signature: "y".repeat(70_000),
+            sizeBytes: 1,
+            touchedAtMs: now,
+          }]],
         }],
       ],
     }));
@@ -614,9 +651,14 @@ describe("durable antigravity replay snapshot", () => {
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
     const metrics = antigravityReplayMetrics();
     expect(metrics.sessions).toBe(1);
-    expect(metrics.calls).toBe(1);
-    // 300-byte cap: one 200-byte call plus the 64-byte fixed session key.
-    expect(metrics.totalBytes).toBe(64 + 200);
+    // 64-byte session key + 64-byte call key + 20-byte signature.
+    expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
+  });
+
+  test("snapshot never serializes sizeBytes", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    expect(readFileSync(snapshotPath(), "utf8")).not.toContain("sizeBytes");
   });
 
   test("corrupt or unknown-version snapshots start the cache empty", () => {
@@ -643,5 +685,56 @@ describe("durable antigravity replay snapshot", () => {
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
     expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("flush waits out a blocked writer and persists mutations that land during it", async () => {
+    let firstWriteReached!: () => void;
+    const reached = new Promise<void>(resolve => { firstWriteReached = resolve; });
+    let firstWriteRelease!: () => void;
+    const release = new Promise<void>(resolve => { firstWriteRelease = resolve; });
+    let writes = 0;
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => {
+        writes += 1;
+        if (writes === 1) {
+          firstWriteReached();
+          await release;
+        }
+      },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    const flushing = flushAntigravityReplay();
+    await reached;
+    // A mutation lands while the first snapshot write is still blocked.
+    observeAntigravityReplay(MODEL, "-second", [fcPart("get_y", {}, SIG)]);
+    firstWriteRelease();
+    await flushing;
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).toHaveLength(2);
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, "-second"));
+  });
+
+  test("flush surfaces snapshot write failures for shutdown diagnostics", async () => {
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => { throw new Error("simulated disk failure"); },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await expect(flushAntigravityReplay()).rejects.toThrow("simulated disk failure");
+  });
+
+  test("background snapshot failures log a redacted warning and keep the service running", async () => {
+    const warn = spyOn(console, "warn");
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => { throw new Error("simulated disk failure"); },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    // Let the 2s debounce timer fire and fail.
+    await Bun.sleep(2_100);
+    expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
+    // The failure must not wedge the cache: a later mutation still works.
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
+    expect(antigravityReplayMetrics().calls).toBe(2);
   });
 });
