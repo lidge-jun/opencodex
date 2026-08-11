@@ -81,7 +81,24 @@ function isComment(line: string): boolean {
 }
 
 function hasInlineComment(line: string): boolean {
-  return line.includes("#");
+  let quote: "'" | "\"" | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]!;
+    if (quote === "\"") {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (quote === "'") {
+      if (character !== quote) continue;
+      if (line[index + 1] === quote) index += 1;
+      else quote = null;
+      continue;
+    }
+    if (character === "'" || character === "\"") quote = character;
+    else if (character === "#" && /\s/u.test(line[index - 1] ?? "")) return true;
+  }
+  return false;
 }
 
 function regexpEscape(value: string): string {
