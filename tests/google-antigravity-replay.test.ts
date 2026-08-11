@@ -623,6 +623,39 @@ describe("durable antigravity replay snapshot", () => {
     expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-second"));
   });
 
+  test("snapshot cap includes the complete serialized document", async () => {
+    const now = Date.now();
+    const callA = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const callB = antigravityFunctionCallKeyForTests("get_y", { b: 2 });
+    const sessionA: [string, unknown] = [antigravityReplayKeyForTests(MODEL, SESSION), {
+      byCall: [[callA, { signature: SIG, touchedAtMs: now }]],
+      expiresAtMs: now + 60_000,
+      lastActiveAtMs: now,
+    }];
+    const sessionB: [string, unknown] = [antigravityReplayKeyForTests(MODEL, "-second"), {
+      byCall: [[callB, { signature: SIG, touchedAtMs: now }]],
+      expiresAtMs: now + 60_000,
+      lastActiveAtMs: now + 1,
+    }];
+    // This admits both entries under the old entry-only calculation, but not
+    // the JSON envelope, commas, and entries under the corrected calculation.
+    const entryOnlyBytes = [sessionA, sessionB]
+      .reduce((total, session) => total + Buffer.byteLength(JSON.stringify(session), "utf8"), 0);
+    setAntigravityReplaySnapshotMaxBytesForTests(entryOnlyBytes);
+    writeFileSync(snapshotPath(), JSON.stringify({ version: 1, sessions: [sessionA, sessionB] }));
+
+    // Loading is lazy; touching a loaded call marks the exact snapshot dirty.
+    applyAntigravityReplay(MODEL, SESSION, [{
+      role: "model",
+      parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }],
+    }]);
+    await flushAntigravityReplay();
+
+    const snapshot = readFileSync(snapshotPath(), "utf8");
+    expect(Buffer.byteLength(snapshot, "utf8")).toBeLessThanOrEqual(entryOnlyBytes);
+    expect((JSON.parse(snapshot) as { sessions?: unknown[] }).sessions).toHaveLength(1);
+  });
+
   test("loaded sessions are trimmed to the current per-session caps", () => {
     setAntigravityReplayLimitsForTests({ maxBytesPerSession: 300 });
     const now = Date.now();
@@ -780,6 +813,22 @@ describe("durable antigravity replay snapshot", () => {
     expect(keys).toHaveLength(2);
     expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
     expect(keys).toContain(antigravityReplayKeyForTests(MODEL, "-second"));
+  });
+
+  test("flush rejects when mutations prevent convergence through the attempt bound", async () => {
+    let writes = 0;
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => {
+        writes += 1;
+        observeAntigravityReplay(MODEL, `-churn-${writes}`, [fcPart(`get_${writes}`, {}, SIG)]);
+      },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+
+    await expect(flushAntigravityReplay()).rejects.toThrow(
+      "antigravity replay snapshot flush did not converge before the attempt limit",
+    );
+    expect(writes).toBe(8);
   });
 
   test("flush surfaces snapshot write failures for shutdown diagnostics", async () => {

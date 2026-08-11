@@ -53,6 +53,7 @@ const REPLAY_FLUSH_MAX_ATTEMPTS = 8;
 const REPLAY_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
 /** Refuse-to-parse ceiling for an existing snapshot file. */
 const REPLAY_SNAPSHOT_REFUSE_BYTES = 32 * 1024 * 1024;
+const REPLAY_FLUSH_INCOMPLETE_ERROR = "antigravity replay snapshot flush did not converge before the attempt limit";
 
 interface ReplayLimits {
   maxCallsPerSession: number;
@@ -212,7 +213,13 @@ async function persistReplaySnapshotNow(): Promise<void> {
   const writeGeneration = replayMutationGeneration;
   try {
     const sessions: Array<[string, unknown]> = [];
-    let total = 0;
+    // JSON.stringify's empty document gives us the fixed envelope bytes. Each
+    // additional session contributes its own bytes plus one comma.
+    const emptySnapshotBytes = Buffer.byteLength(JSON.stringify({
+      version: REPLAY_SNAPSHOT_VERSION,
+      sessions: [],
+    }), "utf8");
+    let total = emptySnapshotBytes - 2; // Remove the empty [] from the envelope.
     // Most-recently-active first so the sessions that survive the snapshot
     // byte cap are the ones actually in use (Map order is insertion order).
     for (const [key, entry] of [...replayCache].sort((a, b) => b[1].lastActiveAtMs - a[1].lastActiveAtMs)) {
@@ -226,16 +233,21 @@ async function persistReplaySnapshotNow(): Promise<void> {
         lastActiveAtMs: entry.lastActiveAtMs,
       }];
       const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-      if (total + size > replaySnapshotMaxBytes) break;
-      total += size;
+      const candidateBytes = total + (sessions.length === 0 ? 0 : 1) + size;
+      if (candidateBytes > replaySnapshotMaxBytes) break;
+      total = candidateBytes;
       sessions.push(persistEntry);
     }
     sessions.reverse();
+    const snapshot = JSON.stringify({ version: REPLAY_SNAPSHOT_VERSION, sessions });
+    if (Buffer.byteLength(snapshot, "utf8") > replaySnapshotMaxBytes) {
+      throw new Error("antigravity replay snapshot exceeds its size limit");
+    }
     mkdirSync(dirname(replaySnapshotPath()), { recursive: true, mode: 0o700 });
     try { chmodSync(dirname(replaySnapshotPath()), 0o700); } catch { /* best-effort (e.g. Windows) */ }
     await atomicWriteFileAsync(
       replaySnapshotPath(),
-      JSON.stringify({ version: REPLAY_SNAPSHOT_VERSION, sessions }),
+      snapshot,
       undefined,
       replaySnapshotWriteSeam,
     );
@@ -258,6 +270,7 @@ export async function flushAntigravityReplay(): Promise<void> {
     await replaySnapshotPersistGate;
     if (replayMutationGeneration === replayWrittenGeneration && replaySnapshotPersistTimer === null) return;
   }
+  throw new Error(REPLAY_FLUSH_INCOMPLETE_ERROR);
 }
 
 /**
