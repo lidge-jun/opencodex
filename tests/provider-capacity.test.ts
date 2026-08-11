@@ -58,6 +58,20 @@ describe("configured-weight Codex pool capacity", () => {
     });
   });
 
+  test("an all-Team pool has complete configured-weight coverage", () => {
+    const result = aggregateCodexPoolCapacity([
+      account("team", 20, { isMain: true, active: true }),
+      account("team", 60),
+    ], NOW);
+    expect(result.quota?.weeklyPercent).toBe(40);
+    expect(result.aggregation).toMatchObject({
+      includedAccounts: 2,
+      excludedAccounts: 0,
+      unknownPlanAccounts: 0,
+      incomplete: false,
+    });
+  });
+
   test("same-time resets group partial consumed capacity and expose only recovery percent", () => {
     const result = aggregateCodexPoolCapacity([
       account("pro", 25, { weeklyResetAt: NOW + 10_000 }),
