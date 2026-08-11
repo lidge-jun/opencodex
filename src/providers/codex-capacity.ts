@@ -2,6 +2,7 @@ import { codexPlanKey, codexPlanValue } from "../codex/plan";
 
 export const CODEX_CONFIGURED_CAPACITY_WEIGHTS = {
   plus: 1,
+  team: 1,
   business: 1,
   prolite: 5,
   pro: 20,
