@@ -1,3 +1,4 @@
+import { LAB_AUTOMATION_HARD_MAX } from "./constants";
 import type { LabAutomationPolicyV1, LabAutomationStateV1 } from "./types";
 
 export function cooldownActive(state: LabAutomationStateV1, key: string, now: number): boolean {
@@ -5,18 +6,30 @@ export function cooldownActive(state: LabAutomationStateV1, key: string, now: nu
   return typeof until === "number" && until > now;
 }
 
+function activeCooldowns(state: LabAutomationStateV1, now: number): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const [key, until] of Object.entries(state.cooldownUntilByKey)) {
+    if (until > now) next[key] = until;
+  }
+  return next;
+}
+
+export function cooldownCapacityExhausted(state: LabAutomationStateV1, now: number): boolean {
+  return Object.keys(activeCooldowns(state, now)).length >= LAB_AUTOMATION_HARD_MAX.maxPersistedRuns;
+}
+
 export function setCooldown(
   state: LabAutomationStateV1,
   key: string,
   untilMs: number,
+  now: number,
 ): LabAutomationStateV1 {
-  return {
-    ...state,
-    cooldownUntilByKey: {
-      ...state.cooldownUntilByKey,
-      [key]: untilMs,
-    },
-  };
+  const next = activeCooldowns(state, now);
+  if (!(key in next) && Object.keys(next).length >= LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
+    return { ...state, cooldownUntilByKey: next };
+  }
+  next[key] = untilMs;
+  return { ...state, cooldownUntilByKey: next };
 }
 
 export function clearCooldown(state: LabAutomationStateV1, key: string): LabAutomationStateV1 {
