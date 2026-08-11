@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type {
-  LabAutomationPolicyV1,
-  LabAutomationRunRecordV1,
-  LabAutomationRunState,
-  LabAutomationStateV1,
-  PlannedLabRunV1,
+import {
+  LabAutomationError,
+  type LabAutomationPolicyV1,
+  type LabAutomationRunRecordV1,
+  type LabAutomationRunState,
+  type LabAutomationStateV1,
+  type PlannedLabRunV1,
 } from "./types";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
 
@@ -26,35 +27,13 @@ function isRollingBudgetEvidence(run: LabAutomationRunRecordV1, now: number): bo
   return run.startedAt > cutoff && run.startedAt <= now;
 }
 
-function isCancellationBackoffEvidence(run: LabAutomationRunRecordV1, now: number): boolean {
-  if (
-    run.trigger !== "scheduled"
-    || run.state !== "cancelled"
-    || run.terminalCode !== "cancelled"
-    || typeof run.completedAt !== "number"
-  ) {
-    return false;
-  }
-  const maxBackoffMs = Math.max(
-    LAB_AUTOMATION_HARD_MAX.failureCooldownMs,
-    LAB_AUTOMATION_HARD_MAX.schedulerTickMs,
-  );
-  return run.completedAt + maxBackoffMs > now;
-}
-
-/** Evict only disposable terminal history; budget and cancellation records remain authority. */
+/** Evict only disposable terminal history; rolling budget records remain authority. */
 function evictOldestTerminal(runs: LabAutomationRunRecordV1[], now: number): boolean {
   let oldestIndex = -1;
   let oldestTime = Number.POSITIVE_INFINITY;
   for (let index = 0; index < runs.length; index += 1) {
     const run = runs[index]!;
-    if (
-      !isTerminal(run)
-      || isRollingBudgetEvidence(run, now)
-      || isCancellationBackoffEvidence(run, now)
-    ) {
-      continue;
-    }
+    if (!isTerminal(run) || isRollingBudgetEvidence(run, now)) continue;
     const terminalAt = run.completedAt ?? run.updatedAt;
     if (terminalAt < oldestTime) {
       oldestTime = terminalAt;
@@ -194,14 +173,19 @@ export function trimTerminalRuns(state: LabAutomationStateV1, now: number): LabA
   const keepMs = LAB_AUTOMATION_HARD_MAX.terminalRunRetentionMs;
   const runs = state.runs.filter((row) => {
     if (!isTerminal(row)) return true;
-    // Retention exceeds both the rolling budget window and maximum cancellation backoff.
-    // Keep both authority checks explicit so future retention changes cannot erase them.
-    if (isRollingBudgetEvidence(row, now) || isCancellationBackoffEvidence(row, now)) return true;
+    // The retention window exceeds the rolling budget window. Keep budget evidence explicit
+    // so a future retention reduction cannot over-grant the hourly run budgets.
+    if (isRollingBudgetEvidence(row, now)) return true;
     const completedAt = row.completedAt ?? row.updatedAt;
     return now - completedAt < keepMs;
   });
   while (runs.length > LAB_AUTOMATION_HARD_MAX.maxPersistedRuns) {
-    if (!evictOldestTerminal(runs, now)) break;
+    if (!evictOldestTerminal(runs, now)) {
+      throw new LabAutomationError(
+        "persisted run ceiling exceeded by non-disposable run records",
+        "invalid_state",
+      );
+    }
   }
   return { ...state, runs };
 }
