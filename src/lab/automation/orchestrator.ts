@@ -15,7 +15,12 @@ import {
   isRunBudgetExhausted,
   isLiveRequestBudgetExhausted,
 } from "./budgets";
-import { clearCooldown, cooldownForFailure, setCooldown } from "./cooldown";
+import {
+  canReserveScheduledCooldown,
+  clearCooldown,
+  cooldownForFailure,
+  setCooldown,
+} from "./cooldown";
 import {
   enqueuePlannedRuns,
   selectDispatchableRuns,
@@ -48,9 +53,7 @@ function configKey(configDir?: string): string {
 }
 
 function dispatchDepsFor(configDir?: string): AutomationDispatchDeps {
-  return dispatchDepsByConfigDir.get(configKey(configDir))
-    ?? dispatchDepsByConfigDir.get("")
-    ?? {};
+  return dispatchDepsByConfigDir.get(configKey(configDir)) ?? {};
 }
 
 function cancellationCooldownUntil(policy: LabAutomationPolicyV1, now: number): number {
@@ -199,6 +202,9 @@ function claimNextRun(
     };
     const dispatchable = selectDispatchableRuns(policy, state, now, (run) => {
       if (!predicate(run)) return false;
+      if (run.trigger === "scheduled" && !canReserveScheduledCooldown(state, run.runKey, now)) {
+        return false;
+      }
       if (run.evidenceLayer === "live_route_compatibility" && isLiveRequestBudgetExhausted(policy, state, now)) {
         return false;
       }
