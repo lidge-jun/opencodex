@@ -3,7 +3,7 @@
  *
  * - GET  /api/lab/automation
  * - PUT  /api/lab/automation
- * - GET  /api/lab/automation/runs
+ * - GET /api/lab/automation/runs
  * - POST /api/lab/automation/run
  * - POST /api/lab/automation/runs/:id/cancel
  *
@@ -15,6 +15,7 @@ import {
   buildLabAutomationStatus,
   cancelLabAutomationRun,
   enqueueManualLabRun,
+  reconcileLabAutomationQueue,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../../lab/automation/orchestrator";
@@ -39,9 +40,15 @@ const AUTOMATION_LAYERS: readonly LabAutomationLayer[] = [
   "live_route_compatibility",
   "task_effectiveness",
 ];
+const UPDATE_KEYS = new Set(["policy", "routes"]);
+const MANUAL_RUN_KEYS = new Set(["evidenceLayer", "scenarioId", "providerName", "modelId"]);
 
 function automationErrorResponse(code: string, message: string, status: number, ctx: ManagementContext): Response {
   return jsonResponse({ error: { code, message } }, status, ctx.req, ctx.config);
+}
+
+function hasUnknownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).some((key) => !allowed.has(key));
 }
 
 function parseLimit(raw: string | null, ctx: ManagementContext): number | Response {
@@ -56,6 +63,7 @@ function parseLimit(raw: string | null, ctx: ManagementContext): number | Respon
 }
 
 function applySchedulerPolicy(policy: LabAutomationPolicyV1, configDir?: string): void {
+  reconcileLabAutomationQueue(configDir);
   if (policy.enabled) {
     startLabAutomationScheduler(configDir);
   } else {
@@ -99,6 +107,9 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
     try {
       const body = await readManagementJsonBody(req);
       if (!isPlainRecord(body)) return automationErrorResponse("invalid_body", "body must be an object", 400, ctx);
+      if (hasUnknownKeys(body, MANUAL_RUN_KEYS)) {
+        return automationErrorResponse("invalid_body", "manual run body contains unknown fields", 400, ctx);
+      }
       const evidenceLayer = body.evidenceLayer;
       const scenarioId = body.scenarioId;
       if (typeof evidenceLayer !== "string" || !AUTOMATION_LAYERS.includes(evidenceLayer as LabAutomationLayer)) {
@@ -137,9 +148,23 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
     try {
       const body = await readManagementJsonBody(req);
       if (!isPlainRecord(body)) return automationErrorResponse("invalid_body", "body must be an object", 400, ctx);
+      if (hasUnknownKeys(body, UPDATE_KEYS)) {
+        return automationErrorResponse("invalid_body", "automation update contains unknown fields", 400, ctx);
+      }
       let policy = loadLabAutomationPolicy(configDir);
       if (body.policy !== undefined) {
-        policy = normalizeLabAutomationPolicyV1({ ...policy, ...body.policy as Record<string, unknown> });
+        if (!isPlainRecord(body.policy)) return automationErrorResponse("invalid_policy", "policy must be an object", 400, ctx);
+        const incoming = body.policy as Record<string, unknown>;
+        const mergedLayers = incoming.layers === undefined
+          ? policy.layers
+          : isPlainRecord(incoming.layers)
+            ? { ...policy.layers, ...incoming.layers }
+            : incoming.layers;
+        policy = normalizeLabAutomationPolicyV1({
+          ...policy,
+          ...incoming,
+          layers: mergedLayers,
+        });
         saveLabAutomationPolicy(policy, configDir);
       }
       if (body.routes !== undefined) {
