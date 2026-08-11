@@ -16,13 +16,16 @@ import {
 } from "../src/config";
 import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog-migration";
 import { rateLimitRetryPolicyFor } from "../src/providers/key-failover";
-import { activeUserCostOverlays, refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
+import {
+  activeUserCostOverlays,
+  refreshUserCostOverlays,
+  resetPreservedDiskOnlyProvidersForTests,
+} from "../src/usage/user-cost-overlays";
 import type { OcxConfig } from "../src/types";
 
 /**
- * A user hand-edits `config.json` while the proxy runs. `saveConfig` serializes the
- * WHOLE object, so ANY later service-time save rewrites `claudeCode` from memory and
- * the edit vanishes with no visible cause (#488, devlog 260726_claude_auth_auto/040 H1).
+ * A user or cooperating process can edit config.json while the proxy runs.
+ * Guarded saves rebase disjoint live changes onto that newer disk snapshot.
  */
 
 let home: string;
@@ -618,16 +621,44 @@ test("an unarmed config saves without reconciliation", () => {
   expect((diskConfig().claudeCode as Record<string, unknown>).authMode).toBe("subscription");
 });
 
-// DOCUMENTED RESIDUAL, asserted so it cannot drift into an assumed guarantee: only the
-// `claudeCode` subtree is reconciled. A hand edit to `providers` is still lost.
-test("a providers hand edit is NOT preserved", () => {
+test("a provider deletion from a newer disk snapshot survives an unrelated live save", () => {
   const live = loadConfig();
+  live.providers.extra = {
+    adapter: "openai-chat",
+    baseUrl: "http://127.0.0.1:2/v1",
+    allowPrivateNetwork: true,
+  };
+  saveConfig(live);
   armClaudeCodeBaseline(live);
-  writeDiskConfig({ providers: { handEdited: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:2/v1", allowPrivateNetwork: true } } });
+  resetPreservedDiskOnlyProvidersForTests();
+  writeDiskConfig({ providers: { test: live.providers.test } });
 
   live.port = 10103;
+  live.disabledModels = ["test/one"];
   saveConfigPreservingClaudeCode(live);
   expect(Object.keys(diskConfig().providers as Record<string, unknown>)).toEqual(["test"]);
+  expect(diskConfig().disabledModels).toEqual(["test/one"]);
+});
+
+test("independent custom-model edits survive a guarded stale save", () => {
+  const live = loadConfig();
+  live.customModels = [customModel("one"), customModel("two")];
+  saveConfig(live);
+  armClaudeCodeBaseline(live);
+
+  live.customModels![0]!.modelId = "live-one";
+  writeDiskConfig({
+    customModels: [
+      customModel("one"),
+      { ...customModel("two"), modelId: "disk-two" },
+    ],
+  });
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().customModels).toEqual([
+    { ...customModel("one"), modelId: "live-one" },
+    { ...customModel("two"), modelId: "disk-two" },
+  ]);
 });
 
 test("upstreamHostCircuitThreshold live writes accept only integer values from 0 through 20", () => {
