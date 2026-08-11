@@ -473,7 +473,7 @@ exec ${shQuote(realCodexPath)} "$@"
 `;
 }
 
-type UnixShimProbeResult = "cleanup" | "descendants" | "recursive" | "timeout" | null;
+type UnixShimProbeResult = "cleanup" | "descendants" | "failed" | "recursive" | "timeout" | null;
 
 function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
   if (process.platform === "win32") return null;
@@ -512,6 +512,7 @@ function probeUnixShimInstall(wrapperPath: string): UnixShimProbeResult {
     if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
       return "recursive";
     }
+    if (result.status !== 0) return "failed";
     return null;
   } finally {
     for (const path of [markerPath, groupPath]) {
@@ -1231,7 +1232,9 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
           ? `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`
           : unsafe === "descendants"
             ? "the saved launcher left background descendants running after --version"
-            : "the saved launcher's probe process group could not be terminated cleanly";
+            : unsafe === "cleanup"
+              ? "the saved launcher's probe process group could not be terminated cleanly"
+              : "the saved launcher failed its --version probe";
       return {
         installed: false,
         message: `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
