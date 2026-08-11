@@ -122,10 +122,11 @@ port too:
 ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 ```
 
-If a registered callback port is already in use and the login surface offers manual input, the flow
-still returns the provider authorization URL. Complete the provider login, then copy the full failed
-callback URL from the browser address bar and paste it into OpenCodex. The URL is validated against
-the pending flow's state and PKCE session. Callers without manual input still fail closed.
+If a registered callback port is already in use and the login surface offers manual input, OpenCodex
+keeps the registered redirect URI and still returns the provider authorization URL. Complete the
+provider login, then paste the final redirect URL from the browser address bar or the authorization
+code into OpenCodex. The pending flow preserves state and PKCE validation. Callers without manual
+input still fail closed.
 
 :::caution[Forwarded loopback is unauthenticated]
 Plain `ssh -L` listens on your local loopback and is safe for the default unauthenticated bind. Do not
