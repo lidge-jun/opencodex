@@ -11,26 +11,68 @@ export function rollBudgetWindow(state: LabAutomationStateV1, now: number): LabA
   };
 }
 
-export function runBudgetRemaining(policy: LabAutomationPolicyV1, state: LabAutomationStateV1): number {
-  return Math.max(0, policy.maxRunsPerHour - state.runsThisHour);
+function rollingStartedRuns(state: LabAutomationStateV1, now: number): number {
+  const cutoff = now - LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
+  return state.runs.filter((run) => typeof run.startedAt === "number" && run.startedAt > cutoff && run.startedAt <= now).length;
 }
 
-export function liveRequestBudgetRemaining(policy: LabAutomationPolicyV1, state: LabAutomationStateV1): number {
-  return Math.max(0, policy.maxLiveRequestsPerHour - state.liveRequestsThisHour);
+function rollingStartedLiveRuns(state: LabAutomationStateV1, now: number): number {
+  const cutoff = now - LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
+  return state.runs.filter((run) =>
+    run.evidenceLayer === "live_route_compatibility"
+    && typeof run.startedAt === "number"
+    && run.startedAt > cutoff
+    && run.startedAt <= now
+  ).length;
 }
 
-export function isRunBudgetExhausted(policy: LabAutomationPolicyV1, state: LabAutomationStateV1): boolean {
-  return runBudgetRemaining(policy, state) <= 0;
+function legacyCounterActive(state: LabAutomationStateV1, now: number): boolean {
+  return now - state.budgetWindowStartedAt < LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
 }
 
-export function isLiveRequestBudgetExhausted(policy: LabAutomationPolicyV1, state: LabAutomationStateV1): boolean {
-  return liveRequestBudgetRemaining(policy, state) <= 0;
+export function runBudgetRemaining(
+  policy: LabAutomationPolicyV1,
+  state: LabAutomationStateV1,
+  now = Date.now(),
+): number {
+  const rolling = rollingStartedRuns(state, now);
+  const legacy = legacyCounterActive(state, now) ? state.runsThisHour : 0;
+  return Math.max(0, policy.maxRunsPerHour - Math.max(rolling, legacy));
 }
 
+export function liveRequestBudgetRemaining(
+  policy: LabAutomationPolicyV1,
+  state: LabAutomationStateV1,
+  now = Date.now(),
+): number {
+  const rolling = rollingStartedLiveRuns(state, now);
+  const legacy = legacyCounterActive(state, now) ? state.liveRequestsThisHour : 0;
+  return Math.max(0, policy.maxLiveRequestsPerHour - Math.max(rolling, legacy));
+}
+
+export function isRunBudgetExhausted(
+  policy: LabAutomationPolicyV1,
+  state: LabAutomationStateV1,
+  now = Date.now(),
+): boolean {
+  return runBudgetRemaining(policy, state, now) <= 0;
+}
+
+export function isLiveRequestBudgetExhausted(
+  policy: LabAutomationPolicyV1,
+  state: LabAutomationStateV1,
+  now = Date.now(),
+): boolean {
+  return liveRequestBudgetRemaining(policy, state, now) <= 0;
+}
+
+/** Legacy persisted counters remain for schema compatibility; startedAt records are rolling authority. */
 export function recordRunBudgetUse(state: LabAutomationStateV1, liveRequest: boolean): LabAutomationStateV1 {
   return {
     ...state,
-    runsThisHour: state.runsThisHour + 1,
-    liveRequestsThisHour: liveRequest ? state.liveRequestsThisHour + 1 : state.liveRequestsThisHour,
+    runsThisHour: Math.min(LAB_AUTOMATION_HARD_MAX.maxRunsPerHour, state.runsThisHour + 1),
+    liveRequestsThisHour: liveRequest
+      ? Math.min(LAB_AUTOMATION_HARD_MAX.maxLiveRequestsPerHour, state.liveRequestsThisHour + 1)
+      : state.liveRequestsThisHour,
   };
 }
