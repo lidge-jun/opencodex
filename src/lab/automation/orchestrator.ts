@@ -4,10 +4,16 @@ import {
   loadLabAutomationPolicy,
   loadLabAutomationRoutes,
   loadLabAutomationState,
-  saveLabAutomationState,
+  mutateLabAutomationState,
 } from "./persistence";
-import { rollBudgetWindow, recordRunBudgetUse, runBudgetRemaining, liveRequestBudgetRemaining, isRunBudgetExhausted, isLiveRequestBudgetExhausted } from "./budgets";
-import { cooldownForFailure, setCooldown } from "./cooldown";
+import {
+  rollBudgetWindow,
+  runBudgetRemaining,
+  liveRequestBudgetRemaining,
+  isRunBudgetExhausted,
+  isLiveRequestBudgetExhausted,
+} from "./budgets";
+import { clearCooldown, cooldownForFailure, setCooldown } from "./cooldown";
 import {
   enqueuePlannedRuns,
   selectDispatchableRuns,
@@ -17,7 +23,13 @@ import {
 } from "./queue";
 import { dispatchLabAutomationRun, type DispatchResult } from "./dispatch";
 import { recoverLabAutomationState } from "./recovery";
-import type { AutomationDispatchDeps, LabAutomationRunRecordV1, LabAutomationStatusV1 } from "./types";
+import type {
+  AutomationDispatchDeps,
+  LabAutomationPolicyV1,
+  LabAutomationRoutesV1,
+  LabAutomationRunRecordV1,
+  LabAutomationStatusV1,
+} from "./types";
 import { LabAutomationError } from "./types";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
 import { cancelQueuedRun } from "./queue";
@@ -48,7 +60,8 @@ export function buildLabAutomationStatus(configDir?: string): LabAutomationStatu
   const policy = loadLabAutomationPolicy(configDir);
   const routes = loadLabAutomationRoutes(configDir);
   const state = loadLabAutomationState(configDir);
-  const hourAgo = Date.now() - LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
+  const now = Date.now();
+  const hourAgo = now - LAB_AUTOMATION_HARD_MAX.budgetWindowMs;
   const completedLastHour = state.runs.filter((row) => row.state === "completed" && (row.completedAt ?? 0) >= hourAgo).length;
   const blockedLastHour = state.runs.filter((row) => row.state === "blocked" && (row.completedAt ?? 0) >= hourAgo).length;
   return {
@@ -59,45 +72,168 @@ export function buildLabAutomationStatus(configDir?: string): LabAutomationStatu
       running: countRunsByState(state, "running"),
       completedLastHour,
       blockedLastHour,
-      remainingRunBudget: runBudgetRemaining(policy, state),
-      remainingLiveRequestBudget: liveRequestBudgetRemaining(policy, state),
+      remainingRunBudget: runBudgetRemaining(policy, state, now),
+      remainingLiveRequestBudget: liveRequestBudgetRemaining(policy, state, now),
     },
     schedulerRunning: isLabAutomationSchedulerRunning(),
   };
 }
 
-async function runDispatchBatch(configDir?: string, now = Date.now()): Promise<void> {
+function scheduledEligibilityCode(
+  policy: LabAutomationPolicyV1,
+  routes: LabAutomationRoutesV1,
+  run: LabAutomationRunRecordV1,
+): string | null {
+  if (run.trigger !== "scheduled") return null;
+  if (!policy.enabled) return "automation_disabled";
+  switch (run.evidenceLayer) {
+    case "protocol_conformance":
+      return policy.layers.protocolConformance ? null : "layer_disabled";
+    case "live_route_compatibility": {
+      if (!policy.layers.liveRouteCompatibility) return "layer_disabled";
+      if (!run.providerName || !run.modelId) return "route_ineligible";
+      const enrolled = routes.routes.some((route) =>
+        route.providerName === run.providerName && route.modelId === run.modelId
+      );
+      return enrolled ? null : "route_ineligible";
+    }
+    case "task_effectiveness":
+      if (!policy.layers.taskEffectiveness) return "layer_disabled";
+      return policy.taskEffectivenessBackgroundEnabled ? null : "task_background_disabled";
+  }
+}
+
+function reconcileQueuedState(
+  state: ReturnType<typeof loadLabAutomationState>,
+  policy: LabAutomationPolicyV1,
+  routes: LabAutomationRoutesV1,
+  now: number,
+): ReturnType<typeof loadLabAutomationState> {
+  let next = state;
+  for (const run of state.runs) {
+    if (run.state !== "queued" || run.trigger !== "scheduled") continue;
+    const code = scheduledEligibilityCode(policy, routes, run);
+    if (code) next = transitionRun(next, run.runId, "cancelled", now, code);
+  }
+  return next;
+}
+
+/** Apply current policy/route enrollment to already queued scheduled work without executing it. */
+export function reconcileLabAutomationQueue(configDir?: string): void {
+  const policy = loadLabAutomationPolicy(configDir);
+  const routes = loadLabAutomationRoutes(configDir);
+  const now = Date.now();
+  mutateLabAutomationState(configDir, (state) => ({
+    state: trimTerminalRuns(reconcileQueuedState(state, policy, routes, now), now),
+    value: undefined,
+  }));
+}
+
+function loadPlannerConfig(): import("../../types").OcxConfig | undefined {
+  try {
+    return dispatchDeps.loadConfig?.() ?? readConfigDiagnostics().config;
+  } catch {
+    return undefined;
+  }
+}
+
+function claimNextRun(
+  policy: LabAutomationPolicyV1,
+  routes: LabAutomationRoutesV1,
+  planned: ReturnType<typeof planLabAutomationRuns>,
+  configDir: string | undefined,
+  now: number,
+  manualRunId?: string,
+): LabAutomationRunRecordV1 | null {
+  return mutateLabAutomationState(configDir, (loaded) => {
+    let state = rollBudgetWindow(loaded, now);
+    state = reconcileQueuedState(state, policy, routes, now);
+    if (policy.enabled && manualRunId === undefined) {
+      state = enqueuePlannedRuns(state, planned, "scheduled", now);
+    }
+    if (isRunBudgetExhausted(policy, state, now)) {
+      return { state: trimTerminalRuns(state, now), value: null };
+    }
+    const predicate = (run: LabAutomationRunRecordV1): boolean => {
+      if (manualRunId !== undefined) return run.runId === manualRunId && run.trigger === "manual";
+      return policy.enabled && run.trigger === "scheduled";
+    };
+    const dispatchable = selectDispatchableRuns(policy, state, now, (run) => {
+      if (!predicate(run)) return false;
+      if (run.evidenceLayer === "live_route_compatibility" && isLiveRequestBudgetExhausted(policy, state, now)) {
+        return false;
+      }
+      return scheduledEligibilityCode(policy, routes, run) === null;
+    });
+    const selected = dispatchable[0];
+    if (!selected) return { state: trimTerminalRuns(state, now), value: null };
+    state = transitionRun(state, selected.runId, "running", now);
+    const running = state.runs.find((run) => run.runId === selected.runId) ?? null;
+    return { state: trimTerminalRuns(state, now), value: running };
+  });
+}
+
+function finalizeRun(
+  run: LabAutomationRunRecordV1,
+  policy: LabAutomationPolicyV1,
+  configDir: string | undefined,
+  result: DispatchResult | null,
+  error: unknown,
+  cancelled: boolean,
+): void {
+  const completedAt = Date.now();
+  mutateLabAutomationState(configDir, (state) => {
+    const current = state.runs.find((row) => row.runId === run.runId);
+    if (!current || current.state !== "running") {
+      return { state: trimTerminalRuns(state, completedAt), value: undefined };
+    }
+    let next = state;
+    if (cancelled || (error instanceof LabAutomationError && error.code === "cancelled")) {
+      next = transitionRun(next, run.runId, "cancelled", completedAt, "cancelled");
+      return { state: trimTerminalRuns(next, completedAt), value: undefined };
+    }
+    if (result) {
+      next = transitionRun(next, run.runId, result.terminalState, completedAt, result.terminalCode);
+      if (result.terminalState === "completed") {
+        next = clearCooldown(next, run.runKey);
+      } else {
+        next = setCooldown(
+          next,
+          run.runKey,
+          cooldownForFailure(policy, result.cooldownCode, completedAt),
+        );
+      }
+      return { state: trimTerminalRuns(next, completedAt), value: undefined };
+    }
+    const terminalCode = error instanceof LabAutomationError ? error.code : "dispatch_failure";
+    next = transitionRun(next, run.runId, "failed", completedAt, terminalCode);
+    next = setCooldown(next, run.runKey, cooldownForFailure(policy, "harness_failure", completedAt));
+    return { state: trimTerminalRuns(next, completedAt), value: undefined };
+  });
+}
+
+async function runDispatchBatch(
+  configDir?: string,
+  options: { manualRunId?: string } = {},
+): Promise<void> {
   if (shutdownRequested) return;
   const policy = loadLabAutomationPolicy(configDir);
-  if (!policy.enabled) return;
-  let state = rollBudgetWindow(loadLabAutomationState(configDir), now);
   const routes = loadLabAutomationRoutes(configDir);
-  let config: import("../../types").OcxConfig | undefined;
-  try {
-    config = readConfigDiagnostics().config;
-  } catch {
-    config = undefined;
-  }
-  const planned = planLabAutomationRuns({
-    policy,
-    routes,
-    state,
-    now,
-    config,
-    configDir,
-  });
-  state = enqueuePlannedRuns(state, planned, "scheduled", now);
-  const dispatchable = selectDispatchableRuns(policy, state, now);
-  for (const run of dispatchable) {
+  if (!policy.enabled && options.manualRunId === undefined) return;
+  const config = loadPlannerConfig();
+  const snapshot = loadLabAutomationState(configDir);
+  const planned = policy.enabled && options.manualRunId === undefined
+    ? planLabAutomationRuns({ policy, routes, state: snapshot, now: Date.now(), config, configDir })
+    : [];
+  const maxDispatches = options.manualRunId ? 1 : Math.max(1, policy.maxConcurrentRuns);
+  for (let dispatched = 0; dispatched < maxDispatches; dispatched += 1) {
     if (shutdownRequested) break;
-    if (isRunBudgetExhausted(policy, state)) break;
-    if (run.evidenceLayer === "live_route_compatibility" && isLiveRequestBudgetExhausted(policy, state)) {
-      continue;
-    }
-    state = transitionRun(state, run.runId, "running", now);
-    saveLabAutomationState(state, configDir);
+    const run = claimNextRun(policy, routes, planned, configDir, Date.now(), options.manualRunId);
+    if (!run) break;
     const controller = new AbortController();
     inFlightControllers.set(run.runId, controller);
+    let result: DispatchResult | null = null;
+    let error: unknown;
     try {
       const deps: AutomationDispatchDeps = {
         ...dispatchDeps,
@@ -105,36 +241,17 @@ async function runDispatchBatch(configDir?: string, now = Date.now()): Promise<v
         loadConfig: dispatchDeps.loadConfig ?? (() => readConfigDiagnostics().config),
         abortSignal: controller.signal,
       };
-      const result: DispatchResult = await dispatchLabAutomationRun(run, deps);
-      if (cancellingRunIds.has(run.runId) || controller.signal.aborted) {
-        state = transitionRun(state, run.runId, "cancelled", Date.now(), "cancelled");
-      } else {
-        state = recordRunBudgetUse(state, result.liveRequest);
-        state = transitionRun(state, run.runId, result.terminalState, Date.now(), result.terminalCode);
-        if (result.terminalState !== "completed") {
-          state = setCooldown(
-            state,
-            run.runKey,
-            cooldownForFailure(policy, result.terminalCode, Date.now()),
-          );
-        }
-      }
-    } catch (error) {
-      if (cancellingRunIds.has(run.runId) || (error instanceof LabAutomationError && error.code === "cancelled")) {
-        state = transitionRun(state, run.runId, "cancelled", Date.now(), "cancelled");
-      } else {
-        const code = error instanceof Error ? error.message : "dispatch_failure";
-        state = transitionRun(state, run.runId, "failed", Date.now(), code);
-        state = setCooldown(state, run.runKey, cooldownForFailure(policy, "harness_failure", Date.now()));
-      }
+      result = await dispatchLabAutomationRun(run, deps);
+    } catch (caught) {
+      error = caught;
     } finally {
+      const cancelled = cancellingRunIds.has(run.runId) || controller.signal.aborted;
+      finalizeRun(run, policy, configDir, result, error, cancelled);
       inFlightControllers.delete(run.runId);
       cancellingRunIds.delete(run.runId);
     }
-    state = trimTerminalRuns(state, Date.now());
-    saveLabAutomationState(state, configDir);
+    if (options.manualRunId !== undefined) break;
   }
-  saveLabAutomationState(trimTerminalRuns(state, now), configDir);
 }
 
 /** Single bounded scheduler tick — plan, enqueue, dispatch within concurrency limits. */
@@ -152,9 +269,13 @@ export function startLabAutomationScheduler(configDir?: string): void {
   if (schedulerTimer) return;
   shutdownRequested = false;
   const policy = loadLabAutomationPolicy(configDir);
-  let state = loadLabAutomationState(configDir);
-  state = recoverLabAutomationState(policy, state, Date.now());
-  saveLabAutomationState(state, configDir);
+  const routes = loadLabAutomationRoutes(configDir);
+  const now = Date.now();
+  mutateLabAutomationState(configDir, (state) => {
+    let next = recoverLabAutomationState(policy, state, now);
+    next = reconcileQueuedState(next, policy, routes, now);
+    return { state: trimTerminalRuns(next, now), value: undefined };
+  });
   schedulerTimer = setInterval(() => {
     void runLabAutomationTick(configDir);
   }, LAB_AUTOMATION_HARD_MAX.schedulerTickMs);
@@ -182,28 +303,29 @@ export async function enqueueManualLabRun(
   configDir?: string,
 ): Promise<LabAutomationRunRecordV1 | null> {
   const now = Date.now();
-  let state = loadLabAutomationState(configDir);
-  state = enqueuePlannedRuns(state, [planned], "manual", now);
-  saveLabAutomationState(state, configDir);
-  const created = state.runs.find((row) => row.runKey === planned.runKey && row.trigger === "manual");
+  const created = mutateLabAutomationState(configDir, (state) => {
+    const next = enqueuePlannedRuns(state, [planned], "manual", now);
+    const run = next.runs.find((row) =>
+      row.runKey === planned.runKey && row.trigger === "manual" && row.state === "queued"
+    ) ?? null;
+    return { state: next, value: run };
+  });
   if (!created) return null;
-  await runLabAutomationTick(configDir);
+  // Manual execution is independent of automation enablement/layer toggles.
+  await runDispatchBatch(configDir, { manualRunId: created.runId });
   return loadLabAutomationState(configDir).runs.find((row) => row.runId === created.runId) ?? created;
 }
 
 export function cancelLabAutomationRun(runId: string, configDir?: string): boolean {
-  const state = loadLabAutomationState(configDir);
-  const run = state.runs.find((row) => row.runId === runId);
-  if (!run) return false;
-  if (run.state === "queued") {
-    saveLabAutomationState(cancelQueuedRun(state, runId, Date.now()), configDir);
-    return true;
-  }
-  if (run.state === "running") {
+  const controller = inFlightControllers.get(runId);
+  if (controller) {
     cancellingRunIds.add(runId);
-    const controller = inFlightControllers.get(runId);
-    if (controller) controller.abort(new Error("cancelled"));
+    controller.abort(new Error("cancelled"));
     return true;
   }
-  return false;
+  return mutateLabAutomationState(configDir, (state) => {
+    const run = state.runs.find((row) => row.runId === runId);
+    if (!run || run.state !== "queued") return { state, value: false };
+    return { state: cancelQueuedRun(state, runId, Date.now()), value: true };
+  });
 }
