@@ -537,6 +537,14 @@ async function pollForToken(
   signal?: AbortSignal,
 ): Promise<OAuthCredentials> {
   const deadline = Date.now() + expiresInMs;
+  // Deadline-aware retry wait: never sleep past the device-flow deadline, so a
+  // late retry cannot delay the expiration report or accept a stale response.
+  const sleepUntilDeadline = async (ms: number) => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) return false;
+    await sleep(Math.min(ms, remainingMs), signal);
+    return true;
+  };
   let waitMs = Math.max(1000, intervalMs);
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("Login cancelled");
@@ -560,25 +568,28 @@ async function pollForToken(
       // current wait interval. The device-code grant is idempotent for the
       // pending case, so a retried poll is safe (unlike the refresh path).
       if (signal?.aborted) throw new Error("Login cancelled");
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) break;
-      await sleep(Math.min(waitMs, remainingMs), signal);
-      continue;
+      if (await sleepUntilDeadline(waitMs)) continue;
+      break;
     }
     // Parse once and pass the payload through to the failure path (review #8),
     // so we never try to re-read a body that has already been consumed.
-    const payload = (await response.json().catch(() => ({}))) as NousTokenResponse;
+    // Normalize a successful-but-non-object body (for example valid JSON
+    // `null`) to an empty object so the required-field validation below
+    // produces a terminal NousTokenError instead of a raw TypeError.
+    const parsed = (await response.json().catch(() => ({}))) as unknown;
+    const payload = (parsed && typeof parsed === "object" ? parsed : {}) as NousTokenResponse;
+    if (Date.now() >= deadline) break;
     if (response.ok) return parseTokenPayload(payload, "");
     const error = payload.error;
     if (error === "authorization_pending") {
-      await sleep(waitMs, signal);
+      if (!(await sleepUntilDeadline(waitMs))) break;
       continue;
     }
     if (error === "slow_down") {
       waitMs = Math.min(MAX_POLL_INTERVAL_MS, waitMs + 5000);
       const retryAfter = typeof payload.interval === "number" ? payload.interval * 1000 : undefined;
       if (retryAfter && retryAfter > waitMs) waitMs = Math.min(MAX_POLL_INTERVAL_MS, retryAfter);
-      await sleep(waitMs, signal);
+      if (!(await sleepUntilDeadline(waitMs))) break;
       continue;
     }
     if (error === "expired_token") {

@@ -336,6 +336,28 @@ describe("Nous device-flow error handling", () => {
     expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
     expect((err as { terminal?: boolean }).terminal).toBe(true);
   });
+
+  test("a successful device-flow response with a null body is a terminal invalid_token error, not a TypeError", async () => {
+    // A 200 response whose body is valid JSON `null` must be normalized to an
+    // empty object so parseTokenPayload raises the intended terminal
+    // invalid_token error instead of dereferencing null into a raw TypeError.
+    globalThis.fetch = deviceFlowFetch(() =>
+      new Response("null", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    const ctrl: OAuthController = { onAuth() {} };
+    let err: unknown;
+    try {
+      await loginNous(ctrl);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TypeError);
+    expect((err as Error).message).toContain("did not include an access token");
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
+  });
 });
 
 describe("Nous Portal base URL hardening", () => {
