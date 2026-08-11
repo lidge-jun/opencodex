@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { delimiter, dirname, extname, join, posix } from "node:path";
 import {
   chmodSync,
@@ -33,6 +34,9 @@ const CODEX_SHIM_PROBE_BYTES = 16 * 1024;
 export const CODEX_SHIM_REPLACEMENT_STABLE_MS = 100;
 export const CODEX_SHIM_STATE_MAX_BYTES = 1024 * 1024;
 const CODEX_SHIM_RESTORE_LOCK_STALE_MS = 30_000;
+const CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS = 5_000;
+const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
+const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx restore and reinstall Codex before enabling codexAutoStart.";
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let lastShimDiscoveryError: string | null = null;
 /** Last human-readable reason discovery returned null (exposed for doctor/tests). */
@@ -384,8 +388,8 @@ export function buildUnixCodexShim(realCodexPath: string, bunPath: string, cliPa
   return `#!/usr/bin/env sh
 # ${SHIM_MARKER}
 if [ "\${OCX_SHIM_ACTIVE_PID:-}" = "$$" ]; then
-  printf '%s\n' 'opencodex: saved Codex launcher resolved back to the autostart shim; run ocx restore and reinstall Codex before enabling codexAutoStart.' >&2
-  exit 126
+  printf '%s\n' ${shQuote(CODEX_SHIM_REENTRY_DIAGNOSTIC)} >&2
+  exit ${CODEX_SHIM_REENTRY_EXIT_CODE}
 fi
 # Dynamic launchers such as mise exec -- codex may resolve the command name
 # back to this wrapper. An exec chain keeps the same PID; a legitimate nested
@@ -433,6 +437,40 @@ case "$ocx_subcommand" in
 esac
 exec ${shQuote(realCodexPath)} "$@"
 `;
+}
+
+function probeUnixShimInstall(wrapperPath: string): "recursive" | "timeout" | null {
+  if (process.platform === "win32") return null;
+  const env: NodeJS.ProcessEnv = { ...process.env, OCX_SHIM_BYPASS: "1" };
+  delete env.OCX_SHIM_ACTIVE_PID;
+  const result = spawnSync("/bin/sh", [wrapperPath, "--version"], {
+    encoding: "utf8",
+    env,
+    timeout: CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return "timeout";
+  if (result.status === CODEX_SHIM_REENTRY_EXIT_CODE && result.stderr.includes(CODEX_SHIM_REENTRY_DIAGNOSTIC)) {
+    return "recursive";
+  }
+  return null;
+}
+
+function rollbackFreshShimInstall(targets: readonly ShimFileState[]): void {
+  const errors: Error[] = [];
+  for (const target of [...targets].reverse()) {
+    try {
+      if (!target.preserveOnly && existsSync(target.wrapperPath) && isShim(target.wrapperPath)) unlinkSync(target.wrapperPath);
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    try {
+      if (existsSync(target.backupPath) && !existsSync(target.originalPath)) renameSync(target.backupPath, target.originalPath);
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, "Codex shim install validation rollback failed");
 }
 
 function windowsBatchValue(value: string): string {
@@ -1072,6 +1110,19 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   for (const target of targets) {
     if (existsSync(target.originalPath)) renameSync(target.originalPath, target.backupPath);
     if (!target.preserveOnly) writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+  }
+  if (process.platform !== "win32") {
+    const unsafe = targets.map(target => probeUnixShimInstall(target.wrapperPath)).find(result => result !== null);
+    if (unsafe) {
+      rollbackFreshShimInstall(targets);
+      const reason = unsafe === "recursive"
+        ? "the saved launcher resolved back to the generated shim"
+        : `the saved launcher did not finish --version within ${CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS}ms`;
+      return {
+        installed: false,
+        message: `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
+      };
+    }
   }
   writeState(primaryState(targets));
   return {

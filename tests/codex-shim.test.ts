@@ -254,6 +254,81 @@ exit 64
     }
   });
 
+  test("Unix install rejects a recursive dynamic launcher and restores the original", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-reentry-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-reentry-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const misePath = join(binDir, "mise");
+    const original = `#!/bin/sh\nexec "${misePath}" exec -- codex "$@"\n`;
+    try {
+      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(misePath, `#!/bin/sh
+if [ "$1" = exec ] && [ "$2" = -- ] && [ "$3" = codex ]; then
+  shift 3
+  exec codex "$@"
+fi
+exit 64
+`, "utf8");
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(misePath, 0o755);
+      chmodSync(codexPath, 0o755);
+
+      const installed = installCodexShim();
+
+      expect(installed.installed).toBe(false);
+      expect(installed.message).toContain("saved launcher resolved back to the generated shim");
+      expect(installed.message).toContain("original launcher was restored");
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("Unix install rolls back when launcher validation times out", () => {
+    if (process.platform === "win32") return;
+
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-timeout-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, "codex");
+    const original = "#!/bin/sh\nexec /bin/sleep 30\n";
+    try {
+      process.env.PATH = `${binDir}:${oldPath ?? ""}`;
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, "utf8");
+      chmodSync(codexPath, 0o755);
+
+      const installed = installCodexShim();
+
+      expect(installed.installed).toBe(false);
+      expect(installed.message).toContain("did not finish --version within 5000ms");
+      expect(installed.message).toContain("original launcher was restored");
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   test("Unix shim permits a real Codex process to start a new child invocation", () => {
     if (process.platform === "win32") return;
 
