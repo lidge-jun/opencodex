@@ -512,7 +512,7 @@ export const DISPATCH_ALIASES: ReadonlyMap<string, string> = aliasTargets;
  * canonical runner. Returns undefined when the command is unknown. */
 export function resolveDispatchCommand(command: string | undefined): string | undefined {
   if (command === undefined) return undefined;
-  if (command in commandRunners) return command;
+  if (Object.prototype.hasOwnProperty.call(commandRunners, command)) return command;
   return aliasTargets.get(command);
 }
 

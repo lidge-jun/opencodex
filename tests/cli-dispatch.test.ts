@@ -47,6 +47,14 @@ describe("CLI dispatch aliases", () => {
     expect(resolveDispatchCommand("definitely-not-a-command")).toBeUndefined();
     expect(resolveDispatchCommand(undefined)).toBeUndefined();
   });
+
+  test("resolveDispatchCommand rejects inherited Object property names", () => {
+    // commandRunners is a normal object; inherited names (__proto__,
+    // constructor, toString) must not resolve as valid commands.
+    expect(resolveDispatchCommand("__proto__")).toBeUndefined();
+    expect(resolveDispatchCommand("constructor")).toBeUndefined();
+    expect(resolveDispatchCommand("toString")).toBeUndefined();
+  });
 });
 
 describe("dispatchCommand exit codes", () => {
@@ -60,5 +68,12 @@ describe("dispatchCommand exit codes", () => {
   test("returns 1 for an unknown command", async () => {
     const head = { kind: "command" as const, command: "definitely-not-a-command", args: ["definitely-not-a-command"] };
     expect(await dispatchCommand(head, fakeDeps)).toBe(1);
+  });
+
+  test("returns 1 for inherited Object property names", async () => {
+    for (const name of ["__proto__", "constructor", "toString"]) {
+      const head = { kind: "command" as const, command: name, args: [name] };
+      expect(await dispatchCommand(head, fakeDeps), `${name} must be unknown`).toBe(1);
+    }
   });
 });
