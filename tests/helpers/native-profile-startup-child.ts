@@ -58,6 +58,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 }) as typeof fetch;
 
 const server = startServer(0, {
+  inspectNativeCodexOwnership: () => ({
+    ownership: "owned",
+    reason: "native startup test fixture",
+  }),
   nativeMainStartup: {
     manager,
     beforeRecovery: async () => {

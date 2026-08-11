@@ -20,8 +20,15 @@ export type NativeMainStartupGateSnapshot =
   | { status: "ready"; homeId: string | null }
   | {
       status: "blocked";
-      homeId: string;
-      reason: "recovery-pending" | "manual-recovery" | "owner-conflict" | "owner-unavailable" | "stage-cleanup-required";
+      homeId: string | null;
+      reason:
+        | "foreign-ownership"
+        | "ownership-unknown"
+        | "recovery-pending"
+        | "manual-recovery"
+        | "owner-conflict"
+        | "owner-unavailable"
+        | "stage-cleanup-required";
     };
 
 export interface NativeMainStartupGateDeps {
@@ -42,6 +49,10 @@ export interface NativeMainStartupLifecycle {
 let epoch = 0;
 let snapshot: NativeMainStartupGateSnapshot = { status: "ready", homeId: null };
 let settled: Promise<NativeMainStartupGateSnapshot> = Promise.resolve(snapshot);
+export type NativeMainServiceOwnershipBlockReason =
+  | "foreign-ownership"
+  | "ownership-unknown";
+const serviceOwnershipRefs = new Map<NativeMainServiceOwnershipBlockReason, number>();
 interface StartupEntry {
   homeId: string;
   refs: number;
@@ -295,6 +306,37 @@ export function startNativeMainStartupLifecycle(
   };
 }
 
+function activeServiceOwnershipBlockReason(): NativeMainServiceOwnershipBlockReason | null {
+  if ((serviceOwnershipRefs.get("foreign-ownership") ?? 0) > 0) return "foreign-ownership";
+  if ((serviceOwnershipRefs.get("ownership-unknown") ?? 0) > 0) return "ownership-unknown";
+  return null;
+}
+
+function serviceOwnershipSnapshot(
+  reason: NativeMainServiceOwnershipBlockReason,
+): NativeMainStartupGateSnapshot {
+  return { status: "blocked", homeId: null, reason };
+}
+
+/** Close native-main admission without resolving or creating any CODEX_HOME artifacts. */
+export function blockNativeMainStartupForUnownedServiceHome(
+  reason: NativeMainServiceOwnershipBlockReason,
+): NativeMainStartupLifecycle {
+  serviceOwnershipRefs.set(reason, (serviceOwnershipRefs.get(reason) ?? 0) + 1);
+  let released = false;
+  return {
+    homeId: null,
+    settled: Promise.resolve(serviceOwnershipSnapshot(reason)),
+    async release() {
+      if (released) return;
+      released = true;
+      const remaining = Math.max(0, (serviceOwnershipRefs.get(reason) ?? 0) - 1);
+      if (remaining === 0) serviceOwnershipRefs.delete(reason);
+      else serviceOwnershipRefs.set(reason, remaining);
+    },
+  };
+}
+
 export function bindNativeMainStartupLifecycle(server: object, lifecycle: NativeMainStartupLifecycle): void {
   serverLifecycles.set(server, lifecycle);
 }
@@ -307,7 +349,7 @@ export async function releaseNativeMainStartupLifecycle(server: object): Promise
 }
 
 export function isNativeMainTrafficBlocked(): boolean {
-  return snapshot.status === "blocked";
+  return activeServiceOwnershipBlockReason() !== null || snapshot.status === "blocked";
 }
 
 /**
@@ -340,9 +382,13 @@ export function completeNativeMainRecovery(homeId: string): boolean {
 }
 
 export function nativeMainStartupGateSnapshot(): NativeMainStartupGateSnapshot {
+  const reason = activeServiceOwnershipBlockReason();
+  if (reason) return serviceOwnershipSnapshot(reason);
   return { ...snapshot };
 }
 
 export function waitForNativeMainStartupGate(): Promise<NativeMainStartupGateSnapshot> {
+  const reason = activeServiceOwnershipBlockReason();
+  if (reason) return Promise.resolve(serviceOwnershipSnapshot(reason));
   return settled;
 }

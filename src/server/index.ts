@@ -23,7 +23,10 @@ import { withCatalogWriteSerialization } from "../codex/catalog-write-serializat
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { getCodexHome } from "../codex/paths";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
-import { inspectNativeCodexOwnership } from "../integrations/native/ownership-preflight";
+import {
+  inspectNativeCodexOwnership,
+  type OwnershipInspection,
+} from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
 import {
   reconcileLiveStateStores,
@@ -162,6 +165,7 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import {
   bindNativeMainStartupLifecycle,
+  blockNativeMainStartupForUnownedServiceHome,
   releaseNativeMainStartupLifecycle,
   startNativeMainStartupLifecycle,
   type NativeMainStartupGateDeps,
@@ -426,12 +430,25 @@ export interface StartServerDeps {
   managementApi?: ManagementApiDeps;
   /** Test-only native-main recovery dependencies; production constructs the normal manager. */
   nativeMainStartup?: NativeMainStartupGateDeps;
+  /** Test-only ownership evidence; production inspects the installed service state. */
+  inspectNativeCodexOwnership?: typeof inspectNativeCodexOwnership;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
   /** Test-only seam; production derives a fresh local-attestation secret per process. */
   localAttestationSecret?: string;
   /** Optional readiness gate; a fresh pending gate is created when omitted. */
   readinessGate?: ReadinessGate;
+}
+
+function inspectStartupOwnership(deps: StartServerDeps): OwnershipInspection {
+  try {
+    return (deps.inspectNativeCodexOwnership ?? inspectNativeCodexOwnership)();
+  } catch {
+    return {
+      ownership: "unknown",
+      reason: "service-home ownership inspection failed",
+    };
+  }
 }
 
 /*
@@ -498,21 +515,28 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       if (migrated) saveConfig(config);
     }
   }
+  // Resolve unattended service-home authority before any Codex lock, cache, owner,
+  // journal, or credential path. Both positive foreign evidence and an unprovable
+  // ownership state are non-authority.
+  startupCacheInvalidationWrote = false;
+  const startupCacheOwnership = inspectStartupOwnership(deps);
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit, but both the
   // home resolution and the acquisition can fail on a machine with no Codex home —
   // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
   // otherwise turn "no Codex installed" into "proxy will not start".
-  try {
-    const startupCodexHome = getCodexHome();
-    // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
-    // with the later startup sync and warns ONCE about stale app-servers; warning
-    // here instead would read a catalog mtime the sync is about to move.
-    const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
-    // A refused permit is not a write; only a completed run that returned true is.
-    startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
-  } catch { /* no readable Codex home: nothing to invalidate */ }
+  if (startupCacheOwnership.ownership === "owned") {
+    try {
+      const startupCodexHome = getCodexHome();
+      // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
+      // with the later startup sync and warns ONCE about stale app-servers; warning
+      // here instead would read a catalog mtime the sync is about to move.
+      const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
+        invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+      // A refused permit is not a write; only a completed run that returned true is.
+      startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
+    } catch { /* no readable Codex home: nothing to invalidate */ }
+  }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
   // the server can serve a request, and AFTER the startup migrations above — those run
   // against a config nobody else holds and are the documented exception to the save
@@ -651,10 +675,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // CODEX_HOME. When the user has disabled the Codex integration, starting the
   // proxy must not manufacture those Codex artifacts merely to serve other
   // clients; no Codex request can use this lifecycle in that state.
-  const nativeOwnership = inspectNativeCodexOwnership();
+  // Re-probe here instead of trusting the earlier cache decision: startup work
+  // between the two sites must not widen the service-install race.
+  const nativeOwnership = inspectStartupOwnership(deps);
   const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
-    && nativeOwnership.ownership !== "foreign"
-    ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
+    ? nativeOwnership.ownership === "owned"
+      ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
+      : blockNativeMainStartupForUnownedServiceHome(
+        nativeOwnership.ownership === "foreign" ? "foreign-ownership" : "ownership-unknown",
+      )
     : {
       homeId: null,
       settled: Promise.resolve({ status: "ready", homeId: null }),
