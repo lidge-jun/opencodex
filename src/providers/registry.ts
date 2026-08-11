@@ -2323,6 +2323,24 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     noVisionModels: OPENCODE_ZEN_TEXT_ONLY_MODELS,
   },
   { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
+  // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic
+  // preset above and the paid token-plan host below. Keep a separate fixed-destination contract
+  // so existing custom providers are never retargeted while the official route receives the
+  // strict reasoning ladder its validator enforces (#1483).
+  {
+    id: "xiaomi-mimo",
+    label: "Xiaomi MiMo (OpenAI Chat)",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://platform.xiaomimimo.com/console/balance",
+    defaultModel: "mimo-v2.5",
+    models: ["mimo-v2.5"],
+    reasoningEfforts: ["low", "medium", "high"],
+    reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
+    preserveCustomDestination: true,
+    note: "Official Xiaomi MiMo OpenAI-compatible Chat endpoint. The upstream validator accepts reasoning_effort none/low/medium/high; higher Codex tiers are clamped to high.",
+  },
   { id: "kilo", label: "Kilo", baseUrl: "https://api.kilo.ai/api/gateway", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://kilo.ai" },
   {
     id: "mimo-free",
