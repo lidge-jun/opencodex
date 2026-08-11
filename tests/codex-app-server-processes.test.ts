@@ -340,15 +340,15 @@ describe("Codex app-server process matching (#476)", () => {
 });
 
 describe("CLI /api sync wiring for stale app-servers (#476)", () => {
-  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+  const dispatchSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
   const configRoutesSource = readFileSync(
     join(import.meta.dir, "..", "src", "server", "management", "config-routes.ts"),
     "utf8",
   );
 
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
-    const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
-    expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
+    const syncCase = dispatchSource.slice(dispatchSource.indexOf("sync: async"), dispatchSource.indexOf("v2: async"));
+    expect(syncCase).toContain('deps.args.slice(1).includes("--restart-codex")');
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
     expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase).toContain("restart: restartCodex");
@@ -361,9 +361,9 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   });
 
   test("ocx sync-cache only handles app-servers after a successful models_cache write", () => {
-    const syncCacheCase = cliSource.slice(
-      cliSource.indexOf('case "sync-cache":'),
-      cliSource.indexOf('case "gui":'),
+    const syncCacheCase = dispatchSource.slice(
+      dispatchSource.indexOf('"sync-cache": async'),
+      dispatchSource.indexOf("gui: async"),
     );
     // The cache write now happens under the catalog serialization lock K, so the
     // gate reads the permitted writer's outcome instead of a bare boolean call.
