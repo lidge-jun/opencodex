@@ -15,6 +15,7 @@ import {
   LAB_EVENT_SCHEMA_VERSION,
   LAB_PRODUCER,
   LAB_PROJECTION_SPEC_VERSION,
+  LAB_SQLITE_SCHEMA_VERSION,
 } from "../src/lab";
 import { createArtifactStore } from "../src/lab/artifacts/store";
 import { resolveProtocolExecutionContext } from "../src/lab/conformance/executor";
@@ -148,7 +149,7 @@ describe("CL-04 query layer", () => {
       seedProjection(home);
       const status = queryLabStatus(home);
       expect(status.projectionAvailable).toBe(true);
-      expect(status.sqliteSchemaVersion).toBe(2);
+      expect(status.sqliteSchemaVersion).toBe(LAB_SQLITE_SCHEMA_VERSION);
       expect(status.projectionSpecVersion).toBe(LAB_PROJECTION_SPEC_VERSION);
       expect(status.verdictCount).toBeGreaterThan(0);
 
