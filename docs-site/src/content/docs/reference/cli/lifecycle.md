@@ -287,6 +287,13 @@ dashboard UAC prompt or rerun `ocx service install` in an elevated PowerShell wi
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
 
+Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
+service startup is bypassed. It refuses the change and rolls back when the launcher resolves
+`codex` back to the shim, exits nonzero, exceeds five seconds, leaves descendants running, or
+cannot be validated and cleaned up safely. Therefore `codex-shim install` is not unconditional. If
+it is refused, reinstall Codex so the PATH entry is a concrete executable or launcher and retry;
+use `ocx service install` instead when a dynamic command-manager launcher cannot meet these checks.
+
 Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
 install, the command checks the current Codex routing and reports a warning instead of a green result
 when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables

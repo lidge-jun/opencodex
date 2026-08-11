@@ -7,6 +7,9 @@ import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildW
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const skipStabilityWait = () => {};
+const python3Path = process.platform === "win32"
+  ? ""
+  : spawnSync("/bin/sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
 
 function prependPath(dir: string, current: string | undefined): string {
   return [dir, current].filter(Boolean).join(delimiter);
@@ -18,6 +21,17 @@ function successfulLauncher(label: string): string {
 
 function processState(pid: number): string {
   return spawnSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+}
+
+function waitForProcessStop(pid: number, timeoutMs = 1_000): string {
+  const deadline = Date.now() + timeoutMs;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  let state = processState(pid);
+  while (state !== "" && !state.startsWith("Z") && Date.now() < deadline) {
+    Atomics.wait(waiter, 0, 0, 10);
+    state = processState(pid);
+  }
+  return state;
 }
 
 function expectProcessGroupMissing(groupId: number): void {
@@ -417,7 +431,7 @@ exit 126
     }
   });
 
-  test("Unix install rejects child-process redispatch and restores the original", () => {
+  test("Unix install rejects a launcher that leaves a background descendant", () => {
     if (process.platform === "win32") return;
 
     const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-child-reentry-bin-"));
@@ -425,33 +439,19 @@ exit 126
     const oldPath = process.env.PATH;
     const oldHome = process.env.OPENCODEX_HOME;
     const codexPath = join(binDir, "codex");
-    const launcherPath = join(binDir, "dynamic-launcher");
-    const childPidPath = join(home, "child-reentry.pid");
-    const grandchildPidPath = join(home, "child-reentry-grandchild.pid");
-    const groupIdPath = join(home, "child-reentry-group.pid");
-    const original = `#!/bin/sh\nexec "${launcherPath}" "$@"\n`;
+    const childPidPath = join(home, "background-child.pid");
+    const groupIdPath = join(home, "background-child-group.pid");
+    const original = `#!/bin/sh
+/bin/sleep 30 &
+child=$!
+printf '%s\\n' "$child" > "${childPidPath}"
+printf '%s\\n' "$$" > "${groupIdPath}"
+exit 0
+`;
     try {
       process.env.PATH = prependPath(binDir, oldPath);
       process.env.OPENCODEX_HOME = home;
-      writeFileSync(launcherPath, `#!/bin/sh
-if [ -n "$OCX_TEST_CHILD_REENTRY" ]; then
-  /bin/sleep 30 &
-  grandchild=$!
-  printf '%s\\n' "$grandchild" > "${grandchildPidPath}"
-  wait "$grandchild"
-  exec codex "$@"
-fi
-OCX_TEST_CHILD_REENTRY=1
-export OCX_TEST_CHILD_REENTRY
-printf '%s\\n' "$$" > "${groupIdPath}"
-codex "$@" &
-child=$!
-printf '%s\\n' "$child" > "${childPidPath}"
-while [ ! -f "${grandchildPidPath}" ]; do /bin/sleep 0.01; done
-exit 0
-`, "utf8");
       writeFileSync(codexPath, original, "utf8");
-      chmodSync(launcherPath, 0o755);
       chmodSync(codexPath, 0o755);
 
       const installed = installCodexShim();
@@ -462,13 +462,10 @@ exit 0
       expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
       expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
       const childPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
-      const grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8").trim(), 10);
       const groupId = Number.parseInt(readFileSync(groupIdPath, "utf8").trim(), 10);
       expectProcessGroupMissing(groupId);
       const childState = processState(childPid);
-      const grandchildState = processState(grandchildPid);
       expect(childState === "" || childState.startsWith("Z")).toBe(true);
-      expect(grandchildState === "" || grandchildState.startsWith("Z")).toBe(true);
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
@@ -478,6 +475,52 @@ exit 0
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32" || !python3Path)(
+    "Unix install rejects recursive redispatch that escapes into a detached process group",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-detached-reentry-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-detached-reentry-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const childPidPath = join(home, "detached-reentry.pid");
+      const original = `#!${python3Path}
+import os
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.execvpe("codex", ["codex", "--version"], os.environ)
+with open(${JSON.stringify(childPidPath)}, "w", encoding="utf-8") as handle:
+    handle.write(str(pid))
+os._exit(0)
+`;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, original, "utf8");
+        chmodSync(codexPath, 0o755);
+
+        const installed = installCodexShim();
+
+        expect(installed.installed).toBe(false);
+        expect(installed.message).toContain("saved launcher resolved back to the generated shim");
+        expect(readFileSync(codexPath, "utf8")).toBe(original);
+        expect(existsSync(`${codexPath}.opencodex-real`)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+        const childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        const childState = waitForProcessStop(childPid);
+        expect(childState === "" || childState.startsWith("Z")).toBe(true);
+      } finally {
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("Unix install rolls back when launcher validation times out", () => {
     if (process.platform === "win32") return;
@@ -1048,6 +1091,31 @@ exit 0
       expect(readFileSync(backups[0])).toEqual(oldBackup);
       expect(readFileSync(statePath)).toEqual(oldState);
       expect(readdirSync(binDir).filter(name => name.includes(".autorestore-"))).toEqual([]);
+    });
+  });
+
+  test("missing-wrapper repair preserves a concurrent replacement after a successful probe", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ wrappers, backups, statePath }) => {
+      const concurrent = successfulLauncher("missing-wrapper concurrent replacement");
+      const mutatingBackup = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  printf '%s\\n' '#!/bin/sh' '# missing-wrapper concurrent replacement' 'exit 0' > "${wrappers[0]}"
+  chmod 755 "${wrappers[0]}"
+fi
+exit 0
+`;
+      const oldState = readFileSync(statePath);
+      writeFileSync(backups[0], mutatingBackup, "utf8");
+      chmodSync(backups[0], 0o755);
+      rmSync(wrappers[0], { force: true });
+
+      const result = installCodexShim();
+
+      expect(result.installed).toBe(false);
+      expect(readFileSync(wrappers[0], "utf8")).toBe(concurrent);
+      expect(readFileSync(backups[0], "utf8")).toBe(mutatingBackup);
+      expect(readFileSync(statePath)).toEqual(oldState);
     });
   });
 
