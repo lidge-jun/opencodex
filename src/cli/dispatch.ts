@@ -66,11 +66,12 @@ const commandRunners: Record<string, CommandRunner> = {
   init: async () => {
     const { runInit } = await import("./init");
     await runInit();
-    return 0;
+    // runInit sets process.exitCode = 1 on stdin EOF/closed; preserve it.
+    return Number(process.exitCode ?? 0);
   },
   start: async deps => {
     await deps.handleStart();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   stop: async deps => {
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
@@ -78,7 +79,7 @@ const commandRunners: Record<string, CommandRunner> = {
     if (await deps.handleStop()) {
       console.log("⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').");
     }
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   restore: async deps => {
     const restoreJson = deps.args[1] === "--json";
@@ -172,15 +173,15 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   "recover-history": async deps => {
     await deps.handleRecoverHistory();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   uninstall: async deps => {
     await deps.handleUninstall();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   status: async deps => {
     await deps.handleStatus();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   doctor: async deps => {
     const { runDoctor } = await import("./doctor");
@@ -194,7 +195,7 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   ensure: async deps => {
     await deps.handleEnsure();
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   login: async deps => {
     const { handleLogin } = await import("../oauth/login-cli");
@@ -329,7 +330,10 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   "__tray-start": runInternalTrayCommand,
-  "__tray-restart": runInternalTrayCommand,
+  "__tray-restart": async deps => {
+    await deps.handleTrayProxyRestart();
+    return Number(process.exitCode ?? 0);
+  },
   "__startup-health": runInternalTrayCommand,
   "__tray-host": async () => {
     const { runWindowsTrayHost } = await import("../tray/windows");
@@ -347,7 +351,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // The running proxy owns its drain and replacement through /api/system/restart.
     // If nothing is live, restart degrades to the documented `ensure` start behavior.
     await deps.handleProxyRestart(deps.handleRestartStartWhenStopped);
-    return 0;
+    return Number(process.exitCode ?? 0);
   },
   health: async deps => {
     const healthArgs = deps.args.slice(1);
