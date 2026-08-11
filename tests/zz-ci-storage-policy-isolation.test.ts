@@ -20,13 +20,16 @@ test("Linux shards isolate the storage API runtime family into its own gated job
     jobs?: Record<string, Job>;
   };
 
-  const shardRun = workflow.jobs?.test?.steps?.find(step => step.name === "Test")?.run ?? "";
-  expect(shardRun).toContain(
-    "--path-ignore-patterns 'tests/api-storage-policy*.test.ts'",
-  );
-  expect(shardRun).toContain(
-    "--path-ignore-patterns 'tests/api-storage.test.ts'",
-  );
+  const shardRun = workflow.jobs?.test?.steps?.find(
+    step => step.name === "Test in fresh-process batches",
+  )?.run ?? "";
+  expect(shardRun).toContain("scripts/ci/run-bun-test-batches.sh");
+
+  const batchHelper = await Bun.file(
+    new URL("../scripts/ci/run-bun-test-batches.sh", import.meta.url),
+  ).text();
+  expect(batchHelper).toContain("tests/api-storage-policy*.test.ts");
+  expect(batchHelper).toContain("tests/api-storage.test.ts");
 
   const storageJob = workflow.jobs?.["storage-policy"];
   expect(storageJob?.["runs-on"]).toBe("ubuntu-latest");
