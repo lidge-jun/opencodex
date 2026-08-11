@@ -34,7 +34,7 @@
  * was not consumed, so the submitted token is never automatically replayed.
  */
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { getAuthStorePath } from "./store";
@@ -48,6 +48,13 @@ export const NOUS_OAUTH_SCOPE = "inference:invoke";
 const DEFAULT_POLL_INTERVAL_MS = 5000;
 const MAX_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_DEVICE_FLOW_TTL_MS = 15 * 60 * 1000;
+// Fallback lifetime for an inference access token when neither the JWT `exp`
+// claim nor `expires_in` is present. Kept distinct from the device-flow window:
+// the two are unrelated durations.
+const DEFAULT_ACCESS_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+// Upper bound on a plausible inference-JWT lifetime; guards against a bad `exp`
+// unit (ms instead of s) or a badly skewed clock.
+const MAX_PLAUSIBLE_TOKEN_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
 const OAUTH_EXPIRY_SKEW_MS = 2 * 60 * 1000;
 
@@ -178,6 +185,9 @@ function writeRefreshIntent(refreshToken: string, status: RefreshIntentStatus): 
   // Hardened, owner-only directory + atomic (temp+rename) write. Throws on
   // failure so the caller can fail closed instead of refreshing blind.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdirSync only applies the mode at creation; re-apply owner-only on an
+  // existing directory so a permissive pre-existing dir is corrected.
+  try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
   hardenConfigDir();
   const path = refreshIntentPath(refreshToken);
   try {
@@ -223,9 +233,9 @@ export function nousRefreshIntentBlocksReplay(refreshToken: string): boolean {
  * this from inside their `fetch` arguments, so a thrown error guarantees the
  * network call never runs.
  *
- * Mirrors the allowlist discipline in Hermes `hermes_cli/auth.py`
- * (`_NOUS_PORTAL_ALLOWED_HOSTS`, https-only default
- * `DEFAULT_NOUS_PORTAL_URL`).
+ * Mirrors the https-only default in Hermes `hermes_cli/auth.py`
+ * (`DEFAULT_NOUS_PORTAL_URL`). Note: unlike Hermes, this function does not pin
+ * the host to an allowlist; any HTTPS origin passes.
  */
 function resolvePortalBaseUrl(): string {
   const raw = (process.env.NOUS_PORTAL_BASE_URL || NOUS_PORTAL_BASE_URL).trim();
@@ -291,7 +301,14 @@ export function identityFromNousTokens(accessToken: string): { accountId?: strin
 function jwtExpiryMs(payload: NousJwtPayload | undefined): number | undefined {
   const exp = payload?.exp;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return undefined;
-  return exp * 1000;
+  const expMs = exp * 1000;
+  // Ignore an implausible claim (past, or absurdly far in the future) and let
+  // the caller fall back to `expires_in`. A too-large `exp` (e.g. ms instead of
+  // seconds, or clock skew) would otherwise pin the credential as never
+  // expiring, and a too-small one would force an immediate refresh that burns a
+  // single-use token.
+  if (expMs <= Date.now() || expMs > Date.now() + MAX_PLAUSIBLE_TOKEN_LIFETIME_MS) return undefined;
+  return expMs;
 }
 
 /** Does the inference JWT grant the required `inference:invoke` scope? */
@@ -410,10 +427,22 @@ function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: st
   }
   const refresh = nonEmptyString(payload.refresh_token);
   if (!refresh) {
+    if (submittedRefreshToken) {
+      // Rotation path: the server consumed RT-A but returned no replacement, so
+      // reusing RT-A would trigger refresh_token_reused and revoke the session.
+      throw new NousTokenError(
+        undefined,
+        "refresh_token_reused",
+        "Nous Portal did not return a replacement refresh token; refusing to reuse the consumed one (would trigger refresh_token_reused and revoke the session)",
+        { terminal: true },
+      );
+    }
+    // Device-login path: no refresh token was submitted; a missing refresh_token
+    // in the initial token response is an unusable response, not a reuse.
     throw new NousTokenError(
       undefined,
-      "refresh_token_reused",
-      "Nous Portal did not return a replacement refresh token; refusing to reuse the consumed one (would trigger refresh_token_reused and revoke the session)",
+      "invalid_token",
+      "Nous Portal token response did not include a refresh token",
       { terminal: true },
     );
   }
@@ -431,8 +460,9 @@ function parseTokenPayload(payload: NousTokenResponse, submittedRefreshToken: st
   const expiresInMs = typeof payload.expires_in === "number" ? payload.expires_in * 1000 : undefined;
   // Prefer the JWT `exp` claim when present (it is the authoritative inference
   // JWT lifetime), else fall back to `expires_in`.
-  const expires = (expMs ?? (expiresInMs !== undefined ? Date.now() + expiresInMs : Date.now() + DEFAULT_DEVICE_FLOW_TTL_MS))
-    - OAUTH_EXPIRY_SKEW_MS;
+  const rawExpires = expMs
+    ?? (expiresInMs !== undefined ? Date.now() + expiresInMs : Date.now() + DEFAULT_ACCESS_TOKEN_TTL_MS);
+  const expires = Math.max(0, rawExpires - OAUTH_EXPIRY_SKEW_MS);
 
   const creds: OAuthCredentials = {
     access,
@@ -508,17 +538,29 @@ async function pollForToken(
   let waitMs = Math.max(1000, intervalMs);
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("Login cancelled");
-    const response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
-      method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: NOUS_OAUTH_CLIENT_ID,
-        device_code: deviceCode,
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-      }),
-      redirect: "error",
-      signal: requestSignal(signal),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: NOUS_OAUTH_CLIENT_ID,
+          device_code: deviceCode,
+          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        }),
+        redirect: "error",
+        signal: requestSignal(signal),
+      });
+    } catch (netErr) {
+      // Genuine cancellation must abort immediately. Any other transport-level
+      // failure (timeout, DNS, dropped connection, proxy reset) must not destroy
+      // a device session that is still within its deadline: retry with the
+      // current wait interval. The device-code grant is idempotent for the
+      // pending case, so a retried poll is safe (unlike the refresh path).
+      if (signal?.aborted) throw new Error("Login cancelled");
+      await sleep(waitMs, signal);
+      continue;
+    }
     // Parse once and pass the payload through to the failure path (review #8),
     // so we never try to re-read a body that has already been consumed.
     const payload = (await response.json().catch(() => ({}))) as NousTokenResponse;

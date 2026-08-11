@@ -205,6 +205,11 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     refresh: (rt, signal) => refreshNousToken(rt, signal),
     providerConfig: oauthConfig("nous"),
     defaultModel: oauthDefaultModel("nous"),
+    // Single-use rotating refresh tokens must never be background-refreshed
+    // proactively: concurrent refreshes would trip the Portal's reuse
+    // revocation. Anchor the lazy-only default explicitly so it cannot be
+    // silently overridden to proactive.
+    defaultRefreshPolicy: "lazy-only",
   },
   kiro: {
     login: (ctrl, opts) => loginKiro(ctrl, { forceLogin: opts?.forceLogin }),

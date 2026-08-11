@@ -22,9 +22,9 @@
  */
 import { describe, expect, test } from "bun:test";
 import { getAccountCredential, getAccountSet, getCredential } from "../src/oauth/store";
-import { refreshNousToken } from "../src/oauth/nous";
+import { NOUS_INFERENCE_BASE_URL, refreshNousToken } from "../src/oauth/nous";
 import { refreshGenericAccountWithLock } from "../src/oauth/index";
-import type { OAuthProviderDef } from "../src/oauth/types";
+import type { OAuthCredentials } from "../src/oauth/types";
 
 const LIVE = process.env.NOUS_LIVE_TEST === "1";
 
@@ -37,9 +37,11 @@ function len(label: string, v: string | undefined): void {
   console.log(`  ${label}.len: ${v.length}`);
 }
 
-// Minimal provider def: refresh delegates to the Nous implementation; the
-// coordinator owns locking, generation checks, and persistence.
-const NOUS_DEF: OAuthProviderDef = {
+// Minimal refresh-only provider def passed to the coordinator; the coordinator
+// owns locking, generation checks, and persistence. (The full OAuthProviderDef
+// is private to src/oauth/index.ts and not exported, so use the structural
+// subset the coordinator actually consumes.)
+const NOUS_DEF: { id: string; refresh: (rt: string, signal?: AbortSignal) => Promise<OAuthCredentials> } = {
   id: "nous",
   refresh: (rt: string, signal?: AbortSignal) => refreshNousToken(rt, signal),
 };
@@ -79,7 +81,7 @@ describe.skipIf(!LIVE)("Nous Portal live verification (opt-in, no key shared)", 
     expect(after!.refresh).not.toBe(stored!.refresh);
 
     // Read-only live catalog discovery (same endpoint the adapter uses).
-    const res = await fetch("https://inference-api.nousresearch.com/v1/models", {
+    const res = await fetch(`${NOUS_INFERENCE_BASE_URL}/models`, {
       headers: { Authorization: `Bearer ${access}` },
     });
     expect(res.status).toBe(200);

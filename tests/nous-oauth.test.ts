@@ -148,6 +148,24 @@ describe("Nous token-response wiring", () => {
     expect(cred.refresh).toBe("device-refresh");
     expect(cred.accountId).toBe("device-user");
   });
+
+  test("an implausible JWT exp falls back to expires_in instead of pinning a never-expiring credential", async () => {
+    // A too-large `exp` (e.g. milliseconds instead of seconds, or clock skew)
+    // must not produce an expiry so far in the future that the credential is
+    // never refreshed. The caller falls back to `expires_in`.
+    const access = jwtWithClaims({ sub: "wired-user", exp: 9_999_999_999 });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      access_token: access,
+      refresh_token: "rotated-refresh",
+      expires_in: 3600,
+    }), { status: 200 })) as typeof fetch;
+
+    const cred = await refreshNousToken("old-refresh");
+    const expected = Date.now() + 3600_000 - 2 * 60 * 1000;
+    // The expiry is derived from expires_in (≈ now + 3600s - skew), not from the
+    // absurd exp claim.
+    expect(Math.abs(cred.expires - expected)).toBeLessThan(5000);
+  });
 });
 
 describe("Nous device-flow error handling", () => {
@@ -265,6 +283,37 @@ describe("Nous device-flow error handling", () => {
     globalThis.fetch = (async () => new Response("<html>not json</html>", { status: 200 })) as typeof fetch;
     const ctrl: OAuthController = { onAuth() {} };
     await expect(loginNous(ctrl)).rejects.toThrow("Nous Portal device authorization response missing required fields");
+  });
+
+  test("a device-login response missing refresh_token is an unusable-response error, not refresh_token_reused", async () => {
+    // In the device flow no refresh token was submitted, so a missing
+    // refresh_token must not be mislabeled as single-use reuse.
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/oauth/device/code")) {
+        return new Response(JSON.stringify({
+          device_code: "dev-123",
+          user_code: "ABCD-EFGH",
+          verification_uri_complete: "https://portal.nousresearch.com/activate?code=ABCD-EFGH",
+          expires_in: 600,
+          interval: 1,
+        }), { status: 200 });
+      }
+      // Token endpoint: unusable device-login response (no refresh_token).
+      return new Response(JSON.stringify({
+        access_token: jwtWithClaims({ sub: "device-user", exp: Math.floor(Date.now() / 1000) + 3600 }),
+      }), { status: 200 });
+    }) as typeof fetch;
+    const ctrl: OAuthController = { onAuth() {} };
+    let err: unknown;
+    try {
+      await loginNous(ctrl);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
+    expect((err as { oauthError?: string }).oauthError).not.toBe("refresh_token_reused");
   });
 });
 
