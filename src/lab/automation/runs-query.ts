@@ -1,5 +1,6 @@
 import type { LabAutomationRunRecordV1, LabAutomationStateV1 } from "./types";
 import { LAB_AUTOMATION_HARD_MAX } from "./constants";
+import { LabAutomationError } from "./types";
 
 export interface LabAutomationRunsPage {
   items: LabAutomationRunRecordV1[];
@@ -20,7 +21,8 @@ export function listLabAutomationRuns(
   let start = 0;
   if (cursor) {
     const index = sorted.findIndex((row) => row.runId === cursor);
-    start = index >= 0 ? index + 1 : 0;
+    if (index < 0) throw new LabAutomationError("invalid or expired run cursor", "invalid_cursor");
+    start = index + 1;
   }
   const slice = sorted.slice(start, start + capped);
   const hasMore = start + capped < sorted.length;
