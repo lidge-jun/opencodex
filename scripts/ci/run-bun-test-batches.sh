@@ -3,6 +3,8 @@ set -euo pipefail
 
 readonly SHARD_SPEC="${1:-}"
 readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
+readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
+readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
 
 usage() {
   echo "usage: $0 <shard/total>" >&2
@@ -22,6 +24,18 @@ fi
 if [[ ! "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]]; then
   echo "BUN_TEST_BATCH_SIZE must be a positive integer, got: $BATCH_SIZE" >&2
   exit 64
+fi
+if [[ ! "$BATCH_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_BATCH_TIMEOUT_SECONDS must be a positive integer, got: $BATCH_TIMEOUT_SECONDS" >&2
+  exit 64
+fi
+if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_BATCH_KILL_GRACE_SECONDS must be a positive integer, got: $BATCH_KILL_GRACE_SECONDS" >&2
+  exit 64
+fi
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "GNU timeout is required to bound Bun test batches." >&2
+  exit 69
 fi
 
 is_general_test_file() {
@@ -74,7 +88,9 @@ run_batch_once() {
   printf '  %s\n' "${files[@]}"
 
   set +e
-  bun test --isolate "${files[@]}" 2>&1 | tee "$log_file"
+  timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
+    "${BATCH_TIMEOUT_SECONDS}s" \
+    bun test --isolate "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 
@@ -84,6 +100,13 @@ run_batch_once() {
     LAST_FAILURE_KIND=""
     rm -f -- "$log_file"
     return 0
+  fi
+
+  if (( status == 124 )); then
+    LAST_FAILURE_KIND="timeout"
+    echo "::warning::Bun batch timed out after ${BATCH_TIMEOUT_SECONDS}s in shard ${SHARD_SPEC} batch ${batch_number} (attempt ${attempt})."
+    rm -f -- "$log_file"
+    return "$status"
   fi
 
   if is_bun_runtime_crash "$status" "$log_file"; then
@@ -123,7 +146,7 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
 fi
 
 readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
-echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} fresh Bun processes (batch size <= ${BATCH_SIZE})."
+echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} fresh Bun processes (batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
   start=$(( batch_index * BATCH_SIZE ))
@@ -136,19 +159,22 @@ for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
     status=$?
   fi
 
-  if [[ "$LAST_FAILURE_KIND" != "runtime" ]]; then
+  if [[ "$LAST_FAILURE_KIND" != "runtime" && "$LAST_FAILURE_KIND" != "timeout" ]]; then
     exit "$status"
   fi
 
-  echo "Retrying shard ${SHARD_SPEC} batch ${batch_number} once in a fresh Bun process..."
+  retry_kind="$LAST_FAILURE_KIND"
+  echo "Retrying shard ${SHARD_SPEC} batch ${batch_number} once in a fresh Bun process after ${retry_kind} failure..."
   if run_batch_once "$batch_number" 2 "${batch[@]}"; then
-    echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed on the single runtime-crash retry."
+    echo "::warning::Shard ${SHARD_SPEC} batch ${batch_number} passed on the single ${retry_kind} retry."
     continue
   else
     status=$?
   fi
 
-  if [[ "$LAST_FAILURE_KIND" == "runtime" ]]; then
+  if [[ "$LAST_FAILURE_KIND" == "timeout" ]]; then
+    echo "::error::Bun batch timed out twice in shard ${SHARD_SPEC} batch ${batch_number}; failing after one retry."
+  elif [[ "$LAST_FAILURE_KIND" == "runtime" ]]; then
     echo "::error::Bun runtime crash repeated in shard ${SHARD_SPEC} batch ${batch_number}; failing after one retry."
   fi
 
