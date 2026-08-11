@@ -141,16 +141,19 @@ function claimNextRun(
   policy: LabAutomationPolicyV1,
   routes: LabAutomationRoutesV1,
   planned: ReturnType<typeof planLabAutomationRuns>,
+  enqueuePlan: boolean,
   configDir: string | undefined,
   now: number,
   manualRunId?: string,
 ): LabAutomationRunRecordV1 | null {
   return mutateLabAutomationState(configDir, (loaded) => {
     let state = rollBudgetWindow(loaded, now);
-    state = reconcileQueuedState(state, policy, routes, now);
-    if (policy.enabled && manualRunId === undefined) {
+    if (policy.enabled && manualRunId === undefined && enqueuePlan) {
       state = enqueuePlannedRuns(state, planned, "scheduled", now);
     }
+    // Policy/route checks must happen after enqueue as well: a plan can become stale between
+    // the pure planning snapshot and this atomic state claim.
+    state = reconcileQueuedState(state, policy, routes, now);
     if (isRunBudgetExhausted(policy, state, now)) {
       return { state: trimTerminalRuns(state, now), value: null };
     }
@@ -217,18 +220,38 @@ async function runDispatchBatch(
   options: { manualRunId?: string } = {},
 ): Promise<void> {
   if (shutdownRequested) return;
-  const policy = loadLabAutomationPolicy(configDir);
-  const routes = loadLabAutomationRoutes(configDir);
-  if (!policy.enabled && options.manualRunId === undefined) return;
+  const initialPolicy = loadLabAutomationPolicy(configDir);
+  const initialRoutes = loadLabAutomationRoutes(configDir);
   const config = loadPlannerConfig();
   const snapshot = loadLabAutomationState(configDir);
-  const planned = policy.enabled && options.manualRunId === undefined
-    ? planLabAutomationRuns({ policy, routes, state: snapshot, now: Date.now(), config, configDir })
+  const planned = initialPolicy.enabled && options.manualRunId === undefined
+    ? planLabAutomationRuns({
+        policy: initialPolicy,
+        routes: initialRoutes,
+        state: snapshot,
+        now: Date.now(),
+        config,
+        configDir,
+      })
     : [];
-  const maxDispatches = options.manualRunId ? 1 : Math.max(1, policy.maxConcurrentRuns);
+  let enqueuePlan = true;
+  const maxDispatches = options.manualRunId ? 1 : Math.max(1, initialPolicy.maxConcurrentRuns);
   for (let dispatched = 0; dispatched < maxDispatches; dispatched += 1) {
     if (shutdownRequested) break;
-    const run = claimNextRun(policy, routes, planned, configDir, Date.now(), options.manualRunId);
+    // Re-read operational policy before every claim so disabling a layer/route stops the next
+    // queued run immediately rather than after the whole batch.
+    const policy = loadLabAutomationPolicy(configDir);
+    const routes = loadLabAutomationRoutes(configDir);
+    const run = claimNextRun(
+      policy,
+      routes,
+      planned,
+      enqueuePlan,
+      configDir,
+      Date.now(),
+      options.manualRunId,
+    );
+    enqueuePlan = false;
     if (!run) break;
     const controller = new AbortController();
     inFlightControllers.set(run.runId, controller);
@@ -240,6 +263,7 @@ async function runDispatchBatch(
         configDir,
         loadConfig: dispatchDeps.loadConfig ?? (() => readConfigDiagnostics().config),
         abortSignal: controller.signal,
+        enforceRunIdentity: true,
       };
       result = await dispatchLabAutomationRun(run, deps);
     } catch (caught) {
@@ -282,8 +306,8 @@ export function startLabAutomationScheduler(configDir?: string): void {
   schedulerTimer.unref?.();
 }
 
+/** Stop periodic scheduling only. Process shutdown is a separate explicit signal. */
 export function stopLabAutomationScheduler(): void {
-  shutdownRequested = true;
   if (schedulerTimer) {
     clearInterval(schedulerTimer);
     schedulerTimer = null;
