@@ -658,19 +658,21 @@ describe("durable antigravity replay snapshot", () => {
   test("load recomputes call sizes from the signature and ignores serialized sizeBytes", () => {
     const now = Date.now();
     const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const unicodeSig = "\u00e9".repeat(16);
+    const oversizedUnicodeSig = "\u{1f600}".repeat(16_500);
     writeFileSync(snapshotPath(), JSON.stringify({
       version: 1,
       sessions: [
         [antigravityReplayKeyForTests(MODEL, SESSION), {
           expiresAtMs: now + 60_000,
-          // Forged tiny sizeBytes must not shrink the accounted bytes.
-          byCall: [[callKey, { signature: SIG, sizeBytes: 1, touchedAtMs: now }]],
+          // Forged tiny sizeBytes must not shrink the accounted UTF-8 bytes.
+          byCall: [[callKey, { signature: unicodeSig, sizeBytes: 1, touchedAtMs: now }]],
         }],
         [antigravityReplayKeyForTests(MODEL, "-forged"), {
           expiresAtMs: now + 60_000,
-          // Oversized signature with a forged tiny sizeBytes must be dropped.
+          // The UTF-16 length is below 64 KiB, but the UTF-8 byte length is not.
           byCall: [[antigravityFunctionCallKeyForTests("get_y", {}), {
-            signature: "y".repeat(70_000),
+            signature: oversizedUnicodeSig,
             sizeBytes: 1,
             touchedAtMs: now,
           }]],
@@ -679,11 +681,11 @@ describe("durable antigravity replay snapshot", () => {
     }));
     const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
     applyAntigravityReplay(MODEL, SESSION, contents);
-    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(unicodeSig);
     const metrics = antigravityReplayMetrics();
     expect(metrics.sessions).toBe(1);
-    // 64-byte session key + 64-byte call key + 20-byte signature.
-    expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
+    // 64-byte session key + 64-byte call key + 32-byte UTF-8 signature.
+    expect(metrics.totalBytes).toBe(64 + 64 + new TextEncoder().encode(unicodeSig).byteLength);
   });
 
   test("duplicate call keys in a snapshot are collapsed to one admitted call", async () => {
