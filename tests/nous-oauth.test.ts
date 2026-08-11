@@ -315,6 +315,27 @@ describe("Nous device-flow error handling", () => {
     expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
     expect((err as { oauthError?: string }).oauthError).not.toBe("refresh_token_reused");
   });
+
+  test("a successful device-flow response missing access_token is a terminal invalid_token error", async () => {
+    // A 200 token response that omits access_token must be routed through
+    // parseTokenPayload so it is classified as terminal invalid_token, not
+    // silently treated as a transient/unknown error that retries the login.
+    globalThis.fetch = deviceFlowFetch(() =>
+      new Response(JSON.stringify({ refresh_token: "device-refresh" }), { status: 200 }),
+    );
+    const ctrl: OAuthController = { onAuth() {} };
+    let err: unknown;
+    try {
+      await loginNous(ctrl);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toContain("did not include an access token");
+    expect((err as { name?: string }).name).toBe("NousTokenError");
+    expect((err as { oauthError?: string }).oauthError).toBe("invalid_token");
+    expect((err as { terminal?: boolean }).terminal).toBe(true);
+  });
 });
 
 describe("Nous Portal base URL hardening", () => {

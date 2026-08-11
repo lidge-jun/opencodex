@@ -186,8 +186,10 @@ function writeRefreshIntent(refreshToken: string, status: RefreshIntentStatus): 
   // failure so the caller can fail closed instead of refreshing blind.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // mkdirSync only applies the mode at creation; re-apply owner-only on an
-  // existing directory so a permissive pre-existing dir is corrected.
-  try { chmodSync(dir, 0o700); } catch { /* best-effort */ }
+  // existing directory so a permissive pre-existing dir is corrected. Fail
+  // closed: if the directory cannot be hardened to owner-only, do not write
+  // refresh-intent data into a directory a local attacker may observe.
+  chmodSync(dir, 0o700);
   hardenConfigDir();
   const path = refreshIntentPath(refreshToken);
   try {
@@ -558,13 +560,15 @@ async function pollForToken(
       // current wait interval. The device-code grant is idempotent for the
       // pending case, so a retried poll is safe (unlike the refresh path).
       if (signal?.aborted) throw new Error("Login cancelled");
-      await sleep(waitMs, signal);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(waitMs, remainingMs), signal);
       continue;
     }
     // Parse once and pass the payload through to the failure path (review #8),
     // so we never try to re-read a body that has already been consumed.
     const payload = (await response.json().catch(() => ({}))) as NousTokenResponse;
-    if (response.ok && nonEmptyString(payload.access_token)) return parseTokenPayload(payload, "");
+    if (response.ok) return parseTokenPayload(payload, "");
     const error = payload.error;
     if (error === "authorization_pending") {
       await sleep(waitMs, signal);
