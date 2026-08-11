@@ -183,6 +183,23 @@ curl -X PUT http://localhost:10100/api/injection-model \
 不會。變更模式後請開啟新的 Codex 工作階段。若長時間執行的 App host 仍顯示過時的目錄狀態，請執行
 `ocx sync` 並重新啟動該 Codex 介面。
 
+### 當 opencodex 無法信任目錄時會發生什麼？
+
+opencodex 會將磁碟上的模型目錄與目前使用者擁有的每個 Codex app-server 啟動時間比較，產生四種狀態之一：
+
+| 狀態 | 意義 | v2 指引 |
+|---|---|---|
+| `fresh` | 每個 app-server 都在目錄寫入之後啟動 | 完整指引：偏好模型、roster、fallback |
+| `not_running` | 未偵測到 app-server | 完整指引 |
+| `stale` | 至少一個 app-server 早於目錄 | **沒有 opencodex 撰寫的模型指引** |
+| `unknown` | 無法進行比較 | **沒有 opencodex 撰寫的模型指引** |
+
+對 `stale` 與 `unknown`，opencodex 會保留其自身的磁碟衍生宣稱——偏好模型、roster、fallback 與自訂指引——因為執行中的 Codex 可能無法生成磁碟目錄所廣告的內容。
+
+它**不會**指示模型停止設定 `model` 或 `reasoning_effort`。該觀察對使用者擁有的每個 app-server 都是全域的，而入站請求不帶傳送者身分，因此無法將過時的 process 歸因於眼前的請求。基於此禁止覆寫會封鎖現用 `spawn_agent` 工具合法廣告的選項——而該 session 可能其實是新的。現用工具 schema 保持權威。
+
+`unknown` 不是 `stale` 的同義詞。它表示比較本身失敗——目錄時間戳不可讀、process 啟動時間不可讀或 process 列舉失敗——並由 `ocx doctor` 分開回報。`stale` 僅在每個偵測到的 Codex app-server 都在最後一次目錄寫入後啟動時才清除；它不一定會清除 `unknown`。
+
 ### 推理強度
 
 可選的子代理推理強度儲存在 `injectionEffort` 中，只有同時設定注入模型時才有意義。它會向注入的 v2 指引加入 `reasoning_effort` 要求，但不會改變父會話的推理強度。在接受覆蓋的 fork 上，Codex 會直接應用傳給 `spawn_agent` 的 `reasoning_effort`。

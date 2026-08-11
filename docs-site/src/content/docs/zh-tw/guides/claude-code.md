@@ -314,7 +314,7 @@ Claude Code 的 `/effort` 設定會完整保留並傳遞給適配器：
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | 直接傳遞強度（`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`） |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`，≤16384→`medium`，更高→`high` |
-| `thinking.type: "disabled"` | 完全省略推理引數 |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }`；省略摘要 |
 
 解析後的值會顯示在請求日誌的 **Reasoning effort** 列中。
 
@@ -332,7 +332,7 @@ Claude Code 的 `/effort` 設定會完整保留並傳遞給適配器：
 | 使用者 `tool_result` | `function_call_output`（`is_error` → `[tool error]` 字首） |
 | 重放 `thinking` / `redacted_thinking` | 丟棄 |
 | Function 工具 | `{type: "function"}`（`web_search*` → `{type: "web_search"}`） |
-| `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定名稱→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定名稱 function→`{type:"function",name}`，hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

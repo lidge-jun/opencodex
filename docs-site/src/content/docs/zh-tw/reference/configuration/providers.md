@@ -72,6 +72,7 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `noTemperatureModels?` | `string[]` | 拒絕呼叫者指定 `temperature` 的模型。 |
 | `noTopPModels?` | `string[]` | 拒絕呼叫者指定 `top_p` 的模型。 |
 | `noPenaltyModels?` | `string[]` | 拒絕 presence/frequency penalty 的模型。 |
+| `noStructuredOutputModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `response_format` 的精確模型 ID。僅精確符合的請求模型會省略該欄位；structured-output 轉譯對其他每個 `openai-chat` 模型保持啟用。 |
 | `parallelToolCalls?` | `boolean` | 切換平行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 僅在明確 `true` 時廣告。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 預設停用的下游 SSE 修復，用於精確佔位 id 與缺失的終端 id。Function-call id 永不被重寫。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | 其 `tool_choice` 僅接受 `auto` 或 `none` 的模型；強制選擇被降級。 |

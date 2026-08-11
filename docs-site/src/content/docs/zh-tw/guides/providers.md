@@ -42,7 +42,7 @@ shipped v1 設定自動遷移到 marker 2 的單一選項行。原設定只保�
 | --- | --- | --- |
 | `key` | 傳送你的 API 金鑰（`Authorization: Bearer …`，或按 adapter 使用 `x-api-key` / `api-key`）。金鑰可以是字面值，也可以是 `${ENV_VAR}` 引用。 | 大多數供應商。 |
 | `forward` | 將**你傳入的 Codex 認證標頭**原樣轉發給供應商——不儲存任何金鑰。這就是 ChatGPT 登入的透傳方式。 | OpenAI（`openai-responses` adapter）。 |
-| `oauth` | 讀取已儲存的 OAuth 存取權杖（過期前自動重新整理），並將其用作 bearer 金鑰。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 讀取已儲存的 OAuth 存取權杖（過期前自動重新整理），並將其用作 bearer 金鑰。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、GitHub Copilot、Nous Portal。 |
 
 ## 1. ChatGPT 登入（forward / 透傳）
 
@@ -65,13 +65,14 @@ ChatGPT 透傳目錄也會加入 GPT-5.6 Sol/Terra/Luna 的裸 slug（`gpt-5.6-s
 
 ## 2. 帳號登入（OAuth）
 
-有六個供應商預設使用 OAuth 登入。opencodex 會把憑證存入 `~/.opencodex/auth.json` 並自動重新整理。
+有八個供應商預設使用 OAuth 登入——外加透過實驗性非官方 device-flow bridge 的 GitHub Copilot。opencodex 會把憑證存入 `~/.opencodex/auth.json` 並自動重新整理。
 登入 CLI 也接受 `chatgpt`：它會取得一份 ChatGPT 憑證，並建立一個 `forward` 模式的供應商條目。
 
 ```bash
 ocx login xai          # xAI Grok
 ocx login anthropic    # Anthropic Claude (Pro/Max)
 ocx login kimi         # Moonshot Kimi
+ocx login nous         # Nous Portal（device grant；免費 + 付費模型）
 ocx login kiro         # 匯入 kiro-cli 憑證（支援權杖回退）
 ocx login google-antigravity
 ocx login cursor       # 獨立的 Cursor PKCE 登入
@@ -84,9 +85,12 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | 優先使用即時 Grok 目錄；回退預設模型為 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；即時模型列表從 `/v1/models` 取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 程式設計模型。 |
+| `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱閘道（與 Hermes Agent 使用相同後端）。針對 `portal.nousresearch.com` 的 device-grant 登入；存取權杖是 per-request 的 inference JWT。混合付費與 `:free` 模型目錄（`tencent/hy3:free`、`stepfun/step-3.7-flash:free`、…）從登入的帳號即時探索。Refresh token 單次使用並在每次重新整理時輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 優先複用已安裝的 `kiro-cli` 登入。需先安裝 Kiro CLI（`curl -fsSL https://cli.kiro.dev/install | bash`）並執行 `kiro-cli login`。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist 協議使用 Google OAuth。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 實驗性 PKCE 登入、HTTP/2 傳輸和按帳號篩選的模型發現。 |
+
+在終端 Nous refresh 失敗後，執行 `ocx login nous` 重新認證。
 
 你也可以從 [web 儀表板](/zh-tw/guides/web-dashboard/) 啟動 OAuth。
 
