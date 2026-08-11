@@ -157,7 +157,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 78 個含まれています。キー方式 66、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 79 個含まれています。キー方式 67、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -201,6 +201,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -299,6 +300,14 @@ API キーは [Scaleway console](https://console.scaleway.com/generative-api) �
 raw 100 行が上限で、数万件の catalog 全体を download / cache しません。`/v1/models` は認証あり・なしの両方で呼び出せると文書化されているため、入力したキーの有効性は証明できませんが、chat request は設定済みの Bearer キーで認証されます。個人 plan は interactive / prototype
 用途に限られ、任意の application には Scale plan が必要です。キーは
 [Featherless dashboard](https://featherless.ai/account/api-keys) で作成します。
+
+**Novita の discovery:** キー方式のプリセットは `openai-chat` adapter を使用し、Bearer key は
+Novita の固定 OpenAI 互換 host にだけ送信します。公開 model list から `model_type: chat` と
+`chat/completions` endpoint の両方を報告する row だけを残し、discovery を 512 KiB と raw 256 行に
+制限します。catalog は公開されているため、login は list 成功を key の証明にせず「検証不能」と報告します。
+model ごとに capability が異なるため、provider 全体の parallel tool call と OpenAI
+`reasoning_effort` は宣伝しません。キーは
+[Novita key manager](https://novita.ai/settings/key-management) で作成します。
 
 > **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、

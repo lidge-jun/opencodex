@@ -167,7 +167,7 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 78 встроенными пресетами: 66 на основе ключей, восемь OAuth, три локальных и
+opencodex поставляется с 79 встроенными пресетами: 67 на основе ключей, восемь OAuth, три локальных и
 один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
@@ -212,6 +212,7 @@ opencodex поставляется с 78 встроенными пресетам
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -325,6 +326,14 @@ Project ID и dedicated deployment настраиваются как custom prov
 `/v1/models` описан как вызываемый как с аутентификацией, так и без неё, поэтому не может подтвердить корректность введённого ключа, но chat-запросы всё равно аутентифицируются настроенным Bearer-ключом.
 Индивидуальные plan предназначены для interactive/prototype; произвольные приложения требуют Scale
 plan. Ключ создаётся в [дашборде Featherless](https://featherless.ai/account/api-keys).
+
+**Discovery для Novita.** Пресет с ключом использует adapter `openai-chat` и отправляет Bearer key
+только на фиксированный OpenAI-совместимый host Novita. Из публичного списка моделей остаются лишь
+строки, одновременно указывающие `model_type: chat` и endpoint `chat/completions`; discovery ограничен
+512 KiB и 256 исходными строками. Поскольку catalog публичный, login сообщает, что ключ невозможно
+проверить, а не считает успешный список доказательством. Возможности зависят от модели, поэтому пресет
+не заявляет provider-wide parallel tool calls или OpenAI `reasoning_effort`. Ключ создаётся в
+[Novita key manager](https://novita.ai/settings/key-management).
 
 > **Область Baseten:** пресет поддерживает только общие [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > Baseten. Для локальной работы используйте личный [API-ключ](https://docs.baseten.co/organization/api-keys),

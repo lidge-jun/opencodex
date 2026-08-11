@@ -230,7 +230,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 78 built-in presets: 66 key-based, eight OAuth, three local, and one default
+opencodex ships 79 built-in presets: 67 key-based, eight OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -274,6 +274,7 @@ free-experimentation model.
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -393,6 +394,15 @@ gate, and `features.tool_use: true`. Discovery is capped at 128 KiB and 100 raw 
 tens-of-thousands-model catalog is never downloaded or cached in full. Because `/v1/models` is documented as callable with or without authentication, it cannot prove a supplied key is valid; chat requests still use the configured Bearer key. Featherless terms reserve
 individual plans for interactive/prototyping use; arbitrary applications require a Scale plan.
 Create a key in the [Featherless dashboard](https://featherless.ai/account/api-keys).
+
+**Novita discovery.** The key-based preset uses the `openai-chat` adapter and sends its Bearer key
+only to Novita's fixed OpenAI-compatible host. Its public model list is filtered to rows that report
+both `model_type: chat` and the `chat/completions` endpoint, with discovery capped at 512 KiB and 256
+raw rows. Model ids must be preserved exactly as Novita returns them, including slash-delimited ids,
+and must not be normalized or rewritten before routing. Because the catalog is public, login reports
+the key as unverifiable instead of treating a successful list response as proof. Model capabilities
+vary, so the preset does not advertise provider-wide parallel tool calls or OpenAI `reasoning_effort`.
+Create a key in [Novita's key manager](https://novita.ai/settings/key-management).
 
 > **Baseten scope:** The preset covers Baseten's shared [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > only. Use a personal [API key](https://docs.baseten.co/organization/api-keys) for local use, or a team key

@@ -1730,6 +1730,49 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     },
     note: "Authenticated first page of popular chat models only; live discovery admits at most 100 plan-available, ungated rows whose metadata explicitly reports tool use.",
   },
+  {
+    // Primary sources checked 2026-08-08:
+    // - https://novita.ai/docs/api-reference/model-apis-llm-create-chat-completion and
+    //   https://novita.ai/docs/api-reference/model-apis-llm-list-models document the fixed
+    //   OpenAI-compatible Chat Completions and model-list endpoints.
+    // - https://novita.ai/docs/api-reference/basic-authentication documents Bearer API keys.
+    // - https://novita.ai/legal/terms-of-service (updated 2026-08-05) expressly covers AI
+    //   inference APIs, third-party Model Providers, and customer Input/Output processing.
+    // - https://huggingface.co/docs/inference-providers/main/providers/novita lists Novita as an
+    //   Inference Providers partner for chat/VLM traffic, independently supporting routing use.
+    // - https://tsdr.uspto.gov/statusview/sn99255805 is the official use-in-commerce record
+    //   connecting the NOVITA AI mark to Hivemind Labs, Inc., a Delaware corporation. The mark
+    //   application is now abandoned; it is cited only as the public operator-identity record.
+    // Maintainer: @olddonkey; no affiliation with Novita AI or Hivemind Labs, Inc.
+    id: "novita",
+    label: "Novita AI",
+    baseUrl: "https://api.novita.ai/openai/v1",
+    adapter: "openai-chat",
+    authKind: "key",
+    dashboardUrl: "https://novita.ai/settings/key-management",
+    liveModels: true,
+    preserveCustomDestination: true,
+    // The live catalog is public even though the reference shows an Authorization header, so a
+    // successful model fetch cannot prove that a supplied key is valid.
+    apiKeyValidation: "unknown",
+    // The request reference documents tools but not a provider-wide parallel-tool contract.
+    parallelToolCalls: false,
+    // Novita exposes model-specific thinking flags, not an OpenAI reasoning_effort contract.
+    reasoningEfforts: [],
+    modelDiscovery: {
+      path: "models",
+      maxResponseBytes: 512 * 1024,
+      maxModels: 256,
+      filter: {
+        // Require both Novita's chat classification and the exact configured wire endpoint.
+        allOf: [
+          { path: ["model_type"], equalsAny: ["chat"] },
+          { path: ["endpoints"], containsAny: ["chat/completions"] },
+        ],
+      },
+    },
+    note: "Public live catalog filtered to rows that explicitly report chat type and Chat Completions support; key validity remains unknown until an authenticated inference request.",
+  },
   // FREEZE 2026-07-10: exact serverless ids remain auth-gated/unverified. Evidence: devlog/_plan/260710_provider_hardening/003_research_aggregators.md.
   { id: "together", label: "Together", baseUrl: "https://api.together.xyz/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://api.together.xyz/settings/api-keys" },
   { id: "fireworks", label: "Fireworks", baseUrl: "https://api.fireworks.ai/inference/v1", adapter: "openai-chat", authKind: "key", dashboardUrl: "https://fireworks.ai/account/api-keys" },

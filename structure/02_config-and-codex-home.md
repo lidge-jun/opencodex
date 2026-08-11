@@ -20,6 +20,20 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
+to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
+later repair or uninstall look foreign even though the service and runtime were started from the
+same environment. An explicit `CODEX_HOME` remains authoritative, and existing foreign ownership
+records are never migrated implicitly.
+
+[Decision Log]
+- 목적과 의도: Keep service ownership metadata aligned with the Codex home the proxy actually uses.
+- 기존 구현 및 제약 조건: The runtime performed narrow WSL Windows-home discovery, while service state used `CODEX_HOME || ~/.codex`.
+- 검토한 주요 대안: Bake `CODEX_HOME` into every service, migrate old state automatically, or reuse the runtime resolver.
+- 선택한 방식: Resolve service install and comparison state through the existing runtime Codex-home resolver.
+- 다른 대안 대신 이 방식을 선택한 이유: It preserves explicit overrides and the existing WSL ambiguity rules without rewriting user environment or foreign state.
+- 장점, 단점 및 영향: New installs and same-environment repairs agree with runtime targeting; genuinely foreign or ambiguous state remains fail-closed.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged

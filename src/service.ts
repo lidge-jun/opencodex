@@ -14,7 +14,7 @@ import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, ve
 import { loadConfig } from "./config";
 import { restoreNativeCodex, restoreNativeCodexAsync } from "./codex/inject";
 import { stripGrokConfig } from "./grok/inject";
-import { isWslRuntime } from "./codex/home";
+import { isWslRuntime, resolveCodexHomeDir, type CodexHomeDeps } from "./codex/home";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./lib/bun-runtime";
 import type { BunRuntimeSource } from "./lib/bun-runtime";
 import { isProcessAlive, stopProxy } from "./lib/process-control";
@@ -94,9 +94,11 @@ function serviceStatePaths(): string[] {
   return paths;
 }
 
-function currentCodexHome(): string {
-  const raw = process.env.CODEX_HOME?.trim();
-  return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
+function currentCodexHome(deps: CodexHomeDeps = {}): string {
+  // Service ownership must identify the same home as the runtime. In WSL an
+  // unset CODEX_HOME can resolve to the single Windows Desktop home rather than
+  // Linux ~/.codex; recording the fallback here creates a false foreign owner.
+  return resolveCodexHomeDir(deps);
 }
 
 function currentOpenCodexHome(): string {
@@ -218,8 +220,8 @@ export function inspectServiceStateEvidence(
 }
 
 /** The homes this process is actually using, for comparison against a claim. */
-export function currentServiceHomes(): { codexHome: string; opencodexHome: string } {
-  return { codexHome: currentCodexHome(), opencodexHome: currentOpenCodexHome() };
+export function currentServiceHomes(deps: CodexHomeDeps = {}): { codexHome: string; opencodexHome: string } {
+  return { codexHome: currentCodexHome(deps), opencodexHome: currentOpenCodexHome() };
 }
 
 export function serviceHomeMatches(a: string, b: string): boolean {
@@ -283,11 +285,12 @@ export function serviceEnvironmentOwnedHere(): boolean {
 export function assertServiceEnvironmentMatchesInstall(): void {
   const state = readServiceInstallState();
   if (!state) return;
+  const actualCodexHome = currentCodexHome();
   const expected = normalizePathForCompare(state.codexHome);
-  const actual = normalizePathForCompare(currentCodexHome());
+  const actual = normalizePathForCompare(actualCodexHome);
   if (expected !== actual) {
     throw new ServiceOwnershipError(
-      `Service was installed with CODEX_HOME=${state.codexHome}, but current CODEX_HOME=${currentCodexHome()}. ` +
+      `Service was installed with CODEX_HOME=${state.codexHome}, but current CODEX_HOME=${actualCodexHome}. ` +
         "Run the service command from the same Codex home so native Codex restore updates the correct config.",
     );
   }

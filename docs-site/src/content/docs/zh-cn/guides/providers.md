@@ -145,7 +145,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 78 个预设：66 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 79 个预设：67 个密钥预设、8 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 
@@ -189,6 +189,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
 | Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
 | Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -279,6 +280,13 @@ dedicated deployment 需要配置为 custom provider。API 密钥可在
 Hugging Face gate，且 `features.tool_use: true`。发现上限为 128 KiB 和 100 条原始记录，因此不会下载或
 缓存包含数万模型的完整目录。由于 `/v1/models` 在文档中可带或不带鉴权调用，它无法证明输入的密钥有效；chat 请求仍会使用已配置的 Bearer 密钥认证。个人 plan 仅适用于 interactive/prototype 用途；任意 application 需要使用
 Scale plan。密钥可在 [Featherless dashboard](https://featherless.ai/account/api-keys) 创建。
+
+**Novita 发现：**密钥预设使用 `openai-chat` adapter，并只向 Novita 的固定 OpenAI 兼容主机发送
+Bearer key。公开模型列表只保留同时报告 `model_type: chat` 和 `chat/completions` endpoint 的记录，
+发现上限为 512 KiB 和 256 条原始记录。由于 catalog 是公开的，login 会报告密钥无法验证，而不会把
+成功列出模型当作密钥有效的证明。模型能力各不相同，因此预设不会声明 provider-wide parallel tool calls
+或 OpenAI `reasoning_effort`。密钥可在
+[Novita key manager](https://novita.ai/settings/key-management) 创建。
 
 > **Baseten 范围：**该预设仅覆盖 Baseten 的共享 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)。
 > 本地使用可选择个人 [API 密钥](https://docs.baseten.co/organization/api-keys)；共享或生产用途请使用具备
