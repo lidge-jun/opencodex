@@ -41,6 +41,12 @@ describe("parseCliHead (pure CLI head, Phase 1)", () => {
       args: ["sync", "--help"],
       helpTarget: "sync",
     });
+    expect(parseCliHead(["sync", "help"])).toEqual({
+      kind: "help",
+      command: "sync",
+      args: ["sync", "help"],
+      helpTarget: "sync",
+    });
     expect(parseCliHead(["provider", "-h"])).toEqual({
       kind: "help",
       command: "provider",
