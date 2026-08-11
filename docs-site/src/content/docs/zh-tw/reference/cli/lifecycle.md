@@ -187,6 +187,10 @@ ocx service uninstall
 
 在 PATH 上以輕量自動啟動腳本包裝基於腳本的 `codex` 啟動器。真實的 `codex.exe` 目標保持不動，以避免破壞精確的可執行檔呼叫。
 
+在提交安裝或修復之前，OpenCodex 會略過服務啟動，並以 `--version` 執行已儲存的啟動器。若啟動器將 `codex` 解析回 shim、以非零狀態結束、超過五秒、留下仍在執行的子行程，或無法安全地驗證與清理，OpenCodex 會拒絕變更並回復。因此，`codex-shim install` 並非無條件執行。若遭拒，請重新安裝 Codex，使 PATH 項目成為具體的可執行檔或啟動器後再試；若動態指令管理器的啟動器無法通過這些檢查，請改用 `ocx service install`。
+
+升級期間，若已安裝的 Unix shim 缺少目前的驗證防護，OpenCodex 會重新產生並探測它。若已儲存的啟動器不安全，OpenCodex 會移除過時的 shim 並還原原始啟動器，而不是讓不安全的 wrapper 繼續安裝。
+
 若已完成的外部 Codex 更新覆寫了已安裝的 shim，下一個普通 `ocx` 指令會備份穩定的新啟動器並在分派前還原 shim。仍在變動中的啟動器保持不動並稍後重試。修復失敗會發出警告但不會使請求的指令失敗；手動後備：`ocx codex-shim install`。將 `codexShimAutoRestore` 設為 `false`，或設定 `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0` 以進行行程層級的退出。
 
 | 子指令 | 動作 |
