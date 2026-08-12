@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { isSha256Hex, jcsStringify } from "../digest";
 import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
+import { parseStrictPublicJson } from "./strict-json";
 import type { PublicEvidenceBundleV1 } from "./types";
 import { verifyPublicEvidenceBundle } from "./signature";
 import { PublicEvidenceValidationError } from "./validate";
@@ -88,9 +89,9 @@ export function readPublicEvidenceBundle(bundleId: string, configDir?: string): 
     throw new Error("public export is not a private regular file");
   }
   if (stats.size > MAX_PUBLIC_BUNDLE_BYTES) throw new Error("public bundle exceeds 2 MiB");
-  const body = readFileSync(path, "utf8");
-  if (encodedBytes(body) > MAX_PUBLIC_BUNDLE_BYTES) throw new Error("public bundle exceeds 2 MiB");
-  const parsed = JSON.parse(body) as PublicEvidenceBundleV1;
+  const bytes = readFileSync(path);
+  if (bytes.byteLength > MAX_PUBLIC_BUNDLE_BYTES) throw new Error("public bundle exceeds 2 MiB");
+  const parsed = parseStrictPublicJson(bytes, "public export", "public_file_json") as PublicEvidenceBundleV1;
   if (parsed.bundleId !== bundleId) throw new Error("public export filename does not match bundle id");
   assertLocalArtifactExportAuthority(parsed);
   const verification = verifyPublicEvidenceBundle(parsed);
