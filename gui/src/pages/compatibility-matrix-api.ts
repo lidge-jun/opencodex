@@ -207,6 +207,47 @@ export async function fetchArtifactByDigest(
   return artifact;
 }
 
+export type PassiveProductionSummaryDto = {
+  verificationStatus: "not_verification";
+  summary: {
+    subjectId: string;
+    verificationStatus: "not_verification";
+    recentProductionAttempts: number;
+    recentSuccessfulAttempts: number;
+    recentRouteErrorSignals: number;
+    lastObservedProductionAttempt?: number;
+  };
+};
+
+function parsePassiveProductionSummary(raw: unknown): PassiveProductionSummaryDto {
+  if (!isPlainObject(raw) || raw.verificationStatus !== "not_verification" || !isPlainObject(raw.summary)) {
+    throw invalidResponse();
+  }
+  const summary = raw.summary;
+  if (summary.verificationStatus !== "not_verification"
+    || typeof summary.subjectId !== "string"
+    || typeof summary.recentProductionAttempts !== "number"
+    || typeof summary.recentSuccessfulAttempts !== "number"
+    || typeof summary.recentRouteErrorSignals !== "number"
+    || (summary.lastObservedProductionAttempt !== undefined && typeof summary.lastObservedProductionAttempt !== "number")) {
+    throw invalidResponse();
+  }
+  return { verificationStatus: "not_verification", summary: summary as PassiveProductionSummaryDto["summary"] };
+}
+
+export async function fetchPassiveProductionSummary(
+  apiBase: string,
+  subjectId: string,
+  signal: AbortSignal,
+): Promise<PassiveProductionSummaryDto> {
+  const raw = await fetchLabJson<unknown>(
+    apiBase,
+    `/api/lab/production-signals?subjectId=${encodeURIComponent(subjectId)}&limit=50`,
+    signal,
+  );
+  return parsePassiveProductionSummary(raw);
+}
+
 export type LabPageData = {
   status: LabStatusDto;
   verdicts: VerdictDto[];
@@ -254,6 +295,7 @@ export type VerdictDetailData = {
   observationsTruncated: boolean;
   events: LabEventDto[];
   artifacts: ArtifactMetadataDto[];
+  production: PassiveProductionSummaryDto | null;
 };
 
 async function mapSettledBounded<TItem, TResult>(
@@ -295,11 +337,15 @@ export async function fetchVerdictDetail(
     layer: verdict.evidenceLayer,
     suiteId: verdict.suiteId,
   };
-  const [subject, observations, events, artifacts] = await Promise.all([
+  const [subject, observations, events, artifacts, production] = await Promise.all([
     fetchSubjectDetail(apiBase, verdict.subjectId, signal),
     fetchAllObservations(apiBase, observationFilters, signal),
     mapSettledBounded(eventIds, DETAIL_CONCURRENCY, signal, id => fetchEventById(apiBase, id, signal)),
     mapSettledBounded(digests, DETAIL_CONCURRENCY, signal, digest => fetchArtifactByDigest(apiBase, digest, signal)),
+    fetchPassiveProductionSummary(apiBase, verdict.subjectId, signal).catch(error => {
+      if (signal.aborted) throw error;
+      return null;
+    }),
   ]);
   return {
     subject,
@@ -307,5 +353,6 @@ export async function fetchVerdictDetail(
     observationsTruncated: observations.truncated,
     events,
     artifacts,
+    production,
   };
 }

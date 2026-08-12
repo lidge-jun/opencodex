@@ -40,6 +40,7 @@ import {
   queryLabSubjectById,
   queryLabSubjects,
   queryLabVerdicts,
+  queryPassiveProductionSignals,
 } from "../../lab/query";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
@@ -192,6 +193,18 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
 
   if (url.pathname === "/api/lab/status") {
     return jsonResponse(queryLabStatus(), 200, req, config);
+  }
+
+  if (url.pathname === "/api/lab/production-signals") {
+    const subjectId = url.searchParams.get("subjectId")?.trim();
+    if (!subjectId) return errorResponse("invalid_subject", "subjectId is required", 400, ctx);
+    const limit = parseLimit(url.searchParams.get("limit"), ctx);
+    if (limit instanceof Response) return limit;
+    try {
+      return jsonResponse(queryPassiveProductionSignals(subjectId, limit), 200, req, config);
+    } catch {
+      return errorResponse("invalid_subject", "subjectId must be an exact Lab route subject id", 400, ctx);
+    }
   }
 
   if (url.pathname === "/api/lab/catalog") {

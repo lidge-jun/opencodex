@@ -191,6 +191,20 @@ function DetailPane({
             <h4>{t("lab.detailSubject")}</h4>
             <p className="mono">{detail.subject.subjectKind}</p>
           </section>
+          {detail.production && (
+            <section className="lab-detail-section" data-testid="lab-production-signals">
+              <h4>Observed production traffic</h4>
+              <p className="muted">Not Lab verification</p>
+              <dl className="lab-detail-meta">
+                <div><dt>Attempts</dt><dd>{detail.production.summary.recentProductionAttempts}</dd></div>
+                <div><dt>Successes</dt><dd>{detail.production.summary.recentSuccessfulAttempts}</dd></div>
+                <div><dt>Route errors</dt><dd>{detail.production.summary.recentRouteErrorSignals}</dd></div>
+                {detail.production.summary.lastObservedProductionAttempt !== undefined && (
+                  <div><dt>Last observed</dt><dd>{formatAsOf(detail.production.summary.lastObservedProductionAttempt, locale)}</dd></div>
+                )}
+              </dl>
+            </section>
+          )}
           {detail.observations.length > 0 && (
             <section className="lab-detail-section">
               <h4>{t("lab.detailObservations")}</h4>

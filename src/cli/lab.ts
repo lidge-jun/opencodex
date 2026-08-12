@@ -33,6 +33,8 @@ import {
   queryLabSubjectById,
   queryLabSubjects,
   queryLabVerdicts,
+  queryPassiveProductionSignals,
+  type PassiveProductionQueryResultV1,
 } from "../lab/query";
 import {
   CliUsageError,
@@ -64,6 +66,7 @@ import { createProductionLabRouteExecutor } from "../lib/lab-live-route-producti
 
 const USAGE = `Usage:
   ocx lab status [--json]
+  ocx lab production-signals --subject <id> [--limit <n>] [--json]
   ocx lab verdicts [--subject <id>] [--layer <layer>] [--suite <id>] [--verdict <v>] [--from <ms>] [--to <ms>] [--limit <n>] [--cursor <c>] [--json]
   ocx lab subjects [--kind <kind>] [--limit <n>] [--cursor <c>] [--json]
   ocx lab subject <subjectId> [--json]
@@ -187,6 +190,17 @@ function catalogLines(scenarios: ReturnType<typeof queryLabCatalogEntries>): str
   return lines.length > 0 ? lines : ["No catalog scenarios"];
 }
 
+function passiveProductionLines(result: PassiveProductionQueryResultV1): string[] {
+  const summary = result.summary;
+  return [
+    "Observed production traffic (not Lab verification)",
+    `Attempts: ${summary.recentProductionAttempts} | Successes: ${summary.recentSuccessfulAttempts} | Route errors: ${summary.recentRouteErrorSignals}`,
+    ...(summary.lastObservedProductionAttempt !== undefined
+      ? [`Last observed: ${summary.lastObservedProductionAttempt}`]
+      : []),
+  ];
+}
+
 function automationStatusLines(status: ReturnType<typeof buildLabAutomationStatus>): string[] {
   return [
     `Automation enabled: ${status.policy.enabled}`,
@@ -222,6 +236,15 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           rejectArgs(rest, USAGE);
           const status = queryLabStatus(configDir);
           printData(status, wantsJson, statusSummary(status));
+          return;
+        }
+        case "production-signals": {
+          const subjectId = takeOption(rest, "--subject");
+          const limit = takeIntegerOption(rest, "--limit", { min: 1 });
+          rejectArgs(rest, USAGE);
+          if (!subjectId) throw new CliUsageError("--subject is required", USAGE);
+          const result = queryPassiveProductionSignals(subjectId, limit);
+          printData(result, wantsJson, passiveProductionLines(result));
           return;
         }
         case "verdicts": {
