@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,12 +11,14 @@ import {
   type ProtocolSubjectV1,
   type RouteSubjectV1,
 } from "../src/lab";
+import { labPublicPublisherKeyPath } from "../src/lab/paths";
 import {
   PUBLIC_ROUTE_REGISTRY_V1,
   PublicEvidenceValidationError,
   buildPublicEvidenceBundle,
   getOrCreatePublicPublisher,
   isPublicIncidentRef,
+  projectPublicEvidence,
   projectPublicEvidenceRecord,
   publicEvidenceId,
   readPublicEvidenceBundle,
@@ -28,6 +30,7 @@ import {
 } from "../src/lab/public";
 
 const HOMES: string[] = [];
+const DEFAULT_COMPLETED_AT = Date.UTC(2026, 7, 12, 14, 37, 41);
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-public-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -50,7 +53,7 @@ function hex(seed: string): string {
   return Bun.CryptoHasher.hash("sha256", seed, "hex");
 }
 
-function protocolObservation(): ObservationEvent {
+function protocolObservation(completedAt = DEFAULT_COMPLETED_AT): ObservationEvent {
   const subject: ProtocolSubjectV1 = {
     subjectSchemaVersion: 1,
     subjectKind: "protocol",
@@ -65,21 +68,21 @@ function protocolObservation(): ObservationEvent {
   return assignEventId({
     schemaVersion: LAB_EVENT_SCHEMA_VERSION,
     eventKind: "observation" as const,
-    recordedAt: Date.UTC(2026, 7, 12, 14, 37, 48),
+    recordedAt: completedAt + 7_000,
     producer: LAB_PRODUCER,
     producerVersion: "2.13.0",
     evidenceLayer: "protocol_conformance" as const,
     scenarioId: "responses-core.protocol.request-shape",
-    scenarioVersion: "1",
+    scenarioVersion: "1.0.0",
     scenarioManifestDigest: hex("scenario"),
     suiteId: "responses-core",
-    suiteVersion: "1",
+    suiteVersion: "1.0.0",
     suiteManifestDigest: hex("suite"),
     fixtureDigests: [hex("fixture")],
     subject,
     subjectId,
-    startedAt: Date.UTC(2026, 7, 12, 14, 37, 40),
-    completedAt: Date.UTC(2026, 7, 12, 14, 37, 41),
+    startedAt: completedAt - 1_000,
+    completedAt,
     executionMode: "fixture" as const,
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
@@ -98,7 +101,7 @@ function protocolObservation(): ObservationEvent {
   }) as ObservationEvent;
 }
 
-function routeObservation(): ObservationEvent {
+function routeObservation(completedAt = DEFAULT_COMPLETED_AT): ObservationEvent {
   const subject: RouteSubjectV1 = {
     subjectSchemaVersion: 1,
     subjectKind: "route",
@@ -117,7 +120,7 @@ function routeObservation(): ObservationEvent {
   };
   const subjectId = subjectIdForSubject(subject);
   return assignEventId({
-    ...protocolObservation(),
+    ...protocolObservation(completedAt),
     eventId: undefined,
     evidenceLayer: "live_route_compatibility" as const,
     scenarioId: "responses-core.live.request-shape",
@@ -132,6 +135,11 @@ function exportedProtocolRecord() {
   const result = projectPublicEvidenceRecord({ observation: protocolObservation(), verdict: "VERIFIED" });
   if (result.status !== "exportable") throw new Error("expected exportable protocol record");
   return result.record;
+}
+
+function withRecomputedRecordId(record: ReturnType<typeof exportedProtocolRecord>) {
+  const { recordId: _oldRecordId, ...withoutRecordId } = record;
+  return { recordId: publicEvidenceId("record", withoutRecordId), ...withoutRecordId };
 }
 
 describe("CL-10 public authority", () => {
@@ -188,6 +196,21 @@ describe("CL-10 public projection", () => {
     expect(result).toEqual({ status: "not_exportable", reason: "private_route_identity" });
   });
 
+  test("derives bundle day only from records that survive exportability gates", () => {
+    const olderPublic = protocolObservation(Date.UTC(2026, 7, 12, 23, 59, 59));
+    const newerPrivateRoute = routeObservation(Date.UTC(2026, 7, 13, 12, 0, 0));
+    const projected = projectPublicEvidence({
+      createdDayUtc: "2099-12-31",
+      records: [
+        { observation: olderPublic, verdict: "VERIFIED" },
+        { observation: newerPrivateRoute, verdict: "PROBED" },
+      ],
+    });
+    expect(projected.bundle.createdDayUtc).toBe("2026-08-12");
+    expect(projected.bundle.records).toHaveLength(1);
+    expect(projected.excluded).toEqual([{ index: 1, reason: "private_route_identity" }]);
+  });
+
   test("uses domain-separated deterministic public ids", () => {
     const payload = { providerId: "openai", modelId: "gpt-5.6-sol" };
     const a = publicEvidenceId("subject", payload);
@@ -240,6 +263,38 @@ describe("CL-10 public bundle and publisher", () => {
     }
   });
 
+  test("rejects unreviewed assertion authority before publisher key creation", () => {
+    const home = tempHome();
+    const record = exportedProtocolRecord();
+    const unauthorized = withRecomputedRecordId({
+      ...record,
+      assertions: [{ id: "private-assertion-name", required: true, passed: true }],
+    });
+    expect(() => signPublicEvidenceBundle({
+      records: [unauthorized],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      configDir: home,
+    })).toThrow(/assertion.*authority/i);
+    expect(existsSync(labPublicPublisherKeyPath(home))).toBe(false);
+  });
+
+  test("rejects privacy-canary public fields before publisher key creation", () => {
+    const home = tempHome();
+    const record = exportedProtocolRecord();
+    if (record.subject.subjectKind !== "protocol") throw new Error("expected protocol public subject");
+    const subject = { ...record.subject, surface: "https://private.example.test/path?token=secret" };
+    const subjectId = publicEvidenceId("subject", subject);
+    const unsafe = withRecomputedRecordId({ ...record, subject, subjectId });
+    expect(() => signPublicEvidenceBundle({
+      records: [unsafe],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      configDir: home,
+    })).toThrow(/forbidden URL material/i);
+    expect(existsSync(labPublicPublisherKeyPath(home))).toBe(false);
+  });
+
   test("signs and verifies exact canonical bundle bytes without serializing private key material", () => {
     const home = tempHome();
     const handle = getOrCreatePublicPublisher(home);
@@ -274,5 +329,14 @@ describe("CL-10 public bundle and publisher", () => {
     const path = writePublicEvidenceBundle(bundle, home);
     expect(path).toBe(join(home, "lab", "export", `${bundle.bundleId}.json`));
     expect(readPublicEvidenceBundle(bundle.bundleId, home)).toEqual(bundle);
+  });
+
+  test("rejects non-object local export JSON with a validation error", () => {
+    const home = tempHome();
+    const bundleId = "f".repeat(64);
+    const exportDir = join(home, "lab", "export");
+    mkdirSync(exportDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(exportDir, `${bundleId}.json`), "null\n", { encoding: "utf8", mode: 0o600 });
+    expect(() => readPublicEvidenceBundle(bundleId, home)).toThrow(PublicEvidenceValidationError);
   });
 });
