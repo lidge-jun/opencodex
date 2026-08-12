@@ -6,9 +6,9 @@ import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
 import { PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION, PUBLIC_EXPORT_POLICY_VERSION } from "./types";
 import type {
-  PublicEvidenceBundlePreviewV1,
   PublicEvidenceBundleV1,
   PublicEvidencePreviewBundleV1,
+  PublicEvidenceRecordV1,
   PublicProjectionNotExportableReason,
 } from "./types";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
@@ -30,7 +30,7 @@ export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
   bundle: PublicEvidencePreviewBundleV1;
   excluded: Array<{ index: number; reason: PublicProjectionNotExportableReason }>;
 } {
-  const records = [];
+  const records: PublicEvidenceRecordV1[] = [];
   const excluded: Array<{ index: number; reason: PublicProjectionNotExportableReason }> = [];
   input.records.forEach((recordInput, index) => {
     const projected = projectPublicEvidenceRecord(recordInput);
