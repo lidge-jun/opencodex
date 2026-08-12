@@ -1,0 +1,55 @@
+name: CL09 review doc fix
+
+on:
+  push:
+    branches:
+      - feat/cl-09-passive-production-evidence
+    paths:
+      - .github/workflows/cl09-review-doc-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/cl-09-passive-production-evidence
+      - name: Reconcile CL-09 contract review findings
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('devlog/_plan/260807_compatibility_lab/009_cl09_passive_production_evidence.md')
+          s = p.read_text()
+          replacements = [
+            ('# CL-09 - Passive Production Evidence / Shadow Correlation', '# CL-09 - Passive Production Evidence / Exact-Route Correlation'),
+            ('0 production request mutation', '0 outbound production request or user-payload mutation'),
+            ('  httpStatus?: number;\n  terminalStatus?: string;\n  closeReason?: string;\n  errorCode?: string;\n', '  httpStatus?: number;\n'),
+          ]
+          for old, new in replacements:
+            if old not in s:
+              raise SystemExit(f'contract anchor missing: {old!r}')
+            s = s.replace(old, new, 1)
+          anchor = 'A failure in passive evidence capture must never fail or delay the production request.\n'
+          addition = ('A failure in passive evidence capture must never fail or delay the production request.\n\n'
+                      'The invariant against production-request mutation applies to outbound request bytes and user payloads. '
+                      'The metadata-only addition of `labRouteSubjectId` to the existing attempt record is explicitly allowed.\n')
+          if anchor not in s:
+            raise SystemExit('mutation clarification anchor missing')
+          s = s.replace(anchor, addition, 1)
+          p.write_text(s)
+
+          stack = Path('devlog/_plan/260807_compatibility_lab/001_pr_stack_status.md')
+          text = stack.read_text().rstrip('\n') + '\n'
+          stack.write_text(text)
+          PY
+      - name: Remove one-shot workflow and commit
+        run: |
+          git rm .github/workflows/cl09-review-doc-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add devlog/_plan/260807_compatibility_lab/009_cl09_passive_production_evidence.md devlog/_plan/260807_compatibility_lab/001_pr_stack_status.md
+          git commit -m "docs(lab): reconcile CL-09 contract review findings"
+          git push origin HEAD:feat/cl-09-passive-production-evidence
