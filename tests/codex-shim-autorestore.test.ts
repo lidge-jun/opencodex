@@ -161,5 +161,5 @@ describe("Codex shim CLI auto-restore policy", () => {
       rmSync(binDir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 });

@@ -17,7 +17,7 @@ import {
 import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
-import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 
 export const RESPONSE_SPILL_VERSION = 1;
@@ -45,9 +45,29 @@ export interface ResponseSpillRef {
   payloadBytes: number;
 }
 
+/**
+ * Hard ceiling for one spill payload, enforced BOTH at direct-spill admission
+ * (state.ts refuses to durably retain a larger candidate) and at replay read
+ * (below). 256 MiB keeps the replay transient under the process-wide
+ * APP_OWNED_WORST_CASE_PINNED_BYTES ceiling (512 MiB); without an admission
+ * ceiling the read ceiling would strand write-only spills on disk.
+ */
+export const MAX_RESPONSE_SPILL_PAYLOAD_BYTES = 256 * 1024 * 1024;
+
+let spillPayloadCapOverride: number | null = null;
+
+/** Test-only: lower/restore the single-spill payload ceiling (null restores). */
+export function setResponseSpillPayloadCapForTests(bytes: number | null): void {
+  spillPayloadCapOverride = bytes;
+}
+
+export function responseSpillPayloadCap(): number {
+  return spillPayloadCapOverride ?? MAX_RESPONSE_SPILL_PAYLOAD_BYTES;
+}
+
 export type ResponseSpillReadResult =
   | { ok: true; payload: ResponseSpillPayload }
-  | { ok: false; reason: "missing" | "corrupt" };
+  | { ok: false; reason: "missing" | "corrupt" | "too_large" };
 
 export interface ResponseSpillCleanupResult {
   scanned: number;
@@ -176,15 +196,26 @@ function closeFile(fd: number): void {
   record("close");
 }
 
-function unlink(path: string): void {
+function unlink(path: string, ephemeral = false): void {
   try {
     if (spillIoForTest?.unlink) spillIoForTest.unlink(path);
     else unlinkSync(path);
-    forgetHardenedSecretPath(path);
+    // Ephemeral release only for publish temps; stable spill files keep their
+    // destination-keyed timeout memos (anti-restall) and drop just the
+    // success memo for the now-deleted file.
+    if (ephemeral) forgetEphemeralSecretPath(path);
+    else forgetHardenedSecretPath(path);
   } catch (error) {
-    if (isErrno(error, "ENOENT")) forgetHardenedSecretPath(path);
+    if (isErrno(error, "ENOENT")) {
+      if (ephemeral) forgetEphemeralSecretPath(path);
+      else forgetHardenedSecretPath(path);
+    }
     throw error;
   }
+}
+
+function unlinkEphemeral(path: string): void {
+  unlink(path, true);
 }
 
 function publishNoReplace(tempPath: string, destinationPath: string): void {
@@ -284,7 +315,7 @@ export function writeResponseSpillDurably(
       try {
         publishNoReplace(publishTempPath, destinationPath);
         fsyncDirectoryBestEffort(dir);
-        unlink(publishTempPath);
+        unlinkEphemeral(publishTempPath);
         tempPath = null;
         return { version: 1, fileName, digest, payloadBytes: bytes.byteLength };
       } catch (error) {
@@ -298,7 +329,7 @@ export function writeResponseSpillDurably(
       try { closeSync(fd); } catch { /* best effort */ }
     }
     if (tempPath) {
-      try { unlink(tempPath); } catch { /* best effort */ }
+      try { unlinkEphemeral(tempPath); } catch { /* best effort */ }
     }
     throw new Error("Response spill write failed");
   }
@@ -306,6 +337,9 @@ export function writeResponseSpillDurably(
 
 export function readResponseSpill(responseId: string, ref: ResponseSpillRef): ResponseSpillReadResult {
   if (!validSpillRef(ref)) return { ok: false, reason: "corrupt" };
+  // Refuse before any read/parse: an oversized declared payload would otherwise
+  // materialize an unbounded transient (readFileSync + utf8 + JSON.parse).
+  if (ref.payloadBytes > responseSpillPayloadCap()) return { ok: false, reason: "too_large" };
   const match = OWNED_SPILL_NAME.exec(ref.fileName);
   if (!match
     || match[2] !== sha256(responseId).slice(0, 12)
@@ -376,7 +410,10 @@ export function recoverOrphanedResponseSpills(
       try { stat = lstatSync(path); } catch { continue; }
       if (!stat.isFile() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < graceMs) continue;
       try {
-        unlink(path);
+        // Orphaned publish temps get the full ephemeral release; stable
+        // orphaned spills keep destination-keyed timeout memos.
+        if (isOwnedTemp) unlinkEphemeral(path);
+        else unlink(path);
         result.removed += 1;
         result.bytesRemoved += stat.size;
       } catch {

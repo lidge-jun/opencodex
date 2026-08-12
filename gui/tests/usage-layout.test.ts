@@ -61,7 +61,7 @@ test("Usage loading and empty states guard the workspace body", async () => {
 });
 
 test("usage workspace i18n keys exist in every locale", async () => {
-  const locales = ["en", "de", "ja", "ko", "ru", "zh"] as const;
+  const locales = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"] as const;
   for (const locale of locales) {
     const dict = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
     expect(dict).toContain('"usage.workspace.sections":');
@@ -141,4 +141,25 @@ test("Usage renders Available history and a persistent qualification when histor
       Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
     }
   }
+});
+
+test("Usage source marks keep brand colors and invert only the monochrome Grok mark", async () => {
+  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+  const css = await Bun.file(new URL("../src/styles.css", import.meta.url)).text();
+
+  // Claude and Codex ship brand-colored SVGs and must not carry the mono modifier.
+  expect(page).toContain('src="/provider-icons/claude-color.svg"');
+  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/claude-color.svg"');
+  expect(page).toContain('src="/provider-icons/openai.svg"');
+  expect(page).not.toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/openai.svg"');
+
+  // Grok ships a black monochrome mark: it is the only one that needs dark-theme inversion.
+  expect(page).toContain('usage-source-mark usage-source-mark--mono" src="/provider-icons/grok.svg"');
+
+  // Dark-theme inversion must be scoped to the mono modifier so brand hues survive.
+  expect(css).toContain(':root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }');
+  expect(css).not.toContain(':root[data-theme="dark"] .usage-source-mark { filter: invert(1); }');
+  // The OS dark-mode (prefers-color-scheme) path must keep the same scoping.
+  expect(css).toContain(':root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }');
+  expect(css).not.toContain(':root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }');
 });

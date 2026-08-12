@@ -116,6 +116,18 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let selected = ["gemini-pro", "gemini-flash"];
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  const contextBodies: Array<{
+    contextWindow: number | null;
+    modelContextWindows: Record<string, number | null>;
+  }> = [];
+  let providerContextWindow: number | undefined = 256_000;
+  // `retired-model` is deliberately NOT in `ids` and not a configured model: it only exists as
+  // an override. Without merging the override keys into the picker it would be invisible and
+  // unclearable, and an assertion using `claude-opus` alone could not tell the difference.
+  let providerModelContextWindows: Record<string, number> = {
+    "claude-opus": 64_000,
+    "retired-model": 72_000,
+  };
   let failNext = false;
   let failCatalog = false;
   let modelFetches = 0;
@@ -142,8 +154,21 @@ test("Models page combines final visibility, atomic actions, discovery status, a
         name: provider,
         liveModels: true,
         models: ids,
+        contextWindow: providerContextWindow,
+        modelContextWindows: providerModelContextWindows,
         discovery: { status: "failed", reason: "http", httpStatus: 401 },
       }]);
+    }
+    if (url.includes("/api/providers?name=") && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body)) as (typeof contextBodies)[number];
+      contextBodies.push(body);
+      if (body.contextWindow === null) providerContextWindow = undefined;
+      else if (typeof body.contextWindow === "number") providerContextWindow = body.contextWindow;
+      for (const [model, value] of Object.entries(body.modelContextWindows ?? {})) {
+        if (value === null) delete providerModelContextWindows[model];
+        else providerModelContextWindows = { ...providerModelContextWindows, [model]: value };
+      }
+      return Response.json({ success: true });
     }
     if (url.endsWith("/api/selected-models")) return Response.json({ selected: { [provider]: selected }, available: { [provider]: ids } });
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
@@ -195,6 +220,248 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
     expect(container.textContent).not.toContain("Not selected");
+
+    await act(async () => buttonText("Context windows").click());
+    const contextDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const contextInputs = contextDialog.querySelectorAll<HTMLInputElement>("input");
+    expect([...contextInputs].map(input => input.value)).toEqual(["256000", "64000"]);
+    const setValue = Object.getOwnPropertyDescriptor(
+      testWindow.HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setValue.call(contextInputs[0]!, "350000");
+      contextInputs[0]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      setValue.call(contextInputs[1]!, "100000");
+      contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    const pickContextModel = async (modelId: string, dialog: HTMLElement = contextDialog) => {
+      await act(async () => {
+        dialog.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Model"]')!.click();
+      });
+      const option = [...testWindow.document.querySelectorAll<HTMLButtonElement>('[role="option"]')]
+        .find(candidate => candidate.textContent === modelId)!;
+      await act(async () => option.click());
+    };
+    await pickContextModel("claude-sonnet");
+    expect(contextInputs[1]!.value).toBe("");
+    await act(async () => {
+      setValue.call(contextInputs[1]!, "80000");
+      contextInputs[1]!.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await pickContextModel("claude-opus");
+    expect(contextInputs[1]!.value).toBe("100000");
+    await pickContextModel("claude-sonnet");
+    expect(contextInputs[1]!.value).toBe("80000");
+    // An override for a model that live discovery no longer returns must still be selectable,
+    // or the user can neither see nor clear it.
+    await pickContextModel("retired-model");
+    expect(contextInputs[1]!.value).toBe("72000");
+    await pickContextModel("claude-opus");
+    const applyContext = [...contextDialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find(button => button.textContent === "Apply")!;
+    await act(async () => {
+      applyContext.click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    // Both edits must survive. This assertion previously named only `claude-opus`, which
+    // pinned the defect as correct behaviour: the user typed 80000 into claude-sonnet, moved
+    // the picker to claude-opus, hit Apply, and the sonnet value vanished with no error.
+    //
+    // `gemini-pro` is absent because it was never typed into. The payload follows what the
+    // user TOUCHED, not what differs from current state — a poll refreshing an untouched
+    // model mid-modal must not make Apply revert it.
+    expect(contextBodies.at(-1)).toEqual({
+      contextWindow: 350_000,
+      modelContextWindows: { "claude-opus": 100_000, "claude-sonnet": 80_000 },
+    });
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
+
+    await act(async () => buttonText("Context windows").click());
+    const refreshFailureDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    failCatalog = true;
+    // Make an actual edit. Apply now compares against the values the modal opened with, so a
+    // reopened-and-untouched dialog sends nothing — which would leave this case asserting the
+    // refresh behaviour of a request that never happened.
+    const refreshFailureInput = refreshFailureDialog.querySelectorAll<HTMLInputElement>("input.input")[0]!;
+    await act(async () => {
+      setValue.call(refreshFailureInput, "360000");
+      refreshFailureInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...refreshFailureDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies).toHaveLength(2);
+    expect(contextBodies.at(-1)).toEqual({ contextWindow: 360_000 });
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
+    expect(container.textContent).toContain("Context windows updated");
+    failCatalog = false;
+
+    // An edit that is typed and then restored is not a change — and neither is retyping the
+    // same number in a different shape. Comparing raw text instead of parsed values would
+    // treat "64,000" as an edit and stamp a stale number over whatever else moved.
+    await act(async () => buttonText("Context windows").click());
+    const revertDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const revertInput = revertDialog.querySelectorAll<HTMLInputElement>("input.input")[0]!;
+    const openingValue = revertInput.value;
+    await act(async () => {
+      setValue.call(revertInput, "999000");
+      revertInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      setValue.call(revertInput, openingValue);
+      revertInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...revertDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies).toHaveLength(2);
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).toBeNull();
+
+    await act(async () => buttonText("Context windows").click());
+    const reformatDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const reformatInput = reformatDialog.querySelectorAll<HTMLInputElement>("input.input")[0]!;
+    const commaFormatted = reformatInput.value.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    await act(async () => {
+      setValue.call(reformatInput, commaFormatted);
+      reformatInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    // The per-model branch has its own comparison, so exercise it too: a raw-string mutant
+    // reverted only there would otherwise slip past the provider-default case above.
+    await pickContextModel("claude-opus", reformatDialog);
+    const reformatModelInput = reformatDialog.querySelectorAll<HTMLInputElement>("input.input")[1]!;
+    await act(async () => {
+      setValue.call(
+        reformatModelInput,
+        reformatModelInput.value.replace(/\B(?=(\d{3})+(?!\d))/g, "_"),
+      );
+      reformatModelInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...reformatDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies).toHaveLength(2);
+
+    // A value the user never touched must not ride along, even after a real poll refreshed it.
+    // The poll has to actually run: mutating the mock alone leaves React's `groups` on the
+    // opening values, and then comparing drafts against LIVE state — the defect — would look
+    // identical to comparing against the snapshot.
+    await act(async () => buttonText("Context windows").click());
+    const concurrentDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    providerContextWindow = 300_000;
+    providerModelContextWindows = { ...providerModelContextWindows, "claude-opus": 96_000 };
+    await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    // Edit ONLY claude-sonnet. The refreshed default and the refreshed claude-opus are both
+    // untouched, so neither may appear in the payload.
+    await pickContextModel("claude-sonnet", concurrentDialog);
+    const concurrentModelInput = concurrentDialog.querySelectorAll<HTMLInputElement>("input.input")[1]!;
+    await act(async () => {
+      setValue.call(concurrentModelInput, "70000");
+      concurrentModelInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...concurrentDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies).toHaveLength(3);
+    expect(contextBodies.at(-1)).toEqual({ modelContextWindows: { "claude-sonnet": 70_000 } });
+
+    // The precise mutant this defends: keep the `touched` guard but compare against the LIVE
+    // `groups` instead of the opening snapshot. The cases above cannot see that swap, because
+    // in each of them the user's value genuinely differs from both. This one does — the user
+    // touches a field and puts it back, while the server moves underneath.
+    await act(async () => buttonText("Context windows").click());
+    const staleDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const staleDefaultInput = staleDialog.querySelectorAll<HTMLInputElement>("input.input")[0]!;
+    const staleOpeningDefault = staleDefaultInput.value;
+    await act(async () => {
+      setValue.call(staleDefaultInput, "111000");
+      staleDefaultInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      setValue.call(staleDefaultInput, staleOpeningDefault);
+      staleDefaultInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await pickContextModel("claude-opus", staleDialog);
+    const staleModelInput = staleDialog.querySelectorAll<HTMLInputElement>("input.input")[1]!;
+    const staleOpeningModel = staleModelInput.value;
+    await act(async () => {
+      setValue.call(staleModelInput, "123000");
+      staleModelInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      // Restored, and also reformatted — the value is unchanged either way.
+      setValue.call(staleModelInput, staleOpeningModel.replace(/\B(?=(\d{3})+(?!\d))/g, "_"));
+      staleModelInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    // Now the server moves both fields, and the poll lands while the modal is still open.
+    providerContextWindow = 411_000;
+    providerModelContextWindows = { ...providerModelContextWindows, "claude-opus": 88_000 };
+    await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    await act(async () => {
+      [...staleDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    // Nothing was written: both fields are back at what the modal opened with. Comparing
+    // against the refreshed `groups` would have called both dirty and reverted 411K and 88K.
+    expect(contextBodies).toHaveLength(3);
+    expect(container.textContent).toContain("No context window changes to save");
+
+    // A default the user never touches must not block a per-model save, even when the stored
+    // value is one the validator would reject. Validating it unconditionally would strand
+    // anyone whose config was hand-edited before the safe-integer bound existed.
+    providerContextWindow = 1e100;
+    await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    await act(async () => buttonText("Context windows").click());
+    const unsafeDefaultDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    await pickContextModel("claude-sonnet", unsafeDefaultDialog);
+    const unsafeSiblingInput = unsafeDefaultDialog.querySelectorAll<HTMLInputElement>("input.input")[1]!;
+    await act(async () => {
+      setValue.call(unsafeSiblingInput, "55000");
+      unsafeSiblingInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...unsafeDefaultDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    expect(contextBodies.at(-1)).toEqual({ modelContextWindows: { "claude-sonnet": 55_000 } });
+
+    // `Number.isInteger(1e100)` is true, and the server rejects it. Accepting it in the form
+    // would turn a typo into a round-trip error instead of inline feedback.
+    const patchesBeforeUnsafe = contextBodies.length;
+    await act(async () => buttonText("Context windows").click());
+    const unsafeDialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Context windows"]')!;
+    const unsafeInput = unsafeDialog.querySelectorAll<HTMLInputElement>("input.input")[0]!;
+    await act(async () => {
+      setValue.call(unsafeInput, "1e100");
+      unsafeInput.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      [...unsafeDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Apply")!
+        .click();
+      await new Promise(resolve => testWindow.setTimeout(resolve, 0));
+    });
+    // Relative, not absolute: an absolute count silently re-targets whenever a case is added
+    // above, and the property under test is "this Apply wrote nothing".
+    expect(contextBodies).toHaveLength(patchesBeforeUnsafe);
+    expect(container.querySelector('[role="dialog"][aria-label="Context windows"]')).not.toBeNull();
+    // The modal staying open is not the point — the user has to be TOLD why. Without this the
+    // test passes on a silent no-op that looks identical to a hang.
+    expect(unsafeDialog.textContent).toContain("Context windows must be positive whole numbers");
+    await act(async () => {
+      [...unsafeDialog.querySelectorAll<HTMLButtonElement>("button")]
+        .find(button => button.textContent === "Cancel")?.click();
+    });
 
     await act(async () => container.querySelector<HTMLButtonElement>('button.select-trigger[aria-label="Shadow Call Intercept"]')?.click());
     // The workspace Select portals its listbox to document.body, so the options are not inside
@@ -267,7 +534,7 @@ async function withCursorDiscoveryServer<T>(
 test("empty live-discovery provider renders endpoint guidance and a settings link", () => {
   const html = renderHint(true, { status: "ok" });
   expect(html).toContain("No models were discovered");
-  expect(html).toContain('href="#providers"');
+  expect(html).toContain('class="link-btn"');
   expect(html).toContain("Open provider settings");
   expect(html).not.toContain("Discovery failed");
 });
@@ -278,7 +545,7 @@ test("failed HTTP discovery renders an amber status badge and reason", () => {
   expect(html).toContain("HTTP 401");
   expect(html).toContain('class="badge badge-amber"');
   expect(html).toContain('role="status"');
-  expect(html).toContain('href="#providers"');
+  expect(html).toContain('class="link-btn"');
 });
 
 test("failed discovery renders each server-owned reason without provider detail", () => {
@@ -317,7 +584,7 @@ test("HTTP 401 discovery exposes HTTP status and badge", async () => {
   const html = renderHint(true, discovery);
   expect(html).toContain("Discovery failed");
   expect(html).toContain("HTTP 401");
-  expect(html).toContain('href="#providers"');
+  expect(html).toContain('class="link-btn"');
 });
 
 test("destination-blocked discovery exposes blocked status and badge", async () => {
@@ -347,7 +614,7 @@ test("destination-blocked discovery exposes blocked status and badge", async () 
   const html = renderHint(true, discovery);
   expect(html).toContain("Discovery failed");
   expect(html).toContain("blocked by the destination policy");
-  expect(html).toContain('href="#providers"');
+  expect(html).toContain('class="link-btn"');
 });
 
 test("invalid JSON or malformed model data exposes invalid-response status and badge", async () => {

@@ -10,6 +10,8 @@ export type CachedUsageSummary = UsageSummary & {
 
 interface UsageSummaryCacheEntry {
   revisionKey: string;
+  /** userCostOverlayVersion() when the summary was computed; overlay edits invalidate the entry. */
+  overlayVersion: number;
   expiresAt: number;
   summary: CachedUsageSummary;
   revisionReadAt: number;

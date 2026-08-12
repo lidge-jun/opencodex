@@ -24,7 +24,10 @@ export function detectGrokCliToken(): OAuthCredentials | null {
 
     const accessToken = entry.key as string;
     const refreshToken = entry.refresh_token as string;
-    const expiresAt = entry.expires_at ? new Date(entry.expires_at as string).getTime() : 0;
+    const parsedExpiresAt = entry.expires_at ? new Date(entry.expires_at as string).getTime() : 0;
+    // Guard against unparseable/NaN expiries: a non-finite value must never be treated as
+    // "valid forever". Unknown → 0, which forces the refresh-validation path downstream.
+    const expiresAt = Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : 0;
 
     return {
       refresh: refreshToken,
@@ -55,6 +58,9 @@ export function shouldAdoptGrokGeneration(
   now = Date.now(),
   refreshSkewMs = 60_000,
 ): boolean {
+  // A non-finite disk expiry means we cannot reason about the generation: the credential is
+  // either garbage or unknown. Treat it as requiring refresh validation, never as an upgrade.
+  if (!Number.isFinite(disk.expires)) return false;
   if (disk.expires <= now + refreshSkewMs) return false;
   const bothExpiriesExist = stored.expires > 0 && disk.expires > 0;
   if (bothExpiriesExist) return disk.expires >= stored.expires;
@@ -108,7 +114,10 @@ export function parseClaudeOauthPayload(raw: string): OAuthCredentials | null {
     const data = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string; refreshToken?: string; expiresAt?: number } };
     const o = data.claudeAiOauth;
     if (!o?.accessToken || !o?.refreshToken) return null;
-    return { access: o.accessToken, refresh: o.refreshToken, expires: o.expiresAt ?? 0, source: "local-cli" };
+    // Number.isFinite guard: a string/NaN expiresAt must not flow into downstream time
+    // comparisons as a "valid forever" value. Unknown → 0 (refresh-validation path).
+    const expires = typeof o.expiresAt === "number" && Number.isFinite(o.expiresAt) ? o.expiresAt : 0;
+    return { access: o.accessToken, refresh: o.refreshToken, expires, source: "local-cli" };
   } catch {
     return null;
   }

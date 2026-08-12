@@ -250,7 +250,7 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
  --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Effort をそのまま渡します(`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`、≤16384→`medium`、それより大→`high` |
-| `thinking.type: "disabled"` | 推論パラメータをすべて省略します |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }` を明示し、`summary` は省略します |
 
 解釈された値はリクエストログの **Reasoning effort** 列に表示されます。
 
@@ -268,7 +268,7 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
 | `thinking` / `redacted_thinking` 再生 | 破棄 |
 | Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

@@ -53,7 +53,7 @@ function withoutUserOverridden(
 
 function withGeneratedRequestId(
   init: RequestInit | undefined,
-  configuredRequestId: string | undefined,
+  pinnedRequestId: string,
   stableHeaders: Readonly<Record<string, string>>,
 ): RequestInit {
   const headers = new Headers(init?.headers);
@@ -63,7 +63,7 @@ function withGeneratedRequestId(
   if (!headers.has(XAI_GROK_COMPATIBILITY.headers.requestId)) {
     headers.set(
       XAI_GROK_COMPATIBILITY.headers.requestId,
-      configuredRequestId ?? randomUUID(),
+      pinnedRequestId,
     );
   }
   return { ...init, headers };
@@ -83,7 +83,9 @@ export function deriveXaiConvId(promptCacheKey: string): string {
 
 /**
  * Resolve xAI's runtime transport without mutating persisted config. Conversation/session
- * affinity is stable for this resolved transport; request identity is generated per fetch.
+ * affinity is stable for this resolved transport; request identity is pinned per resolved
+ * transport (= per logical request until key rotation), so same-target replays and transient
+ * retries carry the same id while a rotated key gets a fresh one.
  * Agent, deployment, model-override, turn, mode, and user identity headers are intentionally
  * omitted because opencodex has no truthful values for the official fields.
  */
@@ -128,9 +130,14 @@ export function resolveProviderTransport(
     provider.headers,
     XAI_GROK_COMPATIBILITY.headers.requestId,
   );
+  // Pin the request id per resolved transport (= per logical request until key rotation):
+  // same-target 429 replays must carry the SAME x-grok-req-id as the original dispatch, and
+  // transient retries reuse one id so the upstream can dedupe them. A rotated key resolves a
+  // fresh transport, which gets its own id.
+  const requestId = configuredRequestId ?? randomUUID();
   const baseFetch = provider.fetch ?? globalThis.fetch;
   const attemptFetch = ((input, init) =>
-    baseFetch(input, withGeneratedRequestId(init, configuredRequestId, stableHeaders))) as typeof globalThis.fetch;
+    baseFetch(input, withGeneratedRequestId(init, requestId, stableHeaders))) as typeof globalThis.fetch;
 
   return {
     ...provider,

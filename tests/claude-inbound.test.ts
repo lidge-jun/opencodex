@@ -94,7 +94,9 @@ describe("claude inbound translation", () => {
   test("thinking variants", () => {
     const base = { model: "m", max_tokens: 10, messages: [{ role: "user", content: "hi" }] };
     expect((anthropicToResponsesBody({ ...base, thinking: { type: "adaptive" } }) as any).reasoning).toEqual({ summary: "auto" });
-    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toBeUndefined();
+    // "disabled" and omitted must NOT collapse to the same state: for a model that thinks by
+    // default, omission means thinking is ON and shares the caller's max_tokens (#545).
+    expect((anthropicToResponsesBody({ ...base, thinking: { type: "disabled" } }) as any).reasoning).toEqual({ effort: "none" }); // justified: sibling assertions in this test use the same cast
     expect((anthropicToResponsesBody(base) as any).reasoning).toBeUndefined();
     expect(effortForThinkingBudget(1024)).toBe("low");
     expect(effortForThinkingBudget(8192)).toBe("medium");
@@ -126,14 +128,62 @@ describe("claude inbound translation", () => {
       thinking: { type: "enabled", budget_tokens: 1024 },
       output_config: { effort: "xhigh" },
     }))).toEqual({ summary: "auto", effort: "xhigh" });
-    // disabled thinking suppresses effort entirely (subagent wire, claude-code#65863)
+    // disabled thinking suppresses effort entirely (subagent wire, claude-code#65863).
+    // Still suppressed — "high" never reaches the wire — but now stated explicitly as the
+    // "none" disable sentinel instead of by absence, so a default-on model is told to stop
+    // rather than left to think anyway (#545).
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "disabled" }, output_config: { effort: "high" },
-    }))).toBeUndefined();
+    }))).toEqual({ effort: "none" });
     // unknown effort strings are dropped so downstream defaults win
     expect(reasoningOf(anthropicToResponsesBody({
       ...base, thinking: { type: "adaptive" }, output_config: { effort: "turbo" },
     }))).toEqual({ summary: "auto" });
+  });
+
+  test("structured output maps output_config.format to text.format", () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema } },
+    });
+
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema } });
+    expect(parseRequest(body).options.textFormat).toEqual({ type: "json_schema", name: "response", schema });
+  });
+
+  test("structured output rejects unsupported schemas and preserves root references", () => {
+    const base = {
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+    };
+    const invalid = anthropicToResponsesBody({
+      ...base,
+      output_config: {
+        format: { type: "json_schema", schema: { description: "answer" } },
+      },
+    });
+    const refSchema = {
+      $defs: { answer: { type: "object", properties: { value: { type: "string" } } } },
+      $ref: "#/$defs/answer",
+    };
+    const referenced = anthropicToResponsesBody({
+      ...base,
+      output_config: { format: { type: "json_schema", schema: refSchema } },
+    });
+
+    expect(invalid.text).toBeUndefined();
+    expect(referenced.text).toEqual({
+      format: { type: "json_schema", name: "response", schema: refSchema },
+    });
   });
 
   test("tool_choice any/tool/none", () => {
@@ -142,6 +192,23 @@ describe("claude inbound translation", () => {
     expect((anthropicToResponsesBody({ ...base, tool_choice: { type: "none" } }) as any).tool_choice).toBe("none");
     expect((anthropicToResponsesBody({ ...base, tool_choice: { type: "tool", name: "Read" } }) as any).tool_choice)
       .toEqual({ type: "function", name: "Read" });
+  });
+
+  test("forced Claude WebSearch stays a hosted Responses tool choice", () => {
+    const body = anthropicToResponsesBody({
+      model: "gpt-5.6-luna",
+      max_tokens: 10,
+      messages: [{ role: "user", content: "search" }],
+      tools: [{ type: "web_search_20250305", name: "web_search" }],
+      tool_choice: { type: "tool", name: "web_search" },
+      thinking: { type: "disabled" },
+    }) as Record<string, unknown>;
+
+    expect(body.tools).toEqual([{ type: "web_search" }]);
+    expect(body.tool_choice).toEqual({ type: "web_search" });
+    expect(body.reasoning).toEqual({ effort: "none" });
+    expect(() => responsesRequestSchema.parse(body)).not.toThrow();
+    expect(() => parseRequest(body)).not.toThrow();
   });
 
   test("system role messages fold into instructions (real Claude Code sends them; native backend rejects system items)", () => {
@@ -172,6 +239,41 @@ describe("claude inbound translation", () => {
       ],
     }) as any;
     expect(body.input[1].output).toBe("[tool error] boom");
+    expect(() => parseRequest(body)).not.toThrow();
+  });
+
+  test("tool_result document blocks surface the attachment marker", () => {
+    const body = anthropicToResponsesBody({
+      model: "m", max_tokens: 10,
+      messages: [
+        { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t1",
+            content: [
+              { type: "text", text: "3 pages" },
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" }, title: "report.pdf" },
+            ],
+          }],
+        },
+        { role: "assistant", content: [{ type: "tool_use", id: "t2", name: "Read", input: {} }] },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result", tool_use_id: "t2",
+            content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "aWc=" } }],
+          }],
+        },
+      ],
+    }) as any;
+    expect(body.input[1].output).toEqual([
+      { type: "input_text", text: "3 pages" },
+      { type: "input_text", text: "[document: report.pdf]" },
+    ]);
+    // An untitled document still leaves a marker rather than the empty output that
+    // read as "the tool returned nothing".
+    expect(body.input[3].output).toEqual([{ type: "input_text", text: "[document]" }]);
     expect(() => parseRequest(body)).not.toThrow();
   });
 

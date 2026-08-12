@@ -248,6 +248,9 @@ test("production adapter contract rejects omitted translator budgets at typechec
   const base = [
     "x", "tsc", "--noEmit", "--target", "ESNext", "--module", "ESNext",
     "--moduleResolution", "bundler", "--types", "bun-types", "--strict", "--skipLibCheck",
+    // TypeScript 7 refuses to run with files on the command line while a
+    // tsconfig.json is present (TS5112); the fixture is checked standalone.
+    "--ignoreConfig",
   ];
   const invalid = Bun.spawnSync(["bun", ...base, "tests/fixtures/translator-budget-required.invalid.ts"]);
   expect(invalid.exitCode).not.toBe(0);

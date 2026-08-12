@@ -23,9 +23,14 @@ export function markStartupHealthDiagnosticStale(value: StartupHealth): StartupH
     rebootSafe: false,
     protection: "none",
     diagnosticStale: true,
+    // Mirror deriveStartupHealth's choice: an already-registered service is refreshed in
+    // place. Hardcoding installService here silently undid that for every stale-cache
+    // read, which is the path the dashboard hits while a probe is revalidating.
     recommendedCommand: value.routingKind === "custom-local" || value.routingKind === "unknown"
       ? value.commands.restoreNative
-      : value.commands.installService,
+      : value.serviceInstalled && !value.serviceConflict
+        ? value.commands.repairService
+        : value.commands.installService,
   };
 }
 
@@ -72,6 +77,7 @@ function runProbe(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHea
                   : truncateRetainedUtf8(parsed.recommendedCommand, MAX_DIAGNOSTIC_VALUE_BYTES),
                 commands: {
                   installService: truncateRetainedUtf8(parsed.commands.installService, MAX_DIAGNOSTIC_VALUE_BYTES),
+                  repairService: truncateRetainedUtf8(parsed.commands.repairService, MAX_DIAGNOSTIC_VALUE_BYTES),
                   installShim: truncateRetainedUtf8(parsed.commands.installShim, MAX_DIAGNOSTIC_VALUE_BYTES),
                   restoreNative: truncateRetainedUtf8(parsed.commands.restoreNative, MAX_DIAGNOSTIC_VALUE_BYTES),
                 },

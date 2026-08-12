@@ -9,6 +9,7 @@ export function CodexAccountSwitchModal({
   mainEmail,
   accountModeState,
   switchingId,
+  orderBusy = false,
   onCancel,
   onConfirm,
 }: {
@@ -16,6 +17,12 @@ export function CodexAccountSwitchModal({
   mainEmail?: string;
   accountModeState: CodexAccountModeState | null;
   switchingId: string | null;
+  /**
+   * An in-flight selection-order write. It clears the pin this switch would set, so the
+   * controller refuses to run the two together and drops the loser without a toast --
+   * the button has to be unavailable rather than silently ineffective.
+   */
+  orderBusy?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -59,7 +66,7 @@ export function CodexAccountSwitchModal({
         )}
         <div className="modal-actions">
           <button type="button" className="btn btn-ghost" onClick={onCancel}>{t("codexAuth.cancel")}</button>
-          <button type="button" className="btn btn-primary" disabled={Boolean(switchingId)} onClick={onConfirm}>
+          <button type="button" className="btn btn-primary" disabled={Boolean(switchingId) || orderBusy} onClick={onConfirm}>
             {switchingId ? t("pws.accountSwitching") : t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext")}
           </button>
         </div>

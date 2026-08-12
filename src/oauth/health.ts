@@ -3,9 +3,11 @@ import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
-import { configuredAdminToken } from "../lib/admin-secrets";
+import { readRuntimePort } from "../config";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { maskAccountId } from "../lib/privacy";
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import { findLiveProxy } from "../server/proxy-liveness";
+import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { loadAuthStore, peekAuthStore, peekOAuthRefreshIntent, readOAuthRefreshIntent } from "./store";
 import type { ProviderAccount } from "./types";
 
@@ -326,21 +328,22 @@ type LiveProxyCodexHealthResult = {
 };
 
 async function fetchCodexHealthFromLiveProxy(
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch | undefined = undefined,
   findLiveProxyImpl: typeof findLiveProxy = findLiveProxy,
+  readRuntimePortImpl: typeof readRuntimePort = readRuntimePort,
 ): Promise<LiveProxyCodexHealthResult> {
   const live = await findLiveProxyImpl();
   if (!live) return { source: "unavailable", entries: null };
-  // This is a management-plane endpoint. A data-plane service token is intentionally not
-  // interchangeable with the admin credential even on loopback.
-  const token = configuredAdminToken();
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
   try {
-    const res = await fetchImpl(
-      `http://${probeHostname(live.hostname)}:${live.port}/api/codex-auth/accounts`,
-      { headers, signal: AbortSignal.timeout(4000) },
+    const read = await fetchBoundLocalManagementRead(
+      live,
+      LOCAL_MANAGEMENT_READ_PATHS.codexAccounts,
+      { fetchImpl, readRuntime: readRuntimePortImpl, timeoutMs: 4_000 },
     );
+    if (read.kind === "unavailable") {
+      return { source: "management-api-unavailable", entries: null };
+    }
+    const res = read.response;
     if (res.status === 401 || res.status === 403) {
       return { source: "management-auth-failed", entries: null };
     }
@@ -387,10 +390,15 @@ export async function collectOAuthHealthEntriesForCli(
   deps: {
     fetchImpl?: typeof fetch;
     findLiveProxyImpl?: typeof findLiveProxy;
+    readRuntimePortImpl?: typeof readRuntimePort;
   } = {},
 ): Promise<OAuthCliHealthReport> {
   const entries = collectOAuthHealthEntries(now, { observeOnly: true, includeLocalCodex: false });
-  const remote = await fetchCodexHealthFromLiveProxy(deps.fetchImpl, deps.findLiveProxyImpl);
+  const remote = await fetchCodexHealthFromLiveProxy(
+    deps.fetchImpl,
+    deps.findLiveProxyImpl,
+    deps.readRuntimePortImpl,
+  );
   if (remote.entries) {
     for (const entry of remote.entries) entries.push(entry);
     return { entries, codexHealthSource: "management-api" };

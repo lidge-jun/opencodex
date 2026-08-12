@@ -20,6 +20,7 @@ const CLIENT_SECRET = process.env.GOOGLE_ANTIGRAVITY_CLIENT_SECRET
   || "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";
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo";
 const PROD_API = "https://cloudcode-pa.googleapis.com";
 const DAILY_API = "https://daily-cloudcode-pa.googleapis.com";
 const API_VERSION = "v1internal";
@@ -227,4 +228,30 @@ export async function refreshAntigravityToken(refreshToken: string, signal?: Abo
   // Re-discover the project on refresh so a newly-onboarded account fills in projectId.
   const projectId = await discoverAntigravityProject(creds.access, signal).catch(() => undefined);
   return projectId ? { ...creds, projectId } : creds;
+}
+
+/**
+ * Refresh and derive import identity from Google's pinned userinfo endpoint. Imports may not
+ * borrow the email written in a local file: that would let one valid token overwrite another
+ * account's slot when a refresh response has no id_token.
+ */
+export async function validateAntigravityImportCredential(
+  refreshToken: string,
+  signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+  const credential = await refreshAntigravityToken(refreshToken, signal);
+  const response = await fetch(USERINFO_ENDPOINT, {
+    method: "GET",
+    headers: { Accept: "application/json", Authorization: `Bearer ${credential.access}` },
+    signal: requestSignal(signal),
+  });
+  if (!response.ok) throw new Error(`Antigravity identity request failed: ${response.status}`);
+  const body = (await response.json().catch(() => undefined)) as { email?: unknown; id?: unknown } | undefined;
+  if (typeof body?.email !== "string" || body.email.length === 0) {
+    throw new Error("Antigravity identity response did not include an email");
+  }
+  if (typeof body.id !== "string" || body.id.length === 0) {
+    throw new Error("Antigravity identity response did not include an account id");
+  }
+  return { ...credential, accountId: body.id, email: body.email.toLowerCase() };
 }

@@ -189,3 +189,92 @@ describe("google adapter — tool-call ids on the wire", () => {
     expect(fc).toBe("call_xyz");
   });
 });
+
+describe("google adapter — tool_choice on the wire", () => {
+  const TOOLS = [
+    { name: "get_weather", parameters: { type: "object", properties: {} } },
+    { name: "shot", namespace: "mcp__chrome", parameters: { type: "object", properties: {} } },
+  ];
+
+  function parsedWithChoice(toolChoice: unknown, tools: unknown[] | null = TOOLS): OcxParsedRequest {
+    return {
+      modelId: "gemini-3-pro",
+      stream: false,
+      options: toolChoice === undefined ? {} : { toolChoice },
+      context: { messages: [{ role: "user", content: "hi" }], tools: tools ?? undefined },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test('"none" and "required" map to NONE and ANY', async () => {
+    expect((await geminiBody(parsedWithChoice("none"))).toolConfig)
+      .toEqual({ functionCallingConfig: { mode: "NONE" } });
+    expect((await geminiBody(parsedWithChoice("required"))).toolConfig)
+      .toEqual({ functionCallingConfig: { mode: "ANY" } });
+  });
+
+  test("a forced tool maps to ANY with its wire name allowed", async () => {
+    expect((await geminiBody(parsedWithChoice({ name: "get_weather" }))).toolConfig)
+      .toEqual({ functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["get_weather"] } });
+    // Dotted alias resolves to the namespaced declaration name.
+    expect((await geminiBody(parsedWithChoice({ name: "mcp__chrome.shot" }))).toolConfig)
+      .toEqual({ functionCallingConfig: { mode: "ANY", allowedFunctionNames: ["mcp__chrome__shot"] } });
+  });
+
+  test('"auto", absent, and allowedTools+auto stay byte-identical (no toolConfig)', async () => {
+    expect((await geminiBody(parsedWithChoice("auto"))).toolConfig).toBeUndefined();
+    expect((await geminiBody(parsedWithChoice(undefined))).toolConfig).toBeUndefined();
+    expect((await geminiBody(parsedWithChoice({ allowedTools: ["get_weather"], mode: "auto" }))).toolConfig).toBeUndefined();
+  });
+
+  test("allowedTools with mode required keeps the filtered catalog and adds ANY", async () => {
+    const body = await geminiBody(parsedWithChoice({ allowedTools: ["get_weather"], mode: "required" }));
+    const declared = (body.tools as { functionDeclarations: { name: string }[] }[])[0].functionDeclarations.map(d => d.name);
+    expect(declared).toEqual(["get_weather"]);
+    expect(body.toolConfig).toEqual({ functionCallingConfig: { mode: "ANY" } });
+  });
+
+  test("no declared tools means no toolConfig even with a choice", async () => {
+    expect((await geminiBody(parsedWithChoice("none", null))).toolConfig).toBeUndefined();
+    expect((await geminiBody(parsedWithChoice({ name: "get_weather" }, []))).toolConfig).toBeUndefined();
+  });
+
+  test('claude-on-antigravity honors "none" by dropping the declarations', async () => {
+    const ccaProvider = {
+      adapter: "google",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      apiKey: "key",
+      project: "proj-123",
+    };
+    const claudeParsed = parsedWithChoice("none");
+    (claudeParsed as unknown as { modelId: string }).modelId = "claude-opus-4.8";
+    const claudeRequest = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(claudeParsed)).body).request as Record<string, unknown>;
+    // VALIDATED would defeat NONE, so the declarations go instead; the config matches a tool-less turn.
+    expect(claudeRequest.tools).toBeUndefined();
+    expect(claudeRequest.toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } });
+
+    // Gemini on the same route has no VALIDATED override, so NONE rides with the catalog intact.
+    const geminiParsed = parsedWithChoice("none");
+    const geminiRequest = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(geminiParsed)).body).request as Record<string, unknown>;
+    const declared = (geminiRequest.tools as { functionDeclarations: { name: string }[] }[])[0].functionDeclarations.map(d => d.name);
+    expect(declared).toEqual(["get_weather", "mcp__chrome__shot"]);
+    expect(geminiRequest.toolConfig).toEqual({ functionCallingConfig: { mode: "NONE" } });
+  });
+
+  test("claude-on-antigravity keeps VALIDATED mode over a client choice, allowed names survive", async () => {
+    const ccaProvider = {
+      adapter: "google",
+      googleMode: "cloud-code-assist",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      apiKey: "key",
+      project: "proj-123",
+    };
+    const parsed = parsedWithChoice({ name: "get_weather" });
+    (parsed as unknown as { modelId: string }).modelId = "claude-opus-4.8";
+    const { body } = await createGoogleAdapter(ccaProvider).buildRequest(parsed);
+    const request = JSON.parse(body).request as Record<string, unknown>;
+    expect(request.toolConfig).toEqual({
+      functionCallingConfig: { mode: "VALIDATED", allowedFunctionNames: ["get_weather"] },
+    });
+  });
+});

@@ -3,6 +3,7 @@ import {
   DecompressedBodyTooLargeError,
   decodeRequestBody,
   MAX_DECOMPRESSED_BODY_BYTES,
+  readBoundedJsonRequestBody,
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
@@ -12,6 +13,40 @@ import type { OcxConfig } from "../src/types";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
 const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify(PAYLOAD));
+
+interface TrackedBodyStats {
+  pulls: number;
+  cancelled: number;
+  sentinelPulled: boolean;
+}
+
+function trackedBodyStream(
+  chunks: readonly Uint8Array[],
+  options: {
+    sentinel?: Uint8Array;
+    cancel?: (reason: unknown) => void | Promise<void>;
+  } = {},
+): { body: ReadableStream<Uint8Array>; stats: TrackedBodyStats } {
+  const pending = [...chunks];
+  const stats: TrackedBodyStats = { pulls: 0, cancelled: 0, sentinelPulled: false };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      stats.pulls += 1;
+      const chunk = pending.shift();
+      if (!chunk) {
+        controller.close();
+        return;
+      }
+      if (chunk === options.sentinel) stats.sentinelPulled = true;
+      controller.enqueue(chunk);
+    },
+    cancel(reason) {
+      stats.cancelled += 1;
+      return options.cancel?.(reason);
+    },
+  }, { highWaterMark: 0 });
+  return { body, stats };
+}
 
 describe("decodeRequestBody", () => {
   test("passes identity and absent encodings through untouched", () => {
@@ -99,18 +134,96 @@ describe("decodeRequestBody", () => {
 });
 
 describe("readJsonRequestBody", () => {
-  test("rejects declared over-cap bodies before arrayBuffer allocation", async () => {
-    let arrayBufferCalls = 0;
-    const req = {
-      headers: new Headers({ "content-length": String(MAX_DECOMPRESSED_BODY_BYTES + 1) }),
-      arrayBuffer: async () => {
-        arrayBufferCalls += 1;
-        return new ArrayBuffer(0);
-      },
-    } as Request;
+  test("rejects and cancels declared over-cap bodies before reading", async () => {
+    const { body, stats } = trackedBodyStream([PAYLOAD_BYTES]);
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-length": String(MAX_DECOMPRESSED_BODY_BYTES + 1) },
+      body,
+    });
 
     await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
-    expect(arrayBufferCalls).toBe(0);
+    expect(stats.pulls).toBe(0);
+    expect(stats.cancelled).toBe(1);
+  });
+
+  for (const [label, headers] of [
+    ["missing Content-Length", { "content-type": "application/json" }],
+    ["a lying low Content-Length", { "content-type": "application/json", "content-length": "1" }],
+  ] as const) {
+    test(`stops and cancels at the wire-byte cap with ${label}`, async () => {
+      const sentinel = Uint8Array.of(0x7f);
+      const { body, stats } = trackedBodyStream([
+        new Uint8Array([1, 2, 3]),
+        new Uint8Array([4, 5, 6]),
+        sentinel,
+      ], { sentinel });
+      const req = new Request("http://localhost/api/optional", { method: "POST", headers, body });
+
+      await expect(readBoundedJsonRequestBody(req, 5, undefined, { emptyBodyFallback: {} }))
+        .rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
+      expect(stats).toEqual({ pulls: 2, cancelled: 1, sentinelPulled: false });
+    });
+  }
+
+  test("accepts an exactly capped fragmented wire body after EOF", async () => {
+    const encoded = new TextEncoder().encode('{"x":1}');
+    const { body, stats } = trackedBodyStream(Array.from(encoded, byte => Uint8Array.of(byte)));
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+
+    expect(await readBoundedJsonRequestBody(req, encoded.byteLength)).toEqual({ x: 1 });
+    expect(stats.cancelled).toBe(0);
+  });
+
+  test("does not await a stream cancellation that never settles", async () => {
+    const sentinel = Uint8Array.of(0x7f);
+    const { body, stats } = trackedBodyStream([
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([4, 5, 6]),
+      sentinel,
+    ], {
+      sentinel,
+      cancel: () => new Promise<void>(() => {}),
+    });
+    const req = new Request("http://localhost/api/optional", { method: "POST", body });
+    const result = readBoundedJsonRequestBody(req, 5).then(
+      () => "resolved",
+      error => error instanceof DecompressedBodyTooLargeError ? "oversized" : "wrong-error",
+    );
+
+    expect(await Promise.race([result, Bun.sleep(250).then(() => "timed-out")])).toBe("oversized");
+    expect(stats).toEqual({ pulls: 2, cancelled: 1, sentinelPulled: false });
+  });
+
+  test("preserves the original abort reason when cancellation settles a pending read as EOF", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    let cancelled = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        markStarted();
+      },
+      cancel() {
+        cancelled += 1;
+      },
+    }, { highWaterMark: 0 });
+    const controller = new AbortController();
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      body,
+      signal: controller.signal,
+    });
+    const pending = readBoundedJsonRequestBody(req, 5);
+    await started;
+    const reason = new Error("stop request body read");
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
+    expect(cancelled).toBe(1);
   });
 
   test("management routes reject a lying declaration when the buffered body exceeds 4 MiB", async () => {
@@ -124,6 +237,23 @@ describe("readJsonRequestBody", () => {
     const response = await handleManagementAPI(req, new URL(req.url), config);
     expect(response?.status).toBe(413);
     expect(await response?.json()).toEqual({ error: "request body too large" });
+  });
+
+  test("rejects oversized compressed wire bytes without a Content-Length before inflation", async () => {
+    const gzipMember = Bun.gzipSync(new TextEncoder().encode(" "));
+    const oversizedWireBody = new Uint8Array(gzipMember.byteLength * 100);
+    for (let index = 0; index < 100; index++) {
+      oversizedWireBody.set(gzipMember, index * gzipMember.byteLength);
+    }
+    expect(oversizedWireBody.byteLength).toBeGreaterThan(1024);
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      body: oversizedWireBody,
+    });
+    expect(req.headers.get("content-length")).toBeNull();
+    await expect(readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: {} }))
+      .rejects.toBeInstanceOf(DecompressedBodyTooLargeError);
   });
 
   test("parses an uncompressed request without touching arrayBuffer path", async () => {
@@ -151,6 +281,27 @@ describe("readJsonRequestBody", () => {
       body: Bun.gzipSync(PAYLOAD_BYTES),
     });
     expect(await readJsonRequestBody(req)).toEqual(PAYLOAD);
+  });
+
+  test("returns an explicit fallback only for an empty optional body", async () => {
+    const fallback = {};
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      body: Bun.gzipSync(new TextEncoder().encode("  \n")),
+    });
+    expect(await readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: fallback }))
+      .toBe(fallback);
+  });
+
+  test("does not turn malformed JSON into the optional-body fallback", async () => {
+    const req = new Request("http://localhost/api/optional", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    await expect(readBoundedJsonRequestBody(req, 1024, undefined, { emptyBodyFallback: {} }))
+      .rejects.toBeInstanceOf(SyntaxError);
   });
 
   test("surfaces UnsupportedContentEncodingError for unknown encodings", async () => {

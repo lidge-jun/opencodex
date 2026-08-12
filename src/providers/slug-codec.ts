@@ -56,12 +56,19 @@ export function slugEquals(stored: string, provider: string, id: string): boolea
   return stored === `${provider}/${id}` || stored === routedSlug(provider, id);
 }
 
+/** Stable key for the exact equivalence relation used by catalog/config slug matching. */
+export function slugEquivalenceKey(slug: string): string {
+  const slash = slug.indexOf("/");
+  return slash <= 0
+    ? JSON.stringify(["exact", slug])
+    : JSON.stringify([
+      "routed",
+      slug.slice(0, slash),
+      encodeRoutedModelId(slug.slice(slash + 1)),
+    ]);
+}
+
 /** Equivalence between two routed slugs regardless of raw/encoded mix. */
 export function slugsEquivalent(a: string, b: string): boolean {
-  if (a === b) return true;
-  const pa = a.indexOf("/");
-  const pb = b.indexOf("/");
-  if (pa <= 0 || pb <= 0) return false;
-  if (a.slice(0, pa) !== b.slice(0, pb)) return false;
-  return encodeRoutedModelId(a.slice(pa + 1)) === encodeRoutedModelId(b.slice(pb + 1));
+  return a === b || slugEquivalenceKey(a) === slugEquivalenceKey(b);
 }

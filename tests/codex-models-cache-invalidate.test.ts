@@ -54,6 +54,27 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(cache.models).toEqual([{ slug: "gpt-5.5" }]);
   });
 
+  test("refuses the cache rewrite when desired state flipped OFF between commit and reacquisition", () => {
+    // The commit-path desired-state check runs under the FIRST catalog permit;
+    // refreshCodexModelCatalog then releases K before invalidateCodexModelsCache
+    // reacquires it. An OFF landing in that gap must gate this second write too —
+    // otherwise a routed models_cache survives a completed disable while the
+    // injector honestly reports status:"skipped".
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "gpt-5.5" }],
+    }, null, 2) + "\n");
+    mkdirSync(join(opencodexHome, ".opencodex"), { recursive: true });
+    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {},
+      clientIntegrations: { codex: false },
+    }, null, 2) + "\n");
+
+    expect(invalidateCodexModelsCache()).toBe(false);
+    expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+  });
+
   test("returns false for a missing catalog and does not warn/restart app-servers", () => {
     const errors: string[] = [];
     const logs: string[] = [];

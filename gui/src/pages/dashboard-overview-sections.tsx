@@ -1,8 +1,10 @@
-import { IconAlert, IconInfo, IconRefresh } from "../icons";
+import { useEffect, useRef, useState } from "react";
+import { IconAlert, IconCheck, IconInfo, IconRefresh, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
 import { Select } from "../ui";
+import { formatNamespacedModelId } from "../provider-icons";
 import { navigateHash } from "../hash-routing";
-import { EFFORT_CAP_LEVELS, requireJson, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
+import { clampVisionReasoningToLadder, EFFORT_CAP_LEVELS, requireJson, shadowCallModelOptions, sidecarBackendForModel, updateJobLabel, visionReasoningLadder, visionReasoningOptionsFor, visionReasoningPatch, visionSidecarBackendForModel } from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -89,14 +91,6 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   );
 }
 
-/**
- * Delegation row: pick the model (and effort) inline, with a link to the rest.
- *
- * The two switches moved to the Subagents tab, which is where the roster they affect lives.
- * The model pick stays: it is the same shape as the sidecar rows below it (label left,
- * dropdown right), and it is the one delegation choice worth changing without leaving the
- * status page.
- */
 export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
   const {
     t, injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
@@ -111,7 +105,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
           value={injectionModel}
           options={[
             { value: "", label: t("dash.injectionNone") },
-            ...injectionAvailable.map(m => ({ value: m.namespaced, label: `${m.provider} / ${m.model}` })),
+            ...injectionAvailable.map(m => ({ value: m.namespaced, label: formatNamespacedModelId(`${m.provider}/${m.model}`, t) })),
           ]}
           onChange={(v) => { void saveInjection({ model: v || null, effort: injectionEffort || null }); }}
           disabled={injectionSaving}
@@ -129,11 +123,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
             label={t("dash.injectionEffortLabel")}
           />
         )}
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          onClick={() => navigateHash("#subagents")}
-        >
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("#subagents")}>
           {t("dash.injectionManage")}
         </button>
       </div>
@@ -144,79 +134,118 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
 export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   const {
     t, runSync, syncing, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
-    syncResult, syncError, updateJob, reconnecting,
+    syncResult, syncError, updateJob, reconnecting, clearSyncFeedback,
   } = d;
+  const syncHoldsWarning = !!syncResult && (
+    !!syncResult.warning
+    || !!syncResult.nativeSubagentDefaultsWarning
+    || !!syncResult.staleAppServerHint
+  );
+  const [syncToastDismissed, setSyncToastDismissed] = useState(false);
+  const syncToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (syncToastTimerRef.current) {
+      clearTimeout(syncToastTimerRef.current);
+      syncToastTimerRef.current = null;
+    }
+    if ((syncResult || syncError) && !syncHoldsWarning) {
+      const holdMs = syncError ? 8000 : 6000;
+      syncToastTimerRef.current = setTimeout(() => {
+        syncToastTimerRef.current = null;
+        setSyncToastDismissed(true);
+        clearSyncFeedback();
+      }, holdMs);
+    }
+    return () => {
+      if (syncToastTimerRef.current) clearTimeout(syncToastTimerRef.current);
+    };
+  }, [syncResult, syncError, syncHoldsWarning, clearSyncFeedback]);
+
+  const handleRunSync = () => {
+    setSyncToastDismissed(false);
+    void runSync();
+  };
+
+  const dismissSyncToast = () => {
+    setSyncToastDismissed(true);
+    clearSyncFeedback();
+  };
 
   return (
-    <div className="panel maintenance-panel">
-      {/* Same one-row chrome as Sub-agent delegation: copy left, action right. */}
-      <div className="dash-sync-summary">
-        <div className="dash-sync-copy">
-          <div className="font-semibold">{t("dash.syncModels")}</div>
-          <div className="muted text-control dash-sync-hint">{t("dash.syncModelsHint")}</div>
+    <>
+      <div className="panel maintenance-panel">
+        <div className="dash-sync-summary">
+          <div className="dash-sync-copy">
+            <div className="font-semibold">{t("dash.syncModels")}</div>
+            <div className="muted text-control dash-sync-hint">{t("dash.syncModelsHint")}</div>
+          </div>
+          <div className="maintenance-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing}>
+              <IconRefresh className={syncing ? "spin-icon" : undefined} /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
+            </button>
+            <button
+              ref={updateTriggerRef}
+              type="button"
+              className="maintenance-update-anchor"
+              onClick={openUpdateDialog}
+              disabled={updateLoading}
+              aria-haspopup="dialog"
+              aria-controls="dashboard-update-dialog"
+              aria-expanded={updateOpen}
+              aria-label={t("dash.checkUpdate")}
+              tabIndex={-1}
+            />
+          </div>
         </div>
-        <div className="maintenance-actions">
-          <button type="button" className="btn btn-ghost btn-sm" onClick={runSync} disabled={syncing}>
-            <IconRefresh /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
-          </button>
-          {/*
-            The update flow lives in the sidebar footer, which reports whether one is waiting
-            and is reachable from every page. A second button here duplicated it without
-            adding that signal. The trigger stays as a zero-size anchor so the deep link
-            (`#dashboard/update`) still has something to open against and the dialog has a
-            focus target to return to on close.
-          */}
-          <button
-            ref={updateTriggerRef}
-            type="button"
-            className="maintenance-update-anchor"
-            onClick={openUpdateDialog}
-            disabled={updateLoading}
-            aria-haspopup="dialog"
-            aria-controls="dashboard-update-dialog"
-            aria-expanded={updateOpen}
-            aria-label={t("dash.checkUpdate")}
-            tabIndex={-1}
-          />
-        </div>
+        {updateJob && (
+          <div className={`notice ${updateJob.status === "failed" ? "notice-err" : "notice-ok"} maintenance-notice`} role="status">
+            {updateJob.status === "failed" ? <IconAlert /> : <IconRefresh />}
+            <span>
+              {updateJobLabel(updateJob.status, t)}
+              {updateJob.latestVersion ? ` ${t("dash.updateVersionTransition", { currentVersion: updateJob.currentVersion, latestVersion: updateJob.latestVersion })}` : ""}
+              {reconnecting ? ` ${t("dash.updateReconnecting")}` : ""}
+              {updateJob.error ? ` ${updateJob.error}` : ""}
+            </span>
+          </div>
+        )}
       </div>
-      {syncResult && (
-        <div className={`notice ${syncResult.nativeSubagentDefaultsWarning ? "notice-warn" : "notice-ok"} maintenance-notice`} role="status">
-          {syncResult.nativeSubagentDefaultsWarning ? <IconAlert /> : <IconRefresh />}
+      {!syncToastDismissed && syncResult && (
+        <div className={`action-toast notice ${syncHoldsWarning ? "notice-warn" : "notice-ok"}`} role="status" aria-live="polite">
+          {syncHoldsWarning ? <IconAlert /> : <IconCheck />}
           <span>
             {t("dash.syncOk", { count: syncResult.added })}
             {syncResult.warning ? ` ${syncResult.warning}` : ""}
             {syncResult.nativeSubagentDefaultsWarning ? ` ${syncResult.nativeSubagentDefaultsWarning}` : ""}
             {syncResult.staleAppServerHint ? <>{" "}<Trans k="dash.syncStaleHint" cmd="ocx sync --restart-codex" /></> : null}
           </span>
+          <button type="button" className="action-toast-dismiss" onClick={dismissSyncToast} aria-label={t("api.dismiss")}>
+            <IconX width={13} height={13} aria-hidden="true" />
+          </button>
         </div>
       )}
-      {syncError && (
-        <div className="notice notice-err maintenance-notice" role="status">
+      {!syncToastDismissed && syncError && (
+        <div className="action-toast notice notice-err" role="status" aria-live="polite">
           <IconAlert /><span>{t("dash.syncFailed", { error: syncError })}</span>
+          <button type="button" className="action-toast-dismiss" onClick={dismissSyncToast} aria-label={t("api.dismiss")}>
+            <IconX width={13} height={13} aria-hidden="true" />
+          </button>
         </div>
       )}
-      {updateJob && (
-        <div className={`notice ${updateJob.status === "failed" ? "notice-err" : "notice-ok"} maintenance-notice`} role="status">
-          {updateJob.status === "failed" ? <IconAlert /> : <IconRefresh />}
-          <span>
-            {updateJobLabel(updateJob.status, t)}
-            {updateJob.latestVersion ? ` ${updateJob.currentVersion} -> ${updateJob.latestVersion}.` : ""}
-            {reconnecting ? ` ${t("dash.updateReconnecting")}` : ""}
-            {updateJob.error ? ` ${updateJob.error}` : ""}
-          </span>
-        </div>
-      )}
-    </div>
+    </>
   );
 }
 
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
     t, settings, settingsSaving, toggleCodexAutoStart,
-    sidecar, sidecarSaving, sidecarModels, models, saveSidecar,
+    sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
+  const visionModel = sidecar?.vision.model ?? "gpt-5.4-mini";
+  const persistedVisionReasoning = sidecar?.vision.reasoning ?? "low";
+  const visionLadder = visionReasoningLadder(models, visionModel);
+  const visionReasoning = clampVisionReasoningToLadder(visionLadder, persistedVisionReasoning);
 
   return (
     <>
@@ -240,9 +269,14 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
       </div>
 
       <div className="dash-sidecar-grid">
-        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
-          <div className="dash-sidecar-card__row">
+        {/* Both sidecar cards wear the DashboardInjectionPanel shell: the PANEL is
+            the flex row, copy left, controls right. */}
+        <div className="panel dash-delegation-summary dash-sidecar-row-card" aria-busy={!sidecar || undefined}>
+          <div className="dash-sidecar-copy">
             <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
+            <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
+          </div>
+          <div className="dash-delegation-controls">
             <Select
               value={sidecar?.webSearch.model ?? "gpt-5.6-luna"}
               options={sidecarModels}
@@ -251,21 +285,38 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
               label={t("dash.sidecarModel")}
             />
           </div>
-          <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
         </div>
 
-        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
-          <div className="dash-sidecar-card__row">
+        <div className="panel dash-delegation-summary dash-sidecar-row-card" aria-busy={!sidecar || undefined}>
+          <div className="dash-sidecar-copy">
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
+            <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
+          </div>
+          <div className="dash-delegation-controls">
             <Select
-              value={sidecar?.vision.model ?? "gpt-5.6-luna"}
-              options={sidecarModels}
-              onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
+              value={visionModel}
+              options={visionModels}
+              onChange={model => {
+                const ladder = visionReasoningLadder(models, model);
+                const reasoning = clampVisionReasoningToLadder(ladder, visionReasoning);
+                void saveSidecar({ vision: { model, backend: visionSidecarBackendForModel(models, visionModels, model), reasoning } });
+              }}
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}
             />
+            <Select
+              value={visionReasoning}
+              // Raw wire value (low…max), matching the delegation panel's bare `high`.
+              options={visionReasoningOptionsFor(visionLadder, visionReasoning)
+                .map(value => ({ value, label: value }))}
+              onChange={reasoning => {
+                void saveSidecar(visionReasoningPatch(reasoning as typeof visionReasoning));
+              }}
+              disabled={!sidecar || sidecarSaving}
+              align="right"
+              label={`${t("dash.visionSidecar")} — ${t("dash.injectionEffortLabel")}`}
+            />
           </div>
-          <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
         </div>
       </div>
 
@@ -301,7 +352,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
             </button>
             <Select
               value={shadowCall?.model ?? ""}
-              options={[{ value: "", label: "—" }, ...models.map(m => ({ value: m.id, label: `${m.provider}/${m.id}` }))]}
+              options={shadowCallModelOptions(models, shadowCall?.model).map(option => option.value === "" ? option : { ...option, label: formatNamespacedModelId(option.value, t) })}
               onChange={v => { void saveShadowCall({ model: v }); }}
               disabled={!shadowCall || shadowCallSaving || !shadowCall?.enabled}
               label={t("dash.shadowCallModel")}

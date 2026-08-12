@@ -17,14 +17,14 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
 | `websockets?` | `boolean` | `false` | Объявлять `supports_websockets` для WebSocket-пути Responses. Значение false удерживает HTTP/SSE. |
-| `corsAllowOrigins?` | `string[]` | `[]` | Дополнительные точные CORS-origin'ы. Loopback-origin'ы разрешены всегда. |
+| `corsAllowOrigins?` | `string[]` | `[]` | Дополнительные точные origin, разрешённые CORS. Loopback-origin разрешены всегда. Поддерживаются authority-based origin браузерных расширений, например `chrome-extension://<extension-id>`; `*` не является маской. Firefox и Safari пересоздают UUID расширения (при каждой установке/запуске браузера), поэтому обновляйте запись при смене origin. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…`, принимаемые для management и data-plane auth на не-loopback bind'ах. Управляются через дашборд. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Лимит в MiB для eviction-friendly app-owned log'ов, cache'ей, blob'ов и continuation payload'ов. Это не RSS-cap. Диапазон 64–4096. |
 | `codexAutoStart?` | `boolean` | `true` | Разрешает shim'у Codex запускать `ocx ensure` перед стартом Codex. При false `ensure` становится no-op. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Восстанавливает установленный shim после завершённого внешнего обновления Codex, которое заменило его. Для отключения через окружение: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Обратимый режим совместимости истории Codex App. Исходные metadata резервируются и восстанавливаются через `ocx stop` / `ocx restore`. |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix'ы по умолчанию: `gpt-5.4-mini` и `gpt-5.6-luna`. |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` | off | Перенаправляет распознанные helper/shadow-call'ы Codex на выбранную модель с low effort. Source-prefix по умолчанию: `gpt-5.6-luna`; клиенты до 0.144.x включительно использовали `gpt-5.4-mini`, который можно восстановить через `sourceModels`. |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
@@ -132,7 +132,7 @@ Codex использует маленькие helper-model'и для задач 
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```
@@ -179,14 +179,17 @@ routed-model и hosted-search timeout. Эффективный watchdog мост�
 | `enabled?` | `boolean` | on when usable | Главный переключатель описания изображений. |
 | `backend?` | `"openai" \| "anthropic"` | auto | Та же логика выбора explicit-first/Anthropic-credential-aware, что и у web search. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` для OpenAI или `claude-sonnet-5` для Anthropic. |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | Уровень рассуждений OpenAI Responses. Anthropic его игнорирует. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | Максимум новых промахов description-cache за один main turn. `0` отключает вызовы; некорректные значения возвращают дефолт. |
 | `timeoutMs?` | `number` | `45000` | Таймаут запроса sidecar'а. |
 
-Vision включается только для изображений, отправленных в модель, входящую в `noVisionModels` её
+Поддерживаемые уровни зависят от возможностей вышестоящего провайдера и заявленной лестницы
+рассуждений выбранной модели. Vision включается только для изображений, отправленных в модель, входящую в `noVisionModels` её
 провайдера. У OpenAI требования по login/forward те же, что и у поиска; явный Anthropic без
 рабочего credential завершается ошибкой. Успешные описания `data:` используют ограниченный cache,
 ключ которого включает backend, model, detail, bytes изображения и нормализованный message
-context. Попадания в cache и дубликаты в пределах одного turn'а не расходуют лимит. Удалённые
+context; в ключи OpenAI дополнительно входит reasoning effort (в ключи Anthropic — нет).
+Попадания в cache и дубликаты в пределах одного turn'а не расходуют лимит. Удалённые
 `https:`-изображения, а также пустые и неуспешные описания не кэшируются.
 
 Sidecar'ы Anthropic OAuth повторно используют уже существующий OAuth fingerprint Claude Code от

@@ -19,13 +19,14 @@ async function call(
   method: string,
   pathname: string,
   headers: Record<string, string> = {},
+  principal?: "admin-token" | "gui-session",
 ): Promise<{ status: number; body: unknown; raw: string; routed: boolean }> {
   // `isAllowedManagementOrigin` derives the expected origin from the Host header and
   // rejects the request outright when it is missing, so Host is required here. Omitting
   // Origin models the GUI's own same-origin fetch.
   const url = new URL(`http://127.0.0.1:10100${pathname}`);
   const req = new Request(url, { method, headers: { host: "127.0.0.1:10100", ...headers } });
-  const res = await handleManagementAPI(req, url, config);
+  const res = await handleManagementAPI(req, url, config, {}, principal);
   if (!res) return { status: 404, body: null, raw: "", routed: false };
   const raw = await res.text();
   return { status: res.status, body: raw ? JSON.parse(raw) : null, raw, routed: true };
@@ -183,27 +184,90 @@ describe("route surface", () => {
       async runGh(args) { calls.push(args); return { status: 0 }; },
     }, async () => {
       invalidateStarStatusCache();
-      // Browser-session evidence: same-origin Origin plus the minted CSRF/GUI-origin
-      // headers the management auth gate has already verified before dispatch.
+      // Browser-session evidence is the CREDENTIAL, not the headers: the auth gate
+      // resolved a minted GUI session, which it only issues to a browser and only
+      // accepts for a mutation after matching origin and the per-session CSRF token.
       const { status, body } = await call("POST", "/api/github/star", {
         origin: "http://127.0.0.1:10100",
         "x-opencodex-gui-origin": "http://127.0.0.1:10100",
         "x-opencodex-csrf-token": "csrf-token",
-      });
+      }, "gui-session");
       expect(status).toBe(200);
       expect((body as Record<string, unknown>).ok).toBe(true);
     }));
     expect(calls.some(args => args.includes("PUT"))).toBe(true);
   });
 
-  test("a hand-typed run is not blocked by the agent guard", async () => {
+  test("forged dashboard headers on an admin-token call cannot star", async () => {
+    // The consent guard used to read the request's Origin/CSRF/GUI-origin headers and
+    // trust them as proof of a browser click. The auth gate accepts a raw admin token
+    // BEFORE it consults the session table, so an agent that can read that token — any
+    // process running as the user — could send exactly these headers with arbitrary
+    // values and star the repository with the user's identity.
+    const calls: string[][] = [];
+    await withEnv({ ...NO_AGENT_ENV, CODEX_THREAD_ID: "019fbc94" }, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      const { status, body } = await call("POST", "/api/github/star", {
+        origin: "http://127.0.0.1:10100",
+        "x-opencodex-gui-origin": "http://127.0.0.1:10100",
+        "x-opencodex-csrf-token": "forged-by-the-token-holder",
+      }, "admin-token");
+      expect(status).toBe(403);
+      expect((body as Record<string, unknown>).code).toBe("agent_consent_required");
+    }));
+    expect(calls).toEqual([]);
+  });
+
+  test("a direct dispatch with no resolved principal is treated as untrusted", async () => {
+    // Defense in depth for callers that bypass the HTTP gate (route-level tests, future
+    // internal dispatchers): an unknown principal must never satisfy the consent check.
+    const calls: string[][] = [];
+    await withEnv({ ...NO_AGENT_ENV, CODEX_THREAD_ID: "019fbc94" }, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      const { status } = await call("POST", "/api/github/star", {
+        origin: "http://127.0.0.1:10100",
+        "x-opencodex-gui-origin": "http://127.0.0.1:10100",
+        "x-opencodex-csrf-token": "csrf-token",
+      });
+      expect(status).toBe(403);
+    }));
+    expect(calls).toEqual([]);
+  });
+
+  test("a clean-environment server still refuses a raw-token star", async () => {
+    // The guard used to fire only when isAgentDriven() was true — but that reads
+    // the SERVER's environment, not the caller's. A proxy running as a service has
+    // no agent markers, so this exact request (raw admin token, no dashboard
+    // session) starred the repository for anyone who could read the token, which
+    // is every agent on the machine. Caller provenance is not knowable here; the
+    // credential is, so the dashboard session is required unconditionally.
     const calls: string[][] = [];
     await withEnv(NO_AGENT_ENV, () => withStarDeps({
       nowMs: () => 0,
       async runGh(args) { calls.push(args); return { status: 0 }; },
     }, async () => {
       invalidateStarStatusCache();
-      const { status } = await call("POST", "/api/github/star");
+      const { status, body } = await call("POST", "/api/github/star", {}, "admin-token");
+      expect(status).toBe(403);
+      expect((body as Record<string, unknown>).code).toBe("agent_consent_required");
+    }));
+    expect(calls).toEqual([]);
+  });
+
+  test("a dashboard click on a clean-environment server still stars", async () => {
+    const calls: string[][] = [];
+    await withEnv(NO_AGENT_ENV, () => withStarDeps({
+      nowMs: () => 0,
+      async runGh(args) { calls.push(args); return { status: 0 }; },
+    }, async () => {
+      invalidateStarStatusCache();
+      const { status } = await call("POST", "/api/github/star", {}, "gui-session");
       expect(status).toBe(200);
     }));
     expect(calls.some(args => args.includes("PUT"))).toBe(true);

@@ -63,14 +63,18 @@ the defaults rather than extending them:
 
 ### Behavior
 
-- When enabled, ALL requests whose bare model id starts with one of the source-model prefixes
-  (default `gpt-5.4-mini`, `gpt-5.6-luna`) are rewritten to the configured model
+- Matching maintenance requests, including `prewarm`, `compaction`, and `memory`, are
+  rewritten to the configured model
+- Normal user turns identified by `x-codex-turn-metadata` with `request_kind: "turn"` are
+  never rewritten
+- Headerless legacy clients retain the original prefix behavior: matching bare model ids are
+  rewritten
+- Missing, malformed, or unrecognized turn metadata retains the legacy prefix behavior
 - Reasoning effort is forced to `low` (matching the original behavior)
 - The original model ID is logged as `shadowCallRewrittenFrom` in request logs
 - When disabled (default), no interception occurs
 
 ### Warning
 
-Enabling this redirects every request for a source model, not just Codex's background helper turns.
-`gpt-5.6-luna` is also a selectable chat model, so if you pick it as your main model while the
-intercept is on, those turns are redirected too — narrow `sourceModels` if that matters to you.
+Headerless clients cannot distinguish foreground turns from background helper calls. If such a
+client uses `gpt-5.6-luna` as its main model, narrow `sourceModels` or disable the intercept.

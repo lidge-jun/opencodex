@@ -105,7 +105,9 @@ describe("opencode-go DeepSeek V4 thinking mode", () => {
       const xhighBody = buildToolCallBody(modelId, "xhigh");
       const mediumBody = buildToolCallBody(modelId, "medium");
 
-      expect(xhighBody.reasoning_effort).toBe("max");
+      // #1057: `xhigh` is a vendor alias that resolves per model — max on Pro,
+      // high on Flash (api-docs.deepseek.com/guides/thinking_mode, 2026-08-06).
+      expect(xhighBody.reasoning_effort).toBe(modelId === "deepseek-v4-flash" ? "high" : "max");
       expect(mediumBody.reasoning_effort).toBe("high");
       expect(xhighBody.messages[1].reasoning_content).toBe("I need to inspect files before answering.");
       expect(xhighBody.messages[1]).toMatchObject({

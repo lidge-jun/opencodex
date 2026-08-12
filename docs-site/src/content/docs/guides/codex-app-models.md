@@ -4,12 +4,26 @@ description: How opencodex models appear in Codex App, Codex CLI, and Codex TUI 
 ---
 
 opencodex does not patch Codex App. It writes the same Codex configuration and model catalog that
-Codex CLI/TUI already use. Because Codex App reads that shared state, routed models can appear in the
-App's model picker as normal Codex catalog entries.
+Codex CLI/TUI use. The app-server reads that shared state, but some Codex Desktop releases apply a
+second remote model allowlist in the renderer and can still remove routed rows from the picker.
 
-OpenAI entries have two stable identities: one bare native `openai` group whose Pool(default) or
-Direct account selection is controlled by `codexAccountMode`, and namespaced
-`openai-apikey/<model>` API-key transport. Changing the account mode does not change picker ids.
+OpenAI entries use two credential routes: native Codex login and the namespaced
+`openai-apikey/<model>` API-key transport. Changing `codexAccountMode` between Pool and Direct by
+itself does not change picker ids. When account-qualified picker rows are enabled by
+`codexAccountPickerEnabled` and `codexAccountNamespaces` has eligible selectors whose
+mapped accounts still exist, however,
+opencodex adds separate `<selector>/<native-openai-model>` rows for the mapped accounts and hides
+the bare native rows from the Codex picker. Selector labels are user-chosen public names with no
+built-in account-role meaning. Selecting a qualified row uses only its mapped account, does not
+change the active Pool account, and fails closed instead of switching accounts when the target is
+unavailable. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
+
+When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
+`codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
+backward compatibility. Set it to `false` to hide generated qualified rows and restore bare native
+rows in the picker without deleting mappings or disabling exact
+`<selector>/<native-openai-model>` routing.
+
 API GPT-5.6 entries use
 1,050,000 context / 922,000 max input, and `*-pro` picker ids resolve to the base wire model with
 `reasoning.mode: "pro"` while logs, usage, and picker state keep the virtual id.
@@ -17,10 +31,12 @@ The API catalog is fixed to exactly eight ids: `gpt-5.5`, `gpt-5.6`, Sol/Terra/L
 three Pro virtual ids; there is no generic `gpt-5.6-pro` alias.
 Compact requests keep the selected tier but send the base model without a reasoning object.
 
-Select a credential route explicitly; change Pool/Direct on the Providers page:
+Select the credential route represented by the picker id. Change Pool/Direct on the Providers page;
+`<selector>` below is a user-chosen public label mapped through `codexAccountNamespaces`:
 
 ```text
-gpt-5.6-sol                         # openai (Pool or Direct option)
+gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
+<selector>/gpt-5.6-sol              # stored Codex account mapped by that selector
 openai-apikey/gpt-5.6-sol           # API key
 ```
 
@@ -32,6 +48,21 @@ cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json
 ```
 
 Earlier v1 three-provider configurations migrate automatically into the single option-aware row.
+
+## Desktop remote-allowlist limitation
+
+If `codex debug models` and app-server `model/list` contain a routed model but Desktop does not show
+it, check the upstream [Codex issue #19694](https://github.com/openai/codex/issues/19694). With the
+remote `use_hidden_models` policy active, Desktop can keep only ids in its native
+`available_models` list and can also display native rows whose catalog visibility is `hide`.
+Catalog refreshes and proxy restarts alone cannot change that renderer policy.
+
+For an equivalent routed model, opencodex provides an explicit, default-off native-alias combo mode.
+It publishes an allowlisted bare slug with an honest custom display label and routes that exact slug
+through the configured combo before canonical OpenAI routing. It also omits disabled bare native
+rows from the effective catalog while compatibility aliases exist, so Desktop cannot resurrect
+them by ignoring `visibility`. See [Codex Desktop native-allowlist compatibility](/guides/combos/#codex-desktop-native-allowlist-compatibility)
+for the command, disable-key semantics, and safety constraints.
 
 ## Integration path
 
@@ -64,7 +95,8 @@ metadata instead of an older-template approximation.
 
 | Route | Picker ids and catalog metadata |
 | --- | --- |
-| Codex login (Pool or Direct) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` (372,000-token catalog window) |
+| Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
+| Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
 | OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus `cursor/grok-4.5` and `cursor/grok-4.5-fast` (500,000); live account discovery decides which remain visible. |
@@ -78,15 +110,25 @@ must still be entitled to use that model.
 
 ## Native and routed model toggles
 
-The dashboard Models page uses `disabledModels` for both model families:
+The dashboard Models page exposes `disabledModels` toggles for bare native ids and routed
+`provider/model` ids. Account-qualified `<selector>/<native-openai-model>` ids are also supported by
+`disabledModels`, but the dashboard does not list or toggle those exact selector rows; add them to
+the configuration manually:
 
 - Routed ids are namespaced (`provider/model`). Disabling one excludes it from the synced catalog
   and `/v1/models`.
-- Native GPT ids are bare slugs. Disabling one keeps its catalog entry but changes
-  `visibility` to `hide`, preserving the exact entry for a later re-enable; the bare OpenAI list
-  shape omits it while disabled.
-- Native rows come from the supported static set, so a disabled native model stays visible in the
-  dashboard and can be turned back on.
+- Account-qualified native ids use `<selector>/<native-openai-model>`. Adding one to
+  `disabledModels` hides only that selector row.
+- Native GPT ids are bare slugs. Disabling one keeps its catalog entry but changes `visibility` to
+  `hide`, preserving the exact entry for a later re-enable; it hides the bare row and every
+  selector-qualified clone for that model from discovery.
+- With at least one native-alias combo configured, disabled bare native rows are omitted rather than
+  retained hidden because affected Desktop releases ignore the hidden flag. A bare native slug
+  shadowed by a native alias is also omitted from the Models page, so it has no native switch there;
+  only unshadowed native rows remain switchable. Sync restores pristine native metadata when an
+  unshadowed disabled row is re-enabled.
+- Unshadowed native rows come from the supported static set, so a disabled unshadowed model stays
+  visible in the dashboard and can be turned back on.
 
 The visibility pass runs after snapshot upgrades, and the management API refreshes the catalog and
 forces Codex's model cache stale after a toggle.
@@ -120,19 +162,42 @@ fast_mode = true
 ```
 
 But the model catalog and runtime request tier id use `priority`. opencodex preserves that split.
-Native OpenAI passthrough models keep fast support; routed non-OpenAI models strip service-tier
-metadata so the fast option is not advertised where it cannot be honored.
+Native OpenAI passthrough models keep fast support; routed providers are capability-gated —
+`service_tier` is stripped only when the provider declares `supportsServiceTier: false` (the registry
+classifies canonical OpenAI as `true`, DeepSeek and Volcengine Ark as `false`), while unclassified
+custom gateways keep caller-supplied values untouched and never get an injection. The fast option is
+never advertised where it cannot be honored, and custom gateways can opt in explicitly with `true`.
 
 ## Subagent selection
 
 Codex sorts picker-visible catalog entries by ascending `priority` and advertises the first five as
-`spawn_agent` model overrides. Pick up to five bare native ids or namespaced `provider/model` ids
-through `subagentModels` or the dashboard Subagents page; opencodex gives those entries priorities
-0-4 in the chosen order. Other models remain callable by exact id.
+`spawn_agent` model overrides. The dashboard Subagents page can select and save up to five bare
+native ids or routed `provider/model` ids. Manually configured `subagentModels` also accepts
+account-qualified `<selector>/<native-openai-model>` ids, but the dashboard does not offer those
+exact ids; saving the page replaces the list with dashboard-visible choices. opencodex assigns low
+catalog priorities in the selected order; when account-qualified picker rows are enabled, bare native selections
+expand into selector-qualified groups. Other models remain callable by exact id.
 
 The featured-model list is separate from the Dashboard's **Sub-agent delegation** selection. It
 controls which overrides Codex offers first; it does not select a model or trigger delegation by
 itself.
+
+## Desktop remote servers
+
+Codex Desktop's remote-server mode filters the picker against the client's own
+`available_models` allowlist (active when the remote `use_hidden_models` setting is on). Routed
+catalog entries are still loaded and served - `model/list` returns them and the bundled CLI reads
+them - but the Desktop renderer drops anything that is not on that native-only allowlist before
+rendering. opencodex has no hook into that list; the upstream bug is tracked at
+[openai/codex#19694](https://github.com/openai/codex/issues/19694).
+
+Until Desktop exposes a control for the allowlist:
+
+- Set the model directly in `~/.codex/config.toml` on the remote machine, for example
+  `model = "input/grok-4.5"`. The picker may show `Custom`, but requests still use the configured
+  routed model.
+- Use Codex CLI or TUI instead of the Desktop picker; they do not apply the allowlist and list
+  routed models normally.
 
 ## Refreshing model state
 

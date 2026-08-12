@@ -24,11 +24,13 @@
  * up to the drain window.
  */
 
-import { buildFailedTailPayload } from "./relay";
+import { buildFailedTailPayload, createSseTerminalOutputBoundary } from "./relay";
 import {
   nextSseBlock,
+  payloadRewriteAsBlockRewrite,
   replaceSseDataPayload,
   sseDataPayload,
+  type SseBlockRewrite,
   type SsePayloadRewrite,
 } from "./sse-payload-rewrite";
 import type { TranslatorBudget } from "../lib/translator-budget";
@@ -43,6 +45,12 @@ export type EagerRelayHooks = {
    * Bun#32111-unsafe tee()+JS-pull chain (#864).
    */
   rewritePayload?: SsePayloadRewrite;
+  /**
+   * Optional block-level rewrite (zero or more blocks out per upstream
+   * block) for lifecycle event injection (#893). Takes precedence over
+   * rewritePayload when both are set.
+   */
+  rewriteBlocks?: SseBlockRewrite;
   /** Flush inspection at upstream end (createSseInspector.finish). */
   finishInspection: () => void;
   /** Drop inspector-owned frame/item state during producer teardown. */
@@ -92,9 +100,11 @@ export function relaySseEagerBounded(
   const now = opts?.now ?? Date.now;
 
   const reader = body.getReader();
-  const rewrite = hooks.rewritePayload;
-  const rewriteDecoder = rewrite ? new TextDecoder() : null;
-  const rewriteEncoder = rewrite ? new TextEncoder() : null;
+  const terminalBoundary = createSseTerminalOutputBoundary();
+  const activeRewrite: SseBlockRewrite | undefined = hooks.rewriteBlocks
+    ?? (hooks.rewritePayload ? payloadRewriteAsBlockRewrite(hooks.rewritePayload) : undefined);
+  const rewriteDecoder = activeRewrite ? new TextDecoder() : null;
+  const rewriteEncoder = activeRewrite ? new TextEncoder() : null;
   const rewriteBudget = opts?.rewriteBudget;
   let frameBuffer = "";
   let frameBufferBytes = 0;
@@ -121,15 +131,9 @@ export function relaySseEagerBounded(
     for (;;) {
       const next = nextSseBlock(frameBuffer);
       if (!next) break;
-      const payload = sseDataPayload(next.block);
-      const rewrittenPayload = payload === null ? null : rewrite!(payload);
-      // Replace only on an actual change: replaceSseDataPayload collapses
-      // multi-data-line events and normalizes newline style even when the
-      // payload is identical, which corrupts valid streams.
-      const block = payload !== null && rewrittenPayload !== payload
-        ? replaceSseDataPayload(next.block, rewrittenPayload!)
-        : next.block;
-      out += block + next.delimiter;
+      for (const outBlock of activeRewrite!(next.block)) {
+        out += outBlock + next.delimiter;
+      }
       frameBuffer = next.rest;
     }
     if (rewriteBudget) {
@@ -143,14 +147,13 @@ export function relaySseEagerBounded(
   };
   /** Flush any trailing partial block at upstream end (rewrite applied, matching the pull relay). */
   const flushRewriteTail = (): Uint8Array => {
-    if (!rewrite) return new Uint8Array(0);
+    if (!activeRewrite) return new Uint8Array(0);
     // Decoder-flushed bytes logically follow everything already decoded.
     let tail = frameBuffer + rewriteDecoder!.decode();
-    const payload = sseDataPayload(tail);
-    if (payload !== null) {
-      const rewrittenPayload = rewrite(payload);
-      if (rewrittenPayload !== payload) tail = replaceSseDataPayload(tail, rewrittenPayload);
-    }
+    const rewritten = activeRewrite(tail);
+    // Multiple emitted blocks must stay separately framed (#893 review);
+    // join places the delimiter only between blocks, never after the last.
+    tail = rewritten.join(tail.includes("\r\n") ? "\r\n\r\n" : "\n\n");
     frameBuffer = "";
     if (rewriteBudget && frameBufferBytes > 0) {
       rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" });
@@ -161,6 +164,7 @@ export function relaySseEagerBounded(
   let queuedBytes = 0;
   let cancelled = false;
   let done = false;
+  const terminalSentinel = new TextEncoder().encode("data: [DONE]\n\n");
   // Pause gate: resolved by client pull, client cancel, or upstream abort so a
   // paused producer ALWAYS resumes (audit blocker 2 — no deadlock; onDone and
   // turn unregistration stay reachable, drainAndShutdown never hangs).
@@ -194,33 +198,45 @@ export function relaySseEagerBounded(
     let syntheticKind: "incomplete" | "failed" | null = null;
     // reader.read() is not intrinsically tied to the upstream AbortController
     // (a fetch body usually rejects on abort, but that coupling is the fetch
-    // implementation's, not the stream's). Race every read against the abort
-    // signal so cancel-drain expiry and shutdown teardown ALWAYS break the
-    // loop even on a silent upstream.
-    const aborted: Promise<"aborted"> = new Promise(resolve => {
-      if (upstream.signal.aborted) resolve("aborted");
-      else upstream.signal.addEventListener("abort", () => resolve("aborted"), { once: true });
-    });
+    // implementation's, not the stream's), so abort must break a parked read on
+    // a silent upstream. Cancelling the reader does that: the pending read
+    // settles and the loop observes the abort. This is deliberately NOT a
+    // shared `Promise.race([reader.read(), aborted])` companion — racing every
+    // read against one never-settled promise retains a reaction per chunk, and
+    // that is the exact retention class relay.ts avoids at its own drain.
+    const wakeParkedRead = () => { reader.cancel(upstream.signal.reason).catch(() => {}); };
+    if (upstream.signal.aborted) wakeParkedRead();
+    else upstream.signal.addEventListener("abort", wakeParkedRead, { once: true });
     try {
       for (;;) {
-        const result = await Promise.race([reader.read(), aborted]);
-        if (result === "aborted") break;
+        const result = await reader.read();
         const { done: upstreamDone, value } = result;
+        // A chunk that already settled is INSPECTED before abort is honored. A read
+        // can settle with a real chunk in the same tick the signal fires (post-cancel
+        // drain: the terminal frame arrives, then the drain timer aborts upstream).
+        // Checking the signal first discarded that frame, so the terminal was never
+        // recorded and the turn was accounted as a plain cancel.
+        if (!upstreamDone && value !== undefined) hooks.inspectChunk(value);
+        if (upstream.signal.aborted) break;
         if (upstreamDone) {
           hooks.finishInspection();
-          if (rewrite) {
-            const tail = flushRewriteTail();
+          const boundedTail = terminalBoundary.finish();
+          if (activeRewrite) {
+            const rewritten = rewriteOutbound(boundedTail);
+            const tail = joinUint8Arrays(rewritten, flushRewriteTail());
             if (tail.byteLength > 0 && !cancelled) {
               queuedBytes += tail.byteLength;
               try { controllerRef?.enqueue(tail); } catch { /* client already gone */ }
             }
+          } else if (boundedTail.byteLength > 0 && !cancelled) {
+            queuedBytes += boundedTail.byteLength;
+            try { controllerRef?.enqueue(boundedTail); } catch { /* client already gone */ }
           }
           if (!hooks.sawTerminal() && !cancelled && !upstream.signal.aborted) {
             syntheticKind = "incomplete";
           }
           break;
         }
-        hooks.inspectChunk(value);
         if (cancelled) {
           // Discard-drain: inspection only, nothing queued. Stop at terminal
           // or when the bounded window expires.
@@ -230,17 +246,30 @@ export function relaySseEagerBounded(
           }
           continue;
         }
-        const outbound = rewrite ? rewriteOutbound(value) : value;
-        if (outbound.byteLength === 0) continue;
-        queuedBytes += outbound.byteLength;
-        try {
-          controllerRef?.enqueue(outbound);
-        } catch {
-          // Controller already torn down (client went away without cancel()).
-          cancelled = true;
-          drainDeadline = now() + drainMs;
-          armDrainTimer();
-          continue;
+        const terminalBounded = terminalBoundary.feed(value);
+        const outbound = activeRewrite ? rewriteOutbound(terminalBounded) : terminalBounded;
+        if (outbound.byteLength > 0) {
+          queuedBytes += outbound.byteLength;
+          try {
+            controllerRef?.enqueue(outbound);
+          } catch {
+            // Controller already torn down (client went away without cancel()).
+            cancelled = true;
+            drainDeadline = now() + drainMs;
+            armDrainTimer();
+            continue;
+          }
+        }
+        if (terminalBoundary.terminalSeen()) {
+          // The Responses terminal event ends the turn even when a compatible
+          // gateway keeps its HTTP connection alive. Add the conventional
+          // sentinel and stop the single-reader relay at that protocol boundary.
+          if (!terminalBoundary.doneSeen()) {
+            queuedBytes += terminalSentinel.byteLength;
+            try { controllerRef?.enqueue(terminalSentinel); } catch { /* client already gone */ }
+          }
+          reader.cancel("Responses terminal event received").catch(() => {});
+          break;
         }
         while (queuedBytes > maxQueueBytes && !cancelled && !upstream.signal.aborted) {
           await paused();
@@ -272,6 +301,7 @@ export function relaySseEagerBounded(
         try { rewriteBudget.releaseRetained(frameBufferBytes, { kind: "live_transient" }); } catch { /* teardown must not throw */ }
         frameBufferBytes = 0;
       }
+      terminalBoundary.dispose();
       if (syntheticKind) hooks.onSynthetic(syntheticKind);
       if (cancelled && !hooks.sawTerminal()) {
         hooks.onClientCancel();
@@ -284,6 +314,7 @@ export function relaySseEagerBounded(
         try { controllerRef?.close(); } catch { /* already closed/errored */ }
       }
       try { hooks.disposeInspection?.(); } catch { /* inspection teardown must not block lifecycle cleanup */ }
+      try { activeRewrite?.dispose?.(); } catch { /* rewrite teardown must not block lifecycle cleanup */ }
       fireDone();
     }
   };
@@ -310,4 +341,13 @@ export function relaySseEagerBounded(
       wakeUp();
     },
   });
+}
+
+function joinUint8Arrays(first: Uint8Array, second: Uint8Array): Uint8Array {
+  if (first.byteLength === 0) return second;
+  if (second.byteLength === 0) return first;
+  const joined = new Uint8Array(first.byteLength + second.byteLength);
+  joined.set(first);
+  joined.set(second, first.byteLength);
+  return joined;
 }

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, saveConfigPreservingClaudeCode } from "../config";
+import { setIntegrationEnabled } from "../codex/desired-state";
 import {
   DESKTOP_FAMILIES,
   moveDesktopRoute,
@@ -41,7 +42,11 @@ export async function applyProfile(
   profile: DesktopProfile,
   mode: Desktop3pConfigMode,
   deps: ApplyProfileDeps = {},
-): Promise<{ ok: boolean; path: string; reason?: string }> {
+): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
+  // Explicit apply is an enable action. Persist intent before any Desktop write
+  // so a process crash cannot leave a gateway profile that startup immediately removes.
+  const desired = setIntegrationEnabled("claude-desktop", true);
+  if (!desired.ok) return { ok: false, path: "", reason: desired.message };
   const config = loadConfig();
   const state = await buildClaudeDesktopState(config, profile);
   config.claudeCode = { ...(config.claudeCode ?? {}), desktopProfile: state.profile };
@@ -52,7 +57,7 @@ export async function applyProfile(
     // serving process installs the map there; a local-only write leaves the
     // daemon unable to decode aliases, and the provider rejects them (400).
     const post = deps.postApplyImpl ?? (async (m: Desktop3pConfigMode, p: DesktopProfile) =>
-      runtimeRequest<{ ok?: boolean; path?: string; error?: string }>(
+      runtimeRequest<{ ok?: boolean; path?: string; error?: string; saved?: boolean; warning?: string }>(
         "/api/claude-desktop/apply",
         // The daemon's config may be older than what we just saved, so the
         // profile travels with the request instead of being re-read there.
@@ -61,12 +66,26 @@ export async function applyProfile(
     try {
       const applied = await post(mode, state.profile);
       if (applied.ok === false) return { ok: false, path: applied.path ?? "", reason: applied.error ?? "daemon apply failed" };
-      return { ok: true, path: applied.path ?? "" };
+      // Partial success: Desktop was written but the applied marker was not
+      // persisted. Pass the degradation up instead of reporting a clean apply.
+      const partial = (applied as { saved?: boolean; warning?: string }).saved === false;
+      return {
+        ok: true,
+        path: applied.path ?? "",
+        ...(partial ? { warning: (applied as { warning?: string }).warning ?? "applied marker was not saved" } : {}),
+      };
     } catch (error) {
       return { ok: false, path: "", reason: error instanceof Error ? error.message : String(error) };
     }
   }
   const allModels = await fetchAllModels(config);
+  // The toggle can persist OFF while fetchAllModels was awaiting (same race the
+  // management writers fence). Re-read persisted intent immediately before the
+  // writer; a lost race is a discriminated skip, not a write.
+  const { claudeDesktopIntegrationEnabledNow } = await import("../codex/desired-state");
+  if (!claudeDesktopIntegrationEnabledNow()) {
+    return { ok: false, path: "", reason: "desired_state_changed" };
+  }
   const routed = filterCatalogVisibleModels(allModels, config).map(model => ({
     provider: model.provider,
     id: model.id,
@@ -111,6 +130,9 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
         return 1;
       }
       console.log(`Claude Desktop 설정을 적용했습니다: ${result.path}`);
+      // The write landed; only the bookkeeping marker did not. Saying nothing
+      // would leave the saved-vs-applied display wrong with no explanation.
+      if (result.warning) console.warn(`⚠️  ${result.warning}`);
       console.log("Claude Desktop을 완전히 종료한 뒤 다시 열어 주세요.");
       return 0;
     } catch (error) {
@@ -175,6 +197,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       if (flags.includes("--apply")) {
         const result = await applyProfile(reconciled, "static", deps);
         if (!result.ok) { console.error(`프로필은 저장했지만 Desktop 적용에 실패했습니다: ${result.reason ?? "unknown error"}`); return 1; }
+        if (result.warning) console.warn(`⚠️  ${result.warning}`);
       }
       console.log("Claude Desktop 프로필을 가져왔습니다.");
       return 0;

@@ -1,0 +1,51 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Meta-Llama-3.1-8B-Instruct-fast",
+      "name": "Meta-Llama-3.1-8B-Instruct (fast)",
+      "object": "model",
+      "owned_by": "system",
+      "context_length": 131072,
+      "architecture": {
+        "modality": "text->text",
+        "tokenizer": "Other"
+      },
+      "supported_features": ["function-calling", "json-mode"]
+    },
+    {
+      "id": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+      "name": "Qwen3 VL 235B Instruct",
+      "object": "model",
+      "owned_by": "system",
+      "context_length": 262144,
+      "architecture": {
+        "modality": "text+image->text",
+        "tokenizer": "Qwen"
+      },
+      "supported_features": ["function-calling"]
+    },
+    {
+      "id": "BAAI/bge-en-icl",
+      "name": "BGE English ICL",
+      "object": "model",
+      "owned_by": "system",
+      "context_length": 8192,
+      "architecture": {
+        "modality": "text->embedding",
+        "tokenizer": "Bert"
+      }
+    },
+    {
+      "id": "black-forest-labs/FLUX.1-dev",
+      "name": "FLUX.1 Dev",
+      "object": "model",
+      "owned_by": "system",
+      "context_length": 512,
+      "architecture": {
+        "modality": "text->image",
+        "tokenizer": "Other"
+      }
+    }
+  ]
+}

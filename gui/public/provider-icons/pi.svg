@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><g transform="translate(0.0000 0.0000) scale(0.03000)">
   <rect width="800" height="800" rx="120" fill="#09090b"/>
   <path fill="#fff" fill-rule="evenodd" d="
     M165.29 165.29
@@ -18,4 +18,4 @@
     Z
   "/>
   <path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/>
-</svg>
+</g></svg>

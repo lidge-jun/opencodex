@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
 import { npmInvocation } from "./npm-invocation.mjs";
+import {
+  npmCachePreflightFailureMessage,
+  runNpmCachePreflight,
+} from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
 /**
  * A `codex-history-backup-*.json` surviving a stop means the native-history restore was
@@ -177,6 +182,14 @@ export async function runUpdate(): Promise<void> {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
   }
 
+  if (installer === "npm") {
+    const cachePreflight = runNpmCachePreflight();
+    if (!cachePreflight.ok) {
+      console.error(`⚠️  ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+      process.exit(1);
+    }
+  }
+
   const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);
   const target = updateSpawnTarget(bin, cmdArgs);
   if (!target) {
@@ -185,7 +198,7 @@ export async function runUpdate(): Promise<void> {
   }
 
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
-  // unloads it permanently, so a successful update must reinstall/restart it afterwards.
+  // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
   try {
     const { isServiceInstalled } = await import("../service");
@@ -294,11 +307,11 @@ export async function runUpdate(): Promise<void> {
         if (trayWasRunning) spawnSync(process.execPath, [process.argv[1], "tray", "start"], { stdio: "ignore", windowsHide: true });
       }
     }
-    // The stop above unloaded any managed service; reinstall it with the NEW files
+    // The stop above unloaded any managed service; repair it with the NEW files
     // (spawn the fresh cli.ts so updated code writes the baked paths) so a
     // launchd/schtasks/systemd user isn't left with the background proxy down.
     if (serviceWasInstalled) {
-      console.log("🔁 Reinstalling the background service with the updated files...");
+      console.log("🔁 Refreshing the background service with the updated files...");
       const { serviceReinstallArgs } = await import("../service");
       const { reclaimListenPort } = await import("../server/port-reclaim");
       const freed = await reclaimListenPort(capturedListen.port, capturedListen.hostname, {
@@ -309,7 +322,7 @@ export async function runUpdate(): Promise<void> {
         onlyKillPids: capturedListen.oldPid != null ? [capturedListen.oldPid] : [],
       });
       if (!freed) {
-        console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; reinstalling service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
+        console.warn(`⚠️  Port ${capturedListen.port} still busy after 30s; repairing service with pinned --port ${capturedListen.port} anyway (refusing to hop).`);
       }
       const prevBake = process.env.OCX_BAKE_PORT;
       process.env.OCX_BAKE_PORT = String(capturedListen.port);
@@ -332,9 +345,8 @@ export async function runUpdate(): Promise<void> {
           }
         }
         if (!serviceRefreshed || !serviceViable) {
-          // On Windows, schtasks /create requires elevation. The CLI inherits the
-          // user's (non-admin) token, so the service reinstall can fail with access
-          // denied — or exit 0 while leaving stale/missing assets that never start
+          // A repair needs no elevation (it never calls `schtasks /create`), but it can
+          // still fail — or exit 0 while leaving stale/missing assets that never start
           // the proxy. Fall back to a direct detached proxy start so the update
           // never leaves the user without a running proxy — but only when the port is free.
           if (!freed) {
@@ -344,8 +356,8 @@ export async function runUpdate(): Promise<void> {
                 : "⚠️  Service refresh failed and the captured port is still busy; not starting on another port.",
             );
             console.warn(process.platform === "win32"
-              ? `   Run 'ocx service install' as administrator, then 'ocx start --port ${capturedListen.port}'.`
-              : `   Run 'ocx service install' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
+              ? `   Run 'ocx service repair', then 'ocx start --port ${capturedListen.port}'.`
+              : `   Run 'ocx service repair' to see the reason, then 'ocx start --port ${capturedListen.port}'.`);
           } else {
             console.warn(
               serviceRefreshed
@@ -353,18 +365,18 @@ export async function runUpdate(): Promise<void> {
                 : "⚠️  Service refresh failed — starting the proxy directly instead.",
             );
             // Elevation is a Windows-only remedy; elsewhere the refresh fails for
-            // reasons `ocx service install` reports directly (since it now verifies
+            // reasons `ocx service repair` reports directly (since it now verifies
             // the service actually serves).
             console.warn(process.platform === "win32"
-              ? "   Run 'ocx service install' as administrator to refresh the background service."
-              : "   Run 'ocx service install' to refresh the background service and see why it failed.");
+              ? "   Run 'ocx service repair' to refresh the background service."
+              : "   Run 'ocx service repair' to refresh the background service and see why it failed.");
             const env = { ...process.env };
             delete env.OCX_SERVICE;
             const child = spawn(process.execPath, [process.argv[1], "start", "--port", String(capturedListen.port)], {
               detached: true,
               stdio: "ignore",
               windowsHide: true,
-              env,
+              env: withProcessRuntimeProvenance(env),
             });
             child.unref();
             console.log(`✅ Proxy starting on port ${capturedListen.port}.`);

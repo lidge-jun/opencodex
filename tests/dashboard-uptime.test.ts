@@ -25,5 +25,6 @@ describe("dashboard uptime formatting", () => {
   test("uses compact localized units", () => {
     expect(formatUptime(3720, "en")).toBe("1h 2m");
     expect(formatUptime(93600, "zh")).toBe("1天 2小时");
+    expect(formatUptime(93600, "zh-TW")).toBe("1天 2小時");
   });
 });

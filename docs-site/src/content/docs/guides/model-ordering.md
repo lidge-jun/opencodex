@@ -15,7 +15,15 @@ it earlier in the picker. The implementation records this constraint directly in
 `src/codex/catalog/sync.ts`.
 
 opencodex therefore controls featured placement by assigning lower priorities, not by relying on
-array position. The relevant priorities are:
+array position. Unless noted otherwise, the fixed priorities and worked example below describe a
+catalog with no eligible Codex account selectors. With `N` eligible selectors, featured priorities
+use `N` as a stride: a bare native choice at configured rank `i` expands to selector rows at
+priorities `i * N + j`, where `j` is the selector's zero-based position; a routed choice uses
+`i * N`; and an exact selector-qualified choice uses `i * N + j` for its selector. Unselected routed
+rows are moved outside those selector groups. Codex still advertises only the first five
+picker-visible rows.
+
+The relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
@@ -57,7 +65,7 @@ only change whether a model is included.
 
 ## Effective picker pattern
 
-With a non-empty featured list, the resulting order is:
+With no eligible account selectors and a non-empty featured list, the resulting order is:
 
 1. Models in the exact configured `subagentModels` order, with priorities `0` through `4`.
 2. All remaining routed models, ordered alphabetically by provider and then model id, at priority `5`.
@@ -95,16 +103,19 @@ The picker begins as follows:
 | After routed models | Remaining native models | `featured.length + 100` or higher | Unselected natives are moved below the featured block |
 
 The first five entries are the overrides advertised to `spawn_agent`; the rest continue in the
-normal picker order.
+normal picker order. With account selectors, the five-entry limit applies after bare native choices
+have expanded into selector-qualified groups.
 
 ## Changing the order
 
-The only supported way to customize leading model order is to reorder `subagentModels`. You can do
-that on the dashboard's **Sub-agents** page or in the opencodex configuration. The list accepts at
-most five models, and its order is significant.
+The supported way to customize leading model order is to reorder `subagentModels`. The dashboard's
+**Sub-agents** page can reorder bare native and routed ids. Use `ocx agent subagents set` or edit the
+opencodex configuration for exact `<selector>/<native-openai-model>` choices; the dashboard does not
+list those choices and omits them if it saves the roster. Use at most five configured ids. With
+account selectors, one bare native choice can expand into multiple selector-qualified catalog rows,
+so configured choices and advertised rows are not necessarily one-to-one.
 
 There is currently no general `modelOrder`, `providerOrder`, or priority-map setting in `OcxConfig`.
-The supported ordering field is `subagentModels` (`src/types.ts:238-246`); `disabledModels` and each
-provider's `selectedModels` are visibility fields (`src/types.ts:276-282` and
-`src/types.ts:439-446`). To change the rest of the picker order would require a code-level behavior
-change rather than a configuration edit.
+The supported ordering field is `subagentModels`; `disabledModels` and each provider's
+`selectedModels` are visibility fields. Changing the remaining picker order would require a
+code-level behavior change rather than a configuration edit.

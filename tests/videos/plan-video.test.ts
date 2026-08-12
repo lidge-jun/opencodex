@@ -47,6 +47,31 @@ describe("planVideoBridge", () => {
     expect(plan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);
   });
 
+  test("tool_choice cannot arm an excluded video sidecar", async () => {
+    const config = makeConfig({ images: { videoBridgeEnabled: true } } as unknown as OcxConfig);
+    const parsed = makeParsed();
+
+    parsed.options = { toolChoice: "none" };
+    expect(await planVideoBridge(config, parsed, makeProvider("api.anthropic.com"))).toBeUndefined();
+    parsed.options = { toolChoice: { name: "read_file" } };
+    expect(await planVideoBridge(config, parsed, makeProvider("api.anthropic.com"))).toBeUndefined();
+    parsed.options = { toolChoice: { allowedTools: ["read_file"], mode: "required" } };
+    expect(await planVideoBridge(config, parsed, makeProvider("api.anthropic.com"))).toBeUndefined();
+
+    parsed.options = { toolChoice: { name: VIDEO_GEN_TOOL_NAME } };
+    parsed.context.tools = [{ name: "generate_video", description: "Generate", parameters: {} }];
+    const canonicalPlan = await planVideoBridge(config, parsed, makeProvider("api.anthropic.com"));
+    expect(canonicalPlan).toBeDefined();
+    expect(canonicalPlan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);
+    expect(canonicalPlan!.toolNames.has("generate_video")).toBe(false);
+
+    parsed.options = { toolChoice: { name: "generate_video" } };
+    const aliasPlan = await planVideoBridge(config, parsed, makeProvider("api.anthropic.com"));
+    expect(aliasPlan).toBeDefined();
+    expect(aliasPlan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(false);
+    expect(aliasPlan!.toolNames.has("generate_video")).toBe(true);
+  });
+
   test("returns undefined for OpenAI native passthrough", async () => {
     const config = makeConfig({ images: { videoBridgeEnabled: true } } as unknown as OcxConfig);
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.openai.com"));

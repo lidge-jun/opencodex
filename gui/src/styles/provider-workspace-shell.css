@@ -316,6 +316,20 @@
   display: block;
 }
 
+/* Colored initial-letter fallback for providers without a logo asset. */
+.provider-icon-fallback {
+  width: 100%;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  font-weight: var(--weight-semibold);
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+
 .provider-icon-mask {
   mask-size: contain;
   mask-repeat: no-repeat;

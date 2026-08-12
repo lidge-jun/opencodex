@@ -1,0 +1,77 @@
+/* Integrations surfaces (devlog/_fin/260802_client_toggle_api/060).
+   Existing tokens only — no new color is introduced here. */
+
+/* Conflict and Cannot-verify are the two states a user must not misread as
+   ordinary drift, so they carry the same danger color with different weight:
+   filled for a conflict we can describe, outlined for a file we could not
+   even read. */
+.integration-badge--danger { background: var(--red-soft); color: var(--red); }
+.integration-badge--danger-outline { background: transparent; color: var(--red); border-color: var(--red); }
+
+.integration-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); margin-bottom: 14px; }
+.integration-summary-cell { display: flex; flex-direction: column; gap: 2px; }
+.integration-summary-label { font-size: var(--text-caption); color: var(--muted); }
+.integration-summary .btn { margin-left: auto; }
+
+/* `stretch` (the grid default) already equalizes row heights; what varied was
+   the CONTENT height, because a two-line config path pushed the action row
+   down while a one-line one did not. Reserving the detail line's height keeps
+   the switches on one baseline across the row. */
+.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+/*
+  One full-width row, not a wide card: no grid cell, no hover border, no
+  stretched title. `flex-wrap` is what keeps long German/Russian action copy
+  moving below the label at 320-390px instead of clipping.
+*/
+.integration-api-keys-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; margin: 14px 0 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-api-keys-copy { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.integration-api-keys-copy h4 { margin: 0; }
+.integration-api-keys-row .integration-meta { margin: 0; min-height: 0; }
+.integration-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.integration-card-head h4 { margin: 0; }
+/* Stretched link: the title is the real control and its ::after covers the
+   card, so the whole card navigates from ONE tab stop named after the client.
+   The action row is lifted above that overlay — it needs `position` as well as
+   `z-index`, since neither the row nor the shared `.switch` sets one, and
+   without it the overlay silently swallows every toggle. */
+.integration-card-link { appearance: none; background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.integration-card-link::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
+.integration-card-link:focus-visible { outline: none; }
+.integration-card-link:focus-visible::after { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.integration-card:hover { border-color: var(--accent-ring); }
+.integration-card-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; margin-top: auto; }
+.integration-card-actions .btn { margin-left: auto; }
+
+.integration-empty { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted); }
+
+.integration-client-head { display: flex; align-items: center; gap: 10px; }
+.integration-client-head h4 { margin: 0; }
+.integration-client-head .switch { margin-left: auto; }
+
+/* A config path is the thing a user copies when a refusal tells them to
+   finish by hand, so it must never be truncated into uselessness. */
+.integration-path { font-family: var(--font-code); font-size: var(--text-caption); color: var(--muted); overflow-wrap: anywhere; margin: 4px 0; }
+.integration-meta { font-size: var(--text-caption); color: var(--muted); }
+/* Two lines of a long config path, so a card with a short path and a card with
+   a wrapped one land their action rows on the same line. */
+.integration-card .integration-path,
+.integration-card .integration-meta { margin: 0; min-height: calc(var(--text-caption) * var(--leading-ui) * 2); }
+
+.integration-history { list-style: none; padding: 0; margin: 8px 0; display: flex; flex-direction: column; gap: 6px; }
+.integration-history li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.integration-history-kind { font-family: var(--font-code); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.integration-history-client { font-size: var(--text-caption); color: var(--muted); }
+.integration-history-at { font-size: var(--text-caption); color: var(--muted); margin-right: auto; }
+
+.integration-restore-dialog .integration-path { margin: 10px 0; }
+
+/* Consequence facts are read in a fixed order; spacing separates the four
+   questions without turning them into decorative cards. */
+.integration-consequence-body { display: flex; flex-direction: column; gap: 12px; }
+.integration-consequence-body p { margin: 0; font-size: var(--text-caption); line-height: var(--leading-body); }
+.integration-consequence-body code { font-family: var(--font-code); font-size: inherit; overflow-wrap: anywhere; }
+
+/* The Claude Code connection switch, relocated out of the sidebar. */
+.claudecode-connection-head { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
+.claudecode-connection-head .switch { margin-left: auto; }

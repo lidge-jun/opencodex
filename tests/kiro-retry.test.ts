@@ -330,6 +330,22 @@ describe("kiro retry fetch", () => {
     expect(mock.calls).toHaveLength(1);
   });
 
+  test("a profileArn-required 400 classifies as kiro_profile_required with actionable copy (#993)", async () => {
+    const mock = mockFetch([
+      new Response(JSON.stringify({
+        __type: "ValidationException",
+        message: "profileArn is required for this account",
+      }), { status: 400 }),
+    ]);
+    const res = await fetchKiroWithRetry(request, { timeoutMs: 5_000 });
+    const text = await res.text();
+    expect(res.status).toBe(400);
+    expect(text).toContain("kiro_profile_required");
+    expect(text).toContain("ocx account login kiro --reauth");
+    // Non-retryable: exactly one upstream call.
+    expect(mock.calls).toHaveLength(1);
+  });
+
   test("normalizes final transient 429 after bounded adapter retries", async () => {
     const mock = mockFetch([
       new Response("rate limited", { status: 429, headers: { "Retry-After": "0" } }),

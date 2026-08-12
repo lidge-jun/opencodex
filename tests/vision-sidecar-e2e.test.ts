@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { OcxConfig } from "../src/types";
+import { parseRequest } from "../src/responses/parser";
+import { resetVisionDescriptionCache, stripImagesInPlace } from "../src/vision";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 
@@ -26,6 +29,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-vision-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
   globalThis.fetch = originalFetch;
+  resetVisionDescriptionCache();
 });
 
 afterEach(() => {
@@ -77,6 +81,29 @@ function serveUpstream(record: (bodyText: string) => void) {
   });
 }
 
+/** Fake text-only upstream (openai-responses passthrough wire): records the forwarded body. */
+function serveResponsesUpstream(record: (bodyText: string) => void) {
+  return Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    async fetch(req) {
+      record(await req.text());
+      return Response.json({
+        id: "resp_vision_1",
+        object: "response",
+        status: "completed",
+        output: [{
+          id: "msg_vision_1",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "I see a red logo.", annotations: [] }],
+        }],
+        usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+      });
+    },
+  });
+}
+
 function baseRequest(model: string) {
   return {
     model, stream: false,
@@ -87,7 +114,41 @@ function baseRequest(model: string) {
   };
 }
 
+function toolImageRequest(model: string) {
+  return {
+    model, stream: false,
+    input: [
+      {
+        type: "function_call", call_id: "call_view_image", name: "view_image",
+        arguments: JSON.stringify({ path: "/tmp/screenshot.png" }),
+      },
+      {
+        type: "function_call_output", call_id: "call_view_image",
+        output: [
+          { type: "input_text", text: "Image loaded." },
+          { type: "input_image", image_url: PNG_DATA_URL, detail: "high" },
+        ],
+      },
+    ],
+  };
+}
+
 describe("vision sidecar fallback (issue #88, end-to-end)", () => {
+  test("raw-body normalization removes an image when parsing produces zero captions", () => {
+    const parsed = parseRequest({
+      model: "textonly/blind-model",
+      input: [{
+        type: "message",
+        role: "user",
+        content: [{ type: "input_image", image_url: "" }],
+      }],
+    });
+
+    expect(stripImagesInPlace(parsed)).toBe(false);
+    expect(JSON.stringify(parsed._rawBody)).not.toContain("input_image");
+    expect(JSON.stringify(parsed._rawBody)).toContain("[image omitted:");
+  });
+
   test("noVisionModels request fires the sidecar and forwards the caption instead of the image", async () => {
     let upstreamBody = "";
     let sidecarBody = "";
@@ -156,7 +217,159 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain("image_url");
     } finally {
-      server.stop(true);
+      await server.stop(true);
+    }
+  });
+
+  test("Responses passthrough removes every raw image when fewer captions than images are produced", async () => {
+    let upstreamBody = "";
+    let sidecarHits = 0;
+    upstream = serveResponsesUpstream(b => { upstreamBody = b; });
+    sidecar = serveSidecar(() => { sidecarHits += 1; });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly", openaiProviderTierVersion: 2,
+      providers: {
+        textonly: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const token = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-sidecar" });
+      const request = baseRequest("textonly/blind-model");
+      request.input[0].content.splice(1, 0, { type: "input_image", image_url: "" });
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "chatgpt-account-id": "acct-vision-sidecar",
+        },
+        body: JSON.stringify(request),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarHits).toBe(1);
+      expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).not.toContain("input_image");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Responses passthrough replaces an image returned by a client tool", async () => {
+    let upstreamBody = "";
+    let sidecarHits = 0;
+    upstream = serveResponsesUpstream(b => { upstreamBody = b; });
+    sidecar = serveSidecar(() => { sidecarHits += 1; });
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(requestUrl);
+      const prefix = "/backend-api/codex";
+      if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+        return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, sidecar!.url), init);
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly", openaiProviderTierVersion: 2,
+      providers: {
+        textonly: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+        openai: {
+          adapter: "openai-responses",
+          authMode: "forward",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          codexAccountMode: "direct",
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const token = fakeChatGptJwt({ chatgpt_account_id: "acct-vision-sidecar" });
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+          "chatgpt-account-id": "acct-vision-sidecar",
+        },
+        body: JSON.stringify(toolImageRequest("textonly/blind-model")),
+      });
+      expect(res.status).toBe(200);
+      expect(sidecarHits).toBe(1);
+      expect(upstreamBody).toContain(CAPTION);
+      expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).not.toContain("image_url");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Responses passthrough strips images when no vision sidecar is available", async () => {
+    let upstreamBody = "";
+    upstream = serveResponsesUpstream(b => { upstreamBody = b; });
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "textonly",
+      providers: {
+        textonly: {
+          adapter: "openai-responses",
+          authMode: "key",
+          baseUrl: upstream.url.toString().replace(/\/$/, ""),
+          responsesPath: "/responses",
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: ["blind-model"],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(baseRequest("textonly/blind-model")),
+      });
+      expect(res.status).toBe(200);
+      expect(upstreamBody).toContain("[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]");
+      expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).not.toContain("image_url");
+    } finally {
+      await server.stop(true);
     }
   });
 
@@ -192,7 +405,95 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       expect(upstreamBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
       expect(upstreamBody).not.toContain(CAPTION);
     } finally {
-      server.stop(true);
+      await server.stop(true);
+    }
+  });
+
+  /*
+   * #1043 activation evidence. The registry classification is only useful if the
+   * strip actually fires for a Zen model, so this drives the real path with the
+   * built-in `opencode-zen` list rather than a fixture list, and asserts the
+   * observable effect: the image bytes are gone from the upstream body and the
+   * omission marker is there instead.
+   *
+   * `big-pickle` is the id that reproduced the reported 400 verbatim against the
+   * live endpoint (devlog/_plan/260805_bug_fix_stack/002_zen_modality_probe.md).
+   */
+  test("a text-only Zen model has its image stripped before the upstream request (#1043)", async () => {
+    let upstreamBody = "";
+    upstream = serveUpstream(b => { upstreamBody = b; });
+
+    const zen = PROVIDER_REGISTRY.find(p => p.id === "opencode-zen");
+    expect(zen?.noVisionModels).toContain("big-pickle");
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+      providers: {
+        // A custom provider carrying the REGISTRY's list verbatim. The built-in
+        // opencode-zen entry pins its own baseUrl, so it cannot be aimed at a local
+        // upstream; what is under test is the classification, which is read from the
+        // registry above rather than written out here.
+        zenlike: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: zen?.noVisionModels,
+        },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer forward-oauth-token" },
+        body: JSON.stringify(baseRequest("zenlike/big-pickle")),
+      });
+      expect(res.status).toBe(200);
+      // The effect, not merely a 200: no image bytes on the wire, marker present.
+      expect(upstreamBody).not.toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).toContain("[image omitted");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a vision-capable Zen model keeps its image (#1043 negative case)", async () => {
+    let upstreamBody = "";
+    upstream = serveUpstream(b => { upstreamBody = b; });
+
+    const zen = PROVIDER_REGISTRY.find(p => p.id === "opencode-zen");
+    // Measured as accepting images; classifying it would silently degrade it.
+    expect(zen?.noVisionModels).not.toContain("mimo-v2.5-free");
+
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "zenlike", openaiProviderTierVersion: 2,
+      providers: {
+        zenlike: {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          noVisionModels: zen?.noVisionModels,
+        },
+        openai: { adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer forward-oauth-token" },
+        body: JSON.stringify(baseRequest("zenlike/mimo-v2.5-free")),
+      });
+      expect(res.status).toBe(200);
+      expect(upstreamBody).toContain("aGVsbG8taW1hZ2UtYnl0ZXM=");
+      expect(upstreamBody).not.toContain("[image omitted");
+    } finally {
+      await server.stop(true);
     }
   });
 });

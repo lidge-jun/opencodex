@@ -190,4 +190,53 @@ describe("Responses abort guards", () => {
       process.off("unhandledRejection", onUnhandledRejection);
     }
   });
+
+  test("a throwing buildRequest is mapped to 400 invalid_request_error, not an unhandled rejection", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => { unhandledRejections.push(reason); };
+    process.on("unhandledRejection", onUnhandledRejection);
+    try {
+      adapterFactory = provider => ({
+        name: "test-throw-build",
+        buildRequest: () => { throw new Error("fixture build failure"); },
+        async *parseStream(): AsyncGenerator<AdapterEvent> {
+          yield { type: "error", message: "unreachable" };
+        },
+      });
+
+      const response = await post("test-throw-build", false);
+      const body = await response.json() as { error?: { code?: string; message?: string } };
+
+      expect(response.status).toBe(400);
+      expect(body.error?.code).toBe("invalid_request_error");
+      expect(body.error?.message).toContain("fixture build failure");
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  test("a client abort during buildRequest surfaces 499 client_cancelled instead of a 400", async () => {
+    const clientAbort = new AbortController();
+    adapterFactory = provider => ({
+      name: "test-abort-build",
+      buildRequest: () => {
+        clientAbort.abort(new DOMException("client disconnected", "AbortError"));
+        throw new Error("build interrupted by client disconnect");
+      },
+      async *parseStream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "error", message: "unreachable" };
+      },
+    });
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture/model", input: "hello", stream: false }),
+    }), config("test-abort-build"), { model: "", provider: "" }, { abortSignal: clientAbort.signal });
+    const body = await response.json() as { error?: { code?: string } };
+
+    expect(response.status).toBe(499);
+    expect(body.error?.code).toBe("client_cancelled");
+  });
 });

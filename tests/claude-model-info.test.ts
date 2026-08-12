@@ -86,6 +86,16 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(variants).toHaveLength(1); // gpt-5.4 (1M) only; gpt-5.6-sol native is 372k
   });
 
+  test("native OpenAI rows carry max_input_tokens so Claude Code skips the 200k fallback (#1218)", () => {
+    const infos = buildAnthropicModelInfos(["gpt-5.6-sol", "gpt-5.5"], []);
+    const sol = infos.find(i => i.display_name === "gpt-5.6-sol (native)");
+    const gpt55 = infos.find(i => i.display_name === "gpt-5.5 (native)");
+    // 372k is the deliberate reported window for the gpt-5.6 family (the
+    // ChatGPT channel does not hard-block past 272k); gpt-5.5 stays at 272k.
+    expect(sol!.max_input_tokens).toBe(372_000);
+    expect(gpt55!.max_input_tokens).toBe(272_000);
+  });
+
   test("[1m] variant never double-suffixes or duplicates (audit R1#11)", () => {
     const infos = buildAnthropicModelInfos([], [
       // Anthropic passthrough keeps its id verbatim, so an id already carrying the
@@ -96,19 +106,19 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(infos).toHaveLength(1);
   });
 
-  test("auto-context widens variants to safe sub-1M rows with honest labels (devlog 020)", () => {
+  test("no [1m] rows for sub-1M models, even with auto-context enabled (#854 contract)", () => {
     const auto = { enabled: true, compactWindow: 350_000 };
     const infos = buildAnthropicModelInfos(["gpt-5.4", "gpt-5.6-sol"], [
       { provider: "mock", id: "small-model", contextWindow: 128_000 },
       { provider: "mock", id: "mid-model", contextWindow: 300_000 }, // < compact window: unsafe, no row
     ], auto);
     const variants = infos.filter(i => i.id.endsWith("[1m]"));
-    expect(variants).toHaveLength(2); // gpt-5.4 (1M) + gpt-5.6-sol (372k)
-    const sol = variants.find(v => v.display_name.includes("gpt-5.6-sol"))!;
-    expect(sol.display_name.endsWith("· 372k")).toBe(true); // honest real window, not "1M"
-    expect(sol.max_input_tokens).toBe(372_000);
-    const five4 = variants.find(v => v.display_name.includes("gpt-5.4"))!;
-    expect(five4.display_name.endsWith("· 1M")).toBe(true);
+    // The [1m] marker makes Claude Code account 1e6 tokens: only the
+    // authoritative 1M model may carry it — never the 372K route.
+    expect(variants).toHaveLength(1);
+    expect(variants[0]!.display_name.includes("gpt-5.4")).toBe(true);
+    expect(variants[0]!.display_name.endsWith("· 1M")).toBe(true);
+    expect(variants[0]!.max_input_tokens).toBe(1_000_000);
   });
 
   test("auto-context never widens anthropic passthrough rows (audit 021 #3)", () => {
@@ -131,7 +141,8 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     ], auto, "readable");
     const ids = infos.map(i => i.id);
     expect(ids).toContain("claude-ocx-native--gpt-5.6-sol");
-    expect(ids).toContain("claude-ocx-native--gpt-5.6-sol[1m]"); // 372k native, auto-marked
+    // 372k native: NO [1m] variant under the authoritative-window contract.
+    expect(ids).not.toContain("claude-ocx-native--gpt-5.6-sol[1m]");
     expect(ids).toContain("claude-ocx-cursor--gpt-5.6-luna");
     expect(ids).toContain("claude-ocx-cursor--gpt-5.6-luna[1m]");
     expect(ids).toContain("claude-opus-4-8"); // anthropic canonical passthrough

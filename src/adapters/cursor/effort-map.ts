@@ -116,12 +116,24 @@ export function cursorModelHasEffortTiers(baseModelId: string): boolean {
 }
 
 /**
- * Compose a Cursor wire id from a Codex-facing base id and effort tier.
- * Fast variants put the mode after the effort; other models use the ordinary `{base}-{effort}` form.
+ * Compose Cursor's flattened model id from a Codex-facing base id and effort tier. Discovery uses
+ * this for the ids returned by GetUsableModels. Parameterized Grok Fast requests bypass the flat id
+ * and send the base model plus requested_model parameters instead.
  */
 export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
   if (baseModelId.endsWith("-fast")) {
     return `${baseModelId.slice(0, -"-fast".length)}-${effortSuffix}-fast`;
   }
   return `${baseModelId}-${effortSuffix}`;
+}
+
+/**
+ * Compose the exact flattened id sent by AgentService/Run. Discovery normalizes Cursor's optional
+ * `cursor-` prefix only for catalog matching, but regular Grok 4.5 requests require that prefix on
+ * the wire. Keep this separate from {@link cursorWireModelIdWithEffort} so discovery can continue
+ * comparing canonical, prefix-free ids. Grok Fast uses requested_model parameters instead.
+ */
+export function cursorRequestWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  const flattened = cursorWireModelIdWithEffort(baseModelId, effortSuffix);
+  return baseModelId === "grok-4.5" ? `cursor-${flattened}` : flattened;
 }

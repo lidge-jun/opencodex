@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { managementFetch as fetch } from "./helpers/management-auth";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -33,6 +33,27 @@ function writeSessionsFixture(codexHome: string): void {
   writeFileSync(join(codexHome, "sessions", "2026", "07", "01", "rollout-x.jsonl"), "x".repeat(500));
   mkdirSync(join(codexHome, "archived_sessions"));
   writeFileSync(join(codexHome, "archived_sessions", "rollout-y.jsonl"), "y".repeat(120));
+}
+
+function inventoryCodexHome(codexHome: string): { bytes: number; fileCount: number; paths: string[] } {
+  const inventory = { bytes: 0, fileCount: 0, paths: [] as string[] };
+  const walk = (dir: string, relPrefix = "", root = false): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (root && entry.name === ".trash") continue;
+      const filePath = join(dir, entry.name);
+      const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(filePath, relPath);
+      } else if (entry.isFile()) {
+        inventory.bytes += statSync(filePath).size;
+        inventory.fileCount += 1;
+        inventory.paths.push(relPath);
+      }
+    }
+  };
+  walk(codexHome, "", true);
+  inventory.paths.sort();
+  return inventory;
 }
 
 beforeEach(() => {
@@ -70,8 +91,34 @@ describe("GET /api/storage", () => {
       expect(sessions.fileCount).toBe(1);
       const archived = body.buckets.find((b: { key: string }) => b.key === "archived_sessions");
       expect(archived.bytes).toBe(120);
-      // config.toml written by the isolated-home helper lands in "other".
-      expect(body.total.fileCount).toBe(3);
+      expect(archived.fileCount).toBe(1);
+      const other = body.buckets.find((b: { key: string }) => b.key === "other");
+      expect(other).toBeDefined();
+      expect(other.fileCount).toBeGreaterThanOrEqual(1);
+
+      // config.toml and live native-main coordination files legitimately land in
+      // "other"; compare against the filesystem without fixing their exact count.
+      const inventory = inventoryCodexHome(isolatedCodexHome!.path);
+      expect(body.total).toEqual({ bytes: inventory.bytes, fileCount: inventory.fileCount });
+      const fixturePaths = [
+        "archived_sessions/rollout-y.jsonl",
+        "config.toml",
+        "sessions/2026/07/01/rollout-x.jsonl",
+      ];
+      const coordinationDatabases = [
+        ".opencodex-native-main.claim.sqlite",
+        ".opencodex-native-main.owner.sqlite",
+        ".opencodex-native-profile.lock.sqlite",
+      ];
+      const sqliteSidecars = ["-journal", "-wal", "-shm"];
+      expect(inventory.paths).toEqual(expect.arrayContaining(fixturePaths));
+      expect(inventory.paths.filter(path =>
+        !fixturePaths.includes(path)
+        && !coordinationDatabases.some(database =>
+          path === database || sqliteSidecars.some(suffix => path === `${database}${suffix}`)
+        )
+      )).toEqual([]);
+      expect(body.total.fileCount).toBeGreaterThanOrEqual(3);
       expect(body.total.bytes).toBeGreaterThan(620);
     } finally {
       await server.stop(true);

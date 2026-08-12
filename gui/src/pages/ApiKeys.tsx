@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Notice } from "../ui";
 import { useI18n, LOCALES } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import {
   classifyExternalModel,
@@ -85,7 +86,13 @@ function validCachedKeys(cached: CachedKeysShape | null): CachedKeysShape | null
   return cached;
 }
 
-export default function ApiKeys({ apiBase }: { apiBase: string }) {
+/**
+ * `active` gates both resources. As one panel of the Integrations tab strip
+ * this stays mounted while hidden — which is what preserves in-progress key
+ * drafts — so without the gate a hidden panel would keep polling the catalog
+ * behind whatever tab the user is actually looking at.
+ */
+export default function ApiKeys({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   // v2: a v1 session entry has no auth matrix, and defaulting that to [] would
@@ -169,13 +176,13 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     keysResourceKey,
     [apiBase],
     fetchKeys,
-    { isEmpty: data => data.keys.length === 0, initialData: cachedKeys ?? undefined },
+    { isEmpty: data => data.keys.length === 0, initialData: cachedKeys ?? undefined, enabled: active },
   );
   const modelsResource = useDataSurface<ExternalModelRow[]>(
     modelsResourceKey,
     [apiBase],
     fetchModels,
-    { isEmpty: models => models.length === 0, initialData: cachedModels ?? undefined },
+    { isEmpty: models => models.length === 0, initialData: cachedModels ?? undefined, enabled: active },
   );
   const keysState = keysResource.state;
   const modelsState = modelsResource.state;
@@ -314,7 +321,7 @@ export default function ApiKeys({ apiBase }: { apiBase: string }) {
     if (model.native) return t("api.sourceNative");
     if (model.provider === "combo") return t("api.sourceCombo");
     if (model.custom) return t("api.sourceCustom");
-    return model.provider;
+    return formatProviderDisplayName(model.provider, t);
   };
 
   const protocolLabel = (protocol: GatewayInboundProtocol): string => {

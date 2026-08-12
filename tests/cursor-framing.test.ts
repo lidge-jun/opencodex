@@ -3,6 +3,7 @@ import {
   CONNECT_FLAG_COMPRESSED,
   CONNECT_FLAG_END_STREAM,
   ConnectFrameError,
+  consumeConnectFrames,
   decodeAvailableConnectFrames,
   decodeConnectFrame,
   decodeConnectFrames,
@@ -210,5 +211,71 @@ describe("Cursor Connect envelope framing", () => {
       () => decodeAvailableConnectFrames(decoded.remainder, CURSOR_MAX_CONNECT_FRAME_BYTES, 1),
       "payload_too_large",
     );
+  });
+});
+
+describe("consumeConnectFrames (cursor-based, no remainder copy)", () => {
+  const frame = (payload: Uint8Array, flags = 0) => {
+    const out = new Uint8Array(5 + payload.byteLength);
+    out[0] = flags;
+    new DataView(out.buffer).setUint32(1, payload.byteLength, false);
+    out.set(payload, 5);
+    return out;
+  };
+  const joinBytes = (...parts: Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+    let offset = 0;
+    for (const part of parts) { out.set(part, offset); offset += part.byteLength; }
+    return out;
+  };
+
+  test("consumes complete frames and reports raw bytes (headers included)", () => {
+    const f1 = frame(bytes(1, 2, 3));
+    const f2 = frame(bytes(4, 5));
+    const input = joinBytes(f1, f2);
+    const decoded = consumeConnectFrames(input);
+    expect(decoded.frames).toHaveLength(2);
+    // RAW consumed: 5-byte header + payload per frame — a payload-only count
+    // would come back 5 short.
+    expect(decoded.consumedBytes).toBe(input.byteLength);
+    expect([...decoded.frames[0]!.payload]).toEqual([1, 2, 3]);
+  });
+
+  test("stops at a trailing partial frame and reports the boundary", () => {
+    const f1 = frame(bytes(9, 9, 9));
+    const partial = bytes(0, 0, 0); // 3 bytes of a header
+    const decoded = consumeConnectFrames(joinBytes(f1, partial));
+    expect(decoded.frames).toHaveLength(1);
+    expect(decoded.consumedBytes).toBe(f1.byteLength);
+  });
+
+  test("stops at a trailing partial header inside the next frame", () => {
+    const f1 = frame(bytes(7));
+    const declared = new Uint8Array(5);
+    new DataView(declared.buffer).setUint32(1, 100, false); // declares 100 payload bytes
+    const decoded = consumeConnectFrames(joinBytes(f1, declared, bytes(1, 2)));
+    expect(decoded.frames).toHaveLength(1);
+    expect(decoded.consumedBytes).toBe(f1.byteLength);
+  });
+
+  test("honors the frame-slot limit", () => {
+    const input = joinBytes(frame(bytes(1)), frame(bytes(2)), frame(bytes(3)));
+    const decoded = consumeConnectFrames(input, undefined, 2);
+    expect(decoded.frames).toHaveLength(2);
+    expect(decoded.consumedBytes).toBe(frame(bytes(1)).byteLength * 2);
+  });
+
+  test("rejects an oversized declared length at header arrival", () => {
+    const header = new Uint8Array(5);
+    new DataView(header.buffer).setUint32(1, 17 * 1024 * 1024, false);
+    expectFrameError(
+      () => consumeConnectFrames(header, CURSOR_MAX_EFFECTIVE_CONNECT_PAYLOAD_BYTES),
+      "payload_too_large",
+    );
+  });
+
+  test("returns zero consumption for header-only and empty input", () => {
+    expect(consumeConnectFrames(new Uint8Array()).consumedBytes).toBe(0);
+    expect(consumeConnectFrames(bytes(0, 0)).consumedBytes).toBe(0);
   });
 });

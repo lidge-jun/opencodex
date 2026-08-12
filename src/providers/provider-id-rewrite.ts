@@ -148,3 +148,32 @@ export function rewriteProviderReferences(config: OcxConfig, from: string, to: s
 
   return { changed, collisions };
 }
+
+/**
+ * Drop the custom-model rows that belonged to a provider being removed.
+ *
+ * The sibling of the rename pass above. `rewriteProviderReferences` already
+ * carries `customModels[].provider` across a rename, so the array tracks the
+ * provider lifecycle — but removal used to delete only `config.providers[name]`
+ * and leave the rows behind. Those orphans still reach `/api/models` and the
+ * generated Codex catalog, which key on the row rather than on provider
+ * existence, so they surface as models that resolve to nothing (#1273).
+ *
+ * Only the rows are touched: the `customModelCatalogMigration` marker records
+ * one-time ownership of pre-marker rows and must survive removal unchanged, or
+ * an older binary's view of that ownership silently changes.
+ *
+ * Returns the number of rows dropped so callers can report it.
+ */
+export function dropProviderCustomModels(config: OcxConfig, provider: string): number {
+  const existing = config.customModels;
+  if (!Array.isArray(existing) || existing.length === 0) return 0;
+  const kept = existing.filter(model => model.provider !== provider);
+  if (kept.length === existing.length) return 0;
+  // Match the add/remove routes: an emptied list is dropped rather than left as
+  // `[]`, so the `customModels` field is absent either way. Only that field —
+  // the `customModelCatalogMigration` marker is deliberately left in place.
+  if (kept.length > 0) config.customModels = kept;
+  else delete config.customModels;
+  return existing.length - kept.length;
+}

@@ -1,0 +1,461 @@
+{
+  "schemaVersion": 1,
+  "authority": "CL-00 design contract; not a runtime registry",
+  "sourceCommit": "3ad5bb6bd3f76f6879d84b78ea39edd3e01ec296",
+  "assertionDslVersion": "1.0.0",
+  "evidenceSchemaVersion": "1.0.0",
+  "failureRuleSets": {
+    "protocol-v1-default": [
+      { "id": "contract-integrity", "match": ["fixture_digest_mismatch", "manifest_digest_mismatch", "fixture_decode_failure", "harness_failure", "sanitizer_failure"], "classification": "harness_failure", "secondaryCode": "contract_integrity", "verdictEffect": "none", "retry": "never", "expected": false },
+      { "id": "time-limit", "match": ["connect_timeout", "first_byte_timeout", "inactivity_timeout", "total_timeout"], "classification": "timeout", "secondaryCode": "scenario_time_limit", "verdictEffect": "none", "retry": "never", "expected": false },
+      { "id": "resource-limit", "match": ["request_limit", "input_byte_limit", "output_byte_limit", "output_token_limit", "tool_call_limit", "artifact_byte_limit"], "classification": "budget_exhausted", "secondaryCode": "scenario_resource_limit", "verdictEffect": "none", "retry": "never", "expected": false },
+      { "id": "required-assertion", "match": ["required_assertion_failed"], "classification": "protocol_failure", "secondaryCode": "deterministic_assertion", "verdictEffect": "degraded", "retry": "never", "expected": false },
+      { "id": "fallback", "match": ["no_prior_rule"], "classification": "inconclusive", "secondaryCode": "unclassified", "verdictEffect": "none", "retry": "never", "expected": false }
+    ]
+  },
+  "expectedFailureRuleTemplate": {
+    "id": "expected-failure-exact-match",
+    "match": ["expected_failure_exact_match"],
+    "retry": "never",
+    "expected": true
+  },
+  "manifestDefaults": {
+    "version": "1.0.0",
+    "suiteVersion": "1.0.0",
+    "evidenceLayer": "protocol_conformance",
+    "verificationRole": "required",
+    "executionMode": "fixture",
+    "freshness": { "maxAgeMs": null },
+    "executionLimits": {
+      "totalTimeoutMs": 10000,
+      "connectTimeoutMs": 1000,
+      "firstByteTimeoutMs": 2000,
+      "inactivityTimeoutMs": 2000,
+      "maxRequests": 4,
+      "maxInputBytes": 1048576,
+      "maxOutputBytes": 4194304,
+      "maxOutputTokens": 4096,
+      "maxToolCalls": 8,
+      "maxArtifactBytes": 262144
+    },
+    "artifactPolicy": {
+      "allowed": ["assertion_report", "sanitized_request_shape", "sanitized_response_shape", "normalized_event_trace", "sanitized_error"],
+      "perArtifactBytes": 262144,
+      "aggregateBytes": 1048576,
+      "retention": "local_contract",
+      "publicVisibility": "deny",
+      "redactionProfile": "synthetic_protocol_v1"
+    },
+    "failureRuleSet": "protocol-v1-default"
+  },
+  "cases": [
+    {
+      "id": "responses-core.protocol.request-shape",
+      "suite": "responses-core",
+      "capability": "protocol.responses.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "rsp-request-shape", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"modelId\":\"fixture-model\",\"context\":{\"messages\":[{\"role\":\"user\",\"content\":\"PING\",\"timestamp\":0}]},\"stream\":false,\"options\":{\"temperature\":0}}", "digest": "ccc7549e8bcfe4e28d0d4a87c14e622ecfb75973600b5eef830d83620c5bd0f8" },
+      "assertions": [
+        { "id": "method", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/model", "expected": "fixture-model", "required": true },
+        { "id": "message", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/0/content", "expected": "PING", "required": true },
+        { "id": "temperature", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/temperature", "expected": 0, "required": true }
+      ]
+    },
+    {
+      "id": "responses-core.protocol.sse-framing",
+      "suite": "responses-core",
+      "capability": "protocol.responses.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "rsp-sse-framing-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "rsp-sse-framing", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data:{\"type\":\"response.output_text.delta\",\"delta\":\"A\"}\n\ndata: null\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"B\"}\n\ndata:{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\"}}\n\n", "digest": "1c384ef32886054d8f15c14cbcbcc9af4a3bed845d6f820691368614d61515e7" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["response.output_text.delta", "response.output_text.delta", "response.completed"], "required": true },
+        { "id": "text", "operator": "normalized_text_equals", "selector": "/client/response/normalizedText", "expected": "AB", "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true }
+      ]
+    },
+    {
+      "id": "responses-core.protocol.item-lifecycle",
+      "suite": "responses-core",
+      "capability": "protocol.responses.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "rsp-item-lifecycle-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "rsp-item-lifecycle", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_fixture\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_fixture\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[]}}\n\n", "digest": "ef271e8aaa1d63d51d4e7e0d47facadf39603c1ffa2e871865ace3684feead08" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["response.output_item.added", "response.output_item.done", "response.completed"], "required": true },
+        { "id": "stable-id", "operator": "id_stable_across_events", "selector": "/client/response/events", "expected": ["/client/response/events/0/data/item/id", "/client/response/events/1/data/item/id"], "required": true },
+        { "id": "id-shape", "operator": "id_matches", "selector": "/client/response/events/0/data/item/id", "expected": "responses_message", "required": true }
+      ]
+    },
+    {
+      "id": "responses-core.protocol.terminal-state",
+      "suite": "responses-core",
+      "capability": "protocol.responses.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "rsp-terminal-state-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "rsp-terminal-state", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"code\":\"fixture_failure\"}}}\n\n", "digest": "472735364ce0ee28e68192d478ccb658ec8d6a149dba6fe914e5ab35cc1a41d7" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["response.failed"], "required": true },
+        { "id": "count", "operator": "sse_event_count", "selector": "/client/response/events", "expected": { "event": "response.failed", "count": 1 }, "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "failed", "required": true }
+      ]
+    },
+    {
+      "id": "responses-core.protocol.json-sse-equivalence",
+      "suite": "responses-core",
+      "capability": "protocol.responses.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-http", "responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector", "raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "rsp-json-sse-equivalence", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"json\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"output\":[{\"id\":\"msg_fixture\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"OK\"}]}]},\"sse\":\"event: response.output_text.delta\\ndata: {\\\"type\\\":\\\"response.output_text.delta\\\",\\\"delta\\\":\\\"OK\\\"}\\n\\nevent: response.completed\\ndata: {\\\"type\\\":\\\"response.completed\\\",\\\"response\\\":{\\\"id\\\":\\\"resp_fixture\\\",\\\"status\\\":\\\"completed\\\"}}\\n\\n\"}", "digest": "b7288170258b91361530d1dd5a0a818859ff9b6176793554ec8b0ae1177d87cf" },
+      "assertions": [
+        { "id": "text", "operator": "normalized_text_equals", "selector": "/client/response/normalizedText", "expected": "OK", "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true },
+        { "id": "equivalent", "operator": "verifier_result_equals", "selector": "/verifiers/json_sse_equivalence", "expected": "pass", "required": true }
+      ]
+    },
+    {
+      "id": "chat-core.protocol.request-mapping",
+      "suite": "chat-core",
+      "capability": "protocol.chat.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "chat-request-mapping", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"context\":{\"systemPrompt\":[\"SYS\"],\"messages\":[{\"role\":\"developer\",\"content\":\"DEV\",\"timestamp\":0},{\"role\":\"user\",\"content\":\"PING\",\"timestamp\":1}]},\"options\":{\"textFormat\":{\"type\":\"json_object\"}}}", "digest": "0a9c319b3a6dadbf581d0d2185f57527cd28aa57127e0eac91a421735b4c2ad9" },
+      "assertions": [
+        { "id": "roles", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages", "expected": [{"role":"system","content":"SYS"},{"role":"developer","content":"DEV"},{"role":"user","content":"PING"}], "required": true },
+        { "id": "format", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/response_format", "expected": {"type":"json_object"}, "required": true }
+      ]
+    },
+    {
+      "id": "chat-core.protocol.nonstream-envelope",
+      "suite": "chat-core",
+      "capability": "protocol.chat.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "chat-nonstream-envelope-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":false}", "digest": "4f6e495840e4fc80f833aa8cc09c09ee765ae9f8134db70565f3445989892db7" },
+      "fixture": { "id": "chat-nonstream-envelope", "role": "upstream_response", "mediaType": "application/json", "bytesUtf8": "{\"id\":\"chatcmpl_fixture\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}", "digest": "4a9a0352daa284e73850ce613b1cc939a534d6a930c7b68c8eb28e3fcca5b248" },
+      "assertions": [
+        { "id": "status", "operator": "http_status_equals", "selector": "/client/response/status", "expected": 200, "required": true },
+        { "id": "text", "operator": "normalized_text_equals", "selector": "/client/response/normalizedText", "expected": "OK", "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true }
+      ]
+    },
+    {
+      "id": "chat-core.protocol.stream-assembly",
+      "suite": "chat-core",
+      "capability": "protocol.chat.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "chat-stream-assembly-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "chat-stream-assembly", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"alpha\",\"arguments\":\"{\\\"x\\\":\"}},{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"beta\",\"arguments\":\"{\\\"y\\\":\"}}]}}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"2}\"}},{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", "digest": "0085f298a8690aefb74bb09ea2e0cb77703aaf6cfd822c6ce0d4d334ad4b9b3f" },
+      "assertions": [
+        { "id": "alpha", "operator": "tool_call_equals", "selector": "/client/response/toolCalls/0", "expected": {"id":"call_a","name":"alpha","arguments":{"x":1},"kind":"function","ordinal":0}, "required": true },
+        { "id": "beta", "operator": "tool_call_equals", "selector": "/client/response/toolCalls/1", "expected": {"id":"call_b","name":"beta","arguments":{"y":2},"kind":"function","ordinal":1}, "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true }
+      ]
+    },
+    {
+      "id": "chat-core.protocol.stream-terminal",
+      "suite": "chat-core",
+      "capability": "protocol.chat.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "chat-stream-terminal-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "chat-stream-terminal", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", "digest": "6e0e4e8d32d8575db6a09e89c222b16338e1499e940e038599f7a6b5332e59e6" },
+      "assertions": [
+        { "id": "text", "operator": "normalized_text_equals", "selector": "/client/response/normalizedText", "expected": "OK", "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true }
+      ]
+    },
+    {
+      "id": "anthropic-core.protocol.request-mapping",
+      "suite": "anthropic-core",
+      "capability": "protocol.anthropic.messages.core",
+      "requirements": { "inboundProtocols": ["anthropic-messages"], "upstreamProtocols": ["openai-responses"], "surfaces": ["anthropic-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "anthropic-request-mapping", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"system\":\"SYS\",\"messages\":[{\"role\":\"user\",\"content\":\"PING\"}],\"max_tokens\":32,\"stream\":false}", "digest": "deeca799f660f413d0cb85263aa332bdc05aa995ccf8c7322f6af43e9bf6a627" },
+      "assertions": [
+        { "id": "model", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/model", "expected": "fixture-model", "required": true },
+        { "id": "system", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/instructions", "expected": "SYS", "required": true },
+        { "id": "input", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/input/0/content/0/text", "expected": "PING", "required": true }
+      ]
+    },
+    {
+      "id": "anthropic-core.protocol.content-sequence",
+      "suite": "anthropic-core",
+      "capability": "protocol.anthropic.messages.core",
+      "requirements": { "inboundProtocols": ["anthropic-messages"], "upstreamProtocols": ["openai-responses"], "surfaces": ["anthropic-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "anthropic-content-sequence-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"messages\":[{\"role\":\"user\",\"content\":\"PING\"}],\"max_tokens\":32,\"stream\":true}", "digest": "96e15d2044ccaacca81d32bda4157e4baf82ef98c7640f27034e10285f5de8f3" },
+      "fixture": { "id": "anthropic-content-sequence", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data:{\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata:{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fixture\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", "digest": "1f8148d142038f42fadf4b3e938b45f4313986cbbd6338feac3b8db8f355299a" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["message_start","content_block_start","content_block_delta","content_block_stop","message_delta","message_stop"], "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "message_stop", "required": true }
+      ]
+    },
+    {
+      "id": "anthropic-core.protocol.tool-round-trip",
+      "suite": "anthropic-core",
+      "capability": "protocol.anthropic.messages.core",
+      "requirements": { "inboundProtocols": ["anthropic-messages"], "upstreamProtocols": ["openai-responses"], "surfaces": ["anthropic-http"], "requiredClaims": ["tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "anthropic-tool-roundtrip", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"messages\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_fixture\",\"name\":\"lookup\",\"input\":{\"q\":\"x\"}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_fixture\",\"content\":\"RESULT\"}]}],\"tools\":[{\"name\":\"lookup\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}},\"required\":[\"q\"]}}],\"max_tokens\":32}", "digest": "f8dfefb427ce81fb4570f83d8d24c91e79350a7a256ecde7e636e0d70fbdff64" },
+      "assertions": [
+        { "id": "call-id", "operator": "id_correlates", "selector": "/upstream/requests", "expected": ["/upstream/requests/0/json/input/0/call_id","/upstream/requests/0/json/input/1/call_id"], "required": true },
+        { "id": "result", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/input/1/output", "expected": "RESULT", "required": true }
+      ]
+    },
+    {
+      "id": "anthropic-core.protocol.terminal-errors",
+      "suite": "anthropic-core",
+      "capability": "protocol.anthropic.messages.core",
+      "requirements": { "inboundProtocols": ["anthropic-messages"], "upstreamProtocols": ["openai-responses"], "surfaces": ["anthropic-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "anthropic-terminal-error-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"messages\":[{\"role\":\"user\",\"content\":\"PING\"}],\"max_tokens\":32,\"stream\":true}", "digest": "96e15d2044ccaacca81d32bda4157e4baf82ef98c7640f27034e10285f5de8f3" },
+      "fixture": { "id": "anthropic-terminal-error", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"code\":\"overloaded\",\"message\":\"fixture\"}}}\n\n", "digest": "fad0d0edca35d066e89de5488635a2912930d5dedc79d047759fb6ecc6567718" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["error"], "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "failed", "required": true }
+      ]
+    },
+    {
+      "id": "tools-core.protocol.function-round-trip",
+      "suite": "tools-core",
+      "capability": "tools.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "tools-function", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"tools\":[{\"name\":\"lookup\",\"parameters\":{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}},\"required\":[\"q\"]}}],\"upstreamToolCall\":{\"id\":\"call_fixture\",\"name\":\"lookup\",\"arguments\":\"{\\\"q\\\":\\\"x\\\"}\"},\"toolResult\":{\"toolCallId\":\"call_fixture\",\"content\":\"RESULT\"}}", "digest": "9107f4dfdd7da8340c866c9fb6f42854437cebb98592d0510969c810c1eeb0ad" },
+      "assertions": [
+        { "id": "call", "operator": "tool_call_equals", "selector": "/client/response/toolCalls/0", "expected": {"id":"call_fixture","name":"lookup","arguments":{"q":"x"},"kind":"function","ordinal":0}, "required": true },
+        { "id": "result", "operator": "tool_result_correlates", "selector": "/upstream/requests", "expected": {"call":"/client/response/toolCalls/0/id","result":"/upstream/requests/1/json/messages/1/tool_call_id"}, "required": true }
+      ]
+    },
+    {
+      "id": "tools-core.protocol.custom-freeform-round-trip",
+      "suite": "tools-core",
+      "capability": "tools.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-http"], "requiredClaims": ["custom_tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "tools-custom", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"tool\":{\"type\":\"custom\",\"name\":\"apply_patch\",\"format\":{\"type\":\"grammar\",\"syntax\":\"lark\",\"definition\":\"start: /[\\\\s\\\\S]+/\"}},\"call\":{\"id\":\"call_patch\",\"name\":\"apply_patch\",\"input\":\"*** Begin Patch\\n*** End Patch\\n\"},\"output\":{\"call_id\":\"call_patch\",\"output\":\"Done\"}}", "digest": "752750104e99602d9160feaa591bcbfcfd0c8c53fc9feda4a48c3b6813b74d44" },
+      "assertions": [
+        { "id": "call", "operator": "tool_call_equals", "selector": "/client/response/toolCalls/0", "expected": {"id":"call_patch","name":"apply_patch","arguments":"*** Begin Patch\n*** End Patch\n","kind":"custom","ordinal":0}, "required": true },
+        { "id": "result", "operator": "tool_result_correlates", "selector": "/upstream/requests", "expected": {"call":"/client/response/toolCalls/0/id","result":"/upstream/requests/1/json/input/0/call_id"}, "required": true }
+      ]
+    },
+    {
+      "id": "tools-core.protocol.parallel-correlation",
+      "suite": "tools-core",
+      "capability": "tools.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-sse"], "requiredClaims": ["parallel_tools"], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "tools-parallel-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "tools-parallel", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data:{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"a\",\"arguments\":\"{\"}},{\"index\":1,\"id\":\"call_b\",\"function\":{\"name\":\"b\",\"arguments\":\"{\"}}]}}]}\n\ndata:{\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"}\"}},{\"index\":0,\"function\":{\"arguments\":\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata:[DONE]\n\n", "digest": "7a954d390bdf48d0dec3ed2515a5bbbedd4165656fcb7f0643ce743d17bb39f0" },
+      "assertions": [
+        { "id": "calls", "operator": "json_path_equals", "selector": "/client/response/toolCalls", "expected": [{"id":"call_a","name":"a","arguments":{},"kind":"function","ordinal":0},{"id":"call_b","name":"b","arguments":{},"kind":"function","ordinal":1}], "required": true },
+        { "id": "order", "operator": "json_path_equals", "selector": "/verifiers/nonoverlap_order", "expected": ["call_a","call_b"], "required": true }
+      ]
+    },
+    {
+      "id": "tools-core.protocol.result-content",
+      "suite": "tools-core",
+      "capability": "tools.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["tools","image"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "tools-result-content", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"callId\":\"call_fixture\",\"content\":[{\"type\":\"input_text\",\"text\":\"RESULT\"},{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,iVBORw0KGgo=\",\"detail\":\"high\"}],\"isError\":false}", "digest": "ec81d47d3d6a67254afcc21b55f458269d8dd34ab3b3d52a6c12fec9bec814ab" },
+      "assertions": [
+        { "id": "text", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/0/content", "expected": "RESULT", "required": true },
+        { "id": "image", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/1/content/0/image_url/url", "expected": "data:image/png;base64,iVBORw0KGgo=", "required": true }
+      ]
+    },
+    {
+      "id": "tools-core.protocol.choice-and-allowed-set",
+      "suite": "tools-core",
+      "capability": "tools.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "tools-choice", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"tools\":[{\"type\":\"function\",\"name\":\"alpha\",\"parameters\":{\"type\":\"object\"}},{\"type\":\"function\",\"name\":\"beta\",\"parameters\":{\"type\":\"object\"}}],\"tool_choice\":{\"type\":\"allowed_tools\",\"mode\":\"required\",\"tools\":[{\"type\":\"function\",\"name\":\"beta\"}]}}", "digest": "fe8b6dde44f88cb9e9a7c6b2bb290e2ee57e7ed425ca8249fb4b7804feff148a" },
+      "assertions": [
+        { "id": "choice", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/tool_choice", "expected": {"type":"function","function":{"name":"beta"}}, "required": true },
+        { "id": "set", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/tools", "expected": [{"type":"function","function":{"name":"beta","parameters":{"type":"object"}}}], "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.streaming-turn",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-sse"], "requiredClaims": [], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "codex-streaming-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "codex-streaming", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "data:{\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\ndata:[DONE]\n\n", "digest": "f109d35734ecca8e71226ff739b6a0783aca283a9b0d0238a7974b2d7fd9af53" },
+      "assertions": [
+        { "id": "text", "operator": "normalized_text_equals", "selector": "/client/response/normalizedText", "expected": "OK", "required": true },
+        { "id": "terminal", "operator": "terminal_signal_equals", "selector": "/client/response/terminal", "expected": "completed", "required": true },
+        { "id": "phase", "operator": "json_path_equals", "selector": "/client/response/events/6/data/item/phase", "expected": "final_answer", "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.apply-patch-turn",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["custom_tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "codex-patch", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"name\":\"apply_patch\",\"input\":\"*** Begin Patch\\n*** Add File: x\\n+x\\n*** End Patch\\n\",\"callId\":\"call_patch\",\"result\":\"Done\"}", "digest": "668baa1fbea1d7a6556f717467fc3b90a47b2edfaa2ccf0c7950fd30dfe27a81" },
+      "assertions": [
+        { "id": "call", "operator": "tool_call_equals", "selector": "/client/response/toolCalls/0", "expected": {"id":"call_patch","name":"apply_patch","arguments":"*** Begin Patch\n*** Add File: x\n+x\n*** End Patch\n","kind":"custom","ordinal":0}, "required": true },
+        { "id": "result", "operator": "tool_result_correlates", "selector": "/upstream/requests", "expected": {"call":"/client/response/toolCalls/0/id","result":"/upstream/requests/1/json/messages/1/tool_call_id"}, "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.tool-continuation",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-http"], "requiredClaims": ["tools"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "codex-tool-continuation", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"turn1\":{\"output\":[{\"type\":\"function_call\",\"id\":\"fc_fixture\",\"call_id\":\"call_fixture\",\"name\":\"lookup\",\"arguments\":\"{}\"}]},\"turn2\":{\"input\":[{\"type\":\"function_call_output\",\"call_id\":\"call_fixture\",\"output\":\"RESULT\"}]}}", "digest": "0b1e955829282c51e056e0bd1d6eb88d62fbae1accd52bdda579c3fce9eac205" },
+      "assertions": [
+        { "id": "correlation", "operator": "id_correlates", "selector": "/upstream/requests", "expected": ["/upstream/requests/0/json/input/0/call_id","/upstream/requests/0/json/input/1/call_id"], "required": true },
+        { "id": "order", "operator": "json_path_equals", "selector": "/verifiers/call_result_order", "expected": "pass", "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.previous-response-replay",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "codex-replay", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"stored\":{\"id\":\"resp_prev\",\"input\":[{\"role\":\"user\",\"content\":\"ONE\"}],\"output\":[{\"role\":\"assistant\",\"content\":\"TWO\"}]},\"next\":{\"previous_response_id\":\"resp_prev\",\"input\":[{\"role\":\"user\",\"content\":\"THREE\"}]}}", "digest": "e849a72d9772616a5ca8853bef48fd2f0884fd006b9ac747bd442513ad05e0f4" },
+      "assertions": [
+        { "id": "expanded", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/input", "expected": [{"role":"user","content":"ONE"},{"role":"assistant","content":"TWO"},{"role":"user","content":"THREE"}], "required": true },
+        { "id": "private-id", "operator": "json_path_absent", "selector": "/upstream/requests/0/json/previous_response_id", "expected": true, "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.structured-output",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["structured_output"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "codex-structured", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"text\":{\"format\":{\"type\":\"json_schema\",\"name\":\"answer\",\"schema\":{\"type\":\"object\",\"properties\":{\"ok\":{\"type\":\"boolean\"}},\"required\":[\"ok\"],\"additionalProperties\":false},\"strict\":true}}}", "digest": "e6278954535f4d482a9bb1f6c0189ef7aed00294a7bde695747b7898886cf937" },
+      "assertions": [
+        { "id": "format", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/response_format", "expected": {"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false},"strict":true}}, "required": true }
+      ]
+    },
+    {
+      "id": "codex-core.protocol.compaction-and-special-items",
+      "suite": "codex-core",
+      "capability": "client.codex.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "codex-special-items", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":[{\"type\":\"context_compaction\",\"encrypted_content\":\"ocx1:fixture\"},{\"type\":\"local_shell_call\",\"id\":\"shell_fixture\",\"call_id\":\"call_shell\",\"status\":\"completed\",\"action\":{\"type\":\"exec\",\"command\":[\"echo\",\"ok\"]}},{\"type\":\"function_call_output\",\"call_id\":\"call_shell\",\"output\":\"ok\"},{\"type\":\"tool_search_output\",\"status\":\"failed\",\"error\":\"fixture\"}]}", "digest": "bf61cb0783f288a4dd6b0b8c0f9a2ddb60f02d0f8ea1d2875ea7e3fe1740b043" },
+      "assertions": [
+        { "id": "compaction", "operator": "json_path_equals", "selector": "/verifiers/compaction_replayed", "expected": true, "required": true },
+        { "id": "shell", "operator": "json_path_equals", "selector": "/verifiers/local_shell_correlated", "expected": true, "required": true },
+        { "id": "search", "operator": "json_path_equals", "selector": "/verifiers/tool_search_error", "expected": "fixture", "required": true }
+      ]
+    },
+    {
+      "id": "vision-core.protocol.input-image",
+      "suite": "vision-core",
+      "capability": "modalities.image.input",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["image"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "vision-input", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":[{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"READ\"},{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,iVBORw0KGgo=\",\"detail\":\"high\"}]}]}", "digest": "a26ba5209858c3658d698c1dcb6c92845b2e6aae6bab70a7b9ad1cba1d8aa6a5" },
+      "assertions": [
+        { "id": "text", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/0/content/0/text", "expected": "READ", "required": true },
+        { "id": "image", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/0/content/1/image_url", "expected": {"url":"data:image/png;base64,iVBORw0KGgo=","detail":"high"}, "required": true }
+      ]
+    },
+    {
+      "id": "vision-core.protocol.tool-result-image",
+      "suite": "vision-core",
+      "capability": "modalities.image.input",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["tools","image"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "vision-tool-result", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"callId\":\"call_fixture\",\"result\":[{\"type\":\"input_text\",\"text\":\"RESULT\"},{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,iVBORw0KGgo=\"}]}", "digest": "02c724259bb3c98002842cafad6d890d3dab7db287f1803fd9ce97ec79630a6d" },
+      "assertions": [
+        { "id": "tool-text", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/0", "expected": {"role":"tool","tool_call_id":"call_fixture","content":"RESULT"}, "required": true },
+        { "id": "image-carrier", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/messages/1/content/0/image_url/url", "expected": "data:image/png;base64,iVBORw0KGgo=", "required": true }
+      ]
+    },
+    {
+      "id": "vision-core.protocol.modality-gate",
+      "suite": "vision-core",
+      "capability": "modalities.image.input",
+      "verificationRole": "negative_control",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": [], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "vision-gate", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"model\":\"text-only\",\"modelInputModalities\":[\"text\"],\"visionSidecar\":{\"enabled\":false},\"requestHasImage\":true}", "digest": "d5b438fb3fad873b0a1bb1b6c91539862e4f3aa8690a963eb6121c5a3229818a" },
+      "assertions": [
+        { "id": "path", "operator": "json_path_equals", "selector": "/verifiers/modality_path", "expected": "unsupported", "required": true },
+        { "id": "no-drop", "operator": "json_path_equals", "selector": "/verifiers/silent_image_drop", "expected": false, "required": true }
+      ],
+      "expectedFailure": { "controlKind": "conformance_negative_control", "expectedClass": "capability_failure", "expectedCode": "image_input_unsupported", "assertionIds": ["path", "no-drop"], "onMatch": "pass", "onMismatch": "fail" }
+    },
+    {
+      "id": "reasoning-core.protocol.effort-mapping",
+      "suite": "reasoning-core",
+      "capability": "reasoning.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["reasoning"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "reasoning-effort", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"requested\":\"high\",\"reasoningEffortMap\":{\"high\":\"adaptive\"},\"reasoningWireFormat\":\"gateway-object\"}", "digest": "d9d5cce104809764d5edbc833088a0a9bb3b4d678a4f135353cc5fecf62e8b57" },
+      "assertions": [
+        { "id": "wire", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/reasoning", "expected": {"enabled":true,"effort":"adaptive"}, "required": true },
+        { "id": "legacy-absent", "operator": "json_path_absent", "selector": "/upstream/requests/0/json/reasoning_effort", "expected": true, "required": true }
+      ]
+    },
+    {
+      "id": "reasoning-core.protocol.summary-stream",
+      "suite": "reasoning-core",
+      "capability": "reasoning.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-sse"], "requiredClaims": ["reasoning"], "requiredHarnessFeatures": ["raw_sse_capture"], "platforms": [], "routePreconditions": [] },
+      "initiatingRequest": { "id": "reasoning-summary-request", "role": "client_request", "mediaType": "application/json", "bytesUtf8": "{\"model\":\"fixture-model\",\"input\":\"PING\",\"stream\":true}", "digest": "c2c39a78b939e6c5182d3206f86aa86d6fd706959de9c37072db759aa510a1f6" },
+      "fixture": { "id": "reasoning-summary", "role": "upstream_response", "mediaType": "text/event-stream", "bytesUtf8": "event: response.reasoning_summary_part.added\ndata: {\"type\":\"response.reasoning_summary_part.added\",\"item_id\":\"rs_fixture\",\"summary_index\":0,\"part\":{\"type\":\"summary_text\",\"text\":\"\"}}\n\nevent: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_fixture\",\"summary_index\":0,\"delta\":\"WHY\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n", "digest": "d9c4fa73b67f7a92d9ec55af7ff12b16ddc9870059e5e530ee04006b171367e7" },
+      "assertions": [
+        { "id": "events", "operator": "sse_event_sequence", "selector": "/client/response/events", "expected": ["response.reasoning_summary_part.added","response.reasoning_summary_text.delta","response.completed"], "required": true },
+        { "id": "id", "operator": "id_matches", "selector": "/client/response/events/0/data/item_id", "expected": "responses_reasoning", "required": true }
+      ]
+    },
+    {
+      "id": "reasoning-core.protocol.replay",
+      "suite": "reasoning-core",
+      "capability": "reasoning.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-responses"], "surfaces": ["responses-http"], "requiredClaims": ["reasoning"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "reasoning-replay", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"turn1\":{\"reasoning\":{\"id\":\"rs_fixture\",\"text\":\"PLAN\",\"signature\":\"sig_fixture\"},\"toolCall\":{\"callId\":\"call_fixture\"}},\"turn2\":{\"toolResult\":{\"callId\":\"call_fixture\",\"output\":\"RESULT\"}}}", "digest": "6e137e06f52c32e9f7d394b92343a8b849103328e958ab7c9b2825a799ea60c3" },
+      "assertions": [
+        { "id": "text", "operator": "json_path_equals", "selector": "/upstream/requests/1/json/input/0/content/0/text", "expected": "PLAN", "required": true },
+        { "id": "signature", "operator": "json_path_equals", "selector": "/upstream/requests/1/json/input/0/signature", "expected": "sig_fixture", "required": true }
+      ]
+    },
+    {
+      "id": "reasoning-core.protocol.private-content-isolation",
+      "suite": "reasoning-core",
+      "capability": "reasoning.round_trip",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["openai-chat"], "surfaces": ["responses-http"], "requiredClaims": ["reasoning"], "requiredHarnessFeatures": ["adapter_vector"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "reasoning-private", "role": "adapter_vector", "mediaType": "application/vnd.opencodex.adapter-vector+json", "bytesUtf8": "{\"origin\":{\"provider\":\"alpha\",\"encrypted\":\"opaque_fixture\"},\"destination\":{\"provider\":\"beta\",\"adapter\":\"openai-chat\"}}", "digest": "3519bd299fe2cd5b8069e0cd1c3b65b61d5ce9588c66e54b49d42af5ccf0c81e" },
+      "assertions": [
+        { "id": "upstream-absent", "operator": "json_path_absent", "selector": "/upstream/requests/0/json/encrypted_content", "expected": true, "required": true },
+        { "id": "client-absent", "operator": "json_path_absent", "selector": "/client/response/json/hidden_reasoning", "expected": true, "required": true }
+      ]
+    },
+    {
+      "id": "mcp-core.protocol.namespace-mapping",
+      "suite": "mcp-core",
+      "capability": "tools.mcp.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["cursor-protobuf"], "surfaces": ["responses-http"], "requiredClaims": ["mcp"], "requiredHarnessFeatures": ["adapter_vector","in_memory_mcp_stub","mcp_namespace_round_trip_v1"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "mcp-namespace", "role": "synthetic_tool", "mediaType": "application/vnd.opencodex.mcp-stub+json", "bytesUtf8": "{\"namespace\":\"mcp__fixture\",\"name\":\"lookup\",\"description\":\"fixture\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}}", "digest": "91a53f8c580d461d0f5e0d7209e5d4b95249bdfa8bd3fd4f298e18bdeadb0693" },
+      "assertions": [
+        { "id": "wire-name", "operator": "json_path_equals", "selector": "/upstream/requests/0/json/tools/0/name", "expected": "mcp__fixture__lookup", "required": true },
+        { "id": "reverse", "operator": "json_path_equals", "selector": "/client/response/mcpCalls/0", "expected": {"namespace":"mcp__fixture","name":"lookup"}, "required": true }
+      ]
+    },
+    {
+      "id": "mcp-core.protocol.schema-and-bounds",
+      "suite": "mcp-core",
+      "capability": "tools.mcp.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["cursor-protobuf"], "surfaces": ["responses-http"], "requiredClaims": ["mcp"], "requiredHarnessFeatures": ["adapter_vector","in_memory_mcp_stub","mcp_schema_bounds_v1"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "mcp-bounds", "role": "synthetic_tool", "mediaType": "application/vnd.opencodex.mcp-stub+json", "bytesUtf8": "{\"limitBytes\":64,\"exactSchema\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"x\\\":{\\\"type\\\":\\\"string\\\"}},\\\"a\\\":\\\"xxx\\\"}\",\"overSchema\":\"{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"x\\\":{\\\"type\\\":\\\"string\\\"}},\\\"a\\\":\\\"xxxx\\\"}\"}", "digest": "34ff4414dc8e196d460390557f4fd74c32418ea00710167baff2a0dc1f3b643c" },
+      "assertions": [
+        { "id": "exact", "operator": "verifier_result_equals", "selector": "/verifiers/exact_bound", "expected": "pass", "required": true },
+        { "id": "over", "operator": "verifier_result_equals", "selector": "/verifiers/one_over_rejected", "expected": "pass", "required": true },
+        { "id": "atomic", "operator": "json_path_equals", "selector": "/verifiers/partial_commit", "expected": false, "required": true }
+      ]
+    },
+    {
+      "id": "mcp-core.protocol.call-result",
+      "suite": "mcp-core",
+      "capability": "tools.mcp.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["cursor-protobuf"], "surfaces": ["responses-http"], "requiredClaims": ["mcp"], "requiredHarnessFeatures": ["adapter_vector","in_memory_mcp_stub","mcp_call_result_v1"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "mcp-call", "role": "synthetic_tool", "mediaType": "application/vnd.opencodex.mcp-stub+json", "bytesUtf8": "{\"namespace\":\"mcp__fixture\",\"name\":\"lookup\",\"arguments\":{\"q\":\"x\"},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"RESULT\"}],\"isError\":false}}", "digest": "986ef5017fbdb46eb18b30daaffe72aecc93868b7d89b11c3e244dc084f46496" },
+      "assertions": [
+        { "id": "call", "operator": "json_path_equals", "selector": "/verifiers/stub_received", "expected": {"namespace":"mcp__fixture","name":"lookup","arguments":{"q":"x"}}, "required": true },
+        { "id": "result", "operator": "json_path_equals", "selector": "/client/response/json", "expected": {"content":[{"type":"text","text":"RESULT"}],"isError":false}, "required": true }
+      ]
+    },
+    {
+      "id": "mcp-core.protocol.resource-round-trip",
+      "suite": "mcp-core",
+      "capability": "tools.mcp.core",
+      "requirements": { "inboundProtocols": ["openai-responses"], "upstreamProtocols": ["cursor-protobuf"], "surfaces": ["responses-http"], "requiredClaims": ["mcp"], "requiredHarnessFeatures": ["adapter_vector","in_memory_mcp_stub","mcp_resource_round_trip_v1"], "platforms": [], "routePreconditions": [] },
+      "fixture": { "id": "mcp-resource", "role": "synthetic_tool", "mediaType": "application/vnd.opencodex.mcp-stub+json", "bytesUtf8": "{\"resources\":[{\"uri\":\"fixture://one\",\"name\":\"one\"}],\"read\":{\"uri\":\"fixture://one\",\"contents\":[{\"uri\":\"fixture://one\",\"text\":\"RESOURCE\"}]}}", "digest": "a3f6317374ce92da0155dd14bbf0d5822e8687cbe8ef7968221f23acf8b16aa5" },
+      "assertions": [
+        { "id": "list", "operator": "json_path_equals", "selector": "/client/response/json/resources", "expected": [{"uri":"fixture://one","name":"one"}], "required": true },
+        { "id": "read", "operator": "json_path_equals", "selector": "/client/response/json/contents", "expected": [{"uri":"fixture://one","text":"RESOURCE"}], "required": true }
+      ]
+    }
+  ]
+}

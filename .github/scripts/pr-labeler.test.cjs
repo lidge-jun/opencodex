@@ -6,6 +6,7 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   detectTypeLabelFromTitle,
+  detectTypeLabelFromCommits,
   hasHumanTypeLabelOverride,
   planTypeLabelSync,
   TYPE_LABELS,
@@ -142,6 +143,115 @@ describe("planTypeLabelSync", () => {
       events: [],
     });
     assert.deepEqual(plan, { skip: true, reason: "no-prefix" });
+  });
+});
+
+describe("detectTypeLabelFromCommits", () => {
+  it("reads the type from unanimous commits", () => {
+    assert.equal(
+      detectTypeLabelFromCommits([
+        "fix(usage): price long-context requests at the published long rate",
+      ]),
+      "bug",
+    );
+  });
+
+  it("treats chore as supporting, not competing (PR #955 shape)", () => {
+    // Four `fix(codex):` commits plus one `test(codex):`. Requiring unanimity
+    // would abstain here, and on almost every real PR — nearly every
+    // substantial change carries a test or chore commit alongside its fix.
+    assert.equal(
+      detectTypeLabelFromCommits([
+        "fix(codex): probe reset-derived cooldowns without waiting to be selected",
+        "fix(codex): fail closed on an unrecognized plan",
+        "fix(codex): classify prolite as a weekly plan",
+        "fix(codex): share one window rule instead of a plan allowlist",
+        "test(codex): assert the window rule in literals",
+      ]),
+      "bug",
+    );
+  });
+
+  it("keeps chore when nothing else competes", () => {
+    assert.equal(
+      detectTypeLabelFromCommits(["ci: pin an action", "test: add a case"]),
+      "chore",
+    );
+  });
+
+  it("abstains on a genuine mix of fix and feat", () => {
+    assert.equal(
+      detectTypeLabelFromCommits(["fix(a): repair x", "feat(b): add y"]),
+      null,
+    );
+  });
+
+  it("reads only the first line of a multi-line commit message", () => {
+    // A body line starting with `feat:` must not vote.
+    assert.equal(
+      detectTypeLabelFromCommits([
+        "fix(a): repair x\n\nfeat: this is prose in the body, not a type",
+      ]),
+      "bug",
+    );
+  });
+
+  it("returns null for absent or unusable input", () => {
+    assert.equal(detectTypeLabelFromCommits([]), null);
+    assert.equal(detectTypeLabelFromCommits(undefined), null);
+    assert.equal(detectTypeLabelFromCommits(["", null]), null);
+  });
+});
+
+describe("planTypeLabelSync commit fallback", () => {
+  it("labels a stack PR whose title carries no type", () => {
+    // `stack 3/5:` fails the conventional regex (the `3/5` sits between the
+    // word and the colon), reaches the sentence-case fallback, which extracts
+    // `stack` — a word with no PREFIX_TO_LABEL entry. The sync used to skip
+    // here, and a skip is not a failure, so the `label` check stayed green
+    // while all four stack PRs carried no type label.
+    const plan = planTypeLabelSync({
+      title: "stack 3/5: carry six contributor bug fixes with authorship intact",
+      currentLabels: [],
+      events: [],
+      commitMessages: [
+        "fix(kiro): round-trip the redactedContent reasoning blob",
+        "fix(responses): close passthrough streams at terminal events",
+      ],
+    });
+    assert.deepEqual(plan, { skip: false, detected: "bug", add: "bug", remove: [] });
+  });
+
+  it("does not let commits override a title that already classifies", () => {
+    const plan = planTypeLabelSync({
+      title: "feat(providers): add a preset",
+      currentLabels: [],
+      events: [],
+      commitMessages: ["fix(a): repair x", "fix(b): repair y"],
+    });
+    assert.equal(plan.detected, "enhancement");
+  });
+
+  it("still skips when neither the title nor the commits classify", () => {
+    const plan = planTypeLabelSync({
+      title: "stack 1/5: triage the open issue surface",
+      currentLabels: [],
+      events: [],
+      commitMessages: ["wip", "more wip"],
+    });
+    assert.deepEqual(plan, { skip: true, reason: "no-prefix" });
+  });
+
+  it("still honours a human override before consulting commits", () => {
+    const plan = planTypeLabelSync({
+      title: "stack 2/5: price long-context requests",
+      currentLabels: ["enhancement"],
+      events: [
+        { event: "labeled", label: { name: "enhancement" }, actor: { login: "a-human" } },
+      ],
+      commitMessages: ["fix(usage): price long-context requests"],
+    });
+    assert.deepEqual(plan, { skip: true, reason: "human-override" });
   });
 });
 

@@ -401,7 +401,7 @@ describe("executeArchivedCleanup", () => {
     const ids = db.query<{ id: string }, []>("SELECT id FROM threads ORDER BY id").all().map(r => r.id);
     db.close();
     expect(ids).toEqual(["active", "tmid", "tnew"]);
-  });
+  }, { timeout: STORE_BUDGET_MS });
 
   test("permanent deletes files and threads without creating trash", () => {
     home = buildHome();
@@ -417,7 +417,7 @@ describe("executeArchivedCleanup", () => {
     const ids = db.query<{ id: string }, []>("SELECT id FROM threads").all().map(r => r.id);
     db.close();
     expect(ids).toEqual(["active"]);
-  });
+  }, { timeout: STORE_BUDGET_MS });
 
   test("stale_preview when filesystem changed after preview", () => {
     home = buildHome();

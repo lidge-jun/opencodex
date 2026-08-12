@@ -2,6 +2,7 @@ import { durableBunRuntime } from "../lib/bun-runtime";
 import { codexAutoStartEnabled, getConfigPath, getPidPath, readConfigDiagnostics, readPid, readRuntimePort, type RuntimePortState } from "../config";
 import { diagnoseCodexBundledPlugins, type CodexPluginsDiagnostic } from "../codex/plugins-doctor";
 import { findLiveProxy, isOpencodexHealthz, probeHostname } from "../server/proxy-liveness";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import type { OcxConfig } from "../types";
 import { diagnoseService, serviceLogPath } from "../service";
 import { collectStartupHealth, type StartupHealth } from "../codex/autostart-health";
@@ -110,12 +111,18 @@ export function resolveStatusPid(
   return live ? live.pid : pidFile;
 }
 
+export function proxyHealthFailureReason(error: unknown, signal: AbortSignal): "timed out" | "unreachable" {
+  return signal.aborted || (error instanceof Error && error.name === "AbortError")
+    ? "timed out"
+    : "unreachable";
+}
+
 async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
   const url = target.healthUrl;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 800);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await directLocalHttpFetch(url, { signal: controller.signal });
     if (!response.ok) {
       const message = `returned HTTP ${response.status}`;
       return { ok: false, url, message, label: `${url} ${message}` };
@@ -130,7 +137,7 @@ async function checkProxyHealth(target: ListenTarget): Promise<HealthCheck> {
     const message = `ok${version}${uptime}`;
     return { ok: true, url, message, label: `${url} ${message}` };
   } catch (error) {
-    const reason = error instanceof Error && error.name === "AbortError" ? "timed out" : "unreachable";
+    const reason = proxyHealthFailureReason(error, controller.signal);
     return { ok: false, url, message: reason, label: `${url} ${reason}` };
   } finally {
     clearTimeout(timer);
@@ -173,7 +180,7 @@ export async function collectStatus(): Promise<CliStatusView> {
   // either way. `live` was already identity-probed a few lines above, so cross-check
   // rather than print registration as if it were service.
   const serviceSummary = service.installed && !live
-    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service install'`
+    ? `${service.summary} — registered but NOT serving; see ${serviceLogPath()} and re-run 'ocx service repair'`
     : service.summary;
   const codexShim = diagnoseCodexShim();
   const codexShimSummary = codexShim.summary;

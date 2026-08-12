@@ -39,14 +39,12 @@ export function ClaudeCodeSettingsCard({
 
   return (
     <div className="card" style={{ overflow: "hidden" }}>
-      <div className="setting-row">
-        <div className="setting-label">
-          <span className="title">{t("claude.enabledLabel")}</span>
-          <span className="desc">{t("claude.enabledHint")}</span>
-        </div>
-        <SettingToggle label={t("claude.enabledLabel")} checked={state.enabled} onChange={enabled => onStateChange({ ...state, enabled })} />
-      </div>
-
+      {/*
+        The connection toggle lives in the Claude Code header, where it commits
+        immediately. Keeping a copy here as a Save-gated draft row meant one
+        setting with two controls and two different commit semantics — a user
+        who flipped this one and navigated away had changed nothing.
+      */}
       <div className="setting-row">
         <div className="setting-label">
           <span className="title">{t("claude.authMode")}</span>

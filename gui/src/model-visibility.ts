@@ -27,8 +27,9 @@ export function parseSelectedModels(value: unknown): ProviderModelMap {
 export async function fetchSelectedModels(
   apiBase: string,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ProviderModelMap> {
-  const response = await fetchImpl(`${apiBase}/api/selected-models`);
+  const response = await fetchImpl(`${apiBase}/api/selected-models`, signal ? { signal } : undefined);
   if (!response.ok) throw new Error(`selected models HTTP ${response.status}`);
   return parseSelectedModels(await response.json());
 }

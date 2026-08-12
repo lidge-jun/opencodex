@@ -2,8 +2,15 @@ import type { OcxUsage } from "../../types";
 import type { OcxMessage, OcxRequestOptions, OcxTool } from "../../types";
 import type { CursorRoutingLevel } from "./discovery";
 
+export interface CursorRequestedModelParameter {
+  id: string;
+  value: string;
+}
+
 export interface CursorRunRequest {
   modelId: string;
+  /** Cursor model-picker parameters encoded through AgentRunRequest.requested_model. */
+  requestedModelParameters?: readonly CursorRequestedModelParameter[];
   /** Cursor Router optimization parameter; valid only while modelId is the `default` wire model. */
   routingLevel?: CursorRoutingLevel;
   conversationId: string;

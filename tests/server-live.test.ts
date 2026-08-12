@@ -2,14 +2,26 @@
  * /v1/live relay: Codex App / ChatGPT voice POSTs call-create against the injected base_url,
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../src/codex/auth-api";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../src/codex/routing";
 import { saveConfig } from "../src/config";
-import { startServer } from "../src/server";
+import {
+  createReadinessGate,
+  runStartupReadinessSync,
+  type ReadinessGate,
+} from "../src/server/readiness";
+import {
+  enqueueLiveSidebandPendingFrame,
+  exceedsLiveSidebandFrameByteLimit,
+  exceedsLiveSidebandPendingByteLimit,
+  MAX_WS_FRAME_BYTES,
+  startServer,
+} from "../src/server";
+import { beginShutdownDrain, isDraining, resetLifecycleDrainStateForTests } from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -467,7 +479,7 @@ test("a routed pool account's token overrides the caller bearer on the live rela
   }
 });
 
-test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to ChatGPT backend", async () => {
+test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
   const seenPaths: string[] = [];
   const seenUpgradeHeaders: Headers[] = [];
   const upstream = Bun.serve({
@@ -483,8 +495,9 @@ test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to Chat
       return new Response("not found", { status: 404 });
     },
     websocket: {
+      maxPayloadLength: MAX_WS_FRAME_BYTES,
       message(ws, message) {
-        ws.send(`echo:${typeof message === "string" ? message : message.toString()}`);
+        ws.send(typeof message === "string" ? `echo:${message}` : `bytes:${message.byteLength}`);
       },
     },
   });
@@ -519,13 +532,20 @@ test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to Chat
     } as unknown as string[]);
 
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("sideband timeout")), 5_000);
+      const timer = setTimeout(() => reject(new Error("sideband timeout")), 15_000);
+      let sawPing = false;
       client.addEventListener("open", () => {
         client.send("ping-sideband");
       });
       client.addEventListener("message", (event) => {
         try {
-          expect(String(event.data)).toBe("echo:ping-sideband");
+          if (!sawPing) {
+            expect(String(event.data)).toBe("echo:ping-sideband");
+            sawPing = true;
+            client.send(Buffer.alloc(MAX_WS_FRAME_BYTES));
+            return;
+          }
+          expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
           expect(seenPaths).toContain("/v1/live/rtc_sideband");
           expect(seenUpgradeHeaders).toHaveLength(1);
           expect(seenUpgradeHeaders[0].get("openai-alpha")).toBe("quicksilver=v2");
@@ -549,6 +569,40 @@ test("sideband GET /v1/live/{callId} upgrades and relays bidirectionally to Chat
     await server.stop(true);
     await upstream.stop(true);
   }
+}, { timeout: 20_000 });
+
+test("sideband byte predicates accept exact limits and reject one byte over", () => {
+  expect(exceedsLiveSidebandFrameByteLimit(50 * 1024 * 1024)).toBe(false);
+  expect(exceedsLiveSidebandFrameByteLimit(50 * 1024 * 1024 + 1)).toBe(true);
+  expect(exceedsLiveSidebandPendingByteLimit(256 * 1024, 768 * 1024)).toBe(false);
+  expect(exceedsLiveSidebandPendingByteLimit(256 * 1024, 768 * 1024 + 1)).toBe(true);
+});
+
+test("sideband queue enforces aggregate bytes and frame count without retaining rejected frames", () => {
+  const byteBounded: { livePending: Array<string | Buffer>; livePendingBytes: number } = {
+    livePending: [],
+    livePendingBytes: 0,
+  };
+  const quarterMiB = Buffer.alloc(256 * 1024);
+  for (let i = 0; i < 4; i += 1) {
+    expect(enqueueLiveSidebandPendingFrame(byteBounded, quarterMiB)).toBe("queued");
+  }
+  expect(byteBounded.livePending).toHaveLength(4);
+  expect(byteBounded.livePendingBytes).toBe(1024 * 1024);
+  expect(enqueueLiveSidebandPendingFrame(byteBounded, Buffer.from([1]))).toBe("too-many-bytes");
+  expect(byteBounded.livePending).toHaveLength(4);
+  expect(byteBounded.livePendingBytes).toBe(1024 * 1024);
+
+  const countBounded: { livePending: Array<string | Buffer>; livePendingBytes: number } = {
+    livePending: [],
+    livePendingBytes: 0,
+  };
+  for (let i = 0; i < 32; i += 1) {
+    expect(enqueueLiveSidebandPendingFrame(countBounded, "x")).toBe("queued");
+  }
+  expect(enqueueLiveSidebandPendingFrame(countBounded, "x")).toBe("too-many-frames");
+  expect(countBounded.livePending).toHaveLength(32);
+  expect(countBounded.livePendingBytes).toBe(32);
 });
 
 test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", async () => {
@@ -623,6 +677,7 @@ test("sideband URL policy: override precedence, normalization, and fail-closed b
   // Scheme rewrite: https -> wss; loopback http -> ws (the dev case the knob exists for).
   expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://localhost:8080/v1")).toBe("ws://localhost:8080/v1/live/rtc_1");
   expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://127.0.0.1:8080")).toBe("ws://127.0.0.1:8080/v1/live/rtc_1");
+  expect(buildLiveSidebandUpstreamWsUrl(frameless, "http://127.0.0.2:8080")).toBe("ws://127.0.0.2:8080/v1/live/rtc_1");
 
   // Fail-closed bounds: malformed, remote plaintext, userinfo, and non-http(s)
   // schemes all return the canonical root — a compromised or accidental override
@@ -631,6 +686,9 @@ test("sideband URL policy: override precedence, normalization, and fail-closed b
     "not a url",
     "http://realtime.example.test/v1",
     "ws://realtime.example.test/v1",
+    "http://127.256.0.1/v1",
+    "http://127.evil.example/v1",
+    "http://127.0.0.1.evil.example/v1",
     "https://user:pass@realtime.example.test/v1",
     "ftp://realtime.example.test/v1",
     "   ",
@@ -848,4 +906,324 @@ test("sideband frame log records direction, kind, and U+FFFD context without ful
     await server.stop(true);
     await upstream.stop(true);
   }
+});
+
+// ── /readyz: per-server readiness gate ────────────────────────────────────────
+// /healthz remains the immediate liveness signal (with only bounded capability
+// metadata); /readyz is the stricter gate that reflects the post-startup Codex sync
+// outcome. It is exact-GET
+// and unauthenticated (like /healthz), returns a sanitized body, 503+Retry-After
+// while pending/failed, and 200 only when ready. Each startServer gets its own
+// PRIVATE gate via createReadinessGate(); starting/failing a second server in the
+// same process can never reset or mutate the first server's gate.
+describe("GET /readyz", () => {
+  test("controlled startup sync drives the server gate to ready or failed", async () => {
+    saveConfig(forwardConfig());
+    const cases = [
+      { outcome: { ok: true }, expectedStatus: "ready", expectedHttp: 200 },
+      { outcome: { ok: true, warning: "catalog sync blocked" }, expectedStatus: "failed", expectedHttp: 503 },
+    ] as const;
+
+    for (const { outcome, expectedStatus, expectedHttp } of cases) {
+      const gate = createReadinessGate();
+      const server = startServer(0, { readinessGate: gate });
+      try {
+        const pending = await fetch(new URL("/readyz", server.url));
+        expect(pending.status).toBe(503);
+        expect(((await pending.json()) as { status: string }).status).toBe("pending");
+
+        await runStartupReadinessSync(gate, async () => outcome);
+
+        const settled = await fetch(new URL("/readyz", server.url));
+        expect(settled.status).toBe(expectedHttp);
+        expect(((await settled.json()) as { status: string }).status).toBe(expectedStatus);
+      } finally {
+        await server.stop(true);
+      }
+    }
+  });
+
+  test("fresh gate is pending; /healthz 200 while /readyz 503 with Retry-After", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      const base = server.url;
+      // Liveness is immediate and unchanged.
+      const healthzRes = await fetch(new URL("/healthz", base));
+      expect(healthzRes.status).toBe(200);
+      const healthzBody = (await healthzRes.json()) as { status: string; service: string; pid: number };
+      expect(healthzBody.status).toBe("ok");
+      expect(healthzBody.service).toBe("opencodex");
+
+      // Readiness is pending right after bind: 503 + Retry-After, sanitized body.
+      const readyzRes = await fetch(new URL("/readyz", base));
+      expect(readyzRes.status).toBe(503);
+      expect(readyzRes.headers.get("retry-after")).toBe("1");
+      const readyzBody = (await readyzRes.json()) as Record<string, unknown>;
+      expect(readyzBody.service).toBe("opencodex");
+      expect(readyzBody.status).toBe("pending");
+      expect(typeof readyzBody.version).toBe("string");
+      expect(typeof readyzBody.uptime).toBe("number");
+      expect(typeof readyzBody.pid).toBe("number");
+      expect(typeof readyzBody.port).toBe("number");
+      // Sanitization: the body must never carry sync diagnostics, paths, or warnings.
+      expect(Object.keys(readyzBody).sort()).toEqual(["pid", "port", "service", "status", "uptime", "version"]);
+      expect(JSON.stringify(readyzBody)).not.toContain("warning");
+      expect(JSON.stringify(readyzBody)).not.toContain("path");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("/readyz is 200 with status ready only after gate.markReady()", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      const base = server.url;
+      expect(((await (await fetch(new URL("/readyz", base))).json()) as { status: string }).status).toBe("pending");
+      gate.markReady();
+      const res = await fetch(new URL("/readyz", base));
+      expect(res.status).toBe(200);
+      expect(res.headers.get("retry-after")).toBeNull();
+      const body = (await res.json()) as { status: string; service: string };
+      expect(body.status).toBe("ready");
+      expect(body.service).toBe("opencodex");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("/readyz is 503 with Retry-After when the gate is failed", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    gate.markFailed();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      const res = await fetch(new URL("/readyz", server.url));
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("1");
+      expect(((await res.json()) as { status: string }).status).toBe("failed");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("exact method/path: POST /readyz and GET /readyz/ are NOT matched", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      const base = server.url;
+      // POST must not be accepted as readiness (falls through to the JSON 404 guard).
+      const postRes = await fetch(new URL("/readyz", base), { method: "POST" });
+      expect(postRes.status).toBe(404);
+      // Trailing slash is a distinct path and must not match either.
+      const slashRes = await fetch(new URL("/readyz/", base));
+      expect(slashRes.status).toBe(404);
+      // OPTIONS is a non-GET method and must not be accepted as a readiness
+      // preflight (the generic OPTIONS branch would otherwise answer 204).
+      const optionsRes = await fetch(new URL("/readyz", base), { method: "OPTIONS" });
+      expect(optionsRes.status).toBe(404);
+      expect(optionsRes.headers.get("content-type")).toContain("application/json");
+      expect(((await optionsRes.json()) as { error?: { type?: string; message?: string } }).error).toMatchObject({
+        type: "not_found",
+        message: "Unknown endpoint: OPTIONS /readyz",
+      });
+      const optionsSlashRes = await fetch(new URL("/readyz/", base), { method: "OPTIONS" });
+      expect(optionsSlashRes.status).toBe(404);
+      expect(optionsSlashRes.headers.get("content-type")).toContain("application/json");
+      expect(((await optionsSlashRes.json()) as { error?: { type?: string; message?: string } }).error).toMatchObject({
+        type: "not_found",
+        message: "Unknown endpoint: OPTIONS /readyz/",
+      });
+      // Encoded variants (e.g. /readyz%2F, which decodes to /readyz/) must NOT
+      // bypass the exact-path rejection and reach the GUI fallback (which would
+      // serve index.html with 200). GET, POST, and OPTIONS all answer the JSON 404.
+      const encodedGetRes = await fetch(`${base}/readyz%2F`);
+      expect(encodedGetRes.status).toBe(404);
+      const encodedPostRes = await fetch(`${base}/readyz%2F`, { method: "POST" });
+      expect(encodedPostRes.status).toBe(404);
+      const encodedOptionsRes = await fetch(`${base}/readyz%2F`, { method: "OPTIONS" });
+      expect(encodedOptionsRes.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("/readyz answers without an admission token (unauthenticated, like /healthz)", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      // No Authorization header, no API auth token in env (beforeEach deletes it).
+      const res = await fetch(new URL("/readyz", server.url), { headers: { Authorization: "" } });
+      // Pending → 503, but it answered (did NOT demand auth → would be 401).
+      expect([200, 503]).toContain(res.status);
+      const body = (await res.json()) as { service?: string };
+      expect(body.service).toBe("opencodex");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("ephemeral startServer(0): /readyz reports the actual bound port (not the requested 0)", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      const boundPort = new URL(server.url).port;
+      // The bound port is a real ephemeral port, not the requested 0.
+      expect(Number(boundPort)).toBeGreaterThan(0);
+      const res = await fetch(new URL("/readyz", server.url));
+      const body = (await res.json()) as { port: number };
+      // /readyz must report the ACTUAL bound port so the strict probe passes.
+      expect(body.port).toBe(Number(boundPort));
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+// ── /readyz per-server gate isolation ─────────────────────────────────────────
+// Two simultaneous startServer invocations in the same process get INDEPENDENT
+// gates. Marking one ready cannot flip the other; a second server whose bind
+// fails cannot mutate the first server's gate; the first stays ready while the
+// second is pending/failed.
+describe("per-server readiness gate isolation", () => {
+  test("two simultaneous servers keep independent gates (first ready while second pending)", async () => {
+    saveConfig(forwardConfig());
+    const gateA: ReadinessGate = createReadinessGate();
+    const gateB: ReadinessGate = createReadinessGate();
+    const serverA = startServer(0, { readinessGate: gateA });
+    const serverB = startServer(0, { readinessGate: gateB });
+    try {
+      gateA.markReady();
+      // gateB stays pending.
+
+      const resA = await fetch(new URL("/readyz", serverA.url));
+      expect(resA.status).toBe(200);
+      expect(((await resA.json()) as { status: string }).status).toBe("ready");
+
+      const resB = await fetch(new URL("/readyz", serverB.url));
+      expect(resB.status).toBe(503);
+      expect(((await resB.json()) as { status: string }).status).toBe("pending");
+    } finally {
+      await serverA.stop(true);
+      await serverB.stop(true);
+    }
+  });
+
+  test("marking one gate failed does not mutate the other gate", async () => {
+    saveConfig(forwardConfig());
+    const gateA: ReadinessGate = createReadinessGate();
+    const gateB: ReadinessGate = createReadinessGate();
+    const serverA = startServer(0, { readinessGate: gateA });
+    const serverB = startServer(0, { readinessGate: gateB });
+    try {
+      gateA.markReady();
+      gateB.markFailed();
+
+      const resA = await fetch(new URL("/readyz", serverA.url));
+      expect(resA.status).toBe(200);
+      expect(((await resA.json()) as { status: string }).status).toBe("ready");
+
+      const resB = await fetch(new URL("/readyz", serverB.url));
+      expect(resB.status).toBe(503);
+      expect(((await resB.json()) as { status: string }).status).toBe("failed");
+    } finally {
+      await serverA.stop(true);
+      await serverB.stop(true);
+    }
+  });
+
+  test("a server with no gate passed in still serves pending /readyz (fresh private gate)", async () => {
+    saveConfig(forwardConfig());
+    // No gate supplied → startServer creates a fresh pending private gate.
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/readyz", server.url));
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { status: string }).status).toBe("pending");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a bind failure on server A's actual occupied port cannot mutate A's gate (A stays ready, B stays pending)", async () => {
+    saveConfig(forwardConfig());
+    const gateA: ReadinessGate = createReadinessGate();
+    const gateB: ReadinessGate = createReadinessGate();
+    // Ephemeral start: A binds a real kernel-assigned port (NOT a fixed user port).
+    const serverA = startServer(0, { readinessGate: gateA });
+    try {
+      gateA.markReady();
+      const occupiedPort = Number(new URL(serverA.url).port);
+      // The bound port is a real ephemeral port — the second startServer targets
+      // the SAME actual port, which is already held by A.
+      expect(occupiedPort).toBeGreaterThan(0);
+      expect(Number.isInteger(occupiedPort)).toBe(true);
+
+      // Binding the occupied port with a separate gate must throw (EADDRINUSE).
+      // It must never silently share A's listener or reset A's gate.
+      expect(() => startServer(occupiedPort, { readinessGate: gateB })).toThrow();
+
+      // A is unaffected by the failed bind: still HTTP 200 / ready.
+      const resA = await fetch(new URL("/readyz", serverA.url));
+      expect(resA.status).toBe(200);
+      expect(((await resA.json()) as { status: string }).status).toBe("ready");
+      expect(gateA.getStatus()).toBe("ready");
+
+      // B never got past Bun.serve, so its gate was never marked: it stays
+      // pending (not failed, not ready) — exactly the isolation contract.
+      expect(gateB.getStatus()).toBe("pending");
+
+      // /healthz on A is unchanged too (liveness and readiness are independent).
+      const healthzRes = await fetch(new URL("/healthz", serverA.url));
+      expect(healthzRes.status).toBe(200);
+    } finally {
+      // Clean up ONLY A — B never bound, so there is no B server to stop.
+      await serverA.stop(true);
+    }
+  });
+});
+
+describe("GET /readyz while draining", () => {
+  afterEach(() => {
+    resetLifecycleDrainStateForTests();
+  });
+
+  test("a ready gate reports pending (503) once the listener starts draining", async () => {
+    saveConfig(forwardConfig());
+    const gate = createReadinessGate();
+    const server = startServer(0, { readinessGate: gate });
+    try {
+      gate.markReady();
+      const base = server.url;
+
+      // Before drain: ready → 200.
+      const readyRes = await fetch(new URL("/readyz", base));
+      expect(readyRes.status).toBe(200);
+      expect(((await readyRes.json()) as { status: string }).status).toBe("ready");
+
+      // Begin draining (as shutdown would). The one-shot gate is NOT mutated,
+      // but /readyz must stop advertising ready while the listener drains.
+      expect(isDraining()).toBe(false);
+      expect(beginShutdownDrain()).toBe(true);
+      expect(isDraining()).toBe(true);
+
+      const drainRes = await fetch(new URL("/readyz", base));
+      expect(drainRes.status).toBe(503);
+      expect(drainRes.headers.get("retry-after")).toBe("1");
+      expect(((await drainRes.json()) as { status: string }).status).toBe("pending");
+
+      // The gate itself is untouched — draining is a listener state, not a gate
+      // transition, so the startup-sync ownership contract is preserved.
+      expect(gate.getStatus()).toBe("ready");
+    } finally {
+      await server.stop(true);
+      resetLifecycleDrainStateForTests();
+    }
+  });
 });

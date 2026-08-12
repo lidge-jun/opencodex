@@ -1,5 +1,5 @@
 <!-- Source: https://kiro.dev/icon.svg (official Kiro app icon, fetched 2026-05-31) -->
-<svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
 <title>Kiro</title>
 <g transform="scale(0.02)">
 <rect width="1200" height="1200" rx="260" fill="#9046FF"/>

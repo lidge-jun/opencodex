@@ -12,11 +12,14 @@ import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
+import { isProxyAdmissionSecret } from "../server/auth-cors";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { PROXY_MARKER, ownAdmissionTokens, defaultAuthDetectDeps, detectClaudeAuth, type AuthDetectDeps } from "../claude/auth-detect";
 import { resolveClaudeAuthMode } from "../claude/auth-mode";
+import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { ANTHROPIC_PARENT_ENV_SLOTS, trustedNodeLauncherContext, type AnthropicParentEnvSlot } from "./launcher-context";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -26,13 +29,41 @@ export interface ClaudeLaunchEnv {
  * Injectable IO for tests. `env` is deliberately NOT injectable: it is bound to the
  * launch base so detection and the spawned process can never disagree (audit R3-3).
  */
-export type ClaudeEnvDeps = { authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens"> };
+export type ClaudeEnvDeps = {
+  authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
+  /** Test seam; production uses the authenticated Node-launcher context. */
+  preBunAnthropicSlots?: readonly AnthropicParentEnvSlot[] | null;
+};
+
+function isClaudeLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/, "");
+  return normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized === "[::1]";
+}
+
+function targetsLocalClaudeProxy(value: string | undefined, port: number): boolean {
+  if (!value) return false;
+  try {
+    const parsed = new URL(value);
+    const effectivePort = parsed.port === "" ? 80 : Number(parsed.port);
+    return parsed.protocol === "http:"
+      && isClaudeLoopbackHostname(parsed.hostname)
+      && effectivePort === port
+      && parsed.username === ""
+      && parsed.password === "";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Pure env assembly (unit-tested): never sets ANTHROPIC_API_KEY (setting both
  * token vars triggers Claude Code's auth-conflict warning, 003 E1), and never
- * overrides variables the user already exported, apart from stale loopback
- * ANTHROPIC_BASE_URL values owned by a previous opencodex launch.
+ * preserves Anthropic variables proven to exist in the parent Node launcher,
+ * apart from stale loopback ANTHROPIC_BASE_URL values owned by a previous
+ * opencodex launch. Unproven ambient values fail closed as project dotenv.
  */
 export function buildClaudeEnv(
   config: OcxConfig,
@@ -47,28 +78,37 @@ export function buildClaudeEnv(
   // stale marker left in place would suppress the admission key and then be removed,
   // leaving the child with no token at all (audit R2-1). It is opencodex state, never
   // user auth, so dropping it unconditionally is safe.
-  if (env.ANTHROPIC_AUTH_TOKEN === PROXY_MARKER) delete env.ANTHROPIC_AUTH_TOKEN;
-  // Step 1b — drop Anthropic credentials that the bundled Bun runtime synthesized from a
-  // project `.env`/`.env.local` (issue #701). Claude Code disables claude.ai connectors the
-  // moment either token slot is populated, so an ambient project file silently moved a
-  // subscriber onto API billing while their OAuth login stayed healthy. The npm launcher
-  // runs under Node, which does NOT auto-load dotenv, so it records the slots that existed
-  // before Bun started; anything populated now but absent then came from the working
-  // directory, not from the user. A genuine shell export is still honored, which keeps
-  // auto-mode API-key auth working. An ABSENT marker means provenance is unknowable
-  // (a direct `bun src/cli/index.ts` run, a test, or an older launcher), and then we
-  // change nothing rather than guess — an EMPTY marker is different: the launcher ran
-  // and saw no pre-existing slots.
-  const preBunSlots = base.OCX_PRE_BUN_ANTHROPIC_ENV;
-  if (preBunSlots !== undefined) {
-    const exported = new Set(preBunSlots.split(",").filter(name => name.length > 0));
-    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as const) {
-      const value = env[name];
-      if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
-    }
+  if (env.ANTHROPIC_AUTH_TOKEN?.trim() === PROXY_MARKER) delete env.ANTHROPIC_AUTH_TOKEN;
+  // Step 1b — drop Anthropic credentials AND destinations that Bun may have synthesized
+  // from a project `.env`/`.env.local`. The plain-Node launcher records genuine parent
+  // exports before Bun starts and pairs that context with an argv proof, so with a
+  // trusted context we know exactly which slots the user really exported.
+  //
+  // Without a trusted context all three slots are treated as project-controlled. An
+  // earlier revision of this branch preserved credentials here, reasoning that the
+  // destination is pinned below so a dotenv key would only ever reach the local proxy.
+  // That reasoning is wrong, and review caught it: `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`
+  // is only set when we own an auth token (see below, and #253 for why asserting it
+  // otherwise logs a subscriber out), so on a subscription launch Claude Code's
+  // settings.env merge can still replace `ANTHROPIC_BASE_URL` after we return. A
+  // preserved key then travels to that host. The repository documents that residual for
+  // subscription mode; it must not be widened into a credential leak.
+  //
+  // Direct `bun src/cli/index.ts` therefore loses ambient Anthropic values. That is a
+  // real cost to a documented entry point, and the escape hatch is the launcher: run
+  // through `ocx` (the published bin) and genuine shell exports are preserved by proof.
+  const explicitSlots = deps.preBunAnthropicSlots;
+  const trustedSlots = explicitSlots === undefined
+    ? trustedNodeLauncherContext()?.anthropicEnvSlots ?? []
+    : explicitSlots ?? [];
+  const exported = new Set<AnthropicParentEnvSlot>(trustedSlots);
+  for (const name of ANTHROPIC_PARENT_ENV_SLOTS) {
+    const value = env[name];
+    if (value !== undefined && value !== "" && !exported.has(name)) delete env[name];
   }
-  // Never forward the seam itself to Claude Code.
+  // Never forward old or current provenance seams to Claude Code.
   delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
+  delete env.OCX_NODE_LAUNCH_CONTEXT;
   const setDefault = (name: string, value: string | undefined) => {
     if (value === undefined || value.length === 0) return;
     if (env[name] !== undefined && env[name] !== "") return; // user wins
@@ -79,10 +119,12 @@ export function buildClaudeEnv(
   if (existingBaseUrl) {
     try {
       const parsed = new URL(existingBaseUrl);
-      const isLoopback = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-      if (isLoopback && parsed.port !== "" && Number(parsed.port) !== port) {
+      const effectivePort = parsed.port === "" ? 80 : Number(parsed.port);
+      if (parsed.protocol === "http:"
+        && isClaudeLoopbackHostname(parsed.hostname)
+        && effectivePort !== port) {
         const replacement = `http://127.0.0.1:${port}`;
-        console.error(`⚠ Replacing stale opencodex ANTHROPIC_BASE_URL ${existingBaseUrl} with ${replacement}.`);
+        console.error(`⚠ Replacing stale opencodex ANTHROPIC_BASE_URL ${parsed.origin} with ${replacement}.`);
         env.ANTHROPIC_BASE_URL = replacement;
       }
     } catch {
@@ -94,8 +136,26 @@ export function buildClaudeEnv(
   // the user's Claude login. Only inject a token when the proxy actually requires an
   // admission key; otherwise Claude Code keeps its own OAuth and sends it to us —
   // native claude models then pass through verbatim (see server/claude-messages.ts).
-  if ((config.apiKeys?.length ?? 0) > 0) {
-    setDefault("ANTHROPIC_AUTH_TOKEN", config.apiKeys![0].key);
+  const ownTokens = ownAdmissionTokens(config);
+  const targetsLocalProxy = targetsLocalClaudeProxy(env.ANTHROPIC_BASE_URL, port);
+  const inheritedApiKey = env.ANTHROPIC_API_KEY;
+  if (typeof inheritedApiKey === "string" && isProxyAdmissionSecret(inheritedApiKey, config)) {
+    delete env.ANTHROPIC_API_KEY;
+  }
+  const hasUserApiKey = Boolean(env.ANTHROPIC_API_KEY?.trim());
+  const inheritedAuthToken = env.ANTHROPIC_AUTH_TOKEN;
+  const inheritedTokenIsOurs = typeof inheritedAuthToken === "string"
+    && isProxyAdmissionSecret(inheritedAuthToken, config);
+  // system-env may have injected the proxy's admission key into the parent. A
+  // proof-bound external BASE_URL is still user-owned, so never let our inherited
+  // key follow it. A user API key also wins on a local launch; remove only the token
+  // values recognized by the shared proxy-admission contract and preserve every
+  // other token.
+  if (inheritedTokenIsOurs && (!targetsLocalProxy || hasUserApiKey)) {
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
+  if (targetsLocalProxy && !hasUserApiKey && ownTokens.length > 0) {
+    setDefault("ANTHROPIC_AUTH_TOKEN", ownTokens[0]);
   }
   // Detection reads the SANITIZED launch env — the exact object spawned below — so the
   // resolver and the spawned process cannot disagree. It deliberately does NOT read the
@@ -110,11 +170,19 @@ export function buildClaudeEnv(
     ...defaultAuthDetectDeps(env as NodeJS.ProcessEnv),
     ...(deps.authDetect ?? {}),
     env: () => env as NodeJS.ProcessEnv,
-    ownTokens: ownAdmissionTokens(config),
+    ownTokens,
   }));
-  if (!env.ANTHROPIC_AUTH_TOKEN && resolved.markerMode === "proxy") {
+  if (!env.ANTHROPIC_AUTH_TOKEN && !hasUserApiKey && targetsLocalProxy && resolved.markerMode === "proxy") {
     env.ANTHROPIC_AUTH_TOKEN = PROXY_MARKER;
   }
+  const finalAuthToken = env.ANTHROPIC_AUTH_TOKEN;
+  const hostOwnsAuthentication = targetsLocalProxy
+    && !hasUserApiKey
+    && typeof finalAuthToken === "string"
+    && (
+      finalAuthToken.trim() === PROXY_MARKER
+      || isProxyAdmissionSecret(finalAuthToken, config)
+    );
   if (resolved.origin === "auto-unknown") {
     console.error("⚠ Claude 인증을 확인하지 못했습니다 — 구독 방식으로 진행합니다. GUI에서 인증 모드를 직접 지정하면 이 판단을 덮어쓸 수 있습니다.");
   }
@@ -136,7 +204,7 @@ export function buildClaudeEnv(
   // Claude Code 2.1.206+ also treats this as a host-auth assertion. Injecting it
   // without a host token makes a valid claude.ai subscription look logged out,
   // so the guard is only safe when opencodex actually owns authentication.
-  if (env.ANTHROPIC_AUTH_TOKEN) {
+  if (hostOwnsAuthentication) {
     setDefault("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
   }
   // Opt-in effort forcing (devlog 136 B6): opus-shaped aliases already carry
@@ -205,7 +273,7 @@ async function ensureProxyForClaude(): Promise<number | null> {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
-    env: { ...process.env, OCX_SERVICE: "1" },
+    env: withProcessRuntimeProvenance({ ...process.env, OCX_SERVICE: "1" }),
   });
   child.unref();
   const deadline = Date.now() + 8_000;

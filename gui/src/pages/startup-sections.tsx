@@ -225,6 +225,14 @@ export function StartupRecoverySection({
 }) {
   const { t } = useI18n();
 
+  // An already-registered service is refreshed in place. `install` re-registers, which
+  // needs elevation on Windows and can switch a WinSW backend to Task Scheduler, so
+  // handing that command to someone who already has a service costs them a UAC prompt
+  // they do not need. A conflict still needs uninstall-then-install.
+  const serviceCommand = data.serviceInstalled && !data.serviceConflict
+    ? data.commands.repairService
+    : data.commands.installService;
+
   return (
     <section className="panel startup-actions">
       <div className="panel-head">
@@ -237,10 +245,10 @@ export function StartupRecoverySection({
           <div className="startup-command-row">
             <div>
               <strong>{t("startup.command.service")}</strong>
-              <code>{data.commands.installService}</code>
+              <code>{serviceCommand}</code>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(data.commands.installService)}>
-              {copied === data.commands.installService ? t("startup.copied") : t("startup.copy")}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCopy(serviceCommand)}>
+              {copied === serviceCommand ? t("startup.copied") : t("startup.copy")}
             </button>
           </div>
         )}

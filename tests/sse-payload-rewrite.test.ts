@@ -6,6 +6,7 @@ import { createImageGenCallRestoreRewrite } from "../src/server/responses-image-
 import { createResponsesItemIdPayloadRewrite } from "../src/server/responses-item-id-repair";
 import {
   composeSsePayloadRewrites,
+  relaySseWithBlockRewrite,
   relaySseWithPayloadRewrite,
 } from "../src/server/sse-payload-rewrite";
 import { createTestTranslatorBudget } from "./helpers/translator-budget";
@@ -22,6 +23,21 @@ function streamFromText(text: string): ReadableStream<Uint8Array> {
       }
       sent = true;
       controller.enqueue(chunk);
+    },
+  });
+}
+
+function streamFromTexts(texts: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      const text = texts[index++];
+      if (text === undefined) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(text));
     },
   });
 }
@@ -101,6 +117,24 @@ describe("SSE payload rewrite composition", () => {
 
   test("compose with no rewrites is identity", () => {
     expect(composeSsePayloadRewrites()('{"a":1}')).toBe('{"a":1}');
+  });
+
+  test("keeps pulling after a partial or intentionally dropped block", async () => {
+    const budget = createTestTranslatorBudget();
+    const upstream = streamFromTexts([
+      'event: drop\ndata: {"type":"drop"',
+      '}\n\nevent: keep\ndata: {"type":"keep","delta":"ok"}\n\n',
+    ]);
+    const rewritten = relaySseWithBlockRewrite(
+      upstream,
+      (block) => block.includes('"type":"drop"') ? [] : [block],
+      budget,
+    );
+
+    expect(await readAll(rewritten)).toBe(
+      'event: keep\ndata: {"type":"keep","delta":"ok"}\n\n',
+    );
+    expect(budget.snapshot().currentBytes).toBe(0);
   });
 
   test("unterminated rewrite accumulation closes through a typed failed tail", async () => {

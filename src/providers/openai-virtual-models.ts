@@ -62,6 +62,7 @@ export function applyOpenAiVirtualModel(
   logCtx.resolvedModel = resolution.wireModelId;
   route.modelId = resolution.wireModelId;
   parsed.modelId = resolution.wireModelId;
+  parsed._openAiVirtualSelectedModelId = resolution.selectedModelId;
 
   if (parsed._rawBody && typeof parsed._rawBody === "object" && !Array.isArray(parsed._rawBody)) {
     const raw = parsed._rawBody as Record<string, unknown>;

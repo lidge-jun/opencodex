@@ -1,12 +1,13 @@
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
-import { modelInList } from "../types";
+import { modelInList, toolChoiceToolPredicate } from "../types";
 import type { SidecarSettings } from "./executor";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { getAccountSet } from "../oauth/store";
 import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
+import { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 
 export { runWithWebSearch } from "./loop";
-export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
+export { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME };
 export { runAnthropicWebSearch, parseAnthropicSidecarSSE } from "./anthropic-executor";
 
 const DEFAULT_SIDECAR_MODEL = "gpt-5.6-luna";
@@ -146,6 +147,7 @@ export function planWebSearch(
   openAiSidecar?: ResolvedOpenAiForwardSidecar,
 ): SidecarPlan | undefined {
   if (!parsed._webSearch || isPassthrough) return undefined;
+  if (!toolChoiceToolPredicate(parsed.options.toolChoice)(buildWebSearchTool())) return undefined;
   const cfg = config.webSearchSidecar ?? {};
   if (cfg.enabled === false) return undefined;
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path, { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
@@ -252,9 +252,23 @@ export function discoverProjectCodexConfigPaths(options: {
 } = {}): string[] {
   const found = new Set<string>();
   const codexConfigPath = options.codexConfigPath ?? resolveCodexConfigPath();
+  // A parent walk can reach the user's home and rediscover this global file as
+  // `$HOME/.codex/config.toml`; compare real paths so symlink aliases are excluded too.
+  const normalizeExistingPath = (candidate: string): string | null => {
+    if (!existsSync(candidate)) return null;
+    let canonical: string;
+    try {
+      canonical = realpathSync.native(candidate);
+    } catch {
+      canonical = resolve(candidate);
+    }
+    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  };
+  const globalConfigIdentity = normalizeExistingPath(codexConfigPath);
   const addIfExists = (projectRoot: string) => {
-    const path = join(resolve(projectRoot), ".codex", "config.toml");
-    if (existsSync(path)) found.add(path);
+    const candidate = join(resolve(projectRoot), ".codex", "config.toml");
+    const candidateIdentity = normalizeExistingPath(candidate);
+    if (candidateIdentity && candidateIdentity !== globalConfigIdentity) found.add(candidate);
   };
 
   let cwd = resolve(options.cwd ?? process.cwd());
@@ -339,7 +353,7 @@ export function summarizeProjectCodexIssue(warning: ProjectCodexConfigWarning): 
 
 function humanizeProviderDetail(detail: string): string {
   if (detail === "opencode_go") return "OpenCode Go";
-  if (detail.startsWith("opencode")) return "OpenCode";
+  if (/^opencode(?:$|[-_.:/])/.test(detail)) return "OpenCode";
   if (detail === "opencodex") return "OpenCodex";
   return detail;
 }

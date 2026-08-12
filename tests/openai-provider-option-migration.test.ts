@@ -4,7 +4,7 @@ import {
   OpenAiTierMigrationCollisionError,
   projectOpenAiTierMigration,
 } from "../src/providers/openai-tiers";
-import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../src/types";
 
 const forward: OcxProviderConfig = {
   adapter: "openai-responses",
@@ -36,6 +36,9 @@ describe("OpenAI provider option migration matrix", () => {
     const result = projectOpenAiTierMigration(input);
     expectCanonical(result, "pool");
     expect(Object.keys(result.config.providers)).toEqual(["openai"]);
+    // No overlays on either legacy row: the merge must not attach a spurious
+    // empty modelCosts: {} to the canonical row.
+    expect(result.config.providers.openai).not.toHaveProperty("modelCosts");
     expect(result.changed).toBe(true);
     expect(input).toEqual(before);
   });
@@ -167,6 +170,154 @@ describe("OpenAI provider option migration matrix", () => {
       },
     }));
     expect(result.config.providers.openai.selectedModels).toEqual(["gpt-a", "gpt-b", "gpt-c"]);
+  });
+
+  test("carries modelCosts from openai and openai-multi into the merged row", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = { "gpt-4.1": { input: 3, output: 4, cacheRead: 0.2, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    // Disjoint overlays from both legacy rows survive the merge.
+    expect(result.config.providers.openai.modelCosts).toEqual({ ...multiCosts, ...costs });
+  });
+
+  test("canonical openai modelCosts wins on key conflicts over the legacy multi map", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = { "gpt-5.6": { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(costs);
+  });
+
+  test("modelCosts-bearing canonical Multi is a managed overlay, not a collision", () => {
+    const multiCosts = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(multiCosts);
+  });
+
+  test("rewrites legacy openai-multi/ modelCosts keys into the merged row", () => {
+    const multiCosts = {
+      "openai-multi/gpt-5.6-sol": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+    };
+    const costs = { "gpt-4.1": { input: 3, output: 4, cacheRead: 0.2, cacheWrite: 0 } };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    // The prefixed legacy key resolves to the bare model id after canonicalization.
+    expect(result.config.providers.openai.modelCosts).toEqual({
+      ...{ "gpt-5.6-sol": multiCosts["openai-multi/gpt-5.6-sol"] },
+      ...costs,
+    });
+  });
+
+  test("canonical openai modelCosts still wins after legacy key rewrite collision", () => {
+    const costs = { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    const multiCosts = {
+      "openai-multi/gpt-5.6": { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 },
+    };
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        openai: { ...forward, modelCosts: costs },
+        "openai-multi": { ...forward, modelCosts: multiCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual(costs);
+  });
+
+  test.each([
+    ["bare first", { "gpt-5.6": 1, "openai-multi/gpt-5.6": 9 }],
+    ["prefixed first", { "openai-multi/gpt-5.6": 9, "gpt-5.6": 1 }],
+  ] as const)("bare modelCosts key wins inside one legacy row regardless of property order (%s)", (_label, raw) => {
+    const bare = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 };
+    const prefixed = { input: 9, output: 9, cacheRead: 0.9, cacheWrite: 0.9 };
+    const modelCosts = Object.fromEntries(
+      Object.entries(raw).map(([key, marker]) => [key, marker === 1 ? bare : prefixed]),
+    ) as Record<string, typeof bare>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts },
+      },
+    }));
+    expect(result.config.providers.openai.modelCosts).toEqual({ "gpt-5.6": bare });
+  });
+
+  test("prototype-named modelCosts keys survive migration as own properties", () => {
+    // JSON.parse creates an own "__proto__" data property (an object literal
+    // would route through the inherited setter and not create one).
+    const overlay = JSON.parse(
+      '{"__proto__": {"input": 1, "output": 2, "cacheRead": 0.1, "cacheWrite": 0}}',
+    ) as Record<string, ProviderCostOverlay>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: overlay },
+      },
+    }));
+    const merged = result.config.providers.openai.modelCosts!;
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(merged, "__proto__")?.value).toEqual(overlay["__proto__"]);
+  });
+
+  test("openai-multi/__proto__ key rewrites to an own __proto__ entry", () => {
+    const overlay = JSON.parse(
+      '{"openai-multi/__proto__": {"input": 3, "output": 4, "cacheRead": 0.2, "cacheWrite": 0}}',
+    ) as Record<string, ProviderCostOverlay>;
+    const result = projectOpenAiTierMigration(cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": { ...forward, modelCosts: overlay },
+      },
+    }));
+    const merged = result.config.providers.openai.modelCosts!;
+    expect(Object.hasOwn(merged, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(merged, "__proto__")?.value).toEqual(overlay["openai-multi/__proto__"]);
+  });
+
+  test("legacy multi with an out-of-bound overlay rate collides", () => {
+    const input = cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": {
+          ...forward,
+          modelCosts: { "gpt-5.6": { input: 1e308, output: 1, cacheRead: 0.1, cacheWrite: 0 } },
+        },
+      },
+    });
+    expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
+  });
+
+  test("legacy multi with an extra field in a modelCosts row collides", () => {
+    const input = cfg({
+      openaiProviderTierVersion: 1,
+      providers: {
+        "openai-multi": {
+          ...forward,
+          modelCosts: { "gpt-5.6": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0, apiKey: "sk-extra" } },
+        },
+      },
+    });
+    expect(() => projectOpenAiTierMigration(input)).toThrow(OpenAiTierMigrationCollisionError);
   });
 
   test("merges provider context caps to the lower positive cap with path-only warning", () => {

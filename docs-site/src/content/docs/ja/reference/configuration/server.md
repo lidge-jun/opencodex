@@ -16,14 +16,14 @@ description: リスナー、リモート アクセス、アドミッション �
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
 | `websockets?` | `boolean` | `false` |応答 WebSocket パスとして `supports_websockets` をアドバタイズします。 False は HTTP/SSE を維持します。 |
-| `corsAllowOrigins?` | `string[]` | `[]` |追加の正確な CORS 起点。ループバック起点は常に許可されます。 |
+| `corsAllowOrigins?` | `string[]` | `[]` | 追加の正確な CORS origin。ループバック origin は常に許可します。`chrome-extension://<extension-id>` など authority ベースのブラウザー拡張 origin に対応し、`*` はワイルドカードではありません。Firefox と Safari は拡張 UUID を（インストール/ブラウザー起動ごとに）再生成するため、origin が変わったらエントリを更新してください。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` |生成された `ocx_…` 資格情報は、非ループバック バインドでの管理およびデータ プレーン認証によって受け入れられました。ダッシュボードで管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` |排除可能なアプリ所有のログ、キャッシュ、BLOB、および継続ペイロードの MiB の上限。範囲は 64 ～ 4096。 RSSキャップではありません。 |
 | `codexAutoStart?` | `boolean` | `true` | Codex を起動する前に、Codex シムで `ocx ensure` を実行させます。 False を指定すると、操作が行われないことが保証されます。 |
 | `codexShimAutoRestore?` | `boolean` | `true` |完了した外部 Codex アップデートによってインストールされたシムが置き換えられた後、インストールされているシムを復元します。環境オプトアウト: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | Codex App 履歴の互換性を元に戻すことができます。元のメタデータは `ocx stop` / `ocx restore` によってバックアップおよび復元されます。 |
-| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` |オフ |認識された Codex ヘルパー/シャドウ呼び出しを、少ない労力で選択したモデルにリダイレクトします。デフォルトのソースプレフィックスは `gpt-5.4-mini` および `gpt-5.6-luna` です。 |
+| `shadowCallIntercept?` | `{ enabled?: boolean; model?: string; sourceModels?: string[] }` |オフ |認識された Codex ヘルパー/シャドウ呼び出しを、少ない労力で選択したモデルにリダイレクトします。デフォルトのソースプレフィックスは `gpt-5.6-luna` です。0.144.x 以前のクライアントでは `gpt-5.4-mini` が使われており、`sourceModels` で復元できます。 |
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` |使用可能な場合はオン | Web 検索サイドカー オプション。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` |使用可能な場合はオン |画像説明サイドカー オプション。 |
 | `images?` | `OcxImagesConfig` | OpenAI の自動選択 | Codex `image_gen` のスタンドアロン イメージ リレー オプション。 |
@@ -105,7 +105,7 @@ Codex は、タイトルやコミット メッセージなどのタスクに小�
   "shadowCallIntercept": {
     "enabled": true,
     "model": "gpt-5.5",
-    "sourceModels": ["gpt-5.4-mini", "gpt-5.6-luna"]
+    "sourceModels": ["gpt-5.6-luna"]
   }
 }
 ```
@@ -144,9 +144,10 @@ OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forw
 | `enabled?` | `boolean` |使用可能な場合はオン |マスターイメージと説明のスイッチ。 |
 | `backend?` | `"openai" \| "anthropic"` |自動 | Web 検索と同じ、明示的優先、人間認証情報を意識した選択。 |
 | `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.4-mini`、Anthropic の場合は `claude-sonnet-5`。 |
+| `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses の推論負荷。Anthropic は無視します。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` |新しい説明のキャッシュミスはメインターンごとに許可されます。 `0` は通話を無効にします。無効な値にはデフォルトが使用されます。 |
 | `timeoutMs?` | `number` | `45000` |サイドカーのフェッチタイムアウト。 |
 
-Vision は、プロバイダーの `noVisionModels` のモデルに送信された画像に対してのみアクティブになります。 OpenAI には、検索と同じログイン/転送要件があります。明示的に選択された Anthropic は、使用可能な認証情報がないと失敗します。成功した `data:` 記述では、バックエンド、モデル、詳細、画像バイト、および正規化されたメッセージ コンテキストをキーとした境界付きキャッシュが使用されます。ヒットと同じターンの重複は制限を消費しません。リモート `https:` イメージと失敗した説明、または空の説明はキャッシュされません。
+対応するレベルは、上流プロバイダーの能力と選択したモデルが公表する推論ラダーによって制限されます。 Vision は、プロバイダーの `noVisionModels` のモデルに送信された画像に対してのみアクティブになります。 OpenAI には、検索と同じログイン/転送要件があります。明示的に選択された Anthropic は、使用可能な認証情報がないと失敗します。成功した `data:` 記述では、バックエンド、モデル、詳細、画像バイト、および正規化されたメッセージ コンテキストをキーとした境界付きキャッシュが使用されます。OpenAI のキーには推論負荷も含まれます（Anthropic のキーには含まれません）。ヒットと同じターンの重複は制限を消費しません。リモート `https:` イメージと失敗した説明、または空の説明はキャッシュされません。
 
 Anthropic OAuth サイドカーは、opencodex の既存のクロード コード OAuth フィンガープリントを再利用します。対象のアカウントとワークロードをソークテストします。

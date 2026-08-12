@@ -3,7 +3,8 @@ import { kiroTruncationReason } from "./kiro-truncation";
 
 export type ParsedKiroEvent =
   | { type: "content"; data?: string; modelId?: string }
-  | { type: "reasoning"; data?: string }
+  | { type: "reasoning"; data?: string; redactedContent?: string }
+  | { type: "context_usage"; contextUsagePercentage: number }
   | { type: "tool"; name?: string; toolUseId?: string; input?: string; stop?: boolean }
   | { type: "truncation"; data: string }
   | { type: "metadata"; usage?: OcxUsage; contextUsagePercentage?: number; stopReason?: string }
@@ -17,6 +18,10 @@ const KNOWN_EVENT_TYPES = new Set([
   "toolUseEvent",
   "messageMetadataEvent",
   "metadataEvent",
+  // Authoritative context pressure. Every capture (kiro-cli 2.14.1 and 2.16.0) put the percentage
+  // HERE and left `metadataEvent` carrying only `stopReason`; metadataEvent's own
+  // contextUsagePercentage stays supported as a fallback rather than being dropped.
+  "contextUsageEvent",
   "invalidStateEvent",
   "error",
 ]);
@@ -114,10 +119,16 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
           : {}),
       };
     case "reasoningContentEvent":
+      // `text` is plaintext reasoning; `redactedContent` is the encrypted blob the GPT-5.6 family
+      // (sol/terra/luna) actually returns — they never send `text`. Keyed off the wire field, not
+      // the model id. Both may be absent on a bare event.
       return {
         type: "reasoning",
         ...(optionalString(eventType, parsed, "text") !== undefined
           ? { data: optionalString(eventType, parsed, "text") }
+          : {}),
+        ...(optionalString(eventType, parsed, "redactedContent") !== undefined
+          ? { redactedContent: optionalString(eventType, parsed, "redactedContent") }
           : {}),
       };
     case "toolUseEvent":
@@ -160,6 +171,13 @@ export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKi
         ...(typeof contextUsagePercentage === "number" ? { contextUsagePercentage } : {}),
         ...(stopReason !== undefined ? { stopReason } : {}),
       };
+    }
+    case "contextUsageEvent": {
+      const contextUsagePercentage = parsed.contextUsagePercentage;
+      if (typeof contextUsagePercentage !== "number" || !Number.isFinite(contextUsagePercentage)) {
+        return malformed(eventType, "contextUsagePercentage must be a finite number");
+      }
+      return { type: "context_usage", contextUsagePercentage };
     }
     case "invalidStateEvent":
       return { type: "invalid_state", message: optionalString(eventType, parsed, "message") };

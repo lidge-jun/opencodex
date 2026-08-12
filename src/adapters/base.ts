@@ -49,11 +49,22 @@ export interface AdapterRequest {
     /** Releases observation of a serialized request body after its final fetch attempt settles. */
     releaseBodyObservation?: () => void;
     /** Exact reasoning parameter emitted by the adapter, for request-log diagnostics only. */
-    reasoningLog?: {
-      effectiveEffort: string;
-      wireField: "reasoning_effort" | "thinking_budget" | "thinking.type";
-      wireValue: string | number;
-    };
+    reasoningLog?:
+      | {
+          effectiveEffort: string;
+          wireField: "reasoning.enabled";
+          wireValue: boolean;
+        }
+      | {
+          effectiveEffort: string;
+          wireField: "thinking_budget";
+          wireValue: number;
+        }
+      | {
+          effectiveEffort: string;
+          wireField: "reasoning_effort" | "reasoning.effort" | "thinking.type";
+          wireValue: string;
+        };
     usageLog?: {
       inputTokens?: number;
       estimated?: boolean;

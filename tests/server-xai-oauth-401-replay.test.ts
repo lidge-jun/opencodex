@@ -128,7 +128,7 @@ describe("xAI OAuth upstream 401 replay", () => {
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -145,7 +145,7 @@ describe("xAI OAuth upstream 401 replay", () => {
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -176,7 +176,7 @@ describe("xAI OAuth upstream 401 replay", () => {
       expect(chatCalls).toBe(1);
       expect(refreshCalls).toBe(0);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -237,7 +237,7 @@ describe("xAI OAuth upstream 401 replay", () => {
       expect(attemptsByBearer.get("Bearer rejected-access")).toBe(2);
       expect(attemptsByBearer.get("Bearer fresh-access")).toBe(2);
     } finally {
-      server.stop(true);
+      await server.stop(true);
     }
   });
 });

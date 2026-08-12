@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
+import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
 import { hashLogConversationQuery, matchesLogConversationId } from "../log-conversation-id";
 import { statusCodeInfo } from "../status-codes";
@@ -17,6 +18,10 @@ import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydo
 import { speedLabel } from "./logs-speed-label";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
+import {
+  sanitizeLogEntryRouteDecision,
+  validCachedRouteDecision,
+} from "./log-route-decision";
 
 function logsCacheKey(apiBase: string): string {
   return `ocx.logs.list.v1:${apiBase}`;
@@ -42,7 +47,11 @@ type MetricUnavailableReason =
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable";
 
-type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay";
 
 type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
@@ -52,7 +61,7 @@ interface MatchedPriceInfo {
   provider: string;
   modelId: string;
   jawcodeProvider?: string;
-  source: "jawcode" | "expected";
+  source: "jawcode" | "expected" | "user";
   sourceRef?: string;
   verifiedAt?: string;
   status: "verified" | "verified-derived";
@@ -76,11 +85,17 @@ interface LogDisplayMetrics {
   cost: CostResult;
 }
 
+/**
+ * Recovery kinds recorded on a log attempt; rendered as localized labels in the logs
+ * detail dialog instead of raw wire values.
+ */
 type AttemptRecoveryKind =
   | "transient-5xx"
   | "connection-reset"
   | "oauth-401"
   | "key-429"
+  | "rate-limit-429"
+  | "anthropic-oauth-429"
   | "image-413";
 
 interface LogAttempt {
@@ -101,7 +116,7 @@ interface LogAttempt {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   displayMetrics?: LogDisplayMetrics;
 }
 
@@ -115,7 +130,7 @@ export interface LogEntry {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -133,9 +148,15 @@ export interface LogEntry {
   firstOutputMs?: number;
   attempts?: LogAttempt[];
   displayMetrics?: LogDisplayMetrics;
+  /** Bounded route-decision trace (RI-01); absent for pre-trace rows. */
+  routeDecision?: {
+    routeKind?: string;
+    profile?: { id?: string; revision?: string };
+    selected?: { provider?: string; model?: string; reason?: string };
+    candidates?: Array<{ provider?: string; model?: string; eligible?: boolean; exclusions?: Array<{ code?: string }> }>;
+  };
 }
 
-/** Session-cache entries are arbitrary JSON — reject shapes that would crash the table. */
 function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
   if (!Array.isArray(cached)) return null;
   for (const entry of cached) {
@@ -147,6 +168,7 @@ function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
       || typeof entry.provider !== "string"
       || typeof entry.status !== "number"
       || typeof entry.durationMs !== "number"
+      || !validCachedRouteDecision(entry.routeDecision)
     ) {
       return null;
     }
@@ -221,7 +243,7 @@ interface ReasoningLogFields {
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
 }
 
 function effortLabel(log: ReasoningLogFields): string {
@@ -284,14 +306,40 @@ const ESTIMATE_REASON_KEYS = {
   usage_estimated: "logs.detail.estimate.usage_estimated",
   cache_detail_missing: "logs.detail.estimate.cache_detail_missing",
   expected_price_overlay: "logs.detail.estimate.expected_price_overlay",
+  provider_cost_overlay: "logs.detail.estimate.provider_cost_overlay",
 } as const satisfies Record<CostEstimateReason, string>;
 
+/**
+ * i18n keys for every {@link AttemptRecoveryKind}, so the logs detail dialog renders a
+ * localized label instead of the raw wire value (e.g. `rate-limit-429`).
+ */
+const RECOVERY_KIND_KEYS = {
+  "transient-5xx": "logs.detail.attempt.recovery.transient5xx",
+  "connection-reset": "logs.detail.attempt.recovery.connectionReset",
+  "oauth-401": "logs.detail.attempt.recovery.oauth401",
+  "key-429": "logs.detail.attempt.recovery.key429",
+  "rate-limit-429": "logs.detail.attempt.recovery.rateLimit429",
+  "anthropic-oauth-429": "logs.detail.attempt.recovery.anthropicOauth429",
+  "image-413": "logs.detail.attempt.recovery.image413",
+} as const satisfies Record<AttemptRecoveryKind, string>;
+
+/** Map a metric-unavailable reason to its i18n key. */
 function metricReasonKey(reason: MetricUnavailableReason) {
   return METRIC_REASON_KEYS[reason];
 }
 
+/** Map a cost-estimate reason to its i18n key. */
 function estimateReasonKey(reason: CostEstimateReason) {
   return ESTIMATE_REASON_KEYS[reason];
+}
+
+/**
+ * Map one attempt recovery kind to its i18n key for the logs detail dialog.
+ */
+function recoveryKindKey(kind: AttemptRecoveryKind) {
+  // A stale/malformed cached row can carry a kind outside the known set; fall back to a
+  // localized label instead of handing `t()` an undefined key.
+  return RECOVERY_KIND_KEYS[kind] ?? "logs.detail.attempt.recovery.unknown";
 }
 
 function verificationKey(status: MatchedPriceInfo["status"]): "logs.detail.verification.verified" | "logs.detail.verification.derived" {
@@ -428,7 +476,8 @@ export default function Logs({ apiBase }: { apiBase: string }) {
     const res = await fetch(`${apiBase}/api/logs?limit=2000`, { signal });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`.trim());
     const body = await res.json() as LogEntry[] | { logs?: LogEntry[] };
-    const next = Array.isArray(body) ? body : (body.logs ?? []);
+    const raw = Array.isArray(body) ? body : (body.logs ?? []);
+    const next = raw.map(sanitizeLogEntryRouteDecision);
     writeSessionListCache(resourceKey, next);
     return next;
   }, [apiBase, resourceKey]);
@@ -745,7 +794,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       {reasoningWire && <span className="muted text-caption leading-tight">{reasoningWire}</span>}
                     </span>
                   </td>
-                  <td className="muted">{log.provider}</td>
+                  <td className="muted">{formatProviderDisplayName(log.provider, t)}</td>
                   <td>
                     <span className="log-status-cell">
                       <span className="mono font-semibold" style={{ color: statusColor(log.status) }}>{log.status}</span>
@@ -842,7 +891,8 @@ function LogDetailDialog({
       aria-labelledby="log-detail-title"
       onCancel={e => { e.preventDefault(); onClose(); }}
     >
-      <div className="modal-card log-detail-card">
+      <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onClose} />
+      <div className="modal-card log-detail-card" onClick={event => event.stopPropagation()} role="document">
         <div className="modal-head">
           <h3 id="log-detail-title">
             <span className="mono" style={{ color: statusColor(detail.status) }}>{detail.status}</span>
@@ -883,13 +933,52 @@ function LogDetailDialog({
               </>
             )}
             <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
-            <span className="muted">{t("logs.col.provider")}</span><span>{detail.provider}</span>
+            <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
             {(detail.requestedEffort || detail.effectiveEffort) && (
               <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
             )}
             {detail.errorCode && (<><span className="muted">{t("logs.col.error")}</span><span className="mono">{detail.errorCode}</span></>)}
             {detail.upstreamError && (<><span className="muted">{t("logs.col.upstreamReason")}</span><span className="mono log-detail-break">{detail.upstreamError}</span></>)}
           </div>
+        </section>
+
+        <section className="log-detail-section" aria-labelledby="log-detail-route">
+          <h4 id="log-detail-route" className="log-detail-section-title">{t("logs.detail.route.section")}</h4>
+          {detail.routeDecision ? (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.route.kind")}</span><span className="mono">{detail.routeDecision.routeKind ?? "–"}</span>
+              {detail.routeDecision.profile?.id && (
+                <><span className="muted">{t("logs.detail.route.profile")}</span>
+                  <span className="mono">{detail.routeDecision.profile.id} ({detail.routeDecision.profile.revision})</span></>
+              )}
+              {detail.routeDecision.selected?.provider && (
+                <><span className="muted">{t("logs.detail.route.selected")}</span>
+                  <span className="mono">
+                    {detail.routeDecision.selected.provider}/{detail.routeDecision.selected.model}
+                    {detail.routeDecision.selected.reason ? ` — ${detail.routeDecision.selected.reason}` : ""}
+                  </span></>
+              )}
+              <span className="muted">{t("logs.detail.route.candidates")}</span>
+              <span className="mono">
+                {(detail.routeDecision.candidates ?? []).map(candidate => {
+                  const provider = typeof candidate.provider === "string" && candidate.provider.length > 0
+                    ? candidate.provider
+                    : "–";
+                  const model = typeof candidate.model === "string" && candidate.model.length > 0
+                    ? candidate.model
+                    : "–";
+                  const mark = candidate.eligible === true
+                    ? " ✓"
+                    : candidate.eligible === false
+                      ? " ✗"
+                      : " ?";
+                  return `${provider}/${model}${mark}`;
+                }).join("  ") || "–"}
+              </span>
+            </div>
+          ) : (
+            <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
+          )}
         </section>
 
         <section className="log-detail-section" aria-labelledby="log-detail-performance">
@@ -960,13 +1049,15 @@ function LogDetailDialog({
                   const attemptReasoningWire = reasoningWireLabel(attempt);
                   const matched = attemptCost?.kind === "value" ? attemptCost.estimate.price : undefined;
                   const reason = attempt.errorCode
-                    ?? (attempt.recoveryKinds.length ? attempt.recoveryKinds.join(", ") : undefined)
+                    ?? (attempt.recoveryKinds.length
+                      ? attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ")
+                      : undefined)
                     ?? (attemptCost?.kind === "unavailable" ? t(metricReasonKey(attemptCost.reason)) : t("logs.detail.attempt.completed"));
                   return (
                     <tr key={`${attempt.ordinal}-${attempt.provider}-${attempt.model}`}>
                       <td className="num mono">{attempt.ordinal}</td>
                       <td>
-                        <span>{attempt.provider}</span><br />
+                        <span>{formatProviderDisplayName(attempt.provider, t)}</span><br />
                         <span className="mono muted log-detail-break">{attempt.model}</span>
                         {(attempt.requestedEffort || attempt.effectiveEffort) && (
                           <>

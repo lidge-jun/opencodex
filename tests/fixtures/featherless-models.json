@@ -1,0 +1,80 @@
+{
+  "data": [
+    {
+      "id": "alpindale/magnum-72b-v1",
+      "object": "model",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 4,
+      "is_gated": false,
+      "available_on_current_plan": true,
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "Qwen/Qwen3-8B",
+      "object": "model",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "concurrency_cost": 1,
+      "is_gated": false,
+      "available_on_current_plan": true,
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "example/sparse-plan-tool-model",
+      "object": "model",
+      "owned_by": "fixture",
+      "context_length": null,
+      "concurrency_cost": null,
+      "is_gated": false,
+      "available_on_current_plan": true,
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "vanta-research/atom-v1-preview-12b",
+      "object": "model",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "is_gated": false,
+      "available_on_current_plan": true,
+      "features": {
+        "image_input": true
+      }
+    },
+    {
+      "id": "huihui-ai/Qwen3-32B-abliterated",
+      "object": "model",
+      "owned_by": "Feather",
+      "context_length": 32768,
+      "is_gated": true,
+      "available_on_current_plan": true,
+      "features": {
+        "tool_use": true
+      }
+    },
+    {
+      "id": "example/plan-unavailable-tool-model",
+      "object": "model",
+      "owned_by": "Feather",
+      "context_length": 16384,
+      "is_gated": false,
+      "available_on_current_plan": false,
+      "features": {
+        "tool_use": true
+      }
+    }
+  ],
+  "pagination": {
+    "current_page": 1,
+    "per_page": 100,
+    "total_items": 683,
+    "total_pages": 7
+  },
+  "total": 683
+}

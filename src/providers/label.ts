@@ -1,6 +1,6 @@
 import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
-function canonicalUsageProviderLabel(provider: string): string {
+export function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
 }
 

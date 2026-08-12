@@ -147,6 +147,28 @@ describe("Cursor OAuth core flow", () => {
     expect(creds.expires).toBe(exp * 1000 - 5 * 60 * 1000);
   });
 
+  test("credentialsFromCursorTokens coerces numeric JWT sub for multiauth", () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const access = jwtWithExp(exp, { sub: 424242 });
+    const creds = credentialsFromCursorTokens(access, "refresh-token");
+    expect(creds.accountId).toBe("424242");
+  });
+
+  test("credentialsFromCursorTokens rejects unsafe numeric JWT sub", () => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const access = jwtWithExp(exp, { sub: Number.MAX_SAFE_INTEGER + 1 });
+    const creds = credentialsFromCursorTokens(access, "refresh-token");
+    expect(creds.accountId).toBeUndefined();
+  });
+
+  test("generateCursorAuthParams keeps the documented PKCE URL even when forceLogin is set", async () => {
+    const p = await generateCursorAuthParams({ forceLogin: true });
+    const url = new URL(p.loginUrl);
+    expect(url.searchParams.get("prompt")).toBeNull();
+    expect(url.searchParams.get("mode")).toBe("login");
+    expect(url.searchParams.get("redirectTarget")).toBe("cli");
+  });
+
   test("refreshCursorToken preserves accountId from the refreshed access token", async () => {
     const exp = Math.floor(Date.now() / 1000) + 3600;
     const access = jwtWithExp(exp, { sub: "google-oauth2|user_02XYZ" });

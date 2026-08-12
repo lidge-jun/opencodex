@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 
 /**
  * Regression: `ocx start` + Ctrl-C must NOT orphan the Bun proxy.
@@ -24,6 +25,14 @@ const runnable = process.platform !== "win32" && nodeAvailable;
 
 const spawned: ChildProcess[] = [];
 const tmpHomes: string[] = [];
+
+function claimTempHome(home: string): { homeDir: string; userProfile: string; serviceManagerEnv: Record<string, string> } {
+  const homeDir = join(home, "user-home");
+  const userProfile = join(home, "user-profile");
+  mkdirSync(homeDir, { recursive: true });
+  mkdirSync(userProfile, { recursive: true });
+  return { homeDir, userProfile, serviceManagerEnv: claimOwnedServiceHome(home, home, homeDir).env };
+}
 
 afterAll(() => {
   for (const c of spawned) {
@@ -74,6 +83,7 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         const home = mkdtempSync(join(tmpdir(), "ocx-shutdown-"));
         tmpHomes.push(home);
         const port = await freePort();
+        const identity = claimTempHome(home);
 
         // Seed a native Codex config so the proxy actually injects on start (injectCodexConfig
         // no-ops when no config.toml exists) — this lets us prove the config is RESTORED.
@@ -82,7 +92,14 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
 
         const child = spawn("node", [BIN_OCX, "start", "--port", String(port)], {
           stdio: "ignore",
-          env: { ...process.env, OPENCODEX_HOME: home, CODEX_HOME: home },
+          env: {
+            ...process.env,
+            HOME: identity.homeDir,
+            USERPROFILE: identity.userProfile,
+            OPENCODEX_HOME: home,
+            CODEX_HOME: home,
+            ...identity.serviceManagerEnv,
+          },
         });
         spawned.push(child);
 

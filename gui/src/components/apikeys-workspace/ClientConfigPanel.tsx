@@ -78,7 +78,7 @@ export default function ClientConfigPanel({
     // Mechanics per ClaudeDesktop.exportProfile: the anchor is an implementation
     // detail of a real <button>, and the filename comes from the envelope so it
     // matches the destination file's own name.
-    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+    const url = URL.createObjectURL(new Blob([json], { type: envelope.mediaType }));
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = envelope.filename;

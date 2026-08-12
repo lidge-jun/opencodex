@@ -53,6 +53,51 @@ const SORT_DEFS: { id: ProviderSortMode; labelKey: "pws.sort.az" | "pws.sort.za"
   { id: "accounts-first", labelKey: "pws.sort.accountsFirst" },
 ];
 
+const QUOTA_REPORT_MAX_AGE_MS = 30 * 60_000;
+
+function freshQuotaReport(value: unknown, now: number): ProviderQuotaReportView | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  if (typeof row.updatedAt !== "number" || !Number.isFinite(row.updatedAt)) return null;
+  if (now - row.updatedAt >= QUOTA_REPORT_MAX_AGE_MS) return null;
+  if (!("quota" in row)) return null;
+  if (row.label !== undefined && typeof row.label !== "string") return null;
+  if (row.source !== undefined && typeof row.source !== "string") return null;
+  return {
+    ...(typeof row.label === "string" ? { label: row.label } : {}),
+    ...(typeof row.source === "string" ? { source: row.source } : {}),
+    updatedAt: row.updatedAt,
+    quota: row.quota,
+    ...(row.aggregation !== undefined ? { aggregation: row.aggregation } : {}),
+  };
+}
+
+function freshQuotaReportRecord(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const out: Record<string, ProviderQuotaReportView> = {};
+  for (const [provider, raw] of Object.entries(value)) {
+    const report = freshQuotaReport(raw, now);
+    if (provider.trim() && report) out[provider] = report;
+  }
+  return out;
+}
+
+function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaReportView> | null {
+  return freshQuotaReportRecord(readSessionListCache<unknown>(key));
+}
+
+function freshQuotaReportsFromResponse(value: unknown, now = Date.now()): Record<string, ProviderQuotaReportView> {
+  if (!Array.isArray(value)) return {};
+  const out: Record<string, ProviderQuotaReportView> = {};
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const provider = (raw as Record<string, unknown>).provider;
+    const report = freshQuotaReport(raw, now);
+    if (typeof provider === "string" && provider.trim() && report) out[provider] = report;
+  }
+  return out;
+}
+
 export default function ProviderWorkspaceShell({
   providers,
   apiBase,
@@ -119,10 +164,13 @@ export default function ProviderWorkspaceShell({
     readSessionListCache<{ models: Record<string, ProviderModelUsageRow[]> }>(usageCacheKey)?.models ?? {}
   ));
   const [quotaReports, setQuotaReports] = useState<Record<string, ProviderQuotaReportView>>(() => (
-    readSessionListCache<Record<string, ProviderQuotaReportView>>(quotasCacheKey) ?? {}
+    readFreshQuotaReportCache(quotasCacheKey) ?? {}
   ));
   const [usageLoading, setUsageLoading] = useState(() => !readSessionListCache(usageCacheKey));
-  const [quotasLoading, setQuotasLoading] = useState(() => !readSessionListCache(quotasCacheKey));
+  const [quotasLoading, setQuotasLoading] = useState(() => {
+    const cached = readFreshQuotaReportCache(quotasCacheKey);
+    return !cached || Object.keys(cached).length === 0;
+  });
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
   const filterWrapRef = useRef<HTMLDivElement>(null);
 
@@ -213,31 +261,29 @@ export default function ProviderWorkspaceShell({
   useEffect(() => {
     let cancelled = false;
     const timeout = window.setTimeout(() => {
-      if (!readSessionListCache(quotasCacheKey)) setQuotasLoading(true);
+      const cached = readFreshQuotaReportCache(quotasCacheKey);
+      if (!cached || Object.keys(cached).length === 0) setQuotasLoading(true);
       // A forced bump means a mutation just changed the answer, so the server's TTL has to
       // be bypassed. The old derived-key effect always read the cached view, which is why a
       // switch could leave the bars showing the previous account's quota.
       void fetch(`${apiBase}/api/provider-quotas${quotaForceRefresh ? "?refresh=1" : ""}`)
-        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown }> }>(r))
+        .then(r => readJsonIfOk<{ reports?: Array<{ provider: string; label?: string; source?: string; updatedAt?: number; quota?: unknown; aggregation?: unknown }> }>(r))
         .then((data) => {
           if (cancelled || !data) return;
-          // Merge so a partial/failed probe cannot wipe a previously good provider row.
+          // A successful endpoint response is authoritative, including an empty report list.
+          const next = freshQuotaReportsFromResponse(data.reports);
+          setQuotaReports(next);
+          writeSessionListCache(quotasCacheKey, next);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // Keep last-good only inside the same server freshness bound.
           setQuotaReports(prev => {
-            const next = { ...prev };
-            for (const report of data.reports ?? []) {
-              if (!report?.provider) continue;
-              next[report.provider] = {
-                label: report.label,
-                source: report.source,
-                updatedAt: typeof report.updatedAt === "number" ? report.updatedAt : Date.now(),
-                quota: report.quota,
-              };
-            }
+            const next = freshQuotaReportRecord(prev) ?? {};
             writeSessionListCache(quotasCacheKey, next);
             return next;
           });
         })
-        .catch(() => { /* keep last-good */ })
         .finally(() => { if (!cancelled) setQuotasLoading(false); });
     }, 0);
     return () => {

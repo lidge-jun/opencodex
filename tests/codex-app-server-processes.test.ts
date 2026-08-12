@@ -11,8 +11,10 @@ import {
   isWindowsCodexCandidateCommandLine,
   listCodexAppServerProcesses,
   listWindowsSnapshots,
+  resetCodexAppServerCatalogStateCache,
   restartCodexAppServers,
   STALE_CODEX_APP_SERVER_HINT,
+  warnIfStaleCodexAppServersAfterStartupWrite,
   WINDOWS_CODEX_BASENAME_CANDIDATE_RE,
 } from "../src/codex/app-server-processes";
 
@@ -338,15 +340,15 @@ describe("Codex app-server process matching (#476)", () => {
 });
 
 describe("CLI /api sync wiring for stale app-servers (#476)", () => {
-  const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+  const dispatchSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
   const configRoutesSource = readFileSync(
     join(import.meta.dir, "..", "src", "server", "management", "config-routes.ts"),
     "utf8",
   );
 
   test("ocx sync only handles app-servers after a catalog/cache write and forwards --restart-codex", () => {
-    const syncCase = cliSource.slice(cliSource.indexOf('case "sync":'), cliSource.indexOf('case "v2":'));
-    expect(syncCase).toContain('args.slice(1).includes("--restart-codex")');
+    const syncCase = dispatchSource.slice(dispatchSource.indexOf("sync: async"), dispatchSource.indexOf("v2: async"));
+    expect(syncCase).toContain('deps.args.slice(1).includes("--restart-codex")');
     expect(syncCase).toContain("synced.catalogWritten || synced.cacheSynced");
     expect(syncCase).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCase).toContain("restart: restartCodex");
@@ -359,16 +361,22 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   });
 
   test("ocx sync-cache only handles app-servers after a successful models_cache write", () => {
-    const syncCacheCase = cliSource.slice(
-      cliSource.indexOf('case "sync-cache":'),
-      cliSource.indexOf('case "gui":'),
+    const syncCacheCase = dispatchSource.slice(
+      dispatchSource.indexOf('"sync-cache": async'),
+      dispatchSource.indexOf("gui: async"),
     );
-    expect(syncCacheCase).toContain("invalidateCodexModelsCache()");
-    expect(syncCacheCase).toContain("if (invalidateCodexModelsCache())");
+    // The cache write now happens under the catalog serialization lock K, so the
+    // gate reads the permitted writer's outcome instead of a bare boolean call.
+    // The property under test is unchanged: app-servers are touched only after a
+    // write actually landed, never on a refused/failed serialization attempt.
+    expect(syncCacheCase).toContain("withCatalogWriteSerialization");
+    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome)");
+    const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
+    expect(syncCacheCase).toContain(gate);
     expect(syncCacheCase).toContain("afterCatalogWriteHandleAppServers");
-    expect(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"))
+    expect(syncCacheCase.indexOf(gate))
       .toBeLessThan(syncCacheCase.indexOf("afterCatalogWriteHandleAppServers"));
-    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf("if (invalidateCodexModelsCache())"));
+    const gatedBlock = syncCacheCase.slice(syncCacheCase.indexOf(gate));
     expect(gatedBlock).toContain("afterCatalogWriteHandleAppServers");
     expect(syncCacheCase.replace(gatedBlock, "")).not.toContain("afterCatalogWriteHandleAppServers");
   });
@@ -421,6 +429,18 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
   });
 });
 
+describe("process utility invocation source guards", () => {
+  const processSource = readFileSync(
+    join(import.meta.dir, "..", "src", "codex", "app-server-processes.ts"),
+    "utf8",
+  );
+
+  test("pins every Darwin ps invocation to the system binary", () => {
+    expect(processSource.match(/execFileSync\(\s*["']\/bin\/ps["']/g) ?? []).toHaveLength(4);
+    expect(processSource).not.toMatch(/execFileSync\(\s*["']ps["']/);
+  });
+});
+
 describe("Windows Win32_Process owner enumeration (#476)", () => {
   const processSource = readFileSync(
     join(import.meta.dir, "..", "src", "codex", "app-server-processes.ts"),
@@ -457,13 +477,26 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
         expect(child.pid).toBeGreaterThan(1);
         // Brief settle so Win32_Process can observe the child. A loaded Windows
         // runner can also exhaust one CIM enumeration deadline, so tolerate one
-        // transient empty result while keeping the production timeout unchanged.
+        // transient empty result OR one thrown deadline (ETIMEDOUT propagates by
+        // design) while keeping the production timeout unchanged.
         Bun.sleepSync(250);
-        let snapshots = listWindowsSnapshots();
+        const enumerate = (): ReturnType<typeof listWindowsSnapshots> | undefined => {
+          try {
+            return listWindowsSnapshots();
+          } catch {
+            return undefined; // transient CIM deadline on a contended runner
+          }
+        };
+        let snapshots = enumerate() ?? [];
         let match = snapshots.find(snapshot => snapshot.pid === child.pid);
         if (!match) {
           Bun.sleepSync(250);
-          snapshots = listWindowsSnapshots();
+          snapshots = enumerate() ?? [];
+          match = snapshots.find(snapshot => snapshot.pid === child.pid);
+        }
+        if (!match) {
+          Bun.sleepSync(1_000);
+          snapshots = enumerate() ?? [];
           match = snapshots.find(snapshot => snapshot.pid === child.pid);
         }
         expect(match).toBeDefined();
@@ -480,4 +513,120 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
     },
     { timeout: 35_000 },
   );
+});
+
+/*
+ * #1046. Service startup rewrites the catalog and the models cache while an
+ * app-server that booted earlier keeps its own in-memory model list, so the
+ * picker shows a roster that no longer exists on disk. The startup path warns;
+ * it must never signal, because a boot is not a user consenting to have an
+ * in-flight turn interrupted.
+ */
+describe("warnIfStaleCodexAppServersAfterStartupWrite (#1046)", () => {
+  const APP_SERVER_CMD = "/usr/local/bin/codex app-server";
+  const collectErrors = () => {
+    const errors: string[] = [];
+    return { log: { error: (m?: unknown) => { errors.push(String(m)); } }, errors };
+  };
+
+  test("warns when an app-server predates the catalog write", () => {
+    const { log, errors } = collectErrors();
+    const result = warnIfStaleCodexAppServersAfterStartupWrite({
+      log,
+      io: {
+        listSnapshots: () => [{ pid: 4242, commandLine: APP_SERVER_CMD }],
+        readStartMs: () => 1_000,
+        catalogMtimeMs: () => 2_000,
+      },
+    });
+    expect(result.warned).toBe(true);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("4242");
+  });
+
+  test("stays quiet for fresh, not_running, and unknown", () => {
+    const fresh = collectErrors();
+    expect(warnIfStaleCodexAppServersAfterStartupWrite({
+      log: fresh.log,
+      io: {
+        listSnapshots: () => [{ pid: 1, commandLine: APP_SERVER_CMD }],
+        readStartMs: () => 3_000,
+        catalogMtimeMs: () => 1_000,
+      },
+    }).warned).toBe(false);
+
+    const none = collectErrors();
+    expect(warnIfStaleCodexAppServersAfterStartupWrite({
+      log: none.log,
+      io: { listSnapshots: () => [], catalogMtimeMs: () => 1_000 },
+    }).warned).toBe(false);
+
+    const unknown = collectErrors();
+    expect(warnIfStaleCodexAppServersAfterStartupWrite({
+      log: unknown.log,
+      io: {
+        listSnapshots: () => [{ pid: 2, commandLine: APP_SERVER_CMD }],
+        readStartMs: () => null,
+        catalogMtimeMs: () => 1_000,
+      },
+    }).warned).toBe(false);
+
+    expect([...fresh.errors, ...none.errors, ...unknown.errors]).toEqual([]);
+  });
+
+  /*
+   * The masking risk this layer has to defend against, stated honestly.
+   *
+   * `collectCodexAppServerCatalogState` memoizes for 5s, but ONLY when every io
+   * field is defaulted (`fullyDefault`). That has two consequences:
+   *
+   * - Production startup runs on the default path, so a `fresh` reading taken
+   *   before the catalog write CAN be replayed after it, and the helper drops the
+   *   memo first for exactly that reason.
+   * - Any test that injects io bypasses the cache, so it cannot reproduce the
+   *   masking and would pass with or without the reset. Writing one anyway would
+   *   be a test that looks like proof and is not.
+   *
+   * So this asserts the mechanism the fix depends on — that a defaulted read is
+   * memoized and an explicit invalidation clears it — rather than pretending to
+   * exercise a path the seam makes unreachable. The helper's own call to the
+   * invalidation is verified by reading it, not by a test that cannot fail.
+   */
+  test("a defaulted read is memoized, and invalidation is what clears it", () => {
+    resetCodexAppServerCatalogStateCache();
+    const first = collectCodexAppServerCatalogState();
+    const second = collectCodexAppServerCatalogState();
+    // Same object identity: the second call served the memo rather than recomputing.
+    expect(second).toBe(first);
+
+    resetCodexAppServerCatalogStateCache();
+    expect(collectCodexAppServerCatalogState()).not.toBe(first);
+  });
+
+  /*
+   * The assertion that would catch a future refactor pointing startup at
+   * `afterCatalogWriteHandleAppServers({ restart: true })`, which SIGTERMs matching
+   * processes and says so in its own log line.
+   */
+  test("never signals a process", () => {
+    const killed: number[] = [];
+    warnIfStaleCodexAppServersAfterStartupWrite({
+      io: {
+        listSnapshots: () => [{ pid: 999, commandLine: APP_SERVER_CMD }],
+        readStartMs: () => 1_000,
+        catalogMtimeMs: () => 2_000,
+        kill: pid => { killed.push(pid); },
+      },
+    });
+    expect(killed).toEqual([]);
+  });
+
+  test("a discovery failure is swallowed so startup still comes up", () => {
+    const { log, errors } = collectErrors();
+    expect(warnIfStaleCodexAppServersAfterStartupWrite({
+      log,
+      io: { listSnapshots: () => { throw new Error("ps unavailable"); } },
+    }).warned).toBe(false);
+    expect(errors).toEqual([]);
+  });
 });

@@ -149,6 +149,74 @@ describe("ocx provider", () => {
     }
   });
 
+  test("provider show --json never prints secret-shaped modelCosts keys", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          modelCosts: {
+            "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+            "sk-abcdef1234567890": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+          },
+        },
+      },
+    });
+    try {
+      const result = runCli(["provider", "show", "blsc", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toContain("sk-abcdef1234567890");
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.modelCosts).toEqual({
+        "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("provider add --force preserves an existing modelCosts overlay", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        blsc: {
+          adapter: "openai-chat",
+          baseUrl: "https://llmapi.blsc.cn",
+          apiKey: "sk-old",
+          modelCosts: {
+            "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+          },
+        },
+      },
+    });
+    try {
+      const result = runCli([
+        "provider", "add", "blsc",
+        "--adapter", "openai-chat",
+        "--base-url", "https://llmapi.blsc.cn",
+        "--api-key", "sk-rotated",
+        "--force",
+      ], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = readConfig(dir);
+      expect(config.providers.blsc.apiKey).toBe("sk-rotated");
+      expect(config.providers.blsc.modelCosts).toEqual({
+        "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("provider add custom provider with full flags", () => {
     const { dir } = freshConfig();
     try {
@@ -218,6 +286,45 @@ describe("ocx provider", () => {
       const config = readConfig(dir);
       expect(config.providers.deepseek).toBeUndefined();
       expect(config.providers.openai).toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("provider remove drops that provider's custom models (#1273)", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        huggingface: { adapter: "openai-chat", baseUrl: "https://api.hf.test/v1", apiKey: "k" },
+      },
+      customModels: [
+        { id: "keep-1", provider: "openai", modelId: "kept-model" },
+        { id: "drop-1", provider: "huggingface", modelId: "DeepSeek-V4-Flash-0731" },
+      ],
+      // Seeded so the assertion below proves removal does not rewrite one-time
+      // ownership: an older binary must keep seeing the same legacy slugs.
+      customModelCatalogMigration: {
+        version: 1,
+        legacyOwnedSlugs: ["huggingface/DeepSeek-V4-Flash-0731", "openai/kept-model"],
+      },
+    });
+    try {
+      const result = runCli(["provider", "remove", "huggingface", "--json"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        action: "removed",
+        provider: "huggingface",
+        droppedCustomModels: 1,
+      });
+
+      const config = readConfig(dir);
+      expect(config.customModels).toEqual([
+        { id: "keep-1", provider: "openai", modelId: "kept-model" },
+      ]);
+      expect(config.customModelCatalogMigration).toEqual({
+        version: 1,
+        legacyOwnedSlugs: ["huggingface/DeepSeek-V4-Flash-0731", "openai/kept-model"],
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

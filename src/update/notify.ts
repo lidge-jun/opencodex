@@ -83,8 +83,12 @@ function gt(a: number[], b: number[]): boolean {
 
 /**
  * Channel-aware "is latest newer than current?".
- * - latest channel: compare maj.min.pat only; prereleases are never "newer"
- *   (parity with codex-rs), so stable users are not pushed onto previews.
+ * - latest channel: compare maj.min.pat only; prerelease TARGETS are never
+ *   "newer" (parity with codex-rs), so stable users are not pushed onto
+ *   previews. An installed preview CURRENT compares by its maj.min.pat core,
+ *   so a stable release with a strictly higher base is offered (same base is
+ *   content-lateral promotion and stays not-newer, mirroring the preview
+ *   channel's O3 rule).
  * - preview channel: preview-vs-preview compares the trailing -preview.N; a
  *   stable release with a strictly higher base counts as newer (O3), while a
  *   stable release with the same base as the current preview does not.
@@ -92,7 +96,7 @@ function gt(a: number[], b: number[]): boolean {
 export function isNewer(latest: string, current: string, channel: Channel): boolean {
   if (channel === "latest") {
     const l = parseStable(latest);
-    const c = parseStable(current);
+    const c = parseStable(current) ?? parsePreview(current)?.slice(0, 3);
     if (!l || !c) return false;
     return gt(l, c);
   }

@@ -1,18 +1,27 @@
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import ClaudeCode from "./ClaudeCode";
 import ClaudeDesktop from "./ClaudeDesktop";
+import { navigateHash, normalizeHashPath } from "../hash-routing";
 import { useT } from "../i18n/shared";
 import { readSessionListCache } from "../session-list-cache";
 
 type ClaudeTab = "code" | "desktop";
+
+const CODE_HASH = "integrations/claude";
+const DESKTOP_HASH = "integrations/claude/desktop";
+
+/** Desktop is a route of its own, so a reload or a shared link opens on it. */
+function readClaudeTab(hash = typeof window !== "undefined" ? window.location.hash : ""): ClaudeTab {
+  return normalizeHashPath(hash) === DESKTOP_HASH ? "desktop" : "code";
+}
 
 function readCachedDesktopPort(apiBase: string): number | null {
   const cached = readSessionListCache<{ data?: { port?: number } }>(`ocx.claude-desktop.v1:${apiBase}`);
   return typeof cached?.data?.port === "number" ? cached.data.port : null;
 }
 
-export default function Claude({ apiBase }: { apiBase: string }) {
-  const [tab, setTab] = useState<ClaudeTab>("code");
+export default function Claude({ apiBase, active = true }: { apiBase: string; active?: boolean }) {
+  const [tab, setTab] = useState<ClaudeTab>(readClaudeTab);
   const t = useT();
   const codeTabRef = useRef<HTMLButtonElement>(null);
   const desktopTabRef = useRef<HTMLButtonElement>(null);
@@ -31,7 +40,26 @@ export default function Claude({ apiBase }: { apiBase: string }) {
     });
   }, [apiBase]);
 
+  /*
+   * Back/Forward across the inner selection has to move the panel too. The
+   * outer Integrations strip owns `integrations/claude`, but Desktop's nested
+   * hash is read here — otherwise history would change the URL and leave the
+   * inner panel showing Code.
+   */
+  useEffect(() => {
+    const syncFromHash = () => setTab(readClaudeTab());
+    window.addEventListener("hashchange", syncFromHash);
+    window.addEventListener("popstate", syncFromHash);
+    return () => {
+      window.removeEventListener("hashchange", syncFromHash);
+      window.removeEventListener("popstate", syncFromHash);
+    };
+  }, []);
+
   const selectTab = (next: ClaudeTab) => {
+    // `navigateHash` is a no-op for the current hash, so reselecting the same
+    // inner tab adds no history entry.
+    navigateHash(next === "desktop" ? DESKTOP_HASH : CODE_HASH);
     setTab(next);
     // preventScroll: focusing the tab must not scroll the page — otherwise the
     // Code/Desktop panels' different header heights make the tab strip jump.
@@ -113,7 +141,7 @@ export default function Claude({ apiBase }: { apiBase: string }) {
       >
         {/* Mounted while hidden so drafts survive a tab switch, but `active` keeps it from
             fetching for a panel nobody is looking at — mirroring Desktop below. */}
-        <ClaudeCode key={apiBase} apiBase={apiBase} active={tab === "code"} />
+        <ClaudeCode key={apiBase} apiBase={apiBase} active={active && tab === "code"} />
       </div>
       <div
         id="claude-desktop-panel"
@@ -124,7 +152,7 @@ export default function Claude({ apiBase }: { apiBase: string }) {
         <ClaudeDesktop
           key={apiBase}
           apiBase={apiBase}
-          active={tab === "desktop"}
+          active={active && tab === "desktop"}
           onPortChange={setDesktopPort}
         />
       </div>

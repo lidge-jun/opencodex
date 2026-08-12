@@ -3,6 +3,9 @@ param(
   [Parameter(Mandatory = $true)][string]$CliPath,
   [Parameter(Mandatory = $true)][string]$CodexHome,
   [Parameter(Mandatory = $true)][string]$OpenCodexHome,
+  # Provenance of $BunPath, chosen when the tray entry was built. Optional so an
+  # already-installed launcher command from an older version still starts.
+  [ValidateSet("", "override", "bundled", "process")][string]$BunRuntimeSource = "",
   [ValidateSet("Run", "Stop")][string]$Mode = "Run",
   [int]$HostPid = 0
 )
@@ -81,7 +84,7 @@ function ConvertTo-NativeArgument([string]$Value) {
   return '"' + $Value + '"'
 }
 
-function Start-OcxCommand([string[]]$CommandArgs) {
+function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
   try {
     $allArgs = @($CliPath) + $CommandArgs
     $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -92,9 +95,17 @@ function Start-OcxCommand([string[]]$CommandArgs) {
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
     $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
     $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    if ($BunRuntimeSource) {
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
+      # Paired with the source so a later relaunch can tell the marker still describes
+      # this binary rather than one it merely inherited.
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath
+    }
     $process = [System.Diagnostics.Process]::Start($psi)
-    if ($null -ne $process) { $process.Dispose() }
+    if ($null -eq $process) { throw "Process did not start" }
     Write-ActionLog "dispatched $($CommandArgs -join ' ')"
+    if ($TrackExit) { return $process }
+    $process.Dispose()
     return $true
   } catch {
     Write-ActionLog "launch failed: $($_.Exception.GetType().Name)"
@@ -163,18 +174,40 @@ $script:pendingAction = $null
 $script:pendingStarted = 0L
 $script:pendingDeadline = 0L
 $script:pendingOldProxyPid = $null
+$script:pendingProcess = $null
 
 function Set-PendingAction([string]$Action, [int]$TimeoutSeconds) {
+  if ($null -ne $script:pendingAction) {
+    Write-ActionLog "$Action ignored because $($script:pendingAction) is still pending"
+    return $false
+  }
+  if ($null -ne $script:pendingProcess) {
+    try {
+      $script:pendingProcess.Dispose()
+    } catch {
+      Write-ActionLog "pending process dispose failed: $($_.Exception.GetType().Name)"
+    }
+    $script:pendingProcess = $null
+  }
   $script:pendingAction = $Action
   $script:pendingStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   $script:pendingDeadline = $script:pendingStarted + ($TimeoutSeconds * 1000)
   $script:pendingOldProxyPid = $script:proxyPid
+  return $true
 }
 
 function Complete-PendingAction([bool]$Success) {
   if ($null -eq $script:pendingAction) { return }
   $action = $script:pendingAction
   $script:pendingAction = $null
+  if ($null -ne $script:pendingProcess) {
+    try {
+      $script:pendingProcess.Dispose()
+    } catch {
+      Write-ActionLog "pending process dispose failed: $($_.Exception.GetType().Name)"
+    }
+    $script:pendingProcess = $null
+  }
   if ($Success) {
     Write-ActionLog "$action completed (port=$($script:port), pid=$($script:proxyPid))"
     $notify.ShowBalloonTip(2500, "opencodex", "$action completed.", [System.Windows.Forms.ToolTipIcon]::Info)
@@ -217,6 +250,11 @@ function Update-TrayState {
     $stopItem.Enabled = $false
     $restartItem.Enabled = $false
   }
+  if ($null -ne $script:pendingAction) {
+    $startItem.Enabled = $false
+    $stopItem.Enabled = $false
+    $restartItem.Enabled = $false
+  }
   $heartbeat = @{ pid = $PID; timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
   if ($HostPid -gt 0) { $heartbeat.hostPid = $HostPid }
   $heartbeatJson = $heartbeat | ConvertTo-Json -Compress
@@ -228,26 +266,59 @@ function Update-TrayState {
     $reached = ($script:pendingAction -eq "Start Proxy" -and $script:online) -or
       ($script:pendingAction -eq "Stop Proxy" -and -not $script:online) -or
       ($script:pendingAction -eq "Restart Proxy" -and $elapsed -gt 3000 -and $script:online -and $script:proxyPid -ne $script:pendingOldProxyPid)
-    if ($reached) { Complete-PendingAction $true }
+    $commandFailed = $false
+    if ($null -ne $script:pendingProcess) {
+      try {
+        $commandFailed = $script:pendingProcess.HasExited -and $script:pendingProcess.ExitCode -ne 0
+      } catch {
+        Write-ActionLog "pending process result inspection failed: $($_.Exception.GetType().Name)"
+        # If we cannot inspect the tracked command, we cannot prove it is still
+        # healthy. Fail the pending action instead of silently waiting for a later
+        # timeout and presenting an indeterminate process as success-capable.
+        $commandFailed = $true
+      }
+    }
+    if ($commandFailed) { Complete-PendingAction $false }
+    elseif ($reached) { Complete-PendingAction $true }
     elseif ($now -gt $script:pendingDeadline) { Complete-PendingAction $false }
   }
 }
 
 $openItem.add_Click({ Start-OcxCommand @("gui") })
 $startItem.add_Click({
+  if (-not (Set-PendingAction "Start Proxy" 75)) { return }
   $statusItem.Text = "Proxy: Starting..."
-  Set-PendingAction "Start Proxy" 15
-  if (-not (Start-OcxCommand @("__tray-start"))) { $script:pendingAction = $null }
+  # service start can spend 20s and the CLI then observes health for another 40s.
+  $startProcess = Start-OcxCommand @("__tray-start") -TrackExit
+  if ($startProcess -is [System.Diagnostics.Process]) {
+    $script:pendingProcess = $startProcess
+  } else {
+    Complete-PendingAction $false
+  }
 })
 $stopItem.add_Click({
+  if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
   $statusItem.Text = "Proxy: Stopping..."
-  Set-PendingAction "Stop Proxy" 15
-  if (-not (Start-OcxCommand @("stop"))) { $script:pendingAction = $null }
+  $stopProcess = Start-OcxCommand @("stop") -TrackExit
+  if ($stopProcess -is [System.Diagnostics.Process]) {
+    $script:pendingProcess = $stopProcess
+  } else {
+    Complete-PendingAction $false
+  }
 })
 $restartItem.add_Click({
+  if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
   $statusItem.Text = "Proxy: Restarting..."
-  Set-PendingAction "Restart Proxy" 20
-  if (-not (Start-OcxCommand @("__tray-restart"))) { $script:pendingAction = $null }
+  # /api/system/restart may drain active work for 60s and then spend up to 70s
+  # handing off to an identity-verified replacement. The tray observes health/PID
+  # rather than the detached CLI exit, so keep a watchdog margin around that shared
+  # lifecycle budget. The CLI remains the lifecycle owner; the tray never kills.
+  $restartProcess = Start-OcxCommand @("__tray-restart") -TrackExit
+  if ($restartProcess -is [System.Diagnostics.Process]) {
+    $script:pendingProcess = $restartProcess
+  } else {
+    Complete-PendingAction $false
+  }
 })
 $logsItem.add_Click({
   $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -280,6 +351,9 @@ try {
   $timer.Stop()
   $timer.Dispose()
   $notify.Visible = $false
+  if ($null -ne $script:pendingProcess) {
+    try { $script:pendingProcess.Dispose() } catch { $null = $_ }
+  }
   $notify.Dispose()
   foreach ($icon in $script:ownedIcons) { $icon.Dispose() }
   $menu.Dispose()

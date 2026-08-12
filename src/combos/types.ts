@@ -1,4 +1,5 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
+import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type {
   OcxComboConfig,
   OcxComboDefaultEffort,
@@ -24,11 +25,7 @@ const COMBO_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * `combo/` prefix. Codex-facing slugs tolerate at most one "/", so deeper paths reject.
  */
 const COMBO_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
-/**
- * Bare aliases in the OpenAI native family (gpt-*, o1-*, o3-*, o4-*, codex-*) are
- * rejected: they collide with native catalog rows and the canonical-OpenAI routing
- * branch, which cannot be shadowed honestly.
- */
+/** Bare aliases in this family require the explicit `nativeAlias` opt-in below. */
 const NATIVE_OPENAI_FAMILY_PATTERN = /^(?:gpt-|o1-|o3-|o4-|codex-)/;
 
 export interface ComboValidationIssue {
@@ -42,7 +39,20 @@ export interface NormalizedComboConfig {
   defaultEffort: OcxComboDefaultEffort | null;
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
   alias: string | null;
+  /** Explicit native-family alias opt-in. */
+  nativeAlias: boolean;
+  /** Display-only label for the catalog row, or null when unset. */
+  displayName: string | null;
   targets: Array<Required<OcxComboTarget>>;
+}
+
+/** True only for an explicitly opted-in bare native-family alias. */
+export function isNativeAliasCombo(
+  combo: { alias?: string | null; nativeAlias?: boolean },
+): boolean {
+  const alias = typeof combo.alias === "string" ? combo.alias.trim() : "";
+  return combo.nativeAlias === true
+    && SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias);
 }
 
 export function targetKey(target: Pick<OcxComboTarget, "provider" | "model">): string {
@@ -64,6 +74,27 @@ export function comboModelId(id: string): string {
 export function comboPublicModelId(id: string, combo: { alias?: string | null }): string {
   const alias = typeof combo.alias === "string" ? combo.alias.trim() : "";
   return alias || comboModelId(id);
+}
+
+/**
+ * Persisted selector that hides a combo from discovery. Native aliases keep the canonical
+ * `combo/<id>` selector because their bare public id remains the native OpenAI disable key.
+ */
+export function comboDisabledModelId(
+  id: string,
+  combo: { alias?: string | null; nativeAlias?: boolean },
+): string {
+  return isNativeAliasCombo(combo) ? comboModelId(id) : comboPublicModelId(id, combo);
+}
+
+/** Every persisted selector that can refer to this combo in `disabledModels`. */
+export function comboDisabledModelSelectors(
+  id: string,
+  combo: { alias?: string | null; nativeAlias?: boolean },
+): string[] {
+  const canonical = comboModelId(id);
+  const preferred = comboDisabledModelId(id, combo);
+  return preferred === canonical ? [canonical] : [canonical, preferred];
 }
 
 /**
@@ -94,7 +125,7 @@ export function comboAliasIssues(
   id: string,
   alias: string,
   combos: Record<string, OcxComboConfig> | undefined,
-  options: { excludeComboId?: string } = {},
+  options: { excludeComboId?: string; allowNativeAlias?: boolean } = {},
 ): ComboValidationIssue[] {
   const issues: ComboValidationIssue[] = [];
   if (!COMBO_ALIAS_PATTERN.test(alias)) {
@@ -110,10 +141,12 @@ export function comboAliasIssues(
       message: `alias must not use the reserved "${COMBO_NAMESPACE}/" namespace`,
     });
   }
-  if (!alias.includes("/") && NATIVE_OPENAI_FAMILY_PATTERN.test(alias)) {
+  if (!alias.includes("/")
+    && NATIVE_OPENAI_FAMILY_PATTERN.test(alias)
+    && options.allowNativeAlias !== true) {
     issues.push({
       path: ["alias"],
-      message: "bare aliases in the OpenAI native family (gpt-*, o1-*, o3-*, o4-*, codex-*) are not allowed",
+      message: "bare aliases in the OpenAI native family require nativeAlias=true",
     });
   }
   for (const [otherId, other] of Object.entries(combos ?? {})) {
@@ -193,8 +226,38 @@ export function comboConfigIssues(
       issues.push({ path: ["alias"], message: "alias must be a string" });
     } else {
       const alias = body.alias.trim();
-      if (alias) issues.push(...comboAliasIssues(id, alias, options.combos, options));
+      if (alias) {
+        issues.push(...comboAliasIssues(id, alias, options.combos, {
+          ...options,
+          allowNativeAlias: body.nativeAlias === true,
+        }));
+      }
     }
+  }
+
+  if (body.nativeAlias !== undefined && typeof body.nativeAlias !== "boolean") {
+    issues.push({ path: ["nativeAlias"], message: "nativeAlias must be a boolean" });
+  }
+  if (body.displayName !== undefined) {
+    if (typeof body.displayName !== "string") {
+      issues.push({ path: ["displayName"], message: "displayName must be a string" });
+    } else if (body.displayName.trim().length > 128 || /[\u0000-\u001f\u007f]/.test(body.displayName)) {
+      issues.push({
+        path: ["displayName"],
+        message: "displayName must be at most 128 characters and contain no control characters",
+      });
+    }
+  }
+  const alias = typeof body.alias === "string" ? body.alias.trim() : "";
+  const nativeAlias = body.nativeAlias === true;
+  if (nativeAlias && !SUPPORTED_NATIVE_OPENAI_SLUGS.has(alias)) {
+    issues.push({
+      path: ["nativeAlias"],
+      message: "nativeAlias requires a currently supported bare OpenAI-native model alias",
+    });
+  }
+  if (nativeAlias && (typeof body.displayName !== "string" || body.displayName.trim().length === 0)) {
+    issues.push({ path: ["displayName"], message: "displayName is required for native aliases" });
   }
 
   if (!Array.isArray(body.targets) || body.targets.length === 0) {
@@ -271,11 +334,14 @@ export function comboConfigError(
 
 export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig {
   const alias = typeof raw.alias === "string" ? raw.alias.trim() : "";
+  const displayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
   return {
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
     defaultEffort: raw.defaultEffort ?? null,
     alias: alias || null,
+    nativeAlias: raw.nativeAlias === true,
+    displayName: displayName || null,
     targets: raw.targets.map(target => ({
       provider: target.provider.trim(),
       model: target.model.trim(),

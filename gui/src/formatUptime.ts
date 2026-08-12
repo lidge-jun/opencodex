@@ -1,30 +1,24 @@
-import type { Locale } from "./i18n/shared";
-
-const UPTIME_UNITS: Record<Locale, { day: string; hour: string; minute: string; second: string }> = {
-  en: { day: "d", hour: "h", minute: "m", second: "s" },
-  de: { day: "T", hour: "Std", minute: "Min", second: "Sek" },
-  ko: { day: "일", hour: "시간", minute: "분", second: "초" },
-  zh: { day: "天", hour: "小时", minute: "分钟", second: "秒" },
-  ru: { day: "д", hour: "ч", minute: "мин", second: "с" },
-  ja: { day: "日", hour: "時間", minute: "分", second: "秒" },
-};
+import { catalogValue, type Locale } from "./i18n/catalogs";
 
 export function formatUptime(seconds: number, locale: Locale): string {
   const totalSeconds = Math.max(0, Math.floor(seconds));
-  const units = UPTIME_UNITS[locale] ?? UPTIME_UNITS.en;
+  const day = catalogValue(locale, "uptime.day");
+  const hour = catalogValue(locale, "uptime.hour");
+  const minute = catalogValue(locale, "uptime.minute");
+  const second = catalogValue(locale, "uptime.second");
 
-  if (totalSeconds < 5 * 60) return `${totalSeconds}${units.second}`;
+  if (totalSeconds < 5 * 60) return `${totalSeconds}${second}`;
 
   const totalMinutes = Math.floor(totalSeconds / 60);
-  if (totalMinutes < 60) return `${totalMinutes}${units.minute}`;
+  if (totalMinutes < 60) return `${totalMinutes}${minute}`;
 
   const totalHours = Math.floor(totalMinutes / 60);
   if (totalHours < 24) {
     const minutes = totalMinutes % 60;
-    return minutes > 0 ? `${totalHours}${units.hour} ${minutes}${units.minute}` : `${totalHours}${units.hour}`;
+    return minutes > 0 ? `${totalHours}${hour} ${minutes}${minute}` : `${totalHours}${hour}`;
   }
 
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
-  return hours > 0 ? `${days}${units.day} ${hours}${units.hour}` : `${days}${units.day}`;
+  return hours > 0 ? `${days}${day} ${hours}${hour}` : `${days}${day}`;
 }

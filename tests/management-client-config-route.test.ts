@@ -4,8 +4,7 @@ import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_CONFIG_SCHEMA,
   OPENCODE_PROVIDER_ID,
-  PI_API_KEY_ENV,
-  PI_API_KEY_ENV_REF,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   buildClientConfig,
   normalizeExportModels,
   opencodeGlobalConfigPath,
@@ -14,6 +13,7 @@ import {
   type PiGeneratedConfig,
 } from "../src/clients/config-export";
 import type { OcxConfig } from "../src/types";
+import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 
 /**
  * A key that looks exactly like a real one. Every assertion about `ocx_` absence is
@@ -29,6 +29,8 @@ interface ClientConfigEnvelope {
   exportHint: string;
   modelCount: number;
   modelsWithoutLimits: number;
+  format: string;
+  text: string;
   config: unknown;
 }
 
@@ -81,7 +83,7 @@ async function clientConfigApi(config: OcxConfig, query: string): Promise<Respon
     new Request(url, { headers: { Host: url.host } }),
     url,
     config,
-    { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+    { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
   );
   expect(response).not.toBeNull();
   return response!;
@@ -93,7 +95,7 @@ async function modelRows(config: OcxConfig): Promise<ModelRow[]> {
     new Request(url, { headers: { Host: url.host } }),
     url,
     config,
-    { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+    { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
   );
   return await response!.json() as ModelRow[];
 }
@@ -148,13 +150,35 @@ describe("GET /api/client-config", () => {
 
     expect(body.client).toBe("pi");
     expect(body.filename).toBe("pi-models.json");
-    expect(body.apiKeyEnv).toBe(PI_API_KEY_ENV);
+    expect(body.apiKeyEnv).toBe("");
 
     const provider = (body.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
     expect(Array.isArray(provider.models)).toBe(true);
-    expect(provider.apiKey).toBe(PI_API_KEY_ENV_REF);
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(provider.baseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(provider.models.map(model => model.id)).toContain("a/m1");
+  }, 15_000);
+
+  test("OMP returns the full routed catalog as models.yml YAML", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=omp");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+
+    expect(body.client).toBe("omp");
+    expect(body.filename).toBe("omp-models.yaml");
+    expect(body.format).toBe("yaml");
+    expect(body.text).toContain("providers:");
+    expect(body.text).toContain("a/m1");
+    const provider = (body.config as PiGeneratedConfig).providers[OPENCODE_PROVIDER_ID];
+    const routedIds = provider.models
+      .map(model => model.id)
+      .filter(id => id.startsWith("a/") || id.startsWith("b/"));
+    expect(routedIds).toEqual(["a/m1", "a/m2", "b/no-context"]);
+    expect(provider.models.find(model => model.id === "a/m1")?.contextWindow).toBe(128_000);
+    expect(provider.models.find(model => model.id === "b/no-context")?.contextWindow).toBeUndefined();
+    expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
+    expect(body.text).not.toContain(REAL_LOOKING_KEY);
+    expect(JSON.stringify(body.config)).not.toContain(REAL_LOOKING_KEY);
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {
@@ -243,7 +267,7 @@ describe("GET /api/client-config", () => {
       new Request(url, { headers: { Host: url.host, Origin: "https://evil.example" } }),
       url,
       baseConfig(),
-      { saveConfigPreservingClaudeCode: () => {}, refreshCodexCatalog: async () => {} },
+      { saveConfigPreservingClaudeCode: () => {}, createManagementConvergeCodex: catalogConvergenceFactory() },
     );
     expect(response?.status).toBe(403);
   }, 15_000);

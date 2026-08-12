@@ -11,20 +11,31 @@
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
+  codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
+  CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
+import { codexAccountNamespaceForModel } from "../codex/account-namespace-match";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
+import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
-import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar } from "../providers/openai-sidecar";
+import {
+  listOpenAiForwardSidecarCandidates,
+  resolveFirstUsableOpenAiSidecar,
+  type ExactOpenAiSidecarAccount,
+} from "../providers/openai-sidecar";
+import { routeModel } from "../router";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
+import type { AdmissionLease } from "../lib/admission";
+import { codexAccountSelectionForTurn } from "./lifecycle";
 
 /**
  * Default TOTAL deadline for one search relay. alpha/search is non-streaming JSON — response
@@ -34,12 +45,13 @@ import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
  * long-running search).
  */
 const SEARCH_UPSTREAM_TIMEOUT_MS = 200_000;
-const SEARCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+export const SEARCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 export async function handleSearch(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
+  turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
   try { validateForwardAdmissionCredential(req.headers, config); }
   catch (err) {
@@ -55,6 +67,32 @@ export async function handleSearch(
   const model = (body as { model?: unknown } | null)?.model;
   if (typeof model === "string" && model) logCtx.model = model;
 
+  let exactAccount: ExactOpenAiSidecarAccount | undefined;
+  let relayBody = body;
+  const accountNamespace = typeof model === "string"
+    ? codexAccountNamespaceForModel(config.codexAccountNamespaces, model)
+    : undefined;
+  if (accountNamespace && typeof model === "string") {
+    try {
+      const route = routeModel(config, model);
+      if (!route.codexAccountId || route.codexAccountNamespace !== accountNamespace) {
+        return formatErrorResponse(400, "invalid_request_error", "Invalid Codex account-qualified search model");
+      }
+      exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
+      logCtx.provider = `${route.providerName}-${accountNamespace}`;
+      logCtx.routeDecision = route.routeDecision;
+      // The ChatGPT search endpoint only understands the native model slug. The
+      // account namespace is proxy routing syntax and must not cross the wire.
+      relayBody = { ...(body as Record<string, unknown>), model: route.modelId };
+    } catch (err) {
+      return formatErrorResponse(
+        400,
+        "invalid_request_error",
+        err instanceof Error ? err.message : "Invalid Codex account-qualified search model",
+      );
+    }
+  }
+
   const candidates = listOpenAiForwardSidecarCandidates(config);
   if (candidates.length === 0) {
     return formatErrorResponse(
@@ -67,7 +105,10 @@ export async function handleSearch(
 
   let upstream: Awaited<ReturnType<typeof resolveFirstUsableOpenAiSidecar>>;
   try {
-    upstream = await resolveFirstUsableOpenAiSidecar(candidates, req.headers, config);
+    upstream = await resolveFirstUsableOpenAiSidecar(candidates, req.headers, config, {
+      exactAccount,
+      beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+    });
     if (!upstream) {
       return formatErrorResponse(
         401,
@@ -75,16 +116,21 @@ export async function handleSearch(
         "web search relay needs ChatGPT auth (Authorization header)",
       );
     }
-    logCtx.provider = formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
+    logCtx.provider = accountNamespace
+      ? `${upstream.providerName}-${accountNamespace}`
+      : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return cooldownErrorResponse(err);
+      return cooldownErrorResponse(err, Date.now(), accountNamespace);
     }
+    if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
     if (err instanceof CodexThreadAffinityExpiredError) {
       return formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
     }
     if (err instanceof CodexAuthContextError) {
-      const safeAccountLabel = formatCodexProviderForLog("openai", err.accountId, config);
+      const safeAccountLabel = accountNamespace
+        ? `openai-${accountNamespace}`
+        : formatCodexProviderForLog("openai", err.accountId, config);
       console.error(`[search] Pool account ${safeAccountLabel} token failed; reauthentication required`);
       return formatErrorResponse(401, "authentication_error", "Selected Codex account needs reauthentication");
     }
@@ -99,27 +145,36 @@ export async function handleSearch(
   const timeoutMs = config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("search");
+  let upstreamResponse: Response | undefined;
   try {
-    const upstreamResponse = await fetch(url, {
+    upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(relayBody),
       signal: linkedSignal.signal,
     });
-    const payload = await upstreamResponse.arrayBuffer();
-    if (payload.byteLength > SEARCH_RESPONSE_MAX_BYTES) {
-      return formatErrorResponse(502, "upstream_error", `search response too large (${payload.byteLength} bytes)`);
+    const observed = await readBoundedResponseBytes(upstreamResponse, {
+      maxBytes: SEARCH_RESPONSE_MAX_BYTES,
+      signal: linkedSignal.signal,
+    });
+    if (observed.oversized) {
+      upstream.recordOutcome?.(upstreamResponse.status);
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        `search response too large (exceeded ${SEARCH_RESPONSE_MAX_BYTES} bytes)`,
+      );
     }
     upstream.recordOutcome?.(upstreamResponse.status);
     const relayHeaders: Record<string, string> = {};
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) relayHeaders["content-type"] = contentType;
-    return new Response(payload, { status: upstreamResponse.status, headers: relayHeaders });
+    return new Response(observed.bytes, { status: upstreamResponse.status, headers: relayHeaders });
   } catch (err) {
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
     }
-    if (err instanceof Error && err.name === "TimeoutError") {
+    if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {
       upstream.recordOutcome?.("timeout");
       return formatErrorResponse(504, "upstream_error", "search upstream timed out");
     }
@@ -132,5 +187,11 @@ export async function handleSearch(
   } finally {
     sidecarExit();
     linkedSignal.cleanup();
+    // A response that aborted before the reader attached still owns its upstream socket.
+    // Consumed/cancelled bodies are already closed; locked bodies remain owned by the reader.
+    const pendingBody = upstreamResponse?.body;
+    if (pendingBody && !pendingBody.locked) {
+      try { void pendingBody.cancel().catch(() => undefined); } catch { /* already closed */ }
+    }
   }
 }

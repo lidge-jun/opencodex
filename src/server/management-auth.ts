@@ -13,7 +13,23 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
-import { forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import {
+  LOCAL_MANAGEMENT_CAPABILITY_HEADER,
+  LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
+  LOCAL_MANAGEMENT_EXPECTED_PID_HEADER,
+  LOCAL_MANAGEMENT_NONCE_HEADER,
+  parseExpectedLocalManagementPid,
+  verifyLocalManagementReadCapability,
+} from "../lib/local-management-capability";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  parseExpectedSystemRestartPid,
+  verifySystemRestartCapability,
+} from "../lib/system-restart-contract";
+import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
   isAllowedManagementOrigin,
@@ -26,6 +42,9 @@ import {
 
 const GUI_SESSION_TTL_MS = 5 * 60_000;
 const GUI_SESSION_LIMIT = 128;
+const LOCAL_READ_REPLAY_LIMIT = 256;
+const consumedLocalReadCapabilities = new Map<string, number>();
+const admittedLocalReadRequests = new WeakSet<Request>();
 
 interface GuiSessionRecord {
   csrfToken: string;
@@ -95,12 +114,17 @@ function readExistingToken(path: string): string {
 export function removeManagementTokenPathBestEffort(
   path: string,
   remove: (path: string) => void = unlinkSync,
+  options?: { ephemeral?: boolean },
 ): void {
+  // Temps get the full ephemeral release (success + both timeout namespaces);
+  // stable token paths drop only the success memo — destination-keyed timeout
+  // memos are intentional anti-restall state.
+  const forget = options?.ephemeral ? forgetEphemeralSecretPath : forgetHardenedSecretPath;
   try {
     remove(path);
-    forgetHardenedSecretPath(path);
+    forget(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") forgetHardenedSecretPath(path);
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") forget(path);
     /* other failures retain fail-closed state for the caller */
   }
 }
@@ -120,7 +144,8 @@ function createTokenFile(path: string): string {
     chmodSync(temporary, 0o600);
     let temporaryHardened: { ok: boolean };
     try {
-      temporaryHardened = hardenSecretPath(temporary, { required: true });
+      // Destination-keyed timeout memo (the final token path), not the temp.
+      temporaryHardened = hardenSecretPath(temporary, { required: true, timeoutMemoKey: path });
     } catch {
       temporaryHardened = { ok: false };
     }
@@ -155,7 +180,7 @@ function createTokenFile(path: string): string {
     if (fd !== null) {
       try { closeSync(fd); } catch { /* best effort */ }
     }
-    removeManagementTokenPathBestEffort(temporary);
+    removeManagementTokenPathBestEffort(temporary, unlinkSync, { ephemeral: true });
   }
 }
 
@@ -231,11 +256,137 @@ export function issueGuiSession(
   return { token, ...session };
 }
 
+/**
+ * Which credential actually authorized a management request.
+ *
+ * `admin-token` is the raw token from disk/env: anything running as the user can
+ * read it, including a coding agent. `gui-session` is a session token this process
+ * minted for a browser, and it only authorizes a mutation after the origin and the
+ * per-session CSRF token match. Consent-bearing routes must key off this value
+ * rather than off request headers, which the token holder can forge freely.
+ * The capability principals are process-scoped HMACs bound to the current process
+ * PID and listening port. Local reads are accepted only for two exact GET paths;
+ * restart remains a separate wire contract for its exact POST.
+ */
+export type ManagementPrincipal =
+  | "admin-token"
+  | "gui-session"
+  | "local-read-capability"
+  | "system-restart-capability";
+
+export interface LocalManagementAuthContext {
+  attestationSecret: string;
+  pid: number;
+  port: number;
+}
+
+function hasSystemRestartCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (!local || req.method !== "POST") return false;
+  let path: string;
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    return false;
+  }
+  if (path !== SYSTEM_RESTART_PATH) return false;
+  const expectedPid = parseExpectedSystemRestartPid(
+    req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  return verifySystemRestartCapability(
+    local.attestationSecret,
+    req.headers.get(SYSTEM_RESTART_NONCE_HEADER),
+    req.method,
+    path,
+    local.pid,
+    local.port,
+    req.headers.get(SYSTEM_RESTART_CAPABILITY_HEADER),
+  );
+}
+
+function hasLocalReadCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  // requireManagementAuth and managementPrincipal inspect the same Request in
+  // sequence. Preserve that one admission without accepting a replayed request.
+  if (admittedLocalReadRequests.has(req)) return true;
+  if (!local || req.method !== "GET") return false;
+  let url: URL;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return false;
+  }
+  // Do not let a future query-bearing variant silently inherit this narrow grant.
+  if (url.search !== "") return false;
+  const expectedPid = parseExpectedLocalManagementPid(
+    req.headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  const expiresAtRaw = req.headers.get(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER);
+  if (!expiresAtRaw || !/^[1-9]\d*$/.test(expiresAtRaw)) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const capability = req.headers.get(LOCAL_MANAGEMENT_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyLocalManagementReadCapability(
+    local.attestationSecret,
+    req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
+    req.method,
+    url.pathname,
+    local.pid,
+    local.port,
+    expiresAt,
+    capability,
+    now,
+  )) return false;
+  for (const [consumed, retainedUntil] of consumedLocalReadCapabilities) {
+    if (retainedUntil <= now) consumedLocalReadCapabilities.delete(consumed);
+  }
+  if (!capability || consumedLocalReadCapabilities.has(capability)) return false;
+  if (consumedLocalReadCapabilities.size >= LOCAL_READ_REPLAY_LIMIT) return false;
+  consumedLocalReadCapabilities.set(capability, expiresAt);
+  admittedLocalReadRequests.add(req);
+  return true;
+}
+
+/**
+ * The principal for a request that already passed `requireManagementAuth`. Kept as a
+ * separate resolution (rather than a changed return type) so every existing caller
+ * keeps its `Response | null` contract. Browser and admin principals are derived
+ * from the same session table and CSRF comparison the gate uses; the restart
+ * principal is derived from the same process-scoped capability check.
+ */
+export function managementPrincipal(
+  req: Request,
+  state: ManagementAuthState,
+  config?: OcxConfig,
+  local?: LocalManagementAuthContext,
+): ManagementPrincipal | null {
+  if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
+  if (hasLocalReadCapability(req, local)) return "local-read-capability";
+  if (!state.available) return null;
+  const actual = req.headers.get("x-opencodex-api-key")?.trim()
+    || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  if (!actual) return null;
+  if (equalSecret(actual, state.token)) return "admin-token";
+  if (!config) return null;
+  removeExpiredSessions(state);
+  return state.sessions.has(actual) ? "gui-session" : null;
+}
+
 export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): Response | null {
+  if (hasSystemRestartCapability(req, local)) return null;
+  if (hasLocalReadCapability(req, local)) return null;
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

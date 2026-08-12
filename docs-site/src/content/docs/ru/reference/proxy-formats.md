@@ -67,6 +67,8 @@ Translated-adapter'ы обрабатывают только известные �
 При `stream: false` или при отсутствии `stream` те же события адаптера собираются в один JSON
 Responses. Обе формы сохраняют выбранную модель, output item'ы, terminal status и usage.
 
+Клиентские frame'ы Responses SSE ограничены 4 MiB на frame, считая сырые байты до разделителя SSE-блока. В HTTP незавершённый upstream-frame, превысивший этот предел, завершается fail-closed синтетическим событием `response.failed`, после которого идёт `data: [DONE]`. В мосте Responses WebSocket то же условие даёт 502 `websocket_protocol_error` и отменяет upstream-reader. Если полноценный terminal-frame Responses уже получен, он остаётся авторитетным: слишком большие или некорректные байты после него отбрасываются и не заменяют завершённый ход транспортной ошибкой.
+
 Каждый terminal usage-объект Responses всегда включает оба detail-объекта, даже если провайдер их
 не сообщил:
 

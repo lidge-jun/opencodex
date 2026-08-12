@@ -64,13 +64,16 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
 ## Vision sidecar
 
 当路由模型列在其 provider 的 `noVisionModels` 中，并且请求包含图像时，opencodex 会在主调用
-**之前**描述每张图像，并用文字替换图像。Dashboard 和管理 API 当前显示的默认值是
-`gpt-5.6-luna`，启动时也会把明确保存的旧 `gpt-5.4-mini` 值迁移到 Luna。只有在
-`visionSidecar.model` 字段完全不存在时，vision 执行路径才会使用代码中的 `gpt-5.4-mini` 回退值。
+**之前**描述每张图像，并用文字替换图像。当 `visionSidecar.model` 缺失或为空时，OpenAI 执行路径、
+Dashboard 和管理 API 都使用 `gpt-5.4-mini` 作为回退。启动时仍会把明确保存的旧
+`gpt-5.4-mini` 值迁移到 `gpt-5.6-luna`；该迁移只作用于已保存值，不适用于缺失的 model 字段。
 
 - 图像可以来自 user、developer 和 tool-result message，也包括 Codex 的 `view_image` 结果。
-- 每张图像会以 `reasoning.effort: "low"` 发送给配置的原生 vision 模型，描述结果会就地替换
-  图像部分。
+- OpenAI 路径（ChatGPT 登录透传）会通过 Responses 端点把每张图像发送给配置的视觉模型，并携带所选
+  的 `reasoning.effort`（默认为 `low`），描述结果就地替换图像部分。Anthropic 路径走 Messages
+  端点并使用自己的思考预算映射，会忽略这个 OpenAI 专用设置。
+- 对于具有可靠能力元数据的原生模型，不支持的推理等级会归一化到不高于请求值的最高支持档位；如果
+  不存在这样的档位，则使用最低支持档位。对于缺少可靠能力元数据的未知模型或自定义模型，保持宽松处理。
 - 描述任务最多同时处理 3 张图像，并保持输入顺序。发送给描述模型的用户上下文最多 800 个字符，
   每张图像注入的描述最多 2,000 个字符。请求不会发送 ChatGPT 后端不支持的
   `max_output_tokens`。
@@ -83,14 +86,16 @@ Anthropic OAuth provider。Sidecar 错误会转换成长度受限的工具结果
   移除，而不会继续转发给纯文本后端。
 - `maxDescriptionsPerTurn`（默认 8）限制每个主模型 turn 的新增描述次数。缓存命中和同一 turn
   的重复请求不会消耗配额。成功的 `data:` 图像描述会按后端、模型、detail、图像字节和消息上下文
-  缓存；内容可变的 `https:` 图像不会缓存。
+  缓存；OpenAI 的缓存键还会额外包含推理强度（Anthropic 键不含，因为该字段在那里被忽略）。
+  内容可变的 `https:` 图像不会缓存。
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }

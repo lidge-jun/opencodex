@@ -1,7 +1,7 @@
 /**
  * Darwin eager-relay abort-stress probe — PARENT (watchdog) process.
  *
- * Gate for devlog/_plan/260731_macos_rss_retention/100_darwin_eager_optin.md:
+ * Gate for devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md:
  * spawns the child server (scripts/darwin-eager-abort-stress-child.ts), then
  * issues real network fetches with socket aborts in three classes:
  *   before-first-byte | mid-frame | during-backpressure

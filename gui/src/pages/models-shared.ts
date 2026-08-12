@@ -1,6 +1,7 @@
 import type { TFn } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
+import { formatNamespacedModelId } from "../provider-icons";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -67,8 +68,6 @@ export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
 export const PAGE = 60; // rows rendered per provider before a "show more"
 
 export const COLLAPSED_KEY_V2 = "ocx-models-collapsed:v2";
-export const COMBOS_OPEN_KEY_V1 = "ocx-models-combos-open:v1";
-export const COMBOS_OPEN_KEY_LEGACY = "ocx-models-combos-open";
 
 /** Compact token display (350k) — unit is technical, not prose. */
 export function fmtK(n: number): string {
@@ -88,12 +87,14 @@ export function activeModelOptions(
   models: ModelRow[],
   disabled: Set<string>,
   selected: ProviderModelMap,
+  t?: TFn,
 ): { value: string; label: string }[] {
   const options: { value: string; label: string }[] = [];
   for (const m of models) {
     const blocked = disabled.has(m.id) || disabled.has(m.namespaced);
     if (modelVisible(selected, m.provider, m.id, m.native === true, blocked)) {
-      options.push({ value: m.namespaced, label: m.namespaced });
+      // Friendly label (display-name provider prefix) while the raw route stays the value.
+      options.push({ value: m.namespaced, label: t ? formatNamespacedModelId(m.namespaced, t) : m.namespaced });
     }
   }
   return options;
@@ -122,19 +123,4 @@ export function writeCollapsedProviders(collapsed: Set<string>, storage: Storage
   }
 }
 
-export function readCombosOpen(storage: StorageLike = localStorage): boolean {
-  try {
-    const saved = storage.getItem(COMBOS_OPEN_KEY_V1) ?? storage.getItem(COMBOS_OPEN_KEY_LEGACY);
-    return saved === "1";
-  } catch {
-    return false;
-  }
-}
 
-export function writeCombosOpen(open: boolean, storage: StorageLike = localStorage): void {
-  try {
-    storage.setItem(COMBOS_OPEN_KEY_V1, open ? "1" : "0");
-  } catch {
-    /* quota / private-mode */
-  }
-}

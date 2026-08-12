@@ -96,6 +96,9 @@
 }
 .pwi-settings-textarea:focus { border-color: var(--accent-ring); outline: none; }
 .pwi-settings-hint { font-size: var(--text-caption); color: var(--muted); line-height: 1.4; }
+.pwi-settings-mode-msg { font-size: var(--text-caption); line-height: 1.4; }
+.pwi-settings-mode-msg--ok  { color: var(--green); }
+.pwi-settings-mode-msg--err { color: var(--red); }
 
 .pwi-settings-sticky-bar {
   position: sticky; bottom: 0; z-index: 2;

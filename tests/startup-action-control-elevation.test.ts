@@ -68,6 +68,24 @@ describe("startup install elevation retry", () => {
     });
   }
 
+  test("a CLI-completed two-phase scheduler install does not enter the legacy Dashboard finalizer", async () => {
+    execFileMock.mockImplementation((
+      _file: string,
+      _args: string[],
+      _options: unknown,
+      callback: (error: Error | null, stdout?: string, stderr?: string) => void,
+    ) => {
+      callback(null, "service installed", "");
+    });
+
+    await expect(runStartupInstallAction("install-service")).resolves.toEqual({
+      message: "Background service installed.",
+    });
+    expect(finalizeMock).not.toHaveBeenCalled();
+    expect(getStartupInstallState().status).toBe("idle");
+    expect((execFileMock.mock.calls[0]![2] as { timeout?: number }).timeout).toBe(0);
+  });
+
   test("retries only for structured schtasks /create access denied", async () => {
     failCli(`Windows access denied while running Task Scheduler.\n${WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER}`);
 

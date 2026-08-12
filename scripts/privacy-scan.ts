@@ -43,7 +43,7 @@ const DEVLOG_PLACEHOLDER_EMAILS = new Set([
  * three detectors worked on a staged file before the probe was removed. Construct
  * the strings from fragments so this scanner does not report its own allowances.
  */
-const DEVLOG_PUBLICATION_PROOF_FILE = "devlog/_plan/260730_devlog_publication_feasibility/030_wp3_wp4_execution_record.md";
+const DEVLOG_PUBLICATION_PROOF_FILE = "devlog/_fin/260730_devlog_publication_feasibility/030_wp3_wp4_execution_record.md";
 const DEVLOG_PUBLICATION_PROOF_TOKEN = ["sk-", "liveKeyShaped9", "x8w7v6u5", "t4s3r2q1p0"].join("");
 const DEVLOG_PUBLICATION_PROOF_HOME_USERNAME = ["someone", "else"].join("");
 const DEVLOG_PUBLICATION_PROOF_EMAIL = ["stranger", "third-party.example.org"].join("@");

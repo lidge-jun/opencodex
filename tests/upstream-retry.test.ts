@@ -2,7 +2,10 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   fetchWithResetRetry,
   isConnectionResetError,
+  prepareSameTarget429Wait,
+  releaseResponseBodyBestEffort,
   retryBackoffDelayMs,
+  sleepWithHeartbeats,
 } from "../src/lib/upstream-retry";
 
 function bunResetError(): Error {
@@ -57,6 +60,86 @@ describe("isConnectionResetError", () => {
     err.name = "TimeoutError";
     (err as Error & { code: string }).code = "ECONNRESET";
     expect(isConnectionResetError(err)).toBe(false);
+  });
+});
+
+describe("sleepWithHeartbeats", () => {
+  test("a non-positive heartbeat interval is clamped instead of spinning forever", async () => {
+    const events: string[] = [];
+    for await (const event of sleepWithHeartbeats(3, undefined, 0)) {
+      events.push(event.type);
+    }
+    // 3ms of wait with a clamped 1ms step -> exactly 3 beats, then termination (no spin).
+    expect(events).toHaveLength(3);
+  });
+
+  test("a NaN heartbeat interval waits the full duration instead of aborting after one beat", async () => {
+    const started = Date.now();
+    const events: string[] = [];
+    for await (const event of sleepWithHeartbeats(120, undefined, Number.NaN)) {
+      events.push(event.type);
+    }
+    // NaN falls back to the 1ms step: the full 120ms wait happens (120 beats), instead of the
+    // buggy NaN-chunk path that exited after one beat.
+    expect(events).toHaveLength(120);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(110);
+  });
+
+  test("zero wait yields nothing", async () => {
+    const events: string[] = [];
+    for await (const event of sleepWithHeartbeats(0, undefined)) {
+      events.push(event.type);
+    }
+    expect(events).toEqual([]);
+  });
+});
+
+describe("releaseResponseBodyBestEffort", () => {
+  test("a never-settling cancel() does not block past the bounded timeout", async () => {
+    const signal = new AbortController().signal;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        // Never settles — the release must still be bounded.
+        return new Promise<void>(() => {});
+      },
+    });
+    const started = Date.now();
+    await releaseResponseBodyBestEffort(body, signal, 120);
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    expect(elapsed).toBeLessThan(1_000);
+  });
+
+  test("a never-settling cancel() resolves immediately when the signal aborts", async () => {
+    const controller = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        return new Promise<void>(() => {});
+      },
+    });
+    const pending = releaseResponseBodyBestEffort(body, controller.signal, 60_000);
+    controller.abort(new DOMException("client disconnected", "AbortError"));
+    const started = Date.now();
+    await pending;
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  test("an already-aborted signal initiates cancellation without awaiting it", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let cancelInitiated = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelInitiated = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    await releaseResponseBodyBestEffort(body, controller.signal, 60_000);
+    expect(cancelInitiated).toBe(true);
+  });
+
+  test("null body is a no-op", async () => {
+    await expect(releaseResponseBodyBestEffort(null, new AbortController().signal, 10)).resolves.toBeUndefined();
   });
 });
 
@@ -177,5 +260,46 @@ describe("retryBackoffDelayMs", () => {
     } finally {
       randomSpy.mockRestore();
     }
+  });
+});
+
+
+describe("prepareSameTarget429Wait", () => {
+  test("releases the body then waits without heartbeats when no interval is set", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const events: string[] = [];
+    const started = Date.now();
+    for await (const event of prepareSameTarget429Wait({
+      body,
+      delayMs: 40,
+    })) {
+      events.push(event.type);
+    }
+    expect(cancelled).toBe(true);
+    expect(events).toEqual([]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(30);
+  });
+
+  test("yields heartbeats when a heartbeat interval is provided", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        return;
+      },
+    });
+    const events: string[] = [];
+    for await (const event of prepareSameTarget429Wait({
+      body,
+      delayMs: 30,
+      heartbeatIntervalMs: 10,
+    })) {
+      events.push(event.type);
+    }
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events.every(type => type === "heartbeat")).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { comboConfigError } from "../src/combos";
 import { providerContextCap } from "../src/providers/context-cap";
-import { rewriteProviderReferences } from "../src/providers/provider-id-rewrite";
+import { dropProviderCustomModels, rewriteProviderReferences } from "../src/providers/provider-id-rewrite";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 const FROM = "alibaba-token-plan";
@@ -130,4 +130,82 @@ test("does not touch providers[*].selectedModels", () => {
   } as unknown as OcxConfig;
   expect(rewriteProviderReferences(config, FROM, TO).changed).toBe(0);
   expect(config.providers.openrouter!.selectedModels).toEqual([`${FROM}/qwen3.7-max`]);
+});
+
+// ---------------------------------------------------------------------------
+// dropProviderCustomModels — the removal sibling of the rename pass (#1273)
+// ---------------------------------------------------------------------------
+
+function customModelsConfig(models: Array<{ id: string; provider: string; modelId: string }>): OcxConfig {
+  return {
+    providers: {
+      huggingface: { adapter: "openai-chat" },
+      "agnes-ai": { adapter: "openai-chat" },
+    },
+    customModels: models,
+  } as unknown as OcxConfig;
+}
+
+test("removal drops only the departing provider's custom models", () => {
+  const config = customModelsConfig([
+    { id: "a", provider: "agnes-ai", modelId: "agnes-2.5-flash" },
+    { id: "b", provider: "huggingface", modelId: "DeepSeek-V4-Flash-0731" },
+    { id: "c", provider: "huggingface", modelId: "another-model" },
+  ]);
+
+  expect(dropProviderCustomModels(config, "huggingface")).toBe(2);
+  expect(config.customModels).toEqual([
+    { id: "a", provider: "agnes-ai", modelId: "agnes-2.5-flash" },
+  ] as OcxConfig["customModels"]);
+});
+
+test("removing the last custom model deletes the key rather than leaving []", () => {
+  // The add/remove routes drop an emptied list, so the `customModels` field is
+  // absent either way. Only that field: the `customModelCatalogMigration`
+  // marker is deliberately preserved, so the two configs are not identical.
+  const config = customModelsConfig([
+    { id: "b", provider: "huggingface", modelId: "DeepSeek-V4-Flash-0731" },
+  ]);
+
+  expect(dropProviderCustomModels(config, "huggingface")).toBe(1);
+  expect(Object.hasOwn(config, "customModels")).toBe(false);
+});
+
+test("a provider with no custom models is a no-op that leaves the array identical", () => {
+  const rows = [{ id: "a", provider: "agnes-ai", modelId: "agnes-2.5-flash" }];
+  const config = customModelsConfig(rows);
+  const before = config.customModels;
+
+  expect(dropProviderCustomModels(config, "huggingface")).toBe(0);
+  // Same reference, not merely a deep-equal copy: an untouched save must not
+  // look like a mutation to anything comparing identity.
+  expect(config.customModels).toBe(before);
+});
+
+test("an absent customModels key is left absent", () => {
+  const config = { providers: { huggingface: { adapter: "openai-chat" } } } as unknown as OcxConfig;
+  expect(dropProviderCustomModels(config, "huggingface")).toBe(0);
+  expect(Object.hasOwn(config, "customModels")).toBe(false);
+});
+
+test("removal leaves the custom-model ownership marker untouched", () => {
+  // legacyOwnedSlugs records one-time ownership of pre-marker rows. Rewriting it
+  // here would change an older binary's view of what it may delete, which the
+  // migration module explicitly warns against.
+  const config = customModelsConfig([
+    { id: "a", provider: "agnes-ai", modelId: "agnes-2.5-flash" },
+    { id: "b", provider: "huggingface", modelId: "DeepSeek-V4-Flash-0731" },
+  ]);
+  const marker = {
+    version: 1,
+    legacyOwnedSlugs: ["agnes-ai/agnes-2.5-flash", "huggingface/DeepSeek-V4-Flash-0731"],
+  };
+  (config as unknown as Record<string, unknown>).customModelCatalogMigration = marker;
+
+  dropProviderCustomModels(config, "huggingface");
+
+  expect((config as unknown as Record<string, unknown>).customModelCatalogMigration).toEqual({
+    version: 1,
+    legacyOwnedSlugs: ["agnes-ai/agnes-2.5-flash", "huggingface/DeepSeek-V4-Flash-0731"],
+  });
 });

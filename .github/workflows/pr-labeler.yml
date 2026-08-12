@@ -68,10 +68,18 @@ jobs:
               owner, repo, issue_number: pr, per_page: 100,
             });
 
+            // Titles that carry no recognisable type (e.g. `stack 3/5: ...`)
+            // fall back to the PR's commits, which stay conventional even when
+            // the title does not. Covered by the existing `contents: read`.
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner, repo, pull_number: pr, per_page: 100,
+            });
+
             const plan = planTypeLabelSync({
               title: liveTitle,
               currentLabels: currentLabels.map((label) => label.name),
               events,
+              commitMessages: commits.map((commit) => commit.commit?.message || ''),
             });
 
             if (plan.skip) {

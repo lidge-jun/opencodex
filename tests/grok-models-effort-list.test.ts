@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
+import { SERVER_BUDGET_MS } from "./helpers/test-budget";
+
+// These cases start a real server and hit /v1/models. Keep the budget at the
+// server class so a slow runner does not turn a discovery probe into a flake.
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 const previousHome = process.env.OPENCODEX_HOME;
 let testHome = "";
@@ -18,6 +23,10 @@ function effortConfig(): OcxConfig {
       kimi: {
         adapter: "openai-chat",
         baseUrl: "https://kimi.test/v1",
+        // Configured tiers are the subject under test. Live discovery against
+        // the fake host can hang on DNS long enough to blow Bun's 5s default
+        // on Linux CI (shard 3), so keep the catalog pinned to config.
+        liveModels: false,
         models: ["k3", "kimi-for-coding"],
         modelReasoningEfforts: {
           k3: ["low", "high", "max"],
@@ -43,7 +52,13 @@ afterEach(() => {
 
 describe("raw /v1/models list reasoning-effort advertisement (Grok Build discovery)", () => {
   test("routed models with configured tiers advertise the Grok reasoning catalog shape", async () => {
-    saveConfig(effortConfig());
+    const config = effortConfig();
+    config.providers.openai = {
+      adapter: "openai-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      liveModels: false,
+    };
+    saveConfig(config);
     const server = startServer(0);
     try {
       const res = await fetch(new URL("/v1/models", server.url));

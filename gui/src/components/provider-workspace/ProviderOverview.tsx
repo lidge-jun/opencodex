@@ -2,7 +2,7 @@
  * ProviderOverview — 2-column layout: left (CONNECTION + Auth summary) / right
  * (STATS + Notes). Phase 030 of workspace design parity.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../../fetch-json";
 import { useT, useI18n } from "../../i18n/shared";
 import { IconAlert, IconCheck } from "../../icons";
@@ -12,6 +12,7 @@ import { accountQuotaFromReport, formatQuotaSourceLabel, type ProviderQuotaRepor
 import type { ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
 import type { ProviderUpdatePatch } from "./types";
+import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
 
 type ConnectionTestResult = {
   applicable?: boolean;
@@ -29,16 +30,17 @@ type ConnectionTestState = {
 };
 
 export default function ProviderOverview({
-  item, usageTotals, quotaReport, oauthEmail,
+  item, usageTotals, quotaReport, oauthEmail, oauth,
   apiBase, connectionIdentity,
   onEditSettings, onViewUsage, onUpdateProvider,
   onReauthenticate, onCancelLogin, reauthBusy = false,
-  accountPanel,
 }: {
   item: WorkspaceItem;
   usageTotals?: ProviderUsageTotals;
   quotaReport?: ProviderQuotaReportView;
   oauthEmail?: string;
+  /** Login state for OAuth summaries that carry no email (e.g. Cursor/Kimi). */
+  oauth?: { loggedIn?: boolean };
   apiBase?: string;
   /** Opaque active credential identity used only to invalidate stale probe results. */
   connectionIdentity?: string;
@@ -48,12 +50,6 @@ export default function ProviderOverview({
   onReauthenticate?: () => void;
   onCancelLogin?: () => void;
   reauthBusy?: boolean;
-  /**
-   * WP3: the same account rows the Accounts tab renders, backed by the same shared
-   * state. Overview is the main surface, so the operations live here too; the
-   * duplication is intentional (D2) and cannot desync because both read one controller.
-   */
-  accountPanel?: ReactNode;
 }) {
   const t = useT();
   const { locale } = useI18n();
@@ -205,58 +201,62 @@ export default function ProviderOverview({
         )}
       </section>
 
-      {accountPanel ? (
-        <section className="pws-section" aria-label={t("pws.availableAccounts")}>
-          {accountPanel}
-        </section>
-      ) : (
-        <section className="pws-section" aria-label={t("pws.authSummary")}>
-          <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
-          {needsAttention ? (
-            <div className="pws-auth-summary pws-auth-summary--warn" role="status">
-              <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
-              <div className="pws-auth-summary-body">
-                <span>
-                  <strong>{t("pws.status.needsAttention")}</strong>
-                  {" — "}
-                  {item.authMode === "forward"
-                    ? t("pws.attention.reauthForward")
-                    : t("pws.attention.reauth")}
-                </span>
-                {onReauthenticate && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    disabled={reauthBusy}
-                    onClick={() => onReauthenticate()}
-                  >
-                    {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
-                  </button>
-                )}
-                {reauthBusy && onCancelLogin && (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
-                    {t("common.cancel")}
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="pws-auth-summary">
-              <span className="pws-auth-dot" />
-              <span>
-                {item.authMode === "forward"
-                  ? t("pws.passthrough")
-                  : item.authMode === "oauth"
-                    ? (oauthEmail ? t("pws.loggedInAs", { email: oauthEmail }) : t("pws.notLoggedIn"))
-                    : item.hasApiKey
-                      ? t("pws.apiKeyConfigured")
-                      : authModeLabel(item, t)}
-              </span>
-            </div>
-          )}
-
+      {quotaReport && (
+        <section className="pws-section" aria-label={t("pws.rateLimits")}>
+          <h3 className="pws-section-title">{t("pws.rateLimits")}</h3>
+          <ProviderCapacityQuota report={quotaReport} pending={false} />
         </section>
       )}
+
+      <section className="pws-section" aria-label={t("pws.authSummary")}>
+        <h3 className="pws-section-title">{t("pws.authSummary")}</h3>
+        {needsAttention ? (
+          <div className="pws-auth-summary pws-auth-summary--warn" role="status">
+            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
+            <div className="pws-auth-summary-body">
+              <span>
+                <strong>{t("pws.status.needsAttention")}</strong>
+                {" — "}
+                {item.authMode === "forward"
+                  ? t("pws.attention.reauthForward")
+                  : t("pws.attention.reauth")}
+              </span>
+              {onReauthenticate && (
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={reauthBusy}
+                  onClick={() => onReauthenticate()}
+                >
+                  {reauthBusy ? t("prov.waitingBrowser") : t("pws.reauthenticate")}
+                </button>
+              )}
+              {reauthBusy && onCancelLogin && (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => onCancelLogin()}>
+                  {t("common.cancel")}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="pws-auth-summary">
+            <span className="pws-auth-dot" />
+            <span>
+              {item.authMode === "forward"
+                ? t("pws.passthrough")
+                : item.authMode === "oauth"
+                  ? (oauthEmail
+                    ? t("pws.loggedInAs", { email: oauthEmail })
+                    : oauth?.loggedIn
+                      ? t("pws.loggedInTitle")
+                      : t("pws.notLoggedIn"))
+                  : item.hasApiKey
+                    ? t("pws.apiKeyConfigured")
+                    : authModeLabel(item, t)}
+            </span>
+          </div>
+        )}
+      </section>
       </div>
 
       <aside className="pws-overview-sidebar">

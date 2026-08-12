@@ -1,6 +1,7 @@
 import { Trans } from "../i18n/provider";
 import type { TFn } from "../i18n/shared";
 import { EmptyState } from "../ui";
+import { formatProviderDisplayName } from "../provider-icons";
 import type { ProviderInfo } from "./dashboard-shared";
 
 export function DashboardProvidersSection({
@@ -22,7 +23,7 @@ export function DashboardProvidersSection({
             <tbody>
               {providers.map(p => (
                 <tr key={p.name}>
-                  <td className="font-semibold">{p.name}</td>
+                  <td className="font-semibold">{formatProviderDisplayName(p.name, t)}</td>
                   <td><span className="chip">{p.adapter}</span></td>
                   <td className="muted mono text-label">{p.baseUrl}</td>
                   <td className="muted">{p.defaultModel ?? "—"}</td>

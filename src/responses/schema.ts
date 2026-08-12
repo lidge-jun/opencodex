@@ -107,7 +107,7 @@ export const toolSchema = z.object({
 const builtinToolSchema = z.object({ type: z.string() }).loose();
 
 const hostedToolType = z.enum([
-  "web_search_preview", "file_search", "computer_use_preview",
+  "web_search", "web_search_preview", "file_search", "computer_use_preview",
   "code_interpreter", "image_generation", "mcp",
 ]);
 

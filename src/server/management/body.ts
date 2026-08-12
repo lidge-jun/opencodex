@@ -11,6 +11,12 @@ export function readManagementJsonBody<T = unknown>(req: Request): Promise<T> {
   return readBoundedJsonRequestBody(req, MANAGEMENT_JSON_BODY_MAX_BYTES) as Promise<T>;
 }
 
+export function readOptionalManagementJsonBody<T = unknown>(req: Request): Promise<T> {
+  return readBoundedJsonRequestBody(req, MANAGEMENT_JSON_BODY_MAX_BYTES, undefined, {
+    emptyBodyFallback: {},
+  }) as Promise<T>;
+}
+
 export function managementBodyTooLargeResponse(
   error: unknown,
   req: Request,

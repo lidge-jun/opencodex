@@ -8,15 +8,15 @@ function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig
     baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
     apiKey: "sk-test",
     authMode: "key",
-    preserveReasoningContentModels: ["qwen3.8-max-preview"],
-    thinkingBudgetModels: ["qwen3.8-max-preview"],
+    preserveReasoningContentModels: ["qwen3.8-max"],
+    thinkingBudgetModels: ["qwen3.8-max"],
     ...overrides,
   };
 }
 
 function parsedWithThinkingHistory(): OcxParsedRequest {
   return {
-    modelId: "qwen3.8-max-preview",
+    modelId: "qwen3.8-max",
     context: {
       messages: [
         { role: "user", content: "fix the bug in auth.ts", timestamp: 1 },
@@ -102,10 +102,10 @@ describe("Qwen 3.8 reasoning_content preservation", () => {
     expect(assistantMsgs[1].reasoning_content).toBeUndefined();
   });
 
-  test("registry includes qwen3.8-max-preview in alibaba-token-plan preserveReasoningContentModels", async () => {
+  test("registry includes qwen3.8-max in alibaba-token-plan preserveReasoningContentModels", async () => {
     const { PROVIDER_REGISTRY } = await import("../src/providers/registry");
     const alibaba = PROVIDER_REGISTRY.find(e => e.id === "alibaba-token-plan");
     expect(alibaba).toBeDefined();
-    expect(alibaba!.preserveReasoningContentModels).toContain("qwen3.8-max-preview");
+    expect(alibaba!.preserveReasoningContentModels).toContain("qwen3.8-max");
   });
 });

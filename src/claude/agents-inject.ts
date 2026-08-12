@@ -15,7 +15,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { claudeCodeAlias, claudeCodeNativeAlias } from "./alias";
-import { resolveAutoContext, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
+import { AUTO_CONTEXT_OFF, shouldMarkOneMillion, stripOneMillionMarker, withOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
 import { DEFAULT_SUBAGENT_MODELS, hasOwnProvider } from "../config";
 import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
@@ -58,6 +58,27 @@ function pickerDefaultModel(configDir: string): string | null {
 /** Roster entry -> alias + display parts. Entries are bare native slugs or "provider/id".
  * Codex-facing encoded ids (`provider/vendor-model`) decode to the native slash id first
  * so the alias joins the raw-native context-window map (context-windows.ts). */
+
+/**
+ * Generated subagent defs cannot rely on the parent's auto-context compaction
+ * pairing, so their [1m] marker follows the AUTHORITATIVE window only: mark when
+ * the effective window (exact selector, then the canonical [1m] form, then bare)
+ * is genuinely >= 1M; strip an inherited unsafe marker back to the bare selector;
+ * with no window information, keep the selector as it was. Genuine routed [1m]
+ * ids are preserved through the canonical-exact lookup. (#854)
+ */
+function withSubagentContextMarker(selector: string, windows: Record<string, number>): string {
+  const bare = stripOneMillionMarker(selector);
+  const wasMarked = selector !== bare;
+  const canonicalExact = wasMarked ? `${bare}[1m]` : selector;
+  const authoritativeWindow = windows[selector] ?? windows[canonicalExact] ?? windows[bare];
+  if (typeof authoritativeWindow === "number" && authoritativeWindow > 0) {
+    return shouldMarkOneMillion(authoritativeWindow, AUTO_CONTEXT_OFF)
+      ? (withOneMillionMarker(selector, windows) ?? selector)
+      : bare;
+  }
+  return wasMarked ? selector : bare;
+}
 function entryParts(entry: string, config: OcxConfig): { alias: string; id: string; provider: string } {
   const slash = entry.indexOf("/");
   if (slash > 0) {
@@ -72,7 +93,6 @@ function entryParts(entry: string, config: OcxConfig): { alias: string; id: stri
 }
 
 export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, number>, configDir = claudeConfigDir()): ClaudeAgentDef[] {
-  const auto = resolveAutoContext(config.claudeCode);
   const blockedSkills = effectiveBlockedSkillNames(config.claudeCode);
   const blockedSkillsFor = (model: string): readonly string[] => {
     const unmarked = stripOneMillionMarker(model);
@@ -87,8 +107,10 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   const coveredModels = new Set<string>();
 
   const push = (name: string, alias: string, description: string) => {
-    // Effective model value: [1m] marking follows the same predicate as env slots.
-    const model = withOneMillionMarker(alias, windows, auto) ?? alias;
+    // Generated defs mark [1m] on the authoritative window only — never the
+    // main-session auto-context predicate (a 372K route marked [1m] would be
+    // accounted at 1M with no compaction safety net in the subagent).
+    const model = withSubagentContextMarker(alias, windows);
     const bare = alias.toLowerCase();
     if (coveredModels.has(bare)) return;
     coveredModels.add(bare);
@@ -120,7 +142,7 @@ export function buildClaudeAgentDefs(config: OcxConfig, windows: Record<string, 
   // the next launch sync — documented limit. No resolvable default -> no self def.
   const selfModel = pickerDefaultModel(configDir) ?? (config.claudeCode?.model?.trim() || null);
   if (selfModel) {
-    const marked = withOneMillionMarker(selfModel, windows, auto) ?? selfModel;
+    const marked = withSubagentContextMarker(selfModel, windows);
     defs.push({
       file: `${OWNED_PREFIX}self.md`,
       name: `${OWNED_PREFIX}self`,

@@ -76,8 +76,10 @@ describe("collectOAuthDoctorChecks", () => {
   });
 
   test("labels management auth failure without claiming the proxy is down", async () => {
+    const attestationSecret = "A".repeat(43);
     const checks = await collectOAuthDoctorChecks(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async () => new Response("unauthorized", { status: 401 }),
     });
     const warn = checks.find((c) => c.level === "WARN" && c.message.includes("Codex account health unavailable"));
@@ -89,8 +91,10 @@ describe("collectOAuthDoctorChecks", () => {
   });
 
   test("Codex needsReauth WARN comes from management API, not CLI process maps", async () => {
+    const attestationSecret = "A".repeat(43);
     const checks = await collectOAuthDoctorChecks(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async () =>
         new Response(JSON.stringify({
           accounts: [{

@@ -159,23 +159,24 @@ export default function AnthropicAccountPoolSettings({
                   : t("anthropicPool.disabledDesc")}
           </div>
         </div>
-        <label className="toggle" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={toggleDisabled}
-            onChange={(event) => {
-              const next = event.target.checked;
-              void save({
-                enabled: next,
-                threshold,
-                strategy,
-                stickyLimit,
-              });
-            }}
-          />
-          <span>{enabled ? t("anthropicPool.on") : t("anthropicPool.off")}</span>
-        </label>
+        <button
+          type="button"
+          className={`toggle ${enabled ? "on" : ""}`}
+          disabled={toggleDisabled}
+          aria-pressed={enabled}
+          aria-label={t("anthropicPool.title")}
+          title={enabled ? t("anthropicPool.on") : t("anthropicPool.off")}
+          onClick={() => {
+            void save({
+              enabled: !enabled,
+              threshold,
+              strategy,
+              stickyLimit,
+            });
+          }}
+        >
+          <span className="toggle-knob" />
+        </button>
       </div>
 
       <div
@@ -183,7 +184,7 @@ export default function AnthropicAccountPoolSettings({
         className="card-sub"
         style={{
           marginTop: 10,
-          padding: "8px 10px",
+          padding: "10px 16px",
           border: "1px solid var(--border, #c9a227)",
           borderRadius: 6,
           background: "color-mix(in srgb, var(--warn, #c9a227) 12%, transparent)",

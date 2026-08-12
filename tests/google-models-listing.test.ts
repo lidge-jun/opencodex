@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildCatalogEntries, gatherRoutedModels as gatherRoutedModelsDirect } from "../src/codex/catalog";
 import { buildModelsRequest } from "../src/oauth";
 import { clearModelCache, getStaleCached } from "../src/codex/model-cache";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
@@ -10,10 +13,13 @@ const gatherRoutedModels: typeof gatherRoutedModelsDirect = (config, options) =>
   gatherRoutedModelsDirect(withStubbedProviderFetch(config), options);
 
 const originalFetch = globalThis.fetch;
+const originalOpencodexHome = process.env.OPENCODEX_HOME;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
   clearModelCache();
+  if (originalOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = originalOpencodexHome;
 });
 
 function configWith(name: string, prov: Partial<OcxProviderConfig>): OcxConfig {
@@ -38,13 +44,15 @@ describe("buildModelsRequest google routing", () => {
     expect(headers["x-goog-api-key"]).toBe("gk-123");
   });
 
-  test("an explicit Antigravity live-discovery override keeps Authorization: Bearer", () => {
-    // Static discovery is the preset default. If a user explicitly opts into the generic probe,
-    // a saved config may still omit googleMode — the registry's cloud-code-assist mode must win.
+  test("Antigravity uses its authenticated CCA model-discovery RPC", () => {
+    // A saved config may omit googleMode — the registry's cloud-code-assist mode must win.
     const prov = { adapter: "google", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com", liveModels: true } as OcxProviderConfig;
-    const { url, headers } = buildModelsRequest(prov, "oauth-token", "google-antigravity");
-    expect(url).toBe("https://daily-cloudcode-pa.googleapis.com/models");
+    const { method, url, headers } = buildModelsRequest(prov, "oauth-token", "google-antigravity");
+    expect(method).toBe("POST");
+    expect(url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
     expect(headers["Authorization"]).toBe("Bearer oauth-token");
+    expect(headers["Content-Type"]).toBe("application/json");
+    expect(headers.Accept).toBe("application/json");
     expect(headers["x-goog-api-key"]).toBeUndefined();
   });
 
@@ -52,6 +60,175 @@ describe("buildModelsRequest google routing", () => {
     const prov = { adapter: "google", authMode: "key", baseUrl: "https://aiplatform.googleapis.com" } as OcxProviderConfig;
     const { url } = buildModelsRequest(prov, "gk-123", "google-vertex");
     expect(url).toBe("https://aiplatform.googleapis.com/models");
+  });
+});
+
+describe("Antigravity live model discovery", () => {
+  test("uses the CCA agent list and applies CCA metadata", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-discovery-"));
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+            projectId: "project-id",
+          },
+        }],
+      },
+    }));
+    const seen: { url: string; init?: RequestInit }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), init });
+      return Response.json({
+        models: {
+          "gemini-3.6-flash-low": { maxTokens: 1_048_576, supportsImages: true, supportsThinking: true, thinkingBudget: 1000 },
+          "gemini-3.6-flash-high": { maxTokens: 1_048_576, supportsImages: true, supportsThinking: true, thinkingBudget: 10000 },
+          "future-agent-model": { maxTokens: 333_333, supportsImages: false, supportsThinking: true, thinkingBudget: 7777 },
+          "gemini-3.1-flash-image": { maxTokens: 555_555, supportsImages: true },
+          "non-agent-command-model": { maxTokens: 222_222 },
+          "tab-only-model": { maxTokens: 32_768 },
+        },
+        agentModelSorts: [{ groups: [{ modelIds: [
+          "future-agent-model", "gemini-3.6-flash-low", "gemini-3.6-flash-high",
+        ] }] }],
+        imageGenerationModelIds: ["gemini-3.1-flash-image"],
+        tabModelIds: ["tab-only-model"],
+        commandModelIds: ["non-agent-command-model"],
+      });
+    }) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels(configWith("google-antigravity", {
+        adapter: "google",
+        authMode: "oauth",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        project: "configured-project",
+        liveModels: true,
+        models: ["configured-only"],
+      }));
+      const live = models.filter(model => model.provider === "google-antigravity");
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.url).toBe("https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels");
+      expect(seen[0]?.init?.method).toBe("POST");
+      expect((seen[0]?.init?.headers as Record<string, string>).Authorization).toBe("Bearer access-token");
+      expect(JSON.parse(String(seen[0]?.init?.body))).toEqual({ project: "configured-project" });
+      expect(live.map(model => model.id).sort()).toEqual([
+        "future-agent-model",
+        "gemini-3.1-flash-image",
+        "gemini-3.6-flash-high",
+        "gemini-3.6-flash-low",
+      ]);
+      expect(live.find(model => model.id === "gemini-3.6-flash-low")).toMatchObject({
+        contextWindow: 1_048_576,
+        inputModalities: ["text", "image"],
+        reasoningEfforts: [],
+      });
+      expect(live.find(model => model.id === "future-agent-model")).toMatchObject({
+        contextWindow: 333_333,
+        inputModalities: ["text"],
+        reasoningEfforts: [],
+      });
+      expect(live.map(model => model.id)).not.toContain("tab-only-model");
+      expect(live.map(model => model.id)).not.toContain("non-agent-command-model");
+
+      const catalog = buildCatalogEntries(null, [], live);
+      const flashLow = catalog.find(entry => entry.slug === "google-antigravity/gemini-3.6-flash-low");
+      const flashHigh = catalog.find(entry => entry.slug === "google-antigravity/gemini-3.6-flash-high");
+      const future = catalog.find(entry => entry.slug === "google-antigravity/future-agent-model");
+      expect(flashLow).toMatchObject({
+        context_window: 1_048_576,
+        max_context_window: 1_048_576,
+        auto_compact_token_limit: 943_718,
+        input_modalities: ["text", "image"],
+      });
+      expect(flashLow).not.toHaveProperty("default_reasoning_level");
+      expect(flashLow?.supported_reasoning_levels).toEqual([]);
+      expect(flashHigh).toBeDefined();
+      expect(catalog.map(entry => entry.slug)).not.toContain("google-antigravity/gemini-3.6-flash");
+      expect(catalog.map(entry => entry.slug)).not.toContain("google-antigravity/gemini-3.6-flash-medium");
+      expect(future).toMatchObject({
+        context_window: 333_333,
+        max_context_window: 333_333,
+        auto_compact_token_limit: 299_999,
+        input_modalities: ["text"],
+      });
+      expect(future).not.toHaveProperty("default_reasoning_level");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("degrades malformed CCA agent IDs to the configured static catalog", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-antigravity-malformed-discovery-"));
+    process.env.OPENCODEX_HOME = home;
+    writeFileSync(join(home, "auth.json"), JSON.stringify({
+      "google-antigravity": {
+        activeAccountId: "active",
+        accounts: [{
+          id: "active",
+          credential: {
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 3_600_000,
+            projectId: "project-id",
+          },
+        }],
+      },
+    }));
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => Response.json({
+      models: { "bad\u0000model": { maxTokens: 1_048_576 } },
+      agentModelSorts: [{ groups: [{ modelIds: ["bad\u0000model"] }] }],
+    })) as typeof fetch;
+
+    try {
+      const models = await gatherRoutedModels(configWith("google-antigravity", {
+        adapter: "google",
+        authMode: "oauth",
+        baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+        liveModels: true,
+        models: ["configured-only"],
+      }));
+
+      expect(models.filter(model => model.provider === "google-antigravity").map(model => model.id))
+        .toEqual(["configured-only"]);
+      expect(getStaleCached("google-antigravity")).toBeNull();
+    } finally {
+      warning.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("uses the configured key for a custom CCA provider", async () => {
+    const seen: { headers: Record<string, string> }[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ headers: (init?.headers ?? {}) as Record<string, string> });
+      return Response.json({
+        models: { "custom-agent-model": { maxTokens: 1_048_576 } },
+        agentModelSorts: [{ groups: [{ modelIds: ["custom-agent-model"] }] }],
+      });
+    }) as typeof fetch;
+
+    const models = await gatherRoutedModels(configWith("custom-cca", {
+      adapter: "google",
+      authMode: "key",
+      apiKey: "custom-cca-key",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      googleMode: "cloud-code-assist",
+      project: "configured-project",
+      liveModels: true,
+    }));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.headers.Authorization).toBe("Bearer custom-cca-key");
+    expect(models.filter(model => model.provider === "custom-cca").map(model => model.id))
+      .toEqual(["custom-agent-model"]);
   });
 });
 

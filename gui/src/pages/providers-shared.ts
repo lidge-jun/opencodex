@@ -9,6 +9,7 @@ export interface ProvidersConfig {
     defaultModel?: string;
     models?: string[];
     liveModels?: boolean;
+    reasoningWireFormat?: "gateway-object";
     authMode?: string;
     keyOptional?: boolean;
     disabled?: boolean;

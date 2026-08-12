@@ -39,7 +39,7 @@ import { extractKiroImages, normalizeKiroImages, type KiroImage } from "./kiro-i
 import { sniffImageDimensions } from "./anthropic-image-guard";
 import { fetchKiroWithRetry, noteKiroTransientThrottle } from "./kiro-retry";
 import { convertKiroToolContext } from "./kiro-tools";
-import { neutralizeIdentity } from "./identity";
+import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeFromNames } from "./tool-catalog-nudge";
 import {
   KIRO_COMPLETION_INSTRUCTIONS,
@@ -99,7 +99,11 @@ interface KiroUserInputMessage {
 }
 interface KiroHistoryEntry {
   userInputMessage?: KiroUserInputMessage;
-  assistantResponseMessage?: { content: string; toolUses?: KiroToolUse[] };
+  assistantResponseMessage?: {
+    content: string;
+    toolUses?: KiroToolUse[];
+    reasoningContent?: { redactedContent: string };
+  };
 }
 
 function kiroToolWireNames(tools: readonly unknown[]): string[] {
@@ -326,7 +330,7 @@ function validateKiroCapabilities(parsed: OcxParsedRequest): void {
 
 type KiroTurn =
   | { kind: "user"; content: string; images: KiroImage[]; toolResults: KiroToolResult[] }
-  | { kind: "assistant"; content: string; toolUses: KiroToolUse[] };
+  | { kind: "assistant"; content: string; toolUses: KiroToolUse[]; redactedReasoning?: string };
 
 function appendTurnText(target: string, next: string): string {
   if (!next) return target;
@@ -381,9 +385,21 @@ function validateKiroConversationState(history: KiroHistoryEntry[], currentMessa
 function boundedInjectedInstruction(text: string, used: { value: number }): string | undefined {
   const remaining = MAX_KIRO_INJECTED_INSTRUCTION_CHARS - used.value;
   if (remaining <= 0 || !text) return undefined;
-  const result = text.length <= remaining ? text : text.slice(0, remaining);
+  let result = text.length <= remaining ? text : text.slice(0, remaining);
+  // Never end the slice on a lone high surrogate: encoding it substitutes
+  // U+FFFD into the injected instruction. One step back keeps a valid pair
+  // out instead of a broken half.
+  if (result.length > 0) {
+    const last = result.charCodeAt(result.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) result = result.slice(0, -1);
+  }
   used.value += result.length;
-  return result;
+  return result.length > 0 ? result : undefined;
+}
+
+/** Test-only: exercise the surrogate-safe instruction bound directly. */
+export function boundedInjectedInstructionForTests(text: string, used: { value: number }): string | undefined {
+  return boundedInjectedInstruction(text, used);
 }
 
 function kiroCompletionTool(): Record<string, unknown> {
@@ -431,9 +447,10 @@ export function buildKiroPayload(
   const nameMap = toolContext.nameMap;
   const systemParts: string[] = [];
   const injectedChars = { value: 0 };
-  // Neutralize Codex's GPT-5 identity line so a routed Kiro model never misreports as GPT-5/OpenAI
-  // and the proxy identity never leaks upstream.
-  if (parsed.context.systemPrompt?.length) systemParts.push(neutralizeIdentity(parsed.context.systemPrompt.join("\n\n")));
+  // Name the Kiro model id actually sent on the wire without leaking the proxy identity upstream.
+  if (parsed.context.systemPrompt?.length) {
+    systemParts.push(identifyRoutedModel(parsed.context.systemPrompt.join("\n\n"), modelId));
+  }
   for (const addition of toolContext.systemAdditions) {
     const boundedAddition = boundedInjectedInstruction(addition, injectedChars);
     if (boundedAddition) systemParts.push(boundedAddition);
@@ -458,13 +475,15 @@ export function buildKiroPayload(
       turns.push({ kind: "user", content, images: [...images], toolResults: [...toolResults] });
     }
   };
-  const pushAssistant = (content: string, toolUses: KiroToolUse[]): void => {
+  const pushAssistant = (content: string, toolUses: KiroToolUse[], redactedReasoning?: string): void => {
     const last = turns.at(-1);
     if (last?.kind === "assistant") {
       last.content = appendTurnText(last.content, content);
       last.toolUses.push(...toolUses);
+      // Merged turns keep the newest blob: it covers the reasoning up to the merged turn's end.
+      if (redactedReasoning) last.redactedReasoning = redactedReasoning;
     } else {
-      turns.push({ kind: "assistant", content, toolUses: [...toolUses] });
+      turns.push({ kind: "assistant", content, toolUses: [...toolUses], ...(redactedReasoning ? { redactedReasoning } : {}) });
     }
   };
 
@@ -494,7 +513,7 @@ export function buildKiroPayload(
         const hasReasoning = aMsg.content.some(part => part.type === "thinking" && part.thinking.trim());
         if (hasReasoning) continue;
       }
-      pushAssistant(text, toolUses);
+      pushAssistant(text, toolUses, aMsg.kiroRedactedReasoning);
     } else if (msg.role === "toolResult") {
       const tr = msg as OcxToolResultMessage;
       if (tr.containsEncryptedContent) {
@@ -548,6 +567,7 @@ export function buildKiroPayload(
         assistantResponseMessage: {
           content: turn.content,
           ...(turn.toolUses.length > 0 ? { toolUses: turn.toolUses } : {}),
+          ...(turn.redactedReasoning ? { reasoningContent: { redactedContent: turn.redactedReasoning } } : {}),
         },
       }
     : {
@@ -1170,6 +1190,12 @@ async function* parseKiroAttemptEvents(
           if (ev.data) {
             yield* emitRetained(stage({ type: "reasoning_raw_delta", text: ev.data }));
           }
+          if (ev.redactedContent) {
+            yield* emitRetained(stage({ type: "kiro_redacted_reasoning", data: ev.redactedContent }));
+          }
+          break;
+        case "context_usage":
+          if (ev.contextUsagePercentage > 0) contextUsagePercentage = ev.contextUsagePercentage;
           break;
         case "tool": {
           for (const contentEvent of thinking.flush()) {

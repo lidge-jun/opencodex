@@ -16,6 +16,7 @@ const USAGE = `Usage:
   ocx combo set <id> --targets <provider/model[:weight],...>
       [--strategy <failover|round-robin>] [--sticky <1-100>]
       [--effort <low|medium|high|xhigh|max|ultra|->] [--alias <name|->]
+      [--native-alias] [--display-name <label|->]
       [--rename-from <id>] [--json]
   ocx combo remove <id> --yes [--json]`;
 
@@ -77,6 +78,8 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (stickyLimit > 100) throw new CliUsageError("--sticky must be <= 100", USAGE);
   const effort = takeOption(args, "--effort");
   const alias = takeOption(args, "--alias");
+  const nativeAlias = takeFlag(args, "--native-alias");
+  const displayName = takeOption(args, "--display-name");
   const renameFrom = takeOption(args, "--rename-from");
   rejectArgs(args, USAGE);
   const combo: Record<string, unknown> = {
@@ -86,6 +89,8 @@ async function set(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   };
   if (effort !== undefined) combo.defaultEffort = effort === "-" ? null : effort;
   if (alias !== undefined) combo.alias = alias === "-" ? "" : alias;
+  if (nativeAlias) combo.nativeAlias = true;
+  if (displayName !== undefined) combo.displayName = displayName === "-" ? "" : displayName;
   const result = await runtimeRequest("/api/combos", {
     method: "PUT",
     body: JSON.stringify({ id, combo, ...(renameFrom ? { renameFrom } : {}) }),

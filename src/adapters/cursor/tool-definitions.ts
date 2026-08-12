@@ -8,6 +8,9 @@ export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
 export const CODEX_SHELL_COMMAND_TOOL = "shell_command";
 export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
+export const CURSOR_EDIT_FILE_TOOL = "edit_file";
+export const CURSOR_MULTI_EDIT_TOOL = "multi_edit";
+export const CURSOR_STRUCTURED_EDIT_TOOLS = [CURSOR_EDIT_FILE_TOOL, CURSOR_MULTI_EDIT_TOOL] as const;
 export const CURSOR_EXEC_COMMAND_TOOL = CODEX_EXEC_COMMAND_TOOL;
 export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL] as const;
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
@@ -38,6 +41,47 @@ export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
     max_output_tokens: { type: "number", description: "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy." },
   },
   required: ["cmd"],
+  additionalProperties: false,
+} as const;
+
+/**
+ * Structured single-replacement schema advertised to Cursor models in addition to the freeform
+ * `apply_patch` tool. Cursor-trained models reliably emit exact-match replacements (the native
+ * Edit shape) but cannot produce Codex's freeform patch grammar, so every file edit attempt on the
+ * Cursor route produced malformed `apply_patch` payloads that the Codex client rejected locally
+ * (#1017). Calls to this tool are converted server-side into a valid apply_patch payload.
+ */
+export const CURSOR_EDIT_FILE_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    file_path: { type: "string", description: "Path of the file to edit, relative to the workspace root." },
+    old_string: { type: "string", description: "Exact text to replace. Must match the current file content, including line breaks." },
+    new_string: { type: "string", description: "Replacement text. Empty removes the matched text." },
+  },
+  required: ["file_path", "old_string", "new_string"],
+  additionalProperties: false,
+} as const;
+
+/** Structured multi-replacement schema; mirrors Cursor's native MultiEdit shape. */
+export const CURSOR_MULTI_EDIT_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    file_path: { type: "string", description: "Path of the file to edit, relative to the workspace root." },
+    edits: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          old_string: { type: "string", description: "Exact text to replace. Must match the current file content, including line breaks." },
+          new_string: { type: "string", description: "Replacement text. Empty removes the matched text." },
+        },
+        required: ["old_string", "new_string"],
+        additionalProperties: false,
+      },
+      description: "Ordered replacement edits for this file. Each old_string must match the current file content.",
+    },
+  },
+  required: ["file_path", "edits"],
   additionalProperties: false,
 } as const;
 
@@ -138,6 +182,73 @@ export function cursorRequestAdvertisesApplyPatch(
 ): boolean {
   const catalog = tools ?? [];
   return catalog.some(tool => !tool.namespace && tool.name === CODEX_APPLY_PATCH_TOOL && tool.freeform === true && cursorToolAllowedByChoice(tool, toolChoice, catalog));
+}
+
+export function isCursorStructuredEditToolName(name: string): boolean {
+  return (CURSOR_STRUCTURED_EDIT_TOOLS as readonly string[]).includes(name);
+}
+
+/** Internal provenance gate for synthetic edits after prompt filtering and catalog budgeting. */
+export function isCursorSyntheticStructuredEditTool(
+  tool: Pick<OcxTool, "namespace" | "name" | "cursorStructuredEdit">,
+): boolean {
+  return !tool.namespace && tool.cursorStructuredEdit === true && isCursorStructuredEditToolName(tool.name);
+}
+
+/**
+ * Synthetic structured edit tools for the Cursor route (#1017).
+ *
+ * Codex exposes `apply_patch` as a freeform custom tool whose body must be the exact Codex patch
+ * grammar (`*** Begin Patch` envelope, `@@` hunks, `-`/`+` prefixes). Cursor-trained models are
+ * trained on exact-match edit tools instead and emit malformed patch text on every attempt, which
+ * the Codex client then rejects locally ("invalid hunk"). When the request advertises the freeform
+ * `apply_patch` tool, also advertise Cursor-native-shaped `edit_file` / `multi_edit` tools; the
+ * adapter converts their exact-match replacements into a valid apply_patch payload (see
+ * protobuf-events.translateStructuredEditCall).
+ *
+ * Never widened when the caller pinned an explicit tool choice: a forced `apply_patch` selection
+ * must not gain sibling tools the client did not ask for.
+ */
+export function cursorStructuredEditTools(
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): OcxTool[] {
+  if (!cursorRequestAdvertisesApplyPatch(tools, toolChoice)) return [];
+  if (toolChoice && toolChoice !== "auto" && toolChoice !== "required") return [];
+  // Never shadow an already-advertised bare tool with the same name (a client catalog could
+  // legitimately expose its own `edit_file` / `multi_edit` MCP-style tools).
+  const existingBareNames = new Set(
+    (tools ?? []).filter(tool => !tool.namespace).map(tool => tool.name),
+  );
+  const candidates: OcxTool[] = [
+    {
+      name: CURSOR_EDIT_FILE_TOOL,
+      cursorStructuredEdit: true,
+      description:
+        "Replace one block of exact text in a file. OpenCodex converts the replacement into a Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
+      parameters: { ...CURSOR_EDIT_FILE_INPUT_SCHEMA },
+    },
+    {
+      name: CURSOR_MULTI_EDIT_TOOL,
+      cursorStructuredEdit: true,
+      description:
+        "Apply several exact-text replacements to one file. OpenCodex converts the edits into a single Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. Each old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Edits are independent: every old_string is matched against the ORIGINAL file content, so a later edit must not rely on text introduced by an earlier one. Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
+      parameters: { ...CURSOR_MULTI_EDIT_INPUT_SCHEMA },
+    },
+  ];
+  return candidates.filter(tool => !existingBareNames.has(tool.name));
+}
+
+/**
+ * True when this request actually advertises the synthetic structured edit tools (`edit_file` /
+ * `multi_edit`) — i.e. a freeform `apply_patch` is advertised, no tool-choice pin blocks widening,
+ * and neither name is shadowed by an existing bare tool in the client catalog.
+ */
+export function cursorRequestAdvertisesStructuredEdits(
+  tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
+  toolChoice?: OcxRequestOptions["toolChoice"],
+): boolean {
+  return cursorStructuredEditTools(tools, toolChoice).length > 0;
 }
 
 export function cursorToolWireName(tool: Pick<OcxTool, "namespace" | "name">): string {
@@ -415,6 +526,9 @@ export function buildCursorToolGuidanceSystemNote(
   const hasBareExec = shellBridgeNames.length > 0;
   const shellBridgeLabel = quotedNames(shellBridgeNames.length > 0 ? shellBridgeNames : [...CODEX_SHELL_BRIDGE_TOOL_NAMES]);
   const hasApplyPatch = cursorRequestAdvertisesApplyPatch(tools, toolChoice);
+  const structuredEditNames = tools
+    ?.filter(tool => !tool.namespace && isCursorStructuredEditToolName(tool.name))
+    .map(tool => tool.name) ?? [];
   const discoveryTools = discoveryToolLabel(wireNames);
   const unavailableNeighborNames = unavailableNeighborAgentToolNames(wireNames);
   // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
@@ -443,7 +557,9 @@ export function buildCursorToolGuidanceSystemNote(
       ? `For file read/search/listing, use ${shellBridgeLabel} when no more specific listed tool is available.`
       : undefined,
     hasApplyPatch
-      ? "For file edits, use the `apply_patch` tool, not built-in file write/delete tools."
+      ? structuredEditNames.length > 0
+        ? `For file edits, prefer the structured edit tools ${quotedNames(structuredEditNames)} — they take exact-match replacements that OpenCodex converts into Codex \`apply_patch\` changes for approval. Use \`apply_patch\` directly only when you can emit its exact freeform syntax (\`*** Begin Patch\` envelope with \`@@\` hunks and \`-\`/\`+\` line prefixes); never emit patch-like plain text as tool arguments.`
+        : "For file edits, use the `apply_patch` tool, not built-in file write/delete tools."
       : undefined,
     hasBareExec
       ? "For tool-count demos, each counted tool must be a separate Codex shell-bridge invocation/result; do not collapse several requested tools into one chained shell command."
@@ -457,7 +573,7 @@ export function buildCursorToolGuidanceSystemNote(
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
     hasBareExec
-      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). Do not tell the user access is blocked. For file edits, use ${structuredEditNames.length > 0 ? `the structured edit tools (${quotedNames(structuredEditNames)}) or ` : ""}\`apply_patch\` when available.`
       : undefined,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");

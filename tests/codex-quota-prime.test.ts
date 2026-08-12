@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   primeCodexPoolQuotas,
@@ -7,9 +7,23 @@ import {
   updateAccountQuota,
   clearAccountQuota,
   clearCodexQuotaPrimeState,
+  clearMainAccountInfoCache,
 } from "../src/codex/auth-api";
 import { saveCodexAccountCredential } from "../src/codex/account-store";
+import { resetMainCodexAccountIdentityTrackingForTests } from "../src/codex/account-lifecycle";
+import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import {
+  completeNativeMainRecovery,
+  initializeNativeMainStartupGate,
+} from "../src/codex/native-profile-startup";
+import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
+import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { resolveCodexAccountForThread, clearThreadAccountMap } from "../src/codex/routing";
+import {
+  acquireNativeMainProfileDrain,
+  getNativeMainProfileRequestCount,
+  resetLifecycleDrainStateForTests,
+} from "../src/server/lifecycle";
 import type { OcxConfig } from "../src/types";
 
 // Phase 20 (260630_wsl-account-autoswitch): startup/lazy quota priming.
@@ -57,6 +71,19 @@ function whamResponse(weekly: number) {
   }), { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
+function seedMainAccount(accountId = "main-account", accessToken = "main-access"): void {
+  writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
+    tokens: { access_token: accessToken, account_id: accountId },
+  }));
+}
+
+function switchRequest(): Request {
+  return new Request("http://localhost/api/native-main-profiles/switch", {
+    method: "POST",
+    body: JSON.stringify({ target: "replacement", confirmedStopped: true }),
+  });
+}
+
 describe("primeCodexPoolQuotas", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -70,12 +97,18 @@ describe("primeCodexPoolQuotas", () => {
     clearAccountQuota();
     clearThreadAccountMap();
     clearCodexQuotaPrimeState();
+    clearMainAccountInfoCache();
+    resetMainCodexAccountIdentityTrackingForTests();
+    resetLifecycleDrainStateForTests();
   });
 
   afterEach(() => {
     clearAccountQuota();
     clearThreadAccountMap();
     clearCodexQuotaPrimeState();
+    clearMainAccountInfoCache();
+    resetMainCodexAccountIdentityTrackingForTests();
+    resetLifecycleDrainStateForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -99,6 +132,185 @@ describe("primeCodexPoolQuotas", () => {
       expect(getAccountQuota("p2")).not.toBeNull();
       expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 20 });
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("in-flight main publication completes before a profile switch mutates state", async () => {
+    seedMainAccount();
+    const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID });
+    const originalFetch = globalThis.fetch;
+    let releaseUsage!: () => void;
+    const usageGate = new Promise<void>(resolve => { releaseUsage = resolve; });
+    let markUsageStarted!: () => void;
+    const usageStarted = new Promise<void>(resolve => { markUsageStarted = resolve; });
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      markUsageStarted();
+      await usageGate;
+      return whamResponse(41);
+    }) as typeof fetch;
+    let switches = 0;
+    const manager = {
+      switch: async () => {
+        switches += 1;
+        expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toMatchObject({ weeklyPercent: 41 });
+        clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+        return { ok: true };
+      },
+    } as unknown as NativeProfileManager;
+    try {
+      const prime = primeCodexPoolQuotas(config, "in-flight-switch");
+      await usageStarted;
+      expect(getNativeMainProfileRequestCount()).toBe(1);
+      const switching = handleNativeProfileAPI(
+        switchRequest(),
+        new URL("http://localhost/api/native-main-profiles/switch"),
+        config,
+        { manager, drainTimeoutMs: 5_000 },
+      );
+      await Bun.sleep(20);
+      expect(switches).toBe(0);
+      releaseUsage();
+      await prime;
+      expect((await switching)?.status).toBe(200);
+      expect(switches).toBe(1);
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    } finally {
+      releaseUsage();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("main prime retains ownership through identity retry and final publication", async () => {
+    seedMainAccount("main-account", "main-access");
+    const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID });
+    const originalFetch = globalThis.fetch;
+    const requestedAccounts: string[] = [];
+    let releaseFirst!: () => void;
+    let releaseRetry!: () => void;
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const retryGate = new Promise<void>(resolve => { releaseRetry = resolve; });
+    let markFirstStarted!: () => void;
+    let markRetryStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { markFirstStarted = resolve; });
+    const retryStarted = new Promise<void>(resolve => { markRetryStarted = resolve; });
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      const accountId = new Headers(init?.headers).get("ChatGPT-Account-Id") ?? "";
+      requestedAccounts.push(accountId);
+      if (requestedAccounts.length === 1) {
+        markFirstStarted();
+        await firstGate;
+        return whamResponse(91);
+      }
+      markRetryStarted();
+      await retryGate;
+      return whamResponse(12);
+    }) as typeof fetch;
+    let switches = 0;
+    const manager = {
+      switch: async () => {
+        switches += 1;
+        expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toMatchObject({ weeklyPercent: 12 });
+        clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+        return { ok: true };
+      },
+    } as unknown as NativeProfileManager;
+    try {
+      const prime = primeCodexPoolQuotas(config, "identity-retry");
+      await firstStarted;
+      seedMainAccount("replacement-account", "replacement-access");
+      const switching = handleNativeProfileAPI(
+        switchRequest(),
+        new URL("http://localhost/api/native-main-profiles/switch"),
+        config,
+        { manager, drainTimeoutMs: 5_000 },
+      );
+      await Bun.sleep(20);
+      expect(switches).toBe(0);
+      releaseFirst();
+      await retryStarted;
+      expect(requestedAccounts).toEqual(["main-account", "replacement-account"]);
+      expect(getNativeMainProfileRequestCount()).toBe(1);
+      expect(switches).toBe(0);
+      releaseRetry();
+      await prime;
+      expect((await switching)?.status).toBe(200);
+      expect(switches).toBe(1);
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    } finally {
+      releaseFirst();
+      releaseRetry();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("startup recovery skips every main operation while pool priming continues", async () => {
+    seedMainAccount();
+    const config = makeConfig({ activeCodexAccountId: MAIN_CODEX_ACCOUNT_ID });
+    seedPoolAccount(config, "p1");
+    const homeId = "quota-prime-recovery";
+    await initializeNativeMainStartupGate({
+      manager: { context: { homeId }, recover: async () => ({}) } as unknown as NativeProfileManager,
+      probeRecoveryState: () => "manual",
+    });
+    const originalFetch = globalThis.fetch;
+    let poolFetches = 0;
+    let mainOperations = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      if (new Headers(init?.headers).get("ChatGPT-Account-Id") === "acct-p1") poolFetches += 1;
+      return whamResponse(22);
+    }) as typeof fetch;
+    try {
+      await primeCodexPoolQuotas(config, "startup-recovery", {
+        reconcileMainAccount: () => { mainOperations += 1; return false; },
+        readMainTokens: () => { mainOperations += 1; return null; },
+        fetchMainInfo: async () => {
+          mainOperations += 1;
+          return { email: null, plan: null, quota: null };
+        },
+      });
+      expect(mainOperations).toBe(0);
+      expect(poolFetches).toBe(1);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 22 });
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)).toBeNull();
+    } finally {
+      completeNativeMainRecovery(homeId);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("active main drain skips only main priming and preserves pool continuity", async () => {
+    seedMainAccount();
+    const config = makeConfig({ activeCodexAccountId: "p1" });
+    seedPoolAccount(config, "p1");
+    const drain = acquireNativeMainProfileDrain("quota-prime-pool-only");
+    const originalFetch = globalThis.fetch;
+    let poolFetches = 0;
+    let mainOperations = 0;
+    globalThis.fetch = (async (input, init) => {
+      if (!String(input).includes("/backend-api/wham/usage")) return originalFetch(input, init);
+      if (new Headers(init?.headers).get("ChatGPT-Account-Id") === "acct-p1") poolFetches += 1;
+      return whamResponse(18);
+    }) as typeof fetch;
+    try {
+      await primeCodexPoolQuotas(config, "active-drain", {
+        reconcileMainAccount: () => { mainOperations += 1; return false; },
+        readMainTokens: () => { mainOperations += 1; return null; },
+        fetchMainInfo: async () => {
+          mainOperations += 1;
+          return { email: null, plan: null, quota: null };
+        },
+      });
+      expect(mainOperations).toBe(0);
+      expect(poolFetches).toBe(1);
+      expect(getAccountQuota("p1")).toMatchObject({ weeklyPercent: 18 });
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+    } finally {
+      drain?.release();
       globalThis.fetch = originalFetch;
     }
   });

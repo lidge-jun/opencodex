@@ -59,6 +59,61 @@ describe("relaySseWithFailedTail", () => {
     expect(upstream.signal.aborted).toBe(false);
   });
 
+  test("closes at response.completed when the upstream keeps its SSE connection open", async () => {
+    const upstream = new AbortController();
+    let sourceCancelled = false;
+    let sentTerminal = false;
+    const src = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sentTerminal) {
+          sentTerminal = true;
+          controller.enqueue(encoder.encode(
+            'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ));
+        }
+        // Deliberately never close: several Responses-compatible gateways keep
+        // this connection alive after the protocol terminal event.
+      },
+      cancel() { sourceCancelled = true; },
+    });
+
+    const out = await Promise.race([
+      drain(relaySseWithFailedTail(src, upstream)),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("relay did not close at terminal")), 200)),
+    ]);
+
+    expect(out).toContain("response.completed");
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(sourceCancelled).toBe(true);
+    expect(upstream.signal.aborted).toBe(false);
+  });
+
+  test("drops frames coalesced after the terminal block", async () => {
+    const upstream = new AbortController();
+    const src = sourceStream([
+      'event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+      + 'event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"must not leak"}\n\n',
+    ]);
+
+    const out = await drain(relaySseWithFailedTail(src, upstream));
+
+    expect(out).toContain("response.completed");
+    expect(out).not.toContain("must not leak");
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("recognizes only a real DONE data event", async () => {
+    const ordinaryText = 'data: {"type":"response.completed","response":{"status":"completed","note":"data: [DONE]"}}\n\n';
+    const withRealDone = ordinaryText + "data: [DONE]\n\n";
+
+    const ordinaryOut = await drain(relaySseWithFailedTail(sourceStream([ordinaryText]), new AbortController()));
+    const realOut = await drain(relaySseWithFailedTail(sourceStream([withRealDone]), new AbortController()));
+
+    expect(ordinaryOut.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(ordinaryOut.split("\ndata: [DONE]\n\n").length - 1).toBe(1);
+    expect(realOut).toBe(withRealDone);
+  });
+
   test("mid-stream error keeps prior bytes and appends a clean failed terminal", async () => {
     const upstream = new AbortController();
     const src = sourceStream(['data: {"type":"response.output_text.delta","delta":"hel', ""], { failAfter: true });

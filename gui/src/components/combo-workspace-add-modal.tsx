@@ -102,7 +102,7 @@ export function AddComboModal({
             <IconX width={16} height={16} />
           </button>
         </div>
-        <p className="muted" style={{ marginTop: 0 }}>{t("cws.addSubtitle")}</p>
+        <p className="muted" style={{ marginTop: 0, maxWidth: "62ch", overflowWrap: "anywhere" }}>{t("cws.addSubtitle")}</p>
         {error && <Notice tone="err">{error}</Notice>}
         <div className="cwi-modal-form">
           <div className="cwi-field">
@@ -118,7 +118,7 @@ export function AddComboModal({
                 model: comboPublicModelId(e.target.value, d.alias),
               }))}
             />
-            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.idInternalHint")}
             </p>
           </div>
@@ -136,10 +136,10 @@ export function AddComboModal({
                 model: comboPublicModelId(d.id, e.target.value),
               }))}
             />
-            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.aliasHint")}
             </p>
-            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.idHint", {
                 model: draft.id.trim() ? comboPublicModelId(draft.id, draft.alias) : "…",
               })}
@@ -152,7 +152,7 @@ export function AddComboModal({
               disabled={busy}
               onChange={(strategy) => setDraft((d) => ({ ...d, strategy }))}
             />
-            <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {draft.strategy === "failover" ? t("cws.strategy.failoverHint") : t("cws.strategy.roundRobinHint")}
             </p>
           </div>
@@ -165,7 +165,7 @@ export function AddComboModal({
               allowedEfforts={allowedEfforts}
               onChange={(defaultEffort) => setDraft((d) => ({ ...d, defaultEffort }))}
             />
-            <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
               {t("cws.field.defaultEffortHint")}
             </p>
           </div>
@@ -186,16 +186,13 @@ export function AddComboModal({
                   setDraft((d) => ({ ...d, stickyLimit }));
                 }}
               />
-              <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+              <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
                 {t("cws.field.stickyLimitHint")}
               </p>
             </div>
           )}
           <div className="cwi-field">
             <span className="field-label">{t("cws.targets")}</span>
-            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-              {draft.strategy === "failover" ? t("cws.targets.failoverHint") : t("cws.targets.roundRobinHint")}
-            </p>
             <TargetEditor
               targets={draft.targets}
               strategy={draft.strategy}
@@ -203,6 +200,9 @@ export function AddComboModal({
               models={models}
               onChange={(targets) => setDraft((d) => ({ ...d, targets }))}
             />
+            <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>
+              {draft.strategy === "failover" ? t("cws.targets.failoverHint") : t("cws.targets.roundRobinHint")}
+            </p>
           </div>
         </div>
         <div className="cwi-modal-actions">

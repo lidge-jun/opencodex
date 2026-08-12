@@ -62,6 +62,8 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 当 `stream: false` 或未提供 `stream` 时，同样的适配器事件会被收集为一个 Responses JSON
 对象。两种形式都会保留所选模型、输出项、终止状态和 usage。
 
+面向客户端的 Responses SSE 帧按 SSE 块分隔符之前的原始字节计算，每帧限制为 4 MiB。对于 HTTP，未终止的上游帧一旦超过该限制，会以合成的 `response.failed` 事件并随后发送 `data: [DONE]` 的方式 fail closed。对于 Responses WebSocket 桥，相同情况会发送 502 `websocket_protocol_error` 并取消上游 reader。已经完整到达的 Responses 终止帧具有优先权；其后的超大或格式错误字节会被丢弃，而不会把已经完成的轮次替换为传输失败。
+
 每个终止的 Responses usage 对象都包含两个 detail 对象，即使提供方没有报告这些细节：
 
 ```json

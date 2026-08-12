@@ -30,6 +30,7 @@ import { getMainAccountToken, MAIN_CODEX_ACCOUNT_ID } from "../codex/main-accoun
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
+import { tryAcquireNativeMainProfileClaim } from "../codex/native-main-admission";
 
 export interface TokenGuardianHandle {
   stop(): void;
@@ -175,11 +176,14 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
   ) {
     const mode = providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) ?? "pool";
     if (opts.codexWarmupEnabled) {
-      const mainToken = getMainAccountToken();
       const key = `codex:${MAIN_CODEX_ACCOUNT_ID}`;
-      if (mainToken && !inBackoff(key, nowMs)) {
+      if (!inBackoff(key, nowMs)) {
         tasks.push(async () => {
+          const nativeMainLease = tryAcquireNativeMainProfileClaim();
+          if (!nativeMainLease) return;
           try {
+            const mainToken = getMainAccountToken();
+            if (!mainToken) return;
             await warmCodexAccount({
               accessToken: mainToken.accessToken,
               chatgptAccountId: mainToken.chatgptAccountId,
@@ -190,9 +194,11 @@ export async function guardianSweep(nowMs: number = Date.now()): Promise<Guardia
           } catch (err) {
             recordFailure(key, nowMs, opts.backoffBaseSeconds, opts.backoffMaxSeconds, false, writerGeneration);
             result.failed.push(key);
+          } finally {
+            nativeMainLease.release();
           }
         });
-      } else if (mainToken) {
+      } else {
         result.skippedBackoff.push(key);
       }
     }

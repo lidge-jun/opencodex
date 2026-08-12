@@ -77,8 +77,9 @@ export default function ClientConfigRow({
 
   const label = t(CLIENT_LABEL_KEYS[client]);
   const mark = CLIENT_MARKS[client];
-  // eslint-disable-next-line local-i18n/no-hardcoded-ui-strings -- file content newline, not UI text
-  const json = data ? `${JSON.stringify(data.config, null, 2)}\n` : "";
+  // The server renders the client's own format; re-serializing as JSON here
+  // would hand a TOML or YAML client bytes its parser cannot read.
+  const json = data?.text ?? "";
 
   const openDetails = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
     if (data) onOpenDetails(client, data, json, event.currentTarget);

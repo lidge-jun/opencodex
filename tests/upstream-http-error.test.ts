@@ -7,11 +7,11 @@ import {
 describe("sanitizeUpstreamErrorText", () => {
   test("redacts secrets and absolute paths", () => {
     const text = sanitizeUpstreamErrorText(
-      "Authorization: Bearer secret-token at /Users/example/private.json and C:\\Users\\JK\\secret.txt",
+      "Authorization: Bearer secret-token at /Users/example/private.json and C:\\Users\\user\\secret.txt",
     );
     expect(text).not.toContain("secret-token");
     expect(text).not.toContain("/Users/example/private.json");
-    expect(text).not.toContain("C:\\Users\\JK\\secret.txt");
+    expect(text).not.toContain("C:\\Users\\user\\secret.txt");
   });
 });
 

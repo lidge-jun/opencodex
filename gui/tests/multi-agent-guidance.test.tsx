@@ -65,6 +65,11 @@ function props(overrides: Partial<Props> = {}): Props {
     guidanceEnabled: false,
     syncCodexDefaults: true,
     onSave: (patch) => { requests.push(patch); },
+    ultraMode: { enabled: false, hintText: null, multiAgentV2Enabled: false },
+    ultraSaving: false,
+    onUltraModeSave: () => {},
+    ultraLoadFailed: false,
+    onUltraModeRetry: () => {},
     ...overrides,
   };
 }

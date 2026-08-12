@@ -1,0 +1,102 @@
+---
+title: 運作原理
+description: opencodex 的完整請求生命週期 —— 解析、路由、適配、橋接與 streaming。
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex 使用 OpenAI **Responses API**。opencodex 接收透過 HTTP 與 Server-Sent Events 傳送的
+`POST /v1/responses`，也可選擇在同一路徑上啟用 WebSocket 升級。它會把請求轉換為 provider
+的 wire 格式，再把回應轉換回 Responses 事件，因此 Codex 無需知道自己正在與非 OpenAI 模型通訊。
+
+```
+            ┌──────────────────────────── opencodex ────────────────────────────┐
+            │                                                                     │
+ Codex ──▶  │  parser ──▶ router ──▶ [vision] ──▶ adapter ──▶ provider           │  ──▶ Codex
+ (/v1/      │     │          │          │            │           │                │   (SSE / WS)
+  responses)│   OcxParsed  provider   describe    buildRequest  parseStream       │
+            │   Request    +adapter   images       + fetch      AdapterEvent[]    │
+            │                                          │           │              │
+            │                                  [web-search loop]  bridge ─▶ SSE   │
+            └─────────────────────────────────────────────────────────────────────┘
+```
+
+![Codex 多帳號路由：既有 thread 會維持同一個 ChatGPT 帳號，新 session 則可重新整理配額並選擇使用量較低的健康帳號。](../../../../assets/multi-auth-routing.svg)
+
+## Codex 認證帳號選擇
+
+當選中的供應商是 ChatGPT/Codex 直通時，opencodex 可在請求轉發到上游前，先從已儲存的帳號池中選帳。
+規則刻意拆成兩部分：
+
+- **既有 thread id 維持親和性。** thread 會綁定啟動它的帳號世代，因此長時間的 SSH、tmux 或
+  行動裝置掛載的 Codex session 會繼續使用同一個帳號，而不是在對話中途被重新平衡。
+- **新 session 可以重新平衡。** 對新 thread，opencodex 會比較 5 小時、每週與 30 天視窗的已知配額
+  使用量，略過需要重新認證或處於 cooldown 的帳號；當作用中帳號跨過設定門檻時，可切換到使用量較低
+  的合格帳號。
+- **配額與失敗訊號會回饋路由。** 儀表板可用 `GET /api/codex-auth/accounts?refresh=1` 強制重新整理
+  配額；成功的上游回應會擷取配額標頭，429 會讓帳號進入 cooldown，401/403 則標記為需重新認證。
+
+## Sub-agent 模型選擇
+
+全新安裝會透過 `subagentModels` 在 Codex 的 sub-agent 選擇器中優先顯示 `gpt-5.5`、GPT-5.6
+Sol/Terra/Luna 三個模型和 `gpt-5.4-mini`。儀表板可以從原生或已路由模型中重新排序或替換最多
+五個條目。對於 v1 協作請求，可選的 `injectionModel` 與 `injectionEffort` 會新增開發者指令，
+告訴 `spawn_agent` 應使用哪個模型和 reasoning effort；v2 請求保留 Codex 原生的多代理指引。
+
+## 生命週期
+
+<Steps>
+
+1. **解析** —— `responses/parser.ts` 使用 Zod schema(`responses/schema.ts`)校驗請求,
+   並將其降級為內部的 `OcxParsedRequest`:系統提示詞、一份規範化的訊息列表
+   (文字、圖像、工具呼叫、工具結果)、工具定義、生成選項,以及諸如 `_webSearch`(請求了託管的網路搜尋)
+   和 `_structuredOutput`(設定了 JSON schema /
+   JSON 物件的 `text.format`)等特性標誌。圖像會被保留為真正的內容部分 —— 絕不會被內聯為
+   base64 文字。
+
+2. **路由** —— `router.ts` 按固定的優先順序將請求的模型 id 對映到一個已設定的 provider：
+   顯式的 `provider/model` → provider 的 `defaultModel` → 內建字首模式
+   (`claude-`、`gpt-`、`o1-`/`o3-`/`o4-`、`llama-`/`mixtral-`/`gemma-`) → provider 的 `models[]` →
+   `defaultProvider` 回退。參見 [模型路由](/zh-tw/guides/model-routing/)。
+
+3. **認證** —— 對於 `oauth` 型別的 provider,opencodex 會換入一個全新、自動重新整理的 access
+   token 作為 bearer key,從而讓現有的 adapter 無需改動即可完成認證。對於 ChatGPT/Codex 帳號池，
+   `codex/auth-context.ts` 會先解析帳號；若必要的池憑證不可用，直通 adapter 會拒絕繼續。
+
+4. **Vision sidecar（可選）** —— 如果已路由的模型被列在 `provider.noVisionModels` 中，且
+   請求攜帶了圖像，opencodex 會透過已設定的 vision sidecar 描述每張圖像並替換為文字，讓純文字
+   模型仍可對圖像進行推理。後端可選 `openai`（ChatGPT 登入）或 `anthropic`（OAuth）；未設定時
+   會自動選擇，顯式 `anthropic` 但無可用憑證時會關閉失敗。
+   參見 [Sidecar](/zh-tw/guides/sidecars/)。
+
+5. **直通快速路徑** —— 對於 Responses 直通 adapter（`openai-responses` 或 `azure-openai`），
+   opencodex 會保留 Responses body，只執行必要的路由與相容性改寫，然後直接轉發 provider 回應，
+   不再轉換為 `AdapterEvent`。
+
+6. **網路搜尋 sidecar（可選）** —— 如果 Codex 啟用了託管的 `web_search`，但已路由的模型
+   並非 OpenAI，opencodex 會暴露一個合成的 `web_search` 函式工具，並在一個小型
+   agentic 迴圈中執行該模型；真實搜尋由所選 sidecar 後端執行（`openai` 預設以 ChatGPT 登入
+   呼叫 `gpt-5.6-luna`，或 `anthropic` OAuth），再將結果作為工具結果注入回去。
+
+7. **壓縮（按需）** —— Codex v1 會呼叫 `POST /v1/responses/compact`，v2 則在 Responses turn 中
+   加入 `compaction_trigger`。原生直通路由會把壓縮請求傳送到上游；已路由模型則在停用工具的
+   情況下執行摘要，並回傳 Codex 所需的替代歷史記錄格式。
+
+8. **適配** —— 否則,所選 adapter 的 `buildRequest()` 會以 provider 的原生格式生成上游 HTTP 請求
+   (URL、headers、body),由 opencodex 對其執行 `fetch`。
+
+9. **橋接** —— adapter 的 `parseStream()`(或 `parseResponse()`)會產出內部的 `AdapterEvent`
+   (text、reasoning、tool-call start/delta/end、done、error)。`bridge.ts` 會將該流轉換回
+   Responses SSE 事件 —— `response.output_text.delta`、`response.reasoning_summary_text.delta`、
+   `response.function_call_arguments.delta`、`response.completed` 等等。啟用 WebSocket 時，同樣的
+   event payload 會作為 text frame 傳送。
+
+</Steps>
+
+## 為什麼是代理而不是 fork 一份 Codex?
+
+Codex 把 Responses API 硬編碼在內部。透過在協議邊界處進行翻譯,opencodex 可以與
+Codex 的 **CLI、App 和 SDK** 無改動地協作,能在 Codex 更新後繼續工作,並讓你能夠按請求切換 provider
+而無需改動 Codex 本身。這種翻譯是雙向且忠於 streaming 的:
+推理摘要、MCP 工具名稱空間、freeform(`apply_patch`)工具,以及 `tool_search` 發現
+都能正確地往返。關於逐事件的對映,參見 [架構參考](/zh-tw/reference/architecture/)。

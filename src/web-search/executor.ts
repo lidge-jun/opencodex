@@ -62,8 +62,8 @@ export async function runWebSearch(
     tool_choice: "auto",
     reasoning: { effort: settings.reasoning },
     // NOTE: the ChatGPT (codex) backend rejects `max_output_tokens` ("Unsupported parameter") and
-    // requires `store: false` — keep this body minimal. Answer length is capped downstream
-    // (format-result clamps the injected tool_result), so no upstream cap is needed.
+    // requires `store: false` — keep this body minimal. The shared SSE parser bounds raw response
+    // bytes before format-result applies its smaller display clamp.
     store: false,
     stream: true,
   };

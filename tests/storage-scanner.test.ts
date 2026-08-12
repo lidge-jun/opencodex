@@ -14,7 +14,7 @@ let previousCodexHome: string | undefined;
 
 /**
  * Builds a synthetic CODEX_HOME mirroring the layout documented in
- * devlog/_plan/500_storage-page-session-cleanup/20_codex-storage-structure.md:
+ * devlog/_fin/500_storage-page-session-cleanup/20_codex-storage-structure.md:
  * date-partitioned sessions/, flat archived_sessions/, versioned state / logs
  * sqlite files with WAL siblings, plus non-session dirs for the "other" bucket.
  */

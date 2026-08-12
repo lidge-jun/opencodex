@@ -1,0 +1,125 @@
+---
+title: Integrations
+description: Connect opencodex to OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code and Gajae Code from the dashboard — one switch per client, with a backup taken before every write.
+---
+
+The **Integrations** tab writes opencodex's provider block into a client's own config
+file, and removes it again. Seven clients work this way, each with a switch:
+
+| Client | Config file | Format | When the change takes effect | Credential |
+|---|---|---|---|---|
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
+| Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
+| OMP | `~/.omp/agent/models.yml` | YAML | after restarting OMP | `opencodex-loopback` placeholder |
+| Hermes | `~/.hermes/config.yaml` | YAML | new sessions | `OPENCODEX_HERMES_API_KEY` |
+| OpenClaw | `~/.openclaw/openclaw.json` | JSON5 | immediately, on a running gateway | `OPENCODEX_OPENCLAW_API_KEY` |
+| Kimi Code | `~/.kimi-code/config.toml` | TOML | on restart, or `/reload` | loopback placeholder |
+| Gajae Code | `~/.gjc/agent/models.yml` | YAML | new sessions, or when you open `/model` |`OPENCODEX_GAJAE_API_KEY` |
+
+Paths honor each client's own environment override where it has one. For OMP,
+`OMP_PROFILE` wins over `PI_PROFILE` by presence, even when explicitly empty. A named profile
+uses `PI_CONFIG_DIR` as a directory name relative to the user's home and ignores `PI_CODING_AGENT_DIR`; without a named profile,
+`PI_CODING_AGENT_DIR` wins. OMP supports provider-level headers, but this initial integration
+is deliberately loopback-only; remote `x-opencodex-api-key` wiring is deferred. Relocated
+`HERMES_HOME`, `KIMI_CODE_HOME`, and `XDG_CONFIG_HOME` paths are likewise followed rather than
+guessed at. The table lists each client's default.
+
+For native OpenAI models, the generated OMP block selects its model-level Responses API, preserving
+image input and reasoning-effort controls. Routed models retain the provider's Chat Completions
+dialect so their existing adapters remain compatible.
+
+OpenClaw has several, and they do different jobs. `OPENCLAW_CONFIG_PATH` selects the
+file; `OPENCLAW_STATE_DIR`, `OPENCLAW_PROFILE` and `OPENCLAW_HOME` select the state
+directory, which is also what detection looks at — so a profile or relocated home
+still reads as installed, while a config-path override moves only the file. If you
+are still on the older `.clawdbot` layout, that is found too: the modern directory
+wins when it exists, and the legacy one is used when it is the only one there.
+
+These must be **absolute paths** or start with `~`. A relative one is refused rather
+than resolved, because it would mean whatever directory each process happened to
+start in — and that path is stored with the backup, so it has to name the same file
+tomorrow as it did today.
+
+opencodex reads these from its own environment. If your gateway runs with a profile
+or a relocated home, start opencodex with the same variables set, or it will
+correctly follow a different installation.
+
+## The other four surfaces are not switches
+
+**API Keys** manages opencodex's own credentials and is not a client at all. **Codex
+CLI** is wired by the proxy service itself — starting opencodex applies it, stopping it
+restores native routing — so there is nothing to toggle per-file. **Claude** keeps its
+own enable flag and Desktop's Save/Apply flow, and **Grok Build** keeps its
+select-then-apply model fence. Those semantics predate this feature and are unchanged.
+
+## Rollback
+
+Every successful write takes a snapshot of your file *first*, so the state you had is
+always recoverable:
+
+- **Undo** appears on the newest operation when your file still matches what we wrote.
+- **Restore this point…** appears on older operations, or when the file changed after
+  that operation. Restoring across such a change asks a second time before replacing
+  your newer edits — and backs them up too, so that restore is itself undoable.
+- Ten backups are kept per client. Beyond that, the oldest snapshot files are removed
+  and their history rows read **Backup expired**.
+
+Disable removes only the entries opencodex recorded as its own. If your file changed
+after we wrote it, the switch locks and disable refuses rather than guessing which
+edits were yours.
+
+## What to expect, honestly
+
+**Formatting is generally not preserved.** Applying parses a config and writes it back
+out, so JSON, JSON5 and TOML may be reformatted and comments in JSON5 or TOML are lost.
+OMP is the exception: its YAML writer patches only `providers.opencodex`, preserving
+unrelated provider comments and formatting byte-for-byte. If that exact source range
+cannot be identified safely, the operation refuses instead. For other clients, use
+Restore when you need the previous file bytes: the snapshot is a verbatim copy.
+
+**If a value cannot be rewritten faithfully, the switch refuses instead.** The round
+trip covers the value kinds these formats use in practice, and where it does not —
+a TOML file using `inf` or `nan`, for instance, which the parser available to us
+cannot read back accurately — applying stops and says so rather than writing a
+changed value and calling it success. You will see the file named and nothing on
+disk will have moved. Editing that file by hand still works; it is only our
+automatic rewrite that declines.
+
+**Pi, Kimi Code and Gajae Code only work against a loopback bind.** Their config schemas
+have no place for the `x-opencodex-api-key` header that a non-loopback bind requires, so a
+generated config would simply be rejected. Give them loopback access instead, through an
+SSH tunnel or a local forwarder that adds the header.
+
+**The generated OMP integration is also deliberately loopback-only.** OMP does support
+provider-level headers, but this initial integration does not emit remote
+`x-opencodex-api-key` credential wiring. Manual remote OMP configuration is outside the
+managed integration for now.
+
+**Kimi Code cannot hold an environment reference,** so its config carries an
+`opencodex-loopback` placeholder rather than a key. No real credential is ever written
+into any client config.
+
+**For `ocx opencode`, the launcher's provider block wins.** That launcher injects
+`provider.opencodex` through `OPENCODE_CONFIG_CONTENT`, which outranks the same entry on
+disk — the rest of your opencode config still applies as usual. The switch here is what
+matters when you launch `opencode` directly.
+
+## From the terminal
+
+The same operations are available headlessly:
+
+```bash
+ocx integration client status
+ocx integration client enable --client hermes
+ocx integration client disable --client hermes
+ocx integration client history --client hermes
+ocx integration client restore --op <opId> [--confirm-drift]
+```
+
+`--confirm-drift` is never assumed. If the file changed after the operation you are
+restoring, the command refuses and tells you, because replacing your newer edits is your
+decision to make.
+
+Client details were verified against each project's own configuration format; see the
+research notes in `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md`
+for what was checked and when.

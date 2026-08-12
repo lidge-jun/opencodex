@@ -118,6 +118,16 @@ export function safeHostLabel(url: string): string {
   }
 }
 
+/** Canonical origin (scheme + host) for failure-attribution keys: http and
+ * https for the same host must not share one ledger entry (#914 review). */
+export function safeOriginLabel(url: string): string {
+  try {
+    return new URL(url).origin.toLowerCase();
+  } catch {
+    return "upstream";
+  }
+}
+
 
 
 export function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
@@ -133,6 +143,7 @@ export async function fetchWithHeaderTimeout(
   timeoutMs: number,
   preferIdentityEncoding = false,
   executor: typeof globalThis.fetch = globalThis.fetch,
+  manualRedirect = false,
 ): Promise<Response> {
   const timeout = new AbortController();
   const timer = setTimeout(() => {
@@ -148,10 +159,13 @@ export async function fetchWithHeaderTimeout(
     return await executor(url, {
       ...init,
       headers,
+      // Credential-bearing sends opt into manual redirects so a 3xx is relayed
+      // as a Response instead of being followed into a rejection that is
+      // indistinguishable from a pre-connection failure (#914).
+      ...(manualRedirect ? { redirect: "manual" as const } : {}),
       signal: AbortSignal.any([abortSignal, timeout.signal]),
     });
   } finally {
     clearTimeout(timer);
   }
 }
-

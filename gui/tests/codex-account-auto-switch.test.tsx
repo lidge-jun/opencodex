@@ -148,7 +148,7 @@ describe("Codex account auto-switch threshold", () => {
     expect(fillFirst).toContain("drain point for new/unbound tasks");
     for (const html of [quota, roundRobin, fillFirst]) {
       expect(html).toContain("Failure recovery is separate");
-      expect(html).toContain("provider-side prompt cache may be cold");
+      expect(html).toContain("Prompt cache resets on account switch");
     }
   });
 

@@ -1,0 +1,63 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "Qwen/Qwen3-32B-TEE",
+      "object": "model",
+      "owned_by": "sglang",
+      "context_length": 40960,
+      "max_model_len": 40960,
+      "max_output_length": 40960,
+      "input_modalities": ["text"],
+      "output_modalities": ["text"],
+      "supported_features": ["json_mode", "tools", "structured_outputs", "reasoning"],
+      "confidential_compute": true
+    },
+    {
+      "id": "moonshotai/Kimi-K2.6-TEE",
+      "object": "model",
+      "owned_by": "sglang",
+      "context_length": 262144,
+      "max_model_len": 262144,
+      "max_output_length": 65536,
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"],
+      "supported_features": ["json_mode", "structured_outputs", "tools", "reasoning"],
+      "confidential_compute": true
+    },
+    {
+      "id": "example/sparse-tool-model",
+      "object": "model",
+      "owned_by": "fixture",
+      "context_length": null,
+      "max_model_len": null,
+      "max_output_length": null,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supported_features": ["tools"],
+      "confidential_compute": true
+    },
+    {
+      "id": "unsloth/Mistral-Nemo-Instruct-2407-TEE",
+      "object": "model",
+      "owned_by": "sglang",
+      "context_length": null,
+      "max_model_len": 131072,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supported_features": null,
+      "confidential_compute": true
+    },
+    {
+      "id": "Nemotron-3-Nano-Omni-30B-TEE",
+      "object": "model",
+      "owned_by": "sglang",
+      "context_length": 131072,
+      "max_model_len": 131072,
+      "input_modalities": null,
+      "output_modalities": null,
+      "supported_features": null,
+      "confidential_compute": true
+    }
+  ]
+}

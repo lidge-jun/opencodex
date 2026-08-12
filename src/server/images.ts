@@ -15,13 +15,16 @@
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
+  codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
+  CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
 import { formatCodexProviderForLog } from "../codex/routing";
 import { signalWithTimeout } from "../lib/abort";
+import { readBoundedResponseBytes, type BoundedBytesResult } from "../lib/bounded-body";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
@@ -35,6 +38,8 @@ import { safeAntigravityHttpErrorMessage } from "../adapters/google-errors";
 import { sanitizeUpstreamErrorText } from "../adapters/upstream-http-error";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { decodeValidatedImageBase64, MAX_ENCODED_BYTES_PER_IMAGE } from "../images/artifacts";
+import type { AdmissionLease } from "../lib/admission";
+import { codexAccountSelectionForTurn } from "./lifecycle";
 
 export type ImagesEndpoint = "generations" | "edits";
 
@@ -46,7 +51,56 @@ const IMAGES_UPSTREAM_TIMEOUT_MS = 300_000;
  * containing base64-encoded images — typically a few MB. This prevents an oversized or malicious
  * response from exhausting process memory.
  */
-const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
+export const IMAGES_RESPONSE_MAX_BYTES = 100 * 1024 * 1024;
+
+interface ImageResponseBytesOptions {
+  signal?: AbortSignal;
+  /** Smaller values are used only by focused reader tests. */
+  maxBytes?: number;
+}
+
+function cancelUnlockedResponseBody(response: Response | undefined, reason?: unknown): void {
+  const body = response?.body;
+  if (!body || body.locked) return;
+  try {
+    void body.cancel(reason).catch(() => undefined);
+  } catch {
+    // A broken stream can throw synchronously from cancel().
+  }
+}
+
+/**
+ * Read one image relay response as exact raw bytes under the same cap used by
+ * the public handler. A trustworthy Content-Length can reject obvious excess
+ * before attaching a reader; the streaming reader remains authoritative when
+ * the header is absent or understated.
+ */
+export async function readImageResponseBytes(
+  response: Response,
+  options: ImageResponseBytesOptions = {},
+): Promise<BoundedBytesResult> {
+  const signal = options.signal;
+  if (signal?.aborted) {
+    cancelUnlockedResponseBody(response, signal.reason);
+    throw signal.reason;
+  }
+  if (response.body === null) {
+    return { bytes: new Uint8Array(0), oversized: false };
+  }
+
+  const maxBytes = options.maxBytes ?? IMAGES_RESPONSE_MAX_BYTES;
+  const contentLength = response.headers.get("content-length");
+  const declaredBytes = contentLength === null ? Number.NaN : Number(contentLength);
+  if (Number.isSafeInteger(declaredBytes) && declaredBytes > maxBytes) {
+    cancelUnlockedResponseBody(
+      response,
+      new DOMException("Response body size limit reached", "QuotaExceededError"),
+    );
+    return { bytes: new Uint8Array(0), oversized: true };
+  }
+
+  return readBoundedResponseBytes(response, { maxBytes, signal });
+}
 
 const CCA_IMAGE_MODEL = "gemini-3.1-flash-image";
 
@@ -323,6 +377,7 @@ export async function handleImages(
   config: OcxConfig,
   endpoint: ImagesEndpoint,
   logCtx: RequestLogContext,
+  turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
   const candidates = selectImagesProvider(config);
   if (candidates.error) {
@@ -375,11 +430,15 @@ export async function handleImages(
   let forwardAuthError: Response | undefined;
   if (canUseOpenAiForward) {
     try {
-      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config);
+      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config, {
+        beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+      });
       if (forward) logCtx.provider = formatCodexProviderForLog(forward.providerName, codexLogAccountId(forward.authContext), config);
     } catch (err) {
       if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
+      } else if (err instanceof CodexMainProfileDrainingError) {
+        forwardAuthError = codexMainProfileDrainingResponse();
       } else if (err instanceof CodexThreadAffinityExpiredError) {
         forwardAuthError = formatErrorResponse(409, "invalid_request_error", "Codex thread account affinity expired; start a new session");
       } else if (err instanceof CodexAuthContextError) {
@@ -431,34 +490,47 @@ export async function handleImages(
   const timeoutMs = config.images?.timeoutMs ?? IMAGES_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("images");
+  let upstreamResponse: Response | undefined;
   try {
     // Images POSTs create paid, non-idempotent work. One fetch only: no reset retry without a
     // source-proven idempotency contract.
-    const upstreamResponse = await fetch(url, {
+    upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: linkedSignal.signal,
     });
-    // Buffer rather than stream: the payload is one JSON document (base64 image, typically a few
-    // MB), and buffering keeps the timeout window covering the whole exchange. Cap the size to
-    // prevent an oversized response from exhausting process memory.
-    const payload = await upstreamResponse.arrayBuffer();
-    if (payload.byteLength > IMAGES_RESPONSE_MAX_BYTES) {
-      return formatErrorResponse(502, "upstream_error", `image ${endpoint} response too large (${payload.byteLength} bytes)`);
+    const observed = await readImageResponseBytes(upstreamResponse, {
+      maxBytes: IMAGES_RESPONSE_MAX_BYTES,
+      signal: linkedSignal.signal,
+    });
+    if (observed.oversized) {
+      forward?.recordOutcome?.(upstreamResponse.status);
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        `image ${endpoint} response too large (exceeded ${IMAGES_RESPONSE_MAX_BYTES} bytes)`,
+      );
     }
-    forward?.recordOutcome?.(upstreamResponse.status);
     const relayHeaders: Record<string, string> = {};
     const contentType = upstreamResponse.headers.get("content-type");
     if (contentType) relayHeaders["content-type"] = contentType;
-    return new Response(payload, { status: upstreamResponse.status, headers: relayHeaders });
+    // Fetch represents 204/205/304 responses with a null body. Preserve that
+    // invariant: constructing those statuses with even an empty Uint8Array throws.
+    const relayBody = upstreamResponse.body === null ? null : observed.bytes;
+    const relayResponse = new Response(relayBody, {
+      status: upstreamResponse.status,
+      headers: relayHeaders,
+    });
+    forward?.recordOutcome?.(upstreamResponse.status);
+    return relayResponse;
   } catch (err) {
     // Client cancel first: it aborts the linked signal too, and must not be logged as an
     // upstream failure (499 maps to client_closed_request in the request log).
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", `image ${endpoint} request canceled by client`);
     }
-    if (err instanceof Error && err.name === "TimeoutError") {
+    if (linkedSignal.signal.aborted || (err instanceof Error && err.name === "TimeoutError")) {
       forward?.recordOutcome?.("timeout");
       // codex retries 5xx up to 4 more times; a retried 504 is acceptable for a transient hang.
       return formatErrorResponse(504, "upstream_error", `image ${endpoint} upstream timed out`);
@@ -472,5 +544,9 @@ export async function handleImages(
   } finally {
     sidecarExit();
     linkedSignal.cleanup();
+    // If cancellation won before readImageResponseBytes attached its reader, the
+    // response still owns an upstream body/socket. Consumed or locked bodies are
+    // already owned by the reader and need no second cancellation.
+    cancelUnlockedResponseBody(upstreamResponse);
   }
 }

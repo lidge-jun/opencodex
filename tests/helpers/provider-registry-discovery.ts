@@ -16,7 +16,7 @@ export async function withRegistryDiscovery<T>(
   if (!entry) throw new Error(`missing ${providerId} registry entry`);
   const originalDiscovery = entry.modelDiscovery;
   const originalPreserveCustomDestination = entry.preserveCustomDestination;
-  clearModelCache(providerId);
+  clearModelCache(providerId, "eviction");
   entry.modelDiscovery = spec;
   if (overrides.preserveCustomDestination !== undefined) {
     entry.preserveCustomDestination = overrides.preserveCustomDestination;
@@ -28,6 +28,6 @@ export async function withRegistryDiscovery<T>(
     else entry.modelDiscovery = originalDiscovery;
     if (originalPreserveCustomDestination === undefined) delete entry.preserveCustomDestination;
     else entry.preserveCustomDestination = originalPreserveCustomDestination;
-    clearModelCache(providerId);
+    clearModelCache(providerId, "eviction");
   }
 }

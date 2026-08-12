@@ -4,8 +4,13 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 
 /**
- * Rapid clicks on the sidebar Claude switch must serialize to a single in-flight PUT
- * (App.tsx claudeToggleInFlight + disabled while pending).
+ * Rapid clicks on the Claude connection switch must serialize to a single
+ * in-flight PUT (ClaudeCode.tsx `connectionInFlight` + disabled while pending).
+ *
+ * The control moved out of the sidebar when the three integration pages
+ * collapsed into one Integrations route, but its semantics did not: it still
+ * commits immediately rather than becoming another Save-gated draft, so the
+ * serialization it depended on has to move with it.
  */
 
 const globals = [
@@ -23,6 +28,7 @@ let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
 let putBodies: unknown[] = [];
+let claudeEnabled = false;
 let releasePut: (() => void) | null = null;
 let putGate: Promise<void> | null = null;
 
@@ -33,9 +39,34 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * The fields ClaudeCode reads while rendering. A bare `{ enabled }` payload was
+ * enough while the switch lived in the sidebar, but the control now sits on the
+ * Claude Code surface itself, so the page has to render for the switch to
+ * exist at all — and it throws on a response missing `aliases`/`available`.
+ */
+const CLAUDE_CODE_STATE = {
+  authMode: "auto",
+  autoConnectSupported: false,
+  systemEnv: false,
+  fastMode: null,
+  maxContextTokens: null,
+  autoContext: true,
+  autoCompactWindow: null,
+  injectAgents: true,
+  smallFastModel: "",
+  effectiveModelEnv: {},
+  available: [],
+  aliases: [],
+  modelMap: {},
+  port: 10100,
+};
+
 beforeEach(() => {
   previousGlobals = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#api" });
+  // The switch now lives on the Claude Code surface, so the route has to be
+  // the one that mounts it.
+  testWindow = new Window({ url: "http://localhost/#integrations/claude" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
@@ -48,6 +79,7 @@ beforeEach(() => {
   (globalThis as Record<string, unknown>).__APP_VERSION__ = "0.0.0-test";
 
   putBodies = [];
+  claudeEnabled = false;
   putGate = new Promise<void>((resolve) => {
     releasePut = resolve;
   });
@@ -57,12 +89,17 @@ beforeEach(() => {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
 
     if (url.includes("/api/claude-code") && method === "PUT") {
-      putBodies.push(JSON.parse(String(init?.body ?? "{}")));
+      const body = JSON.parse(String(init?.body ?? "{}")) as { enabled?: boolean };
+      putBodies.push(body);
       await putGate;
-      return jsonResponse({ enabled: true });
+      // The server persists what it was sent, so the following GET reports it.
+      // A fixed response would let the page re-read `enabled: false` after
+      // enabling and send the same value twice — hiding a real toggle bug.
+      if (typeof body.enabled === "boolean") claudeEnabled = body.enabled;
+      return jsonResponse({ ...CLAUDE_CODE_STATE, enabled: claudeEnabled });
     }
     if (url.includes("/api/claude-code")) {
-      return jsonResponse({ enabled: false });
+      return jsonResponse({ ...CLAUDE_CODE_STATE, enabled: claudeEnabled });
     }
     if (url.includes("/healthz")) {
       return jsonResponse({ status: "ok", version: "0.0.0-test", uptime: 1 });

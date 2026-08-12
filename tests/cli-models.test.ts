@@ -4,16 +4,21 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { INTERNAL_DEADLINE_MS } from "./helpers/test-budget";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
 function runCli(args: string[], env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [cliPath, ...args], {
+  const result = spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
     env: { ...process.env, ...env },
     encoding: "utf8",
+    timeout: INTERNAL_DEADLINE_MS,
+    killSignal: "SIGKILL",
   });
+  if (result.error) throw result.error;
+  return result;
 }
 
 function freshConfig(extra?: Record<string, unknown>) {

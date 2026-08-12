@@ -4,14 +4,26 @@ import { getConfigDir } from "../config";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
+import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
+export type CodexUsageAccountLogLabel = "main" | `p${string}`;
 
+export function isCodexUsageAccountLogLabel(value: unknown): value is CodexUsageAccountLogLabel {
+  return value === "main" || (typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value));
+}
+
+/**
+ * Recovery kinds recorded per attempt in the usage log; the GUI renders localized labels
+ * for these wire values.
+ */
 export type AttemptRecoveryKind =
   | "transient-5xx"
   | "connection-reset"
   | "oauth-401"
   | "key-429"
+  | "rate-limit-429"
   | "anthropic-oauth-429"
   | "image-413";
 
@@ -27,15 +39,19 @@ export interface PersistedUsageAttempt {
   sendCount: number;
   recoveryKinds: AttemptRecoveryKind[];
   usageStatus: UsageStatus;
+  /** Stable non-PII identity for the Codex pool account that served this attempt. */
+  accountLogLabel?: CodexUsageAccountLogLabel;
   inputTokenEstimate?: number;
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /** Installation-local exact Compatibility Lab route-subject digest for this attempt. */
+  labRouteSubjectId?: string;
   /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
 }
 
 export interface PersistedUsageEntry {
@@ -50,6 +66,8 @@ export interface PersistedUsageEntry {
   admissionKind?: "configured" | "environment" | "loopback";
   /** The inbound wire, not the client product — see `surface`. */
   inboundProtocol?: "responses" | "chat" | "messages";
+  /** Stable non-PII identity for Codex Pool usage; absent for Direct/non-Codex traffic. */
+  accountLogLabel?: CodexUsageAccountLogLabel;
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
@@ -59,7 +77,7 @@ export interface PersistedUsageEntry {
   /** Adapter-normalized tier and exact upstream parameter emitted for this request. */
   effectiveEffort?: string;
   reasoningWireField?: string;
-  reasoningWireValue?: string | number;
+  reasoningWireValue?: string | number | boolean;
   requestedServiceTier?: string;
   requestedSpeedLabel?: string;
   configuredServiceTier?: string;
@@ -81,6 +99,12 @@ export interface PersistedUsageEntry {
   closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
+  /**
+   * Bounded route-decision trace (RI-01): why this provider/model/account was
+   * selected. Additive field; old rows without it parse unchanged. Never
+   * contains prompts, credentials, or hidden reasoning.
+   */
+  routeDecision?: RouteDecisionTraceV1;
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -118,8 +142,8 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
   return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
-export function usageLogPath(): string {
-  return join(getConfigDir(), "usage.jsonl");
+export function usageLogPath(configDir?: string): string {
+  return join(configDir ?? getConfigDir(), "usage.jsonl");
 }
 
 export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
@@ -173,6 +197,7 @@ const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
   "connection-reset",
   "oauth-401",
   "key-429",
+  "rate-limit-429",
   "anthropic-oauth-429",
   "image-413",
 ]);
@@ -182,6 +207,11 @@ const USAGE_STATUSES = new Set<UsageStatus>([
   "unsupported",
   "estimated",
 ]);
+const LAB_ROUTE_SUBJECT_ID_RE = /^[0-9a-f]{64}$/;
+
+export function isLabRouteSubjectId(value: unknown): value is string {
+  return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
+}
 
 function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -251,6 +281,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     sendCount: attempt.sendCount as number,
     recoveryKinds,
     usageStatus: attempt.usageStatus as UsageStatus,
+    ...(isCodexUsageAccountLogLabel(attempt.accountLogLabel)
+      ? { accountLogLabel: attempt.accountLogLabel }
+      : {}),
     ...(isNonNegativeFiniteNumber(attempt.inputTokenEstimate)
       ? { inputTokenEstimate: attempt.inputTokenEstimate }
       : {}),
@@ -259,6 +292,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(isLabRouteSubjectId(attempt.labRouteSubjectId)
+      ? { labRouteSubjectId: attempt.labRouteSubjectId }
+      : {}),
     ...(typeof attempt.requestedEffort === "string" && attempt.requestedEffort
       ? { requestedEffort: capMetadataString(attempt.requestedEffort) }
       : {}),
@@ -268,12 +304,27 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     ...(typeof attempt.reasoningWireField === "string" && attempt.reasoningWireField
       ? { reasoningWireField: capMetadataString(attempt.reasoningWireField) }
       : {}),
-    ...(typeof attempt.reasoningWireValue === "string" && attempt.reasoningWireValue
-      ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
-      : isNonNegativeFiniteNumber(attempt.reasoningWireValue)
-        ? { reasoningWireValue: attempt.reasoningWireValue }
-        : {}),
+    ...(isValidReasoningWireValue(attempt.reasoningWireField, attempt.reasoningWireValue)
+      ? typeof attempt.reasoningWireValue === "string"
+        ? { reasoningWireValue: capMetadataString(attempt.reasoningWireValue) }
+        : { reasoningWireValue: attempt.reasoningWireValue }
+      : {}),
   };
+}
+
+/**
+ * Pairing rule for reasoning diagnostics, shared with the live request-log capture path:
+ * a non-empty string, a non-negative finite number, or a boolean only for
+ * `reasoning.enabled`. The field name itself is validated separately at capture time;
+ * persisted rows may carry legacy field names, so this checks only the value shape.
+ */
+export function isValidReasoningWireValue(
+  wireField: unknown,
+  wireValue: unknown,
+): wireValue is string | number | boolean {
+  return (typeof wireValue === "string" && wireValue.length > 0)
+    || (typeof wireValue === "number" && Number.isFinite(wireValue) && wireValue >= 0)
+    || (wireField === "reasoning.enabled" && typeof wireValue === "boolean");
 }
 
 function normalizedAttempts(raw: unknown): PersistedUsageAttempt[] {
@@ -294,6 +345,9 @@ export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): Persiste
 
 function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const attempts = normalizedAttempts(entry.attempts);
+  const routeDecision = entry.routeDecision
+    ? normalizeRouteDecisionTrace(entry.routeDecision)
+    : undefined;
   return {
     requestId: entry.requestId,
     timestamp: entry.timestamp,
@@ -309,6 +363,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
     ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+    ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
+      ? { accountLogLabel: entry.accountLogLabel }
+      : {}),
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),
@@ -323,11 +380,11 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.reasoningWireField === "string" && entry.reasoningWireField
       ? { reasoningWireField: capMetadataString(entry.reasoningWireField) }
       : {}),
-    ...(typeof entry.reasoningWireValue === "string" && entry.reasoningWireValue
-      ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
-      : isNonNegativeFiniteNumber(entry.reasoningWireValue)
-        ? { reasoningWireValue: entry.reasoningWireValue }
-        : {}),
+    ...(isValidReasoningWireValue(entry.reasoningWireField, entry.reasoningWireValue)
+      ? typeof entry.reasoningWireValue === "string"
+        ? { reasoningWireValue: capMetadataString(entry.reasoningWireValue) }
+        : { reasoningWireValue: entry.reasoningWireValue }
+      : {}),
     ...(typeof entry.requestedServiceTier === "string" && entry.requestedServiceTier
       ? { requestedServiceTier: capMetadataString(entry.requestedServiceTier) }
       : {}),
@@ -354,11 +411,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
-    ...(attempts.length > 0 ? { attempts } : {}),
+    ...(Array.isArray(entry.attempts) ? { attempts } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
     ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
     ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
+    ...(routeDecision ? { routeDecision } : {}),
   };
 }
 
@@ -388,8 +446,9 @@ export type UsageLogRevision = {
 
 let usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
 const MANAGEMENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
+const RECENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
 const MANAGEMENT_USAGE_READ_CHUNK_BYTES = 1024 * 1024;
-const MANAGEMENT_USAGE_MAX_ENTRIES = 200_000;
+const MANAGEMENT_USAGE_MAX_ENTRIES = 500_000;
 const MANAGEMENT_USAGE_FLIGHT_STALE_MS = 30_000;
 export interface ManagementUsageSnapshot {
   entries: PersistedUsageEntry[];
@@ -614,18 +673,20 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
  * Read only the newest `limit` usage.jsonl rows without loading the whole append-only
  * file into memory. Used by request-log hydration on `ocx start`.
  */
-export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
+export function readRecentUsageEntries(limit: number, configDir?: string): PersistedUsageEntry[] {
   if (!Number.isFinite(limit) || limit <= 0) return [];
-  const path = usageLogPath();
+  const path = usageLogPath(configDir);
   if (!existsSync(path)) return [];
   let fd: number | undefined;
   try {
     fd = openSync(path, "r");
     const size = fstatSync(fd).size;
     if (size <= 0) return [];
-    // ~4 KiB/row budget with a floor; expand once if the window yields too few lines.
-    let windowBytes = Math.min(size, Math.max(64 * 1024, Math.ceil(limit) * 4 * 1024));
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Trace-sized rows need a larger per-row budget than the pre-trace ledger,
+    // but startup hydration must never grow into an unbounded whole-file read.
+    const maxWindowBytes = Math.min(size, RECENT_USAGE_MAX_READ_BYTES);
+    let windowBytes = Math.min(maxWindowBytes, Math.max(64 * 1024, Math.ceil(limit) * 20 * 1024));
+    while (true) {
       const start = Math.max(0, size - windowBytes);
       const buf = Buffer.alloc(size - start);
       readSync(fd, buf, 0, buf.length, start);
@@ -633,8 +694,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       if (start > 0) {
         const nl = text.indexOf("\n");
         if (nl < 0) {
-          if (start === 0) break;
-          windowBytes = Math.min(size, windowBytes * 4);
+          if (start === 0 || windowBytes >= maxWindowBytes) break;
+          windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
           continue;
         }
         text = text.slice(nl + 1);
@@ -644,8 +705,8 @@ export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
       // or partial lines are filtered out during parsing and we always return the
       // most recent N valid rows (not N physical lines minus corrupt ones).
       const entries = parseUsageLines(lines);
-      if (entries.length >= limit || start === 0 || windowBytes >= size) return entries.slice(-limit);
-      windowBytes = Math.min(size, windowBytes * 4);
+      if (entries.length >= limit || start === 0 || windowBytes >= maxWindowBytes) return entries.slice(-limit);
+      windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
     }
     return [];
   } catch {

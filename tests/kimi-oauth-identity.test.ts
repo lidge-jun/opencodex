@@ -75,6 +75,37 @@ describe("Kimi token-response wiring (production parseTokenPayload path)", () =>
     expect(cred.accountId).toBe("wired-user");
     expect(cred.email).toBe(["w", String.fromCharCode(64), "kimi.example"].join(""));
   });
+
+  test("refreshKimiToken rejects a non-finite expires_in (would otherwise yield NaN expiry)", async () => {
+    globalThis.fetch = (async () => new Response(
+      // JSON.stringify would turn Infinity into null; hand-write 1e999 so JSON.parse
+      // yields Infinity, which typeof === "number" alone would let through.
+      `{"access_token":"at","refresh_token":"rt","expires_in":1e999}`,
+      { status: 200 },
+    )) as typeof fetch;
+
+    await expect(refreshKimiToken("old-refresh")).rejects.toThrow("missing required fields");
+  });
+
+  test("refreshKimiToken rejects an overflowing expires_in (finite input, Infinity expiry)", async () => {
+    globalThis.fetch = (async () => new Response(
+      // Number.MAX_VALUE passes Number.isFinite but overflows to Infinity when
+      // multiplied by 1000 — the computed expiry must be rejected as malformed.
+      `{"access_token":"at","refresh_token":"rt","expires_in":1.7976931348623157e308}`,
+      { status: 200 },
+    )) as typeof fetch;
+
+    await expect(refreshKimiToken("old-refresh")).rejects.toThrow("missing required fields");
+  });
+
+  test("refreshKimiToken rejects a negative expires_in (already-past expiry)", async () => {
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ access_token: "at", refresh_token: "rt", expires_in: -1 }),
+      { status: 200 },
+    )) as typeof fetch;
+
+    await expect(refreshKimiToken("old-refresh")).rejects.toThrow("missing required fields");
+  });
 });
 
 describe("Kimi multiauth via saveCredential", () => {

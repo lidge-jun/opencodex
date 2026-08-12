@@ -19,7 +19,9 @@ beforeEach(() => {
     fetch: { configurable: true, value: testWindow.fetch.bind(testWindow) },
   });
   originalPrompt = window.prompt;
-  resetApiAuthFetchForTests();
+  resetApiAuthFetchForTests(async () => {
+    return window.prompt("OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)")?.trim() || null;
+  });
   sessionStorage.clear();
 });
 
@@ -82,6 +84,37 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
   expect(sessionStorage.length).toBe(0);
 });
 
+test("validates prompted tokens with a safe read before retrying the failed request", async () => {
+  const validationResults: string[] = [];
+  const seenRequests: Array<[string, string | null]> = [];
+  resetApiAuthFetchForTests(async (verifyToken) => {
+    validationResults.push(await verifyToken("wrong-token"));
+    validationResults.push(await verifyToken("fresh-token"));
+    return "fresh-token";
+  });
+
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    seenRequests.push([url.pathname, key]);
+    if (url.pathname === "/api/settings" && key === "fresh-token") {
+      return new Response("{}", { status: 200 });
+    }
+    if (url.pathname === "/api/config" && key === "fresh-token") {
+      return new Response("{}", { status: 200 });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect((await fetch("/api/config")).status).toBe(200);
+  expect(validationResults).toEqual(["rejected", "accepted"]);
+  expect(seenRequests).toContainEqual(["/api/settings", "wrong-token"]);
+  expect(seenRequests).toContainEqual(["/api/settings", "fresh-token"]);
+  expect(seenRequests).not.toContainEqual(["/api/config", "wrong-token"]);
+  expect(sessionStorage.length).toBe(0);
+});
+
 test("cross-origin /api/* requests do not receive the API key or token prompt", async () => {
   let promptCalls = 0;
   let phase: "seed" | "cross" = "seed";
@@ -124,7 +157,7 @@ test("concurrent 401s share one token prompt and all retry with the stored token
     const headers = new Headers(init?.headers);
     // Session re-bootstrap probe: this fixture never mints sessions, so fail it fast
     // instead of letting it join the release queue below.
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key") === "shared-token") {
@@ -245,7 +278,7 @@ test("canceling the token prompt once does not reopen it for the rest of the 401
   const release401: Array<() => void> = [];
   const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
-    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/") {
+    if (new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/").pathname === "/opencodex-session") {
       return new Response("unauthorized", { status: 401 });
     }
     if (headers.get("X-OpenCodex-API-Key")) {
@@ -357,7 +390,7 @@ test("expired session silently re-bootstraps from the served document without pr
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (url.pathname === "/") {
+    if (url.pathname === "/opencodex-session") {
       bootstrapFetches += 1;
       return new Response(sessionDocumentHtml("ocx_session_fresh", "fresh-csrf", "http://localhost"), {
         status: 200,
@@ -394,7 +427,7 @@ test("a session minted for another origin is rejected and the prompt fallback st
     const raw = input instanceof Request ? input.url : String(input);
     const url = new URL(raw, "http://localhost/");
     const headers = new Headers(init?.headers);
-    if (url.pathname === "/") {
+    if (url.pathname === "/opencodex-session") {
       return new Response(sessionDocumentHtml("ocx_session_foreign", "foreign-csrf", "http://192.0.2.10:10100"), {
         status: 200,
         headers: { "Content-Type": "text/html" },

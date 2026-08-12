@@ -287,7 +287,7 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Effort를 그대로 전달해요(`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, 그보다 크면→`high` |
-| `thinking.type: "disabled"` | 추론 매개변수를 모두 생략해요 |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }`을 명시하고 `summary`는 생략해요 |
 
 해석된 값은 요청 로그의 **Reasoning effort** 열에 표시돼요.
 
@@ -305,7 +305,7 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | 사용자 `tool_result` | `function_call_output`(`is_error` → `[tool error]` 접두사) |
 | `thinking` / `redacted_thinking` 재생 | 버려요 |
 | Function 도구 | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, 이름 지정 함수→`{type:"function",name}`, 호스팅 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

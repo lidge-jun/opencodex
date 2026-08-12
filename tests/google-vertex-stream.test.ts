@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter as createGoogleAdapterProduction } from "../src/adapters/google";
-import { isVertexTruncationReason, vertexTruncationErrorMessage } from "../src/adapters/google-truncation";
+import { isVertexTruncatedTurn, isVertexTruncationReason, vertexTruncationErrorMessage } from "../src/adapters/google-truncation";
 import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
@@ -29,6 +29,14 @@ describe("vertex truncation helpers", () => {
     expect(isVertexTruncationReason("STOP")).toBe(false);
     expect(isVertexTruncationReason(undefined)).toBe(false);
     expect(vertexTruncationErrorMessage("MAX_TOKENS")).toContain("truncated upstream");
+  });
+
+  test("MALFORMED_FUNCTION_CALL fails closed with zero started calls; MAX_TOKENS does not", () => {
+    expect(isVertexTruncatedTurn("MALFORMED_FUNCTION_CALL", 0)).toBe(true);
+    expect(isVertexTruncatedTurn("MAX_TOKENS", 0)).toBe(false);
+    expect(isVertexTruncatedTurn("MAX_TOKENS", 1)).toBe(true);
+    expect(isVertexTruncatedTurn("STOP", 5)).toBe(false);
+    expect(isVertexTruncatedTurn(undefined, 5)).toBe(false);
   });
 });
 
@@ -77,6 +85,17 @@ describe("vertex parseStream fail-closed truncation", () => {
     expect(text).toContain('"incomplete_details":{"reason":"max_output_tokens"}');
   });
 
+  test("MALFORMED_FUNCTION_CALL with NO emitted call part yields a terminal error, not done", async () => {
+    // The malformed call is dropped upstream, so the final chunk usually carries only the
+    // finishReason. Without the guard this surfaced as a clean empty completion.
+    const events = await collect(vertexProvider, [
+      { candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 0 } },
+    ]);
+    const last = events[events.length - 1];
+    expect(last.type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
   test("usage-only final chunk (no candidates) is not dropped", async () => {
     const events = await collect(vertexProvider, [
       { candidates: [{ content: { parts: [{ text: "hi" }] } }] },
@@ -93,6 +112,14 @@ describe("vertex parseResponse fail-closed truncation (non-streaming)", () => {
   test("MAX_TOKENS with a tool call yields a terminal error, not done", async () => {
     const adapter = createGoogleAdapter(vertexProvider);
     const body = JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "get_x", args: {} } }] }, finishReason: "MAX_TOKENS" }] });
+    const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
+    expect(events[events.length - 1].type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("MALFORMED_FUNCTION_CALL with no call part yields a terminal error, not done", async () => {
+    const adapter = createGoogleAdapter(vertexProvider);
+    const body = JSON.stringify({ candidates: [{ finishReason: "MALFORMED_FUNCTION_CALL" }], usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 0 } });
     const events = await adapter.parseResponse!(new Response(body, { status: 200 }));
     expect(events[events.length - 1].type).toBe("error");
     expect(events.some(e => e.type === "done")).toBe(false);

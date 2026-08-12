@@ -37,7 +37,7 @@ function atRiskHealth() {
     platform: "darwin",
     recommendedCommand: "ocx service install",
     diagnosticStale: false,
-    commands: { installService: "ocx service install", installShim: "ocx shim install", restoreNative: "ocx restore" },
+    commands: { installService: "ocx service install", repairService: "ocx service repair", installShim: "ocx shim install", restoreNative: "ocx restore" },
   };
 }
 

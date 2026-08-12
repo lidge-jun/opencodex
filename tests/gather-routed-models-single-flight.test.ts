@@ -97,12 +97,22 @@ describe("gatherRoutedModels single-flight", () => {
 
     const omissionsA: ComboCatalogOmission[] = [];
     const omissionsB: ComboCatalogOmission[] = [];
+    const outcomesA: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
+    const outcomesB: Array<{ provider: string; state: "authoritative" | "degraded" }> = [];
     await Promise.all([
-      gatherRoutedModels(config, { comboOmissions: omissionsA }),
-      gatherRoutedModels(config, { comboOmissions: omissionsB }),
+      gatherRoutedModels(config, {
+        comboOmissions: omissionsA,
+        providerModelOutcomes: outcomesA,
+      }),
+      gatherRoutedModels(config, {
+        comboOmissions: omissionsB,
+        providerModelOutcomes: outcomesB,
+      }),
     ]);
     expect(omissionsA.some(item => item.id === "incomplete")).toBe(true);
     expect(omissionsB).toEqual(omissionsA);
+    expect(outcomesA).toEqual([{ provider: "a", state: "authoritative" }]);
+    expect(outcomesB).toEqual(outcomesA);
   });
 
   test("distinct provider sets keep separate in-flight gathers (no slot eviction)", async () => {

@@ -16,7 +16,7 @@ const IMMUTABLE_READONLY_FLAGS = constants.SQLITE_OPEN_READONLY | constants.SQLI
 
 /**
  * Read-only CODEX_HOME storage scanner — Phase 1 of the Storage page epic
- * (devlog/_plan/500_storage-page-session-cleanup). Pure measurement: sizes via
+ * (devlog/_fin/500_storage-page-session-cleanup). Pure measurement: sizes via
  * fs.stat walks, DB row counts via immutable readonly opens that degrade to
  * null on lock/corruption. Performs zero writes under CODEX_HOME.
  */

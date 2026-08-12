@@ -24,7 +24,7 @@ const INTL_ID = "alibaba-token-plan-intl";
  * the one matching the destination's registry contract.
  * `defaultModel` and `note` are user-editable too and are handled below.
  */
-const USER_OWNED_FIELDS = ["apiKey", "apiKeyPool", "disabled", "baseUrl", "allowPrivateNetwork", "liveModels"] as const;
+const USER_OWNED_FIELDS = ["apiKey", "apiKeyPool", "disabled", "baseUrl", "allowPrivateNetwork", "liveModels", "modelCosts"] as const;
 
 export interface AlibabaRegionMigrationProjection {
   config: OcxConfig;

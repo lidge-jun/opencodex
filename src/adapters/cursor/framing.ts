@@ -168,6 +168,45 @@ export function decodeAvailableConnectFrames(
   }
 }
 
+/**
+ * Cursor-based sibling of decodeAvailableConnectFrames for callers that keep
+ * their own raw backlog: consumes complete frames from the FRONT of `input`
+ * and reports how many bytes were consumed (headers included) instead of
+ * materializing a remainder copy, and hands payload VIEWS (not copies) back so
+ * the caller can transfer the already-charged bytes to the frame lifecycle
+ * instead of reserving a second copy. The caller advances its own cursor by
+ * `consumedBytes` and never pays an O(backlog) copy per drain.
+ */
+export function consumeConnectFrames(
+  input: Uint8Array,
+  maxPayloadBytes = MAX_CONNECT_FRAME_PAYLOAD_BYTES,
+  availableFrameSlots = Number.POSITIVE_INFINITY,
+): { frames: ConnectFrame[]; consumedBytes: number } {
+  const planned: InspectedConnectFrame[] = [];
+  let offset = 0;
+  while (offset < input.length && planned.length < availableFrameSlots) {
+    const inspected = inspectConnectFrame(input, offset, maxPayloadBytes);
+    if (!inspected) break;
+    planned.push(inspected);
+    offset += inspected.readBytes;
+  }
+  // Zero-copy handoff for large payloads: VIEWS into the caller's backlog
+  // buffer (safe: append-only at its end, compaction/growth replace the
+  // buffer, a consumed region is never mutated in place). Small payloads are
+  // COPIED instead — a small view would pin the whole backlog buffer (up to
+  // 32 MiB) alive while the frame waits in the work queue.
+  const COPY_PIN_THRESHOLD_BYTES = 64 * 1024;
+  const frames = planned.map(({ flags, length, payloadStart }) => ({
+    flags,
+    payload: length <= COPY_PIN_THRESHOLD_BYTES
+      ? input.slice(payloadStart, payloadStart + length)
+      : input.subarray(payloadStart, payloadStart + length),
+    compressed: isConnectFrameCompressed(flags),
+    endStream: isConnectFrameEndStream(flags),
+  }));
+  return { frames, consumedBytes: offset };
+}
+
 function inspectConnectFrame(
   input: Uint8Array,
   offset: number,

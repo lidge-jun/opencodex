@@ -7,6 +7,10 @@ import type {
 } from "./add-codex-account-reducer";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
+import {
+  codexAccountMutationCompletion,
+  type CodexAccountMutationCompletion,
+} from "../codex-account-mutation";
 
 export function useAddCodexAccountOAuth({
   apiBase,
@@ -37,7 +41,7 @@ export function useAddCodexAccountOAuth({
   const manualCodeStateRef = useRef(ui.manualCodeState);
   const loginAbortRef = useRef<AbortController | null>(null);
   const startedReauthRef = useRef<string | null>(null);
-  const onAddedRef = useRef<() => void>(() => {});
+  const onAddedRef = useRef<(completion: CodexAccountMutationCompletion) => void>(() => {});
   const onCloseRef = useRef<() => void>(() => {});
 
   const manualCodeBusy = ui.manualCodeState === "submitting";
@@ -104,7 +108,10 @@ export function useAddCodexAccountOAuth({
     };
   }, [apiBase, clearManualCode, dispatch, stopPolling]);
 
-  const bindCallbacks = useCallback((onAdded: () => void, onClose: () => void) => {
+  const bindCallbacks = useCallback((
+    onAdded: (completion: CodexAccountMutationCompletion) => void,
+    onClose: () => void,
+  ) => {
     onAddedRef.current = onAdded;
     onCloseRef.current = onClose;
   }, []);
@@ -177,7 +184,11 @@ export function useAddCodexAccountOAuth({
           ]);
           try {
             const stRes = await fetch(statusUrl, { signal: tickSignal });
-            const st = await readJsonIfOk<{ status: string; error?: string }>(stRes);
+            const st = await readJsonIfOk<{
+              status: string;
+              error?: string;
+              catalogRefreshPending?: unknown;
+            }>(stRes);
             if (!aliveRef.current || pollSession.signal.aborted) return;
             if (!st) {
               pollErrorStreakRef.current += 1;
@@ -198,7 +209,7 @@ export function useAddCodexAccountOAuth({
               flowRef.current = null;
               dispatch({ type: "set-flow-id", flowId: null });
               if (!aliveRef.current) return;
-              onAddedRef.current();
+              onAddedRef.current(codexAccountMutationCompletion(st));
               onCloseRef.current();
             } else if (st.status === "error" || st.status === "expired") {
               stopPolling();

@@ -52,6 +52,14 @@ describe("upsertOAuthProvider credential preservation", () => {
     expect(provider.authMode).toBe("key");
   });
 
+  test("carries user-configured modelCosts across a re-login upsert", () => {
+    const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
+    const costs = { "grok-4": { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } };
+    config.providers.xai!.modelCosts = costs;
+    upsertOAuthProvider(config, "xai");
+    expect(config.providers.xai!.modelCosts).toEqual(costs);
+  });
+
   test("carries the key over without changing oauth billing when the user did not pick key mode", () => {
     const config = configWithKey("xai", "openai-chat", "https://api.x.ai/v1");
     config.providers.xai!.authMode = "oauth";

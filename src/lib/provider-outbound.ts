@@ -6,17 +6,19 @@ import {
   providerDestinationConfigError,
   resolvePublicAddresses,
 } from "./destination-policy";
-import { pinnedHttpGet } from "./pinned-http";
+import { pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
 import { outboundProxyConfigured } from "./proxy-env";
 import { publicProviderBaseUrl } from "./provider-url";
 
 type ProviderGetInit = Omit<RequestInit, "body" | "method" | "redirect">;
+type ProviderPostInit = ProviderGetInit & { body: string };
 type ProviderOutboundConfig = Pick<OcxProviderConfig, "baseUrl" | "allowPrivateNetwork"> & {
   fetch?: typeof globalThis.fetch;
 };
 export interface ProviderOutboundDependencies {
   resolveAddresses?: typeof resolvePublicAddresses;
   pinnedGet?: typeof pinnedHttpGet;
+  pinnedPost?: typeof pinnedHttpPost;
 }
 
 export class ProviderOutboundPolicyError extends Error {
@@ -102,13 +104,18 @@ export async function providerRedirectError(response: Response, requestUrl: stri
   return `provider returned ${response.status} redirect to ${target}; configure the final provider URL directly`;
 }
 
-export async function providerOutboundGet(
+async function providerOutboundRequest(
   name: string,
   provider: ProviderOutboundConfig,
   url: string,
-  init: ProviderGetInit = {},
+  method: "GET" | "POST",
+  init: ProviderGetInit | ProviderPostInit,
   dependencies: ProviderOutboundDependencies = {},
 ): Promise<Response> {
+  const postUrl = method === "POST" ? new URL(url) : undefined;
+  if (postUrl?.protocol !== undefined && postUrl.protocol !== "https:") {
+    throw new ProviderOutboundPolicyError("provider POST URL must use HTTPS");
+  }
   if (provider.fetch) {
     // A caller-owned executor cannot be peer-pinned here. This branch keeps literal/config
     // checks and redirect blocking, but does not provide the resolved-address guarantees of
@@ -128,12 +135,13 @@ export async function providerOutboundGet(
       });
       if (destinationError) throw new ProviderOutboundPolicyError(destinationError);
     }
-    return provider.fetch(url, { ...init, method: "GET", redirect: "manual" });
+    return provider.fetch(url, { ...init, method, redirect: "manual" });
   }
-  const parsed = new URL(url);
+  const parsed = postUrl ?? new URL(url);
   const proxyConfigured = configuredProxyFor();
   const resolveAddresses = dependencies.resolveAddresses ?? resolvePublicAddresses;
   const pinnedGet = dependencies.pinnedGet ?? pinnedHttpGet;
+  const pinnedPost = dependencies.pinnedPost ?? pinnedHttpPost;
   const allowPrivate = providerAllowsPrivateNetwork(name, provider);
   let resolved: Awaited<ReturnType<typeof resolvePublicAddresses>>;
   try {
@@ -150,11 +158,11 @@ export async function providerOutboundGet(
     if (!proxyConfigured) throw error;
     warnProxyBoundaryOnce();
     warnProxyDnsDegradationOnce();
-    return globalThis.fetch(url, { ...init, method: "GET", redirect: "manual" });
+    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
   }
   if (proxyConfigured && !resolved.privateNetwork) {
     warnProxyBoundaryOnce();
-    return globalThis.fetch(url, { ...init, method: "GET", redirect: "manual" });
+    return globalThis.fetch(url, { ...init, method, redirect: "manual" });
   }
   if (proxyConfigured && resolved.privateNetwork && !noProxyMatches(parsed)) {
     const hostname = normalizeProxyHostname(parsed.hostname);
@@ -162,9 +170,34 @@ export async function providerOutboundGet(
       `provider URL resolves to a private-network destination; add ${hostname} to NO_PROXY before using allowPrivateNetwork with an outbound proxy`,
     );
   }
-  return pinnedGet(url, pickPinnedAddress(resolved.addresses), init.signal ?? undefined, {
+  const requestOptions = {
     headers: init.headers,
     rejectUnauthorized: true,
     context: "provider response",
-  });
+  };
+  const pinned = pickPinnedAddress(resolved.addresses);
+  if (method === "POST") {
+    return pinnedPost(url, pinned, (init as ProviderPostInit).body, init.signal ?? undefined, requestOptions);
+  }
+  return pinnedGet(url, pinned, init.signal ?? undefined, requestOptions);
+}
+
+export async function providerOutboundGet(
+  name: string,
+  provider: ProviderOutboundConfig,
+  url: string,
+  init: ProviderGetInit = {},
+  dependencies: ProviderOutboundDependencies = {},
+): Promise<Response> {
+  return providerOutboundRequest(name, provider, url, "GET", init, dependencies);
+}
+
+export async function providerOutboundPost(
+  name: string,
+  provider: ProviderOutboundConfig,
+  url: string,
+  init: ProviderPostInit,
+  dependencies: ProviderOutboundDependencies = {},
+): Promise<Response> {
+  return providerOutboundRequest(name, provider, url, "POST", init, dependencies);
 }

@@ -29,13 +29,183 @@
  *   hardenSecretDir  — same contract for directories.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import {
+  resolveCurrentWindowsPrincipal,
+  resolveCurrentWindowsPrincipalAsync,
+  setSyntheticWindowsPrincipalForTests,
+} from "./windows-user-principal";
 
-const hardenedDirectories = new Set<string>();
-const hardenedPaths = new Set<string>();
-/** Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them. */
-const timedOutPaths = new Set<string>();
+const hardenedDirectories = new Map<string, HardenedIdentity>();
+const hardenedPaths = new Map<string, HardenedIdentity>();
+/**
+ * Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them.
+ * `false` means one explicitly authorized recovery attempt remains; `true` means
+ * that attempt was consumed. Ordinary callers never consume it.
+ */
+const timedOutPaths = new Map<string, boolean>();
+
+/**
+ * The memo value: `object:freshness` for a file a harden was actually attributed
+ * to.
+ *
+ * There is deliberately no null member. An observation that cannot be read is
+ * not stored at all — the entry is deleted — because a "recorded as unverifiable"
+ * value was dead code the moment attribution became a before/after comparison,
+ * and a branch nothing can reach is a branch no test can defend.
+ */
+type HardenedIdentity = string;
+
+/**
+ * What a stat can tell us about WHICH OBJECT is at a path.
+ *
+ * Two fields, deliberately separated, because conflating them shipped a bug:
+ *
+ * - `object` — `dev:ino`. Answers "is this the same file". Survives an ACL or
+ *   permission change, which is exactly what we need across an icacls call.
+ * - `freshness` — `ctimeNs`. Answers "has this file's metadata moved since". It
+ *   distinguishes an unlink/recreate that ext4 gave the same inode back for, and
+ *   it MOVES when permissions change.
+ *
+ * The first version used `dev:ino:ctimeNs` for both jobs. Since chmod bumps ctime
+ * — probed, `{ctimeChangedByChmod: true}` — and icacls is a permission change, the
+ * before/after comparison would have rejected its own successful harden and failed
+ * closed on every first harden on Windows. Requiring the identity to be unchanged
+ * across an operation whose entire purpose is to change it is not a strict check;
+ * it is a broken one.
+ */
+interface PathObservation {
+  readonly object: string;
+  readonly freshness: string;
+}
+
+/**
+ * Observe which object is at a path, and how fresh it is.
+ *
+ * `dev:ino` alone is not enough to detect a replacement, which a Linux CI run
+ * proved: ext4 reuses the inode of an unlinked file immediately — 100 of 100
+ * unlink/recreate cycles produced the SAME `ino`, while macOS reused none in 200
+ * and happily reported the earlier fix working. That is why `freshness` exists;
+ * `ctimeNs` differed in 100 of 100 of those same cycles.
+ *
+ * `bigint: true` is used because `ctimeNs` exists only in that variant.
+ *
+ * Test seam: `setStatForTests` replaces this reader so a test can vary `dev`,
+ * `ino`, and `ctimeNs` independently. Mirroring the implementation's string
+ * format in test setup proves nothing about which components production uses —
+ * an audit removed `dev` and all forty tests still passed.
+ *
+ * UNVERIFIED: the plain `ino` is reported to be 0 on NTFS while the bigint form
+ * carries the file index, and the zero-ino guard exists for that case. Neither
+ * Darwin nor Linux CI can confirm it and no pinned-Bun Windows probe has run.
+ * It is defensive code, not a demonstrated platform fact.
+ */
+type StatReader = (path: string) => { dev: bigint; ino: bigint; ctimeNs: bigint };
+
+const defaultStatReader: StatReader = path => {
+  const s = statSync(path, { bigint: true });
+  return { dev: s.dev, ino: s.ino, ctimeNs: s.ctimeNs };
+};
+
+let statReader: StatReader = defaultStatReader;
+
+/** Test seam: drive dev / ino / ctime independently. */
+export function setStatForTests(reader: StatReader | null): void {
+  statReader = reader ?? defaultStatReader;
+}
+
+function observe(targetPath: string): PathObservation | null {
+  try {
+    const s = statReader(targetPath);
+    if (s.ino === 0n) return null;
+    return { object: `${s.dev}:${s.ino}`, freshness: `${s.ctimeNs}` };
+  } catch {
+    return null;
+  }
+}
+
+function memoValue(seen: PathObservation): HardenedIdentity {
+  return `${seen.object}:${seen.freshness}`;
+}
+
+/**
+ * True only when this exact FILE was hardened, not merely this pathname.
+ *
+ * The memo used to be a `Set<string>` of paths. A stable destination — such as
+ * the coordinator database `hardenStableLockFile` hardens — can be unlinked and
+ * recreated at the same name, and the replacement inherited the previous file's
+ * hardening while never having been through icacls. Ephemeral temps escaped this
+ * only because atomic writers call `forgetEphemeralSecretPath` once the temp is
+ * gone; nothing does that for a stable path.
+ */
+function memoSatisfied(cache: Map<string, HardenedIdentity>, targetPath: string): boolean {
+  const remembered = cache.get(targetPath);
+  if (remembered === undefined) return false;
+  const current = observe(targetPath);
+  // Unreadable now is not "unchanged": re-harden rather than trust a value we
+  // cannot confirm still describes what is there.
+  //
+  // A miss RETIRES the entry rather than leaving it. Keeping it left the cache in
+  // a state nothing could justify: after a mismatch and a failed re-harden, the
+  // stale value survived, so restoring the old identity would satisfy it again
+  // without any ACL work. That needs exact-identity ABA to bite — outside the
+  // proof bound this unit claims — but "the consequence is out of scope" is not a
+  // reason to keep an entry we have just proven does not describe what is there.
+  if (current === null || memoValue(current) !== remembered) {
+    cache.delete(targetPath);
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Record a harden ONLY if the file we hardened is still the file at that path.
+ *
+ * Reading identity after the ACL sequence returns answers "what is there now",
+ * which is not the same question as "what did icacls operate on". A replacement
+ * landing mid-sequence — probed by swapping the file during the final
+ * `/remove:g` — made the memo remember the REPLACEMENT as hardened, so the next
+ * acquisition skipped ACL work on a file that had never seen it:
+ *
+ *   {identityChangedDuringHarden: true, callsForOriginal: 3, totalCalls: 3,
+ *    replacementWasHardened: false}
+ *
+ * So the OBJECT is captured before the sequence and compared after it. Only the
+ * object — `dev:ino` — because icacls changes permissions, and `ctimeNs` moves
+ * when permissions change (probed: `{ctimeChangedByChmod: true}`). Comparing the
+ * full identity across the call would have rejected every successful harden and
+ * failed closed on the first harden on Windows: the check would have been
+ * demanding that an operation not do the thing it exists to do.
+ *
+ * The memo then stores the object plus the freshness read AFTER hardening, which
+ * is the state a later lookup should match.
+ *
+ * A changed object, or an unreadable observation at either end, means we cannot
+ * say what was hardened: the memo is cleared rather than written, and required
+ * callers fail closed. An optional caller soft-fails, as it does for every other
+ * unproven ACL.
+ *
+ * Returns true when the harden may be reported successful.
+ */
+function recordHarden(
+  cache: Map<string, HardenedIdentity>,
+  targetPath: string,
+  before: PathObservation | null,
+): boolean {
+  const after = observe(targetPath);
+  if (before === null || after === null || before.object !== after.object) {
+    // Never leave a memo behind for a file we cannot vouch for, including one
+    // written by an earlier successful harden of a now-replaced file.
+    cache.delete(targetPath);
+    return false;
+  }
+  cache.set(targetPath, memoValue(after));
+  return true;
+}
+
+const SUBSTITUTED_DIAGNOSTIC =
+  "ACL hardening could not be attributed — the file at this path changed during hardening";
 
 export interface HardenResult {
   ok: boolean;
@@ -51,6 +221,12 @@ export interface HardenOptions {
    * Must NOT be a parent directory — directory ACLs are not authoritative for new files.
    */
   timeoutMemoKey?: string;
+  /**
+   * Consume the one recovery attempt for a previously timed-out memo key.
+   * Only a caller that owns its own single-flight and bounded retry policy should
+   * set this. It never clears or bypasses an already-consumed timeout memo.
+   */
+  retryTimedOutOnce?: boolean;
 }
 
 /**
@@ -58,9 +234,23 @@ export interface HardenOptions {
  * timeout retry and the diagnostic verification pass (no per-attempt fresh budget:
  * loadConfig hardens dir+config+auth sequentially, so per-attempt budgets stack
  * into multi-minute startup stalls). Override with OPENCODEX_ACL_TIMEOUT_MS
- * (integer ms, clamped to [1000, 60000]; invalid values fall back to 5000).
+ * (integer ms, clamped to [1000, 60000]; invalid values fall back to 30000).
+ *
+ * The default was 5s until #1156. One envelope has to cover the whole sequence —
+ * `/grant:r`, `/inheritance:r`, `/remove:g`, plus the conditional `/findsid`
+ * verification — and on machines where icacls is slow (Defender real-time scanning,
+ * roaming profiles, a domain-controller round trip) 5s ran out mid-sequence. The
+ * harden then failed closed, the native-main owner published a permanent
+ * `unavailable`, and every native request returned 503 until restart. A slow start
+ * is recoverable; that is not.
+ *
+ * The cost is honest and worth stating: because loadConfig hardens three paths
+ * sequentially, the timeout-path worst case at load is ~90s, and the owner path
+ * (initial call + one recovery) is ~60.25s. Both require icacls to be
+ * pathologically slow on every call; a healthy machine finishes in milliseconds
+ * and sees no change. Operators who prefer the old bound can set the env override.
  */
-const HARDEN_DEADLINE_DEFAULT_MS = 5_000;
+const HARDEN_DEADLINE_DEFAULT_MS = 30_000;
 const HARDEN_DEADLINE_MIN_MS = 1_000;
 const HARDEN_DEADLINE_MAX_MS = 60_000;
 
@@ -151,9 +341,21 @@ export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): 
   asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
 }
 
-/** Test seam: force the platform gate (e.g. "win32") so CI on POSIX reaches the runner. */
+/**
+ * Test seam: force the platform gate (e.g. "win32") so CI on POSIX reaches the runner.
+ *
+ * Faking win32 on a host without System32 also has to supply a principal, or
+ * every forced-branch test would fail on the identity lookup instead of
+ * exercising icacls. The synthetic value is registered with the resolver, not
+ * chosen here, so a test that injects its own runner still wins.
+ */
+const SYNTHETIC_TEST_PRINCIPAL = "*S-1-5-21-1-2-3-1001";
+
 export function setPlatformForTests(value: string | null): void {
   platformOverride = value;
+  setSyntheticWindowsPrincipalForTests(
+    value === "win32" && platform !== "win32" ? SYNTHETIC_TEST_PRINCIPAL : null,
+  );
 }
 
 /** Test seam: injectable clock for deadline tests (no real sleeps). */
@@ -173,9 +375,35 @@ export function forgetHardenedSecretPath(targetPath: string): void {
   hardenedPaths.delete(targetPath);
 }
 
+/**
+ * Ephemeral-path lifecycle release: clears the success memo AND any timeout
+ * memo keyed by THIS TEMP path in both namespaces. Call only after the temp is
+ * proven absent (successful rename, successful unlink, ENOENT, or an explicit
+ * non-existence check). Never pass a stable destination: destination-keyed
+ * timeout memos are intentional anti-restall state and are not touched here.
+ */
+export function forgetEphemeralSecretPath(tempPath: string): void {
+  hardenedPaths.delete(tempPath);
+  timedOutPaths.delete(`required:${tempPath}`);
+  timedOutPaths.delete(`optional:${tempPath}`);
+}
+
+/** Test seam: timeout memo sets return to baseline after ephemeral cleanup. */
+export function timedOutSecretPathCountForTests(): number {
+  return timedOutPaths.size;
+}
+
 /** Test seam for proving ephemeral success memos do not grow across replacements. */
 export function hardenedSecretPathCountForTests(): number {
   return hardenedPaths.size;
+}
+
+/**
+ * Directory counterpart. It had no seam, and that absence hid a real gap: a
+ * directory-only pathname memo passed every file-based test in this suite.
+ */
+export function hardenedSecretDirCountForTests(): number {
+  return hardenedDirectories.size;
 }
 
 function effectivePlatform(): string {
@@ -197,17 +425,26 @@ function icaclsError(step: string, result: IcaclsResult): NodeJS.ErrnoException 
 }
 
 /**
- * Return the current Windows username from the environment.
- * Falls back to USERDOMAIN\USERNAME if USERNAME alone is ambiguous.
- * The value is used directly in icacls arguments, so it must be present.
+ * The ACL principal is the effective token SID and nothing else.
+ *
+ * There is no name-shaped fallback here, and that absence is the fix for #1149
+ * rather than an omission. `USERDOMAIN\USERNAME` has the right shape but is not
+ * evidence of the current token's subject, and both variables are writable by
+ * the process that launched us. Granting Full Control to a wrong principal and
+ * then running `/inheritance:r` is destructive in both directions: another
+ * account can be left holding the secret, or the file can be left with no ACE
+ * the current user can use. When the SID cannot be resolved we decline.
+ *
+ * Non-Windows hosts that force this branch through `setPlatformForTests` get
+ * their principal from `setSyntheticWindowsPrincipalForTests`, which lives with
+ * the resolver so an injected runner can still take precedence over it.
  */
-function currentWindowsUser(): string | undefined {
-  const username = env["USERNAME"];
-  const domain = env["USERDOMAIN"];
-  if (!username) return undefined;
-  // USERDOMAIN is the machine/domain name; USERNAME is the account name.
-  // icacls accepts "DOMAIN\User" or just "User" for local accounts.
-  return domain ? `${domain}\\${username}` : username;
+function currentWindowsPrincipal(deadline: number): string {
+  return resolveCurrentWindowsPrincipal(deadline - nowFn());
+}
+
+async function currentWindowsPrincipalAsync(deadline: number): Promise<string> {
+  return resolveCurrentWindowsPrincipalAsync(deadline - nowFn());
 }
 
 /**
@@ -227,10 +464,7 @@ function grantAce(user: string, directory: boolean): string {
 }
 
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = currentWindowsPrincipal(deadline);
 
   // The deadline is owned by hardenEntry (total budget incl. retry + verification).
   const run = (step: string, args: string[]): IcaclsResult => {
@@ -247,7 +481,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
   // Step 1: grant current user full control BEFORE any destructive ACL change.
   // If this fails, inheritance is untouched and the writer keeps inherited access.
-  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
 
   // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
   // from step 1 survives this transition, so a later failure still leaves cleanup access.
@@ -276,10 +510,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
 /** Async counterpart of runIcacls — same step order and timeout/error classification (#612). */
 async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: number): Promise<void> {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = await currentWindowsPrincipalAsync(deadline);
 
   const run = async (step: string, args: string[]): Promise<IcaclsResult> => {
     const remaining = deadline - nowFn();
@@ -293,7 +524,7 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
     if (!result.success) throw icaclsError(step, result);
   };
 
-  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
   await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
   const removal = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
@@ -327,6 +558,8 @@ function sanitizeDiagnostics(error: unknown): string {
       return `ACL hardening failed (${code}) — permission denied running icacls`;
     case "EICACLS":
       return "ACL hardening failed (EICACLS) — icacls command error; filesystem may not support per-user NTFS ACLs";
+    case "EACLIDENTITY":
+      return "ACL hardening failed (EACLIDENTITY) — the effective Windows account SID could not be resolved";
     default:
       return `ACL hardening failed${code ? ` (${code})` : ""} — filesystem may not support per-user NTFS ACLs`;
   }
@@ -335,6 +568,60 @@ function sanitizeDiagnostics(error: unknown): string {
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && "code" in error
     && String((error as NodeJS.ErrnoException).code) === "ETIMEDOUT";
+}
+
+/** Preserve only the bounded machine-readable cause on a sanitized public error. */
+function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoException {
+  const error = new Error(diagnostics) as NodeJS.ErrnoException;
+  const code = cause && typeof cause === "object" && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  // EACLIDENTITY belongs here for the same reason as the rest: a caller that
+  // catches a required-mode failure has to tell "the SID could not be resolved"
+  // apart from "icacls stalled". Without it the code was dropped and only the
+  // message carried the cause, which no caller can branch on.
+  if (
+    code === "ETIMEDOUT" ||
+    code === "EICACLS" ||
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "EACLIDENTITY"
+  ) {
+    error.code = code;
+  }
+  return error;
+}
+
+function previousTimeoutError(retryConsumed: boolean): NodeJS.ErrnoException {
+  if (retryConsumed) {
+    const error = new Error(
+      "ACL hardening skipped — the previous timeout recovery was already consumed",
+    ) as NodeJS.ErrnoException;
+    error.code = "EACLRETRYEXHAUSTED";
+    return error;
+  }
+  return sanitizedAclError(
+    "ACL hardening skipped — previous attempt timed out",
+    Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+  );
+}
+
+/** Consume, but never reset, the single explicit recovery attempt for this key. */
+function timeoutMemoErrorIfBlocked(
+  memoKey: string,
+  opts: HardenOptions,
+): NodeJS.ErrnoException | null {
+  const retryConsumed = timedOutPaths.get(memoKey);
+  if (retryConsumed === undefined) return null;
+  if (opts.retryTimedOutOnce && retryConsumed === false) {
+    timedOutPaths.set(memoKey, true);
+    return null;
+  }
+  return previousTimeoutError(retryConsumed);
+}
+
+function recordTimeout(memoKey: string): void {
+  if (!timedOutPaths.has(memoKey)) timedOutPaths.set(memoKey, false);
 }
 
 /**
@@ -393,16 +680,18 @@ function hardenEntry(
   targetPath: string,
   directory: boolean,
   opts: HardenOptions,
-  cache: Set<string>,
+  cache: Map<string, HardenedIdentity>,
 ): HardenResult {
-  if (!existsSync(targetPath)) return { ok: true };
+  // Observed absence retires the memo. Leaving it would let a later file at this
+  // path satisfy the cache if the filesystem ever hands back a matching identity.
+  if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
-  if (cache.has(targetPath)) return { ok: true };
+  if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -410,10 +699,18 @@ function hardenEntry(
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break; // retry only while budget remains
     try {
+      // Captured BEFORE the sequence: this is the file we are about to harden.
+      const before = observe(targetPath);
       runIcacls(targetPath, directory, deadline);
-      cache.add(targetPath);
+      if (!recordHarden(cache, targetPath, before)) {
+        if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
+        return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
+      }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
+      // A substitution is not a transient icacls stall; do not spend the retry on it.
+      if (err instanceof Error && err.message === SUBSTITUTED_DIAGNOSTIC) throw err;
       lastErr = err;
       if (!isTimeoutError(err)) break; // real failures do not retry
     }
@@ -421,14 +718,14 @@ function hardenEntry(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = describeAclStateAfterTimeout(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 
@@ -437,16 +734,16 @@ async function hardenEntryAsync(
   targetPath: string,
   directory: boolean,
   opts: HardenOptions,
-  cache: Set<string>,
+  cache: Map<string, HardenedIdentity>,
 ): Promise<HardenResult> {
-  if (!existsSync(targetPath)) return { ok: true };
+  if (!existsSync(targetPath)) { cache.delete(targetPath); return { ok: true }; }
   if (effectivePlatform() !== "win32") return { ok: true };
-  if (cache.has(targetPath)) return { ok: true };
+  if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -454,10 +751,16 @@ async function hardenEntryAsync(
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - nowFn() <= 0) break;
     try {
+      const before = observe(targetPath);
       await runIcaclsAsync(targetPath, directory, deadline);
-      cache.add(targetPath);
+      if (!recordHarden(cache, targetPath, before)) {
+        if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
+        return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
+      }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
+      if (err instanceof Error && err.message === SUBSTITUTED_DIAGNOSTIC) throw err;
       lastErr = err;
       if (!isTimeoutError(err)) break;
     }
@@ -465,14 +768,14 @@ async function hardenEntryAsync(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = await describeAclStateAfterTimeoutAsync(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 

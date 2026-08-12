@@ -2,6 +2,7 @@ import { type Dispatch, type SetStateAction } from "react";
 import { IconChevron, IconSearch } from "../icons";
 import type { TFn } from "../i18n/shared";
 import { EmptyState } from "../ui";
+import { formatProviderDisplayName } from "../provider-icons";
 import type { ModelInfo } from "./dashboard-shared";
 
 export function DashboardModelsSection({
@@ -60,7 +61,7 @@ export function DashboardModelsSection({
                       aria-expanded={open}
                     >
                       <IconChevron width={12} height={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform .12s", color: "var(--muted)" }} aria-hidden="true" />
-                      <span className="font-semibold">{provider}</span>
+                      <span className="font-semibold">{formatProviderDisplayName(provider, t)}</span>
                       <span className="count">{rows.length}</span>
                     </button>
                     {open && (

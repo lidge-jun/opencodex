@@ -11,6 +11,7 @@ import {
   fetchProviderQuotaReports,
   getCachedProviderAccountQuota,
   reconcileProviderAccountQuotaRows,
+  resetProviderQuotaReconcileStateForTests,
   supportsPerAccountQuota,
 } from "../src/providers/quota";
 
@@ -49,6 +50,7 @@ afterEach(() => {
   rmSync(opencodexHome, { recursive: true, force: true });
   clearAccountQuotaCache();
   clearProviderQuotaCache();
+  resetProviderQuotaReconcileStateForTests();
 });
 
 describe("fetchProviderAccountQuotas", () => {

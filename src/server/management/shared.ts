@@ -51,7 +51,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { estimateComboCost, estimateRequestCost, effectiveServiceTier, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
@@ -82,7 +82,11 @@ export type TokPerSecondResult =
   | { kind: "value"; value: number; estimated: boolean }
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
-export type CostEstimateReason = "usage_estimated" | "cache_detail_missing" | "expected_price_overlay";
+export type CostEstimateReason =
+  | "usage_estimated"
+  | "cache_detail_missing"
+  | "expected_price_overlay"
+  | "provider_cost_overlay";
 
 export type CostResult =
   | { kind: "value"; estimate: NonNullable<ReturnType<typeof estimateRequestCost>>; estimateReasons: CostEstimateReason[] }
@@ -123,8 +127,9 @@ export function unavailableCostReason(entry: MetricSource): MetricUnavailableRea
   return "price_unmatched";
 }
 
+/** Display-time cost estimate for one log entry (or its attempt list), including the reasons that qualify the estimate. */
 export function costResult(entry: MetricSource): CostResult {
-  const tier = effectiveServiceTier(entry);
+  const tier = serviceTierContext(entry);
   const estimate = entry.attempts?.length
     ? estimateComboCost(entry.attempts, undefined, tier)
     : estimateRequestCost({ provider: entry.provider, model: entry.model, usage: entry.usage, usageStatus: entry.usageStatus, serviceTier: tier });
@@ -136,6 +141,8 @@ export function costResult(entry: MetricSource): CostResult {
       && entry.usage.cacheCreationInputTokens === undefined ? "cache_detail_missing" as const : undefined,
     estimate.price?.source === "expected" || estimate.attempts?.some(a => a.price.source === "expected")
       ? "expected_price_overlay" as const : undefined,
+    estimate.price?.source === "user" || estimate.attempts?.some(a => a.price.source === "user")
+      ? "provider_cost_overlay" as const : undefined,
   ].filter((reason): reason is CostEstimateReason => reason !== undefined);
   return { kind: "value", estimate, estimateReasons };
 }

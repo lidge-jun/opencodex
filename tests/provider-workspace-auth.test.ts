@@ -120,10 +120,8 @@ describe("workspace account integration seam", () => {
     expect(page).toContain('notify(t("prov.logoutFail"');
     expect(page).toContain('notify(t("prov.accountRemoveFail"');
     expect(page).toContain("await fetchAccountSets([provider])");
-    // Upstream replaced the setToast state with showActionFeedback; the contract this
-    // pins is unchanged and slightly tighter — the failure path must surface
-    // codexAuth.removeFailed AND mark it as an error tone via the second argument.
-    expect(codexPool).toContain('showActionFeedback(t("codexAuth.removeFailed"), true)');
+    // The failure path must surface codexAuth.removeFailed and mark it as an error tone.
+    expect(codexPool).toContain('showActionFeedback(t("codexAuth.removeFailed"), "err")');
     expect(hook).toContain("pauseTokensRef");
   });
 
@@ -170,6 +168,9 @@ describe("workspace account integration seam", () => {
     expect(details).toContain("authHandlers?.onReauth(item.name, active?.id)");
     expect(overview).toContain("onReauthenticate");
     expect(overview).toContain("pws.reauthenticate");
+    // OAuth providers without an email (Cursor/Kimi) still read as logged in.
+    expect(overview).toContain("oauth?.loggedIn");
+    expect(overview).toContain('t("pws.loggedInTitle")');
   });
 
   test("wires Codex active reauth health into openai rail status", async () => {
@@ -223,5 +224,15 @@ describe("workspace account integration seam", () => {
     expect(mainCard).toContain("codexAuth.mainTokenExpired");
     // The panel now shares the controller instead of reporting health upward.
     expect(panel).toContain("controller={codexController}");
+  });
+
+  test("keeps the doctor-copy affordance off the Providers account surfaces", async () => {
+    const [panel, pool] = await Promise.all([
+      Bun.file("gui/src/components/provider-workspace/ProviderAuthPanel.tsx").text(),
+      Bun.file("gui/src/components/CodexAccountPool.tsx").text(),
+    ]);
+    expect(panel).not.toContain("copyDoctor");
+    expect(pool).toContain("const showDoctorCopy = !embedded;");
+    expect(pool).toContain("onCopyDoctor={showDoctorCopy ? copyDoctor : undefined}");
   });
 });

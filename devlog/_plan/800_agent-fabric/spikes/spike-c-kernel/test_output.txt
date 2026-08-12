@@ -1,0 +1,19 @@
+?   	fab00-spike-c	[no test files]
+=== RUN   TestAppendOnlyAndHashChain
+--- PASS: TestAppendOnlyAndHashChain (0.00s)
+=== RUN   TestExpectedSequenceRejection
+--- PASS: TestExpectedSequenceRejection (0.00s)
+=== RUN   TestProjectionRebuildFromZero
+--- PASS: TestProjectionRebuildFromZero (0.00s)
+=== RUN   TestSchemaVersionTolerance
+--- PASS: TestSchemaVersionTolerance (0.01s)
+=== RUN   TestArtifactContentAddressing
+--- PASS: TestArtifactContentAddressing (0.00s)
+=== RUN   TestFencingTokenMonotonicAndStaleRejection
+--- PASS: TestFencingTokenMonotonicAndStaleRejection (0.00s)
+=== RUN   TestOnePrimaryOwnerAndRollback
+--- PASS: TestOnePrimaryOwnerAndRollback (0.01s)
+=== RUN   TestPermissionsNeverWidenWithoutApproval
+--- PASS: TestPermissionsNeverWidenWithoutApproval (0.00s)
+PASS
+ok  	fab00-spike-c/kernel	0.361s

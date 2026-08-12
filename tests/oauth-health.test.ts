@@ -22,6 +22,14 @@ import {
 } from "../src/codex/routing";
 import type { OcxConfig } from "../src/types";
 import { formatOAuthHealthForStatus } from "../src/cli/status-oauth";
+import {
+  LOCAL_MANAGEMENT_CAPABILITY_HEADER,
+  LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
+  LOCAL_MANAGEMENT_EXPECTED_PID_HEADER,
+  LOCAL_MANAGEMENT_NONCE_HEADER,
+  LOCAL_MANAGEMENT_READ_PATHS,
+  verifyLocalManagementReadCapability,
+} from "../src/lib/local-management-capability";
 
 const origHome = process.env.HOME;
 const origOcxHome = process.env.OPENCODEX_HOME;
@@ -174,11 +182,29 @@ describe("collectOAuthHealthEntriesForCli", () => {
   test("uses management API Codex health and does not read CLI process maps", async () => {
     markCodexAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    const attestationSecret = "A".repeat(43);
     let authorization: string | null = null;
+    let apiKey: string | null = null;
+    let fetchCalls = 0;
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async (_input, init) => {
-        authorization = new Headers(init?.headers).get("authorization");
+        fetchCalls += 1;
+        const headers = new Headers(init?.headers);
+        authorization = headers.get("authorization");
+        apiKey = headers.get("x-opencodex-api-key");
+        expect(headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER)).toBe("4242");
+        expect(verifyLocalManagementReadCapability(
+          attestationSecret,
+          headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
+          "GET",
+          LOCAL_MANAGEMENT_READ_PATHS.codexAccounts,
+          4242,
+          19191,
+          Number(headers.get(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER)),
+          headers.get(LOCAL_MANAGEMENT_CAPABILITY_HEADER),
+        )).toBe(true);
         return new Response(JSON.stringify({
           accounts: [{
             id: "proxy-codex-acct",
@@ -191,7 +217,9 @@ describe("collectOAuthHealthEntriesForCli", () => {
         }), { status: 200 });
       },
     });
-    expect(authorization).toBe("Bearer ocx-admin-health-test");
+    expect(fetchCalls).toBe(1);
+    expect(authorization).toBeNull();
+    expect(apiKey).toBeNull();
     expect(report.codexHealthSource).toBe("management-api");
     expect(report.entries.some(e => e.accountId === MAIN_CODEX_ACCOUNT_ID)).toBe(false);
     const remote = report.entries.find(e => e.accountId === "proxy-codex-acct");
@@ -201,6 +229,39 @@ describe("collectOAuthHealthEntriesForCli", () => {
       reason: "rate_limit",
     });
     expect(remote?.action).toContain("wait until");
+  });
+
+  test("never sends the admin token to a configured-port listener without runtime attestation", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    let fetchCalls = 0;
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "config" }),
+      readRuntimePortImpl: () => null,
+      fetchImpl: async (_input, init) => {
+        fetchCalls += 1;
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        return new Response("fake");
+      },
+    });
+    expect(fetchCalls).toBe(0);
+    expect(report.codexHealthSource).toBe("management-api-unavailable");
+  });
+
+  test("a stale runtime record cannot launch a local capability request", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "ocx-admin-health-test";
+    const attestationSecret = "A".repeat(43);
+    let apiCalls = 0;
+    const report = await collectOAuthHealthEntriesForCli(Date.now(), {
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19192, attestationSecret }),
+      fetchImpl: async (_input, init) => {
+        expect(new Headers(init?.headers).get("authorization")).toBeNull();
+        apiCalls += 1;
+        return new Response("fake");
+      },
+    });
+    expect(apiCalls).toBe(0);
+    expect(report.codexHealthSource).toBe("management-api-unavailable");
   });
 
   test("labels unavailable fallback and omits process-local Codex maps", async () => {
@@ -216,8 +277,10 @@ describe("collectOAuthHealthEntriesForCli", () => {
   });
 
   test("distinguishes management authentication failure from a stopped proxy", async () => {
+    const attestationSecret = "A".repeat(43);
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async () => new Response("unauthorized", { status: 401 }),
     });
     expect(report.codexHealthSource).toBe("management-auth-failed");
@@ -228,8 +291,10 @@ describe("collectOAuthHealthEntriesForCli", () => {
   });
 
   test("distinguishes an invalid management response from a stopped proxy", async () => {
+    const attestationSecret = "A".repeat(43);
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async () => new Response("upstream error", { status: 500 }),
     });
     expect(report.codexHealthSource).toBe("management-api-unavailable");
@@ -239,8 +304,10 @@ describe("collectOAuthHealthEntriesForCli", () => {
   });
 
   test("malformed remote health is re-derived instead of rendering undefined", async () => {
+    const attestationSecret = "A".repeat(43);
     const report = await collectOAuthHealthEntriesForCli(Date.now(), {
-      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: null }),
+      findLiveProxyImpl: async () => ({ hostname: "127.0.0.1", port: 19191, pid: 4242, source: "runtime" }),
+      readRuntimePortImpl: () => ({ pid: 4242, port: 19191, attestationSecret }),
       fetchImpl: async () =>
         new Response(JSON.stringify({
           accounts: [{

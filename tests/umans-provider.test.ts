@@ -96,6 +96,22 @@ describe("Umans provider", () => {
     expect(provider.apiKeyTransport).toBe("bearer");
   });
 
+  test("CLI key-login save payload preserves nonempty and explicit-empty reasoning placeholder policies", () => {
+    const requiredModels = ["deepseek-reasoner"];
+    const required = providerConfigFromKeyLoginProvider({
+      ...KEY_LOGIN_PROVIDERS.umans,
+      requiresReasoningPlaceholderModels: requiredModels,
+    } satisfies KeyLoginProvider, "sk-required");
+    const optedOut = providerConfigFromKeyLoginProvider({
+      ...KEY_LOGIN_PROVIDERS.umans,
+      requiresReasoningPlaceholderModels: [],
+    } satisfies KeyLoginProvider, "sk-opted-out");
+
+    expect(required.requiresReasoningPlaceholderModels).toEqual(["deepseek-reasoner"]);
+    expect(required.requiresReasoningPlaceholderModels).not.toBe(requiredModels);
+    expect(optedOut.requiresReasoningPlaceholderModels).toEqual([]);
+  });
+
   test("OpenAI API key-login clones max-input metadata and never persists virtual maps", () => {
     const source = KEY_LOGIN_PROVIDERS["openai-apikey"];
     const provider = providerConfigFromKeyLoginProvider(source, "sk-openai");

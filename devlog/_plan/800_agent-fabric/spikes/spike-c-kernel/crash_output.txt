@@ -1,0 +1,6 @@
+Boundary 1: crash BEFORE append                         -> no state changed; restart retries from last event
+Boundary 2: crash AFTER append BEFORE projection        -> event persisted; projection rebuilt on restart
+Boundary 3: crash BEFORE acknowledgement                -> handoff not committed; source retains ownership (token unchanged)
+Boundary 4: crash AFTER acknowledgement BEFORE commit   -> handoff not committed; source retains; target session discarded
+Boundary 5: crash AFTER commit BEFORE source shutdown   -> target owns; source worktree downgraded; source stale-writer fenced
+FINAL verify                                            -> PASS owner=rs_target fencing=1 acchash=sha256:acceptance_demo

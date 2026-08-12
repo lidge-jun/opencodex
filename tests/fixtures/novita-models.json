@@ -1,0 +1,57 @@
+{
+  "data": [
+    {
+      "id": "moonshotai/kimi-k3",
+      "object": "model",
+      "owned_by": "unknown",
+      "model_type": "chat",
+      "context_size": 1048576,
+      "max_output_tokens": 1048576,
+      "features": ["serverless", "function-calling", "structured-outputs", "reasoning"],
+      "endpoints": ["chat/completions", "anthropic", "responses"],
+      "input_modalities": ["text", "image", "video"],
+      "output_modalities": ["text"]
+    },
+    {
+      "id": "zai-org/glm-5.2",
+      "object": "model",
+      "owned_by": "unknown",
+      "model_type": "chat",
+      "context_size": 1048576,
+      "max_output_tokens": 131072,
+      "features": ["function-calling", "structured-outputs", "reasoning", "serverless"],
+      "endpoints": ["chat/completions", "anthropic"],
+      "input_modalities": ["text"],
+      "output_modalities": ["text"]
+    },
+    {
+      "id": "example/sparse-chat-model",
+      "object": "model",
+      "owned_by": "fixture",
+      "model_type": "chat",
+      "context_size": null,
+      "features": null,
+      "endpoints": ["chat/completions"],
+      "input_modalities": null,
+      "output_modalities": null
+    },
+    {
+      "id": "baai/bge-m3",
+      "object": "model",
+      "owned_by": "unknown",
+      "model_type": "embedding",
+      "context_size": 8192,
+      "features": ["serverless"],
+      "endpoints": ["embeddings"]
+    },
+    {
+      "id": "example/responses-only-model",
+      "object": "model",
+      "owned_by": "fixture",
+      "model_type": "chat",
+      "context_size": 131072,
+      "features": ["function-calling"],
+      "endpoints": ["responses"]
+    }
+  ]
+}

@@ -1,9 +1,9 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { countPendingOpencodexHistory, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setHistoryDbBusyTimeoutForTests, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { classifyRecoverableHistoryError, countPendingOpencodexHistory, historyBackupPathFor, isRecoverableHistoryError, migrateHistoryToOpenai, restoreLegacyOpenaiHistory, setAfterNoopPendingCountForTests, setHistoryDbBusyTimeoutForTests, snapshotCodexHistoryNoop, syncCodexHistoryProvider, withHistoryRetry } from "../src/codex/history-provider";
 
 // Windows CI: a transient file lock can consume the full production 5s busy timeout, tripping
 // bun's 5s default per-test timeout by itself. Fail fast into withHistoryRetry instead.
@@ -11,6 +11,12 @@ setHistoryDbBusyTimeoutForTests(250);
 // Windows CI runners also have slow filesystems: legitimate sqlite open/fsync cycles in this
 // file measure 5-7s there (vs <100ms locally), straddling bun's 5s default. Explicit headroom.
 setDefaultTimeout(30_000);
+
+const noopSnapshotArtifacts = new Set<string>();
+afterEach(() => {
+  for (const path of noopSnapshotArtifacts) rmSync(path, { recursive: true, force: true });
+  noopSnapshotArtifacts.clear();
+});
 
 /** Read the LAST session_meta payload, mirroring the app's last-writer-wins fold over rollout lines. */
 function latestSessionMetaPayload(path: string): Record<string, unknown> {
@@ -303,6 +309,12 @@ describe("history lock retry", () => {
     expect(isRecoverableHistoryError(new TypeError("undefined is not a function"))).toBe(false);
   });
 
+  test("classifies exhausted history failures for restore callers", () => {
+    expect(classifyRecoverableHistoryError(Object.assign(new Error("x"), { code: "SQLITE_BUSY" }))).toBe("busy");
+    expect(classifyRecoverableHistoryError(Object.assign(new Error("x"), { code: "EACCES" }))).toBe("permission");
+    expect(classifyRecoverableHistoryError(new Error("malformed database schema"))).toBeNull();
+  });
+
   test("withHistoryRetry succeeds after one recoverable failure, sleeping between attempts", () => {
     const sleeps: number[] = [];
     let calls = 0;
@@ -328,6 +340,22 @@ describe("history lock retry", () => {
     expect(calls).toBe(2);
   });
 
+  test("syncCodexHistoryProvider reports why the retry budget died", () => {
+    // A pending opencodex row makes the eject path actually write; with no rows
+    // the restore transaction never starts and nothing contends.
+    const fixture = makeFixture({ includeLegacy: true });
+    const holder = new Database(fixture.dbPath);
+    holder.exec("BEGIN IMMEDIATE");
+    try {
+      const result = syncCodexHistoryProvider("openai", fixture.dbPath, fixture.backupPath);
+      expect(result.failed).toBe(true);
+      expect(result.failureReason).toBe("busy");
+    } finally {
+      holder.exec("ROLLBACK");
+      holder.close();
+    }
+  });
+
   test("withHistoryRetry rethrows hard errors immediately", () => {
     let calls = 0;
     expect(() =>
@@ -341,6 +369,110 @@ describe("history lock retry", () => {
 });
 
 describe("Design B migration helpers", () => {
+  test("strict no-op snapshots distinguish absence from manifest uncertainty", () => {
+    const dir = join(tmpdir(), `ocx-history-noop-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const dbPath = join(dir, "state_5.sqlite");
+    const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({
+      kind: "unknown", reason: "database-absent",
+      stateDbPresent: false, backupPresent: false,
+    });
+    writeFileSync(backupPath, JSON.stringify({ version: 1, stateDbPath: dbPath, entries: {} }));
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({
+      kind: "unknown", reason: "database-absent", stateDbPresent: false, backupPresent: true,
+    });
+    writeFileSync(backupPath, "{not-json");
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({ kind: "unknown", reason: "manifest-read" });
+    writeFileSync(backupPath, JSON.stringify({ version: 1, stateDbPath: join(dir, "other.sqlite"), entries: {} }));
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({ kind: "unknown", reason: "manifest-foreign" });
+    writeFileSync(backupPath, JSON.stringify({ version: 1, entries: {} }));
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({ kind: "unknown", reason: "manifest-schema" });
+    writeFileSync(backupPath, JSON.stringify({
+      version: 1,
+      stateDbPath: dbPath,
+      entries: { "thread-1": { id: "wrong-id", rolloutPath: "r", modelProvider: "openai", source: "cli", hasUserEvent: 1 } },
+    }));
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({ kind: "unknown", reason: "manifest-schema" });
+  });
+
+  test("a missing database with a valid nonempty manifest remains pending", () => {
+    const dir = join(tmpdir(), `ocx-history-noop-pending-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const dbPath = join(dir, "state_5.sqlite");
+    const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
+    const rolloutPath = join(dir, "rollout.jsonl");
+    writeFileSync(backupPath, JSON.stringify({
+      version: 1,
+      stateDbPath: dbPath,
+      entries: {
+        "thread-1": { id: "thread-1", rolloutPath, modelProvider: "openai", source: "cli", hasUserEvent: 1 },
+      },
+    }));
+    expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({
+      kind: "work-pending", pendingRows: 0, backupEntries: 1,
+      stateDbPresent: false, backupPresent: true,
+    });
+  });
+
+  test("a WAL commit after the pending count invalidates a no-op snapshot", () => {
+    const dir = join(tmpdir(), `ocx-history-noop-wal-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const dbPath = join(dir, "state_5.sqlite");
+    const backupPath = historyBackupPathFor(dbPath);
+    noopSnapshotArtifacts.add(backupPath);
+    noopSnapshotArtifacts.add(dir);
+    const seed = new Database(dbPath);
+    try {
+      seed.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE threads (
+          id TEXT PRIMARY KEY,
+          rollout_path TEXT,
+          model_provider TEXT,
+          source TEXT,
+          has_user_event INTEGER,
+          first_user_message TEXT
+        );
+      `);
+      seed.run(
+        "INSERT INTO threads VALUES (?, ?, 'openai', 'cli', 1, 'seed')",
+        ["openai-row", join(dir, "openai-rollout.jsonl")],
+      );
+    } finally {
+      seed.close();
+    }
+
+    setAfterNoopPendingCountForTests(() => {
+      const writer = new Database(dbPath);
+      try {
+        writer.exec("PRAGMA journal_mode = WAL");
+        writer.run(
+          "INSERT INTO threads VALUES (?, ?, 'opencodex', 'cli', 1, 'raced')",
+          ["raced-opencodex-row", join(dir, "raced-rollout.jsonl")],
+        );
+      } finally {
+        writer.close();
+      }
+    });
+
+    try {
+      expect(snapshotCodexHistoryNoop(dbPath, backupPath)).toMatchObject({
+        kind: "unknown",
+        reason: "snapshot-race",
+        stateDbPresent: true,
+        backupPresent: false,
+      });
+    } finally {
+      setAfterNoopPendingCountForTests(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   const busy = () => Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
 
   test("withHistoryRetry honors a custom attempts budget", () => {

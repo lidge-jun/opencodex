@@ -453,3 +453,31 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
 
   await act(async () => { root.unmount(); });
 });
+
+test("Logs: inside-card clicks keep the detail dialog open; backdrop dismiss closes it", async () => {
+  globalThis.fetch = (async (input) => {
+    if (!String(input).includes("/api/logs")) return new Response(null, { status: 404 });
+    return jsonResponse([sampleLog]);
+  }) as typeof fetch;
+
+  const { root, container } = await mountLogs();
+  await flushMicrotasks();
+
+  const detailBtn = container.querySelector<HTMLButtonElement>(".log-detail-btn")!;
+  await act(async () => { detailBtn.click(); });
+  expect(container.querySelector("dialog")).not.toBeNull();
+
+  const card = container.querySelector<HTMLElement>(".log-detail-card")!;
+  expect(card).not.toBeNull();
+  await act(async () => { card.click(); });
+  expect(container.querySelector("dialog")).not.toBeNull();
+
+  const backdrop = container.querySelector<HTMLButtonElement>(".modal-backdrop-dismiss")!;
+  expect(backdrop).not.toBeNull();
+  expect(backdrop.tabIndex).toBe(-1);
+
+  await act(async () => { backdrop.click(); });
+  expect(container.querySelector("dialog")).toBeNull();
+
+  await act(async () => { root.unmount(); });
+});

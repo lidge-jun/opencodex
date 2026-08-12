@@ -24,8 +24,10 @@ import { appendFileSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
+  codexMainProfileDrainingResponse,
   cooldownErrorResponse,
   CodexAuthContextError,
+  CodexMainProfileDrainingError,
   CodexPoolAuthenticationError,
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
@@ -37,6 +39,8 @@ import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
+import type { AdmissionLease } from "../lib/admission";
+import { codexAccountSelectionForTurn } from "./lifecycle";
 
 /** Voice call create can wait on SDP negotiation; bound a hung upstream. */
 const LIVE_UPSTREAM_TIMEOUT_MS = 120_000;
@@ -203,8 +207,12 @@ export function parseLiveSidebandTarget(pathname: string, searchParams: URLSearc
  */
 function isLoopbackHost(hostname: string): boolean {
   const lower = hostname.toLowerCase();
+  const ipv4 = lower.split(".");
+  const ipv4Loopback = ipv4.length === 4
+    && ipv4[0] === "127"
+    && ipv4.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255);
   return lower === "localhost" || lower.endsWith(".localhost")
-    || lower === "127.0.0.1" || lower.startsWith("127.")
+    || ipv4Loopback
     || lower === "::1" || lower === "[::1]";
 }
 
@@ -409,6 +417,7 @@ export async function resolveLiveRelay(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
+  turnAdmissionLease?: AdmissionLease,
 ): Promise<LiveRelayTarget | Response> {
   try {
     validateForwardAdmissionCredential(req.headers, config);
@@ -433,7 +442,9 @@ export async function resolveLiveRelay(
   let forwardAuthError: Response | undefined;
   if (candidates.forwardCandidates.length > 0) {
     try {
-      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config);
+      forward = await resolveFirstUsableOpenAiSidecar(candidates.forwardCandidates, req.headers, config, {
+        beginCodexAccountSelection: codexAccountSelectionForTurn(turnAdmissionLease),
+      });
       if (forward) {
         logCtx.provider = formatCodexProviderForLog(
           forward.providerName,
@@ -444,6 +455,8 @@ export async function resolveLiveRelay(
     } catch (err) {
       if (err instanceof CodexAccountCooldownError) {
         forwardAuthError = cooldownErrorResponse(err);
+      } else if (err instanceof CodexMainProfileDrainingError) {
+        forwardAuthError = codexMainProfileDrainingResponse();
       } else if (err instanceof CodexThreadAffinityExpiredError) {
         forwardAuthError = formatErrorResponse(
           409,
@@ -506,13 +519,14 @@ export async function handleLive(
   req: Request,
   config: OcxConfig,
   logCtx: RequestLogContext,
+  turnAdmissionLease?: AdmissionLease,
 ): Promise<Response> {
   const inboundContentType = req.headers.get("content-type") ?? "application/octet-stream";
   const inboundBodyOrError = await readRequestBodyCapped(req, LIVE_REQUEST_MAX_BYTES);
   if (inboundBodyOrError instanceof Response) return inboundBodyOrError;
   const inboundBody = inboundBodyOrError;
 
-  const relay = await resolveLiveRelay(req, config, logCtx);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
   if (relay instanceof Response) return relay;
 
   const headers: Record<string, string> = { ...relay.headers };
@@ -587,8 +601,9 @@ export async function resolveLiveSidebandUpgrade(
   config: OcxConfig,
   logCtx: RequestLogContext,
   target: LiveSidebandTarget,
+  turnAdmissionLease?: AdmissionLease,
 ): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
-  const relay = await resolveLiveRelay(req, config, logCtx);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
   if (relay instanceof Response) return relay;
   return {
     headers: relay.headers,

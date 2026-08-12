@@ -128,7 +128,7 @@ describe("rate-limit reset credits", () => {
         },
         rate_limit_reset_credits: { available_count: 0 },
       });
-      expect(quota).toEqual({ monthlyPercent: 6, monthlyResetAt: 1787336442, resetCredits: 0 });
+      expect(quota).toEqual({ monthlyPercent: 6, monthlyResetAt: 1787336442, resetCredits: 0, monthlyIsPrimaryWindow: true });
       expect(quota!.weeklyPercent).toBeUndefined();
     });
 
@@ -143,6 +143,7 @@ describe("rate-limit reset credits", () => {
       expect(quota).toEqual({
         monthlyPercent: 39,
         monthlyResetAt: 1787401330,
+        monthlyIsPrimaryWindow: true,
         weeklyPercent: 20,
         weeklyResetAt: 1787000000,
       });
@@ -156,7 +157,7 @@ describe("rate-limit reset credits", () => {
           tertiary_window: { used_percent: 50, reset_at: 1788000000 },
         },
       });
-      expect(quota).toEqual({ monthlyPercent: 39, monthlyResetAt: 1787401330 });
+      expect(quota).toEqual({ monthlyPercent: 39, monthlyResetAt: 1787401330, monthlyIsPrimaryWindow: true });
     });
 
     it("falls back to tertiary wholesale when a monthly primary has no percent", () => {
@@ -179,6 +180,8 @@ describe("rate-limit reset credits", () => {
           tertiary_window: { used_percent: 50, reset_at: 1788000000 },
         },
       });
+      // No provenance flag on the Go/Free branch: the monthly window governs those plans
+      // regardless of which window produced the reading, so recovery never consults it.
       expect(quota).toEqual({ monthlyPercent: 30, monthlyResetAt: 1787401330 });
     });
 
@@ -310,11 +313,12 @@ describe("rate-limit reset credits", () => {
           secondary_window: null,
         },
       });
-      expect(quota).toEqual({ monthlyPercent: 100, monthlyResetAt: 1787401330 });
+      expect(quota).toEqual({ monthlyPercent: 100, monthlyResetAt: 1787401330, monthlyIsPrimaryWindow: true });
       setAccountQuotaFromParsed("monthly-A", quota!);
       expect(getAccountQuota("monthly-A")).toEqual({
         monthlyPercent: 100,
         monthlyResetAt: 1787401330,
+        monthlyIsPrimaryWindow: true,
         updatedAt: expect.any(Number),
       });
     });
@@ -331,6 +335,7 @@ describe("rate-limit reset credits", () => {
       expect(getAccountQuota("monthly-A")).toEqual({
         monthlyPercent: 100,
         monthlyResetAt: 1787401330,
+        monthlyIsPrimaryWindow: true,
         updatedAt: expect.any(Number),
       });
     });
@@ -381,6 +386,7 @@ describe("rate-limit reset credits", () => {
       expect(getAccountQuota("team-tertiary")).toEqual({
         monthlyPercent: 39,
         monthlyResetAt: 1787401330,
+        monthlyIsPrimaryWindow: true,
         updatedAt: expect.any(Number),
       });
     });
@@ -431,6 +437,7 @@ describe("rate-limit reset credits", () => {
       expect(getAccountQuota("team-A")).toEqual({
         monthlyPercent: 39,
         monthlyResetAt: 1787401330,
+        monthlyIsPrimaryWindow: true,
         weeklyPercent: 20,
         weeklyResetAt: 1787000000,
         updatedAt: expect.any(Number),

@@ -49,12 +49,12 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 
 | 占位符 | 替换为 |
 | --- | --- |
-| `{{model}}` | 配置的 `injectionModel`，或空字符串 |
+| `{{model}}` | 当前请求中生效的首选模型。未带选择器的原生 `injectionModel` 只有在请求本身明确指定账户选择器时，才会加上该账户限定。无法解析或存在歧义的未限定值会替换为空字符串；显式限定到账户或提供商路由的 ID 即使无法解析也保持原值 |
 | `{{effort}}` | 配置的 `injectionEffort`，或空字符串 |
 | `{{roster}}` | 解析后的、对 picker 可见且与界面兼容的 roster |
 | `{{fallback}}` | 配置的全局 fallback 指引 |
 
-内置的 v2 指引有 700 字符预算。如果会超出预算，opencodex 会优先删除 roster，而不是截断核心 spawn 指令。只有当首选模型、可用 roster 或 fallback chain 解析成功时，指引才会触发。自定义提示词不会绕过这个门槛。
+内置的 v2 指引有 700 字符预算。如果会超出预算，opencodex 会优先删除 roster，而不是截断核心 spawn 指令。内置指引仅在首选模型、可用 roster 或 fallback chain 解析成功时触发。只要配置了 `injectionModel`，自定义提示词就会触发；如果未限定的值无法唯一解析，`{{model}}` 会替换为空字符串。
 
 在 v1 上，opencodex 只会在 `max` 或 `ultra` effort 下注入上游风格的主动委派指引。它不会在 v1 上额外添加首选模型、roster、fallback list 或自定义提示词。
 
@@ -65,8 +65,10 @@ Dashboard 上的 **Sub-agent delegation** 控件管理三个相关设置：
 对于生成出的工作器，opencodex 会按以下优先级构建顺序：
 
 1. 请求的主模型。
-2. 该角色在其 `$CODEX_HOME/agents/*.toml` 定义中的 `model_fallback` 列表。
+2. opencodex 配置中 `subagentModelFallbackByModel` 提供的 per-model 链，按请求的主模型做键。
 3. opencodex 配置中的全局 `subagentModelFallback` 列表。
+
+per-role fallback 链应该放在 opencodex 配置里，而不是 `$CODEX_HOME/agents/*.toml`。Codex 0.146+ 会严格反序列化 agent 角色文件，并把 `model_fallback` 当作未知字段拒绝，导致整个角色定义被跳过（#1190）。opencodex 为了向后兼容仍然能读取 TOML 里的旧版 `model_fallback`，但 `ocx doctor` 会给出警告，而且 Codex 本身会忽略受影响的角色。
 
 重复的模型 id 会在保留第一次出现的前提下移除。在选择过程中，opencodex 会跳过已禁用、不可路由、由已禁用 provider 支撑、标记为 unhealthy、处于 cooldown、没有可用 pooled Codex 账户，或者超出配置配额阈值的候选项。可用性探测会缓存 `subagentModelFallbackPollMs` 的时长，默认 60 秒。
 

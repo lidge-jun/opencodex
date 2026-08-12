@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, opendirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { atomicWriteFileAsync, getConfigDir } from "../config";
+import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import type { OcxProviderContinuationState } from "../types";
 import {
@@ -9,6 +9,7 @@ import {
   readResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
+  responseSpillPayloadCap,
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
@@ -23,6 +24,10 @@ export const MAX_STORED_RESPONSE_BYTES = 64 * 1024 * 1024;
 /** Legacy snapshot selection only. Spill demotion is governed solely by the RAM cap above. */
 const SNAPSHOT_ENTRY_MAX_BYTES = 2 * 1024 * 1024;
 const SNAPSHOT_TOTAL_MAX_BYTES = 24 * 1024 * 1024;
+/** Refuse-to-parse ceiling for an existing snapshot file (above the 24 MiB write
+ * bound, so anything we wrote ourselves always loads; guards against externally
+ * planted or pre-cap unbounded files being parsed whole). */
+const SNAPSHOT_FILE_MAX_BYTES = 32 * 1024 * 1024;
 const STALE_TEMP_GRACE_MS = 15 * 60 * 1_000;
 const STALE_TEMP_MAX_ENTRIES = 4_096;
 const STALE_TEMP_MAX_CLEANUPS = 512;
@@ -56,7 +61,7 @@ type ResidentInput = Omit<ResidentResponseState, "kind" | "sizeBytes">;
 
 export type PreviousResponseReplayFailure = {
   code: "previous_response_not_found";
-  reason: "spill_missing" | "spill_corrupt" | "spill_failed";
+  reason: "spill_missing" | "spill_corrupt" | "spill_failed" | "spill_too_large";
 };
 
 const states = new Map<string, StoredResponseState>();
@@ -67,6 +72,19 @@ let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
 let stateRevision = 0;
 const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
+/**
+ * Admission-boundary observability (test-visible). directSpills: oversized
+ * candidates routed straight to durable spill without a resident stay or
+ * unrelated demotion. oversizedDrops: candidates above the single-spill
+ * payload ceiling, tombstoned instead of retained. snapshotOversizedRefusals:
+ * snapshot files refused before parse.
+ */
+const admissionCounters = { directSpills: 0, oversizedDrops: 0, snapshotOversizedRefusals: 0 };
+
+/** Test-only: admission-boundary counters (proves the new paths fire). */
+export function responseAdmissionCountersForTests(): Readonly<typeof admissionCounters> {
+  return admissionCounters;
+}
 // Superseded spill generations awaiting a durable snapshot before unlink
 // (review C1-1: unlinking at swap time races a crash against the debounced
 // snapshot — the reloaded OLD stub would point at a deleted file).
@@ -177,12 +195,28 @@ function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void 
   if (options.deleteSpill !== false) deleteOwnedSpills(existing);
 }
 
-function replaceWithSpillFailure(id: string, expected?: StoredResponseState): void {
+function replaceWithSpillFailure(
+  id: string,
+  expected?: StoredResponseState,
+  options: { deferSpillUnlink?: boolean } = {},
+): void {
   const existing = states.get(id);
   if (expected && existing !== expected) return;
   const failed = tombstone(id, expected?.createdAt ?? existing?.createdAt ?? now());
   if (replaceMapEntry(id, failed, expected)) {
-    if (existing) deleteOwnedSpills(existing);
+    if (existing) {
+      if (options.deferSpillUnlink && existing.kind === "spill") {
+        // Crash consistency (same rule as replaceSpillEntryAtomically): the old
+        // durable snapshot still references this generation until the tombstone
+        // itself is durable — queue the unlink for the next stable persist.
+        pendingSpillUnlinks.push(existing.spill);
+        while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
+          deleteResponseSpill(pendingSpillUnlinks.shift()!);
+        }
+      } else {
+        deleteOwnedSpills(existing);
+      }
+    }
   }
 }
 
@@ -236,7 +270,9 @@ function replaceSpillEntryAtomically(
     }
   } catch {
     spillCounters.writeFailures += 1;
-    replaceWithSpillFailure(id, expected);
+    // deferSpillUnlink: the durable snapshot may still reference the old
+    // generation; deleting it now would strand the old stub after a crash.
+    replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
   }
 }
 
@@ -251,6 +287,11 @@ function setResidentEntry(id: string, entry: ResidentInput): void {
     pruneResponses();
     return;
   }
+  if (candidate.sizeBytes > byteCap()) {
+    admitOversizedCandidate(id, candidate, expected);
+    pruneResponses();
+    return;
+  }
   if (expected?.kind === "spill") {
     replaceSpillEntryAtomically(id, expected, candidate);
     pruneResponses();
@@ -258,6 +299,68 @@ function setResidentEntry(id: string, entry: ResidentInput): void {
   }
   if (!replaceMapEntry(id, candidate, expected)) return;
   pruneResponses();
+}
+
+/**
+ * Admission boundary for candidates that can never fit as resident (larger
+ * than the whole resident-map cap). Writes them DIRECTLY to durable spill and
+ * installs only the stub — the oversized candidate never becomes resident and
+ * no unrelated resident is demoted to make room for it. Candidates above the
+ * single-spill payload ceiling are tombstoned instead: retaining a spill the
+ * replay ceiling would refuse to read is write-only waste.
+ */
+function admitOversizedCandidate(
+  id: string,
+  candidate: ResidentResponseState,
+  expected?: StoredResponseState,
+): void {
+  if (candidate.sizeBytes > responseSpillPayloadCap()) {
+    admissionCounters.oversizedDrops += 1;
+    replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
+    return;
+  }
+  try {
+    const ref = writeResponseSpillDurably(id, {
+      createdAt: candidate.createdAt,
+      items: candidate.items,
+      ...(candidate.providers ? { providers: candidate.providers } : {}),
+    });
+    // Enforce the ceiling against the REAL envelope: the spill payload adds
+    // the {version, responseId, ...} wrapper, so a candidate within the
+    // wrapper's size of the cap would otherwise be retained unreadably.
+    if (ref.payloadBytes > responseSpillPayloadCap()) {
+      deleteResponseSpill(ref);
+      admissionCounters.oversizedDrops += 1;
+      replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
+      return;
+    }
+    const base: Omit<SpilledResponseState, "sizeBytes"> = {
+      kind: "spill",
+      createdAt: candidate.createdAt,
+      ...(candidate.providers ? { providers: candidate.providers } : {}),
+      spill: ref,
+    };
+    const next: SpilledResponseState = { ...base, sizeBytes: stubSize(id, base) };
+    if (!replaceMapEntry(id, next, expected)) {
+      deleteResponseSpill(ref);
+      return;
+    }
+    spillCounters.writes += 1;
+    admissionCounters.directSpills += 1;
+    noteStubSwapForTest();
+    if (expected?.kind === "spill") {
+      // Same deferred-unlink rule as replaceSpillEntryAtomically: the new stub
+      // is durable only after the debounced snapshot, so the old generation
+      // stays until a stable persist drains the queue.
+      pendingSpillUnlinks.push(expected.spill);
+      while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
+        deleteResponseSpill(pendingSpillUnlinks.shift()!);
+      }
+    }
+  } catch {
+    spillCounters.writeFailures += 1;
+    replaceWithSpillFailure(id, expected, { deferSpillUnlink: true });
+  }
 }
 
 // Expansion provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
@@ -334,8 +437,18 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     items: rec.items,
     ...(providers ? { providers } : {}),
   });
-  if (resident) replaceMapEntry(id, resident);
-  else replaceMapEntry(id, tombstone(id, rec.createdAt));
+  if (!resident) {
+    replaceMapEntry(id, tombstone(id, rec.createdAt));
+    return;
+  }
+  // Same admission boundary as live writes: an oversized snapshot row goes
+  // straight to spill (or tombstone above the payload ceiling) instead of
+  // entering the resident map and demoting unrelated rows on the first prune.
+  if (resident.sizeBytes > byteCap()) {
+    admitOversizedCandidate(id, resident, undefined);
+    return;
+  }
+  replaceMapEntry(id, resident);
 }
 
 export interface ResponseStateTempRecoveryResult {
@@ -454,18 +567,43 @@ function ensureLoaded(): void {
   if (loaded) return;
   loaded = true;
   const path = snapshotPath();
+  // Atomic writes place their temp beside the RESOLVED target, so a symlinked
+  // snapshot (dotfiles-managed config dir) strands temps in the link's real
+  // directory where a scan of the literal config dir would never see them.
+  // Both locations are swept; they collapse to one when nothing is symlinked.
+  // resolveWriteTarget refuses a dangling link; snapshot loading stays independent.
+  let resolvedDir = dirname(path);
   try {
-    recoverStaleResponseStateTemps(dirname(path));
+    resolvedDir = dirname(resolveWriteTarget(path));
   } catch {
-    /* best-effort cleanup only; snapshot loading must remain independent */
+    /* unresolvable link: sweep the literal dir only */
+  }
+  for (const dir of new Set([dirname(path), resolvedDir])) {
+    try {
+      recoverStaleResponseStateTemps(dir);
+    } catch {
+      /* best-effort cleanup only; snapshot loading must remain independent */
+    }
   }
   try {
     if (existsSync(path)) {
-      const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-      if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
-        for (const entry of raw.states) {
-          if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
-          loadSnapshotEntry(entry[0], entry[1]);
+      // Bound the read BEFORE parse: the 24 MiB write cap constrains snapshots
+      // this process wrote, not a pre-existing oversized file. statSync follows
+      // symlinks deliberately — readFileSync below follows them too, so the
+      // size gate must measure the same target the read would.
+      const stat = statSync(path);
+      if (!stat.isFile()) {
+        // Symlink to a FIFO/device (e.g. /dev/zero): reading would block or
+        // return unbounded input. Only regular files are ever parsed.
+      } else if (stat.size > SNAPSHOT_FILE_MAX_BYTES) {
+        admissionCounters.snapshotOversizedRefusals += 1;
+      } else {
+        const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
+        if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
+          for (const entry of raw.states) {
+            if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+            loadSnapshotEntry(entry[0], entry[1]);
+          }
         }
       }
     }
@@ -504,7 +642,9 @@ async function writeBoundedSnapshot(path: string): Promise<SnapshotWriteOutcome>
           persistable = smallState;
         }
         const persistEntry: [string, unknown] = [id, persistable];
-        const size = JSON.stringify(persistEntry).length;
+        // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
+        // past both snapshot caps at up to 2x the intended size.
+        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
         if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
         if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
         total += size;
@@ -676,7 +816,11 @@ function materializeEntry(
     spillCounters.readFailures += 1;
     const failure: PreviousResponseReplayFailure = {
       code: "previous_response_not_found",
-      reason: result.reason === "missing" ? "spill_missing" : "spill_corrupt",
+      reason: result.reason === "missing"
+        ? "spill_missing"
+        : result.reason === "too_large"
+          ? "spill_too_large"
+          : "spill_corrupt",
     };
     replaceWithSpillFailure(id, entry);
     schedulePersist();
