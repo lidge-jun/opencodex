@@ -743,6 +743,12 @@ function canonicalReplayValue(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Canonical identity of a single Responses input item for replay-overlap detection.
+ * Volatile `id`, `status`, and sequence fields are excluded, and retained keys are
+ * recursively sorted so equivalent items match regardless of property order. Returns
+ * undefined for non-object items, which never count as overlap evidence.
+ */
 function canonicalReplayItemKey(item: unknown): string | undefined {
   if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
   const { id: _id, status: _status, sequence_number: _sequenceNumber, ...rest } = item as Record<string, unknown>;
