@@ -1,0 +1,163 @@
+name: CL-10 Task 7 patch retry
+
+on:
+  push:
+    branches:
+      - feat/cl-10-public-evidence-runtime
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+      - name: Apply Matrix community context
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          api = Path('gui/src/pages/compatibility-matrix-api.ts')
+          s = api.read_text()
+          marker = 'export type LabPageData = {\n'
+          community = r'''export type CommunityEvidenceSummaryRowDto = {
+            trustClass: "community_untrusted_v1";
+            status: "cryptographically_valid";
+            bundleId: string;
+            publisherKeyId: string;
+            activeRecordCount: number;
+            revokedRecordCount: number;
+          };
+
+          export type CommunityEvidenceContextDto = {
+            evidence: CommunityEvidenceSummaryRowDto[];
+            trustClass: "community_untrusted_v1";
+            locallyVerified: false;
+          };
+
+          function hasOnlyKeys(raw: Record<string, unknown>, allowed: readonly string[]): boolean {
+            const allowedSet = new Set(allowed);
+            return Object.keys(raw).every(key => allowedSet.has(key));
+          }
+
+          function isSha256Hex(value: unknown): value is string {
+            return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+          }
+
+          function isNonNegativeInteger(value: unknown): value is number {
+            return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+          }
+
+          export function parseCommunityEvidenceContext(raw: unknown): CommunityEvidenceContextDto | null {
+            if (!isPlainObject(raw)
+              || !hasOnlyKeys(raw, ["evidence", "trustClass", "locallyVerified"])
+              || raw.trustClass !== "community_untrusted_v1"
+              || raw.locallyVerified !== false
+              || !Array.isArray(raw.evidence)
+              || raw.evidence.length > 4096) {
+              return null;
+            }
+            const evidence: CommunityEvidenceSummaryRowDto[] = [];
+            for (const value of raw.evidence) {
+              if (!isPlainObject(value)
+                || !hasOnlyKeys(value, [
+                  "trustClass", "status", "bundleId", "publisherKeyId",
+                  "activeRecordCount", "revokedRecordCount",
+                ])
+                || value.trustClass !== "community_untrusted_v1"
+                || value.status !== "cryptographically_valid"
+                || !isSha256Hex(value.bundleId)
+                || !isSha256Hex(value.publisherKeyId)
+                || !isNonNegativeInteger(value.activeRecordCount)
+                || !isNonNegativeInteger(value.revokedRecordCount)) {
+                return null;
+              }
+              evidence.push({
+                trustClass: "community_untrusted_v1",
+                status: "cryptographically_valid",
+                bundleId: value.bundleId,
+                publisherKeyId: value.publisherKeyId,
+                activeRecordCount: value.activeRecordCount,
+                revokedRecordCount: value.revokedRecordCount,
+              });
+            }
+            return { evidence, trustClass: "community_untrusted_v1", locallyVerified: false };
+          }
+
+          export async function fetchCommunityEvidenceContext(
+            apiBase: string,
+            signal: AbortSignal,
+          ): Promise<CommunityEvidenceContextDto> {
+            const raw = await fetchLabJson<unknown>(apiBase, "/api/lab/public/community", signal);
+            const context = parseCommunityEvidenceContext(raw);
+            if (!context) throw invalidResponse();
+            return context;
+          }
+
+          '''
+          assert marker in s
+          s = s.replace(marker, community + marker, 1)
+          old = '  production: PassiveProductionSummaryDto | null;\n};'
+          assert old in s
+          s = s.replace(old, '  production: PassiveProductionSummaryDto | null;\n  community: CommunityEvidenceContextDto | null;\n};', 1)
+          old = '''  const [subject, observations, events, artifacts, production] = await Promise.all([\n    fetchSubjectDetail(apiBase, verdict.subjectId, signal),\n    fetchAllObservations(apiBase, observationFilters, signal),\n    mapSettledBounded(eventIds, DETAIL_CONCURRENCY, signal, id => fetchEventById(apiBase, id, signal)),\n    mapSettledBounded(digests, DETAIL_CONCURRENCY, signal, digest => fetchArtifactByDigest(apiBase, digest, signal)),\n    fetchPassiveProductionSummary(apiBase, verdict.subjectId, signal).catch(error => {\n      if (signal.aborted) throw error;\n      return null;\n    }),\n  ]);'''
+          new = '''  const [subject, observations, events, artifacts, production, community] = await Promise.all([\n    fetchSubjectDetail(apiBase, verdict.subjectId, signal),\n    fetchAllObservations(apiBase, observationFilters, signal),\n    mapSettledBounded(eventIds, DETAIL_CONCURRENCY, signal, id => fetchEventById(apiBase, id, signal)),\n    mapSettledBounded(digests, DETAIL_CONCURRENCY, signal, digest => fetchArtifactByDigest(apiBase, digest, signal)),\n    fetchPassiveProductionSummary(apiBase, verdict.subjectId, signal).catch(error => {\n      if (signal.aborted) throw error;\n      return null;\n    }),\n    fetchCommunityEvidenceContext(apiBase, signal).catch(error => {\n      if (signal.aborted) throw error;\n      return null;\n    }),\n  ]);'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          old = '    artifacts,\n    production,\n  };'
+          assert old in s
+          s = s.replace(old, '    artifacts,\n    production,\n    community,\n  };', 1)
+          api.write_text(s)
+
+          translations = Path('gui/src/i18n/lab-translations.ts')
+          s = translations.read_text()
+          old = '  | "artifact.purged_unavailable"\n  | "selectVerdict";'
+          assert old in s
+          s = s.replace(old, '''  | "artifact.purged_unavailable"\n  | "selectVerdict"\n  | "community.title"\n  | "community.notLocalVerdict"\n  | "community.bundles"\n  | "community.activeRecords"\n  | "community.revokedRecords";''', 1)
+          supplement_marker = 'const LAB_SUPPLEMENTS: Record<LabLocale, Record<LabSupplementKey, string>> = {'
+          pos = s.index(supplement_marker)
+          prefix, tail = s[:pos], s[pos:]
+          replacements = [
+            ('    selectVerdict: "View verdict for {subject}",', '''    selectVerdict: "View verdict for {subject}",\n    "community.title": "Community evidence",\n    "community.notLocalVerdict": "Untrusted read-only context. Not included in this local verdict.",\n    "community.bundles": "Bundles",\n    "community.activeRecords": "Active records",\n    "community.revokedRecords": "Revoked records",'''),
+            ('    selectVerdict: "Urteil für {subject} anzeigen",', '''    selectVerdict: "Urteil für {subject} anzeigen",\n    "community.title": "Community-Evidenz",\n    "community.notLocalVerdict": "Nicht vertrauenswürdiger Nur-Lese-Kontext. Nicht Teil dieses lokalen Urteils.",\n    "community.bundles": "Pakete",\n    "community.activeRecords": "Aktive Einträge",\n    "community.revokedRecords": "Widerrufene Einträge",'''),
+            ('    selectVerdict: "{subject}의 판정 보기",', '''    selectVerdict: "{subject}의 판정 보기",\n    "community.title": "커뮤니티 증거",\n    "community.notLocalVerdict": "신뢰되지 않는 읽기 전용 컨텍스트입니다. 이 로컬 판정에는 포함되지 않습니다.",\n    "community.bundles": "번들",\n    "community.activeRecords": "활성 레코드",\n    "community.revokedRecords": "폐기된 레코드",'''),
+            ('    selectVerdict: "Открыть вердикт для {subject}",', '''    selectVerdict: "Открыть вердикт для {subject}",\n    "community.title": "Данные сообщества",\n    "community.notLocalVerdict": "Недоверенный контекст только для чтения. Не входит в этот локальный вердикт.",\n    "community.bundles": "Пакеты",\n    "community.activeRecords": "Активные записи",\n    "community.revokedRecords": "Отозванные записи",'''),
+            ('    selectVerdict: "{subject} の判定を表示",', '''    selectVerdict: "{subject} の判定を表示",\n    "community.title": "コミュニティ証拠",\n    "community.notLocalVerdict": "信頼されていない読み取り専用コンテキストです。このローカル判定には含まれません。",\n    "community.bundles": "バンドル",\n    "community.activeRecords": "有効なレコード",\n    "community.revokedRecords": "取り消されたレコード",'''),
+            ('    selectVerdict: "{subject} için kararı görüntüle",', '''    selectVerdict: "{subject} için kararı görüntüle",\n    "community.title": "Topluluk kanıtı",\n    "community.notLocalVerdict": "Güvenilmeyen salt okunur bağlam. Bu yerel karara dahil değildir.",\n    "community.bundles": "Paketler",\n    "community.activeRecords": "Etkin kayıtlar",\n    "community.revokedRecords": "Geri çekilen kayıtlar",'''),
+          ]
+          for old_value, new_value in replacements:
+            assert old_value in tail, old_value
+            tail = tail.replace(old_value, new_value, 1)
+          zh = '    selectVerdict: "查看 {subject} 的判定",'
+          assert tail.count(zh) == 2
+          tail = tail.replace(zh, '''    selectVerdict: "查看 {subject} 的判定",\n    "community.title": "社区证据",\n    "community.notLocalVerdict": "不受信任的只读上下文。不计入此本地判定。",\n    "community.bundles": "证据包",\n    "community.activeRecords": "有效记录",\n    "community.revokedRecords": "已撤销记录",''', 1)
+          tail = tail.replace(zh, '''    selectVerdict: "查看 {subject} 的判定",\n    "community.title": "社群證據",\n    "community.notLocalVerdict": "不受信任的唯讀脈絡。不計入此本地判定。",\n    "community.bundles": "證據包",\n    "community.activeRecords": "有效記錄",\n    "community.revokedRecords": "已撤銷記錄",''', 1)
+          translations.write_text(prefix + tail)
+
+          component = Path('gui/src/pages/CompatibilityMatrix.tsx')
+          s = component.read_text()
+          marker = '''          {detail.production && (\n            <section className="lab-detail-section" data-testid="lab-production-signals">\n              <h4>{t("lab.production.title")}</h4>\n              <p className="muted">{t("lab.production.notVerification")}</p>\n              <dl className="lab-detail-meta">\n                <div><dt>{t("lab.production.attempts")}</dt><dd>{detail.production.summary.recentProductionAttempts}</dd></div>\n                <div><dt>{t("lab.production.successes")}</dt><dd>{detail.production.summary.recentSuccessfulAttempts}</dd></div>\n                <div><dt>{t("lab.production.routeErrors")}</dt><dd>{detail.production.summary.recentRouteErrorSignals}</dd></div>\n                {detail.production.summary.lastObservedProductionAttempt !== undefined && (\n                  <div><dt>{t("lab.production.lastObserved")}</dt><dd>{formatAsOf(detail.production.summary.lastObservedProductionAttempt, locale)}</dd></div>\n                )}\n              </dl>\n            </section>\n          )}\n'''
+          assert marker in s
+          addition = marker + '''          {detail.community && detail.community.evidence.length > 0 && (\n            <section className="lab-detail-section" data-testid="lab-community-evidence">\n              <h4>{labSupplement(locale, "community.title")}</h4>\n              <p className="muted">{labSupplement(locale, "community.notLocalVerdict")}</p>\n              <dl className="lab-detail-meta">\n                <div><dt>{labSupplement(locale, "community.bundles")}</dt><dd>{detail.community.evidence.length}</dd></div>\n                <div><dt>{labSupplement(locale, "community.activeRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.activeRecordCount, 0)}</dd></div>\n                <div><dt>{labSupplement(locale, "community.revokedRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.revokedRecordCount, 0)}</dd></div>\n              </dl>\n            </section>\n          )}\n'''
+          component.write_text(s.replace(marker, addition, 1))
+          PY
+      - run: cd gui && bun install --frozen-lockfile
+      - run: cd gui && bun test tests/compatibility-community-evidence.test.ts tests/compatibility-lab-i18n.test.ts
+      - run: cd gui && bun x tsc -b --pretty false
+      - run: cd gui && bun run lint
+      - name: Commit validated Task 7 patch
+        shell: bash
+        run: |
+          rm .github/workflows/cl10-task7-apply.yml .github/workflows/cl10-task7-apply2.yml
+          git config user.name Wibias
+          git config user.email 37517432+Wibias@users.noreply.github.com
+          git add gui/src/pages/compatibility-matrix-api.ts gui/src/pages/CompatibilityMatrix.tsx gui/src/i18n/lab-translations.ts .github/workflows/cl10-task7-apply.yml .github/workflows/cl10-task7-apply2.yml
+          git commit -m "feat(gui): show quarantined CL-10 community evidence"
+          git push origin HEAD:feat/cl-10-public-evidence-runtime
