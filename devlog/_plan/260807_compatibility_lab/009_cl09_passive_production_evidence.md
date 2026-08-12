@@ -10,7 +10,7 @@
 
 CL-08 is merged and closed. This document defines the next Compatibility Lab boundary.
 
-This initial CL-09 PR is contract-only. Implementation is not authorized until the contract is reviewed.
+The CL-09 contract was frozen first on this branch. Runtime implementation now proceeds under this contract and remains subject to independent final review before merge.
 
 ---
 
@@ -450,7 +450,7 @@ Assert none appear in:
 
 ## CL-09.0 - Audit and contract
 
-This PR:
+Completed first on this PR:
 
 - record CL-08 closure;
 - audit current production usage/route evidence and Lab boundaries;
