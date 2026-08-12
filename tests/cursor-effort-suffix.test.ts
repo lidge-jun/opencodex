@@ -127,6 +127,13 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     expect(cursorModelEffortLadder("grok-4.5-fast")).toEqual(["low", "medium", "high"]);
   });
 
+  test("grok-4.6 sends effort and Fast as separate model parameters", () => {
+    expect(selectionFor("cursor/grok-4.6-fast", "high")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
+  });
+
   test("regular grok-4.5 request ids match the recorded discovery fixture", () => {
     for (const effort of ["low", "medium", "high"] as const) {
       const requestModelId = modelIdFor("cursor/grok-4.5", effort);
