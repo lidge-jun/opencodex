@@ -58,11 +58,12 @@ handle only the item types they recognize, and may reject a feature their provid
 Requests whose parsed `input` is estimated — using an approximate, model-aware token estimate over
 message text, `instructions`, and tool definitions — to exceed the routed model's effective input
 limit (per-model maximum input, falling back to the advertised context window) are rejected with
-`413 request_too_large` (code `input_context_window_exceeded`) before any upstream I/O. Codex
-compacts well before this limit, so an oversized body indicates abnormal duplication — for example a
-chained continuation that resends the full conversation to a stateless provider. Compact the
-conversation or start a new thread and retry; the rejected request is never forwarded upstream
-(only the thread-spawn quota probe may run before the rejection).
+`413 request_too_large` (code `input_context_window_exceeded`) before authentication, adapter
+construction, or model-serving upstream I/O. A thread-spawn request may run a quota probe
+beforehand: that probe is the only upstream I/O that can precede the rejection. Codex compacts well
+before this limit, so an oversized body indicates abnormal duplication — for example a chained
+continuation that resends the full conversation to a stateless provider. Compact the conversation or
+start a new thread and retry; the rejected request is never forwarded upstream.
 
 ### JSON and SSE output
 

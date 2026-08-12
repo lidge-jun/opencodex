@@ -1806,14 +1806,12 @@ async function handleResponsesInner(
           const candidateRoute = routeModel(config, candidate, evidenceFromBody(parsed._rawBody));
           const candidateGuard = inputGuardFor(candidateRoute, { estimateGuidance: true });
           if (candidateGuard) return candidateGuard;
-        } catch (err) {
+        } catch {
           // A fallback candidate that cannot be routed NOW can never be selected after
           // quota priming, so it carries no admission risk. A stale entry (removed or
           // disabled provider, exhausted combo, unavailable policy target) must not
-          // fail the primary request, which is already routed and guarded above.
-          if (err instanceof NoEligiblePolicyCandidateError) {
-            logCtx.routeDecision = err.trace;
-          }
+          // fail the primary request, which is already routed and guarded above, and
+          // must not overwrite the primary decision recorded on that route.
           continue;
         }
       }
