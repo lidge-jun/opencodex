@@ -367,6 +367,103 @@ interface PublicBundleSignatureV1 {
 
 A valid signature proves only that the same publisher key signed those exact canonical bytes. It does not prove the evidence is honest, representative, current, or trustworthy.
 
+## 13.1 Frozen canonical byte and signature contract
+
+CL-10 V1 uses RFC 8785 JSON Canonicalization Scheme (JCS) as the only canonical JSON representation. Canonical JSON bytes are UTF-8 bytes of the JCS string. Raw serialized imports must be valid UTF-8 JSON and must reject duplicate decoded object member names before semantic object construction. Duplicate detection is semantic after JSON string escape decoding, so `"a"` and `"\u0061"` are the same member name and must fail closed if both appear in one object.
+
+All public hash identities use the exact construction:
+
+```text
+H(domain, value) = SHA-256(UTF8(domain) || 0x00 || UTF8(JCS(value)))
+```
+
+No trailing NUL is added. The exact V1 domain strings are:
+
+```text
+subject        ocx-lab-public:subject:v1
+record         ocx-lab-public:record:v1
+bundle         ocx-lab-public:bundle:v1
+bundle_digest  ocx-lab-public:bundle-digest:v1
+artifact       ocx-lab-public:artifact:v1
+publisher_key  ocx-lab-public:publisher-key:v1
+revocation     ocx-lab-public:revocation:v1
+route_registry ocx-lab-public:route-registry:v1
+```
+
+The bundle identity preimages are frozen as semantic objects before JCS:
+
+```text
+C = {
+  schemaVersion,
+  exportPolicyVersion,
+  createdDayUtc,
+  publisher,
+  records,
+  artifacts
+}
+
+bundleId = H("ocx-lab-public:bundle:v1", C)
+
+bundleDigest = H(
+  "ocx-lab-public:bundle-digest:v1",
+  { ...C, bundleId }
+)
+```
+
+Therefore `bundleId` is excluded from its own preimage, and both `bundleDigest` and `signature` are excluded from the `bundleId` preimage. `bundleDigest` includes the computed `bundleId`, but excludes both `bundleDigest` and `signature`. A bundle signature is exactly:
+
+```text
+signature.algorithm = "ed25519"
+signature.signedDigest = bundleDigest
+signature.signature = Base64(Ed25519.Sign(privateKey, HexDecode(bundleDigest)))
+```
+
+The signature input is exactly the raw 32 bytes produced by hex-decoding the 64-character lowercase SHA-256 `bundleDigest`. There is no additional signature prefix because the signed digest is already domain-separated by `ocx-lab-public:bundle-digest:v1`.
+
+Publisher identity is exactly:
+
+```text
+keyId = H(
+  "ocx-lab-public:publisher-key:v1",
+  { algorithm: "ed25519", publicKey }
+)
+```
+
+where `publicKey` is the canonical Base64 representation of the Ed25519 SPKI DER bytes.
+
+Revocations use the same construction with a separate domain. After canonical sorting and duplicate rejection of targets:
+
+```text
+R = {
+  schemaVersion,
+  issuedDayUtc,
+  publisher,
+  targets,
+  reason
+}
+
+revocationId = H("ocx-lab-public:revocation:v1", R)
+signature.signedDigest = revocationId
+signature.signature = Base64(Ed25519.Sign(privateKey, HexDecode(revocationId)))
+```
+
+`revocationId` and `signature` are excluded from `R`. This binds schema/version, exact publisher identity, target bundle/record IDs, issued day, and finite reason under the dedicated revocation domain.
+
+Verification order is normative and exact for raw imported bundles:
+
+1. enforce the serialized byte ceiling;
+2. require valid UTF-8 and reject duplicate decoded JSON object member names before object construction;
+3. parse JSON and enforce nesting, array, object-key, and string bounds;
+4. enforce the closed schema/version/field rules and recompute `publisher.keyId`;
+5. recompute public subject/record/artifact identities, references, `bundleId`, and `bundleDigest` from canonical public-safe fields;
+6. require `signature.signedDigest === bundleDigest`;
+7. decode the canonical Ed25519 SPKI key and Base64 signature and verify Ed25519 over `HexDecode(bundleDigest)`;
+8. validate repository-owned public-route, suite, scenario, verifier, and Fabric authority references;
+9. for revocations, bootstrap authority only from an already-verified target bundle and require the exact publisher algorithm, `keyId`, and public key plus valid target membership before applying the revocation;
+10. persist only after every preceding applicable check succeeds.
+
+A fixed test vector must lock these byte-level semantics so serializer, hash-domain, field-set, digest, or signing changes cannot silently create a second V1 wire format.
+
 ---
 
 # 14. Community trust model
@@ -425,7 +522,7 @@ Deleting `community/` loses only imported community context and has no effect on
 
 CL-10 V1 import accepts only bounded bundle bytes through reviewed entry points. It must not dereference arbitrary embedded URLs, paths, artifact references, or publisher-controlled network locations.
 
-A bundle is parsed with strict byte, nesting, array, and string limits before expensive signature or projection work.
+A bundle is parsed with strict byte, UTF-8, duplicate-object-member, nesting, array, object-key, and string limits before expensive signature or projection work. Duplicate decoded object member names are rejected before `JSON.parse`-style semantic object construction so parsers cannot silently collapse an ambiguous wire representation.
 
 Invalid bundles are rejected without partial persistence.
 
@@ -552,8 +649,10 @@ CL-10 implementation must include adversarial tests for:
 - URLs/query strings/IP addresses/header dumps;
 - precise timestamps and raw latency/error fields;
 - unknown JSON fields at every public schema level;
+- duplicate decoded JSON object member names, including escape-equivalent keys;
 - malformed/oversized/deeply nested import bundles;
 - invalid signatures and digests;
+- a fixed RFC 8785/domain-separated bundle digest and Ed25519 signature vector;
 - bundle replay/deduplication;
 - revoked bundles;
 - community evidence isolation from local verdicts, routing, and CL-08;
