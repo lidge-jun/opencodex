@@ -67,6 +67,12 @@ describe("loopback listener policy view", () => {
     expect(countTokensStart).toBeGreaterThan(-1);
     expect(messagesStart).toBeGreaterThan(countTokensStart);
     expect(chatStart).toBeGreaterThan(messagesStart);
+    expect(source.slice(countTokensStart, messagesStart)).toContain(
+      "await handleClaudeCountTokens(req, config, policy)",
+    );
+    expect(source.slice(messagesStart, chatStart)).toContain(
+      "await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy)",
+    );
     for (const branch of [
       source.slice(countTokensStart, messagesStart),
       source.slice(messagesStart, chatStart),
