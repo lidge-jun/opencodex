@@ -540,7 +540,7 @@ describe("codex-auth API", () => {
         consumeCalls += 1;
         markStarted();
         await consumeGate;
-        return Response.json({ code: "noop" });
+        return Response.json({ code: "nothing_to_reset" });
       }
       return previousFetch(input, init);
     }) as typeof fetch;
@@ -568,7 +568,7 @@ describe("codex-auth API", () => {
       releaseConsume();
       const completed = await pending;
       expect(completed?.status).toBe(200);
-      expect(await completed?.json()).toEqual({ code: "noop" });
+      expect(await completed?.json()).toEqual({ code: "nothing_to_reset" });
       expect(getNativeMainProfileRequestCount()).toBe(0);
     } finally {
       releaseConsume();
@@ -2127,6 +2127,34 @@ describe("codex-auth API", () => {
     expect(await resp!.json()).toMatchObject({ error: "Invalid account id format" });
   });
 
+  test("reset-credit consume sanitizes a pre-dispatch client abort", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "pool-aborted", email: "aborted@example.test" });
+    const controller = new AbortController();
+    controller.abort(new Error("private client cancellation detail"));
+    let fetchCalls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+      fetchCalls += 1;
+      return originalFetch(...args);
+    }) as typeof fetch;
+    try {
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ accountId: "pool-aborted" }),
+        signal: controller.signal,
+      });
+      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      expect(resp?.status).toBe(499);
+      const body = await resp?.text();
+      expect(body).not.toContain("private client cancellation detail");
+      expect(fetchCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("reset-credit consume returns remaining from refreshed quota, not the consume payload", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "pool-reset", email: "reset@example.test" });
@@ -2139,6 +2167,10 @@ describe("codex-auth API", () => {
         const url = String(input);
         if (url.includes("/backend-api/wham/rate-limit-reset-credits/consume")) {
           expect(init?.method).toBe("POST");
+          const consumeBody = JSON.parse(String(init?.body)) as { redeem_request_id?: unknown };
+          expect(consumeBody.redeem_request_id).toMatch(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          );
           // Upstream may advertise a wrong/stale remaining — management must ignore it.
           return Response.json({ code: "reset", remaining: 99, available_count: 99 });
         }

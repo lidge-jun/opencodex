@@ -2525,6 +2525,16 @@ function configMutationDatabasePath(): string {
   return path;
 }
 
+/**
+ * Prepare the shared config-mutation database path for an independent top-level
+ * SQLite transaction. Callers must not invoke this while holding
+ * {@link withConfigMutationLockSync}; a second `BEGIN IMMEDIATE` deliberately
+ * fails busy instead of joining an uncommitted transaction.
+ */
+export function prepareConfigMutationDatabasePathForWrite(): string {
+  return configMutationDatabasePath();
+}
+
 let configMutationLockDepth = 0;
 let configMutationDatabase: Database | null = null;
 

@@ -27,6 +27,13 @@ export type CodexResetCreditConsumeCode =
   | "nothing_to_reset"
   | "no_credit";
 
+export const CODEX_RESET_CREDIT_OPERATION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function isCodexResetCreditOperationId(value: unknown): value is string {
+  return typeof value === "string" && CODEX_RESET_CREDIT_OPERATION_ID_PATTERN.test(value);
+}
+
 export type CodexResetCreditRecoveryAuthorization = Readonly<{
   enabled: boolean;
   /**
@@ -164,7 +171,6 @@ export const MAX_TRACKED_RECOVERY_ACCOUNTS = 128;
 export const MAX_TRACKED_RECOVERY_FLIGHTS = 128;
 export const MAX_TRACKED_RECOVERY_WAITERS_PER_FLIGHT = 128;
 const RESET_PROCESS_STATE_FOR_TESTS = Symbol("reset-credit-recovery-process-state-for-tests");
-const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ADD_EVENT_LISTENER = EventTarget.prototype.addEventListener;
 const REMOVE_EVENT_LISTENER = EventTarget.prototype.removeEventListener;
 
@@ -475,7 +481,16 @@ export class CodexResetCreditRecoveryCoordinator {
 
   createLogicalTurn(): CodexResetCreditLogicalTurn {
     const operationId = crypto.randomUUID();
-    if (!OPERATION_ID_PATTERN.test(operationId)) {
+    return this.createLogicalTurnForOperation(operationId);
+  }
+
+  /**
+   * Restores a logical turn whose operation identity was durably reserved before
+   * this coordinator instance existed. Only a validated ledger/adapter should use
+   * this seam; ordinary requests must keep using createLogicalTurn().
+   */
+  createLogicalTurnForOperation(operationId: string): CodexResetCreditLogicalTurn {
+    if (!isCodexResetCreditOperationId(operationId)) {
       throw new TypeError("operationId must be an RFC 4122 version 4 UUID");
     }
     const turn = Object.freeze({ operationId });

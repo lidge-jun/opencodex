@@ -107,6 +107,10 @@ import { providerCodexAccountMode } from "../providers/registry";
 import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBody } from "../lib/bounded-body";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import {
+  CodexResetCreditConsumeError,
+  consumeCodexResetCredit,
+} from "./reset-credit-consume";
+import {
   oauthAccountHealthFields,
   projectCodexAccountHealth,
   type OAuthAccountHealth,
@@ -330,11 +334,6 @@ function safeResetCreditsDto(input: unknown): { credits: { granted_at: string; e
     credits,
     ...(typeof rawAvailable === "number" && Number.isFinite(rawAvailable) ? { available_count: rawAvailable } : {}),
   };
-}
-
-function safeResetCreditConsumeDto(input: unknown): { code: string } {
-  const obj = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
-  return { code: typeof obj.code === "string" ? obj.code : "unknown" };
 }
 
 type ResetCreditJsonRead =
@@ -1701,25 +1700,12 @@ export async function handleCodexAuthAPI(
 
     try {
       const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
-        const idempotencyKey = crypto.randomUUID();
-        const resp = await fetch(
-          "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${auth.accessToken}`,
-              "ChatGPT-Account-Id": auth.chatgptAccountId,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ redeem_request_id: idempotencyKey }),
-            signal: AbortSignal.timeout(10_000),
-          },
-        );
-        if (!resp.ok) {
-          await resp.body?.cancel().catch(() => {});
-          return jsonResponse({ error: `Upstream error ${resp.status}` }, resp.status);
-        }
-        const result = safeResetCreditConsumeDto(await resp.json());
+        const result = await consumeCodexResetCredit({
+          accessToken: auth.accessToken,
+          chatgptAccountId: auth.chatgptAccountId,
+          operationId: crypto.randomUUID(),
+          signal: req.signal,
+        });
         // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
         // and return remaining only when that refresh freshly parsed available_count.
         // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
@@ -1743,7 +1729,7 @@ export async function handleCodexAuthAPI(
               : {}),
           });
         }
-        return jsonResponse(result);
+        return jsonResponse({ code: result.code });
       });
       return operation.ok ? operation.value : operation.response;
     } catch (e) {
@@ -1751,6 +1737,14 @@ export async function handleCodexAuthAPI(
         const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
         response.headers.set("Retry-After", "1");
         return response;
+      }
+      if (req.signal.aborted) {
+        return jsonResponse({ error: "Reset credit consume cancelled by client" }, 499);
+      }
+      if (e instanceof CodexResetCreditConsumeError) {
+        return e.reason === "upstream" && e.upstreamStatus !== undefined
+          ? jsonResponse({ error: `Upstream error ${e.upstreamStatus}` }, e.upstreamStatus)
+          : jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
       }
       return jsonResponse({ error: e instanceof Error ? e.message : "Reset credit consume failed" }, 500);
     }
