@@ -6,7 +6,8 @@ export type PublicEvidenceIdKind =
   | "bundle"
   | "artifact"
   | "publisher_key"
-  | "revocation";
+  | "revocation"
+  | "route_registry";
 
 const PUBLIC_EVIDENCE_DOMAIN: Record<PublicEvidenceIdKind, string> = {
   subject: "ocx-lab-public:subject:v1",
@@ -15,6 +16,7 @@ const PUBLIC_EVIDENCE_DOMAIN: Record<PublicEvidenceIdKind, string> = {
   artifact: "ocx-lab-public:artifact:v1",
   publisher_key: "ocx-lab-public:publisher-key:v1",
   revocation: "ocx-lab-public:revocation:v1",
+  route_registry: "ocx-lab-public:route-registry:v1",
 };
 
 export function publicEvidenceId(kind: PublicEvidenceIdKind, payload: unknown): string {
