@@ -3385,13 +3385,20 @@ async function handleResponsesInner(
       break;
     }
     if (!upstreamResponse.ok) {
+      // Guard the error body BEFORE anything reads it. The success path is guarded further
+      // down, but a non-2xx response is still a Bun fetch body: if the request aborts between
+      // fetch resolution and `.text()` attaching its reader, the orphaned internal rejection is
+      // the same uncatchable teardown `cancelBodyOnAbort` exists to absorb (src/lib/abort.ts).
+      // Found while investigating #1419; not a fix for the native trap reported there.
+      const detachErrorBodyGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
       if (options.comboAttempt) {
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
-          .finally(cleanupUpstreamAbort);
+          .finally(() => { detachErrorBodyGuard(); cleanupUpstreamAbort(); });
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
+      detachErrorBodyGuard();
       cleanupUpstreamAbort();
       if (!isFixedCodexAccount(authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
@@ -3655,7 +3662,12 @@ async function handleResponsesInner(
     }
 
     if (!response.ok) {
+      // Same pre-read guard as the initial response's error branch: a non-2xx continuation body
+      // is still a Bun fetch body, and an abort landing before `.text()` attaches its reader
+      // orphans the internal rejection.
+      const detachContinuationErrorGuard = cancelBodyOnAbort(response.body, upstream.signal);
       const errorText = await response.text().catch(() => "unknown error");
+      detachContinuationErrorGuard();
       yield {
         type: "error",
         status: response.status,

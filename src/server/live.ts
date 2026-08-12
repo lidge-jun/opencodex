@@ -32,7 +32,7 @@ import {
   CodexThreadAffinityExpiredError,
 } from "../codex/auth-context";
 import { formatCodexProviderForLog } from "../codex/routing";
-import { signalWithTimeout } from "../lib/abort";
+import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
@@ -352,6 +352,7 @@ export async function readBodyCapped(
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let readFailed = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -364,9 +365,16 @@ export async function readBodyCapped(
       }
       chunks.push(value);
     }
+  } catch (err) {
+    // A read that throws leaves the stream neither drained nor cancelled, and releasing the
+    // lock alone hands back an unsettled body. Cancel first, then rethrow so the caller's
+    // existing classification (client abort / timeout / connect error) is unchanged.
+    readFailed = true;
+    await reader.cancel(err).catch(() => {});
+    throw err;
   } finally {
     try {
-      reader.releaseLock();
+      if (!readFailed) reader.releaseLock();
     } catch {
       // already released / cancelled
     }
