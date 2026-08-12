@@ -140,6 +140,24 @@ The `multi_agent_v2` feature flag and the logical maximum thread count are separ
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
 
+## Routed tool discovery and hosted search
+
+Routed catalog rows advertise `supports_search_tool: false` by default. That field selects Codex's
+deferred tool-discovery surface; it does not describe the hosted web-search sidecar. OpenCodex still
+round-trips an explicit `tool_search` request, but it does not claim that every routed provider/model
+can discover Codex App plugins through that surface. The conservative catalog value keeps direct MCP
+tools visible in Codex App. Non-Cursor routed rows independently keep
+`web_search_tool_type: "text_and_image"` for the OpenCodex search sidecar; Cursor advertises neither
+because its transport bypasses that sidecar.
+
+[Decision Log]
+- 목적과 의도: routed models must not hide direct Codex App plugin tools behind an unverified deferred discovery capability.
+- 기존 구현 및 제약 조건: every non-Cursor row advertised `supports_search_tool: true`; the parser and bridge can still relay explicit `tool_search` calls.
+- 검토한 주요 대안: keep the blanket flag, disable both deferred discovery and hosted search, or add a future evidence-backed provider/model opt-in.
+- 선택한 방식: default routed deferred discovery to false while preserving the independent non-Cursor hosted-search metadata.
+- 다른 대안 대신 이 방식을 선택한 이유: it fixes plugin availability without removing the existing web-search sidecar or deleting runtime protocol support.
+- 장점, 단점 및 영향: direct MCP tools remain available; a routed model cannot use Codex's deferred discovery solely from generated catalog metadata until a verified opt-in exists.
+
 ## Ultra reasoning level
 
 Ultra is always advertised in the catalog regardless of the `multi_agent_v2` toggle. The v2 toggle

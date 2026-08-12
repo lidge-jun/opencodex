@@ -313,7 +313,7 @@ export function deriveEntry(
     slug, display_name: routedDisplayName(slug), description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
     priority, base_instructions: "You are a helpful coding assistant.",
-    ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: true } : {}),
+    ...(isRouted ? { web_search_tool_type: "text_and_image", supports_search_tool: false } : {}),
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry);

@@ -393,17 +393,18 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
   const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
-  // Routed providers use opencodex sidecars and client-executed tool discovery. The sidecar
-  // runs through native gpt-5.4-mini, so image search is available and verbalized for text-only
-  // models. EXCEPT cursor: its runTurn transport bypasses the web-search plan entirely and
-  // rejects server search queries — advertising the tool would make models call into a void.
+  // `supports_search_tool` selects Codex's deferred tool-discovery surface; it is not the hosted
+  // web-search capability. OpenCodex can round-trip tool_search when a client sends it, but routed
+  // providers have no provider/model proof that Codex App plugins work through that deferred
+  // surface. Advertising it unconditionally hides the App's compatible direct MCP tools (#1522),
+  // so routed rows fail closed to direct discovery. The sidecar-backed hosted web-search metadata
+  // remains advertised independently for non-Cursor routes.
   if (isCursorEntry) {
     delete entry.web_search_tool_type;
-    entry.supports_search_tool = false;
   } else {
     entry.web_search_tool_type = "text_and_image";
-    entry.supports_search_tool = true;
   }
+  entry.supports_search_tool = false;
   // Cursor's transport already serializes overlapping tool calls into atomic Responses tool events.
   // Advertising parallel calls lets Codex send the same native capability bit it sends for OpenAI.
   // Opt-in providers (OcxProviderConfig.parallelToolCalls, e.g. xAI) advertise it too: the

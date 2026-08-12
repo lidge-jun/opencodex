@@ -81,7 +81,7 @@ describe("Phase 100 Codex-native parity smoke", () => {
     const routed = catalog.find(entry => entry.slug === "opencode-go/deepseek-v4-pro");
     expect(routed).toMatchObject({
       web_search_tool_type: "text_and_image",
-      supports_search_tool: true,
+      supports_search_tool: false,
       context_window: 1_000_000,
       auto_compact_token_limit: 900_000,
     });
