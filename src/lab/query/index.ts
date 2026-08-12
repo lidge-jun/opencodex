@@ -31,4 +31,15 @@ export {
   queryLabArtifactByDigest,
   queryLabCatalogEntries,
 } from "./queries";
+export {
+  PASSIVE_PRODUCTION_DEFAULT_LIMIT,
+  PASSIVE_PRODUCTION_MAX_LIMIT,
+  PASSIVE_PRODUCTION_MAX_SCAN_ROWS,
+  derivePassiveProductionSignals,
+  queryPassiveProductionSignals,
+  type PassiveProductionOutcome,
+  type PassiveProductionQueryResultV1,
+  type PassiveProductionSummaryV1,
+  type PassiveRouteSignalV1,
+} from "./passive-production";
 export { sanitizePublicText } from "./dto-map";
