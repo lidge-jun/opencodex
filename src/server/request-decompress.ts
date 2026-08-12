@@ -1,5 +1,5 @@
 import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
-import type { TranslatorBudget } from "../lib/translator-budget";
+import { TRANSLATOR_MAX_TURN_BYTES, type TranslatorBudget } from "../lib/translator-budget";
 
 /**
  * Request-body decompression for the /v1/responses data plane.
@@ -62,6 +62,51 @@ function cancelReaderWithoutWaiting(reader: ReadableStreamDefaultReader<Uint8Arr
   } catch {
     // A non-standard reader may throw synchronously from cancel().
   }
+}
+
+/**
+ * Approximate the UTF-8 byte length that JSON.stringify(value) would produce without
+ * materializing the serialized copy. The walk stops once `cap` is exceeded, so a
+ * multi-hundred-MB parsed body can never force a full re-serialization just to account
+ * for the retained copy (oversized-input memory hardening, issue #314).
+ */
+function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
+  const encoder = new TextEncoder();
+  let total = 0;
+  const add = (n: number): boolean => {
+    total += n;
+    return total <= cap;
+  };
+  const visit = (v: unknown): boolean => {
+    if (total > cap) return false;
+    if (v === null) return add(4);
+    if (v === undefined) return true;
+    if (typeof v === "string") return add(encoder.encode(v).byteLength + 2);
+    if (typeof v === "number") return add(String(v).length);
+    if (typeof v === "boolean") return add(v ? 4 : 5);
+    if (Array.isArray(v)) {
+      if (!add(1)) return false;
+      for (let i = 0; i < v.length; i++) {
+        if (i > 0 && !add(1)) return false;
+        if (!visit(v[i])) return false;
+      }
+      return add(1);
+    }
+    if (typeof v === "object") {
+      if (!add(1)) return false;
+      const entries = Object.entries(v as Record<string, unknown>);
+      for (let i = 0; i < entries.length; i++) {
+        if (i > 0 && !add(1)) return false;
+        const [key, item] = entries[i];
+        if (!add(encoder.encode(key).byteLength + 3)) return false;
+        if (!visit(item)) return false;
+      }
+      return add(1);
+    }
+    return true;
+  };
+  visit(value);
+  return Math.min(total, cap);
 }
 
 async function readRequestBodyBytesCapped(
@@ -224,7 +269,11 @@ export async function readBoundedJsonRequestBody(
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
-    budget?.observeAcceptedRequestCopy(new TextEncoder().encode(JSON.stringify(parsed)).byteLength);
+    if (budget) {
+      budget.observeAcceptedRequestCopy(
+        boundedJsonSerializedByteLength(parsed, TRANSLATOR_MAX_TURN_BYTES),
+      );
+    }
     return parsed;
   } finally {
     releaseText?.();

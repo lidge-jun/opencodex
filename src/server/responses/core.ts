@@ -1648,10 +1648,28 @@ async function handleResponsesInner(
     for (const prompt of parsed.context.systemPrompt ?? []) {
       countText(prompt);
     }
+    // Estimate tool schemas structurally instead of serializing a full copy: the walk
+    // stops as soon as the running estimate crosses the effective limit, so an oversized
+    // schema never materializes as one giant string before the 413.
+    const countJsonTokens = (value: unknown): void => {
+      if (estimatedInputTokens > effectiveLimit) return;
+      if (typeof value === "string") {
+        countText(value);
+      } else if (typeof value === "number" || typeof value === "boolean") {
+        countText(String(value));
+      } else if (Array.isArray(value)) {
+        for (const item of value) countJsonTokens(item);
+      } else if (value && typeof value === "object") {
+        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+          countJsonTokens(key);
+          countJsonTokens(item);
+        }
+      }
+    };
     for (const tool of parsed.context.tools ?? []) {
       countText(tool.name);
       countText(tool.description);
-      countText(JSON.stringify(tool.parameters) ?? "");
+      countJsonTokens(tool.parameters);
     }
     if (estimatedInputTokens > effectiveLimit) {
       return Response.json(
