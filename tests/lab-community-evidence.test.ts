@@ -8,6 +8,7 @@ import {
   assignEventId,
   labLedgerPath,
   labSqlitePath,
+  purgeSensitiveEvidence,
   subjectIdForSubject,
   type ObservationEvent,
   type ProtocolSubjectV1,
@@ -21,6 +22,7 @@ import {
   projectPublicEvidence,
   signPublicEvidenceBundle,
   verifyPublicEvidenceRevocation,
+  writePublicEvidenceBundle,
 } from "../src/lab/public";
 
 const roots: string[] = [];
@@ -162,5 +164,27 @@ describe("CL-10 community quarantine", () => {
     importCommunityEvidenceRevocation(revocation, consumerDir);
     const conflict = { ...revocation, issuedDayUtc: "2026-08-13" };
     expect(() => importCommunityEvidenceRevocation(conflict, consumerDir)).toThrow();
+  });
+
+  test("sensitive export purge removes local exports and local community copies but preserves third-party bundles", () => {
+    const consumerDir = configDir("ocx-cl10-consumer-");
+    const thirdPartyDir = configDir("ocx-cl10-third-party-");
+    const localBundle = signedBundle(consumerDir);
+    const localStored = writePublicEvidenceBundle(localBundle, consumerDir);
+    importCommunityEvidenceBundle(localBundle, consumerDir);
+
+    const thirdPartyBundle = signedBundle(thirdPartyDir);
+    importCommunityEvidenceBundle(thirdPartyBundle, consumerDir);
+    expect(listCommunityEvidence(consumerDir)).toHaveLength(2);
+
+    purgeSensitiveEvidence({
+      configDir: consumerDir,
+      targetArtifactDigests: [hex("sensitive-purge-target")],
+      purgeActions: ["export"],
+      recordedAt: Date.UTC(2026, 7, 12, 18, 0, 0),
+    });
+
+    expect(existsSync(localStored.path)).toBe(false);
+    expect(listCommunityEvidence(consumerDir).map((row) => row.bundleId)).toEqual([thirdPartyBundle.bundleId]);
   });
 });
