@@ -10,7 +10,7 @@
 
 CL-09 is merged. CL-10 is the final planned Compatibility Lab phase.
 
-This PR is contract-only. It freezes the public-export and community-trust boundary before any runtime export, upload, remote fetch, or community-evidence ingestion is authorized.
+This PR began contract-only and the contract was independently reviewed and accepted on 2026-08-12. CL-10.1 through CL-10.4 runtime implementation is now authorized on this branch. CL-10.5 remote publishing remains blocked until the exact transport/service contract in section 18 is independently accepted.
 
 ---
 
@@ -125,7 +125,27 @@ A hosted service may aggregate public bundles later, but it must not become the 
 
 An observation is exportable only when all required public identity fields can be represented without private configuration.
 
-V1 exportable routes are limited to public registry routes whose exported behavior identity is entirely composed from reviewed public fields.
+V1 exportable routes are limited to entries in the repo-reviewed `PublicRouteRegistryManifestV1` whose exported behavior identity is entirely composed from reviewed public fields.
+
+The public-route authority is a versioned, content-addressed repository artifact owned by OpenCodex, not a publisher-supplied assertion:
+
+```ts
+interface PublicRouteRegistryManifestV1 {
+  schemaVersion: "public_route_registry_v1";
+  registryVersion: string;
+  sourceCommit: string;
+  entries: PublicRouteRegistryEntryV1[];
+  manifestDigest: string;
+}
+
+interface PublicRouteRegistryEntryV1 {
+  providerId: string;
+  modelId: string;
+  adapterFamilies: Array<"openai-responses" | "openai-chat" | "anthropic-messages">;
+}
+```
+
+CL-10.1 must ship and validate this manifest before any route-scoped record is exportable. The manifest may be updated only by reviewed repository changes with a new digest/version. Dynamic model discovery, cached catalogs, user configuration, imported bundles, and a matching spelling alone can never extend this authority.
 
 A route is not exportable when any behavior-relevant identity depends on a private/custom value, including:
 
@@ -172,16 +192,29 @@ interface PublicEvidenceRecordV1 {
   scenarioVersion: string;
   verdict: "CLAIMED" | "PROBED" | "VERIFIED" | "DEGRADED" | "UNSUPPORTED" | "BLOCKED" | "UNKNOWN";
   observedDayUtc: string;
-  publicRoute: PublicRouteDescriptorV1;
+  subject: PublicEvidenceSubjectV1;
   assertions: PublicAssertionSummaryV1[];
-  incidentRefs?: string[];
+  incidentRefs?: PublicIncidentRefV1[];
   artifactRefs?: string[];
+}
+
+type PublicEvidenceSubjectV1 =
+  | PublicProtocolSubjectV1
+  | PublicRouteSubjectV1
+  | PublicTaskSubjectV1;
+
+interface PublicIncidentRefV1 {
+  corpusId: string; // exact reviewed `IC-NNN` identifier only
 }
 ```
 
-The exact implementation types may use existing repository enum/type names where they already provide stricter closed sets, but the public schema must remain closed and independently versioned from local ledger schemas.
+The public runtime types are dedicated CL-10 types. They may import closed scalar unions such as the existing verdict/evidence-layer literals, but they must not alias, extend, spread, or serialize local ledger/query DTO interfaces. A compile-time TypeScript shape is not the security boundary: every export/import path must pass the dedicated runtime validator for the matching public schema version.
+
+`PublicEvidenceSubjectV1` is layer-matched: protocol records use only a public protocol descriptor, live-route records use only a public route descriptor backed by `PublicRouteRegistryManifestV1`, and task records use a public task descriptor that nests the same public route descriptor plus reviewed public task/verifier authority fields. A layer/subject-kind mismatch is `schema_rejected`.
 
 Unknown top-level or nested fields fail export and import validation.
+
+`incidentRefs` contain only exact reviewed corpus identifiers matching `^IC-[0-9]{3}$` that exist in the repository incident authority. They never contain the corpus entry's historical issue URLs, devlog paths, test paths, prose, or source metadata. `artifactRefs` contain only public artifact IDs present in the same bundle; local artifact digests/relative paths are forbidden.
 
 ---
 
@@ -293,6 +326,12 @@ A publish action must require an explicit user action for the specific bundle. C
 
 Deleting local Lab data remains absolute locally. Public copies already distributed cannot be cryptographically erased, so revocation semantics are required separately.
 
+### Sensitive purge interaction
+
+CL-00 sensitive purge remains authoritative over CL-10 local copies. A purge whose closed action set includes `export` must fail closed until every affected local export/staging copy is removed. CL-10 must additionally remove any locally-originated copy of an affected bundle that has been imported into the local `community/` cache. Third-party community bundles are unrelated to the local sensitive bytes and are not deleted merely because they contain the same public route identity.
+
+A local sensitive purge never waits for network access. If an affected bundle was previously published, CL-10 records or emits a bounded signed `privacy_retraction` revocation for its public bundle/record IDs when the reviewed transport is available, but remote acknowledgement is not a prerequisite for completing the mandatory local purge. The purge must not retain sensitive bytes merely to construct a later revocation.
+
 ---
 
 # 13. Publisher provenance and signatures
@@ -396,7 +435,11 @@ Artifact content embedded in/imported with a bundle is accepted only for closed 
 
 # 17. Revocation and deletion semantics
 
-CL-10 defines `PublicEvidenceRevocationV1` as a signed public statement from the same publisher key that references one or more bundle/record IDs and a finite reason code.
+CL-10 defines `PublicEvidenceRevocationV1` as a signed, bounded public statement from the same publisher key that signed the target bundle and references one or more bundle/record IDs plus a finite reason code.
+
+A consumer bootstraps revocation authority from the already-verified target bundle: `publisher.keyId` and the exact Ed25519 public key in the revocation must match that target bundle before the revocation signature is considered. V1 does not support cross-key revocation or key rotation. A key-rotation protocol requires a later reviewed schema version.
+
+A revocation contains its own domain-separated digest/ID, `issuedDayUtc`, at most 256 sorted unique target IDs, and no free-form reason text. Re-importing the exact same revocation ID and bytes is idempotent. The same revocation ID with different canonical bytes, duplicate target IDs, an unknown target, unsupported reason/version, or a publisher-key mismatch is rejected. Consumers may retain bounded revocations received before a referenced record only in a quarantined pending set with the same structural limits; they do not become effective until the matching publisher/target bundle is present and verified.
 
 Allowed reason classes include:
 
@@ -438,7 +481,7 @@ A fixed reviewed service may aggregate community bundles later, but local OpenCo
 
 # 19. Read surfaces
 
-CL-10 implementation should extend existing Lab surfaces rather than create an unrelated product area.
+CL-10 implementation should extend existing Lab surfaces rather than create an unrelated product area. CL-10.1 through CL-10.4 are authorized after the accepted contract review; this does not relax the remote-publishing gate.
 
 Planned surfaces after contract acceptance:
 
@@ -523,7 +566,7 @@ CL-10 implementation must include adversarial tests for:
 
 ## CL-10.0 - Audit and contract
 
-This PR only:
+Contract work completed on this PR before runtime implementation:
 
 - record CL-09 closure;
 - freeze public exportability and privacy rules;
@@ -532,7 +575,7 @@ This PR only:
 - freeze consent, revocation, import isolation, and remote-publishing gate;
 - define implementation sequence and validation requirements.
 
-No runtime export, import, upload, remote fetch, signing-key creation, community cache, API, CLI, or UI implementation is authorized by CL-10.0 alone.
+Independent review accepted CL-10.0 on 2026-08-12. CL-10.1 through CL-10.4 are therefore authorized on this branch by explicit maintainer direction. CL-10.5 remains blocked by section 18.
 
 ## CL-10.1 - Public projector and privacy validator
 
@@ -624,6 +667,6 @@ cross-platform CI
 
 # 27. Hard stop
 
-Do not implement CL-10 runtime code from this contract PR until the contract is independently accepted.
+The CL-10 contract was independently accepted on 2026-08-12 and explicit maintainer direction authorizes CL-10.1 through CL-10.4 runtime implementation on this branch.
 
-Acceptance of CL-10.0 authorizes the CL-10 implementation sequence. It does not authorize a remote publishing service until section 18 has been completed with an exact reviewed transport contract.
+No CL-10.5 remote publishing code, upload transport, remote fetch, or arbitrary network publication is authorized until section 18 has been completed with an exact reviewed transport contract and independently accepted.
