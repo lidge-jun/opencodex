@@ -275,6 +275,42 @@ describe("responses input-size guard", () => {
     expect(upstreamCalls).toBe(0);
   });
 
+  test("counts a deeply nested tool schema without overflowing the call stack", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // The estimate is small enough to forward, but deep enough that a recursive
+    // countJsonTokens would build a call frame per level; the frame-based walk must
+    // keep the request within the window without exhausting the JS stack.
+    const DEPTH = 30_000;
+    let parameters: unknown = {};
+    for (let i = 0; i < DEPTH; i++) {
+      parameters = { nested: parameters };
+    }
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      tools: [
+        {
+          type: "function",
+          name: "deep_tool",
+          description: "deeply nested schema",
+          parameters,
+        },
+      ],
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(upstreamCalls).toBe(1);
+    expect(res.status).toBe(200);
+  });
+
   test("forwards an input within the window", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {

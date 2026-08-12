@@ -10,6 +10,7 @@ import {
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
+import { createTestTranslatorBudget } from "./helpers/translator-budget";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
 const PAYLOAD_BYTES = new TextEncoder().encode(JSON.stringify(PAYLOAD));
@@ -348,5 +349,21 @@ describe("readJsonRequestBody", () => {
       body: Bun.zstdCompressSync(new TextEncoder().encode("{\"model\":")),
     });
     await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(SyntaxError);
+  });
+
+  test("walks deeply nested parsed bodies without overflowing the call stack", async () => {
+    // The bundled runtime's JSON.parse accepts ~200k nesting, while a plain recursive
+    // walk overflows around 100k; the frame-based budget walk must survive deeper input.
+    const DEPTH = 120_000;
+    const deepJson = `${"[".repeat(DEPTH)}0${"]".repeat(DEPTH)}`;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: deepJson,
+    });
+    const parsed = await readJsonRequestBody(req, createTestTranslatorBudget());
+    let node: unknown = parsed;
+    for (let i = 0; i < DEPTH; i++) node = (node as unknown[])[0];
+    expect(node).toBe(0);
   });
 });

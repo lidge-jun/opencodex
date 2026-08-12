@@ -68,44 +68,93 @@ function cancelReaderWithoutWaiting(reader: ReadableStreamDefaultReader<Uint8Arr
  * Approximate the UTF-8 byte length that JSON.stringify(value) would produce without
  * materializing the serialized copy. The walk stops once `cap` is exceeded, so a
  * multi-hundred-MB parsed body can never force a full re-serialization just to account
- * for the retained copy (oversized-input memory hardening, issue #314).
+ * for the retained copy (oversized-input memory hardening, issue #314). Traversal is
+ * iterative over container/index frames (client-controlled nesting cannot overflow the
+ * call stack), object keys are enumerated lazily, and strings are counted incrementally,
+ * so the walk keeps O(depth) memory instead of materializing sibling lists or encoded
+ * copies proportional to the payload.
  */
 function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
-  const encoder = new TextEncoder();
   let total = 0;
-  const add = (n: number): boolean => {
-    total += n;
-    return total <= cap;
-  };
-  const visit = (v: unknown): boolean => {
-    if (total > cap) return false;
-    if (v === null) return add(4);
-    if (v === undefined) return true;
-    if (typeof v === "string") return add(encoder.encode(v).byteLength + 2);
-    if (typeof v === "number") return add(String(v).length);
-    if (typeof v === "boolean") return add(v ? 4 : 5);
-    if (Array.isArray(v)) {
-      if (!add(1)) return false;
-      for (let i = 0; i < v.length; i++) {
-        if (i > 0 && !add(1)) return false;
-        if (!visit(v[i])) return false;
+  const utf8Length = (text: string): number => {
+    let bytes = 0;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      if (code < 0x80) {
+        bytes += 1;
+      } else if (code < 0x800) {
+        bytes += 2;
+      } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+        const next = text.charCodeAt(i + 1);
+        bytes += next >= 0xdc00 && next <= 0xdfff ? 4 : 3;
+        if (next >= 0xdc00 && next <= 0xdfff) i++;
+      } else {
+        bytes += 3;
       }
-      return add(1);
+      if (bytes > cap) break;
     }
-    if (typeof v === "object") {
-      if (!add(1)) return false;
-      const entries = Object.entries(v as Record<string, unknown>);
-      for (let i = 0; i < entries.length; i++) {
-        if (i > 0 && !add(1)) return false;
-        const [key, item] = entries[i];
-        if (!add(encoder.encode(key).byteLength + 3)) return false;
-        if (!visit(item)) return false;
-      }
-      return add(1);
-    }
-    return true;
+    return bytes;
   };
-  visit(value);
+  /**
+   * Lazily enumerate a parsed object's own enumerable string keys. One generator stays
+   * alive per open object level, so the walk never materializes key arrays for a whole
+   * payload before the cap check can stop it.
+   */
+  function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
+    for (const key in record) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
+    }
+  }
+  type Frame =
+    | { kind: "value"; value: unknown }
+    | { kind: "array"; array: unknown[]; index: number }
+    | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; count: number };
+  const stack: Frame[] = [{ kind: "value", value }];
+  while (stack.length > 0 && total <= cap) {
+    const frame = stack.pop()!;
+    if (frame.kind === "value") {
+      const current = frame.value;
+      if (current === null) {
+        total += 4; // "null"
+      } else if (current === undefined) {
+        // JSON.stringify omits undefined values; keep walking siblings.
+      } else if (typeof current === "string") {
+        total += utf8Length(current) + 2; // surrounding quotes
+      } else if (typeof current === "number") {
+        total += String(current).length;
+      } else if (typeof current === "boolean") {
+        total += current ? 4 : 5;
+      } else if (Array.isArray(current)) {
+        stack.push({ kind: "array", array: current, index: 0 });
+      } else {
+        const record = current as Record<string, unknown>;
+        stack.push({ kind: "object", keys: ownEnumerableKeys(record), record, count: 0 });
+      }
+    } else if (frame.kind === "array") {
+      if (frame.index === 0) total += 1; // '['
+      if (frame.index < frame.array.length) {
+        if (frame.index > 0) total += 1; // ','
+        if (total > cap) break;
+        stack.push({ kind: "array", array: frame.array, index: frame.index + 1 });
+        stack.push({ kind: "value", value: frame.array[frame.index] });
+      } else {
+        total += 1; // ']'
+      }
+    } else {
+      if (frame.count === 0) total += 1; // '{'
+      const next = frame.keys.next();
+      if (next.done) {
+        total += 1; // '}'
+      } else {
+        if (frame.count > 0) total += 1; // ','
+        const key = next.value;
+        total += utf8Length(key) + 3; // "key":
+        if (total > cap) break;
+        stack.push({ kind: "object", keys: frame.keys, record: frame.record, count: frame.count + 1 });
+        stack.push({ kind: "value", value: frame.record[key] });
+      }
+    }
+  }
   return Math.min(total, cap);
 }
 

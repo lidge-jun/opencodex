@@ -1653,20 +1653,53 @@ async function handleResponsesInner(
     /**
      * Estimate tool schemas structurally instead of serializing a full copy: the walk
      * stops as soon as the running estimate crosses the effective limit, so an oversized
-     * schema never materializes as one giant string before the 413.
+     * schema never materializes as one giant string before the 413. Traversal is
+     * iterative over container/index frames (client-controlled nesting cannot overflow
+     * the call stack) and object keys are enumerated lazily, so the walk keeps O(depth)
+     * memory instead of materializing sibling lists or key arrays for the whole payload.
      */
     const countJsonTokens = (value: unknown): void => {
-      if (estimatedInputTokens > effectiveLimit) return;
-      if (typeof value === "string") {
-        countText(value);
-      } else if (typeof value === "number" || typeof value === "boolean") {
-        countText(String(value));
-      } else if (Array.isArray(value)) {
-        for (const item of value) countJsonTokens(item);
-      } else if (value && typeof value === "object") {
-        for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-          countJsonTokens(key);
-          countJsonTokens(item);
+      /**
+       * Lazily enumerate a parsed object's own enumerable string keys. One generator
+       * stays alive per open object level, so the walk never materializes key arrays
+       * before the running estimate can stop it.
+       */
+      function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
+        for (const key in record) {
+          if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
+        }
+      }
+      type Frame =
+        | { kind: "value"; value: unknown }
+        | { kind: "array"; array: unknown[]; index: number }
+        | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; count: number };
+      const stack: Frame[] = [{ kind: "value", value }];
+      while (stack.length > 0 && estimatedInputTokens <= effectiveLimit) {
+        const frame = stack.pop()!;
+        if (frame.kind === "value") {
+          const current = frame.value;
+          if (typeof current === "string") {
+            countText(current);
+          } else if (typeof current === "number" || typeof current === "boolean") {
+            countText(String(current));
+          } else if (Array.isArray(current)) {
+            stack.push({ kind: "array", array: current, index: 0 });
+          } else if (current && typeof current === "object") {
+            const record = current as Record<string, unknown>;
+            stack.push({ kind: "object", keys: ownEnumerableKeys(record), record, count: 0 });
+          }
+        } else if (frame.kind === "array") {
+          if (frame.index < frame.array.length) {
+            stack.push({ kind: "array", array: frame.array, index: frame.index + 1 });
+            stack.push({ kind: "value", value: frame.array[frame.index] });
+          }
+        } else {
+          const next = frame.keys.next();
+          if (!next.done) {
+            stack.push({ kind: "object", keys: frame.keys, record: frame.record, count: frame.count + 1 });
+            stack.push({ kind: "value", value: next.value });
+            stack.push({ kind: "value", value: frame.record[next.value] });
+          }
         }
       }
     };
