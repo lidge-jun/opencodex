@@ -141,12 +141,21 @@ describe("openai-chat parallel tool call stream assembly", () => {
     expect(assembled(events)).toEqual([{ id: "late", name: "late_name", args: "{\"z\":9}" }]);
   });
 
-  test("T7: name never arrives - call still flushed with empty name (parity, no silent drop)", async () => {
+  // Previously this asserted the call was flushed with an empty name, on a "no silent drop"
+  // rationale. That invariant still holds and is now stronger: an unnamed call cannot vanish
+  // silently, because the turn fails loudly instead. What changed is the mechanism — emitting
+  // a call the Codex tool-call contract cannot dispatch was never a usable outcome (#1514).
+  test("T7: name never arrives - turn fails closed instead of emitting an undispatchable call", async () => {
     const events = await collect(sse([
       chunkOf([{ index: 0, id: "anon", function: { arguments: "{\"q\":1}" } }]),
       chunkOf([], "tool_calls"),
     ]));
-    expect(assembled(events)).toEqual([{ id: "anon", name: "", args: "{\"q\":1}" }]);
+    expect(assembled(events)).toEqual([]);
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    const last = events.at(-1);
+    expect(last?.type).toBe("error");
+    expect(last && last.type === "error" ? last.message : "").toContain("without a function name");
+    expect(events.some(e => e.type === "done")).toBe(false);
   });
 
   test("T8: text deltas interleaved mid-assembly pass through and never split a call", async () => {
