@@ -28,6 +28,7 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | 해당 없음 |
 | 모델 탐색 | `GET /v1/models` | 세 가지 카탈로그 계약 중 하나 | 해당 없음 |
+| 카탈로그 배포 | `GET`, `HEAD /v1/catalog` | 생성된 Codex 카탈로그 문서 | 해당 없음 |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | 릴레이된 call-creation 응답 | 별도의 sideband WebSocket이 양방향 프레임을 릴레이함 |
 | Responses compaction | `POST /v1/responses/compact` | 대체 히스토리 JSON | 해당 없음 |
 
@@ -182,6 +183,69 @@ Responses로 변환되어 일반적으로 라우팅된 뒤, Anthropic JSON 또�
 | Codex 카탈로그 | `client_version` 쿼리 파라미터 | `{ "models": [...] }` | 네이티브 및 라우팅 항목은 더 풍부한 Codex 카탈로그 필드, 표시 여부, effort, WebSocket, 다중 에이전트 메타데이터를 담음 |
 | 일반 OpenAI list | 어느 트리거도 아님 | `{ "object": "list", "data": [...] }` | 보이는 네이티브 id는 그대로이며, 라우팅 id는 alias 또는 `provider/model` |
 
+## `GET /v1/catalog`와 `HEAD /v1/catalog`
+
+이 경로는 생성된 Codex 카탈로그 문서를 data-plane 호출자에게 제공합니다. 따라서 원격 클라이언트는 이미
+추론에 사용하는 credential로 모델 메타데이터를 받을 수 있습니다. management 경로 `GET /api/catalog`도 그대로
+남아 dashboard와 운영 도구에 같은 문서를 반환하지만, 그 경로는 admin secret을 요구하며 그 secret은 클라이언트
+머신에 배포해서는 안 됩니다.
+
+두 경로는 같은 생성 카탈로그를 읽습니다. 두 번째 카탈로그 생성기는 없고, `/api/*` management prefix에
+data-plane 예외를 추가하지도 않았습니다.
+
+| 속성 | 동작 |
+| --- | --- |
+| 메서드 | `GET`과 `HEAD`만 허용합니다. 이 표면은 읽기 전용이며 `/v1` 아래에 카탈로그 변경 API는 없습니다 |
+| Body | 카탈로그 문서로, `GET /api/catalog`가 반환하는 바이트와 동일합니다 |
+| 콘텐츠 타입 | `application/json`, 그리고 `X-Content-Type-Options: nosniff` |
+| 캐싱 | `Cache-Control: no-store`. 이 문서는 실시간 provider, 표시 여부, selector 상태를 반영하고 credential별로 제공되므로 중간 계층이 보관하거나 재전송해서는 안 됩니다 |
+| 버전 메타데이터 | `x-opencodex-codex-version`은 이 프록시가 선택한 Codex 버전을 보고합니다. 프록시에 신뢰할 수 있는 런타임 버전이 없으면 헤더는 추측되지 않고 생략됩니다 |
+| `HEAD` | `GET`과 같은 상태와 헤더에 `Content-Length`를 더하고 body는 없습니다. 내려받기 전에 크기와 버전 차이를 확인할 수 있습니다 |
+| 응답 상한 | 8 MiB. 더 큰 문서는 스트리밍되지 않고 결정적으로 거부됩니다 |
+
+이 경로 고유의 실패:
+
+| 상태 | 유형 또는 코드 | 의미 |
+| --- | --- | --- |
+| 404 | `catalog_not_found` | 제공할 카탈로그 문서가 없습니다. 알 수 없는 `/v1/*` 경로가 반환하는 일반 `not_found`와 구분되므로 스크립트가 둘을 구별할 수 있습니다 |
+| 405 | `method_not_allowed` | 읽기가 아닌 메서드를 사용했습니다. 응답에 `Allow: GET, HEAD`가 포함됩니다 |
+| 500 | `catalog_too_large` | 카탈로그 문서가 8 MiB data-plane 상한을 초과했습니다 |
+
+credential이 없거나 유효하지 않으면 메서드를 따지기 전에 401로 거부되므로, 익명의 비읽기 요청은 경로의 존재를
+드러내지 않고 `authentication_error`를 받습니다.
+
+### 여러 머신에서 카탈로그 내려받기
+
+중앙 호스팅 배포에서는 클라이언트 머신이 자신의 data-plane key로 카탈로그를 내려받습니다.
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog \
+  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+```
+
+같은 key를 추론에도 사용합니다.
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+내려받지 않고 카탈로그 변경을 확인합니다.
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+admin secret은 운영자의 신뢰된 머신에 남습니다. 위에서 쓴 data-plane key는 `GET /api/catalog`을 포함한 모든
+`/api/*` 경로에서 거부됩니다.
+
 ## `POST /v1/live`와 Realtime sideband
 
 `POST /v1/live`는 ChatGPT/Codex App Frameless call-creation 표면을 받습니다.
@@ -232,11 +296,21 @@ loopback 전용 bind에서는 data-plane admission에 설정된 key가 필요하
 | `/v1/chat/completions` | 필요함 | proxy admission에서는 거부됨 | 거부됨 |
 | `/v1/messages`와 `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
+| `/v1/catalog` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/live`, `/v1/realtime/calls`, 및 sideband joins | 허용됨 | 허용됨 | 허용됨 |
 
 Responses 계열과 Chat 요청은 `Authorization`을 provider 또는 Codex Direct passthrough용으로 예약하므로, remote
 proxy key는 전용 헤더를 사용해야 합니다. Messages와 Realtime 표면은 더 넓은 클라이언트 호환성이 필요하므로
 세 가지 형식을 모두 허용합니다.
+
+data-plane key는 위의 표면에만 도달하고 그 밖에는 아무것도 열지 못합니다. `/api/*`는 management 평면이며
+admin secret이 필요하고, GUI session 역시 management 전용입니다. 구체적으로는 다음과 같습니다.
+
+| Credential 종류 | 허용 표면 |
+| --- | --- |
+| Data plane | 위의 추론 endpoint와 읽기 전용 `GET /v1/models`, `GET`/`HEAD /v1/catalog` |
+| Management 평면 | `/api/*`만 |
+| GUI session | `/api/*`만, 발급한 dashboard origin에 바인딩됨 |
 
 :::caution
 data-plane key는 management credential이 아닙니다. management API는 별도의 admin secret을 사용합니다.

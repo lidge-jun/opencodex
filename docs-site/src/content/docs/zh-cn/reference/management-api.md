@@ -137,6 +137,10 @@ Authorization: Bearer <admin-token>
 | `PUT, DELETE /api/custom-models/{id}` | 编辑或删除一个自定义模型 | 400 id/字段无效；404 未找到；409 模型重复 |
 | `GET, PUT /api/selected-models` | 读取 provider 允许列表和可用性，或替换一个允许列表 | 400 缺少 provider/请求体；404 未知 provider |
 
+`GET /api/catalog` 面向 Dashboard 和运维工具。当远程客户端需要 catalog 时，请使用数据平面路由
+`GET /v1/catalog`：它由同一个生成器返回同一份文档，因此客户端机器永远不需要拿到 admin secret。
+参见 [Proxy API Formats](/zh-cn/reference/proxy-formats/)。
+
 ### OAuth 账户、provider 密钥和数据平面密钥
 
 | 方法和路径 | 用途 | 典型错误 |

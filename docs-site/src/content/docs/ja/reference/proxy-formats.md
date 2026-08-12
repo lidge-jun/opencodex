@@ -23,6 +23,7 @@ provider events → internal adapter events → client dialect
 |人間的なメッセージ | `POST /v1/messages` |人類 `message` JSON |人間的メッセージ SSE |
 |人間トークン数 | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` |該当なし |
 |モデルの発見 | `GET /v1/models` | 3 つのカタログ契約のうちの 1 つ |該当なし |
+|カタログ配布 | `GET`、`HEAD /v1/catalog` |生成された Codex カタログ ドキュメント |該当なし |
 |音声とリアルタイム | `POST /v1/live`、`POST /v1/realtime/calls` |中継されたコール作成応答 |別のサイドバンド WebSocket がフレームを両方向に中継します。
 |応答の圧縮 | `POST /v1/responses/compact` |置換履歴 JSON |該当なし |
 
@@ -149,6 +150,63 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 |Codexカタログ | `client_version` クエリパラメータ | `{ "models": [...] }` |ネイティブおよびルーティングされたエントリには、より豊富な Codex カタログ フィールド、可視性、労力、WebSocket、およびマルチエージェント メタデータが含まれています。
 |プレーンな OpenAI リスト |どちらのトリガーもありません | `{ "object": "list", "data": [...] }` |表示されるネイティブ ID は裸です。ルーティング ID はエイリアスまたは `provider/model` |
 
+## `GET /v1/catalog` と `HEAD /v1/catalog`
+
+このルートは、生成された Codex カタログ ドキュメントをデータプレーンの呼び出し元に提供します。これにより、リモート クライアントは、すでに推論に使用している資格情報でモデル メタデータを取得できます。管理ルート `GET /api/catalog` は引き続き存在し、ダッシュボードと運用ツールに同じドキュメントを返します。こちらは管理シークレットを必要としますが、そのシークレットをクライアント マシンに配布すべきではありません。
+
+2 つのルートは同じ生成済みカタログを読み取ります。2 番目のカタログ生成器は存在せず、`/api/*` 管理プレフィックスにデータプレーンの例外は追加されていません。
+
+|プロパティ |動作 |
+| --- | --- |
+|メソッド | `GET` と `HEAD` のみ。このサーフェスは読み取り専用で、`/v1` 配下にカタログ変更 API はありません |
+| Body |カタログ ドキュメント。`GET /api/catalog` が返すバイト列と同一です |
+|コンテンツ タイプ | `application/json`、および `X-Content-Type-Options: nosniff` |
+|キャッシュ | `Cache-Control: no-store`。このドキュメントはライブのプロバイダー、可視性、セレクター状態を反映し、資格情報ごとに提供されるため、中間層が保持または再送してはなりません |
+|バージョン メタデータ | `x-opencodex-codex-version` はこのプロキシが選択した Codex バージョンを報告します。プロキシに信頼できるランタイム バージョンがない場合、ヘッダーは推測されるのではなく省略されます |
+| `HEAD` | `GET` と同じステータスとヘッダーに加えて `Content-Length` を返し、本文はありません。ダウンロード前にサイズとバージョン差分を確認できます |
+|応答上限 | 8 MiB。これを超えるドキュメントは中継されず、確定的に拒否されます |
+
+このルート固有の失敗:
+
+|ステータス |タイプまたはコード |意味 |
+| --- | --- | --- |
+| 404 | `catalog_not_found` |提供できるカタログ ドキュメントがありません。未知の `/v1/*` パスが返す一般的な `not_found` とは区別されるため、スクリプトが両者を判別できます |
+| 405 | `method_not_allowed` |読み取り以外のメソッドが使用されました。応答には `Allow: GET, HEAD` が含まれます |
+| 500 | `catalog_too_large` |カタログ ドキュメントが 8 MiB のデータプレーン上限を超えています |
+
+資格情報が欠落または無効な場合、メソッドを検討する前に 401 で拒否されます。したがって匿名の読み取り以外のリクエストは、ルートの存在を明かすのではなく `authentication_error` を受け取ります。
+
+### 複数マシンでのカタログ ダウンロード
+
+集中ホスト型のデプロイでは、クライアント マシンが自身のデータプレーン キーでカタログをダウンロードします。
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog \
+  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+```
+
+同じキーを推論にも使用します。
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+ダウンロードせずにカタログの変更を確認します。
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+管理シークレットは運用者の信頼できるマシンに留まります。上で使用したデータプレーン キーは、`GET /api/catalog` を含むすべての `/api/*` ルートで拒否されます。
+
 ## `POST /v1/live` とRealtime サイドバンド
 
 `POST /v1/live` は、ChatGPT/Codex アプリのフレームレス通話作成サーフェスを受け入れます。 `POST /v1/realtime/calls` は、OpenAI Realtime 呼び出し作成サーフェスを受け入れます。 opencodex は、適格な OpenAI ファミリ ルートを選択し、アップストリーム認証モードのコール作成リクエストを正規化し、制限付き応答を中継します。
@@ -192,9 +250,18 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 | `/v1/chat/completions` |必須 |代理入場を拒否されました |拒否されました |
 | `/v1/messages` および `/v1/messages/count_tokens` |承認済み |承認済み |承認済み |
 | `/v1/models` |承認済み |承認済み |承認済み |
+| `/v1/catalog` |承認済み |承認済み |承認済み |
 | `/v1/live`、`/v1/realtime/calls`、および側波帯結合 |承認済み |承認済み |承認済み |
 
 Responses-family および Chat リクエストは、プロバイダーまたは Codex Direct パススルー用に `Authorization` を予約するため、リモート プロキシ キーは専用ヘッダーを使用する必要があります。メッセージとリアルタイム サーフェスは、より広範なクライアント互換性を必要とするため、3 つの形式すべてを受け入れます。
+
+データプレーン キーが到達できるのは上記のサーフェスだけです。`/api/*` は管理プレーンであり、管理シークレットを必要とします。GUI セッションも管理プレーン専用です。具体的には次のとおりです。
+
+|資格情報のクラス |許可されるサーフェス |
+| --- | --- |
+|データプレーン |上記の推論エンドポイント、および読み取り専用の `GET /v1/models` と `GET`/`HEAD /v1/catalog` |
+|管理プレーン | `/api/*` のみ |
+| GUI セッション | `/api/*` のみ。発行元のダッシュボード オリジンにバインドされます |
 
 :::caution
 データプレーン キーは管理資格情報ではありません。管理 API は別の管理シークレットを使用します。 [管理 API](/reference/management-api/)を参照してください。 1 つのシークレットを両方のプレーンに再利用しないでください。

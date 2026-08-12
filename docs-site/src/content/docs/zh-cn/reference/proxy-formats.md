@@ -28,6 +28,7 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | 不适用 |
 | 模型发现 | `GET /v1/models` | 三种目录契约之一 | 不适用 |
+| 目录分发 | `GET`、`HEAD /v1/catalog` | 生成的 Codex catalog 文档 | 不适用 |
 | 语音和 Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | 转发的调用创建响应 | 独立的 sideband WebSocket 双向转发帧 |
 | Responses compaction | `POST /v1/responses/compact` | 替换历史 JSON | 不适用 |
 
@@ -166,6 +167,63 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 | Codex catalog | `client_version` 查询参数 | `{ "models": [...] }` | 原生和路由条目携带更丰富的 Codex catalog 字段、可见性、effort、WebSocket 和 multi-agent 元数据 |
 | Plain OpenAI list | 两个触发条件都没有 | `{ "object": "list", "data": [...] }` | 可见的原生 ID 是裸值；路由 ID 是别名或 `provider/model` |
 
+## `GET /v1/catalog` 和 `HEAD /v1/catalog`
+
+该路由把生成的 Codex catalog 文档提供给数据平面调用方，因此远程客户端可以用它已经用于推理的凭证获取模型元数据。管理路由 `GET /api/catalog` 依然存在，并为 Dashboard 和运维工具返回同一份文档；它需要 admin secret，而该密钥不应分发到客户端机器。
+
+两个路由读取同一份生成的 catalog。不存在第二个 catalog 生成器，也没有在 `/api/*` 管理前缀上增加任何数据平面例外。
+
+| 属性 | 行为 |
+| --- | --- |
+| 方法 | 只有 `GET` 和 `HEAD`。该表面是只读的，`/v1` 下不存在任何 catalog 变更 API |
+| Body | catalog 文档，与 `GET /api/catalog` 返回的字节完全一致 |
+| 内容类型 | `application/json`，并带 `X-Content-Type-Options: nosniff` |
+| 缓存 | `Cache-Control: no-store`。该文档跟踪实时的 provider、可见性和 selector 状态，并按凭证提供，因此中间层不得保留或重放它 |
+| 版本元数据 | `x-opencodex-codex-version` 报告本代理选定的 Codex 版本。当代理没有权威运行时版本时，该头会被省略，而不是猜测一个值 |
+| `HEAD` | 与 `GET` 相同的状态和响应头，另外带 `Content-Length`，且没有 body —— 在下载前检查大小和版本偏差 |
+| 响应上限 | 8 MiB。更大的文档会被确定性地拒绝，而不是继续传输 |
+
+该路由专有的失败：
+
+| 状态 | 类型或 code | 含义 |
+| --- | --- | --- |
+| 404 | `catalog_not_found` | 代理没有可提供的 catalog 文档。它与未知 `/v1/*` 路径返回的通用 `not_found` 不同，因此脚本可以区分两者 |
+| 405 | `method_not_allowed` | 使用了非读取方法。响应携带 `Allow: GET, HEAD` |
+| 500 | `catalog_too_large` | catalog 文档超过 8 MiB 的数据平面上限 |
+
+缺失或无效的凭证会在考虑方法之前就以 401 被拒绝，因此匿名的非读取请求得到的是 `authentication_error`，而不是暴露该路由的存在。
+
+### 多机器 catalog 下载
+
+在集中托管的部署中，客户端机器用自己的数据平面密钥下载 catalog：
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog \
+  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+```
+
+同一个密钥随后用于推理：
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+在不下载的情况下检查 catalog 是否变化：
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+admin secret 始终留在运维方的可信机器上。上面使用的数据平面密钥在每一个 `/api/*` 路由上都会被拒绝，包括 `GET /api/catalog`。
+
 ## `POST /v1/live` 和 Realtime sideband
 
 `POST /v1/live` 接受 ChatGPT/Codex App 的 Frameless call-creation 表面。
@@ -211,10 +269,19 @@ Compaction 会为需要缩短长 Responses 会话的客户端返回替换历史�
 | `/v1/chat/completions` | 必需 | 被代理准入拒绝 | 被拒绝 |
 | `/v1/messages` 和 `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
+| `/v1/catalog` | 接受 | 接受 | 接受 |
 | `/v1/live`、`/v1/realtime/calls` 和 sideband join | 接受 | 接受 | 接受 |
 
 Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex Direct
 透传，因此远程代理密钥必须使用专用头。Messages 和 Realtime 表面需要更广泛的客户端兼容性，因此接受这三种形式。
+
+数据平面密钥只能到达上表中的表面，别无其他。`/api/*` 是管理平面，需要 admin secret；GUI session 同样只属于管理平面。具体来说：
+
+| 凭证类别 | 允许的表面 |
+| --- | --- |
+| 数据平面 | 上面的推理端点，加上只读的 `GET /v1/models` 与 `GET`/`HEAD /v1/catalog` |
+| 管理平面 | 仅 `/api/*` |
+| GUI session | 仅 `/api/*`，并绑定到签发它的 Dashboard origin |
 
 :::caution
 数据平面密钥不是管理凭证。管理 API 使用单独的 admin secret；

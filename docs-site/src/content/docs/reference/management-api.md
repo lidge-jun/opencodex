@@ -161,6 +161,11 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider |
 
+`GET /api/catalog` is for the dashboard and operator tooling. When a remote client needs the
+catalog, use the data-plane route `GET /v1/catalog`: it returns the same document from the same
+generator, so client machines never receive the admin secret. See
+[Proxy API Formats](/reference/proxy-formats/).
+
 ### OAuth accounts, provider keys, and data-plane keys
 
 | Method and path | Purpose | Notable errors |

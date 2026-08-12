@@ -16,7 +16,7 @@ OpenCodex uses three mutually exclusive reusable admission credential classes:
 
 | Credential class | Sources | Allowed surface |
 | --- | --- | --- |
-| Data plane | `OPENCODEX_API_AUTH_TOKEN`, the `service-api-token` file loaded through `OCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints and new data-plane WebSocket handshakes only |
+| Data plane | `OPENCODEX_API_AUTH_TOKEN`, the `service-api-token` file loaded through `OCX_API_TOKEN_FILE`, and `config.apiKeys` | `/v1/*` HTTP endpoints — the inference surfaces plus read-only `GET /v1/models` and `GET`/`HEAD /v1/catalog` — and new data-plane WebSocket handshakes only |
 | Management plane | `OPENCODEX_ADMIN_AUTH_TOKEN` or the independent protected `admin-api-token` file | `/api/*` only |
 | GUI session | A short-lived token issued only with a legitimate same-origin local dashboard page | `/api/*` only, bound to the issuing origin |
 
@@ -79,6 +79,40 @@ be treated as implemented:
 - revoke an already established connection when its data key is deleted;
 - enforce an idle timeout;
 - reauthenticate subsequent frames after the handshake.
+
+## Catalog distribution across the two planes
+
+The generated Codex catalog is served on both planes, and the invariant is that they consume one
+authority. `src/codex/catalog/distribution.ts` reads and serializes the document and resolves the
+`x-opencodex-codex-version` header; management `GET /api/catalog` and data-plane `GET`/`HEAD
+/v1/catalog` both go through it and serialize nothing themselves. A second catalog generator or a
+second serializer on either surface is the failure this boundary exists to prevent.
+
+What legitimately differs is transport, and only transport: admission helper, CORS wrapper, error
+envelope, cache policy, and the data-plane response ceiling. The document is the same bytes.
+
+The data-plane route exists because the management credential also authorizes provider
+configuration, OAuth and account management, settings mutation, and proxy shutdown. A centrally
+hosted deployment needs client machines to fetch model metadata, not to hold that credential. The
+accepted resolution was a separate least-privilege route rather than an admission exception inside
+`/api/*` — **`/api/catalog` must never accept a data-plane credential.**
+
+Contract details that are load-bearing rather than incidental:
+
+- Admission is resolved **before** the method, so an anonymous non-read request answers 401 instead
+  of disclosing the route with a 405. An admitted caller gets 405 with `Allow: GET, HEAD`.
+- `HEAD` answers with the status and headers `GET` would produce, plus `Content-Length`, and no
+  body. That is the point of offering it: a client checks size and version skew before downloading.
+- A catalog that cannot be materialized is `404 catalog_not_found` — deliberately distinct from the
+  generic `not_found` an unknown `/v1/*` path returns, because a client script has to tell "no such
+  route" from "no catalog yet". Neither answer names a path on the operator's disk.
+- `Cache-Control: no-store`: the document tracks live provider, visibility, and selector state and is
+  served per credential, so a shared intermediary must not retain or replay it.
+- `DATA_PLANE_CATALOG_MAX_BYTES` (8 MiB) is a declared ceiling on what this route will ship, not a
+  memory guard — the document is already resident by then. The management route keeps its existing
+  unbounded behavior; the bound belongs to the remotely reachable transport.
+- The route is **not** in `loopbackRouteAllowed`. The unauthenticated loopback listener serves what a
+  directly-spawned `codex app-server` needs, and it does not need this.
 
 ## API ownership
 

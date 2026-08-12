@@ -30,6 +30,7 @@ control и safety ответа всё равно происходят на гр�
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Подсчёт токенов Anthropic | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Не применяется |
 | Обнаружение моделей | `GET /v1/models` | Один из трёх контрактов каталога | Не применяется |
+| Распространение каталога | `GET`, `HEAD /v1/catalog` | Сгенерированный документ каталога Codex | Не применяется |
 | Голос и Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Ответ создания вызова после ретрансляции | Отдельный sideband WebSocket ретранслирует frame'ы в обе стороны |
 | Компактизация Responses | `POST /v1/responses/compact` | JSON истории-замены | Не применяется |
 
@@ -196,6 +197,71 @@ passthrough. Native-eligible-запрос пересылается в count-endp
 | Каталог Codex | Query-параметр `client_version` | `{ "models": [...] }` | Нативные и маршрутизируемые записи несут более богатые поля каталога Codex: visibility, effort, WebSocket и multi-agent metadata |
 | Обычный список OpenAI | Ни один триггер не сработал | `{ "object": "list", "data": [...] }` | Видимые native-id идут без префикса; routed-id — как alias или `provider/model` |
 
+## `GET /v1/catalog` и `HEAD /v1/catalog`
+
+Этот маршрут отдаёт сгенерированный документ каталога Codex вызывающей стороне data plane, поэтому
+удалённый клиент может получить metadata моделей тем же credential, который уже использует для
+inference. Management-маршрут `GET /api/catalog` остаётся и возвращает тот же документ для dashboard
+и операторских инструментов; он требует admin-secret, а этот секрет не следует раздавать на
+клиентские машины.
+
+Оба маршрута читают один и тот же сгенерированный каталог. Второго генератора каталога нет, и в
+management-префикс `/api/*` не добавлено никакого исключения для data plane.
+
+| Свойство | Поведение |
+| --- | --- |
+| Методы | Только `GET` и `HEAD`. Surface только для чтения; под `/v1` нет API изменения каталога |
+| Body | Документ каталога, побайтово совпадающий с тем, что возвращает `GET /api/catalog` |
+| Content type | `application/json`, вместе с `X-Content-Type-Options: nosniff` |
+| Кэширование | `Cache-Control: no-store`. Документ отражает актуальное состояние провайдеров, visibility и selector'ов и отдаётся под конкретный credential, поэтому промежуточный узел не должен его сохранять или переотдавать |
+| Metadata версии | `x-opencodex-codex-version` сообщает версию Codex, выбранную этим прокси. Если у прокси нет авторитетной runtime-версии, заголовок опускается, а не угадывается |
+| `HEAD` | Тот же статус и заголовки, что у `GET`, плюс `Content-Length`, и без body — можно проверить размер и расхождение версий до загрузки |
+| Предел ответа | 8 MiB. Более крупный документ детерминированно отклоняется, а не отдаётся потоком |
+
+Ошибки, специфичные для этого маршрута:
+
+| Статус | Тип или код | Значение |
+| --- | --- | --- |
+| 404 | `catalog_not_found` | У прокси нет документа каталога. Отличается от общего `not_found`, который возвращает неизвестный путь `/v1/*`, поэтому скрипт может различить эти два случая |
+| 405 | `method_not_allowed` | Использован метод, не являющийся чтением. Ответ несёт `Allow: GET, HEAD` |
+| 500 | `catalog_too_large` | Документ каталога превышает предел data plane в 8 MiB |
+
+Отсутствующий или недействительный credential отклоняется с 401 ещё до проверки метода, поэтому
+анонимный запрос с методом записи получает `authentication_error`, а не раскрытие маршрута.
+
+### Загрузка каталога на несколько машин
+
+В централизованно размещённом развёртывании клиентская машина скачивает каталог своим ключом data
+plane:
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog \
+  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+```
+
+Тот же ключ затем работает для inference:
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+Проверить изменение каталога, не загружая его:
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+Admin-secret остаётся на доверенной машине оператора. Использованный выше ключ data plane
+отклоняется на каждом маршруте `/api/*`, включая `GET /api/catalog`.
+
 ## `POST /v1/live` и Realtime sideband
 
 `POST /v1/live` принимает surface Frameless call-creation из ChatGPT/Codex App.
@@ -248,11 +314,21 @@ conversation.
 | `/v1/chat/completions` | Обязателен | Отклоняется для proxy-admission | Отклоняется |
 | `/v1/messages` и `/v1/messages/count_tokens` | Принимается | Принимается | Принимается |
 | `/v1/models` | Принимается | Принимается | Принимается |
+| `/v1/catalog` | Принимается | Принимается | Принимается |
 | `/v1/live`, `/v1/realtime/calls` и sideband-join'ы | Принимается | Принимается | Принимается |
 
 Responses-family и Chat-запросы резервируют `Authorization` под passthrough провайдера или Codex
 Direct, поэтому remote proxy key здесь обязан идти через dedicated-заголовок. Surface'ам Messages
 и Realtime нужна более широкая совместимость с клиентами, поэтому там принимаются все три формы.
+
+Ключ data plane открывает только перечисленные выше surface'ы и больше ничего. `/api/*` — это
+management plane, ему нужен admin-secret; GUI-session тоже относится только к management. Конкретно:
+
+| Класс credential | Разрешённая поверхность |
+| --- | --- |
+| Data plane | Перечисленные выше inference-endpoint'ы плюс только для чтения `GET /v1/models` и `GET`/`HEAD /v1/catalog` |
+| Management plane | Только `/api/*` |
+| GUI session | Только `/api/*`, с привязкой к origin выдавшего dashboard |
 
 :::caution
 Ключи data plane — это не management credentials. У management API свой отдельный admin-secret;

@@ -155,6 +155,11 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | `PUT, DELETE /api/custom-models/{id}` | Изменить или удалить одну custom-модель | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Прочитать allowlist'ы и availability провайдеров либо заменить один allowlist | 400 missing provider/body; 404 unknown provider |
 
+`GET /api/catalog` предназначен для dashboard и операторских инструментов. Когда каталог нужен
+удалённому клиенту, используйте маршрут data plane `GET /v1/catalog`: он возвращает тот же документ
+от того же генератора, поэтому клиентские машины никогда не получают admin-secret. См.
+[Proxy API Formats](/ru/reference/proxy-formats/).
+
 ### OAuth-аккаунты, ключи провайдеров и ключи data plane
 
 | Метод и путь | Назначение | Особые ошибки |

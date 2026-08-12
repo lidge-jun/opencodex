@@ -29,6 +29,7 @@ should select among several targets.
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token count | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | Not applicable |
 | Model discovery | `GET /v1/models` | One of three catalog contracts | Not applicable |
+| Catalog distribution | `GET`, `HEAD /v1/catalog` | The generated Codex catalog document | Not applicable |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
 
@@ -204,6 +205,69 @@ wins unless `client_version` is also present.
 | Codex catalog | `client_version` query parameter | `{ "models": [...] }` | Native and routed entries carry the richer Codex catalog fields, visibility, effort, WebSocket, and multi-agent metadata |
 | Plain OpenAI list | Neither trigger | `{ "object": "list", "data": [...] }` | Visible native ids are bare; routed ids are aliases or `provider/model` |
 
+## `GET /v1/catalog` and `HEAD /v1/catalog`
+
+This route serves the generated Codex catalog document to a data-plane caller, so a remote client
+can obtain model metadata with the credential it already uses for inference. The management route
+`GET /api/catalog` still exists and returns the same document for the dashboard and operator
+tooling; it requires the admin secret, which should not be distributed to client machines.
+
+The two routes read the same generated catalog. There is no second catalog generator, and no
+data-plane exception was added to the `/api/*` management prefix.
+
+| Property | Behavior |
+| --- | --- |
+| Methods | `GET` and `HEAD` only. The surface is read-only and there is no catalog mutation API under `/v1` |
+| Body | The catalog document, byte-identical to what `GET /api/catalog` returns |
+| Content type | `application/json`, with `X-Content-Type-Options: nosniff` |
+| Caching | `Cache-Control: no-store`. The document tracks live provider, visibility, and selector state and is served per credential, so an intermediary must not retain or replay it |
+| Version metadata | `x-opencodex-codex-version` reports the Codex version this proxy selected. The header is omitted rather than guessed when the proxy has no authoritative runtime version |
+| `HEAD` | Same status and headers as `GET`, plus `Content-Length`, and no body — check size and version skew before downloading |
+| Response ceiling | 8 MiB. A larger document is refused deterministically instead of being streamed |
+
+Route-specific failures:
+
+| Status | Type or code | Meaning |
+| --- | --- | --- |
+| 404 | `catalog_not_found` | The proxy has no catalog document to serve. Distinct from the generic `not_found` an unknown `/v1/*` path returns, so a script can tell the two apart |
+| 405 | `method_not_allowed` | A non-read method was used. The response carries `Allow: GET, HEAD` |
+| 500 | `catalog_too_large` | The catalog document exceeds the 8 MiB data-plane ceiling |
+
+A missing or invalid credential is rejected with 401 before the method is considered, so an
+anonymous non-read request answers `authentication_error` rather than disclosing the route.
+
+### Multi-machine catalog download
+
+On a centrally hosted deployment, a client machine downloads the catalog with its data-plane key:
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog \
+  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+```
+
+The same key then serves inference:
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+Check for a changed catalog without downloading it:
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+The admin secret stays on the operator's trusted machine. The data-plane key used above is refused
+on every `/api/*` route, including `GET /api/catalog`.
+
 ## `POST /v1/live` and Realtime sideband
 
 `POST /v1/live` accepts the ChatGPT/Codex App Frameless call-creation surface.
@@ -256,11 +320,21 @@ use the matrix below. “Dedicated” means `X-OpenCodex-API-Key`; the other col
 | `/v1/chat/completions` | Required | Rejected for proxy admission | Rejected |
 | `/v1/messages` and `/v1/messages/count_tokens` | Accepted | Accepted | Accepted |
 | `/v1/models` | Accepted | Accepted | Accepted |
+| `/v1/catalog` | Accepted | Accepted | Accepted |
 | `/v1/live`, `/v1/realtime/calls`, and sideband joins | Accepted | Accepted | Accepted |
 
 Responses-family and Chat requests reserve `Authorization` for provider or Codex Direct
 passthrough, so a remote proxy key must use the dedicated header. Messages and Realtime surfaces
 need broader client compatibility and therefore accept all three forms.
+
+A data-plane key reaches the surfaces above and nothing else. `/api/*` is the management plane and
+requires the admin secret; a GUI session is also management-only. Concretely:
+
+| Credential class | Allowed surface |
+| --- | --- |
+| Data plane | The inference endpoints above, plus read-only `GET /v1/models` and `GET`/`HEAD /v1/catalog` |
+| Management plane | `/api/*` only |
+| GUI session | `/api/*` only, bound to the issuing dashboard origin |
 
 :::caution
 Data-plane keys are not management credentials. The management API uses a separate admin secret;

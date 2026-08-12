@@ -137,6 +137,10 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT, DELETE /api/custom-models/{id}` | 編輯或刪除一個自訂模型 | 400 無效 id/欄位；404 未找到；409 重複模型 |
 | `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商 |
 
+`GET /api/catalog` 面向儀表板與運維工具。當遠端客戶端需要目錄時，請使用 data-plane 路由
+`GET /v1/catalog`：它由同一個生成器回傳同一份文件，因此客戶端機器永遠不需要取得管理秘密。
+請見 [Proxy API Formats](/zh-tw/reference/proxy-formats/)。
+
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 
 | 方法與路徑 | 用途 | Notable errors |

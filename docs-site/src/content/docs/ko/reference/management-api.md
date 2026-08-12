@@ -137,6 +137,10 @@ Authorization: Bearer <admin-token>
 | `PUT, DELETE /api/custom-models/{id}` | custom model 하나를 수정하거나 삭제합니다 | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 model |
 | `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider |
 
+`GET /api/catalog`은 dashboard와 운영 도구용입니다. 원격 클라이언트가 카탈로그를 필요로 할 때는
+data-plane 경로 `GET /v1/catalog`을 사용하십시오. 같은 생성기에서 같은 문서를 반환하므로 클라이언트
+머신이 admin secret을 받을 일이 없습니다. [Proxy API Formats](/ko/reference/proxy-formats/)를 보십시오.
+
 ### OAuth 계정, provider key, 데이터 평면 키
 
 | Method and path | 목적 | 주요 오류 |
