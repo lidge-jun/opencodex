@@ -51,6 +51,7 @@ describe("Cursor discovery metadata", () => {
       expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)[id]).toBe(200_000);
     }
     expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["composer-2.5-fast"]).toBe(200_000);
+    expect(cursorModelContextWindows(CURSOR_STATIC_MODELS)["grok-4.6-fast"]).toBe(256_000);
   });
 
   test("auto is not activated by live GetUsableModels wire ids alone", () => {

@@ -242,7 +242,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
   // 260813 preemptive: grok-4.6 seeded ahead of Cursor's lineup update (mirrors grok-4.5).
   { id: "grok-4.6", contextWindow: 500_000, supportsReasoningEffort: true },
-  { id: "grok-4.6-fast", contextWindow: 500_000, supportsReasoningEffort: true },
+  { id: "grok-4.6-fast", contextWindow: 256_000, supportsReasoningEffort: true },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {
