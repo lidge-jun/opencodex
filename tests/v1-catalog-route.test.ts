@@ -17,9 +17,11 @@ import type { OcxConfig } from "../src/types";
 
 const DATA_PLANE_KEY = "ocx_data_catalogreader";
 const ADMIN_TOKEN = "admin-secret-for-v1-catalog";
-const PROVIDER_API_KEY = "sk-provider-secret-shouldnotleak";
+// Fixture secrets use the shapes `scripts/privacy-scan.ts` already recognizes as
+// obviously-fake test sentinels, so this file cannot trip the gate it exists to defend.
+const PROVIDER_API_KEY = "sk-test-809providerkeysentinel";
 const CODEX_ACCOUNT_ID = "codex-account-privateid-9f2c";
-const CODEX_ACCOUNT_EMAIL = "operator@private.example";
+const CODEX_ACCOUNT_EMAIL = "operator@pool.example.test";
 /** An operator-chosen public namespace; the catalog may carry it, the account id may not. */
 const PUBLIC_SELECTOR = "workspace-a";
 const previousHome = process.env.OPENCODEX_HOME;
