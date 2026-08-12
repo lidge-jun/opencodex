@@ -18,14 +18,15 @@ import {
   labPublicExportsDir,
   labPublicPublisherKeyPath,
 } from "../paths";
-import { readCommunityEvidenceBundle } from "./community";
+import { readCommunityEvidenceBundleForPublisher } from "./community";
 import { publicPublisherKeyId } from "./ids";
+import { readPublicEvidenceBundle } from "./store";
 import { PublicEvidenceValidationError } from "./validate";
 
 const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
-const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})\.json$/;
+const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 
 function readExistingPublisherKeyId(configDir?: string): string | null {
   const path = labPublicPublisherKeyPath(configDir);
@@ -71,13 +72,20 @@ function readExistingPublisherKeyId(configDir?: string): string | null {
   }
 }
 
-function localExportBundleIds(configDir?: string): Set<string> {
-  const ids = new Set<string>();
+function publicIdentity(publisherKeyId: string, bundleId: string): string {
+  return `${publisherKeyId}:${bundleId}`;
+}
+
+function localExportIdentities(configDir?: string): Set<string> {
+  const identities = new Set<string>();
   for (const entry of readdirSync(labPublicExportsDir(configDir), { withFileTypes: true })) {
     const match = EXPORT_FILE_RE.exec(entry.name);
-    if (match) ids.add(match[1]!);
+    if (!match) continue;
+    const bundleId = match[1]!;
+    const bundle = readPublicEvidenceBundle(bundleId, configDir);
+    identities.add(publicIdentity(bundle.publisher.keyId, bundle.bundleId));
   }
-  return ids;
+  return identities;
 }
 
 function purgeAllExports(configDir?: string): number {
@@ -95,11 +103,12 @@ function purgeAllExports(configDir?: string): number {
  *
  * The pre-CL-10 purge contract already removes every local export when the
  * `export` action is selected. CL-10 additionally removes quarantined community
- * bundle copies that can be proven locally-originated, either because their
- * content id is currently present in the local export store or because their
- * publisher key is this installation's existing publisher key.
+ * bundle copies that can be proven locally-originated by the exact
+ * `(publisherKeyId, bundleId)` pair or by this installation's existing
+ * publisher key.
  *
- * Third-party community evidence is deliberately preserved. When local
+ * Third-party community evidence is deliberately preserved, including an
+ * independently signed copy with the same content `bundleId`. When local
  * provenance cannot be inspected safely, this function fails closed rather than
  * pretending the purge completed.
  */
@@ -108,7 +117,7 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
   deletedCommunityBundles: number;
 } {
   ensureLabDirs(configDir);
-  const exportedBundleIds = localExportBundleIds(configDir);
+  const exportedIdentities = localExportIdentities(configDir);
   const localPublisherKeyId = readExistingPublisherKeyId(configDir);
   const communityDir = labCommunityDir(configDir);
 
@@ -116,14 +125,19 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
   for (const entry of readdirSync(communityDir, { withFileTypes: true })) {
     const match = COMMUNITY_BUNDLE_RE.exec(entry.name);
     if (!match) continue;
-    const bundleId = match[1]!;
-
-    let locallyOriginated = exportedBundleIds.has(bundleId);
-    if (!locallyOriginated && localPublisherKeyId) {
-      const bundle = readCommunityEvidenceBundle(bundleId, configDir);
-      locallyOriginated = bundle.publisher.keyId === localPublisherKeyId;
-    }
+    const publisherKeyId = match[1]!;
+    const bundleId = match[2]!;
+    const locallyOriginated = exportedIdentities.has(publicIdentity(publisherKeyId, bundleId))
+      || publisherKeyId === localPublisherKeyId;
     if (!locallyOriginated) continue;
+
+    const bundle = readCommunityEvidenceBundleForPublisher(bundleId, publisherKeyId, configDir);
+    if (bundle.publisher.keyId !== publisherKeyId || bundle.bundleId !== bundleId) {
+      throw new PublicEvidenceValidationError(
+        "community_identity_mismatch",
+        `community bundle identity changed while purging: ${entry.name}`,
+      );
+    }
 
     const path = join(communityDir, entry.name);
     const before = lstatSync(path);
