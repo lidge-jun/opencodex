@@ -768,6 +768,7 @@ export const en = {
   "usage.range.all": "All",
   "usage.range.available": "Available history",
   "usage.historyTruncated": "Totals cover available history only because older usage was not loaded.",
+  "usage.historyTruncatedWindow": "Totals cover only the usage loaded from {start} to {end}. Older entries exceed the read limit, so any selected range may be incomplete.",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
   "usage.card.requests": "Requests",

@@ -121,6 +121,29 @@ function refreshedUsageSummary<T extends UsageSummary & { historyTruncated: bool
   return { ...summary, since, generatedAt: now };
 }
 
+/**
+ * Timestamp bounds of the rows the bounded reader actually loaded.
+ *
+ * Deliberately computed over the whole snapshot, BEFORE `summarizeUsage` applies the range
+ * and surface predicates: truncation is a property of the read, not of the query, so the
+ * window that matters to a client is the one the reader could see. It is not a completeness
+ * claim and must never be presented as one. `usage.jsonl` is appended when a request
+ * COMPLETES while each row carries the request START time, so a long-running request can be
+ * appended after shorter ones that started later — meaning the oldest loaded timestamp does
+ * not bound what the dropped prefix contains (#1497).
+ */
+function snapshotWindow(entries: PersistedUsageEntry[]): { start: number | null; end: number | null } {
+  let start: number | null = null;
+  let end: number | null = null;
+  for (const entry of entries) {
+    const at = entry.timestamp;
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    if (start === null || at < start) start = at;
+    if (end === null || at > end) end = at;
+  }
+  return { start, end };
+}
+
 export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -209,12 +232,15 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       const overlayVersion = userCostOverlayVersion();
       const snapshot = await readUsageSnapshotForManagement(effectiveReadLimit);
       const revisionReadAt = Date.now();
+      const window = snapshotWindow(snapshot.entries);
       const summary = {
         ...summarizeUsage(snapshot.entries, range, now, surface),
         historyTruncated: snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated,
         truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
         entriesTruncated: snapshot.entriesTruncated,
         entriesDropped: snapshot.entriesDropped,
+        snapshotWindowStart: window.start,
+        snapshotWindowEnd: window.end,
       };
       if (userCostOverlayVersion() !== overlayVersion) {
         // The overlay changed while the summary was being computed, so this
@@ -266,6 +292,8 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
         truncatedPrefixBytes: 0,
         entriesTruncated: false,
         entriesDropped: 0,
+        snapshotWindowStart: null,
+        snapshotWindowEnd: null,
         error: "read_failed",
       });
     }

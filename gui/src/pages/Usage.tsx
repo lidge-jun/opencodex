@@ -88,6 +88,11 @@ interface UsageResponse {
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
   entriesDropped: number;
+  // Bounds of the rows the bounded reader loaded, before any range or surface filtering.
+  // Describes the read, not the query, and is never a completeness claim (#1497).
+  // Optional because a dashboard can talk to a proxy that predates these fields.
+  snapshotWindowStart?: number | null;
+  snapshotWindowEnd?: number | null;
   error?: string;
 }
 
@@ -816,7 +821,23 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       ) : (
         <>
           {state.showError && <Notice tone="err">{t("usage.loadError")}</Notice>}
-          {data?.historyTruncated && <Notice tone="ok">{t("usage.historyTruncated")}</Notice>}
+          {data?.historyTruncated && (
+            // Naming the loaded window is the point: without it, `30d` and "Available history"
+            // look identical on a busy installation even though both may cover far less than
+            // they claim (#1497). `warn` rather than `ok` because a total that silently omits
+            // in-range rows is a caveat, not a status update.
+            <Notice tone="warn">
+              {/* `!= null` rather than `!== null`: an older proxy that predates these fields
+                  omits them entirely, and an undefined bound must fall back to the generic
+                  wording instead of rendering "Invalid Date". */}
+              {data.snapshotWindowStart != null && data.snapshotWindowEnd != null
+                ? t("usage.historyTruncatedWindow", {
+                  start: new Date(data.snapshotWindowStart).toLocaleString(),
+                  end: new Date(data.snapshotWindowEnd).toLocaleString(),
+                })
+                : t("usage.historyTruncated")}
+            </Notice>
+          )}
           <UsageWorkspaceBody
             data={data}
             heatmap={heatmap}

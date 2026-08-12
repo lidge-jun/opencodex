@@ -758,6 +758,7 @@ export const ru: Record<TKey, string> = {
   "usage.range.all": "Все",
   "usage.range.available": "Доступная история",
   "usage.historyTruncated": "Итоги охватывают только доступную историю, поскольку старые данные не загружены.",
+  "usage.historyTruncatedWindow": "Итоги охватывают только использование, загруженное с {start} по {end}. Более старые записи превышают лимит чтения, поэтому выбранный период может быть неполным.",
   "usage.range.30d": "30 дн.",
   "usage.range.7d": "7 дн.",
   "usage.card.requests": "Запросы",

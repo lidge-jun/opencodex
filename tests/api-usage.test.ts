@@ -136,6 +136,92 @@ describe("GET /api/usage", () => {
     }
   });
 
+  // #1497: on a busy installation the newest `managementUsageMaxReadBytes` can cover far less
+  // than the selected range, so `30d` and "Available history" summarize the same moving tail.
+  // The response now names the window the reader actually loaded. It describes the READ, not
+  // the query — usage.jsonl is appended on request completion while rows carry the request
+  // start time, so the oldest loaded row does not bound what the dropped prefix contains, and
+  // no field here may be read as a completeness claim.
+  describe("snapshot window disclosure (#1497)", () => {
+    test("a truncated read reports the loaded window, and it matches the rows that survived", async () => {
+      const now = Date.now();
+      writeFixture(now);
+      saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+      const server = startServer(0);
+      try {
+        const body = await fetch(new URL("/api/usage?range=30d", server.url)).then(r => r.json());
+        expect(body.historyTruncated).toBe(true);
+        expect(typeof body.snapshotWindowStart).toBe("number");
+        expect(typeof body.snapshotWindowEnd).toBe("number");
+        expect(body.snapshotWindowStart).toBeLessThanOrEqual(body.snapshotWindowEnd);
+        // The dropped prefix is the OLDEST part of the file, so a truncated read cannot still
+        // start at the fixture's oldest row.
+        expect(body.snapshotWindowStart).toBeGreaterThan(now - 10 * 86_400_000);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("the window describes the read, so range and surface filters do not move it", async () => {
+      writeFixture(Date.now());
+      saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+      const server = startServer(0);
+      try {
+        const all = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        const thirty = await fetch(new URL("/api/usage?range=30d", server.url)).then(r => r.json());
+        const claude = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(r => r.json());
+
+        expect(thirty.snapshotWindowStart).toBe(all.snapshotWindowStart);
+        expect(thirty.snapshotWindowEnd).toBe(all.snapshotWindowEnd);
+        expect(claude.snapshotWindowStart).toBe(all.snapshotWindowStart);
+        expect(claude.snapshotWindowEnd).toBe(all.snapshotWindowEnd);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("an untruncated read spans the whole fixture and reports no truncation", async () => {
+      const now = Date.now();
+      writeFixture(now);
+      const server = startServer(0);
+      try {
+        const body = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        expect(body.historyTruncated).toBe(false);
+        // The oldest fixture row is 10 days back; an unbounded read must include it.
+        expect(body.snapshotWindowStart).toBeLessThanOrEqual(now - 10 * 86_400_000 + 1000);
+        expect(body.snapshotWindowEnd).toBeGreaterThanOrEqual(body.snapshotWindowStart);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("an empty ledger reports null bounds rather than NaN or Infinity", async () => {
+      writeFileSync(join(testDir, "usage.jsonl"), "");
+      const server = startServer(0);
+      try {
+        const body = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        expect(body.snapshotWindowStart).toBeNull();
+        expect(body.snapshotWindowEnd).toBeNull();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a cached response carries the window through unchanged", async () => {
+      writeFixture(Date.now());
+      saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+      const server = startServer(0);
+      try {
+        const first = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        const second = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        expect(second.snapshotWindowStart).toBe(first.snapshotWindowStart);
+        expect(second.snapshotWindowEnd).toBe(first.snapshotWindowEnd);
+      } finally {
+        await server.stop(true);
+      }
+    });
+  });
+
   test("reuses only a compact summary for an unchanged revision", async () => {
     writeFixture(Date.now());
     const server = startServer(0);

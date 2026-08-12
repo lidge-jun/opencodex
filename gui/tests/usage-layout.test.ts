@@ -68,6 +68,7 @@ test("usage workspace i18n keys exist in every locale", async () => {
     expect(dict).toContain('"usage.workspace.report":');
     expect(dict).toContain('"usage.range.available":');
     expect(dict).toContain('"usage.historyTruncated":');
+    expect(dict).toContain('"usage.historyTruncatedWindow":');
     expect(dict).toContain('"api.attribution.totalRequestsAvailable":');
   }
 });
@@ -141,6 +142,19 @@ test("Usage renders Available history and a persistent qualification when histor
       Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
     }
   }
+});
+
+test("Usage names the loaded window when history is truncated", async () => {
+  const page = await Bun.file(new URL("../src/pages/Usage.tsx", import.meta.url)).text();
+
+  // #1497: when the proxy reports the window it actually loaded, the notice must name that
+  // window instead of the generic wording — otherwise `30d` and "Available history" stay
+  // indistinguishable on a busy installation. `!= null` keeps an older proxy that omits the
+  // fields on the generic string rather than rendering "Invalid Date".
+  expect(page).toContain("usage.historyTruncatedWindow");
+  expect(page).toContain("data.snapshotWindowStart != null && data.snapshotWindowEnd != null");
+  // A total that silently omits in-range rows is a caveat, not a status update.
+  expect(page).toContain('<Notice tone="warn">');
 });
 
 test("Usage source marks keep brand colors and invert only the monochrome Grok mark", async () => {
