@@ -52,6 +52,10 @@ function validatePublisher(publisher: PublicPublisherV1): PublicPublisherV1 {
   if (typeof publisher.publicKey !== "string" || publisher.publicKey.length === 0 || publisher.publicKey.length > 1024) {
     throw new PublicEvidenceValidationError("invalid_publisher", "publisher.publicKey is invalid");
   }
+  const publicKeyBytes = Buffer.from(publisher.publicKey, "base64");
+  if (publicKeyBytes.byteLength === 0 || publicKeyBytes.toString("base64") !== publisher.publicKey) {
+    throw new PublicEvidenceValidationError("invalid_publisher", "publisher.publicKey must use canonical base64");
+  }
   const expectedKeyId = publicEvidenceId("publisher_key", {
     algorithm: publisher.algorithm,
     publicKey: publisher.publicKey,
