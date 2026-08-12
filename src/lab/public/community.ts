@@ -3,7 +3,6 @@ import {
   constants as fsConstants,
   fstatSync,
   fsyncSync,
-  lstatSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -72,21 +71,17 @@ function scanStructure(value: unknown, depth = 0): void {
 }
 
 function boundedInput(raw: unknown): unknown {
-  if (raw instanceof Uint8Array || typeof raw === "string") {
-    const bytes = typeof raw === "string" ? Buffer.from(raw, "utf8") : Buffer.from(raw);
-    if (bytes.byteLength > MAX_IMPORT_BYTES) {
-      throw new PublicEvidenceValidationError("community_size", "community import exceeds 2 MiB");
-    }
-    const parsed = parseStrictPublicJson(bytes, "community import");
-    scanStructure(parsed);
-    return parsed;
-  }
-  scanStructure(raw);
-  const bytes = Buffer.from(jcsStringify(raw), "utf8");
+  const bytes = raw instanceof Uint8Array
+    ? Buffer.from(raw)
+    : typeof raw === "string"
+      ? Buffer.from(raw, "utf8")
+      : Buffer.from(jcsStringify(raw), "utf8");
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
     throw new PublicEvidenceValidationError("community_size", "community import exceeds 2 MiB");
   }
-  return raw;
+  const parsed = parseStrictPublicJson(bytes, "community import");
+  scanStructure(parsed);
+  return parsed;
 }
 
 function verifiedBundle(raw: unknown): PublicEvidenceBundleV1 {
@@ -113,10 +108,6 @@ function assertRegular(path: string, fd: number): void {
 }
 
 function readBounded(path: string): Buffer {
-  const before = lstatSync(path);
-  if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > MAX_IMPORT_BYTES) {
-    throw new PublicEvidenceValidationError("community_unsafe_target", "unsafe community path");
-  }
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     assertRegular(path, fd);
@@ -184,23 +175,35 @@ function readVerifiedBundleAt(path: string): PublicEvidenceBundleV1 {
   return verifiedBundle(readJson(path));
 }
 
+function bundleFromName(name: string, configDir?: string): PublicEvidenceBundleV1 | null {
+  const match = COMMUNITY_BUNDLE_FILE_RE.exec(name);
+  if (!match) return null;
+  const publisherKeyId = match[1]!;
+  const bundleId = match[2]!;
+  const bundle = readVerifiedBundleAt(bundleObjectPath(publisherKeyId, bundleId, configDir));
+  if (bundle.bundleId !== bundleId || bundle.publisher.keyId !== publisherKeyId) {
+    throw new PublicEvidenceValidationError("community_identity_mismatch", "stored community bundle does not match filename identity");
+  }
+  return bundle;
+}
+
+function bundlesFromNames(names: readonly string[], configDir?: string): PublicEvidenceBundleV1[] {
+  const bundles: PublicEvidenceBundleV1[] = [];
+  for (const name of names) {
+    const bundle = bundleFromName(name, configDir);
+    if (bundle) bundles.push(bundle);
+  }
+  return bundles;
+}
+
 export function importCommunityEvidenceBundle(
   raw: unknown,
   configDir?: string,
 ): { created: boolean; status: "cryptographically_valid"; bundleId: string; publisherKeyId: string; path: string } {
   const bundle = verifiedBundle(boundedInput(raw));
   ensureLabDirs(configDir);
-  const stored = persistAt(
-    bundleObjectPath(bundle.publisher.keyId, bundle.bundleId, configDir),
-    "bundle",
-    bundle,
-  );
-  return {
-    ...stored,
-    status: "cryptographically_valid",
-    bundleId: bundle.bundleId,
-    publisherKeyId: bundle.publisher.keyId,
-  };
+  const stored = persistAt(bundleObjectPath(bundle.publisher.keyId, bundle.bundleId, configDir), "bundle", bundle);
+  return { ...stored, status: "cryptographically_valid", bundleId: bundle.bundleId, publisherKeyId: bundle.publisher.keyId };
 }
 
 export function readCommunityEvidenceBundleForPublisher(
@@ -215,28 +218,38 @@ export function readCommunityEvidenceBundleForPublisher(
   return bundle;
 }
 
-function allCommunityBundles(configDir?: string): PublicEvidenceBundleV1[] {
-  return files(configDir).flatMap((name) => {
-    const match = COMMUNITY_BUNDLE_FILE_RE.exec(name);
-    if (!match) return [];
-    return [readCommunityEvidenceBundleForPublisher(match[2]!, match[1]!, configDir)];
-  });
-}
+type RevocationMetadata = {
+  publisher?: { keyId?: unknown };
+  targets?: Array<{ kind?: unknown; id?: unknown }>;
+};
 
-function findTargetBundle(revocation: unknown, configDir?: string): PublicEvidenceBundleV1 {
+function resolveTargetBundle(
+  revocation: unknown,
+  bundles: readonly PublicEvidenceBundleV1[],
+): PublicEvidenceBundleV1 {
   if (!revocation || typeof revocation !== "object") {
     throw new PublicEvidenceValidationError("revocation_target", "revocation target metadata unavailable");
   }
-  const raw = revocation as { publisher?: { keyId?: unknown }; targets?: Array<{ kind?: unknown; id?: unknown }> };
+  const raw = revocation as RevocationMetadata;
   if (!Array.isArray(raw.targets) || typeof raw.publisher?.keyId !== "string") {
     throw new PublicEvidenceValidationError("revocation_target", "revocation targets or publisher unavailable");
   }
   const publisherKeyId = assertId(raw.publisher.keyId);
-  const candidates = allCommunityBundles(configDir).filter((bundle) => bundle.publisher.keyId === publisherKeyId);
-  const fullyMatching = candidates.filter((bundle) => raw.targets!.every((target) =>
-    target.kind === "bundle"
-      ? target.id === bundle.bundleId
-      : target.kind === "record" && bundle.records.some((record) => record.recordId === target.id),
+  const publisherBundles = bundles.filter((bundle) => bundle.publisher.keyId === publisherKeyId);
+  const bundleTargets = raw.targets.filter((target) => target.kind === "bundle" && typeof target.id === "string");
+  if (bundleTargets.length > 0) {
+    const targetIds = new Set(bundleTargets.map((target) => target.id));
+    if (targetIds.size !== 1) {
+      throw new PublicEvidenceValidationError("revocation_target", "revocation bundle targets are ambiguous");
+    }
+    const id = [...targetIds][0]!;
+    const candidate = publisherBundles.find((bundle) => bundle.bundleId === id);
+    if (!candidate) throw new PublicEvidenceValidationError("revocation_target", "revocation target bundle not found");
+    return candidate;
+  }
+  const fullyMatching = publisherBundles.filter((bundle) => raw.targets!.every((target) =>
+    target.kind === "record" && typeof target.id === "string"
+      && bundle.records.some((record) => record.recordId === target.id),
   ));
   if (fullyMatching.length !== 1) {
     throw new PublicEvidenceValidationError(
@@ -245,6 +258,19 @@ function findTargetBundle(revocation: unknown, configDir?: string): PublicEviden
     );
   }
   return fullyMatching[0]!;
+}
+
+function findTargetBundle(revocation: unknown, configDir?: string): PublicEvidenceBundleV1 {
+  const names = files(configDir);
+  const raw = revocation as RevocationMetadata;
+  const publisherKeyId = typeof raw?.publisher?.keyId === "string" ? assertId(raw.publisher.keyId) : null;
+  const directBundleIds = Array.isArray(raw?.targets)
+    ? [...new Set(raw.targets.filter((target) => target.kind === "bundle" && typeof target.id === "string").map((target) => target.id as string))]
+    : [];
+  if (publisherKeyId && directBundleIds.length === 1) {
+    return readCommunityEvidenceBundleForPublisher(assertId(directBundleIds[0]!), publisherKeyId, configDir);
+  }
+  return resolveTargetBundle(revocation, bundlesFromNames(names, configDir));
 }
 
 export function importCommunityEvidenceRevocation(
@@ -258,28 +284,37 @@ export function importCommunityEvidenceRevocation(
     throw new PublicEvidenceValidationError(verified.status, verified.detail ?? "community revocation verification failed");
   }
   ensureLabDirs(configDir);
-  const stored = persistAt(
-    revocationObjectPath(verified.revocation.revocationId, configDir),
-    "revocation",
-    verified.revocation,
-  );
+  const stored = persistAt(revocationObjectPath(verified.revocation.revocationId, configDir), "revocation", verified.revocation);
   return { ...stored, status: "cryptographically_valid", revocationId: verified.revocation.revocationId };
 }
 
-function verifiedRevocationsForBundle(bundle: PublicEvidenceBundleV1, configDir?: string): PublicEvidenceRevocationV1[] {
-  const result: PublicEvidenceRevocationV1[] = [];
-  for (const name of files(configDir)) {
-    if (!COMMUNITY_REVOCATION_FILE_RE.test(name)) continue;
-    const verified = verifyPublicEvidenceRevocation(readJson(join(labCommunityDir(configDir), name)), bundle);
-    if (verified.status === "cryptographically_valid") result.push(verified.revocation);
-  }
-  return result;
-}
-
 export function listCommunityEvidence(configDir?: string): CommunityEvidenceSummaryV1[] {
-  return allCommunityBundles(configDir).map((bundle) => {
+  const names = files(configDir);
+  const bundles = bundlesFromNames(names, configDir);
+  const revocationsByBundle = new Map<string, PublicEvidenceRevocationV1[]>();
+
+  for (const name of names) {
+    if (!COMMUNITY_REVOCATION_FILE_RE.test(name)) continue;
+    const raw = readJson(join(labCommunityDir(configDir), name));
+    let targetBundle: PublicEvidenceBundleV1;
+    try {
+      targetBundle = resolveTargetBundle(raw, bundles);
+    } catch (error) {
+      if (error instanceof PublicEvidenceValidationError) continue;
+      throw error;
+    }
+    const verified = verifyPublicEvidenceRevocation(raw, targetBundle);
+    if (verified.status !== "cryptographically_valid") continue;
+    const key = `${targetBundle.publisher.keyId}:${targetBundle.bundleId}`;
+    const rows = revocationsByBundle.get(key) ?? [];
+    rows.push(verified.revocation);
+    revocationsByBundle.set(key, rows);
+  }
+
+  return bundles.map((bundle) => {
     const revoked = new Set<string>();
-    for (const revocation of verifiedRevocationsForBundle(bundle, configDir)) {
+    const key = `${bundle.publisher.keyId}:${bundle.bundleId}`;
+    for (const revocation of revocationsByBundle.get(key) ?? []) {
       if (revocation.targets.some((target) => target.kind === "bundle" && target.id === bundle.bundleId)) {
         for (const record of bundle.records) revoked.add(record.recordId);
       }
