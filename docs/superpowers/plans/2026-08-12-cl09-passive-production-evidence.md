@@ -62,3 +62,9 @@
 3. Inspect CodeRabbit/review threads and fix valid findings without widening scope.
 4. Update PR #1489 description from contract-only to the delivered implementation and leave it draft for independent final review.
 5. Do not merge.
+
+## Implementation status
+
+Tasks 1-4 are implemented on the PR branch. The implementation uses the existing exact `RouteSubjectV1` identity per real attempt, a bounded read-only production-signal adapter over `usage.jsonl`, and additive Lab API/CLI/Compatibility Matrix read surfaces. Focused CL-09 tests cover legacy/malformed linkage, exact fallback attribution, bounded scans/results, strict data minimization with privacy canaries, source-retention behavior, and static no-feedback guards for routing and CL-08 planning.
+
+The final verification gate is intentionally not marked complete here until the exact final head passes required CI/review checks. PR #1489 remains draft and must not be merged before independent final review.
