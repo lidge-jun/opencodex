@@ -28,6 +28,7 @@ import {
   evictOldestResponseContinuationForBudget,
   expandPreviousResponseInput,
   flushResponseState,
+  markBodyNonPersistable,
   previousResponseConversationId,
   previousResponseProviderState,
   previousResponseReplayFailure,
@@ -2061,5 +2062,65 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     await flushResponseState();
     const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
     expect(raw).not.toContain("resp_multibyte");
+  });
+
+  /**
+   * Encrypted-agent-task recovery decrypts task text into the request body and promises
+   * in-memory retention bounded by a 15-minute TTL. The continuation cache persists request
+   * input to `responses-state.json`, so recording a recovered body would put that plaintext on
+   * disk with no TTL at all. The guard lives in `rememberResponseState` so every recording path
+   * inherits it.
+   */
+  describe("bodies marked non-persistable never reach the continuation cache", () => {
+    test("a marked body is not stored and its text never reaches the snapshot", async () => {
+      const recovered = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "RECOVERED-PLAINTEXT-SENTINEL" }],
+      };
+      markBodyNonPersistable(recovered);
+
+      rememberResponseState(recovered, completedResponse("resp_recovered", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      // Not in memory: a later turn replaying that id gets its request back UNEXPANDED,
+      // i.e. with no `input` grafted on from stored history.
+      const replay = expandPreviousResponseInput({ previous_response_id: "resp_recovered" }) as {
+        input?: unknown;
+      };
+      expect(replay.input).toBeUndefined();
+      // Not on disk, and neither is the response id that would have carried it.
+      const raw = existsSync(join(home, "responses-state.json"))
+        ? readFileSync(join(home, "responses-state.json"), "utf-8")
+        : "";
+      expect(raw).not.toContain("RECOVERED-PLAINTEXT-SENTINEL");
+      expect(raw).not.toContain("resp_recovered");
+    });
+
+    test("an unmarked body with identical shape IS stored — the guard is the marker, not the shape", async () => {
+      const ordinary = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "ORDINARY-INPUT-SENTINEL" }],
+      };
+
+      rememberResponseState(ordinary, completedResponse("resp_ordinary", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).toContain("resp_ordinary");
+    });
+
+    test("marking is per-object, so an unrelated body is unaffected", async () => {
+      const marked = { model: "m", input: "marked", store: true };
+      const sibling = { model: "m", input: "sibling", store: true };
+      markBodyNonPersistable(marked);
+
+      rememberResponseState(marked, completedResponse("resp_marked", "ok"), undefined, { force: true });
+      rememberResponseState(sibling, completedResponse("resp_sibling", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).not.toContain("resp_marked");
+      expect(raw).toContain("resp_sibling");
+    });
   });
 });

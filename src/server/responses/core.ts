@@ -19,6 +19,7 @@ import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractC
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
   expandPreviousResponseInput,
+  markBodyNonPersistable,
   previousResponseProviderState,
   previousResponseReplayFailure,
   rememberResponseState,
@@ -1732,6 +1733,10 @@ async function handleResponsesInner(
             }
           }
           parsed = reparsed;
+          // The recovery mutated `body.input` in place, so `_rawBody` now carries decrypted task
+          // text. Bar it from the continuation cache before any recording path can reach it —
+          // that cache is persisted to disk, which would defeat the recovery cache's TTL.
+          markBodyNonPersistable(parsed._rawBody);
           toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
         } catch {
           unreadableEncryptedAgentTask = true;
