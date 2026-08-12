@@ -22,6 +22,7 @@ import { appendLabEvent, replayLabLedger } from "./store";
 import { ensureLabDirs } from "../paths";
 import { rebuildLabProjection } from "../projection/rebuild";
 import { jcsStringify } from "../digest";
+import { purgeLocalPublicEvidenceCopies } from "../public/purge";
 import {
   closeSync,
   existsSync,
@@ -100,8 +101,6 @@ function atomicRewriteLedger(ledgerPath: string, events: LabEvent[]): void {
         closeSync(dirFd);
       }
     } catch (err) {
-      // The rename is already committed and visible. Report durability failure
-      // without pretending the ledger action can be rolled back.
       throw new PurgeError(
         "ledger_durability_failed",
         `ledger rewrite committed but directory fsync failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -195,7 +194,7 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       completed.push("scratch");
     }
     if (purgeActions.includes("export")) {
-      purgeBoundedDirectory(paths.exportDir);
+      purgeLocalPublicEvidenceCopies(req.configDir);
       completed.push("export");
     }
 
