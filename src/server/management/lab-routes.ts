@@ -9,7 +9,6 @@
  * - GET /api/lab/events
  * - GET /api/lab/events/:eventId
  * - GET /api/lab/artifacts
- * - GET /api/lab/artifacts/:digest
  * - GET /api/lab/catalog
  */
 
@@ -46,6 +45,7 @@ import {
   exportLocalPublicEvidence,
   importCommunityEvidenceValue,
   listCommunityEvidenceContext,
+  parseStrictPublicJson,
   previewLocalPublicEvidence,
   summarizePublicEvidenceVerification,
   PublicEvidenceValidationError,
@@ -232,11 +232,7 @@ async function readBoundedPublicJson(req: Request): Promise<unknown> {
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes));
-  } catch {
-    throw new PublicEvidenceValidationError("public_request_json", "request body is not valid JSON");
-  }
+  return parseStrictPublicJson(bytes, "public evidence request");
 }
 
 function publicEventIds(raw: unknown): string[] {
@@ -468,6 +464,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     }
   }
 
+  const eventMatch = url.pathname.match(/^\/api\/lab\/events\/([^/]+)$/);
   if (url.pathname === "/api/lab/events") {
     const limit = parseLimit(url.searchParams.get("limit"), ctx);
     if (limit instanceof Response) return limit;
@@ -495,7 +492,6 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     }
   }
 
-  const eventMatch = url.pathname.match(/^\/api\/lab\/events\/([^/]+)$/);
   if (eventMatch) {
     const eventId = decodePathSegment(eventMatch[1]!);
     if (eventId === null) return errorResponse("not_found", "unknown resource", 404, ctx);
