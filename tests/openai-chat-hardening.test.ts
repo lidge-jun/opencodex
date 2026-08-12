@@ -302,6 +302,16 @@ describe("openai-chat credential hardening", () => {
     expect(body).not.toHaveProperty("prompt_cache_key");
   });
 
+  test("preserves a caller-supplied service tier for the outbound chat body", () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const req = parsed();
+    req.options.serviceTier = "priority";
+
+    const body = JSON.parse(adapter.buildRequest(req).body);
+
+    expect(body.service_tier).toBe("priority");
+  });
+
   test("canonical Kimi Coding Plan routes forward Codex prompt_cache_key", () => {
     for (const [providerName, authMode] of [
       ["kimi", "oauth"],

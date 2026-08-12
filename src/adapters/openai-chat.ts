@@ -744,6 +744,10 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         messages,
         stream: parsed.stream,
       };
+      // Preserve a caller-selected service tier for OpenAI-compatible chat gateways. The
+      // request pipeline deliberately does not inject fast mode for this adapter, but dropping
+      // an explicit value here makes the Responses parser's serviceTier projection ineffective.
+      if (parsed.options.serviceTier !== undefined) body.service_tier = parsed.options.serviceTier;
       if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
       const maxTokens = resolveMaxTokens(provider, parsed);
       const openRouterRouting = resolveOpenRouterRouting(provider, parsed.modelId);
