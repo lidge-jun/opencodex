@@ -145,6 +145,8 @@ import {
   applySubagentModelFallback,
   maybePrimeSubagentQuota,
   recordSubagentQuotaFailureForThreadSpawn,
+  resolveAgentModelFallbackForPrimary,
+  resolveConfiguredModelFallbackForPrimary,
 } from "../../codex/subagent-model-fallback";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
@@ -1699,40 +1701,31 @@ async function handleResponsesInner(
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
 
   try {
-    // Validate the locally selectable fallback candidate before quota priming: a
-    // thread-spawn request must not run the Codex quota probe (upstream I/O) for an
-    // input that the fallback target would reject. The initial route is guarded above;
-    // the final route is re-validated after fallback selection below.
+    // Validate EVERY locally selectable fallback route before quota priming: the quota
+    // probe can change model availability, so a stricter fallback candidate may be
+    // selected after priming. A thread-spawn request must not run the Codex quota probe
+    // (upstream I/O) for an input that any candidate would reject. The initial route is
+    // guarded above; the final route is re-validated after fallback selection below.
     if (
       threadSpawn
       && !options.comboAttempt
       && route.codexAccountId === undefined
       && !(hasUnexpandedPreviousResponse && isCanonicalOpenAiForwardProvider(route.provider))
     ) {
-      const candidateParsed = {
-        ...parsed,
-        ...(parsed._rawBody && typeof parsed._rawBody === "object"
-          ? { _rawBody: { ...(parsed._rawBody as Record<string, unknown>) } }
-          : {}),
-      } as typeof parsed;
-      const candidateFallback = applySubagentModelFallback(
-        candidateParsed,
-        req.headers,
-        config,
-        previewCodexAccountForRequest(
-          req.headers.get("x-codex-parent-thread-id"),
-          config,
-          Date.now(),
-          undefined,
-          previewSelectionOptions,
-        ),
-        Date.now(),
-        unreadableEncryptedAgentTask,
-        previewSelectionOptions,
-      );
-      if (candidateFallback?.to && !slugsEquivalent(candidateFallback.to, route.modelId)) {
+      const candidateChain = [
+        parsed.modelId,
+        ...resolveConfiguredModelFallbackForPrimary(parsed.modelId, config),
+        ...(config.subagentModelFallback ?? []),
+        ...resolveAgentModelFallbackForPrimary(parsed.modelId, undefined, config.codexAccountNamespaces),
+      ];
+      const seenCandidates = new Set<string>();
+      for (const candidate of candidateChain) {
+        if (typeof candidate !== "string" || candidate.length === 0) continue;
+        if (seenCandidates.has(candidate)) continue;
+        seenCandidates.add(candidate);
+        if (slugsEquivalent(candidate, route.modelId)) continue;
         try {
-          const candidateRoute = routeModel(config, candidateFallback.to, evidenceFromBody(candidateParsed._rawBody));
+          const candidateRoute = routeModel(config, candidate, evidenceFromBody(parsed._rawBody));
           const candidateGuard = inputGuardFor(candidateRoute);
           if (candidateGuard) return candidateGuard;
         } catch (err) {

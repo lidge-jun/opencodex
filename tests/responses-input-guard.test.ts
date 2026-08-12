@@ -166,6 +166,58 @@ describe("responses input-size guard", () => {
     expect(quotaPrimeCalls).toBe(0);
   });
 
+  test("rejects an oversized thread-spawn request before quota priming when a stricter fallback is selectable", async () => {
+    let upstreamCalls = 0;
+    let quotaPrimeCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {
+      quotaPrimeCalls += 1;
+    });
+    // The primary model fits the estimate (~600k tokens < 1M window), but the selectable
+    // fallback is stricter (500k max input). Every candidate must be validated before the
+    // quota probe runs, because priming can change which candidate is selected.
+    const config = {
+      port: 0,
+      defaultProvider: "deepseek",
+      subagentModelFallback: ["deepseek/deepseek-v4-lite"],
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.deepseek.com",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-flash", "deepseek-v4-lite"],
+          modelContextWindows: {
+            "deepseek-v4-flash": 1_000_000,
+            "deepseek-v4-lite": 1_000_000,
+          },
+          modelMaxInputTokens: { "deepseek-v4-lite": 500_000 },
+        },
+      },
+    } as OcxConfig;
+    const res = await postResponses(
+      config,
+      {
+        model: "deepseek/deepseek-v4-flash",
+        input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(2_100_000) }] }],
+      },
+      { "x-openai-subagent": "collab_spawn" },
+    );
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+    expect(quotaPrimeCalls).toBe(0);
+  });
+
   test("rejects an oversized instructions value without calling upstream", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
