@@ -1243,7 +1243,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
           await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
           req,
-          config,
+          policy,
         ));
       }
 

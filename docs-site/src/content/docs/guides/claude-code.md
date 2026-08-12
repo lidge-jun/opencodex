@@ -163,7 +163,7 @@ header is removed, while a genuine provider credential in the other header is pr
 comma-joined credential headers are not forwarded.
 
 The passthrough fires when all of these conditions are met: `nativePassthrough` is not `false`;
-the model begins with `claude` or `anthropic`; the bearer or `x-api-key` starts with `sk-ant-`;
+the model begins with `claude` or `anthropic`; the bearer token or `x-api-key` starts with `sk-ant-`;
 alias/model-map resolution returns the same model unchanged; and, on a non-loopback bind, the
 dedicated proxy admission header is valid. This also means the
 "claude.ai connectors are disabled" warning no longer appears with `ocx claude`.

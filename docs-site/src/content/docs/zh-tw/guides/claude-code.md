@@ -132,7 +132,7 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 憑證會保留。以逗號合併的模糊憑證標頭不會被轉發。
 
 只有同時滿足以下所有條件時才會觸發透傳：`nativePassthrough` 不為 `false`；模型以
-`claude` 或 `anthropic` 開頭；bearer 或 `x-api-key` 以 `sk-ant-` 開頭；並且別名/模型對映
+`claude` 或 `anthropic` 開頭；bearer token 或 `x-api-key` 以 `sk-ant-` 開頭；並且別名/模型對映
 解析後回傳的模型保持不變；且在非回環綁定上，專用代理許可標頭有效。這也意味著使用 `ocx claude` 時不再出現
 “claude.ai connectors are disabled”警告。
 

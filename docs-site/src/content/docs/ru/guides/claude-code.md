@@ -62,7 +62,7 @@ Proxy admission secret в любом provider-заголовке удаляет�
 пересылаются.
 
 Проброс срабатывает, когда выполнены **все** условия: `nativePassthrough` не равен `false`;
-имя модели начинается с `claude` или `anthropic`; bearer или `x-api-key` начинается с `sk-ant-`;
+имя модели начинается с `claude` или `anthropic`; bearer-токен или `x-api-key` начинается с `sk-ant-`;
 разрешение алиасов и карты моделей возвращает ту же модель без изменений; а на non-loopback bind
 валиден dedicated proxy admission-header. Это также означает,
 что предупреждение «claude.ai connectors are disabled» с `ocx claude` больше не появляется.

@@ -57,7 +57,7 @@ ocx claude
 カンマで結合された曖昧な認証ヘッダーは転送しません。
 
 次の条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
-モデル名が `claude` または `anthropic` で始まり、bearer または `x-api-key` が `sk-ant-` で
+モデル名が `claude` または `anthropic` で始まり、bearer トークンまたは `x-api-key` が `sk-ant-` で
 始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであり、非ループバック bind
 では専用プロキシ admission ヘッダーも有効であること。そのため `ocx claude` を
 使うとき "claude.ai connectors are disabled" 警告ももう表示されません。

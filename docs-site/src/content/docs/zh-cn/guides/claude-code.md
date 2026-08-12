@@ -56,7 +56,7 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 凭据会保留。含逗号拼接的歧义凭据请求头不会被转发。
 
 只有同时满足以下所有条件时才会触发透传：`nativePassthrough` 不为 `false`；模型以
-`claude` 或 `anthropic` 开头；bearer 或 `x-api-key` 以 `sk-ant-` 开头；并且别名/模型映射
+`claude` 或 `anthropic` 开头；bearer 令牌或 `x-api-key` 以 `sk-ant-` 开头；并且别名/模型映射
 解析后返回的模型保持不变；并且在非回环绑定上，专用代理准入请求头有效。这也意味着使用 `ocx claude` 时不再出现
 “claude.ai connectors are disabled”警告。
 
