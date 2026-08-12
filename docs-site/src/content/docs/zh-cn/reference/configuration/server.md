@@ -59,6 +59,10 @@ x-opencodex-api-key: your-secret-token
 Responses 和 Chat Completions 会保留 `Authorization`，以便将来可能支持 Codex Direct 透传，因此这里只接受专用的准入头。仪表板生成的 `apiKeys` 可以在启动后替换
 环境令牌；候选项按常量时间比较。
 
+Messages 为兼容路由客户端仍接受三种准入形式。但在非回环绑定上，原生 Anthropic 透传只通过
+`x-opencodex-api-key` 接受代理准入，并把 `Authorization` 和 `x-api-key` 保留给 Anthropic
+凭据。放入这些提供方请求头的代理准入密钥会在转发前被移除。
+
 :::caution[LAN 暴露]
 绑定到 `0.0.0.0` 会将代理及其配置的提供方访问暴露给局域网。仅应在受信任
 的网络中配合强令牌使用。

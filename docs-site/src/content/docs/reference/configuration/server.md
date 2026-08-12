@@ -60,6 +60,11 @@ Responses and Chat Completions reserve `Authorization` for possible Codex Direct
 the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
 environment token after startup; candidates are compared in constant time.
 
+Messages keeps accepting all three admission forms for routed-client compatibility. Native
+Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use
+`x-opencodex-api-key`, while `Authorization` and `x-api-key` are reserved for Anthropic credentials.
+Any proxy admission secret placed in those provider headers is removed before forwarding.
+
 :::caution[LAN exposure]
 A `0.0.0.0` bind exposes the proxy and configured provider access to the LAN. Use it only on trusted
 networks with a strong token.

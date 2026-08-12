@@ -35,6 +35,12 @@ import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput,
 import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import {
+  isApiAuthRequired,
+  isDataPlaneAdmissionSecret,
+  isProxyAdmissionSecret,
+  type RequestPolicyView,
+} from "./auth-cors";
 import type { AdmissionLease } from "../lib/admission";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
 import { CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE } from "../codex/auth-context";
@@ -96,18 +102,52 @@ const PASSTHROUGH_STRIP_HEADERS = new Set([
   "accept-encoding", "x-opencodex-api-key", "origin",
 ]);
 
-function hasAnthropicNativeCredential(req: Request): boolean {
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
-  const apiKey = req.headers.get("x-api-key")?.trim() ?? "";
-  return bearer.startsWith("sk-ant-") || apiKey.startsWith("sk-ant-");
+function singleCredentialToken(name: "authorization" | "x-api-key", value: string | null): string | null {
+  const raw = value?.trim() ?? "";
+  // Fetch Headers comma-joins duplicate fields. Neither Anthropic credential format permits a
+  // comma, so treating a joined value as one token could hide an admission secret behind a real
+  // provider credential. Ambiguous credential headers fail closed.
+  if (!raw || raw.includes(",")) return null;
+  if (name === "authorization") {
+    const match = /^Bearer\s+(.+)$/i.exec(raw);
+    return match?.[1]?.trim() || null;
+  }
+  return raw;
 }
 
-function wantsNativePassthrough(req: Request, config: OcxConfig, model: unknown): model is string {
+function hasAnthropicNativeCredential(req: Request, config: OcxConfig): boolean {
+  const bearer = singleCredentialToken("authorization", req.headers.get("authorization"));
+  const apiKey = singleCredentialToken("x-api-key", req.headers.get("x-api-key"));
+  return (!!bearer && bearer.startsWith("sk-ant-") && !isProxyAdmissionSecret(bearer, config))
+    || (!!apiKey && apiKey.startsWith("sk-ant-") && !isProxyAdmissionSecret(apiKey, config));
+}
+
+function wantsNativePassthrough(
+  req: Request,
+  config: OcxConfig,
+  requestPolicy: RequestPolicyView,
+  model: unknown,
+): model is string {
   if (config.claudeCode?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
-  if (!hasAnthropicNativeCredential(req)) return false;
+  // Authorization and x-api-key both belong to the upstream on this branch. An exposed listener
+  // therefore requires the dedicated admission header even though the routed Messages surface
+  // keeps accepting all three legacy admission forms.
+  if (isApiAuthRequired(requestPolicy)) {
+    const dedicated = req.headers.get("x-opencodex-api-key")?.trim() ?? "";
+    if (!isDataPlaneAdmissionSecret(dedicated, config)) return false;
+  }
+  if (!hasAnthropicNativeCredential(req, config)) return false;
   // An alias or modelMap hit means the user asked for a ROUTED model: translate instead.
   return resolveInboundModel(model, config.claudeCode) === model;
+}
+
+function shouldForwardNativeHeader(name: string, value: string, config: OcxConfig): boolean {
+  const lowerName = name.toLowerCase();
+  if (PASSTHROUGH_STRIP_HEADERS.has(lowerName)) return false;
+  if (lowerName !== "authorization" && lowerName !== "x-api-key") return true;
+  const token = singleCredentialToken(lowerName, value);
+  return !!token && !isProxyAdmissionSecret(token, config);
 }
 
 /** Format a 32-hex cache key as a uuid-shaped session id (version/variant nibbles forced). */
@@ -330,7 +370,7 @@ async function anthropicNativePassthrough(
   }
   const headers = new Headers();
   req.headers.forEach((value, name) => {
-    if (!PASSTHROUGH_STRIP_HEADERS.has(name.toLowerCase())) headers.set(name, value);
+    if (shouldForwardNativeHeader(name, value, config)) headers.set(name, value);
   });
   headers.set("content-type", "application/json");
 
@@ -528,11 +568,12 @@ export async function handleClaudeMessages(
   config: OcxConfig,
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  requestPolicy: RequestPolicyView = config,
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
     return finalizeTranslatorBudgetResponse(
-      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds),
+      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy),
       translatorBudget,
     );
   } catch (error) {
@@ -547,6 +588,7 @@ async function handleClaudeMessagesWithBudget(
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  requestPolicy: RequestPolicyView = config,
 ): Promise<Response> {
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
@@ -601,7 +643,7 @@ async function handleClaudeMessagesWithBudget(
       );
       if (claudeConversationId) logCtx.conversationId = claudeConversationId;
     }
-    if (isRec(anthropicBody) && wantsNativePassthrough(req, config, anthropicBody.model)) {
+    if (isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     if (isRec(anthropicBody) && effortOverride) {
@@ -940,7 +982,11 @@ export function estimateClaudeRequestTokens(
   return Math.max(1, estimateTokens(parts.join("\n"), modelId) + attachmentTokens);
 }
 
-export async function handleClaudeCountTokens(req: Request, config: OcxConfig): Promise<Response> {
+export async function handleClaudeCountTokens(
+  req: Request,
+  config: OcxConfig,
+  requestPolicy: RequestPolicyView = config,
+): Promise<Response> {
   const disabled = claudeInboundDisabled(config);
   if (disabled) return disabled;
 
@@ -973,7 +1019,7 @@ export async function handleClaudeCountTokens(req: Request, config: OcxConfig): 
     raw.model = model;
   }
   captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, config.claudeCode), req.headers.get("anthropic-beta") ?? undefined);
-  if (wantsNativePassthrough(req, config, model)) {
+  if (wantsNativePassthrough(req, config, requestPolicy, model)) {
     return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
   }
   const inputTokens = estimateClaudeRequestTokens(raw, model);

@@ -54,6 +54,11 @@ x-opencodex-api-key: your-secret-token
 
 応答とチャット完了では、Codex Direct パススルーの可能性のために `Authorization` を予約しているため、そこでは専用のアドミッション ヘッダーのみが受け入れられます。ダッシュボードで生成された `apiKeys` は、起動後に環境トークンを置き換える可能性があります。候補は一定時間内に比較されます。
 
+Messages はルーティングクライアントとの互換性のために 3 つの admission 形式を引き続き受け入れます。
+ただし非ループバック bind のネイティブ Anthropic パススルーでは、プロキシ admission は
+`x-opencodex-api-key` のみを使い、`Authorization` と `x-api-key` は Anthropic 認証情報用に
+予約されます。これら provider ヘッダー内のプロキシ admission secret は転送前に削除されます。
+
 :::caution[LAN露出]
 `0.0.0.0` バインドは、プロキシと構成されたプロバイダーの LAN へのアクセスを公開します。強力なトークンを持つ信頼できるネットワークでのみ使用してください。
 :::

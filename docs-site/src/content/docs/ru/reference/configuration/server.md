@@ -62,6 +62,11 @@ Responses и Chat Completions резервируют `Authorization` под во
 поэтому там принимается только dedicated admission-header. Сгенерированные в дашборде `apiKeys`
 могут после старта заменить env-token; сравнение кандидатов выполняется constant-time.
 
+Messages ради совместимости routed-клиентов по-прежнему принимает все три формы admission. Но на
+non-loopback bind нативный passthrough Anthropic принимает proxy admission только через
+`x-opencodex-api-key`, а `Authorization` и `x-api-key` резервирует под credentials Anthropic.
+Proxy admission secret в этих provider-заголовках удаляется перед пересылкой.
+
 :::caution[Экспозиция в LAN]
 Bind на `0.0.0.0` открывает прокси и доступ к настроенным провайдерам всей локальной сети.
 Используйте его только в доверенных сетях и только с сильным токеном.
