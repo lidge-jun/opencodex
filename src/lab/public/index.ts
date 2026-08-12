@@ -6,3 +6,8 @@ export * from "./project";
 export * from "./bundle";
 export * from "./signature";
 export * from "./storage";
+export * from "./community-authority";
+export * from "./revocation";
+export * from "./community";
+export * from "./operator";
+export * from "./purge";
