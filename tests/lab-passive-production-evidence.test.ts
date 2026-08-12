@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
 import {
   normalizeUsageEntryForTest,
@@ -79,6 +80,10 @@ describe("CL-09 bounded passive production projection", () => {
     entry.conversationId = `conversation-${secret}`;
     entry.upstreamError = `raw-error-${secret}`;
     entry.requestedEffort = secret;
+    (entry as unknown as Record<string, unknown>).prompt = `prompt-${secret}`;
+    (entry as unknown as Record<string, unknown>).responseText = `response-${secret}`;
+    (entry.attempts?.[0] as unknown as Record<string, unknown>).toolArguments = `tool-${secret}`;
+    (entry.attempts?.[0] as unknown as Record<string, unknown>).credential = `credential-${secret}`;
 
     const result = derivePassiveProductionSignals([entry], subjectId, 10);
 
@@ -139,5 +144,43 @@ describe("CL-09 bounded passive production projection", () => {
     expect(result.signals).toHaveLength(1);
     expect(result.signals[0]?.subjectId).toBe(subjectA);
     expect(result.signals[0]?.requestRef).toBe("ocx-cl09-passive");
+  });
+
+  test("passive visibility disappears with its existing usage-history source", () => {
+    const subjectId = "1".repeat(64);
+    const entry = usageEntryWithAttempt({ labRouteSubjectId: subjectId });
+    expect(derivePassiveProductionSignals([entry], subjectId).signals).toHaveLength(1);
+    expect(derivePassiveProductionSignals([], subjectId).signals).toHaveLength(0);
+  });
+});
+
+describe("CL-09 no-feedback architecture guards", () => {
+  test("routing and CL-08 planning do not consume passive production queries", () => {
+    for (const path of [
+      "src/routing/evaluator.ts",
+      "src/lab/automation/planner.ts",
+    ]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).not.toContain("queryPassiveProductionSignals");
+      expect(source).not.toContain("passive-production");
+      expect(source).not.toContain("production-signals");
+    }
+  });
+
+  test("production request path only links the exact subject and never reads passive history", () => {
+    const source = readFileSync("src/server/responses/core.ts", "utf8");
+    expect(source).toContain("resolveProductionRouteSubject");
+    expect(source).not.toContain("queryPassiveProductionSignals");
+    expect(source).not.toContain("readRecentUsageEntries");
+  });
+
+  test("passive query remains read-side and cannot create Lab execution or evidence", () => {
+    const source = readFileSync("src/lab/query/passive-production.ts", "utf8");
+    expect(source).toContain("readRecentUsageEntries");
+    expect(source).not.toContain("ObservationEvent");
+    expect(source).not.toContain("appendLab");
+    expect(source).not.toContain("compatibility.jsonl");
+    expect(source).not.toContain("fetch(");
+    expect(source).not.toContain("executeLive");
   });
 });
