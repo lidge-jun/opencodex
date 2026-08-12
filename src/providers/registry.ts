@@ -206,6 +206,8 @@ export interface ProviderRegistryEntry {
    * (and the canonical openai seed comparison keeps its exact key set).
    */
   supportsServiceTier?: boolean;
+  /** Registry default for exact model service-tier capability; explicit config keys win. */
+  modelSupportsServiceTier?: Record<string, boolean>;
   /** Registry default for plaintext reasoning replay; see `OcxProviderConfig.preserveResponsesReasoningContent`. Registry-only like `supportsServiceTier`. */
   preserveResponsesReasoningContent?: boolean;
   /** Registry defaults for per-model Codex reasoning propagation; explicit user keys win during enrichment. */

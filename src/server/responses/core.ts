@@ -113,6 +113,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { SERVICE_TIER_ADAPTERS, supportsServiceTierForModel } from "../../providers/service-tier";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -147,7 +148,6 @@ import {
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
   beginRequestAttempt,
-  catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
   noteAttemptSend,
@@ -1065,9 +1065,12 @@ async function applyFinalRouteRequestNormalization(args: {
     logCtx.preserveResolvedModelFromRoute = true;
   }
 
-  // Fast mode override for OpenAI-routed models, only where the provider's Responses
-  // route documents `service_tier` support (capability gate below strips everywhere else).
-  if (config.fastMode !== undefined && route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === true) {
+  // Fast mode override only where the final provider/model route explicitly documents
+  // service-tier support. The same model-scoped resolver is used by catalog generation.
+  const modelServiceTierSupport = supportsServiceTierForModel(route.provider, route.modelId);
+  if (config.fastMode !== undefined
+    && SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
+    && modelServiceTierSupport === true) {
     const tier = config.fastMode ? "priority" : undefined;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       if (tier) (parsed._rawBody as Record<string, unknown>).service_tier = tier;
@@ -1075,8 +1078,8 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.options.serviceTier = tier;
   }
-  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
-  if (route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === false) {
+  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options, route.modelId);
+  if (SERVICE_TIER_ADAPTERS.has(route.provider.adapter) && modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
     logCtx.requestedSpeedLabel = undefined;
   }
@@ -1130,10 +1133,9 @@ async function applyFinalRouteRequestNormalization(args: {
     }
   }
   recordAttemptRequestedEffort(logCtx);
-  logCtx.modelSupportsServiceTier = catalogModelSupportsServiceTier(
-    route.modelId,
-    logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
-  );
+  logCtx.modelSupportsServiceTier = SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
+    ? modelServiceTierSupport
+    : undefined;
 }
 
 
@@ -1438,8 +1440,13 @@ export function applyServiceTierGate(
   provider: OcxProviderConfig,
   rawBody: unknown,
   options: { serviceTier?: string },
+  modelId?: string,
 ): void {
-  if (provider.adapter !== "openai-responses" || provider.supportsServiceTier !== false) return;
+  if (!SERVICE_TIER_ADAPTERS.has(provider.adapter)) return;
+  const support = modelId === undefined
+    ? provider.supportsServiceTier
+    : supportsServiceTierForModel(provider, modelId);
+  if (support !== false) return;
   if (rawBody && typeof rawBody === "object") {
     delete (rawBody as Record<string, unknown>).service_tier;
   }

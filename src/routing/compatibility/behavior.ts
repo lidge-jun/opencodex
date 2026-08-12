@@ -1,5 +1,6 @@
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { PROVIDER_REGISTRY, type ProviderAuthKind } from "../../providers/registry";
+import { supportsServiceTierForModel } from "../../providers/service-tier";
 import { localFingerprint } from "../../lab/digest";
 import type { LabBehaviorSource, LabBehaviorValues } from "../../lab/live/types";
 
@@ -116,7 +117,10 @@ export function resolveProductionBehaviorValues(
     "auth.mode": behaviorRow("provider_config", authMode),
     "auth.transport": behaviorRow("provider_config", authTransportFor(effective, adapter, authMode)),
     "responses.stateful": behaviorRow("provider_config", effective.statelessResponses !== true),
-    "responses.serviceTier": behaviorRow("provider_config", effective.supportsServiceTier ?? null),
+    "responses.serviceTier": behaviorRow(
+      "provider_config",
+      supportsServiceTierForModel(effective, modelId) ?? null,
+    ),
     "responses.snapshotRepair": behaviorRow("provider_config", effective.responsesSnapshotRepair === true),
     "responses.itemIdRepair": behaviorRow("provider_config", effective.responsesItemIdRepair ?? null),
     "limits.contextWindow": behaviorRow(

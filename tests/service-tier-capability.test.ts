@@ -11,6 +11,8 @@ import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { RequestLogContext } from "../src/server/request-log";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
+import { supportsServiceTierForModel } from "../src/providers/service-tier";
+import { serviceTierAdapterForModel } from "../src/providers/service-tier";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
 describe("registry capability reaches saved configs without overriding them", () => {
@@ -40,6 +42,40 @@ describe("registry capability reaches saved configs without overriding them", ()
     const optedIn: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", apiKey: "sk-test", supportsServiceTier: true };
     enrichProviderFromRegistry("deepseek", optedIn);
     expect(optedIn.supportsServiceTier).toBe(true);
+  });
+});
+
+describe("service-tier capability is exact-model and provider-scoped", () => {
+  test("an exact model entry overrides the provider fallback in both directions", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-responses",
+      baseUrl: "https://relay.example.test/v1",
+      supportsServiceTier: true,
+      modelSupportsServiceTier: { "gpt-5.6-sol": false, "gpt-5.6-terra": true },
+    };
+    expect(supportsServiceTierForModel(provider, "gpt-5.6-sol")).toBe(false);
+    expect(supportsServiceTierForModel(provider, "gpt-5.6-terra")).toBe(true);
+    expect(supportsServiceTierForModel(provider, "gpt-5.6-luna")).toBe(true);
+    expect(supportsServiceTierForModel({
+      supportsServiceTier: false,
+      modelSupportsServiceTier: { "gpt-5.6-sol": true },
+    }, "gpt-5.6-sol")).toBe(false);
+  });
+
+  test("the same bare model id remains independent across providers", () => {
+    expect(supportsServiceTierForModel({ supportsServiceTier: true }, "same-model")).toBe(true);
+    expect(supportsServiceTierForModel({ supportsServiceTier: false }, "same-model")).toBe(false);
+    expect(supportsServiceTierForModel({ modelSupportsServiceTier: { "same-model": true } }, "same-model")).toBe(true);
+  });
+
+  test("catalog-time wire resolution follows exact model adapters", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example.test/v1",
+      modelAdapters: { "responses-model": "openai-responses" },
+    } as const;
+    expect(serviceTierAdapterForModel("custom-relay", provider, "responses-model")).toBe("openai-responses");
+    expect(serviceTierAdapterForModel("custom-relay", provider, "chat-model")).toBe("openai-chat");
   });
 });
 
@@ -75,6 +111,19 @@ describe("applyServiceTierGate fails closed", () => {
     const options: { serviceTier?: string } = {};
     applyServiceTierGate({ adapter: "openai-chat", baseUrl: "https://api.deepseek.com" }, body, options);
     expect(body.service_tier).toBe("priority");
+  });
+
+  test("an exact unsupported model strips a caller tier even when the provider default is true", () => {
+    const body = { model: "gpt-5.6-sol", service_tier: "priority" };
+    const options: { serviceTier?: string } = { serviceTier: "priority" };
+    applyServiceTierGate({
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example.test/v1",
+      supportsServiceTier: true,
+      modelSupportsServiceTier: { "gpt-5.6-sol": false },
+    }, body, options, "gpt-5.6-sol");
+    expect(body).not.toHaveProperty("service_tier");
+    expect(options.serviceTier).toBeUndefined();
   });
 });
 
@@ -174,5 +223,19 @@ describe("the gate fires on the live handleResponses path", () => {
     expect("service_tier" in stripped).toBe(false);
     const optedIn = await drive("custom-gw", { ...custom(), supportsServiceTier: true }, "some-model", { service_tier: "priority" });
     expect(optedIn.service_tier).toBe("priority");
+  });
+
+  test("custom Chat provider injects Fast only for an explicitly capable model", async () => {
+    const custom = (): OcxProviderConfig => ({
+      adapter: "openai-chat",
+      baseUrl: "https://gateway.example.com/v1",
+      apiKey: "sk-test",
+      supportsServiceTier: true,
+      modelSupportsServiceTier: { "verified-model": true, "blocked-model": false },
+    });
+    const supported = await drive("custom-chat", custom(), "verified-model", {}, true);
+    expect(supported.service_tier).toBe("priority");
+    const blocked = await drive("custom-chat", custom(), "blocked-model", { service_tier: "priority" }, true);
+    expect(blocked).not.toHaveProperty("service_tier");
   });
 });

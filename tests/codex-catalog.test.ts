@@ -2274,6 +2274,28 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.base_instructions).toContain("claude-sonnet-4-6");
     expect(routed?.default_reasoning_level).toBe("medium");
   });
+
+  test("buildCatalogEntries restores Fast metadata only for an explicit routed capability", () => {
+    const entries = buildCatalogEntries(nativeTemplate(), [], [
+      { provider: "verified-relay", id: "gpt-5.6-sol", supportsServiceTier: true },
+      { provider: "unverified-relay", id: "gpt-5.6-sol" },
+      { provider: "blocked-relay", id: "gpt-5.6-sol", supportsServiceTier: false },
+    ]);
+    const verified = entries.find(e => e.slug === "verified-relay/gpt-5.6-sol");
+    const unverified = entries.find(e => e.slug === "unverified-relay/gpt-5.6-sol");
+    const blocked = entries.find(e => e.slug === "blocked-relay/gpt-5.6-sol");
+
+    expect(verified?.service_tiers).toEqual([{
+      id: "priority",
+      name: "Fast",
+      description: "1.5x speed, increased usage",
+    }]);
+    expect(verified?.additional_speed_tiers).toEqual(["fast"]);
+    expect(unverified).not.toHaveProperty("service_tiers");
+    expect(unverified).not.toHaveProperty("additional_speed_tiers");
+    expect(blocked).not.toHaveProperty("service_tiers");
+    expect(blocked).not.toHaveProperty("additional_speed_tiers");
+  });
   test("buildCatalogEntries advertises parallel tool calls only for Cursor routed models", () => {
     const entries = buildCatalogEntries(nativeTemplate(), [], [
       { provider: "cursor", id: "composer-2.5", owned_by: "cursor" },

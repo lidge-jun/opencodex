@@ -118,6 +118,8 @@ export interface CatalogModel {
   parallelToolCalls?: boolean;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
+  /** Whether this exact routed model has a verified OpenAI-compatible service tier. */
+  supportsServiceTier?: boolean;
   supportsReasoningSummaries?: boolean;
   /** Normalized upstream capability names retained for management/API consumers (#485 follow-up). */
   capabilities?: string[];
@@ -390,7 +392,7 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   delete entry.service_tiers;
   delete entry.default_service_tier;
   // Routed rows cloned from native templates must not inherit OpenAI-only summary delivery.
-  // Per-model routed opt-ins can be added once provider metadata exposes this capability.
+  // Explicit provider/model metadata is re-applied after this normalization step.
   delete entry.supports_reasoning_summaries;
   const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
   // Routed providers use opencodex sidecars and client-executed tool discovery. The sidecar

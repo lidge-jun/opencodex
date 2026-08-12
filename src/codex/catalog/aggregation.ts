@@ -173,6 +173,11 @@ export function deriveComboCatalogModel(
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
       : {}),
+    ...(members.every(member => member.supportsServiceTier === true)
+      ? { supportsServiceTier: true }
+      : members.some(member => member.supportsServiceTier === false)
+        ? { supportsServiceTier: false }
+        : {}),
     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
   };
 }

@@ -207,6 +207,29 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "modelSupportsServiceTier")) {
+    const value = rawBody.modelSupportsServiceTier;
+    if (value === null) {
+      delete next.modelSupportsServiceTier;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelSupportsServiceTier must be a plain object or null" };
+      const capabilities: Record<string, boolean> = { ...(next.modelSupportsServiceTier ?? {}) };
+      for (const [model, supported] of Object.entries(value)) {
+        if (!model.trim()) return { error: "modelSupportsServiceTier keys must be nonblank model ids" };
+        if (supported === null) {
+          delete capabilities[model];
+          continue;
+        }
+        if (typeof supported !== "boolean") {
+          return { error: "modelSupportsServiceTier values must be booleans or null" };
+        }
+        capabilities[model] = supported;
+      }
+      if (Object.keys(capabilities).length > 0) next.modelSupportsServiceTier = capabilities;
+      else delete next.modelSupportsServiceTier;
+    }
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
     const value = rawBody.noStructuredOutputModels;
     if (value === null) {
@@ -306,6 +329,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
+      modelSupportsServiceTier: p.modelSupportsServiceTier,
       noStructuredOutputModels: p.noStructuredOutputModels,
       authMode: p.authMode,
       apiKeyTransport: p.apiKeyTransport,

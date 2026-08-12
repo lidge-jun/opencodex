@@ -12,6 +12,7 @@
 
 import type { OcxConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { SERVICE_TIER_ADAPTERS, supportsServiceTierForModel } from "../providers/service-tier";
 import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import { PROVIDER_REGISTRY } from "../providers/registry";
 import {
@@ -185,9 +186,12 @@ export function candidateCapabilityEvidence(
     ?? catalogRow?.reasoningEfforts
     ?? (isNative ? nativeReasoningEfforts(modelId) : undefined);
 
-  const tierSupport = provider?.supportsServiceTier
-    ?? registryEntry?.supportsServiceTier;
+  const tierSupport = (provider ? supportsServiceTierForModel(provider, modelId) : undefined)
+    ?? (registryEntry ? supportsServiceTierForModel(registryEntry, modelId) : undefined);
+  const tierAdapter = provider?.adapter ?? registryEntry?.adapter;
   const serviceTier = tierSupport === true
+    && tierAdapter !== undefined
+    && SERVICE_TIER_ADAPTERS.has(tierAdapter)
     ? "supported"
     : tierSupport === false ? "unsupported" : "unknown";
 

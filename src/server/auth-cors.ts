@@ -489,6 +489,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (maxInputError) return `provider ${name} ${maxInputError}`;
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const serviceTierModelsError = booleanRecordConfigError(raw.modelSupportsServiceTier, "modelSupportsServiceTier");
+  if (serviceTierModelsError) return `provider ${name} ${serviceTierModelsError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,
@@ -583,6 +585,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "models",
       "contextWindow",
       "modelContextWindows",
+      "modelSupportsServiceTier",
       "defaultMaxOutputTokens",
       "modelMaxOutputTokens",
       "openRouterRouting",
