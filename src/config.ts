@@ -2532,6 +2532,11 @@ function configMutationDatabasePath(): string {
  * fails busy instead of joining an uncommitted transaction.
  */
 export function prepareConfigMutationDatabasePathForWrite(): string {
+  if (configMutationLockDepth > 0) {
+    throw new Error(
+      "prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync",
+    );
+  }
   return configMutationDatabasePath();
 }
 

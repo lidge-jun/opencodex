@@ -27,6 +27,13 @@ export type CodexResetCreditConsumeCode =
   | "nothing_to_reset"
   | "no_credit";
 
+declare const CODEX_RESERVED_OPERATION_ID_BRAND: unique symbol;
+
+/** An operation id whose durable reservation was validated by the operation ledger. */
+export type CodexReservedOperationId = string & {
+  readonly [CODEX_RESERVED_OPERATION_ID_BRAND]: true;
+};
+
 export const CODEX_RESET_CREDIT_OPERATION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -244,7 +251,7 @@ function generationKey(generation: CodexResetCreditRecoveryGeneration): string {
   ]);
 }
 
-function compareGenerationOrder(
+export function compareCodexResetCreditRecoveryGenerationOrder(
   left: CodexResetCreditRecoveryGeneration,
   right: CodexResetCreditRecoveryGeneration,
 ): -1 | 0 | 1 {
@@ -481,7 +488,7 @@ export class CodexResetCreditRecoveryCoordinator {
 
   createLogicalTurn(): CodexResetCreditLogicalTurn {
     const operationId = crypto.randomUUID();
-    return this.createLogicalTurnForOperation(operationId);
+    return this.registerLogicalTurn(operationId);
   }
 
   /**
@@ -489,10 +496,14 @@ export class CodexResetCreditRecoveryCoordinator {
    * this coordinator instance existed. Only a validated ledger/adapter should use
    * this seam; ordinary requests must keep using createLogicalTurn().
    */
-  createLogicalTurnForOperation(operationId: string): CodexResetCreditLogicalTurn {
+  createLogicalTurnForOperation(operationId: CodexReservedOperationId): CodexResetCreditLogicalTurn {
     if (!isCodexResetCreditOperationId(operationId)) {
       throw new TypeError("operationId must be an RFC 4122 version 4 UUID");
     }
+    return this.registerLogicalTurn(operationId);
+  }
+
+  private registerLogicalTurn(operationId: string): CodexResetCreditLogicalTurn {
     const turn = Object.freeze({ operationId });
     this.logicalTurns.set(turn, {});
     return turn;
@@ -569,7 +580,7 @@ export class CodexResetCreditRecoveryCoordinator {
       if (!recoveryContractsMatch(terminal.contract, this.contract)) {
         return Promise.resolve(notDispatched("coordination-mismatch"));
       }
-      const order = compareGenerationOrder(generationSnapshot, terminal.generation);
+      const order = compareCodexResetCreditRecoveryGenerationOrder(generationSnapshot, terminal.generation);
       if (order === 0) {
         return this.resolveTerminalOutcome(
           terminal.outcome,
@@ -794,7 +805,7 @@ export class CodexResetCreditRecoveryCoordinator {
           const current = CodexResetCreditRecoveryCoordinator.terminalByAccount.get(
             flight.generation.accountId,
           );
-          if (!current || compareGenerationOrder(flight.generation, current.generation) > 0) {
+          if (!current || compareCodexResetCreditRecoveryGenerationOrder(flight.generation, current.generation) > 0) {
             CodexResetCreditRecoveryCoordinator.terminalByAccount.set(
               flight.generation.accountId,
               { generation: flight.generation, outcome: result, contract: flight.contract },

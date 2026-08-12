@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { withConfigMutationLockSync } from "../src/config";
 import {
   MAX_RESET_CREDIT_OPERATION_ACCOUNTS,
+  RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS,
   markResetCreditOperationAmbiguous,
   openResetCreditOperation,
   settleResetCreditOperation,
@@ -12,6 +13,7 @@ import {
 import {
   CodexResetCreditRecoveryCoordinator,
   resetCodexResetCreditRecoveryProcessStateForTests,
+  type CodexReservedOperationId,
   type CodexResetCreditRecoveryGeneration,
 } from "../src/codex/reset-credit-recovery";
 
@@ -28,10 +30,14 @@ function databasePath(): string {
 function corruptFirstRecord(): void {
   const database = new Database(databasePath());
   try {
-    database.run("UPDATE reset_credit_operations SET operation_id = 'not-a-uuid' LIMIT 1");
+    database.run("UPDATE reset_credit_operations SET operation_id = 'not-a-uuid'");
   } finally {
     database.close();
   }
+}
+
+function fixtureOperationId(index: number): string {
+  return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
 }
 
 function createLaxDuplicateLedger(): void {
@@ -74,6 +80,20 @@ afterEach(async () => {
 });
 
 describe("Codex reset-credit operation ledger", () => {
+  test("creates the exact canonical SQLite schema", () => {
+    expect(openResetCreditOperation(GENERATION, 100))
+      .toMatchObject({ kind: "execute", resumed: false });
+    const database = new Database(databasePath(), { readonly: true });
+    try {
+      expect(database.query<{ sql: string }, []>(`
+        SELECT sql FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_operations'
+      `).get()?.sql).toBe(RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS);
+    } finally {
+      database.close();
+    }
+  });
+
   test("durably reserves before dispatch and restores the same logical turn identity", async () => {
     const first = openResetCreditOperation(GENERATION, 100);
     expect(first).toMatchObject({ kind: "execute", resumed: false });
@@ -107,7 +127,23 @@ describe("Codex reset-credit operation ledger", () => {
     expect(secondAttempt).toBe(firstAttempt);
     expect(await firstAttempt).toEqual({ kind: "refresh-required", code: "reset" });
     expect(consumedOperationIds).toEqual([first.operationId]);
-    expect(() => coordinator.createLogicalTurnForOperation("not-a-uuid"))
+    expect(coordinator.terminalGenerationCountForTests()).toBe(1);
+    // Automatic runtime wiring is intentionally out of scope: the coordinator
+    // has fenced this generation, while the durable reservation remains pending
+    // until its future adapter explicitly settles it.
+    expect(openResetCreditOperation(GENERATION, 300)).toEqual({
+      kind: "execute",
+      operationId: first.operationId,
+      resumed: true,
+    });
+    expect(settleResetCreditOperation(GENERATION, first.operationId, "reset", 400))
+      .toEqual({ kind: "updated" });
+    expect(openResetCreditOperation(GENERATION, 500)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    expect(() => coordinator.createLogicalTurnForOperation("not-a-uuid" as CodexReservedOperationId))
       .toThrow("operationId must be an RFC 4122 version 4 UUID");
   });
 
@@ -202,6 +238,33 @@ describe("Codex reset-credit operation ledger", () => {
     }
   });
 
+  test("refuses a canonical ledger that reuses an operation id across accounts", () => {
+    const first = openResetCreditOperation(GENERATION, 100);
+    if (first.kind !== "execute") throw new Error("reservation failed");
+    const database = new Database(databasePath());
+    try {
+      const secondKey = createHash("sha256")
+        .update("codex-reset-credit-operation\0pool-b")
+        .digest("hex");
+      database.prepare(`
+        INSERT INTO reset_credit_operations (
+          account_key, credential_generation, exhaustion_generation, operation_id,
+          state, code, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'pending', NULL, 1, 1)`)
+        .run(
+          secondKey,
+          GENERATION.credentialGeneration,
+          GENERATION.exhaustionGeneration,
+          first.operationId,
+        );
+    } finally {
+      database.close();
+    }
+    expect(openResetCreditOperation(GENERATION)).toEqual({ kind: "unavailable" });
+    expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-c" }))
+      .toEqual({ kind: "unavailable" });
+  });
+
   test("refuses a trigger without replacing the terminal reservation", () => {
     const first = openResetCreditOperation(GENERATION, 100);
     if (first.kind !== "execute") throw new Error("reservation failed");
@@ -232,13 +295,18 @@ describe("Codex reset-credit operation ledger", () => {
   test("fails fast under cross-process mutation contention without minting an id", () => {
     expect(openResetCreditOperation(GENERATION)).toMatchObject({ kind: "execute", resumed: false });
     const holder = new Database(databasePath());
-    holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let transactionOpen = false;
     try {
+      holder.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+      transactionOpen = true;
       expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-b" }))
         .toEqual({ kind: "unavailable" });
     } finally {
-      holder.exec("ROLLBACK");
-      holder.close();
+      try {
+        if (transactionOpen) holder.exec("ROLLBACK");
+      } finally {
+        holder.close();
+      }
     }
     expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-b" }))
       .toMatchObject({ kind: "execute", resumed: false });
@@ -271,7 +339,7 @@ describe("Codex reset-credit operation ledger", () => {
         const key = createHash("sha256")
           .update(`codex-reset-credit-operation\0${accountId}`)
           .digest("hex");
-        const operationId = `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+        const operationId = fixtureOperationId(index);
         insert.run(key, GENERATION.credentialGeneration, GENERATION.exhaustionGeneration, operationId);
       }
       database.exec("COMMIT");
@@ -300,7 +368,9 @@ describe("Codex reset-credit operation ledger", () => {
           key,
           GENERATION.credentialGeneration,
           GENERATION.exhaustionGeneration,
-          "00000000-0000-4000-8000-000000000129",
+          // SELECT_ALL intentionally reads MAX + 1 rows so the corrupt
+          // over-capacity state cannot be mistaken for an ordinary full ledger.
+          fixtureOperationId(MAX_RESET_CREDIT_OPERATION_ACCOUNTS + 1),
         );
     } finally {
       overflow.close();

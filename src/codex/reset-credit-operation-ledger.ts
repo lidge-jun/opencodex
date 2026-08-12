@@ -4,20 +4,25 @@ import { Database } from "bun:sqlite";
 import { prepareConfigMutationDatabasePathForWrite } from "../config";
 import { initializeConfigGeneration } from "./generation";
 import {
+  compareCodexResetCreditRecoveryGenerationOrder,
   isCodexResetCreditOperationId,
   type CodexResetCreditConsumeCode,
   type CodexResetCreditRecoveryGeneration,
+  type CodexReservedOperationId,
 } from "./reset-credit-recovery";
 import { isValidCodexAccountId } from "./account-id";
 
 export const MAX_RESET_CREDIT_OPERATION_ACCOUNTS = 128;
 const ACCOUNT_KEY_PATTERN = /^[0-9a-f]{64}$/;
-const TERMINAL_CODES: ReadonlySet<string> = new Set([
-  "reset",
-  "already_redeemed",
-  "nothing_to_reset",
-  "no_credit",
-]);
+const TERMINAL_STATE_BY_CODE: Readonly<Record<
+  CodexResetCreditConsumeCode,
+  "confirmed" | "stopped"
+>> = Object.freeze({
+  reset: "confirmed",
+  already_redeemed: "confirmed",
+  nothing_to_reset: "stopped",
+  no_credit: "stopped",
+});
 const STATES: ReadonlySet<string> = new Set(["pending", "ambiguous", "confirmed", "stopped"]);
 
 type ResetCreditOperationState = "pending" | "ambiguous" | "confirmed" | "stopped";
@@ -45,8 +50,8 @@ type ResetCreditOperationRow = {
 };
 
 export type OpenResetCreditOperationResult =
-  | Readonly<{ kind: "execute"; operationId: string; resumed: boolean }>
-  | Readonly<{ kind: "terminal"; operationId: string; code: CodexResetCreditConsumeCode }>
+  | Readonly<{ kind: "execute"; operationId: CodexReservedOperationId; resumed: boolean }>
+  | Readonly<{ kind: "terminal"; operationId: CodexReservedOperationId; code: CodexResetCreditConsumeCode }>
   | Readonly<{ kind: "stale-generation" | "unresolved-prior-generation" | "capacity" | "unavailable" }>;
 
 export type UpdateResetCreditOperationResult =
@@ -65,6 +70,7 @@ const CREATE_TABLE = `CREATE TABLE main.reset_credit_operations (
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
   ) STRICT, WITHOUT ROWID`;
 const EXPECTED_SCHEMA_SQL = CREATE_TABLE.replace("main.", "");
+export const RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS = EXPECTED_SCHEMA_SQL;
 const SELECT_ALL = `
   SELECT account_key, credential_generation, exhaustion_generation, operation_id,
          state, code, created_at, updated_at
@@ -161,9 +167,12 @@ function parseRecord(row: ResetCreditOperationRow | null): ResetCreditOperationR
     return undefined;
   }
   const terminal = state === "confirmed" || state === "stopped";
-  if (terminal !== (typeof code === "string" && TERMINAL_CODES.has(code))) return undefined;
-  if (state === "confirmed" && code !== "reset" && code !== "already_redeemed") return undefined;
-  if (state === "stopped" && code !== "nothing_to_reset" && code !== "no_credit") return undefined;
+  const terminalState = typeof code === "string"
+    && Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)
+    ? TERMINAL_STATE_BY_CODE[code as CodexResetCreditConsumeCode]
+    : undefined;
+  if (terminal !== (terminalState !== undefined)) return undefined;
+  if (terminal && state !== terminalState) return undefined;
   return Object.freeze({
     accountKey: row.account_key,
     credentialGeneration: row.credential_generation,
@@ -204,7 +213,7 @@ function assertCanonicalTable(database: Database): void {
   }
 
   const columns = database.query<TableColumnRow, []>(
-    "PRAGMA main.table_xinfo(reset_credit_operations)",
+    `PRAGMA main.table_xinfo(${TABLE_NAME})`,
   ).all();
   if (columns.length !== EXPECTED_COLUMNS.length) {
     throw new Error("invalid reset-credit operation ledger columns");
@@ -283,13 +292,11 @@ function compareGeneration(
   record: ResetCreditOperationRecord,
   generation: CodexResetCreditRecoveryGeneration,
 ): -1 | 0 | 1 {
-  if (record.credentialGeneration !== generation.credentialGeneration) {
-    return record.credentialGeneration < generation.credentialGeneration ? -1 : 1;
-  }
-  if (record.exhaustionGeneration !== generation.exhaustionGeneration) {
-    return record.exhaustionGeneration < generation.exhaustionGeneration ? -1 : 1;
-  }
-  return 0;
+  return compareCodexResetCreditRecoveryGenerationOrder({
+    accountId: generation.accountId,
+    credentialGeneration: record.credentialGeneration,
+    exhaustionGeneration: record.exhaustionGeneration,
+  }, generation);
 }
 
 function isTerminal(record: ResetCreditOperationRecord): boolean {
@@ -302,7 +309,9 @@ function isThenable(value: unknown): boolean {
     : false;
 }
 
-function withLedger<T>(operation: (database: Database, recordCount: number) => T): T {
+type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
+
+function withLedger<T>(operation: (database: Database, recordCount: number) => Synchronous<T>): T {
   const path = prepareConfigMutationDatabasePathForWrite();
   let database: Database | undefined;
   let transactionOpen = false;
@@ -331,6 +340,28 @@ function withLedger<T>(operation: (database: Database, recordCount: number) => T
   }
 }
 
+function isLedgerBusyError(error: unknown): boolean {
+  const code = error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  const message = error instanceof Error ? error.message : "";
+  return code === "SQLITE_BUSY" || code === "SQLITE_LOCKED"
+    || /database (?:is|table is) locked/i.test(message);
+}
+
+function warnLedgerUnavailable(error: unknown): void {
+  if (isLedgerBusyError(error)) return;
+  const nested = error instanceof Error
+    && error.message === "prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync";
+  console.warn(nested
+    ? "[opencodex] Reset-credit operation ledger refused a nested config mutation."
+    : "[opencodex] Reset-credit operation ledger is unavailable.");
+}
+
+/**
+ * Throws `TypeError` for a malformed generation or timestamp. Runtime storage
+ * and contention failures are represented by a result kind.
+ */
 export function openResetCreditOperation(
   generation: CodexResetCreditRecoveryGeneration,
   now = Date.now(),
@@ -348,11 +379,15 @@ export function openResetCreditOperation(
           if (isTerminal(current)) {
             return Object.freeze({
               kind: "terminal" as const,
-              operationId: current.operationId,
+              operationId: current.operationId as CodexReservedOperationId,
               code: current.code!,
             });
           }
-          return Object.freeze({ kind: "execute" as const, operationId: current.operationId, resumed: true });
+          return Object.freeze({
+            kind: "execute" as const,
+            operationId: current.operationId as CodexReservedOperationId,
+            resumed: true,
+          });
         }
         if (!isTerminal(current)) return Object.freeze({ kind: "unresolved-prior-generation" as const });
       } else if (recordCount >= MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
@@ -384,9 +419,14 @@ export function openResetCreditOperation(
         createdAt: now,
         updatedAt: now,
       }));
-      return Object.freeze({ kind: "execute" as const, operationId, resumed: false });
+      return Object.freeze({
+        kind: "execute" as const,
+        operationId: operationId as CodexReservedOperationId,
+        resumed: false,
+      });
     });
-  } catch {
+  } catch (error) {
+    warnLedgerUnavailable(error);
     return Object.freeze({ kind: "unavailable" });
   }
 }
@@ -422,11 +462,16 @@ function updateOperation(
       assertStoredRecord(database, updated);
       return Object.freeze({ kind: "updated" as const });
     });
-  } catch {
+  } catch (error) {
+    warnLedgerUnavailable(error);
     return Object.freeze({ kind: "unavailable" });
   }
 }
 
+/**
+ * Throws `TypeError` for a malformed generation or timestamp. An invalid
+ * operation id returns `mismatch`; runtime storage failures return `unavailable`.
+ */
 export function markResetCreditOperationAmbiguous(
   generation: CodexResetCreditRecoveryGeneration,
   operationId: string,
@@ -444,6 +489,11 @@ export function markResetCreditOperationAmbiguous(
   });
 }
 
+/**
+ * Throws `TypeError` for a malformed generation or timestamp. An invalid
+ * operation id or non-terminal code returns `mismatch`; runtime storage
+ * failures return `unavailable`.
+ */
 export function settleResetCreditOperation(
   generation: CodexResetCreditRecoveryGeneration,
   operationId: string,
@@ -451,12 +501,14 @@ export function settleResetCreditOperation(
   now = Date.now(),
 ): UpdateResetCreditOperationResult {
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
-  if (!TERMINAL_CODES.has(code)) return Object.freeze({ kind: "mismatch" });
+  if (!Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)) {
+    return Object.freeze({ kind: "mismatch" });
+  }
   return updateOperation(generation, operationId, record => {
     if (isTerminal(record)) return record.code === code ? record : undefined;
     return Object.freeze({
       ...record,
-      state: code === "reset" || code === "already_redeemed" ? "confirmed" : "stopped",
+      state: TERMINAL_STATE_BY_CODE[code],
       code,
       updatedAt: Math.max(record.updatedAt, now),
     });
