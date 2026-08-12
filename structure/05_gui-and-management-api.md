@@ -25,18 +25,17 @@ a fourth credential class. A management credential that equals any configured da
 does not enable management access. The data plane may continue to start, but `/api/*` remains closed.
 CLI health collection follows the same boundary without transporting the reusable management
 credential. Its local-read HMAC capability is an additional single-use, route-scoped admission
-mechanism, not a reusable credential class. `ocx status` and `ocx doctor` derive these capabilities
-from the protected
-`runtime-port.json` secret for exactly two read-only GETs: `/api/codex-auth/accounts` and
-`/api/system/memory`. Each capability is bound to its method, path, nonce, proxy PID, and port. A
-short expiry is part of the HMAC, and the server consumes each capability once. A capability cannot
-authorize another management route or survive process replacement. These probes connect directly
-to the selected listener instead of delegating local identity to an environment HTTP proxy. Their
-output distinguishes
-a missing proxy, rejected local capability, and an unexpected management response so a reachable
-`401` cannot be reported as "proxy not running." Legacy or configured-port-only listeners still
-satisfy ordinary liveness, but their detailed CLI health remains unavailable until restarted with
-an attested runtime record and capability-aware server.
+mechanism, not a reusable credential class. `ocx doctor` and OAuth health derive these capabilities
+from the protected `runtime-port.json` secret for exactly two read-only GETs:
+`/api/codex-auth/accounts` and `/api/system/memory`. Each capability is bound to its method, path,
+nonce, proxy PID, and port. A short expiry is part of the HMAC, and the server consumes each
+capability once. A capability cannot authorize another management route or survive process
+replacement. These probes connect directly to the selected listener instead of delegating local
+identity to an environment HTTP proxy. Their output distinguishes a missing proxy, rejected local
+capability, and an unexpected management response so a reachable `401` cannot be reported as
+"proxy not running." Legacy or configured-port-only listeners still satisfy ordinary liveness, but
+their detailed CLI health remains unavailable until restarted with an attested runtime record and
+capability-aware server.
 
 [Decision Log]
 - 목적과 의도: Keep a lower-privileged local process from collecting the management bearer by impersonating `/healthz` on an unused port.
