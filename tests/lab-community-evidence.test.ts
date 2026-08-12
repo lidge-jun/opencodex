@@ -173,7 +173,7 @@ describe("CL-10 community quarantine", () => {
     const localStored = writePublicEvidenceBundle(localBundle, consumerDir);
     importCommunityEvidenceBundle(localBundle, consumerDir);
 
-    const thirdPartyBundle = signedBundle(thirdPartyDir);
+    const thirdPartyBundle = signedBundle(thirdPartyDir, "responses-core.protocol.sse-framing");
     importCommunityEvidenceBundle(thirdPartyBundle, consumerDir);
     expect(listCommunityEvidence(consumerDir)).toHaveLength(2);
 
