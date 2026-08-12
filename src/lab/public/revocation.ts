@@ -1,7 +1,6 @@
-import { createPrivateKey, createPublicKey, sign as signBytes, verify as verifyBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createPublicKey, verify as verifyBytes } from "node:crypto";
 import { publicEvidenceId } from "./ids";
-import { getOrCreatePublicPublisher } from "./signature";
+import { getOrCreatePublicPublisher, signPublicPublisherDigest } from "./signature";
 import {
   PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION,
   type PublicEvidenceBundleV1,
@@ -109,8 +108,7 @@ export function createPublicEvidenceRevocation(input: {
     "revocation",
     revocationPayload(input.issuedDayUtc, handle.publisher, targets, input.reason),
   );
-  const privateKey = createPrivateKey(readFileSync(handle.privateKeyPath, "utf8"));
-  const signature = signBytes(null, Buffer.from(revocationId, "hex"), privateKey).toString("base64");
+  const signature = signPublicPublisherDigest(handle, revocationId);
   return Object.freeze({
     schemaVersion: PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION,
     revocationId,
