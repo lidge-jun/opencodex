@@ -2355,16 +2355,22 @@ async function handleResponsesInner(
       });
     }
     if (!upstreamResponse.ok) {
-      // Same pre-read guard as the translated path's error branch: a non-2xx passthrough body
-      // is still a Bun fetch body, so an abort landing between fetch resolution and the
-      // consumer attaching its reader orphans the internal rejection (src/lib/abort.ts).
+      if (options.comboAttempt) {
+        // No pre-read guard here: `consumeComboFailure` -> `readBoundedResponseBody` reads
+        // `response.body` itself and already threads the abort signal through its own read,
+        // and the combo contract is that this body's getter is touched exactly once (pinned by
+        // "captures passthrough failed usage from its original bounded body exactly once").
+        // Attaching a guard would be a second `.body` access and break that contract for no
+        // gain, since the bounded reader owns settlement on this path.
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        options.onConsumedComboFailure?.(failure);
+        return failure.response;
+      }
+      // The plain passthrough error path has no bounded reader of its own: `.text()` attaches
+      // the reader only when it runs, so an abort landing between fetch resolution and that
+      // call orphans Bun's internal read rejection (src/lib/abort.ts).
       const detachPassthroughErrorGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
       try {
-        if (options.comboAttempt) {
-          const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
-          options.onConsumedComboFailure?.(failure);
-          return failure.response;
-        }
         const errorText = await upstreamResponse.text().catch(() => "");
         return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
           statusText: upstreamResponse.statusText,
@@ -3393,18 +3399,21 @@ async function handleResponsesInner(
       break;
     }
     if (!upstreamResponse.ok) {
-      // Guard the error body BEFORE anything reads it. The success path is guarded further
-      // down, but a non-2xx response is still a Bun fetch body: if the request aborts between
-      // fetch resolution and `.text()` attaching its reader, the orphaned internal rejection is
-      // the same uncatchable teardown `cancelBodyOnAbort` exists to absorb (src/lib/abort.ts).
-      // Found while investigating #1419; not a fix for the native trap reported there.
-      const detachErrorBodyGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
       if (options.comboAttempt) {
+        // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
+        // `response.body` itself with the abort signal threaded through, and the combo
+        // contract is that this body's getter is touched exactly once. A guard here would be
+        // a second `.body` access for no gain, since the bounded reader owns settlement.
         const failure = await consumeComboFailure(upstreamResponse, options.abortSignal)
-          .finally(() => { detachErrorBodyGuard(); cleanupUpstreamAbort(); });
+          .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
+      // The plain error path has no bounded reader of its own: `.text()` attaches the reader
+      // only when it runs, so an abort landing between fetch resolution and that call orphans
+      // Bun's internal read rejection — the uncatchable teardown `cancelBodyOnAbort` absorbs
+      // (src/lib/abort.ts). Found while investigating #1419; not a fix for the native trap.
+      const detachErrorBodyGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
       const errorText = await upstreamResponse.text().catch(() => "unknown error");
       detachErrorBodyGuard();
       cleanupUpstreamAbort();

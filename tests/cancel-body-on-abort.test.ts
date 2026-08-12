@@ -90,6 +90,29 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     expect(source).toContain("detachPassthroughErrorGuard");
   });
 
+  // The combo branches are deliberately NOT guarded: consumeComboFailure ->
+  // readBoundedResponseBody reads `response.body` itself with the abort signal threaded
+  // through, and the combo contract is that the getter is touched exactly once (pinned by
+  // "captures passthrough failed usage from its original bounded body exactly once" in
+  // tests/server-combo-failover-e2e.test.ts). An earlier revision guarded them anyway and
+  // broke that test by adding a second `.body` read.
+  test("the combo failure branches do not add a second body read", async () => {
+    const source = await Bun.file(new URL("../src/server/responses/core.ts", import.meta.url)).text();
+
+    for (const marker of ["const failure = await consumeComboFailure("]) {
+      let from = 0;
+      for (;;) {
+        const at = source.indexOf(marker, from);
+        if (at === -1) break;
+        // Look back a short window: no body guard may be attached immediately before a
+        // combo consumption.
+        const preceding = source.slice(Math.max(0, at - 400), at);
+        expect(preceding).not.toContain("cancelBodyOnAbort(upstreamResponse.body");
+        from = at + marker.length;
+      }
+    }
+  });
+
   test("a normal read still returns the buffered payload", async () => {
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
