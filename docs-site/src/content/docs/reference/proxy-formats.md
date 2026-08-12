@@ -61,7 +61,8 @@ limit (per-model maximum input, falling back to the advertised context window) a
 `413 request_too_large` (code `input_context_window_exceeded`) before any upstream I/O. Codex
 compacts well before this limit, so an oversized body indicates abnormal duplication — for example a
 chained continuation that resends the full conversation to a stateless provider. Compact the
-conversation or start a new thread and retry; the rejected request is never forwarded upstream.
+conversation or start a new thread and retry; the rejected request is never forwarded upstream
+(only the thread-spawn quota probe may run before the rejection).
 
 ### JSON and SSE output
 

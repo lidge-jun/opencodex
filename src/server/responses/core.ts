@@ -1807,13 +1807,14 @@ async function handleResponsesInner(
           const candidateGuard = inputGuardFor(candidateRoute, { estimateGuidance: true });
           if (candidateGuard) return candidateGuard;
         } catch (err) {
-          if (err instanceof NoAvailableComboTargetsError) {
-            return comboUnavailableResponse(err.message);
-          }
+          // A fallback candidate that cannot be routed NOW can never be selected after
+          // quota priming, so it carries no admission risk. A stale entry (removed or
+          // disabled provider, exhausted combo, unavailable policy target) must not
+          // fail the primary request, which is already routed and guarded above.
           if (err instanceof NoEligiblePolicyCandidateError) {
             logCtx.routeDecision = err.trace;
           }
-          return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+          continue;
         }
       }
     }

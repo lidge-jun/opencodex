@@ -224,6 +224,59 @@ describe("responses input-size guard", () => {
     expect(quotaPrimeCalls).toBe(0);
   });
 
+  test("skips an unroutable subagent fallback instead of failing the thread-spawn request", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {});
+    // A disabled provider in the fallback chain cannot be routed; the candidate guard
+    // exists to size admission, not to validate routes, so a stale entry must be
+    // skipped and the healthy primary request must proceed normally.
+    const config = {
+      port: 0,
+      defaultProvider: "deepseek",
+      subagentModelFallback: ["ghost/deepseek-v4-lite"],
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.deepseek.com",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-flash"],
+          modelContextWindows: { "deepseek-v4-flash": 1_000_000 },
+        },
+        ghost: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.ghost.invalid",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-lite"],
+          disabled: true,
+        },
+      },
+    } as OcxConfig;
+    const res = await postResponses(
+      config,
+      {
+        model: "deepseek/deepseek-v4-flash",
+        input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+      },
+      { "x-openai-subagent": "collab_spawn" },
+    );
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+  });
+
   test("rejects an oversized instructions value without calling upstream", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
@@ -460,6 +513,7 @@ describe("responses input-size guard", () => {
     const toolTokens = estimateTokens("spawn_agent", modelId);
     // input + tool + floor < LIMIT (passes without roster), input + tool + resolved > LIMIT.
     const inputTokens = LIMIT - Math.ceil((floorTokens + resolvedTokens + toolTokens) / 2);
+    expect(inputTokens + toolTokens + floorTokens).toBeLessThan(LIMIT);
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const config = {
       port: 0,
