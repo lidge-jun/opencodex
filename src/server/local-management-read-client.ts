@@ -21,6 +21,9 @@ export interface LocalManagementReadDeps {
   readRuntime?: (pid: number) => RuntimePortState | null;
   createNonce?: () => string;
   now?: () => number;
+}
+
+export interface LocalManagementReadRequestDeps extends LocalManagementReadDeps {
   timeoutMs?: number;
 }
 
@@ -34,7 +37,7 @@ export interface LocalManagementReadDeps {
 export async function fetchBoundLocalManagementRead(
   target: LiveProxy,
   path: LocalManagementReadPath,
-  deps: LocalManagementReadDeps = {},
+  deps: LocalManagementReadRequestDeps = {},
 ): Promise<LocalManagementReadResult> {
   if (
     target.source !== "runtime"
