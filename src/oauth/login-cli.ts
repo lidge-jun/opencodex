@@ -2,7 +2,10 @@ import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
 import { findLiveProxy } from "../server/proxy-liveness";
-import { requestBoundLocalProviderReload } from "../server/local-provider-reload-client";
+import {
+  requestBoundLocalProviderReload,
+  type LocalProviderReloadResult,
+} from "../server/local-provider-reload-client";
 import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -21,21 +24,43 @@ export function runningProxyUpdateHeaders(): Headers {
   return headers;
 }
 
-/** Ask the attested runtime to reload one already-persisted provider. */
-export async function notifyRunningProxy(name: string): Promise<void> {
-  if (!LIVE_RELOAD_PROVIDERS.has(name)) return;
+/**
+ * Ask the attested runtime to reload one already-persisted provider.
+ *
+ * Returns the outcome instead of swallowing it. A running proxy that predates
+ * attested reload — or one whose runtime record no longer matches — cannot adopt
+ * the new credential, and the caller has to say so: the credential is on disk, but
+ * the live process keeps routing with the old one until it restarts. Silently
+ * printing success there is how a login appears to work and then does not.
+ */
+export async function notifyRunningProxy(name: string): Promise<LocalProviderReloadResult | null> {
+  if (!LIVE_RELOAD_PROVIDERS.has(name)) return null;
   const live = await findLiveProxy();
-  if (!live) return;
-  await requestBoundLocalProviderReload(live, name);
+  if (!live) return null;
+  return await requestBoundLocalProviderReload(live, name);
 }
 
 /**
  * After `runLogin()` has persisted the merged provider (including preserved apiKey /
  * apiKeyPool / authMode), ask the attested proxy to reload that exact on-disk entry.
  */
-export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<void> {
-  if (!loadConfig().providers[name]) return;
-  await notifyRunningProxy(name);
+export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<LocalProviderReloadResult | null> {
+  if (!loadConfig().providers[name]) return null;
+  return await notifyRunningProxy(name);
+}
+
+/**
+ * A live proxy was found but could not adopt the credential. `null` means there was
+ * nothing to notify (no running proxy, or a provider that never reloads live), which
+ * is not a warning-worthy state.
+ */
+export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null): void {
+  if (!result || result.kind === "reloaded") return;
+  console.warn(
+    `\n⚠️  A proxy is running but could not reload this provider (${result.reason}).`
+    + `\n   The credential is saved to disk; the running proxy keeps using the previous one.`
+    + `\n   Restart it to pick this up: ocx restart`,
+  );
 }
 
 export async function handleLogin(provider?: string): Promise<void> {
@@ -66,8 +91,9 @@ async function handleOAuthLogin(name: string): Promise<void> {
   } finally {
     rl.close();
   }
-  await notifyRunningProxyAfterOAuthLogin(name);
+  const reload = await notifyRunningProxyAfterOAuthLogin(name);
   console.log(`\n✅ Logged in to ${name}. Try: ocx sync`);
+  warnIfLiveReloadSkipped(reload);
 }
 
 export function providerConfigFromKeyLoginProvider(def: KeyLoginProvider, key: string, baseUrlOverride?: string): OcxProviderConfig {
@@ -127,11 +153,16 @@ export async function commitKeyLoginProvider(
   config: OcxConfig,
   name: string,
   provider: OcxProviderConfig,
+  onLiveReload?: (result: LocalProviderReloadResult | null) => void,
 ): Promise<OcxProviderConfig> {
   const mergedProvider = mergeKeyLoginProviderRow(provider, config.providers[name]);
   config.providers[name] = mergedProvider;
   saveConfig(config);
-  await notifyRunningProxy(name);
+  // Evaluate the reload BEFORE the optional call: `onLiveReload?.(await ...)` short-circuits
+  // the whole argument list when no callback is supplied, so the reload would never fire for
+  // callers that do not care about the outcome.
+  const reloadResult = await notifyRunningProxy(name);
+  onLiveReload?.(reloadResult);
   return mergedProvider;
 }
 
@@ -177,8 +208,10 @@ async function handleKeyLogin(name: string): Promise<void> {
     console.error(`Error: ${commitCollision}.`);
     process.exit(1);
   }
-  await commitKeyLoginProvider(config, name, provider);
+  let reload: LocalProviderReloadResult | null = null;
+  await commitKeyLoginProvider(config, name, provider, result => { reload = result; });
   console.log(`✅ ${def.label} added. Try: ocx sync`);
+  warnIfLiveReloadSkipped(reload);
 }
 
 function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, string[]> {
