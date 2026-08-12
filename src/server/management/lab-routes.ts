@@ -9,6 +9,7 @@
  * - GET /api/lab/events
  * - GET /api/lab/events/:eventId
  * - GET /api/lab/artifacts
+ * - GET /api/lab/artifacts/:digest
  * - GET /api/lab/catalog
  */
 
@@ -163,7 +164,7 @@ function parseExecutionMode(raw: string | null, ctx: ManagementContext): Executi
   if (!raw) return undefined;
   const trimmed = raw.trim();
   if (!EXECUTION_MODES.includes(trimmed as ExecutionMode)) {
-    return errorResponse("invalid_execution_mode", "executionMode must be a supported execution mode", 400, ctx);
+    return errorResponse("invalid_execution_mode", "executionMode must be a supported lab execution mode", 400, ctx);
   }
   return trimmed as ExecutionMode;
 }
@@ -464,7 +465,6 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     }
   }
 
-  const eventMatch = url.pathname.match(/^\/api\/lab\/events\/([^/]+)$/);
   if (url.pathname === "/api/lab/events") {
     const limit = parseLimit(url.searchParams.get("limit"), ctx);
     if (limit instanceof Response) return limit;
@@ -492,6 +492,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     }
   }
 
+  const eventMatch = url.pathname.match(/^\/api\/lab\/events\/([^/]+)$/);
   if (eventMatch) {
     const eventId = decodePathSegment(eventMatch[1]!);
     if (eventId === null) return errorResponse("not_found", "unknown resource", 404, ctx);
