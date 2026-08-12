@@ -132,19 +132,14 @@ async function collectPages<T>(
     seen.add(next);
     cursor = next;
   }
-  // The server kept advancing correctly but exceeded the browser-side safety bound.
-  // Preserve the coherent prefix and report truncation separately instead of
-  // misclassifying a legitimate large dataset as a broken pagination contract.
   return { rows, truncated: true };
 }
 
 export async function fetchAllSubjects(apiBase: string, signal: AbortSignal): Promise<CollectedPages<SubjectListItemDto>> {
-  return collectPages(
-    async cursor => {
-      const page = await fetchSubjectPage(apiBase, cursor, signal);
-      return { rows: page.subjects, hasMore: page.hasMore, nextCursor: page.nextCursor };
-    },
-  );
+  return collectPages(async cursor => {
+    const page = await fetchSubjectPage(apiBase, cursor, signal);
+    return { rows: page.subjects, hasMore: page.hasMore, nextCursor: page.nextCursor };
+  });
 }
 
 export async function fetchSubjectDetail(
@@ -181,12 +176,10 @@ async function fetchAllObservations(
   filters: { subjectId: string; layer?: string; suiteId?: string },
   signal: AbortSignal,
 ): Promise<CollectedPages<ObservationDto>> {
-  return collectPages(
-    async cursor => {
-      const page = await fetchObservationsPage(apiBase, filters, cursor, signal);
-      return { rows: page.observations, hasMore: page.hasMore, nextCursor: page.nextCursor };
-    },
-  );
+  return collectPages(async cursor => {
+    const page = await fetchObservationsPage(apiBase, filters, cursor, signal);
+    return { rows: page.observations, hasMore: page.hasMore, nextCursor: page.nextCursor };
+  });
 }
 
 export async function fetchEventById(apiBase: string, eventId: string, signal: AbortSignal): Promise<LabEventDto> {
@@ -329,6 +322,7 @@ export type LabPageData = {
   subjectsTruncated: boolean;
   hasMore: boolean;
   nextCursor?: string;
+  community: CommunityEvidenceContextDto | null;
 };
 
 export async function fetchLabPageData(
@@ -336,9 +330,15 @@ export async function fetchLabPageData(
   filters: VerdictQueryFilters,
   signal: AbortSignal,
 ): Promise<LabPageData> {
-  const status = await fetchLabStatus(apiBase, signal);
+  const [status, community] = await Promise.all([
+    fetchLabStatus(apiBase, signal),
+    fetchCommunityEvidenceContext(apiBase, signal).catch(error => {
+      if (signal.aborted) throw error;
+      return null;
+    }),
+  ]);
   if (!status.projectionAvailable) {
-    return { status, verdicts: [], subjects: [], subjectsTruncated: false, hasMore: false };
+    return { status, verdicts: [], subjects: [], subjectsTruncated: false, hasMore: false, community };
   }
   const [verdictPage, subjects] = await Promise.all([
     fetchVerdictPage(apiBase, filters, undefined, signal),
@@ -351,6 +351,7 @@ export async function fetchLabPageData(
     subjectsTruncated: subjects.truncated,
     hasMore: verdictPage.hasMore,
     nextCursor: verdictPage.nextCursor,
+    community,
   };
 }
 
@@ -370,7 +371,6 @@ export type VerdictDetailData = {
   events: LabEventDto[];
   artifacts: ArtifactMetadataDto[];
   production: PassiveProductionSummaryDto | null;
-  community: CommunityEvidenceContextDto | null;
 };
 
 async function mapSettledBounded<TItem, TResult>(
@@ -391,7 +391,6 @@ async function mapSettledBounded<TItem, TResult>(
         results.push(await mapper(limited[current]!));
       } catch (error) {
         if (signal.aborted) throw error;
-        // Referenced events/artifacts are optional detail enrichment. Keep successful peers.
       }
     }
   };
@@ -412,16 +411,12 @@ export async function fetchVerdictDetail(
     layer: verdict.evidenceLayer,
     suiteId: verdict.suiteId,
   };
-  const [subject, observations, events, artifacts, production, community] = await Promise.all([
+  const [subject, observations, events, artifacts, production] = await Promise.all([
     fetchSubjectDetail(apiBase, verdict.subjectId, signal),
     fetchAllObservations(apiBase, observationFilters, signal),
     mapSettledBounded(eventIds, DETAIL_CONCURRENCY, signal, id => fetchEventById(apiBase, id, signal)),
     mapSettledBounded(digests, DETAIL_CONCURRENCY, signal, digest => fetchArtifactByDigest(apiBase, digest, signal)),
     fetchPassiveProductionSummary(apiBase, verdict.subjectId, signal).catch(error => {
-      if (signal.aborted) throw error;
-      return null;
-    }),
-    fetchCommunityEvidenceContext(apiBase, signal).catch(error => {
       if (signal.aborted) throw error;
       return null;
     }),
@@ -433,6 +428,5 @@ export async function fetchVerdictDetail(
     events,
     artifacts,
     production,
-    community,
   };
 }
