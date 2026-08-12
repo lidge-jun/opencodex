@@ -7,6 +7,7 @@ import {
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
+import { translatorAggregateCurrentBytesForTests } from "../src/lib/translator-budget";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
@@ -365,5 +366,34 @@ describe("readJsonRequestBody", () => {
     let node: unknown = parsed;
     for (let i = 0; i < DEPTH; i++) node = (node as unknown[])[0];
     expect(node).toBe(0);
+  });
+
+  test("charges the serialized size including JSON.stringify escape overhead", async () => {
+    // The budget charge must match the copy the proxy actually retains: JSON.stringify
+    // re-escapes quotes, backslashes, control characters, and lone surrogates, so a raw
+    // UTF-8 byte count would under-charge every escape-heavy body.
+    const payload = {
+      model: "deepseek-v4-flash",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "line\nbreak\t\b\f\rtab \"quoted\" \\backslash\u0001\u001f lone:\ud800",
+            },
+          ],
+        },
+      ],
+    };
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const parsed = await readJsonRequestBody(req, createTestTranslatorBudget());
+    expect(parsed).toEqual(payload);
+    const serializedBytes = new TextEncoder().encode(JSON.stringify(parsed)).byteLength;
+    expect(translatorAggregateCurrentBytesForTests()).toBe(serializedBytes);
   });
 });

@@ -80,14 +80,29 @@ function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
     let bytes = 0;
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i);
-      if (code < 0x80) {
+      // JSON.stringify escapes a string's structural characters, so the serialized
+      // copy is LONGER than the raw UTF-8 text. Match the serialized form: `\"` and
+      // `\\` are two bytes, the five short control escapes (`\b \t \n \f \r`) are two
+      // bytes, every other control character becomes a six-byte `\uXXXX`, and a lone
+      // surrogate (which has no valid pair to serialize as-is) also becomes `\uXXXX`.
+      if (code === 0x22 || code === 0x5c) {
+        bytes += 2;
+      } else if (code < 0x20) {
+        bytes += code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+      } else if (code < 0x80) {
         bytes += 1;
       } else if (code < 0x800) {
         bytes += 2;
-      } else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+      } else if (code >= 0xd800 && code <= 0xdbff) {
         const next = text.charCodeAt(i + 1);
-        bytes += next >= 0xdc00 && next <= 0xdfff ? 4 : 3;
-        if (next >= 0xdc00 && next <= 0xdfff) i++;
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          bytes += 4; // valid pair serializes as-is: two units -> 4 UTF-8 bytes
+          i++;
+        } else {
+          bytes += 6; // lone high surrogate -> \uXXXX
+        }
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        bytes += 6; // lone low surrogate -> \uXXXX
       } else {
         bytes += 3;
       }

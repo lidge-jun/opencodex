@@ -237,6 +237,37 @@ describe("previous_response_id replay overlap", () => {
     expect(input.slice(0, stored.length)).toEqual(stored);
     expect(input.slice(stored.length)).toEqual(request);
   });
+
+  test("a deeply nested chained input never throws and stays conservative", () => {
+    // Nest past the canonical depth budget (256 levels): the item must not produce a
+    // canonical key, so overlap detection degrades to "no overlap" instead of throwing
+    // or letting a deep resend silently match a shallow stored item.
+    const DEPTH = 300;
+    let deepItem: unknown = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "deep" }],
+    };
+    for (let i = 0; i < DEPTH; i++) deepItem = { wrapper: { inner: deepItem } };
+    const stored = [deepItem, assistantInputItem("a1")];
+    rememberResponseState(
+      { model: MODEL, input: stored },
+      { id: "resp_deep", status: "completed", output: [] },
+      undefined,
+      { force: true },
+    );
+    const request = [deepItem, userItem("request")];
+    const expanded = expandPreviousResponseInput({
+      model: MODEL,
+      previous_response_id: "resp_deep",
+      input: request,
+    });
+    const input = expanded.input as unknown[];
+    // Overlap evidence is unavailable for the deep leading item: expansion must preserve
+    // the stored history followed by the ENTIRE request input, never dropping items.
+    expect(input.slice(0, stored.length)).toEqual(stored);
+    expect(input.slice(stored.length)).toEqual(request);
+  });
 });
 
 function statelessDeepseekConfig(): OcxConfig {

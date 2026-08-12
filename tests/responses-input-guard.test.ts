@@ -15,6 +15,11 @@ import {
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
+import {
+  applyInjectionPlaceholders,
+  PROACTIVE_MULTI_AGENT_MODE_TEXT,
+} from "../src/server/responses/collaboration";
+import { estimateTokens } from "../src/lib/token-estimate";
 
 setDefaultTimeout(30_000);
 
@@ -329,5 +334,151 @@ describe("responses input-size guard", () => {
     });
     expect(upstreamCalls).toBe(1);
     expect(res.status).toBe(200);
+  });
+
+  test("counts deterministic v1 guidance against a near-limit input", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    const LIMIT = 1_000_000;
+    const modelId = "deepseek-v4-flash";
+    const guidanceText = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
+    const guidanceTokens = estimateTokens(guidanceText, modelId);
+    // Below the limit on its own, over it once the proactive guidance is counted.
+    const inputTokens = LIMIT - guidanceTokens - 1;
+    const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      reasoning: { effort: "max" },
+      tools: [
+        { type: "function", name: "spawn_agent", description: "" },
+        { type: "function", name: "send_input", description: "" },
+      ],
+      input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("counts a configured injectionPrompt before any thread-spawn quota polling", async () => {
+    let upstreamCalls = 0;
+    let quotaPrimeCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {
+      quotaPrimeCalls += 1;
+    });
+    const LIMIT = 1_000_000;
+    const modelId = "deepseek-v4-flash";
+    const prompt = "a".repeat(500);
+    const floorText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "", "", "", "")}</multi_agent_mode>`;
+    const floorTokens = estimateTokens(floorText, modelId);
+    // Under the limit without the prompt floor, over it once the prompt is counted; the
+    // oversized rejection must precede the quota probe (no upstream I/O before the 413).
+    const inputTokens = LIMIT - floorTokens - 1;
+    const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
+    const config = {
+      port: 0,
+      defaultProvider: "deepseek",
+      injectionPrompt: prompt,
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.deepseek.com",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-flash"],
+          modelContextWindows: { "deepseek-v4-flash": LIMIT },
+        },
+      },
+    } as OcxConfig;
+    const res = await postResponses(
+      config,
+      {
+        model: "deepseek/deepseek-v4-flash",
+        tools: [{ type: "function", name: "spawn_agent", description: "" }],
+        input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+      },
+      { "x-openai-subagent": "collab_spawn" },
+    );
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+    expect(quotaPrimeCalls).toBe(0);
+  });
+
+  test("revalidates input after injected guidance is added during normalization", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    const LIMIT = 1_000_000;
+    const modelId = "deepseek-v4-flash";
+    // The pre-quota estimate counts only the placeholder-free FLOOR of the prompt; the
+    // actual injected guidance resolves {{model}} to a longer value, so the re-validation
+    // AFTER normalization must be the one that rejects (before any auth/upstream I/O).
+    const prompt = `${"a".repeat(200)} {{model}}`;
+    const floorText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "", "", "", "")}</multi_agent_mode>`;
+    const actualText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "deepseek/deepseek-v4-flash", "", "", "")}</multi_agent_mode>`;
+    const floorTokens = estimateTokens(floorText, modelId);
+    const actualTokens = estimateTokens(actualText, modelId);
+    const toolTokens = estimateTokens("spawn_agent", modelId);
+    // input + floor + tools < LIMIT (pre-quota passes), input + actual + tools > LIMIT.
+    const inputTokens = LIMIT - Math.ceil((floorTokens + actualTokens + toolTokens) / 2);
+    const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
+    const previousOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+    process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+    try {
+      const config = {
+        port: 0,
+        defaultProvider: "deepseek",
+        injectionPrompt: prompt,
+        injectionModel: "deepseek/deepseek-v4-flash",
+        providers: {
+          deepseek: {
+            adapter: "openai-responses",
+            baseUrl: "https://api.deepseek.com",
+            responsesPath: "/responses",
+            authMode: "key",
+            apiKey: "sk-test",
+            models: ["deepseek-v4-flash"],
+            modelContextWindows: { "deepseek-v4-flash": LIMIT },
+          },
+        },
+      } as OcxConfig;
+      const res = await postResponses(config, {
+        model: "deepseek/deepseek-v4-flash",
+        tools: [{ type: "function", name: "spawn_agent", description: "" }],
+        input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+      });
+      await expectOversizedRejection(res);
+      expect(upstreamCalls).toBe(0);
+    } finally {
+      if (previousOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+      else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = previousOverride;
+    }
   });
 });

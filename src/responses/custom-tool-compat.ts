@@ -131,11 +131,21 @@ function rewriteCustomToolNode(
   return undefined;
 }
 
-function rewriteForUpstream(
+type JsonTreeTransform = (node: Record<string, unknown>) => unknown | undefined;
+
+/**
+ * Copy-on-write JSON tree walk shared by the routed custom-tool upstream rewrite
+ * (pre-order: a replaced node is a leaf) and the client-facing restore (post-order:
+ * replacement happens after children are rebuilt). Iterative over container/index
+ * frames with lazy key enumeration, so deeply nested client payloads cannot overflow
+ * the call stack; unchanged subtrees keep their original references (change detection
+ * is reference-based per child).
+ */
+function mapJsonTree(
   value: unknown,
-  names: ReadonlySet<string>,
-  callIds: ReadonlySet<string>,
-): unknown {
+  transform: JsonTreeTransform,
+  mode: "pre" | "post",
+): { value: unknown; changed: boolean } {
   type Slot = { value: unknown };
   type Changed = { flag: boolean };
   type Frame =
@@ -145,31 +155,40 @@ function rewriteForUpstream(
     | { kind: "array-assign"; next: unknown[]; changed: Changed; index: number; child: unknown; slot: Slot }
     | { kind: "object-assign"; next: Record<string, unknown>; changed: Changed; key: string; child: unknown; slot: Slot };
 
+  let rootChanged: Changed | undefined;
   const rootSlot: Slot = { value };
   const stack: Frame[] = [{ kind: "node", node: value, slot: rootSlot }];
   while (stack.length > 0) {
     const frame = stack.pop()!;
     if (frame.kind === "node") {
       const node = frame.node;
-      const leaf = rewriteCustomToolNode(node, names, callIds);
-      if (leaf !== undefined) {
-        frame.slot.value = leaf;
-      } else if (Array.isArray(node)) {
+      if (mode === "pre" && isPlainObject(node)) {
+        const leaf = transform(node);
+        if (leaf !== undefined) {
+          frame.slot.value = leaf;
+          continue;
+        }
+      }
+      if (Array.isArray(node)) {
+        const changed: Changed = { flag: false };
+        if (rootChanged === undefined && frame.slot === rootSlot) rootChanged = changed;
         stack.push({
           kind: "array",
           array: node,
           index: 0,
           next: new Array<unknown>(node.length),
-          changed: { flag: false },
+          changed,
           slot: frame.slot,
         });
       } else if (isPlainObject(node)) {
+        const changed: Changed = { flag: false };
+        if (rootChanged === undefined && frame.slot === rootSlot) rootChanged = changed;
         stack.push({
           kind: "object",
           record: node,
           keys: ownEnumerableKeys(node),
           next: {},
-          changed: { flag: false },
+          changed,
           slot: frame.slot,
         });
       } else {
@@ -188,7 +207,18 @@ function rewriteForUpstream(
     } else if (frame.kind === "object") {
       const nextKey = frame.keys.next();
       if (nextKey.done) {
-        frame.slot.value = frame.changed.flag ? frame.next : frame.record;
+        const source = frame.changed.flag ? frame.next : frame.record;
+        if (mode === "post") {
+          const replacement = transform(source);
+          if (replacement !== undefined) {
+            frame.slot.value = replacement;
+            frame.changed.flag = true;
+          } else {
+            frame.slot.value = source;
+          }
+        } else {
+          frame.slot.value = source;
+        }
       } else {
         const key = nextKey.value;
         const child = frame.record[key];
@@ -205,7 +235,15 @@ function rewriteForUpstream(
       frame.changed.flag ||= frame.slot.value !== frame.child;
     }
   }
-  return rootSlot.value;
+  return { value: rootSlot.value, changed: rootChanged?.flag ?? false };
+}
+
+function rewriteForUpstream(
+  value: unknown,
+  names: ReadonlySet<string>,
+  callIds: ReadonlySet<string>,
+): unknown {
+  return mapJsonTree(value, (node) => rewriteCustomToolNode(node, names, callIds), "pre").value;
 }
 
 export function rewriteRoutedCustomToolsForUpstream(body: unknown): {
@@ -223,92 +261,23 @@ export function restoreRoutedCustomCalls(
   value: unknown,
   names: ReadonlySet<string>,
 ): { value: unknown; changed: boolean } {
-  type Slot = { value: unknown; changed: boolean };
-  type Changed = { flag: boolean };
-  type Frame =
-    | { kind: "node"; node: unknown; slot: Slot }
-    | { kind: "array"; array: unknown[]; index: number; next: unknown[]; changed: Changed; slot: Slot }
-    | { kind: "object"; record: Record<string, unknown>; keys: Generator<string>; next: Record<string, unknown>; changed: Changed; slot: Slot }
-    | { kind: "array-assign"; next: unknown[]; changed: Changed; index: number; slot: Slot }
-    | { kind: "object-assign"; next: Record<string, unknown>; changed: Changed; key: string; slot: Slot };
-
-  const rootSlot: Slot = { value, changed: false };
-  const stack: Frame[] = [{ kind: "node", node: value, slot: rootSlot }];
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    if (frame.kind === "node") {
-      const node = frame.node;
-      if (Array.isArray(node)) {
-        stack.push({
-          kind: "array",
-          array: node,
-          index: 0,
-          next: new Array<unknown>(node.length),
-          changed: { flag: false },
-          slot: frame.slot,
-        });
-      } else if (isPlainObject(node)) {
-        stack.push({
-          kind: "object",
-          record: node,
-          keys: ownEnumerableKeys(node),
-          next: {},
-          changed: { flag: false },
-          slot: frame.slot,
-        });
-      } else {
-        frame.slot.value = node;
-      }
-    } else if (frame.kind === "array") {
-      if (frame.index < frame.array.length) {
-        const child = frame.array[frame.index];
-        const childSlot: Slot = { value: child, changed: false };
-        stack.push({ kind: "array", array: frame.array, index: frame.index + 1, next: frame.next, changed: frame.changed, slot: frame.slot });
-        stack.push({ kind: "array-assign", next: frame.next, changed: frame.changed, index: frame.index, slot: childSlot });
-        stack.push({ kind: "node", node: child, slot: childSlot });
-      } else {
-        frame.slot.value = frame.changed.flag ? frame.next : frame.array;
-        frame.slot.changed = frame.changed.flag;
-      }
-    } else if (frame.kind === "object") {
-      const nextKey = frame.keys.next();
-      if (nextKey.done) {
-        const source = frame.changed.flag ? frame.next : frame.record;
-        if (
-          source.type === "function_call"
-          && typeof source.name === "string"
-          && names.has(source.name)
-        ) {
-          const restored: Record<string, unknown> = {
-            ...source,
-            type: "custom_tool_call",
-            id: customToolItemId(source.id),
-            input: customToolInput(source.arguments),
-          };
-          delete restored.arguments;
-          frame.slot.value = restored;
-          frame.slot.changed = true;
-        } else {
-          frame.slot.value = source;
-          frame.slot.changed = frame.changed.flag;
-        }
-      } else {
-        const key = nextKey.value;
-        const child = frame.record[key];
-        const childSlot: Slot = { value: child, changed: false };
-        stack.push({ kind: "object", record: frame.record, keys: frame.keys, next: frame.next, changed: frame.changed, slot: frame.slot });
-        stack.push({ kind: "object-assign", next: frame.next, changed: frame.changed, key, slot: childSlot });
-        stack.push({ kind: "node", node: child, slot: childSlot });
-      }
-    } else if (frame.kind === "array-assign") {
-      frame.next[frame.index] = frame.slot.value;
-      frame.changed.flag ||= frame.slot.changed;
-    } else {
-      frame.next[frame.key] = frame.slot.value;
-      frame.changed.flag ||= frame.slot.changed;
+  return mapJsonTree(value, (node) => {
+    if (
+      node.type === "function_call"
+      && typeof node.name === "string"
+      && names.has(node.name)
+    ) {
+      const restored: Record<string, unknown> = {
+        ...node,
+        type: "custom_tool_call",
+        id: customToolItemId(node.id),
+        input: customToolInput(node.arguments),
+      };
+      delete restored.arguments;
+      return restored;
     }
-  }
-  return { value: rootSlot.value, changed: rootSlot.changed };
+    return undefined;
+  }, "post");
 }
 
 export function restoreRoutedCustomCallsInJson(

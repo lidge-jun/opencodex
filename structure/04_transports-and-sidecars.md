@@ -61,20 +61,22 @@ policy.
 Chained `previous_response_id` turns expand from the local continuation store only when the request
 is a genuine delta: a request that already begins with the complete canonical stored history is kept
 untouched, because stateless upstreams such as DeepSeek force the client to resend the full
-conversation every turn. Parsed input estimated to exceed the routed model's advertised context
-window is rejected with `413 request_too_large` before any upstream I/O; normal clients compact well
-before this limit, so an oversized body indicates abnormal duplication (observed 1x → 2x → 3x → 4x
-expansion and a Windows native crash, #314). The token estimate reuses the model-aware estimator that
-already drives usage and compaction, summed over parsed message text parts without materializing a
-second copy of the request body.
+conversation every turn. Parsed input estimated to exceed the routed model's effective input limit
+is rejected with `413 request_too_large` before any upstream I/O; normal clients compact well before
+this limit, so an oversized body indicates abnormal duplication (observed 1x → 2x → 3x → 4x
+expansion and a Windows native crash, #314). The effective limit is the routed model's
+`modelMaxInputTokens` value when configured, falling back to `modelContextWindows`. The token
+estimate reuses the model-aware estimator that already drives usage and compaction: parsed message
+text parts, `systemPrompt` instructions, tool names, tool descriptions, and serialized parameter
+schemas are all counted, without materializing a second copy of the request body.
 
 [Decision Log]
 - 목적과 의도: Stop chained-turn replay from compounding stored history and refuse oversized Responses input before upstream I/O.
 - 기존 구현 및 제약 조건: `expandPreviousResponseInput` prepended stored history unconditionally; stateless upstreams such as DeepSeek make the client resend the full conversation while still chaining `previous_response_id`, so prepending duplicated it, and recording the duplicated body made the bloat sticky across turns (1x → 2x → 3x → 4x; observed ~1.6M input tokens against a ~400k conversation). Forwarding the oversized body on Windows ballooned bun RSS and native-crashed the whole proxy (upstream Bun memory bug, #314).
 - 검토한 주요 대안: Keep unconditional prepending; detect full resends by request length alone; run an exact tokenizer for admission; reject every request at or over the window; materialize and measure the whole body upfront.
-- 선택한 방식: Only a complete canonical stored-prefix overlap keeps a chained request untouched; partial matches are preserved conservatively by prepending stored history and appending the entire request delta. Canonical item identity ignores volatile top-level fields (`id`, `status`, `sequence_number`) and recursively sorts retained keys. A pre-upstream guard estimates input tokens from parsed message strings/text parts with the existing model-aware estimator and returns `413 request_too_large` (code `input_context_window_exceeded`) when the estimate exceeds the routed model's `modelContextWindows` value.
+- 선택한 방식: Only a complete canonical stored-prefix overlap keeps a chained request untouched; partial matches are preserved conservatively by prepending stored history and appending the entire request delta. Canonical item identity ignores volatile top-level fields (`id`, `status`, `sequence_number`), recursively sorts retained keys, and is bounded to a fixed depth so deep client payloads degrade to "no overlap" instead of overflowing. A pre-upstream guard estimates input tokens with the existing model-aware estimator — counting parsed message text parts, `systemPrompt` instructions, tool names, tool descriptions, and serialized parameter schemas — and returns `413 request_too_large` (code `input_context_window_exceeded`) when the estimate exceeds the routed model's `modelMaxInputTokens` value (falling back to `modelContextWindows`).
 - 다른 대안 대신 이 방식을 선택한 이유: Request length is not proof of a full resend (a genuine delta can be as long as stored history), an exact tokenizer would duplicate model-specific estimation logic and cost memory, and rejecting at the window boundary would break legitimate near-window traffic. The overlap heuristic fixes the observed compounding while staying conservative on ambiguous shapes.
-- 장점, 단점 및 영향: Full-history chained turns stay 1x for stateless upstreams, genuine delta continuations still expand, and abnormal duplication fails one request cleanly instead of crashing the service. The heuristic deduplicates only a complete canonical stored prefix, so partial or reordered overlaps may still duplicate some items, and the token estimate is an approximation over parsed message text rather than an exact tokenizer.
+- 장점, 단점 및 영향: Full-history chained turns stay 1x for stateless upstreams, genuine delta continuations still expand, and abnormal duplication fails one request cleanly instead of crashing the service. The heuristic deduplicates only a complete canonical stored prefix, so partial or reordered overlaps may still duplicate some items, and the token estimate is an approximation over the parsed request rather than an exact tokenizer.
 
 ### Passthrough SSE stream shapes (#314)
 

@@ -725,33 +725,117 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
+/** Deepest canonical tree retained by replay-overlap detection. */
+const CANONICAL_REPLAY_MAX_DEPTH = 256;
+/**
+ * Marker for a client-controlled subtree that nests past the canonical budget. The whole
+ * item then yields no canonical key (undefined), so overlap detection stays conservative
+ * instead of letting a deep resend silently break the prefix match.
+ */
+const canonicalReplayOverflow = Symbol("canonical-replay-overflow");
+
 /**
  * Canonical identity used by replay-overlap detection. Volatile fields that differ between a
  * stored response item and the client's later input resend (`id`, `status`, sequence numbers)
  * are ignored; the remaining shape is what identifies "the same history item".
+ *
+ * The walk is iterative over container/index frames and stops at a bounded depth, so
+ * client-controlled nesting cannot overflow the call stack or allocate unbounded memory
+ * (same hardening as the admission walks). Returns the overflow marker when the depth
+ * budget is exceeded.
  */
 function canonicalReplayValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalReplayValue);
-  if (value && typeof value === "object") {
-    // Null prototype so an own JSON `__proto__` key survives as a serializable property
-    // instead of being treated as a prototype assignment.
-    const record = value as Record<string, unknown>;
-    // The web-search bridge writes `queries` alongside the singular `query` for single-query
-    // calls, while history recorded before that fix carries only `query` and is repaired
-    // outbound by backfillWebSearchQueries (#930). Normalize BEFORE sorting so the derived
-    // key occupies the same canonical position on both sides; a real batch (`queries`
-    // without `query`) is left untouched.
-    const normalized: Record<string, unknown> = { ...record };
-    if (normalized.type === "search" && typeof normalized.query === "string") {
-      normalized.queries = Array.isArray(normalized.queries) ? normalized.queries : [normalized.query];
+  type Slot = { value: unknown };
+  type Frame =
+    | { kind: "node"; node: unknown; slot: Slot; depth: number }
+    | { kind: "array"; array: unknown[]; index: number; next: unknown[]; slot: Slot; depth: number }
+    | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; next: Record<string, unknown>; slot: Slot; depth: number }
+    | { kind: "assign"; next: unknown[] | Record<string, unknown>; position: number | string; slot: Slot };
+  /** Lazily enumerate a parsed object's own enumerable string keys. */
+  function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
+    for (const key in record) {
+      if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
     }
-    const out: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(normalized).sort()) {
-      out[key] = canonicalReplayValue(normalized[key]);
-    }
-    return out;
   }
-  return value;
+
+  let overflowed = false;
+  const rootSlot: Slot = { value };
+  const stack: Frame[] = [{ kind: "node", node: value, slot: rootSlot, depth: 0 }];
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.kind === "node") {
+      const node = frame.node;
+      if (Array.isArray(node)) {
+        if (frame.depth >= CANONICAL_REPLAY_MAX_DEPTH) {
+          overflowed = true;
+          frame.slot.value = canonicalReplayOverflow;
+        } else {
+          stack.push({ kind: "array", array: node, index: 0, next: new Array<unknown>(node.length), slot: frame.slot, depth: frame.depth });
+        }
+      } else if (node && typeof node === "object") {
+        if (frame.depth >= CANONICAL_REPLAY_MAX_DEPTH) {
+          overflowed = true;
+          frame.slot.value = canonicalReplayOverflow;
+        } else {
+          stack.push({
+            kind: "object",
+            record: node as Record<string, unknown>,
+            keys: ownEnumerableKeys(node as Record<string, unknown>),
+            // Null prototype so an own JSON `__proto__` key survives as a serializable
+            // property instead of being treated as a prototype assignment.
+            next: Object.create(null),
+            slot: frame.slot,
+            depth: frame.depth,
+          });
+        }
+      } else {
+        frame.slot.value = node;
+      }
+    } else if (frame.kind === "array") {
+      if (frame.index < frame.array.length) {
+        const childSlot: Slot = { value: frame.array[frame.index] };
+        stack.push({ kind: "array", array: frame.array, index: frame.index + 1, next: frame.next, slot: frame.slot, depth: frame.depth });
+        stack.push({ kind: "assign", next: frame.next, position: frame.index, slot: childSlot });
+        stack.push({ kind: "node", node: frame.array[frame.index], slot: childSlot, depth: frame.depth + 1 });
+      } else {
+        frame.slot.value = frame.next;
+      }
+    } else if (frame.kind === "object") {
+      const nextKey = frame.keys.next();
+      if (nextKey.done) {
+        // The web-search bridge writes `queries` alongside the singular `query` for single-query
+        // calls, while history recorded before that fix carries only `query` and is repaired
+        // outbound by backfillWebSearchQueries (#930). Normalize BEFORE sorting so the derived
+        // key occupies the same canonical position on both sides; a real batch (`queries`
+        // without `query`) is left untouched. Children are already canonical by this point.
+        const normalized: Record<string, unknown> = { ...frame.next };
+        if (normalized.type === "search" && typeof normalized.query === "string") {
+          normalized.queries = Array.isArray(normalized.queries)
+            ? normalized.queries
+            : [normalized.query];
+        }
+        const out: Record<string, unknown> = Object.create(null);
+        for (const key of Object.keys(normalized).sort()) {
+          out[key] = normalized[key];
+        }
+        frame.slot.value = out;
+      } else {
+        const key = nextKey.value;
+        const childSlot: Slot = { value: frame.record[key] };
+        stack.push({ kind: "object", keys: frame.keys, record: frame.record, next: frame.next, slot: frame.slot, depth: frame.depth });
+        stack.push({ kind: "assign", next: frame.next, position: key, slot: childSlot });
+        stack.push({ kind: "node", node: frame.record[key], slot: childSlot, depth: frame.depth + 1 });
+      }
+    } else {
+      const next = frame.next as unknown[] | Record<string, unknown>;
+      if (typeof frame.position === "number") {
+        (next as unknown[])[frame.position] = frame.slot.value;
+      } else {
+        (next as Record<string, unknown>)[frame.position] = frame.slot.value;
+      }
+    }
+  }
+  return overflowed ? canonicalReplayOverflow : rootSlot.value;
 }
 
 /**
@@ -763,9 +847,13 @@ function canonicalReplayValue(value: unknown): unknown {
 function canonicalReplayItemKey(item: unknown): string | undefined {
   if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
   const { id: _id, status: _status, sequence_number: _sequenceNumber, ...rest } = item as Record<string, unknown>;
+  const canonical = canonicalReplayValue(rest);
   // Sort every retained key (including nested objects and arrays) so equivalent items
   // produce the same canonical string regardless of the original property order.
-  return JSON.stringify(canonicalReplayValue(rest));
+  // A subtree beyond the depth budget yields no key at all; the item then never counts
+  // as overlap evidence (never passes an unbounded result to JSON.stringify).
+  if (canonical === canonicalReplayOverflow) return undefined;
+  return JSON.stringify(canonical);
 }
 
 /** Longest leading run of stored history items already present at the start of the request input. */

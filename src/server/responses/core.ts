@@ -205,7 +205,14 @@ import {
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
 
-import { buildToolBridgeMaps, collabSurface, injectDeveloperMessage, multiAgentGuidanceText } from "./collaboration";
+import {
+  applyInjectionPlaceholders,
+  buildToolBridgeMaps,
+  collabSurface,
+  injectDeveloperMessage,
+  multiAgentGuidanceText,
+  PROACTIVE_MULTI_AGENT_MODE_TEXT,
+} from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
 import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upstream-reachability";
@@ -1622,7 +1629,19 @@ async function handleResponsesInner(
    * instead. Reuse the model/CJK-aware estimate that already drives usage and compact
    * decisions; summing parts avoids materializing another copy of a multi-megabyte request.
    */
-  const inputGuardFor = (candidateRoute: typeof route): Response | undefined => {
+  /**
+   * Reject a request whose estimated input exceeds the FINAL routed model's effective
+   * limit (modelMaxInputTokens first, then modelContextWindows). `estimateGuidance`
+   * additionally counts the multi-agent guidance that route normalization will inject,
+   * so a pre-quota check cannot let a doomed near-limit request perform upstream quota
+   * I/O first. Only deterministic guidance is counted: the v1 proactive text for
+   * max/ultra effort, and the wrapped injectionPrompt floor on the v2 surface; the
+   * post-normalization re-validation below re-measures the ACTUAL injected text.
+   */
+  const inputGuardFor = (
+    candidateRoute: typeof route,
+    options: { estimateGuidance?: boolean } = {},
+  ): Response | undefined => {
     const effectiveLimit =
       candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
       ?? candidateRoute.provider.modelContextWindows?.[candidateRoute.modelId];
@@ -1631,6 +1650,21 @@ async function handleResponsesInner(
     const countText = (text: string) => {
       estimatedInputTokens += estimateTokens(text, candidateRoute.modelId);
     };
+    if (options.estimateGuidance) {
+      const surface = collabSurface(parsed);
+      if (surface === "v1" && (parsed.options.reasoning === "max" || parsed.options.reasoning === "ultra")) {
+        countText(`<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`);
+      } else if (
+        surface === "v2"
+        && config.multiAgentGuidanceEnabled !== false
+        && typeof config.injectionPrompt === "string"
+        && config.injectionPrompt.length > 0
+      ) {
+        // Floor of the injected guidance: placeholders resolve to at least the empty
+        // string, and roster/fallback payloads only add more characters.
+        countText(`<multi_agent_mode>${applyInjectionPlaceholders(config.injectionPrompt, "", "", "", "")}</multi_agent_mode>`);
+      }
+    }
     for (const msg of parsed.context.messages) {
       const content = msg.content;
       if (typeof content === "string") {
@@ -1732,7 +1766,7 @@ async function handleResponsesInner(
   const initialInputGuard = hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
     ? undefined
-    : inputGuardFor(route);
+    : inputGuardFor(route, { estimateGuidance: true });
   if (initialInputGuard) return initialInputGuard;
 
   // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
@@ -1781,7 +1815,7 @@ async function handleResponsesInner(
         if (slugsEquivalent(candidate, route.modelId)) continue;
         try {
           const candidateRoute = routeModel(config, candidate, evidenceFromBody(parsed._rawBody));
-          const candidateGuard = inputGuardFor(candidateRoute);
+          const candidateGuard = inputGuardFor(candidateRoute, { estimateGuidance: true });
           if (candidateGuard) return candidateGuard;
         } catch (err) {
           if (err instanceof NoAvailableComboTargetsError) {
@@ -1973,7 +2007,7 @@ async function handleResponsesInner(
 
   // Input-size guard, final route: subagent fallback may have settled a different model or
   // provider, so re-validate before auth, adapter construction, or upstream I/O.
-  const finalInputGuard = inputGuardFor(route);
+  const finalInputGuard = inputGuardFor(route, { estimateGuidance: true });
   if (finalInputGuard) return finalInputGuard;
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
@@ -1990,6 +2024,12 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
+  // Input-size guard, post-normalization: route normalization may have injected
+  // multi-agent guidance (developer message) that pushes a near-limit request over the
+  // window. Re-measure against the ACTUAL parsed context before authentication, adapter
+  // construction, or upstream I/O.
+  const postNormalizationGuard = inputGuardFor(route);
+  if (postNormalizationGuard) return postNormalizationGuard;
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {

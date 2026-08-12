@@ -94,6 +94,34 @@ describe("routed Responses custom-tool compatibility", () => {
     });
   });
 
+  test("preserves unchanged sibling subtrees by reference during the upstream rewrite", () => {
+    const nestedRef = { leaf: "keep me" };
+    const hugeSibling = {
+      type: "function",
+      name: "unchanged_tool",
+      parameters: { type: "object", properties: { nested: nestedRef } },
+    };
+    const raw = {
+      model: "deepseek-v4-flash",
+      tools: [
+        { type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar" } },
+        hugeSibling,
+      ],
+    };
+
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw);
+    expect(rewritten.names).toEqual(new Set(["exec"]));
+    const body = rewritten.body as typeof raw;
+    expect(body.tools[0]).toMatchObject({ type: "function", name: "exec" });
+    // Copy-on-write: the unchanged sibling keeps its exact reference, including its
+    // nested subtree, so large untouched payloads are never duplicated in memory.
+    expect(body.tools[1]).toBe(hugeSibling);
+    expect(
+      (body.tools[1] as { parameters: { properties: { nested: unknown } } })
+        .parameters.properties.nested,
+    ).toBe(nestedRef);
+  });
+
   test("restores deep function-call payloads without overflowing the call stack", () => {
     const DEPTH = 60_000;
     let nested: unknown = {
@@ -110,7 +138,12 @@ describe("routed Responses custom-tool compatibility", () => {
     expect(restored.changed).toBe(true);
     let node: unknown = restored.value;
     for (let i = 0; i < DEPTH; i++) node = (node as { wrapper: { inner: unknown } }).wrapper.inner;
-    expect(node).toMatchObject({ type: "custom_tool_call", name: "exec", input: "echo" });
+    expect(node).toMatchObject({
+      type: "custom_tool_call",
+      id: "ctc_exec",
+      name: "exec",
+      input: "echo",
+    });
     expect((node as Record<string, unknown>).arguments).toBeUndefined();
   });
 
