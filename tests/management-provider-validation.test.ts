@@ -30,6 +30,7 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
+import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -125,6 +126,39 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("service-tier validation and public projection stay in the management boundary", () => {
+    expect(providerServiceTierConfigError("relay", {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      modelSupportsServiceTier: { verified: true, blocked: false },
+    })).toBeNull();
+    expect(providerServiceTierConfigError("relay", {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      modelSupportsServiceTier: { verified: "yes" },
+    })).toContain("modelSupportsServiceTier.verified must be a boolean");
+
+    const config = {
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          apiKey: "sk-never-project",
+          modelSupportsServiceTier: { verified: true },
+        },
+      },
+    } as unknown as OcxConfig;
+    const dto = withProviderServiceTierDTO(
+      { providers: { relay: { hasApiKey: true } } },
+      config,
+    ) as { providers: { relay: Record<string, unknown> } };
+    expect(dto.providers.relay).toMatchObject({
+      hasApiKey: true,
+      modelSupportsServiceTier: { verified: true },
+    });
+    expect(JSON.stringify(dto)).not.toContain("sk-never-project");
+  });
+
   test("validates and exposes structured-output model opt-outs", () => {
     const provider = {
       adapter: "openai-chat",

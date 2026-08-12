@@ -76,6 +76,7 @@ import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from ".
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
+import { withProviderServiceTierDTO } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
@@ -111,7 +112,7 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   if (url.pathname === "/api/config" && req.method === "GET") {
-    return jsonResponse(safeConfigDTO(config));
+    return jsonResponse(withProviderServiceTierDTO(safeConfigDTO(config), config));
   }
 
   if (url.pathname === "/api/config" && req.method === "PUT") {
