@@ -24,6 +24,7 @@ import {
   type RouteResult,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
+import { resolveProductionRouteSubject } from "../../routing/compatibility/subject";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -1779,6 +1780,23 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name);
+  // CL-09: attach only the opaque exact route-subject identity to the attempt.
+  // This is best-effort passive metadata: no Lab state is created and failure
+  // must never alter, retry, or delay the upstream request.
+  if (logCtx.activeAttempt && !logCtx.activeAttempt.labRouteSubjectId) {
+    try {
+      const passiveSubject = resolveProductionRouteSubject(
+        config,
+        route.providerName,
+        route.modelId,
+        route.provider,
+        inboundWire,
+      );
+      if (passiveSubject) logCtx.activeAttempt.labRouteSubjectId = passiveSubject.subjectId;
+    } catch {
+      // Omit passive linkage when exact subject construction is unavailable.
+    }
+  }
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 
   if (adapter.name === "kiro" && parsed.previousResponseId && !parsed._previousResponseInputExpanded) {
