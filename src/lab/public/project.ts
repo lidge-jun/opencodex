@@ -104,5 +104,3 @@ export function projectPublicEvidenceRecord(
 
   return { status: "exportable", record: validatePublicEvidenceRecord(record) };
 }
-
-export const projectPublicEvidence = projectPublicEvidenceRecord;
