@@ -410,4 +410,47 @@ describe("command-code account pool priority", () => {
     const sel = resolveCommandCodeAccountForSession("pinned-sess", config);
     expect(sel.accountId).toBe(aId);
   });
+
+  test("priority tier constrains round-robin and fill-first selection", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    setCachedProviderAccountQuotaForTests("command-code", aId, { fiveHourPercent: 20 });
+    setCachedProviderAccountQuotaForTests("command-code", bId, { fiveHourPercent: 20 });
+
+    for (const strategy of ["round-robin", "fill-first"] as const) {
+      clearCommandCodeAccountPoolState();
+      clearPoolRotationState();
+      const config = {
+        ...cfg(true, 80, { strategy }),
+        commandCodeAccountPool: {
+          enabled: true,
+          autoSwitchThreshold: 80,
+          strategy,
+          accountPriorities: { [bId]: 10 },
+        },
+      } as OcxConfig;
+      expect(resolveCommandCodeAccountForSession(`${strategy}-priority`, config).accountId).toBe(bId);
+    }
+  });
+
+  test("manual pin constrains round-robin and fill-first selection", async () => {
+    const { aId, bId } = await seedTwoAccounts();
+    setCachedProviderAccountQuotaForTests("command-code", aId, { fiveHourPercent: 20 });
+    setCachedProviderAccountQuotaForTests("command-code", bId, { fiveHourPercent: 20 });
+
+    for (const strategy of ["round-robin", "fill-first"] as const) {
+      clearCommandCodeAccountPoolState();
+      clearPoolRotationState();
+      const config = {
+        ...cfg(true, 80, { strategy }),
+        commandCodeAccountPool: {
+          enabled: true,
+          autoSwitchThreshold: 80,
+          strategy,
+          accountPriorities: { [bId]: 10 },
+          activeAccountPinned: aId,
+        },
+      } as OcxConfig;
+      expect(resolveCommandCodeAccountForSession(`${strategy}-pin`, config).accountId).toBe(aId);
+    }
+  });
 });

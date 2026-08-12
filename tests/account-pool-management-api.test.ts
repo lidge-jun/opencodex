@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../src/codex/auth-api";
-import { saveConfig } from "../src/config";
+import { loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -540,6 +540,21 @@ describe("Command Code account pool strategy management API", () => {
       const body = await res.json() as { accounts: Array<{ id: string; quota?: unknown }> };
       expect(body.accounts.length).toBe(1);
       expect(body.accounts[0]!.id).toBe("ccaa1111");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("manual Command Code account activation persists the pool pin", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", accountId: "ccaa1111" }),
+      });
+      expect(res.status).toBe(200);
+      expect(loadConfig().commandCodeAccountPool?.activeAccountPinned).toBe("ccaa1111");
     } finally {
       await server.stop(true);
     }

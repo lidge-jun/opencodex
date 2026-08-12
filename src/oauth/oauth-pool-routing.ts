@@ -258,28 +258,11 @@ export function getOAuthPoolRetryAfterSeconds(provider: string, now = Date.now()
   return Math.max(1, Math.ceil((earliest - now) / 1000));
 }
 
-function pickLowestUsage(provider: string, config: OcxConfig, hooks: OAuthPoolProviderHooks, eligibility: OAuthPoolEligibilityHooks, excludeId: string | undefined, now: number): string | null {
-  const eligible = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, excludeId, now);
-  if (eligible.length === 0) return null;
-  let best = eligible[0]!;
-  let bestScore = usageScore(provider, best);
-  for (let i = 1; i < eligible.length; i++) {
-    const id = eligible[i]!;
-    const score = usageScore(provider, id);
-    if (score < bestScore) {
-      best = id;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
 /** Next eligible account in stable order after `afterId` (wrapping). */
 function pickNextFillFirstAccount(
   provider: string,
   config: OcxConfig,
   hooks: OAuthPoolProviderHooks,
-  eligibility: OAuthPoolEligibilityHooks,
   afterId: string,
   eligible: readonly string[],
 ): string | null {
@@ -316,14 +299,14 @@ function pickAlternateAccount(
   now: number,
 ): string | null {
   const strategy = oauthPoolStrategy(config, hooks);
-  const eligible = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, excludeId, now);
+  const eligible = eligibleWithPriority(provider, config, hooks, eligibility, now, excludeId);
   if (strategy === "round-robin") {
     return pickRoundRobinAccount(hooks.poolKey, eligible, stickyLimitForPool(config, hooks));
   }
   if (strategy === "fill-first") {
-    return pickNextFillFirstAccount(provider, config, hooks, eligibility, excludeId, eligible);
+    return pickNextFillFirstAccount(provider, config, hooks, excludeId, eligible);
   }
-  return pickLowestUsage(provider, config, hooks, eligibility, excludeId, now);
+  return pickLowestUsageAmong(provider, eligible);
 }
 
 function pruneExpiredAffinity(provider: string, now: number): void {
@@ -376,8 +359,12 @@ function isActiveUnderFillFirstThreshold(provider: string, config: OcxConfig, ho
  * Fill-first: keep eligible active under threshold; otherwise advance to the next
  * eligible id in stable sorted order after the current active (wrapping).
  */
-function pickFillFirstAccount(provider: string, config: OcxConfig, hooks: OAuthPoolProviderHooks, eligibility: OAuthPoolEligibilityHooks, now: number): string | null {
-  const eligible = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, undefined, now);
+function pickFillFirstAccount(
+  provider: string,
+  config: OcxConfig,
+  hooks: OAuthPoolProviderHooks,
+  eligible: readonly string[],
+): string | null {
   if (eligible.length === 0) return null;
 
   const set = getAccountSet(provider);
@@ -394,7 +381,7 @@ function pickFillFirstAccount(provider: string, config: OcxConfig, hooks: OAuthP
     return ordered[0] ?? null;
   }
 
-  return pickNextFillFirstAccount(provider, config, hooks, eligibility, active, eligible);
+  return pickNextFillFirstAccount(provider, config, hooks, active, eligible);
 }
 
 /**
@@ -405,14 +392,12 @@ function pickUnboundStrategyAccount(
   provider: string,
   config: OcxConfig,
   hooks: OAuthPoolProviderHooks,
-  eligibility: OAuthPoolEligibilityHooks,
-  now: number,
+  eligible: readonly string[],
 ): { accountId: string; reason: "round-robin" | "fill-first" } | null {
   const strategy = oauthPoolStrategy(config, hooks);
   if (strategy === "quota") return null;
 
   if (strategy === "round-robin") {
-    const eligible = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, undefined, now);
     const limit = stickyLimitForPool(config, hooks);
     const picked = pickRoundRobinAccount(hooks.poolKey, eligible, limit);
     if (!picked) return null;
@@ -421,7 +406,7 @@ function pickUnboundStrategyAccount(
   }
 
   if (strategy === "fill-first") {
-    const picked = pickFillFirstAccount(provider, config, hooks, eligibility, now);
+    const picked = pickFillFirstAccount(provider, config, hooks, eligible);
     if (!picked) return null;
     return { accountId: picked, reason: "fill-first" };
   }
@@ -449,8 +434,15 @@ function applyPriorityTier(
   );
 }
 
-function eligibleWithPriority(provider: string, config: OcxConfig, hooks: OAuthPoolProviderHooks, eligibility: OAuthPoolEligibilityHooks, now: number): string[] {
-  const base = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, undefined, now);
+function eligibleWithPriority(
+  provider: string,
+  config: OcxConfig,
+  hooks: OAuthPoolProviderHooks,
+  eligibility: OAuthPoolEligibilityHooks,
+  now: number,
+  excludeId?: string,
+): string[] {
+  const base = getEligibleOAuthPoolAccounts(provider, hooks, eligibility, excludeId, now);
   return [...applyPriorityTier(provider, config, hooks, eligibility, base, now)];
 }
 
@@ -512,10 +504,14 @@ export function resolveOAuthPoolAccountForSession(
   }
 
   const strategy = oauthPoolStrategy(config, hooks);
+  // Selection order is a boundary, not a quota-only preference: every strategy
+  // must rotate only inside the highest usable tier (or the manual pin's tier).
+  const eligible = eligibleWithPriority(provider, config, hooks, eligibility, now);
   // No session identity (Desktop turns without a sticky key): hold the current
   // active under RR/fill-first instead of treating every turn as a new session.
   if (!key && (strategy === "round-robin" || strategy === "fill-first")) {
     const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
+      && eligible.includes(set.activeAccountId)
       && !isCooled(provider, set.activeAccountId, now)
       && !isSoftAvoided(provider, set.activeAccountId, now)
       && isPoolCredentialUsable(provider, set.activeAccountId, now, eligibility.canRefresh);
@@ -524,7 +520,7 @@ export function resolveOAuthPoolAccountForSession(
     }
   }
 
-  const strategyPick = pickUnboundStrategyAccount(provider, config, hooks, eligibility, now);
+  const strategyPick = pickUnboundStrategyAccount(provider, config, hooks, eligible);
   if (strategyPick) {
     if (key && normalizeAffinityComponent(strategyPick.accountId)) {
       affinity.set(key, { accountId: strategyPick.accountId, lastUsedAt: now });
@@ -535,6 +531,7 @@ export function resolveOAuthPoolAccountForSession(
 
   const threshold = oauthPoolAutoSwitchThreshold(config, hooks);
   const activeOk = set.accounts.some(a => a.id === set.activeAccountId && a.needsReauth !== true)
+    && eligible.includes(set.activeAccountId)
     && !isCooled(provider, set.activeAccountId, now)
     && !isSoftAvoided(provider, set.activeAccountId, now)
     && isPoolCredentialUsable(provider, set.activeAccountId, now, eligibility.canRefresh);
@@ -546,7 +543,6 @@ export function resolveOAuthPoolAccountForSession(
   // active, unless a live pin lowers the tier ceiling (Codex parity). This
   // applies regardless of the active account's usage so an operator's ordering
   // is honored on the next unbound session.
-  const eligible = eligibleWithPriority(provider, config, hooks, eligibility, now);
   const pinned = hooks.pinnedOf(config);
   const pinnedLive = pinned !== undefined && eligible.includes(pinned) && isActiveUnderFillFirstThreshold(provider, config, hooks, pinned);
   if (!pinnedLive && eligible.length > 0 && !eligible.includes(set.activeAccountId)) {
@@ -564,7 +560,7 @@ export function resolveOAuthPoolAccountForSession(
         accountId = set.activeAccountId;
         reason = "active";
       } else {
-        const picked = pickLowestUsage(provider, config, hooks, eligibility, undefined, now);
+        const picked = pickLowestUsageAmong(provider, eligible);
         if (picked) {
           accountId = picked;
           reason = activeOk && picked === set.activeAccountId ? "active" : "lowest-usage";
@@ -577,7 +573,7 @@ export function resolveOAuthPoolAccountForSession(
       accountId = set.activeAccountId;
       reason = "active";
     } else {
-      const picked = pickLowestUsage(provider, config, hooks, eligibility, set.activeAccountId, now);
+      const picked = pickLowestUsageAmong(provider, eligible.filter(id => id !== set.activeAccountId));
       if (picked) {
         accountId = picked;
         reason = "only-eligible";

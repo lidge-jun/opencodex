@@ -299,6 +299,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     if (provider === "command-code") {
       const { resetCommandCodeRoutingForManualSelection } = await import("../../oauth/command-code-routing");
+      config.commandCodeAccountPool = {
+        ...(config.commandCodeAccountPool ?? {}),
+        activeAccountPinned: body.accountId,
+      };
+      saveConfigPreservingClaudeCode(config);
       resetCommandCodeRoutingForManualSelection(body.accountId);
     }
     const { clearModelCache } = await import("../../codex/model-cache");

@@ -86,6 +86,7 @@ describe("state-store sweeper", () => {
       "api-key-cooldowns",
       "combo-target-cooldowns",
       "anthropic-routing-health",
+      "oauth-pool-routing-health",
       "xai-refresh-verdicts",
       "responses-continuation",
       "antigravity-replay",
