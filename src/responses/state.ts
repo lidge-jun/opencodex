@@ -717,6 +717,7 @@ export async function flushResponseState(): Promise<void> {
   if (persistTimer) await persistNow(pendingPersistPath ?? snapshotPath(), true);
 }
 
+/** Normalize a Responses `input` field into an item array (strings become a single user item). */
 function inputItems(input: unknown): unknown[] {
   if (input === undefined) return [];
   if (Array.isArray(input)) return input;

@@ -1612,14 +1612,16 @@ async function handleResponsesInner(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
 
-  // Input-size guard: refuse to forward an input that exceeds the model's effective input
-  // limit (per-model maximum input, falling back to the advertised context window). The
-  // client compacts well before this limit, so an oversized body means abnormal duplication
-  // (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M). Forwarding
-  // it on Windows balloons bun RSS and can native-crash the whole proxy (upstream Bun memory
-  // bug, issue #314), taking every active thread down at once. Fail one request cleanly
-  // instead. Reuse the model/CJK-aware estimate that already drives usage and compact
-  // decisions; summing parts avoids materializing another copy of a multi-megabyte request.
+  /**
+   * Input-size guard: refuse to forward an input that exceeds the model's effective input
+   * limit (per-model maximum input, falling back to the advertised context window). The
+   * client compacts well before this limit, so an oversized body means abnormal duplication
+   * (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M). Forwarding
+   * it on Windows balloons bun RSS and can native-crash the whole proxy (upstream Bun memory
+   * bug, issue #314), taking every active thread down at once. Fail one request cleanly
+   * instead. Reuse the model/CJK-aware estimate that already drives usage and compact
+   * decisions; summing parts avoids materializing another copy of a multi-megabyte request.
+   */
   const inputGuardFor = (candidateRoute: typeof route): Response | undefined => {
     const effectiveLimit =
       candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
@@ -1648,9 +1650,11 @@ async function handleResponsesInner(
     for (const prompt of parsed.context.systemPrompt ?? []) {
       countText(prompt);
     }
-    // Estimate tool schemas structurally instead of serializing a full copy: the walk
-    // stops as soon as the running estimate crosses the effective limit, so an oversized
-    // schema never materializes as one giant string before the 413.
+    /**
+     * Estimate tool schemas structurally instead of serializing a full copy: the walk
+     * stops as soon as the running estimate crosses the effective limit, so an oversized
+     * schema never materializes as one giant string before the 413.
+     */
     const countJsonTokens = (value: unknown): void => {
       if (estimatedInputTokens > effectiveLimit) return;
       if (typeof value === "string") {
