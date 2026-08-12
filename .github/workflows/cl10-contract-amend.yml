@@ -118,10 +118,10 @@ jobs:
 
           rm .github/workflows/cl10-contract-amend.yml
           git diff --check
-          git diff --exit-code -- devlog/_plan/260807_compatibility_lab/010_cl10_public_evidence_export.md docs/superpowers/specs/2026-08-12-cl10-public-evidence-design.md >/dev/null && {
+          if git diff --quiet -- devlog/_plan/260807_compatibility_lab/010_cl10_public_evidence_export.md docs/superpowers/specs/2026-08-12-cl10-public-evidence-design.md; then
             echo 'expected contract changes were not produced' >&2
             exit 1
-          }
+          fi
 
       - name: Commit amendments and remove helper
         shell: bash
