@@ -243,7 +243,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           const limit = takeIntegerOption(rest, "--limit", { min: 1 });
           rejectArgs(rest, USAGE);
           if (!subjectId) throw new CliUsageError("--subject is required", USAGE);
-          const result = queryPassiveProductionSignals(subjectId, limit);
+          const result = queryPassiveProductionSignals(subjectId, limit, configDir);
           printData(result, wantsJson, passiveProductionLines(result));
           return;
         }

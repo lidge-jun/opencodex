@@ -28,7 +28,7 @@ independent review, blockers, and whether a later phase is authorized.
 | CL-06 | `feat/cl-06-routing-profile-compatibility` | `1072b9c39c48a4982229131613ac300560740742` | `b96eae83f2a6d1654472aeeef84799070743aeb8` | [#1394](https://github.com/lidge-jun/opencodex/pull/1394) | MERGED TO `dev` at `b66e33ce7207d91014644d99317e456c992a3418`; ACCEPTED/CLOSED |
 | CL-07 | `feat/cl-07-task-effectiveness-producer` | `b66e33ce7207d91014644d99317e456c992a3418` | `0efe2c69514d3baefee686383fe740e4ecb37d83` | [#1438](https://github.com/lidge-jun/opencodex/pull/1438) | MERGED TO `dev` at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600`; ACCEPTED/CLOSED |
 | CL-08 | `feat/cl-08-lab-automation` | `da8ebd3135553c1d4dd85c1f258e998a5de14f28` | `bfaad5d01a975e8d48b9437bc0a0537077a04134` | [#1447](https://github.com/lidge-jun/opencodex/pull/1447) | MERGED TO `dev` at `3b8f9487676fe258d76295e49e7db75aca26a4cb`; ACCEPTED/CLOSED |
-| CL-09 | `feat/cl-09-passive-production-evidence` | `3b8f9487676fe258d76295e49e7db75aca26a4cb` | CONTRACT DRAFT | [#1489](https://github.com/lidge-jun/opencodex/pull/1489) | CONTRACT REVIEW; runtime implementation not authorized |
+| CL-09 | `feat/cl-09-passive-production-evidence` | `3b8f9487676fe258d76295e49e7db75aca26a4cb` | IMPLEMENTATION REVIEW CANDIDATE | [#1489](https://github.com/lidge-jun/opencodex/pull/1489) | IMPLEMENTED; independent final review and merge acceptance pending |
 
 The CL-01 starting SHA is the exact CL-00 tip recorded when CL-01 began. Its
 moving base-ref name is not a substitute for that historical SHA.
@@ -168,7 +168,7 @@ Claims cannot produce `PROBED`/`VERIFIED`.
 - CL-06: **ACCEPTED/CLOSED** via [#1394](https://github.com/lidge-jun/opencodex/pull/1394), merged to `dev` at `b66e33ce7207d91014644d99317e456c992a3418`.
 - CL-07: **ACCEPTED/CLOSED** via [#1438](https://github.com/lidge-jun/opencodex/pull/1438), merged to `dev` at `02e62fc8c7354c544ef71f8bb3db5ebba42cb600`; accepted head `0efe2c69514d3baefee686383fe740e4ecb37d83`; plan `007_cl07_task_effectiveness.md`.
 - CL-08: **ACCEPTED/CLOSED** via [#1447](https://github.com/lidge-jun/opencodex/pull/1447), merged to `dev` at `3b8f9487676fe258d76295e49e7db75aca26a4cb`; final source head `bfaad5d01a975e8d48b9437bc0a0537077a04134`; plan `008_cl08_automation.md`.
-- CL-09: **CONTRACT DRAFT** via [#1489](https://github.com/lidge-jun/opencodex/pull/1489), based exactly on CL-08 merge `3b8f9487676fe258d76295e49e7db75aca26a4cb`; runtime implementation is not authorized until contract review.
+- CL-09: **IMPLEMENTED / REVIEW PENDING** via [#1489](https://github.com/lidge-jun/opencodex/pull/1489); the phase started from CL-08 merge `3b8f9487676fe258d76295e49e7db75aca26a4cb`, runtime work was rebased to then-current `dev@e8db4e0365b12a314d1c08ec2cf81599efe5b2d3`, and independent final review plus merge acceptance remain pending.
 
 ## CL-06 closure log
 

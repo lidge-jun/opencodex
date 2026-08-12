@@ -10,7 +10,7 @@
 
 CL-08 is merged and closed. This document defines the next Compatibility Lab boundary.
 
-The CL-09 contract was frozen first on this branch. Runtime implementation now proceeds under this contract and remains subject to independent final review before merge.
+The CL-09 contract was frozen first on this branch. Runtime implementation is now complete on this branch and remains subject to independent final review before merge.
 
 ---
 
@@ -457,7 +457,7 @@ Completed first on this PR:
 - freeze passive evidence semantics;
 - explicitly reject duplicate shadow execution and direct verdict promotion.
 
-No runtime implementation.
+No runtime implementation was part of CL-09.0; CL-09.1 through CL-09.4 are implemented later on this PR.
 
 ## CL-09.1 - Exact attempt subject linkage
 

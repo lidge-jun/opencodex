@@ -103,14 +103,23 @@ export function derivePassiveProductionSignals(
   if (!isLabRouteSubjectId(subjectId)) throw new Error("invalid passive production subject id");
   const maxResults = boundedLimit(limit);
   const signals: PassiveRouteSignalV1[] = [];
+  // readRecentUsageEntries returns the selected append-only rows oldest-first.
+  // Tail selection, reverse iteration, and signals[0] as the newest observation rely on this ordering.
   const scanRows = entries.slice(-PASSIVE_PRODUCTION_MAX_SCAN_ROWS);
+  const scanTruncated = entries.length > PASSIVE_PRODUCTION_MAX_SCAN_ROWS;
+  let resultTruncated = false;
 
-  for (let rowIndex = scanRows.length - 1; rowIndex >= 0 && signals.length < maxResults; rowIndex--) {
+  scan: for (let rowIndex = scanRows.length - 1; rowIndex >= 0; rowIndex--) {
     const entry = scanRows[rowIndex]!;
     const attempts = entry.attempts ?? [];
-    for (let attemptIndex = attempts.length - 1; attemptIndex >= 0 && signals.length < maxResults; attemptIndex--) {
+    for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex--) {
       const signal = signalFor(entry, attempts[attemptIndex]!);
-      if (signal?.subjectId === subjectId) signals.push(signal);
+      if (signal?.subjectId !== subjectId) continue;
+      if (signals.length >= maxResults) {
+        resultTruncated = true;
+        break scan;
+      }
+      signals.push(signal);
     }
   }
 
@@ -130,7 +139,7 @@ export function derivePassiveProductionSignals(
     },
     signals,
     scannedRows: scanRows.length,
-    truncated: entries.length > PASSIVE_PRODUCTION_MAX_SCAN_ROWS || signals.length === maxResults,
+    truncated: scanTruncated || resultTruncated,
   };
 }
 
@@ -138,9 +147,12 @@ export function derivePassiveProductionSignals(
 export function queryPassiveProductionSignals(
   subjectId: string,
   limit?: number,
+  configDir?: string,
 ): PassiveProductionQueryResultV1 {
   return derivePassiveProductionSignals(
-    readRecentUsageEntries(PASSIVE_PRODUCTION_MAX_SCAN_ROWS),
+    // Read one row past the scan cap so the projection can distinguish an exact-cap history
+    // from a history with older rows omitted by the bounded reader.
+    readRecentUsageEntries(PASSIVE_PRODUCTION_MAX_SCAN_ROWS + 1, configDir),
     subjectId,
     limit,
   );

@@ -4,7 +4,7 @@
 
 **Authority:** `devlog/_plan/260807_compatibility_lab/009_cl09_passive_production_evidence.md`
 
-**Current base:** `dev@e8db4e0365b12a314d1c08ec2cf81599efe5b2d3`
+**Current base:** `dev@e8db4e0365b12a314d1c08ec2cf81599efe5b2d3`, a later `dev` descendant of the CL-08 merge `3b8f9487676fe258d76295e49e7db75aca26a4cb` used as the implementation snapshot.
 
 ## Task 1 - Exact production-attempt subject linkage
 
@@ -67,4 +67,4 @@
 
 Tasks 1-4 are implemented on the PR branch. The implementation uses the existing exact `RouteSubjectV1` identity per real attempt, a bounded read-only production-signal adapter over `usage.jsonl`, and additive Lab API/CLI/Compatibility Matrix read surfaces. Focused CL-09 tests cover legacy/malformed linkage, exact fallback attribution, bounded scans/results, strict data minimization with privacy canaries, source-retention behavior, and static no-feedback guards for routing and CL-08 planning.
 
-The final verification gate is intentionally not marked complete here until the exact final head passes required CI/review checks. PR #1489 remains draft and must not be merged before independent final review.
+The final verification gate is intentionally not marked complete here until the exact final head passes required CI/review checks. PR #1489 remains open and must not be merged before independent final review.

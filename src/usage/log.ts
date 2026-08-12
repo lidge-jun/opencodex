@@ -132,8 +132,8 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
   return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
-export function usageLogPath(): string {
-  return join(getConfigDir(), "usage.jsonl");
+export function usageLogPath(configDir?: string): string {
+  return join(configDir ?? getConfigDir(), "usage.jsonl");
 }
 
 export function usageTotalTokens(usage: OcxUsage | undefined): number | undefined {
@@ -657,9 +657,9 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
  * Read only the newest `limit` usage.jsonl rows without loading the whole append-only
  * file into memory. Used by request-log hydration on `ocx start`.
  */
-export function readRecentUsageEntries(limit: number): PersistedUsageEntry[] {
+export function readRecentUsageEntries(limit: number, configDir?: string): PersistedUsageEntry[] {
   if (!Number.isFinite(limit) || limit <= 0) return [];
-  const path = usageLogPath();
+  const path = usageLogPath(configDir);
   if (!existsSync(path)) return [];
   let fd: number | undefined;
   try {

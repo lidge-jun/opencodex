@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
   normalizeUsageEntryForTest,
@@ -9,6 +11,7 @@ import {
   PASSIVE_PRODUCTION_MAX_LIMIT,
   PASSIVE_PRODUCTION_MAX_SCAN_ROWS,
   derivePassiveProductionSignals,
+  queryPassiveProductionSignals,
 } from "../src/lab/query/passive-production";
 
 function usageEntryWithAttempt(attempt: Record<string, unknown>): PersistedUsageEntry {
@@ -116,6 +119,77 @@ describe("CL-09 bounded passive production projection", () => {
     expect(result.summary.recentRouteErrorSignals).toBe(0);
   });
 
+  test("classifies cancellation, environmental failures, and route errors independently", () => {
+    const subjectId = "4".repeat(64);
+    const cancelled = usageEntryWithAttempt({ labRouteSubjectId: subjectId, status: 499 });
+    cancelled.status = 499;
+    cancelled.closeReason = "client_cancel";
+
+    const environmental = usageEntryWithAttempt({
+      labRouteSubjectId: subjectId,
+      status: 429,
+      errorCode: "rate_limit_error",
+    });
+    environmental.requestId = "ocx-cl09-environmental";
+    environmental.status = 429;
+
+    const routeError = usageEntryWithAttempt({
+      labRouteSubjectId: subjectId,
+      status: 502,
+      errorCode: "upstream_error",
+    });
+    routeError.requestId = "ocx-cl09-route-error";
+    routeError.status = 502;
+
+    const result = derivePassiveProductionSignals([cancelled, environmental, routeError], subjectId);
+
+    expect(result.signals.map(signal => signal.outcome).sort()).toEqual([
+      "client_cancel",
+      "environmental",
+      "route_error",
+    ]);
+    expect(result.summary.recentRouteErrorSignals).toBe(1);
+  });
+
+  test("reports result truncation only when another matching signal exists", () => {
+    const subjectId = "5".repeat(64);
+    const entries = Array.from({ length: 3 }, (_, index) => {
+      const entry = usageEntryWithAttempt({ labRouteSubjectId: subjectId });
+      entry.requestId = `ocx-cl09-limit-${index}`;
+      entry.timestamp = index;
+      return entry;
+    });
+
+    expect(derivePassiveProductionSignals(entries.slice(0, 2), subjectId, 2).truncated).toBe(false);
+    expect(derivePassiveProductionSignals(entries, subjectId, 2).truncated).toBe(true);
+  });
+
+  test("uses the selected config directory and detects scan overflow", () => {
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-cl09-passive-"));
+    try {
+      const subjectId = "6".repeat(64);
+      const otherSubjectId = "7".repeat(64);
+      const entries = Array.from({ length: PASSIVE_PRODUCTION_MAX_SCAN_ROWS + 1 }, (_, index) => {
+        const entry = usageEntryWithAttempt({
+          labRouteSubjectId: index === PASSIVE_PRODUCTION_MAX_SCAN_ROWS ? subjectId : otherSubjectId,
+        });
+        entry.requestId = `ocx-cl09-config-${index}`;
+        entry.timestamp = index;
+        return entry;
+      });
+      writeFileSync(join(configDir, "usage.jsonl"), `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
+
+      const result = queryPassiveProductionSignals(subjectId, 10, configDir);
+
+      expect(result.signals).toHaveLength(1);
+      expect(result.scannedRows).toBe(PASSIVE_PRODUCTION_MAX_SCAN_ROWS);
+      expect(result.truncated).toBe(true);
+      expect(result.signals[0]?.requestRef).toBe(`ocx-cl09-config-${PASSIVE_PRODUCTION_MAX_SCAN_ROWS}`);
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
   test("bounds result count and scanned source rows", () => {
     const subjectId = "d".repeat(64);
     const entries = Array.from({ length: PASSIVE_PRODUCTION_MAX_SCAN_ROWS + 25 }, (_, index) => {
@@ -200,6 +274,8 @@ describe("CL-09 no-feedback architecture guards", () => {
     expect(source).toContain("resolveProductionRouteSubject");
     expect(source).not.toContain("queryPassiveProductionSignals");
     expect(source).not.toContain("readRecentUsageEntries");
+    const cliSource = readFileSync("src/cli/lab.ts", "utf8");
+    expect(cliSource).toContain("queryPassiveProductionSignals(subjectId, limit, configDir)");
   });
 
   test("passive query remains read-side and cannot create Lab execution or evidence", () => {

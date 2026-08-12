@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { labInstallationSaltPath, labRoot } from "../paths";
 
 const SALT_BYTES = 32;
+const installationSaltCache = new Map<string, Uint8Array>();
 const UNSUPPORTED_DIRECTORY_FSYNC_CODES = new Set(["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
 
 function readSaltFile(path: string): Uint8Array {
@@ -14,11 +15,19 @@ function readSaltFile(path: string): Uint8Array {
   return new Uint8Array(bytes);
 }
 
+function cacheSalt(path: string, salt: Uint8Array): Uint8Array {
+  const cached = new Uint8Array(salt);
+  installationSaltCache.set(path, cached);
+  return new Uint8Array(cached);
+}
+
 /** Read the existing local fingerprint salt without creating Lab state. */
 export function readExistingInstallationSalt(configDir?: string): Uint8Array | null {
   const path = labInstallationSaltPath(configDir);
+  const cached = installationSaltCache.get(path);
+  if (cached) return new Uint8Array(cached);
   try {
-    return readSaltFile(path);
+    return cacheSalt(path, readSaltFile(path));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -56,7 +65,7 @@ export function readInstallationSalt(configDir?: string): Uint8Array {
   const root = labRoot(configDir);
   mkdirSync(root, { recursive: true, mode: 0o700 });
 
-  try { return readSaltFile(path); }
+  try { return cacheSalt(path, readSaltFile(path)); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -78,10 +87,10 @@ export function readInstallationSalt(configDir?: string): Uint8Array {
       linkSync(stagingPath, path);
       try { fsyncDirectory(dirname(path)); }
       catch { throw new Error("harness_failure: installation salt directory fsync failed"); }
-      return new Uint8Array(salt);
+      return cacheSalt(path, salt);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      return readSaltFile(path);
+      return cacheSalt(path, readSaltFile(path));
     }
   } finally {
     if (fd !== undefined) {
