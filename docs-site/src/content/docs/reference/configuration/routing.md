@@ -40,8 +40,9 @@ more than one provider, so use explicit namespaces when a bare model could be am
 request for `side/gpt-5.6-sol` uses only that account, even when the canonical `openai` provider is
 in Direct mode, and sends the bare `gpt-5.6-sol` model id upstream. Only bare native OpenAI-family
 ids are valid after the selector. Account-scoped ids observed in Codex's current model catalog may
-also be preserved exactly when they are not yet part of opencodex's static set; such ids remain
-selector-qualified and are not promoted into the global bare model list.
+also be preserved exactly when they are not yet part of opencodex's static set; the observation must
+carry native catalog provenance, remains qualified to its matching account selector, and is not
+promoted into the global bare model list.
 
 Exact selection bypasses Pool assignment strategy and ordinary thread affinity. If the mapped
 account is missing, paused, cooling down, unusable, or requires reauthentication, the request fails

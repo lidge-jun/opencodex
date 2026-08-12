@@ -50,7 +50,7 @@ import {
   import {
   isNativeAliasCatalogEntry,
   accountBoundNativeOpenAiSlugs,
-  observedAccountBoundNativeOpenAiSlugs,
+  accountBoundNativeOpenAiSlugsBySelector,
   disabledNativeSlugs,
   desktopAllowlistSuppressedNativeSlugs,
   NATIVE_OPENAI_MODELS,
@@ -238,9 +238,12 @@ function prepareCatalog(
   const accountNativeSlugs = accountSelectors.length > 0
     ? accountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
     : [];
-  const observedNativeSlugs = accountSelectors.length === 0
-    ? observedAccountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
-    : [];
+  const accountNativeSlugsBySelector = accountSelectors.length > 0
+    ? accountBoundNativeOpenAiSlugsBySelector(config, observedAccountNativeEntries)
+    : new Map<string, readonly string[]>();
+  // Unknown account-native ids have no safe bare/global identity. They are only projected through
+  // selector-qualified rows when a live selector is configured.
+  const observedNativeSlugs: string[] = [];
   const disabledNative = disabledNativeSlugs(config);
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
@@ -275,6 +278,7 @@ function prepareCatalog(
       disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
       accountNativeSlugs,
+      accountNativeSlugsBySelector,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(

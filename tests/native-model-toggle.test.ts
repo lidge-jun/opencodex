@@ -40,6 +40,8 @@ function nativeTemplate(): Record<string, unknown> {
       { effort: "low", description: "native low" },
       { effort: "high", description: "native high" },
     ],
+    shell_type: "shell_command",
+    comp_hash: "native-comp-hash",
   };
 }
 
@@ -142,10 +144,10 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
 
   test("observed account-only native ids stay qualified and do not expand the bare set", () => {
     const observedEntries = [
-      { slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
-      { slug: "gpt-hidden-daybreak", visibility: "hide", supported_in_api: true },
-      { slug: "gpt-not-an-api-model", visibility: "list", supported_in_api: false },
-      { slug: "provider/gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-hidden-daybreak", visibility: "hide", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-not-an-api-model", visibility: "list", supported_in_api: false },
+      { ...nativeTemplate(), slug: "provider/gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
     ];
     expect(accountBoundNativeOpenAiSlugs(observedEntries)).toContain("gpt-daybreak-blue-latest");
     expect(accountBoundNativeOpenAiSlugs(observedEntries)).not.toContain("gpt-hidden-daybreak");
@@ -172,12 +174,19 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     });
 
     expect(observedAccountBoundNativeEntries([{
+      ...nativeTemplate(),
       slug: "gpt-daybreak-blue-latest",
       visibility: "hide",
       supported_in_api: true,
       opencodex_account_observed_native: true,
     }])).toHaveLength(1);
     expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-daybreak-blue-latest"]);
+  });
+
+  test("a hand-edited cache row without native catalog provenance is ignored", () => {
+    const handEdited = [{ slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true }];
+    expect(accountBoundNativeOpenAiSlugs(handEdited)).not.toContain("gpt-daybreak-blue-latest");
+    expect(observedAccountBoundNativeEntries(handEdited)).toEqual([]);
   });
 
   test("exact account disables hide only the matching generated picker row", () => {

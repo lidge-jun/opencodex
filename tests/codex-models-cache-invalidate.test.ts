@@ -59,7 +59,16 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
       models: [{ slug: "gpt-5.5" }],
     }, null, 2) + "\n");
     writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
-      models: [{ slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true }],
+      models: [{
+        slug: "gpt-daybreak-blue-latest",
+        visibility: "list",
+        supported_in_api: true,
+        shell_type: "shell_command",
+        comp_hash: "native-comp-hash",
+        model_messages: { instructions_template: "You are Codex." },
+        base_instructions: "You are Codex.",
+        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+      }],
     }, null, 2) + "\n");
 
     expect(invalidateCodexModelsCache()).toBe(true);

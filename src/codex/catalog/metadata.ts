@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 
 import { delimiter, dirname, join, resolve } from "node:path";
 import { atomicWriteFile, expandUserPath, getConfigDir, websocketsEnabled } from "../../config";
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
+import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { clearModelCache, DEFAULT_MODEL_CACHE_TTL_MS, getFreshCached, getStaleCached, isModelsFetchCoolingDown, markModelsFetchFailure, setCached } from "../model-cache";
 import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
@@ -34,7 +35,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import type { RawEntry } from "./parsing";
 import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexModelsCache, unique } from "./bundled";
-import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
+import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
@@ -194,10 +195,35 @@ export function shouldIncludeNativeOpenAi(config: Pick<OcxConfig, "providers">):
   return !hasEnabledProvider || shouldIncludeAccountBoundNativeOpenAi(config);
 }
 
+type AccountSelectorConfig = Pick<
+  OcxConfig,
+  "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled"
+>;
+
+function mainAccountSelectors(config: AccountSelectorConfig): string[] {
+  const targets = new Map(codexAccountNamespaceEntries(config));
+  return visibleCodexAccountSelectors(config).filter(selector =>
+    isMainCodexAccountTarget(targets.get(selector) ?? ""));
+}
+
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
-export function desktopVisibleNativeSlugs(config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "combos">): string[] {
+export function desktopVisibleNativeSlugs(
+  config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "combos" | "providers"
+    | "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
+): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
-  return visibleNativeSlugs(config);
+  const visible = visibleNativeSlugs(config);
+  if (!shouldIncludeAccountBoundNativeOpenAi(config)) return visible;
+  const qualified = [...accountBoundNativeOpenAiSlugsBySelector(config).entries()].flatMap(([selector, slugs]) =>
+    slugs
+      .filter(slug => !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug))
+      .map(slug => `${selector}/${slug}`),
+  );
+  const disabled = new Set(config.disabledModels ?? []);
+  return unique([
+    ...visible,
+    ...qualified.filter(slug => !disabled.has(slug) && !disabled.has(slug.slice(slug.indexOf("/") + 1))),
+  ]);
 }
 
 export function nativeModelRows(config: Pick<OcxConfig, "disabledModels" | "combos" | "providerContextCaps">): Array<{ slug: string; disabled: boolean; contextWindow?: number }> {
@@ -262,9 +288,26 @@ export function nativeOpenAiSlugs(): string[] {
 
 const ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX = /^(?:gpt-|o1-|o3-|o4-)/;
 const ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER = "opencodex_account_observed_native";
+const ACCOUNT_BOUND_OBSERVED_SELECTORS_MARKER = "opencodex_account_observed_selectors";
 
 function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
   return !slug.includes("/") && ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX.test(slug);
+}
+
+function hasNativeCatalogProvenance(entry: RawEntry): boolean {
+  const levels = entry.supported_reasoning_levels;
+  const messages = entry.model_messages;
+  return typeof entry.base_instructions === "string"
+    && entry.base_instructions.length > 0
+    && (typeof entry.comp_hash === "string" || entry.comp_hash === null)
+    && entry.shell_type === "shell_command"
+    && Array.isArray(levels)
+    && levels.length > 0
+    && levels.every(level => typeof level === "object" && level !== null
+      && typeof (level as { effort?: unknown }).effort === "string")
+    && typeof messages === "object"
+    && messages !== null
+    && !Array.isArray(messages);
 }
 
 function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
@@ -272,6 +315,7 @@ function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
   const slug = accountBound ?? (typeof entry.slug === "string" ? entry.slug : "");
   if (!isAccountBoundOpenAiNativeSlug(slug)
     || entry.supported_in_api !== true
+    || !hasNativeCatalogProvenance(entry)
     || (entry.visibility !== "list" && entry[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER] !== true)) {
     return undefined;
   }
@@ -321,6 +365,49 @@ export function accountBoundNativeOpenAiSlugs(
     return slug === undefined ? [] : [slug];
   });
   return unique([...NATIVE_OPENAI_MODELS, ...observed]);
+}
+
+/**
+ * Resolve account-native ids per public selector. Bare observations come from Codex's main
+ * catalog/cache, so they are eligible only for selectors that target the main account. A
+ * generated qualified row carries its own selector and never gets copied to an unrelated pool
+ * account. An explicit observation marker is public selector metadata only; private account ids
+ * never enter the catalog or cache.
+ */
+export function accountBoundNativeOpenAiSlugsBySelector(
+  config: AccountSelectorConfig,
+  observedEntries: readonly RawEntry[] = [
+    ...(readCurrentCodexModelsCache()?.models ?? []),
+    ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
+      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+  ],
+): ReadonlyMap<string, readonly string[]> {
+  const selectors = visibleCodexAccountSelectors(config);
+  const mainSelectors = new Set(mainAccountSelectors(config));
+  const result = new Map<string, Set<string>>(
+    selectors.map(selector => [selector, new Set(NATIVE_OPENAI_MODELS)]),
+  );
+  for (const entry of observedEntries) {
+    const slug = observedAccountBoundNativeSlug(entry);
+    if (slug === undefined || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) continue;
+    const generated = trustedAccountBoundNativeCatalogSlug(entry);
+    const generatedSelector = generated === undefined || typeof entry.slug !== "string"
+      ? undefined
+      : entry.slug.slice(0, entry.slug.indexOf("/"));
+    const markedSelectors = Array.isArray(entry[ACCOUNT_BOUND_OBSERVED_SELECTORS_MARKER])
+      ? entry[ACCOUNT_BOUND_OBSERVED_SELECTORS_MARKER].filter((value): value is string => typeof value === "string")
+      : [];
+    const eligible = generatedSelector !== undefined
+      ? (mainSelectors.has(generatedSelector) ? [generatedSelector] : [])
+      : markedSelectors.length > 0
+        ? markedSelectors.filter(selector => mainSelectors.has(selector))
+        : [...mainSelectors];
+    for (const selector of eligible) {
+      const rows = result.get(selector);
+      if (rows) rows.add(slug);
+    }
+  }
+  return new Map([...result.entries()].map(([selector, slugs]) => [selector, [...slugs]]));
 }
 
 /** Unknown native ids observed from Codex, excluding the static release set. */

@@ -887,17 +887,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { accountBoundNativeOpenAiSlugs, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, observedAccountBoundNativeOpenAiSlugs, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
-        const observedAccountNativeSlugs = includeAccountBoundNativeOpenAi
-          ? observedAccountBoundNativeOpenAiSlugs()
-          : [];
         const nativeSlugs = includeNativeOpenAi
-          ? [...new Set([
-            ...nativeOpenAiSlugs(),
-            ...observedAccountNativeSlugs,
-          ])]
+          ? nativeOpenAiSlugs()
           : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
@@ -906,9 +900,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const accountSelectors = includeAccountBoundNativeOpenAi
           ? visibleCodexAccountSelectors(config)
           : [];
-        const accountNativeSlugs = includeAccountBoundNativeOpenAi
-          ? accountBoundNativeOpenAiSlugs()
-          : [];
+        const accountNativeSlugsBySelector = includeAccountBoundNativeOpenAi
+          ? accountBoundNativeOpenAiSlugsBySelector(config)
+          : new Map<string, readonly string[]>();
+        const accountNativeSlugs = [...new Set(
+          [...accountNativeSlugsBySelector.values()].flatMap(slugs => [...slugs]),
+        )];
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
@@ -971,6 +968,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             new Set(),
             providerContextCap(config, OPENAI_CODEX_PROVIDER_ID),
             accountNativeSlugs,
+            accountNativeSlugsBySelector,
           );
           return jsonResponse({
             models: applyNativeVisibility(
@@ -1021,21 +1019,18 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // for both bare and qualified rows. Without selectors, the live catalog continues to own
         // bare availability.
         const selectorNativeSlugs = accountSelectors.length > 0
-          ? accountNativeSlugs.filter(slug => !disabledNatives.has(slug))
+          ? NATIVE_OPENAI_MODELS.filter(slug => !disabledNatives.has(slug))
           : [];
         const bareSelectorNativeSlugs = accountSelectors.length > 0
           ? selectorNativeSlugs
           : [];
-        const observedVisibleNatives = accountSelectors.length === 0
-          ? observedAccountNativeSlugs.filter(slug => !disabledNatives.has(slug) && !shadowedNativeSlugs.has(slug))
-          : [];
         const visibleNatives = includeNativeOpenAi
           ? accountSelectors.length > 0
             ? bareSelectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
-            : [...new Set([...visibleNativeSlugs(config), ...observedVisibleNatives])]
+            : visibleNativeSlugs(config)
           : [];
         const visibleAccountNatives = accountSelectors.flatMap(selector =>
-          selectorNativeSlugs.flatMap(metadataId => {
+          (accountNativeSlugsBySelector.get(selector) ?? []).filter(metadataId => !disabledNatives.has(metadataId)).flatMap(metadataId => {
             const id = `${selector}/${metadataId}`;
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })

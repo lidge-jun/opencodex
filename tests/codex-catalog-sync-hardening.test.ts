@@ -51,6 +51,9 @@ function nativeEntry(slug: string, priority: number): Record<string, unknown> {
     description: "native",
     priority,
     visibility: "list",
+    shell_type: "shell_command",
+    comp_hash: "native-comp-hash",
+    model_messages: { instructions_template: "You are Codex." },
     base_instructions: "You are Codex, a coding agent based on GPT-5.",
     supported_reasoning_levels: [{ effort: "medium", description: "m" }],
   };

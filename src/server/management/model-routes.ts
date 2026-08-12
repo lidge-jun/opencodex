@@ -30,7 +30,7 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   return { values: raw as string[] };
 }
 import type { CatalogModel } from "../../codex/catalog";
-import { accountBoundNativeOpenAiSlugs, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { accountBoundNativeOpenAiSlugsBySelector, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
 import {
@@ -234,9 +234,13 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (!providerConfig && provider !== "openai" && !isVirtualComboNamespace) {
       return jsonResponse({ error: "unknown model visibility provider" }, 400);
     }
+    const accountNativeQualified = shouldIncludeAccountBoundNativeOpenAi(config)
+      ? [...accountBoundNativeOpenAiSlugsBySelector(config).entries()].flatMap(([selector, slugs]) =>
+        slugs.filter(slug => !nativeModelRows(config).some(row => row.slug === slug)).map(slug => `${selector}/${slug}`))
+      : [];
     const supportedNative = new Set([
       ...nativeModelRows(config).map(row => row.slug),
-      ...(shouldIncludeAccountBoundNativeOpenAi(config) ? accountBoundNativeOpenAiSlugs() : []),
+      ...accountNativeQualified,
     ]);
     const targets: Array<{ id: string; native: boolean }> = [];
     const seen = new Set<string>();
@@ -286,13 +290,14 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
           const nativeIds = provider === "openai"
             ? disabledNativeSlugs({ disabledModels: disabled })
             : new Set<string>();
+          const accountNativeIds = provider === "openai" ? new Set(accountNativeQualified) : new Set<string>();
           const nativeAliasSlugs = provider === "openai"
             ? configuredNativeAliasSlugs(config)
             : new Set<string>();
           disabled = disabled.filter(stored => (
             knownComboSelectors.has(stored)
             || nativeAliasSlugs.has(stored)
-            || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored))
+            || (!stored.startsWith(`${provider}/`) && !nativeIds.has(stored) && !accountNativeIds.has(stored))
           ));
         }
       } else {
