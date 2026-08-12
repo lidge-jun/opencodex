@@ -229,6 +229,84 @@ describe("/v1/catalog is read-only (#809)", () => {
   });
 });
 
+describe("the catalog read buys nothing on the management plane (#809)", () => {
+  /**
+   * The half of #809 that makes the route worth having. Reading `/v1/catalog` must not
+   * become a foothold on `/api/*` — including `/api/catalog` itself, which is why the
+   * accepted design added a route instead of widening management admission.
+   */
+  test.each([
+    ["GET", "/api/catalog"],
+    ["GET", "/api/config"],
+    ["GET", "/api/providers"],
+    ["GET", "/api/keys"],
+    ["POST", "/api/providers"],
+    ["POST", "/api/oauth/login"],
+    ["POST", "/api/codex-auth/login"],
+    ["PUT", "/api/disabled-models"],
+    ["POST", "/api/stop"],
+  ])("the data-plane credential is denied on %s %s", async (method, path) => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const catalog = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      // Pin that this exact credential is the one that just read the catalog, so a
+      // denial below cannot be explained by the key being unusable everywhere.
+      expect(catalog.status).toBe(200);
+
+      const management = await fetch(new URL(path, server.url), {
+        method,
+        headers: { "content-type": "application/json", "x-opencodex-api-key": DATA_PLANE_KEY },
+        ...(method === "GET" ? {} : { body: JSON.stringify({ provider: "fixture", models: [] }) }),
+      });
+      expect(management.status).toBe(401);
+      // 503 would mean management auth was unavailable rather than that it refused
+      // this credential, which would make the assertion above vacuous.
+      expect(await management.text()).toContain("admin token required");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the bearer and x-api-key forms of the data-plane credential are denied too", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      for (const headers of [
+        { authorization: `Bearer ${DATA_PLANE_KEY}` },
+        { "x-api-key": DATA_PLANE_KEY },
+      ]) {
+        const response = await fetch(new URL("/api/config", server.url), { headers });
+        expect(response.status).toBe(401);
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a management-only credential does not open the data-plane route", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      // The boundary is mutual: the admin token is not a data-plane admission secret,
+      // so it must not silently become one just because this route reads a document
+      // the management plane also serves.
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+      });
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toContain("slug");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("catalog authority is shared with the management route (#809)", () => {
   test("both routes serve byte-identical catalog documents", async () => {
     writeCatalogFixture();
