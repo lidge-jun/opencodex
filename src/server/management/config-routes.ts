@@ -419,7 +419,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       vision: {
         model: vision.model,
         backend: vs.backend,
-        reasoning: vs.reasoning,
+        reasoning: vision.reasoning,
         maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
       },
       visionModels: vision.models,
