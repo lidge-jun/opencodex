@@ -1,5 +1,6 @@
 import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import { TRANSLATOR_MAX_TURN_BYTES, type TranslatorBudget } from "../lib/translator-budget";
+import { walkJsonTree } from "../lib/json-walk";
 
 /**
  * Request-body decompression for the /v1/responses data plane.
@@ -69,10 +70,9 @@ function cancelReaderWithoutWaiting(reader: ReadableStreamDefaultReader<Uint8Arr
  * materializing the serialized copy. The walk stops once `cap` is exceeded, so a
  * multi-hundred-MB parsed body can never force a full re-serialization just to account
  * for the retained copy (oversized-input memory hardening, issue #314). Traversal is
- * iterative over container/index frames (client-controlled nesting cannot overflow the
- * call stack), object keys are enumerated lazily, and strings are counted incrementally,
- * so the walk keeps O(depth) memory instead of materializing sibling lists or encoded
- * copies proportional to the payload.
+ * the shared read-only walker (iterative frames, lazy keys), and strings are counted
+ * incrementally, so the walk keeps O(depth) memory instead of materializing sibling
+ * lists or encoded copies proportional to the payload.
  */
 function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
   let total = 0;
@@ -110,25 +110,9 @@ function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
     }
     return bytes;
   };
-  /**
-   * Lazily enumerate a parsed object's own enumerable string keys. One generator stays
-   * alive per open object level, so the walk never materializes key arrays for a whole
-   * payload before the cap check can stop it.
-   */
-  function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
-    for (const key in record) {
-      if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
-    }
-  }
-  type Frame =
-    | { kind: "value"; value: unknown }
-    | { kind: "array"; array: unknown[]; index: number }
-    | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; count: number };
-  const stack: Frame[] = [{ kind: "value", value }];
-  while (stack.length > 0 && total <= cap) {
-    const frame = stack.pop()!;
-    if (frame.kind === "value") {
-      const current = frame.value;
+  walkJsonTree(value, {
+    isDone: () => total > cap,
+    onValue: (current) => {
       if (current === null) {
         total += 4; // "null"
       } else if (current === undefined) {
@@ -139,37 +123,30 @@ function boundedJsonSerializedByteLength(value: unknown, cap: number): number {
         total += String(current).length;
       } else if (typeof current === "boolean") {
         total += current ? 4 : 5;
-      } else if (Array.isArray(current)) {
-        stack.push({ kind: "array", array: current, index: 0 });
-      } else {
-        const record = current as Record<string, unknown>;
-        stack.push({ kind: "object", keys: ownEnumerableKeys(record), record, count: 0 });
       }
-    } else if (frame.kind === "array") {
-      if (frame.index === 0) total += 1; // '['
-      if (frame.index < frame.array.length) {
-        if (frame.index > 0) total += 1; // ','
-        if (total > cap) break;
-        stack.push({ kind: "array", array: frame.array, index: frame.index + 1 });
-        stack.push({ kind: "value", value: frame.array[frame.index] });
-      } else {
-        total += 1; // ']'
-      }
-    } else {
-      if (frame.count === 0) total += 1; // '{'
-      const next = frame.keys.next();
-      if (next.done) {
-        total += 1; // '}'
-      } else {
-        if (frame.count > 0) total += 1; // ','
-        const key = next.value;
-        total += utf8Length(key) + 3; // "key":
-        if (total > cap) break;
-        stack.push({ kind: "object", keys: frame.keys, record: frame.record, count: frame.count + 1 });
-        stack.push({ kind: "value", value: frame.record[key] });
-      }
-    }
-  }
+    },
+    onObjectKey: (key) => {
+      total += utf8Length(key) + 3; // "key":
+    },
+    onArrayStart: () => {
+      total += 1; // '['
+    },
+    onArrayEnd: () => {
+      total += 1; // ']'
+    },
+    onArraySeparator: () => {
+      total += 1; // ','
+    },
+    onObjectStart: () => {
+      total += 1; // '{'
+    },
+    onObjectEnd: () => {
+      total += 1; // '}'
+    },
+    onObjectSeparator: () => {
+      total += 1; // ','
+    },
+  });
   return Math.min(total, cap);
 }
 

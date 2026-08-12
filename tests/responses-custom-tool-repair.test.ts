@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   collectRoutedCustomToolNames,
+  mapJsonTree,
   restoreRoutedCustomCalls,
   restoreRoutedCustomCallsInJson,
   rewriteRoutedCustomToolsForUpstream,
@@ -21,6 +22,17 @@ function frame(event: string, payload: Record<string, unknown>): string {
 }
 
 describe("routed Responses custom-tool compatibility", () => {
+  test("reports a root replacement as changed in the pre-order traversal", () => {
+    const raw = { type: "custom", name: "exec", description: "Run JavaScript" };
+    const { value, changed } = mapJsonTree(
+      raw,
+      (node) => (node.type === "custom" ? { ...node, type: "function" } : undefined),
+      "pre",
+    );
+    expect(changed).toBe(true);
+    expect(value).toEqual({ type: "function", name: "exec", description: "Run JavaScript" });
+  });
+
   test("rewrites exec definitions and paired history without touching apply_patch", () => {
     const raw = {
       model: "deepseek-v4-flash",

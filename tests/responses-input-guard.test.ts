@@ -18,6 +18,7 @@ import type { RequestLogContext } from "../src/server/request-log";
 import {
   applyInjectionPlaceholders,
   PROACTIVE_MULTI_AGENT_MODE_TEXT,
+  subagentRosterText,
 } from "../src/server/responses/collaboration";
 import { estimateTokens } from "../src/lib/token-estimate";
 
@@ -423,6 +424,74 @@ describe("responses input-size guard", () => {
     expect(quotaPrimeCalls).toBe(0);
   });
 
+  test("counts resolved roster guidance before any thread-spawn quota polling", async () => {
+    let upstreamCalls = 0;
+    let quotaPrimeCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {
+      quotaPrimeCalls += 1;
+    });
+    const LIMIT = 1_000_000;
+    const modelId = "deepseek-v4-flash";
+    const subagentModel = "deepseek/deepseek-v4-lite";
+    const prompt = `${"a".repeat(100)} {{roster}}`;
+    // The pre-quota estimate resolves {{roster}}/{{model}} from the configured lists;
+    // the placeholder-free floor would be far below the limit and let a doomed request
+    // reach the quota probe.
+    const resolvedText = `<multi_agent_mode>${applyInjectionPlaceholders(
+      prompt,
+      subagentModel,
+      "",
+      subagentRosterText([{ model: subagentModel, efforts: [] }]),
+      "",
+    )}</multi_agent_mode>`;
+    const floorText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "", "", "", "")}</multi_agent_mode>`;
+    const resolvedTokens = estimateTokens(resolvedText, modelId);
+    const floorTokens = estimateTokens(floorText, modelId);
+    const toolTokens = estimateTokens("spawn_agent", modelId);
+    // input + tool + floor < LIMIT (passes without roster), input + tool + resolved > LIMIT.
+    const inputTokens = LIMIT - Math.ceil((floorTokens + resolvedTokens + toolTokens) / 2);
+    const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
+    const config = {
+      port: 0,
+      defaultProvider: "deepseek",
+      injectionPrompt: prompt,
+      subagentModels: [subagentModel],
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.deepseek.com",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-flash"],
+          modelContextWindows: { "deepseek-v4-flash": LIMIT },
+        },
+      },
+    } as OcxConfig;
+    const res = await postResponses(
+      config,
+      {
+        model: "deepseek/deepseek-v4-flash",
+        tools: [{ type: "function", name: "spawn_agent", description: "" }],
+        input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+      },
+      { "x-openai-subagent": "collab_spawn" },
+    );
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+    expect(quotaPrimeCalls).toBe(0);
+  });
+
   test("revalidates input after injected guidance is added during normalization", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
@@ -436,18 +505,11 @@ describe("responses input-size guard", () => {
       });
     }) as typeof fetch;
     const LIMIT = 1_000_000;
-    const modelId = "deepseek-v4-flash";
-    // The pre-quota estimate counts only the placeholder-free FLOOR of the prompt; the
-    // actual injected guidance resolves {{model}} to a longer value, so the re-validation
-    // AFTER normalization must be the one that rejects (before any auth/upstream I/O).
-    const prompt = `${"a".repeat(200)} {{model}}`;
-    const floorText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "", "", "", "")}</multi_agent_mode>`;
-    const actualText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "deepseek/deepseek-v4-flash", "", "", "")}</multi_agent_mode>`;
-    const floorTokens = estimateTokens(floorText, modelId);
-    const actualTokens = estimateTokens(actualText, modelId);
-    const toolTokens = estimateTokens("spawn_agent", modelId);
-    // input + floor + tools < LIMIT (pre-quota passes), input + actual + tools > LIMIT.
-    const inputTokens = LIMIT - Math.ceil((floorTokens + actualTokens + toolTokens) / 2);
+    // No injectionPrompt on v2 means the pre-quota estimate counts NO guidance, but
+    // normalization still injects the default v2 guidance plus the configured fallback
+    // chain text. Only the post-normalization re-validation can catch this request
+    // (before any auth or upstream I/O).
+    const inputTokens = LIMIT - 100;
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const previousOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
     process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
@@ -455,8 +517,7 @@ describe("responses input-size guard", () => {
       const config = {
         port: 0,
         defaultProvider: "deepseek",
-        injectionPrompt: prompt,
-        injectionModel: "deepseek/deepseek-v4-flash",
+        subagentModelFallback: ["deepseek/deepseek-v4-lite"],
         providers: {
           deepseek: {
             adapter: "openai-responses",

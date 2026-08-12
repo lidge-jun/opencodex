@@ -371,7 +371,9 @@ describe("readJsonRequestBody", () => {
   test("charges the serialized size including JSON.stringify escape overhead", async () => {
     // The budget charge must match the copy the proxy actually retains: JSON.stringify
     // re-escapes quotes, backslashes, control characters, and lone surrogates, so a raw
-    // UTF-8 byte count would under-charge every escape-heavy body.
+    // UTF-8 byte count would under-charge every escape-heavy body. The text also covers
+    // every remaining utf8Length branch: a valid surrogate pair (emoji), a two-byte BMP
+    // character ("é"), and a three-byte BMP character ("中").
     const payload = {
       model: "deepseek-v4-flash",
       input: [
@@ -380,7 +382,7 @@ describe("readJsonRequestBody", () => {
           content: [
             {
               type: "input_text",
-              text: "line\nbreak\t\b\f\rtab \"quoted\" \\backslash\u0001\u001f lone:\ud800",
+              text: "line\nbreak\t\b\f\rtab \"quoted\" \\backslash\u0001\u001f lone:\ud800 é 中 😀",
             },
           ],
         },

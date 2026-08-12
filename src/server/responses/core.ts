@@ -51,6 +51,7 @@ import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { estimateTokens } from "../../lib/token-estimate";
+import { walkJsonTree } from "../../lib/json-walk";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
@@ -147,6 +148,7 @@ import {
   recordSubagentQuotaFailureForThreadSpawn,
   resolveAgentModelFallbackForPrimary,
   resolveConfiguredModelFallbackForPrimary,
+  subagentFallbackGuidanceText,
 } from "../../codex/subagent-model-fallback";
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
@@ -212,6 +214,7 @@ import {
   injectDeveloperMessage,
   multiAgentGuidanceText,
   PROACTIVE_MULTI_AGENT_MODE_TEXT,
+  subagentRosterText,
 } from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
@@ -1635,8 +1638,10 @@ async function handleResponsesInner(
    * additionally counts the multi-agent guidance that route normalization will inject,
    * so a pre-quota check cannot let a doomed near-limit request perform upstream quota
    * I/O first. Only deterministic guidance is counted: the v1 proactive text for
-   * max/ultra effort, and the wrapped injectionPrompt floor on the v2 surface; the
-   * post-normalization re-validation below re-measures the ACTUAL injected text.
+   * max/ultra effort, and the v2 injectionPrompt with RESOLVED placeholder values
+   * ({{model}}/{{effort}}/{{roster}}/{{fallback}}), using configured candidates as a
+   * safe upper bound for the catalog-dependent parts. The post-normalization
+   * re-validation below re-measures the ACTUAL injected text.
    */
   const inputGuardFor = (
     candidateRoute: typeof route,
@@ -1654,15 +1659,31 @@ async function handleResponsesInner(
       const surface = collabSurface(parsed);
       if (surface === "v1" && (parsed.options.reasoning === "max" || parsed.options.reasoning === "ultra")) {
         countText(`<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`);
-      } else if (
-        surface === "v2"
-        && config.multiAgentGuidanceEnabled !== false
-        && typeof config.injectionPrompt === "string"
-        && config.injectionPrompt.length > 0
-      ) {
-        // Floor of the injected guidance: placeholders resolve to at least the empty
-        // string, and roster/fallback payloads only add more characters.
-        countText(`<multi_agent_mode>${applyInjectionPlaceholders(config.injectionPrompt, "", "", "", "")}</multi_agent_mode>`);
+      } else if (surface === "v2" && config.multiAgentGuidanceEnabled !== false) {
+        if (typeof config.injectionPrompt === "string" && config.injectionPrompt.length > 0) {
+          // Resolve placeholders with the values available before catalog lookup:
+          // {{model}} gets the longest configured candidate (the catalog-backed
+          // `preferred` can only pick from the configured lists), {{effort}} the
+          // configured effort, and {{roster}}/{{fallback}} upper bounds built from the
+          // configured model lists. The post-normalization guard re-measures the actual
+          // injected text, so this pre-quota estimate only needs to be >= the floor of
+          // what injection can add.
+          const candidates = [
+            ...(typeof config.injectionModel === "string" ? [config.injectionModel] : []),
+            ...(config.subagentModels ?? []),
+          ];
+          const model = candidates.reduce(
+            (longest, m) => (m.length > longest.length ? m : longest),
+            "",
+          );
+          const roster = subagentRosterText(
+            (config.subagentModels ?? []).map(model => ({ model, efforts: [] })),
+          );
+          const fallback = subagentFallbackGuidanceText(config);
+          countText(`<multi_agent_mode>${applyInjectionPlaceholders(config.injectionPrompt, model, config.injectionEffort, roster, fallback)}</multi_agent_mode>`);
+        }
+        // Without injectionPrompt the v2 guidance is catalog-conditional and bounded by
+        // V2_GUIDANCE_CHAR_BUDGET; the post-normalization guard accounts for it exactly.
       }
     }
     for (const msg of parsed.context.messages) {
@@ -1688,54 +1709,22 @@ async function handleResponsesInner(
      * Estimate tool schemas structurally instead of serializing a full copy: the walk
      * stops as soon as the running estimate crosses the effective limit, so an oversized
      * schema never materializes as one giant string before the 413. Traversal is
-     * iterative over container/index frames (client-controlled nesting cannot overflow
-     * the call stack) and object keys are enumerated lazily, so the walk keeps O(depth)
-     * memory instead of materializing sibling lists or key arrays for the whole payload.
+     * the shared read-only walker (iterative frames, lazy keys), so the walk keeps
+     * O(depth) memory instead of materializing sibling lists or key arrays for the
+     * whole payload.
      */
     const countJsonTokens = (value: unknown): void => {
-      /**
-       * Lazily enumerate a parsed object's own enumerable string keys. One generator
-       * stays alive per open object level, so the walk never materializes key arrays
-       * before the running estimate can stop it.
-       */
-      function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
-        for (const key in record) {
-          if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
-        }
-      }
-      type Frame =
-        | { kind: "value"; value: unknown }
-        | { kind: "array"; array: unknown[]; index: number }
-        | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; count: number };
-      const stack: Frame[] = [{ kind: "value", value }];
-      while (stack.length > 0 && estimatedInputTokens <= effectiveLimit) {
-        const frame = stack.pop()!;
-        if (frame.kind === "value") {
-          const current = frame.value;
+      walkJsonTree(value, {
+        isDone: () => estimatedInputTokens > effectiveLimit,
+        onValue: (current) => {
           if (typeof current === "string") {
             countText(current);
           } else if (typeof current === "number" || typeof current === "boolean") {
             countText(String(current));
-          } else if (Array.isArray(current)) {
-            stack.push({ kind: "array", array: current, index: 0 });
-          } else if (current && typeof current === "object") {
-            const record = current as Record<string, unknown>;
-            stack.push({ kind: "object", keys: ownEnumerableKeys(record), record, count: 0 });
           }
-        } else if (frame.kind === "array") {
-          if (frame.index < frame.array.length) {
-            stack.push({ kind: "array", array: frame.array, index: frame.index + 1 });
-            stack.push({ kind: "value", value: frame.array[frame.index] });
-          }
-        } else {
-          const next = frame.keys.next();
-          if (!next.done) {
-            stack.push({ kind: "object", keys: frame.keys, record: frame.record, count: frame.count + 1 });
-            stack.push({ kind: "value", value: next.value });
-            stack.push({ kind: "value", value: frame.record[next.value] });
-          }
-        }
-      }
+        },
+        onObjectKey: (key) => countText(key),
+      });
     };
     for (const tool of parsed.context.tools ?? []) {
       countText(tool.name);

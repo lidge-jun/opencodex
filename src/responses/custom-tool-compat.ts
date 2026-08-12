@@ -131,6 +131,11 @@ function rewriteCustomToolNode(
   return undefined;
 }
 
+/**
+ * Node transform for {@link mapJsonTree}. Return the replacement node, or undefined to
+ * keep the node — pre-order mode then descends into it (a replacement is a leaf), while
+ * post-order mode keeps its rebuilt form.
+ */
 type JsonTreeTransform = (node: Record<string, unknown>) => unknown | undefined;
 
 /**
@@ -139,9 +144,10 @@ type JsonTreeTransform = (node: Record<string, unknown>) => unknown | undefined;
  * replacement happens after children are rebuilt). Iterative over container/index
  * frames with lazy key enumeration, so deeply nested client payloads cannot overflow
  * the call stack; unchanged subtrees keep their original references (change detection
- * is reference-based per child).
+ * is reference-based per child). Returns the transformed value and whether any node
+ * (including the root) was replaced.
  */
-function mapJsonTree(
+export function mapJsonTree(
   value: unknown,
   transform: JsonTreeTransform,
   mode: "pre" | "post",
@@ -155,7 +161,7 @@ function mapJsonTree(
     | { kind: "array-assign"; next: unknown[]; changed: Changed; index: number; child: unknown; slot: Slot }
     | { kind: "object-assign"; next: Record<string, unknown>; changed: Changed; key: string; child: unknown; slot: Slot };
 
-  let rootChanged: Changed | undefined;
+  const rootChanged: Changed = { flag: false };
   const rootSlot: Slot = { value };
   const stack: Frame[] = [{ kind: "node", node: value, slot: rootSlot }];
   while (stack.length > 0) {
@@ -166,12 +172,12 @@ function mapJsonTree(
         const leaf = transform(node);
         if (leaf !== undefined) {
           frame.slot.value = leaf;
+          if (frame.slot === rootSlot) rootChanged.flag = true;
           continue;
         }
       }
       if (Array.isArray(node)) {
-        const changed: Changed = { flag: false };
-        if (rootChanged === undefined && frame.slot === rootSlot) rootChanged = changed;
+        const changed = frame.slot === rootSlot ? rootChanged : { flag: false };
         stack.push({
           kind: "array",
           array: node,
@@ -181,8 +187,7 @@ function mapJsonTree(
           slot: frame.slot,
         });
       } else if (isPlainObject(node)) {
-        const changed: Changed = { flag: false };
-        if (rootChanged === undefined && frame.slot === rootSlot) rootChanged = changed;
+        const changed = frame.slot === rootSlot ? rootChanged : { flag: false };
         stack.push({
           kind: "object",
           record: node,
@@ -235,7 +240,7 @@ function mapJsonTree(
       frame.changed.flag ||= frame.slot.value !== frame.child;
     }
   }
-  return { value: rootSlot.value, changed: rootChanged?.flag ?? false };
+  return { value: rootSlot.value, changed: rootChanged.flag };
 }
 
 function rewriteForUpstream(
