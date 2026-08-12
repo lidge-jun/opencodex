@@ -63,7 +63,7 @@ function readExistingPublisherKeyId(configDir?: string): string | null {
     if (privateKey.asymmetricKeyType !== "ed25519") {
       throw new PublicEvidenceValidationError("publisher_key_invalid", "local publisher key is not Ed25519");
     }
-    const publicKey = createPublicKey(privateKey);
+    const publicKey = createPublicKey(pem);
     const publicKeyDer = publicKey.export({ type: "spki", format: "der" }).toString("base64");
     return publicEvidenceId("publisher_key", { algorithm: "ed25519", publicKey: publicKeyDer });
   } finally {
