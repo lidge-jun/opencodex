@@ -89,6 +89,63 @@ describe("responses input-size guard", () => {
     expect(upstreamCalls).toBe(0);
   });
 
+  test("rejects an oversized instructions value without calling upstream", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // The parser moves `instructions` into context.systemPrompt, which adapters forward
+    // upstream; a short message must not hide an oversized prompt from the guard.
+    const bigInstructions = "a".repeat(4_200_000);
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      instructions: bigInstructions,
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(res.status).toBe(413);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("rejects an oversized tool schema without calling upstream", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      tools: [
+        {
+          type: "function",
+          name: "big_tool",
+          description: "tool with an oversized schema",
+          parameters: {
+            type: "object",
+            properties: {
+              payload: { type: "string", description: "a".repeat(4_200_000) },
+            },
+          },
+        },
+      ],
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    expect(res.status).toBe(413);
+    expect(upstreamCalls).toBe(0);
+  });
+
   test("forwards an input within the window", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {

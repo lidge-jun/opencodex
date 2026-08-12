@@ -1819,17 +1819,32 @@ async function handleResponsesInner(
   const advertisedWindow = route.provider.modelContextWindows?.[route.modelId];
   if (typeof advertisedWindow === "number" && advertisedWindow > 0) {
     let estimatedInputTokens = 0;
+    const countText = (text: string) => {
+      estimatedInputTokens += estimateTokens(text, route.modelId);
+    };
     for (const msg of parsed.context.messages) {
       const content = msg.content;
       if (typeof content === "string") {
-        estimatedInputTokens += estimateTokens(content, route.modelId);
+        countText(content);
       } else if (Array.isArray(content)) {
         for (const part of content) {
           if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-            estimatedInputTokens += estimateTokens((part as { text: string }).text, route.modelId);
+            countText((part as { text: string }).text);
           }
         }
       }
+    }
+    // The selected adapter also forwards prompt-bearing fields that the parser moved out of
+    // `input` (instructions -> systemPrompt) or that never live in messages at all (tool
+    // names, descriptions, and serialized parameter schemas). Count them so a short-message
+    // request cannot smuggle an oversized prompt past the guard.
+    for (const prompt of parsed.context.systemPrompt ?? []) {
+      countText(prompt);
+    }
+    for (const tool of parsed.context.tools ?? []) {
+      countText(tool.name);
+      countText(tool.description);
+      countText(JSON.stringify(tool.parameters) ?? "");
     }
     if (estimatedInputTokens > advertisedWindow) {
       return formatErrorResponse(
