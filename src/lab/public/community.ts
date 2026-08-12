@@ -70,20 +70,170 @@ function scanStructure(value: unknown, depth = 0): void {
   }
 }
 
+function isJsonWhitespace(value: string | undefined): boolean {
+  return value === " " || value === "\n" || value === "\r" || value === "\t";
+}
+
+function malformedJson(message: string): never {
+  throw new PublicEvidenceValidationError("community_json", message);
+}
+
+function assertNoDuplicateJsonObjectKeys(text: string): void {
+  let index = 0;
+
+  function skipWhitespace(): void {
+    while (isJsonWhitespace(text[index])) index += 1;
+  }
+
+  function parseStringToken(): string {
+    if (text[index] !== '"') malformedJson("community JSON contains an invalid string token");
+    const start = index;
+    index += 1;
+    let escaped = false;
+    while (index < text.length) {
+      const ch = text[index++]!;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        try {
+          const decoded = JSON.parse(text.slice(start, index));
+          if (typeof decoded !== "string") malformedJson("community JSON contains an invalid string token");
+          return decoded;
+        } catch (error) {
+          if (error instanceof PublicEvidenceValidationError) throw error;
+          malformedJson("community JSON contains an invalid string token");
+        }
+      }
+      if (ch.charCodeAt(0) < 0x20) malformedJson("community JSON contains an invalid control character");
+    }
+    malformedJson("community JSON contains an unterminated string token");
+  }
+
+  function parseScalar(): void {
+    const start = index;
+    while (index < text.length) {
+      const ch = text[index];
+      if (ch === "," || ch === "]" || ch === "}" || isJsonWhitespace(ch)) break;
+      index += 1;
+    }
+    if (start === index) malformedJson("community JSON contains an invalid value");
+    try {
+      const parsed = JSON.parse(text.slice(start, index));
+      if (parsed !== null && typeof parsed === "object") malformedJson("community JSON contains an invalid scalar value");
+    } catch (error) {
+      if (error instanceof PublicEvidenceValidationError) throw error;
+      malformedJson("community JSON contains an invalid scalar value");
+    }
+  }
+
+  function parseArray(): void {
+    index += 1;
+    skipWhitespace();
+    if (text[index] === "]") {
+      index += 1;
+      return;
+    }
+    while (index < text.length) {
+      parseValue();
+      skipWhitespace();
+      if (text[index] === "]") {
+        index += 1;
+        return;
+      }
+      if (text[index] !== ",") malformedJson("community JSON array is malformed");
+      index += 1;
+      skipWhitespace();
+      if (text[index] === "]") malformedJson("community JSON array contains a trailing comma");
+    }
+    malformedJson("community JSON array is unterminated");
+  }
+
+  function parseObject(): void {
+    index += 1;
+    skipWhitespace();
+    if (text[index] === "}") {
+      index += 1;
+      return;
+    }
+    const keys = new Set<string>();
+    while (index < text.length) {
+      if (text[index] !== '"') malformedJson("community JSON object key must be a string");
+      const key = parseStringToken();
+      if (keys.has(key)) {
+        throw new PublicEvidenceValidationError("duplicate_json_key", `duplicate JSON object key: ${key}`);
+      }
+      keys.add(key);
+      skipWhitespace();
+      if (text[index] !== ":") malformedJson("community JSON object is missing a colon");
+      index += 1;
+      parseValue();
+      skipWhitespace();
+      if (text[index] === "}") {
+        index += 1;
+        return;
+      }
+      if (text[index] !== ",") malformedJson("community JSON object is malformed");
+      index += 1;
+      skipWhitespace();
+      if (text[index] === "}") malformedJson("community JSON object contains a trailing comma");
+    }
+    malformedJson("community JSON object is unterminated");
+  }
+
+  function parseValue(): void {
+    skipWhitespace();
+    const ch = text[index];
+    if (ch === "{") {
+      parseObject();
+      return;
+    }
+    if (ch === "[") {
+      parseArray();
+      return;
+    }
+    if (ch === '"') {
+      parseStringToken();
+      return;
+    }
+    parseScalar();
+  }
+
+  skipWhitespace();
+  if (index === text.length) malformedJson("community JSON is empty");
+  parseValue();
+  skipWhitespace();
+  if (index !== text.length) malformedJson("community JSON contains trailing data");
+}
+
+function parseCommunityJson(bytes: Buffer, label: string): unknown {
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new PublicEvidenceValidationError("community_json", `${label} is not valid UTF-8 JSON`);
+  }
+  assertNoDuplicateJsonObjectKeys(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new PublicEvidenceValidationError("community_json", `${label} is not valid JSON`);
+  }
+  scanStructure(parsed);
+  return parsed;
+}
+
 function boundedInput(raw: unknown): unknown {
   if (raw instanceof Uint8Array || typeof raw === "string") {
     const bytes = typeof raw === "string" ? Buffer.from(raw, "utf8") : Buffer.from(raw);
     if (bytes.byteLength > MAX_IMPORT_BYTES) {
       throw new PublicEvidenceValidationError("community_size", "community import exceeds 2 MiB");
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bytes.toString("utf8"));
-    } catch {
-      throw new PublicEvidenceValidationError("community_json", "community import is not valid JSON");
-    }
-    scanStructure(parsed);
-    return parsed;
+    return parseCommunityJson(bytes, "community import");
   }
   scanStructure(raw);
   const bytes = Buffer.from(jcsStringify(raw), "utf8");
@@ -170,12 +320,7 @@ function persistAt(path: string, kind: "bundle" | "revocation", value: unknown):
 }
 
 function readJson(path: string): unknown {
-  try {
-    return JSON.parse(readBounded(path).toString("utf8"));
-  } catch (error) {
-    if (error instanceof PublicEvidenceValidationError) throw error;
-    throw new PublicEvidenceValidationError("community_json", "stored community object is invalid JSON");
-  }
+  return parseCommunityJson(readBounded(path), "stored community object");
 }
 
 function files(configDir?: string): string[] {
