@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   collectRoutedCustomToolNames,
+  restoreRoutedCustomCalls,
   restoreRoutedCustomCallsInJson,
   rewriteRoutedCustomToolsForUpstream,
 } from "../src/responses/custom-tool-compat";
@@ -65,6 +66,52 @@ describe("routed Responses custom-tool compatibility", () => {
     expect(body.input[1]).toMatchObject({ type: "function_call_output", call_id: "call_exec" });
     expect(body.input[2]).toEqual(raw.input[2]);
     expect(body.input[3]).toEqual(raw.input[3]);
+  });
+
+  test("rewrites deep custom-tool payloads without overflowing the call stack", () => {
+    const DEPTH = 60_000;
+    let nested: unknown = {
+      type: "custom",
+      name: "exec",
+      description: "Run JavaScript",
+      format: { type: "grammar", syntax: "lark" },
+    };
+    for (let i = 0; i < DEPTH; i++) nested = { wrapper: { inner: nested } };
+    const raw = { model: "deepseek-v4-flash", tools: [nested] };
+
+    expect(collectRoutedCustomToolNames(raw)).toEqual(new Set(["exec"]));
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw);
+    expect(rewritten.names).toEqual(new Set(["exec"]));
+    expect(rewritten.body).not.toBe(raw);
+
+    let node: unknown = rewritten.body;
+    node = (node as { tools: unknown[] }).tools[0];
+    for (let i = 0; i < DEPTH; i++) node = (node as { wrapper: { inner: unknown } }).wrapper.inner;
+    expect(node).toMatchObject({
+      type: "function",
+      name: "exec",
+      parameters: { type: "object", properties: { input: { type: "string" } } },
+    });
+  });
+
+  test("restores deep function-call payloads without overflowing the call stack", () => {
+    const DEPTH = 60_000;
+    let nested: unknown = {
+      type: "function_call",
+      id: "fc_exec",
+      call_id: "call_exec",
+      name: "exec",
+      arguments: "{\"input\":\"echo\"}",
+      status: "completed",
+    };
+    for (let i = 0; i < DEPTH; i++) nested = { wrapper: { inner: nested } };
+
+    const restored = restoreRoutedCustomCalls(nested, new Set(["exec"]));
+    expect(restored.changed).toBe(true);
+    let node: unknown = restored.value;
+    for (let i = 0; i < DEPTH; i++) node = (node as { wrapper: { inner: unknown } }).wrapper.inner;
+    expect(node).toMatchObject({ type: "custom_tool_call", name: "exec", input: "echo" });
+    expect((node as Record<string, unknown>).arguments).toBeUndefined();
   });
 
   test("restores non-streaming exec calls while leaving ordinary functions alone", () => {
