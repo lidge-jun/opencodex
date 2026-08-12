@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig } from "../src/config";
 import { upsertOAuthProvider } from "../src/oauth";
-import { notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
+import { notifyRunningProxy, notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -53,6 +53,31 @@ afterEach(() => {
 });
 
 describe("CLI OAuth live-update credential preservation", () => {
+  test("does not post provider credentials when a legacy health listener has no verified pid", async () => {
+    const receivedPaths: string[] = [];
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/healthz") {
+          return Response.json({ status: "ok", version: "2.6.16", uptime: 5 });
+        }
+        receivedPaths.push(url.pathname);
+        return Response.json({ ok: true });
+      },
+    });
+    try {
+      saveConfig(keyModeXaiConfig(listener.port));
+
+      await notifyRunningProxy("xai", { apiKey: "live-update-sentinel-key" });
+
+      expect(receivedPaths).toEqual([]);
+    } finally {
+      await listener.stop(true);
+    }
+  }, 15_000);
+
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
     const server = startServer(0);
     try {

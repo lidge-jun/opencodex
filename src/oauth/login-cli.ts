@@ -20,7 +20,7 @@ export async function notifyRunningProxy(name: string, provider: unknown): Promi
   // Identity-checked runtime-port lookup: reaches a fallback-port proxy and avoids
   // posting credentials-adjacent config to whatever else answers on config.port.
   const live = await findLiveProxy();
-  if (!live) return;
+  if (!live || live.pid === null) return;
   try {
     await fetch(`http://${probeHostname(live.hostname)}:${live.port}/api/providers`, {
       method: "POST",
