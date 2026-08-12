@@ -314,6 +314,9 @@ function handlePublicLabCommand(
       rejectArgs(rest, USAGE);
       const result = verifyPublicEvidenceFile(path);
       printData(result, wantsJson, publicVerificationLines(result));
+      if (result.status !== "cryptographically_valid") {
+        throw new Error(`public evidence verification failed: ${result.status}`);
+      }
       return;
     }
     case "import": {
