@@ -1,0 +1,172 @@
+name: CL-09 GUI lint fix
+
+on:
+  push:
+    branches:
+      - feat/cl-09-passive-production-evidence
+    paths:
+      - .github/workflows/cl09-gui-lint-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/cl-09-passive-production-evidence
+          fetch-depth: 0
+      - name: Apply focused GUI lint fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          locale_values = {
+              "en": {
+                  "title": "Observed production traffic",
+                  "notVerification": "Not Lab verification",
+                  "attempts": "Attempts",
+                  "successes": "Successes",
+                  "routeErrors": "Route errors",
+                  "lastObserved": "Last observed",
+              },
+              "de": {
+                  "title": "Beobachteter Produktionsverkehr",
+                  "notVerification": "Keine Lab-Verifizierung",
+                  "attempts": "Versuche",
+                  "successes": "Erfolge",
+                  "routeErrors": "Routing-Fehler",
+                  "lastObserved": "Zuletzt beobachtet",
+              },
+              "ja": {
+                  "title": "観測された本番トラフィック",
+                  "notVerification": "ラボ検証ではありません",
+                  "attempts": "試行",
+                  "successes": "成功",
+                  "routeErrors": "ルートエラー",
+                  "lastObserved": "最終観測",
+              },
+              "ko": {
+                  "title": "관측된 프로덕션 트래픽",
+                  "notVerification": "랩 검증 아님",
+                  "attempts": "시도",
+                  "successes": "성공",
+                  "routeErrors": "라우팅 오류",
+                  "lastObserved": "마지막 관측",
+              },
+              "ru": {
+                  "title": "Наблюдаемый производственный трафик",
+                  "notVerification": "Не является проверкой Lab",
+                  "attempts": "Попытки",
+                  "successes": "Успешные попытки",
+                  "routeErrors": "Ошибки маршрута",
+                  "lastObserved": "Последнее наблюдение",
+              },
+              "tr": {
+                  "title": "Gözlemlenen üretim trafiği",
+                  "notVerification": "Lab doğrulaması değildir",
+                  "attempts": "Denemeler",
+                  "successes": "Başarılı denemeler",
+                  "routeErrors": "Rota hataları",
+                  "lastObserved": "Son gözlem",
+              },
+              "zh": {
+                  "title": "观测到的生产流量",
+                  "notVerification": "不是实验室验证",
+                  "attempts": "尝试",
+                  "successes": "成功",
+                  "routeErrors": "路由错误",
+                  "lastObserved": "最近观测",
+              },
+              "zh-TW": {
+                  "title": "觀測到的正式環境流量",
+                  "notVerification": "不是實驗室驗證",
+                  "attempts": "嘗試",
+                  "successes": "成功",
+                  "routeErrors": "路由錯誤",
+                  "lastObserved": "最近觀測",
+              },
+          }
+
+          key_names = ["title", "notVerification", "attempts", "successes", "routeErrors", "lastObserved"]
+
+          def lines_for(values):
+              return "".join(
+                  f'  "lab.production.{name}": "{values[name]}",\n'
+                  for name in key_names
+              )
+
+          locale_paths = {
+              "en": Path("gui/src/i18n/en.ts"),
+              "de": Path("gui/src/i18n/de.ts"),
+              "ja": Path("gui/src/i18n/ja.ts"),
+              "ko": Path("gui/src/i18n/ko.ts"),
+              "ru": Path("gui/src/i18n/ru.ts"),
+              "tr": Path("gui/src/i18n/tr.ts"),
+              "zh": Path("gui/src/i18n/zh.ts"),
+              "zh-TW": Path("gui/src/i18n/zh-TW.ts"),
+          }
+
+          for locale, path in locale_paths.items():
+              text = path.read_text(encoding="utf-8")
+              if '"lab.production.title"' in text:
+                  continue
+              anchor = next(
+                  line for line in text.splitlines(keepends=True)
+                  if '"lab.detailArtifacts"' in line
+              )
+              text = text.replace(anchor, anchor + lines_for(locale_values[locale]), 1)
+              path.write_text(text, encoding="utf-8")
+
+          lab_path = Path("gui/src/i18n/lab-translations.ts")
+          lab_text = lab_path.read_text(encoding="utf-8")
+          if '"lab.production.title"' not in lab_text:
+              cursor = 0
+              blocks = [
+                  ("en", "const en:"),
+                  ("de", "const de:"),
+                  ("ja", "const ja:"),
+                  ("ko", "const ko:"),
+                  ("ru", "const ru:"),
+                  ("tr", "const tr:"),
+                  ("zh", "const zh:"),
+                  ("zh-TW", "const zhTW:"),
+              ]
+              for locale, marker in blocks:
+                  start = lab_text.index(marker, cursor)
+                  anchor_start = lab_text.index('  "lab.detailArtifacts"', start)
+                  anchor_end = lab_text.index("\n", anchor_start) + 1
+                  lab_text = lab_text[:anchor_end] + lines_for(locale_values[locale]) + lab_text[anchor_end:]
+                  cursor = anchor_end + len(lines_for(locale_values[locale]))
+              lab_path.write_text(lab_text, encoding="utf-8")
+
+          matrix_path = Path("gui/src/pages/CompatibilityMatrix.tsx")
+          matrix = matrix_path.read_text(encoding="utf-8")
+          replacements = {
+              "<h4>Observed production traffic</h4>": '<h4>{t("lab.production.title")}</h4>',
+              '<p className="muted">Not Lab verification</p>': '<p className="muted">{t("lab.production.notVerification")}</p>',
+              "<div><dt>Attempts</dt><dd>{detail.production.summary.recentProductionAttempts}</dd></div>": '<div><dt>{t("lab.production.attempts")}</dt><dd>{detail.production.summary.recentProductionAttempts}</dd></div>',
+              "<div><dt>Successes</dt><dd>{detail.production.summary.recentSuccessfulAttempts}</dd></div>": '<div><dt>{t("lab.production.successes")}</dt><dd>{detail.production.summary.recentSuccessfulAttempts}</dd></div>',
+              "<div><dt>Route errors</dt><dd>{detail.production.summary.recentRouteErrorSignals}</dd></div>": '<div><dt>{t("lab.production.routeErrors")}</dt><dd>{detail.production.summary.recentRouteErrorSignals}</dd></div>',
+              "<div><dt>Last observed</dt><dd>{formatAsOf(detail.production.summary.lastObservedProductionAttempt, locale)}</dd></div>": '<div><dt>{t("lab.production.lastObserved")}</dt><dd>{formatAsOf(detail.production.summary.lastObservedProductionAttempt, locale)}</dd></div>',
+          }
+          for old, new in replacements.items():
+              if old not in matrix:
+                  raise SystemExit(f"missing expected CompatibilityMatrix fragment: {old}")
+              matrix = matrix.replace(old, new, 1)
+          matrix_path.write_text(matrix, encoding="utf-8")
+      - name: Commit fix and remove helper workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gui/src/i18n gui/src/pages/CompatibilityMatrix.tsx
+          git commit -m "fix(gui): localize CL-09 production signals"
+          git push origin HEAD:feat/cl-09-passive-production-evidence
+          git rm .github/workflows/cl09-gui-lint-fix.yml
+          git commit -m "chore(ci): remove CL-09 lint helper"
+          git push origin HEAD:feat/cl-09-passive-production-evidence
