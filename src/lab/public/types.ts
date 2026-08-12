@@ -2,6 +2,7 @@ import type { CompatibilityVerdict, EvidenceLayer } from "../constants";
 
 export const PUBLIC_ROUTE_REGISTRY_SCHEMA_VERSION = "public_route_registry_v1" as const;
 export const PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION = "public_evidence_bundle_v1" as const;
+export const PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION = "public_evidence_revocation_v1" as const;
 export const PUBLIC_EXPORT_POLICY_VERSION = "public_export_policy_v1" as const;
 
 export const PUBLIC_ADAPTER_FAMILIES = ["openai-responses", "openai-chat", "anthropic-messages"] as const;
@@ -98,6 +99,31 @@ export interface PublicPublisherSignerV1 { publisher: PublicPublisherV1; }
 export type PublicBundleVerificationResult =
   | { status: "cryptographically_valid"; bundle: PublicEvidenceBundleV1 }
   | { status: "schema_rejected" | "digest_invalid" | "signature_invalid"; detail?: string };
+
+export type PublicRevocationReasonV1 = "publisher_retracted" | "privacy_retraction" | "evidence_invalidated" | "superseded";
+export interface PublicRevocationTargetV1 { kind: "bundle" | "record"; id: string; }
+export interface PublicEvidenceRevocationV1 {
+  schemaVersion: typeof PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION;
+  revocationId: string;
+  issuedDayUtc: string;
+  publisher: PublicPublisherV1;
+  targets: PublicRevocationTargetV1[];
+  reason: PublicRevocationReasonV1;
+  signature: PublicBundleSignatureV1;
+}
+export type PublicRevocationVerificationResult =
+  | { status: "cryptographically_valid"; revocation: PublicEvidenceRevocationV1 }
+  | { status: "schema_rejected" | "digest_invalid" | "signature_invalid" | "publisher_mismatch" | "unknown_target"; detail?: string };
+
+export interface CommunityEvidenceSummaryV1 {
+  trustClass: "community_untrusted_v1";
+  status: "cryptographically_valid";
+  bundleId: string;
+  publisherKeyId: string;
+  activeRecordCount: number;
+  revokedRecordCount: number;
+}
+
 export type PublicProjectionNotExportableReason = "private_route_identity" | "unsupported_public_adapter" | "task_authority_unavailable" | "invalid_public_incident_ref";
 export type PublicProjectionResult = { status: "exportable"; record: PublicEvidenceRecordV1 } | { status: "not_exportable"; reason: PublicProjectionNotExportableReason };
 export interface PublicRouteAuthorityV1 { localSubjectId: string; descriptor: PublicRouteSubjectV1; }
