@@ -50,9 +50,15 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | 허용되지 않음 | **필수** | 허용되지 않음 |
 | `/v1/chat/completions` | 허용되지 않음 | **필수** | 허용되지 않음 |
 | `/v1/messages` | 허용됨 | 허용됨 | 허용됨 |
+| `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 
 Responses와 Chat Completions는 `Authorization`을 향후 Codex Direct 패스스루 용도로 예약해 두므로, 여기서는 전용 admission 헤더만 허용됩니다. 대시보드에서 생성한 `apiKeys`는 시작 후 환경 토큰을 대체할 수 있으며, 후보 값은 상수 시간으로 비교합니다.
+
+Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 admission 형식을 계속 허용합니다. 하지만 비루프백
+바인드의 네이티브 Anthropic 패스스루는 프록시 admission을 `x-opencodex-api-key`로만 받고,
+`Authorization`과 `x-api-key`를 Anthropic 자격 증명용으로 예약합니다. 이 provider 헤더에 들어간
+프록시 admission secret은 upstream 전달 전에 제거됩니다.
 
 :::caution[LAN exposure]
 `0.0.0.0` 바인드는 프록시와 설정된 provider 접근을 LAN에 노출합니다. 신뢰할 수 있는 네트워크에서 강한 토큰과 함께만 사용합니다.
@@ -84,7 +90,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-이 설정은 `/v1/messages`, `ocx claude` 실행기, 그리고 Claude 대시보드 페이지를 제어합니다.
+이 설정은 `/v1/messages`, `/v1/messages/count_tokens`, `ocx claude` 실행기, 그리고 Claude 대시보드 페이지를 제어합니다.
 
 | 키 | 형식 | 기본값 | 설명 |
 | --- | --- | --- | --- |

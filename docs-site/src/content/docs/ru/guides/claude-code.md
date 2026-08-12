@@ -54,12 +54,17 @@ ocx claude
 работать в той же сессии через алиасы селектора.
 
 **Обработка заголовков:** hop-by-hop-заголовки, а также `host`, `content-length`,
-`accept-encoding`, `x-opencodex-api-key` и `origin` удаляются перед пересылкой. Все остальные
-заголовки (включая `anthropic-beta` и `anthropic-version`) проходят без изменений.
+`accept-encoding`, `x-opencodex-api-key` и `origin` всегда удаляются перед пересылкой. На
+non-loopback bind нативный passthrough также требует валидный proxy credential именно в
+`x-opencodex-api-key`; после этого `Authorization` и `x-api-key` принадлежат только Anthropic.
+Proxy admission secret в любом provider-заголовке удаляется, а настоящий provider credential в
+другом заголовке сохраняется. Неоднозначные credential-заголовки, объединённые запятыми, не
+пересылаются.
 
-Проброс срабатывает, когда выполнены **все четыре** условия: `nativePassthrough` не равен `false`;
-имя модели начинается с `claude` или `anthropic`; bearer или `x-api-key` начинается с `sk-ant-`;
-и разрешение алиасов и карты моделей возвращает ту же модель без изменений. Это также означает,
+Проброс срабатывает, когда выполнены **все** условия: `nativePassthrough` не равен `false`;
+имя модели начинается с `claude` или `anthropic`; bearer-токен или `x-api-key` начинается с `sk-ant-`;
+разрешение алиасов и карты моделей возвращает ту же модель без изменений; а на non-loopback bind
+валиден dedicated proxy admission-header. Это также означает,
 что предупреждение «claude.ai connectors are disabled» с `ocx claude` больше не появляется.
 
 Отключается параметром `claudeCode.nativePassthrough: false`; другой адрес задаётся через

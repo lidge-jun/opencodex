@@ -50,9 +50,14 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | 不接受 | **必填** | 不接受 |
 | `/v1/chat/completions` | 不接受 | **必填** | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
+| `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
 Responses 與 Chat Completions 為可能的 Codex Direct passthrough 保留 `Authorization`，因此那裡僅接受專屬的許可標頭。儀表板生成的 `apiKeys` 可在啟動後取代環境 token；候選值以常數時間比對。
+
+Messages 與 `count_tokens` 為相容路由客戶端仍接受三種許可形式。但在非回環綁定上，原生 Anthropic 透傳只透過
+`x-opencodex-api-key` 接受代理許可，並將 `Authorization` 與 `x-api-key` 保留給 Anthropic
+憑證。放在這些供應商標頭中的代理許可密鑰會在轉發前移除。
 
 :::caution[LAN 暴露]
 `0.0.0.0` 綁定將代理與設定的供應商存取暴露給 LAN。僅在受信任的網路上搭配強 token 使用。
@@ -119,7 +124,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code（`claudeCode`）
 
-這些設定治理 `/v1/messages`、`ocx claude` 啟動器與 Claude 儀表板頁面。
+這些設定治理 `/v1/messages`、`/v1/messages/count_tokens`、`ocx claude` 啟動器與 Claude 儀表板頁面。
 
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |

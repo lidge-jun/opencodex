@@ -172,12 +172,18 @@ Native Anthropic passthrough is eligible only when all of these are true:
 
 - native passthrough has not been disabled in Claude Code configuration;
 - the requested model begins with `claude` or `anthropic`;
-- the request carries a native Anthropic bearer or `x-api-key` credential; and
+- the request carries a native Anthropic bearer or `x-api-key` credential;
+- on a non-loopback listener, the request also carries valid proxy admission only in
+  `x-opencodex-api-key`; and
 - no configured alias or model map claims that model id for a routed target.
 
 An eligible request is forwarded in the Anthropic dialect so native beta headers, thinking
 signatures, and subscription identity remain end to end. Otherwise it takes the Responses
 round-trip.
+
+The dedicated admission header is never forwarded. Proxy admission secrets found in
+`Authorization` or `x-api-key` are also removed; a separate genuine Anthropic credential is
+preserved. Ambiguous comma-joined credential headers fail closed instead of being forwarded.
 
 `POST /v1/messages/count_tokens` follows the same model resolution and passthrough decision. A
 native-eligible request is forwarded to Anthropic's count endpoint. Other requests use the local

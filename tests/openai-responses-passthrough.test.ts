@@ -11,9 +11,106 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
 
 const provider = {
   adapter: "openai-responses",
-  baseUrl: "https://chatgpt.example/backend-api/codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("noncanonical forward providers cannot receive caller or runtime credentials", () => {
+  const userInfoUrl = new URL("https://chatgpt.com/backend-api/codex");
+  userInfoUrl.username = "user";
+  userInfoUrl.password = "secret";
+  for (const baseUrl of [
+    "https://provider.example/v1/",
+    "https://chatgpt.com/backend-api/not-codex",
+    "https://chatgpt.example/backend-api/codex",
+    "https://chatgpt.com/backend-api/codex?target=custom",
+    "https://chatgpt.com/backend-api/codex#custom",
+    userInfoUrl.toString(),
+  ]) {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl,
+      authMode: "forward",
+      headers: { "x-provider-option": "enabled" },
+      _codexAccountRequired: true,
+      _codexAccountOverride: {
+        accessToken: "runtime-secret",
+        chatgptAccountId: "runtime-account",
+      },
+    } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+    const request = adapter.buildRequest({
+      modelId: "test-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "test-model", input: "ping" },
+    }, {
+      headers: new Headers({
+        authorization: "Bearer caller-secret",
+        "chatgpt-account-id": "caller-account",
+        session_id: "caller-session",
+      }),
+    });
+
+    expect(request.url).toBe(`${baseUrl.replace(/\/+$/, "")}/responses`);
+    expect(request.headers["x-provider-option"]).toBe("enabled");
+    expect(request.headers.authorization).toBeUndefined();
+    expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+    expect(request.headers.session_id).toBeUndefined();
+  }
+});
+
+test("canonical forward providers normalize trailing slashes and let the pool override win", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    ...provider,
+    baseUrl: "https://chatgpt.com/backend-api/codex///",
+    _codexAccountRequired: true,
+    _codexAccountOverride: {
+      accessToken: "runtime-secret",
+      chatgptAccountId: "runtime-account",
+    },
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+
+  expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+  expect(request.headers.authorization).toBe("Bearer runtime-secret");
+  expect(request.headers["chatgpt-account-id"]).toBe("runtime-account");
+});
+
+test("noncanonical pool-required providers use only their configured static credentials", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl: "https://provider.example/v1/",
+    authMode: "forward",
+    headers: { authorization: "Bearer provider-static", "x-provider-option": "enabled" },
+    _codexAccountRequired: true,
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, {
+    headers: new Headers({
+      authorization: "Bearer caller-secret",
+      "chatgpt-account-id": "caller-account",
+      session_id: "caller-session",
+    }),
+  });
+
+  expect(request.url).toBe("https://provider.example/v1/responses");
+  expect(request.headers["x-provider-option"]).toBe("enabled");
+  expect(request.headers.authorization).toBe("Bearer provider-static");
+  expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+  expect(request.headers.session_id).toBeUndefined();
+});
 
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();

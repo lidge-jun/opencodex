@@ -706,6 +706,7 @@ describe("routed Responses custom-tool compatibility", () => {
     const savedFetch = globalThis.fetch;
     let outboundBody: Record<string, unknown> | undefined;
     let outboundAuthorization: string | null = null;
+    let outboundUrl = "";
     const upstreamItem = {
       type: "function_call",
       id: "fc_exec",
@@ -714,7 +715,8 @@ describe("routed Responses custom-tool compatibility", () => {
       arguments: "{\"input\":\"native\"}",
       status: "completed",
     };
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (input, init) => {
+      outboundUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       outboundAuthorization = new Headers(init?.headers).get("authorization");
       return new Response(JSON.stringify({ id: "resp_forward", status: "completed", output: [upstreamItem] }), {
@@ -727,7 +729,7 @@ describe("routed Responses custom-tool compatibility", () => {
       providers: {
         fixture: {
           adapter: "openai-responses",
-          baseUrl: "https://forward.fixture.test",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
         },
       },
@@ -747,6 +749,7 @@ describe("routed Responses custom-tool compatibility", () => {
       const clientBody = await response.json() as { output: Array<Record<string, unknown>> };
       const outboundTools = outboundBody?.tools as Array<Record<string, unknown>> | undefined;
 
+      expect(outboundUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
       expect(outboundAuthorization).toBe("Bearer caller-token");
       expect(outboundTools?.[0]).toMatchObject({ type: "custom", name: "exec" });
       expect(clientBody.output[0]).toMatchObject({ type: "function_call", name: "exec" });

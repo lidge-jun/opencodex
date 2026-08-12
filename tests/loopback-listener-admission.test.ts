@@ -12,6 +12,7 @@
  * kernel refuses remote connections and there is no address to judge.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import {
   isAllowedRequestOrigin,
   requestPolicyView,
@@ -56,6 +57,23 @@ describe("loopback listener policy view", () => {
       request("/v1/responses", { "x-opencodex-api-key": "ocx_data_realsecret" }),
       wildcardConfig,
     )).toEqual({ kind: "configured", keyId: "k1" });
+  });
+
+  test("both Anthropic routes finish CORS with the listener-effective policy", () => {
+    const source = readFileSync(new URL("../src/server/index.ts", import.meta.url), "utf8");
+    const countTokensStart = source.indexOf('url.pathname === "/v1/messages/count_tokens"');
+    const messagesStart = source.indexOf('url.pathname === "/v1/messages"', countTokensStart + 1);
+    const chatStart = source.indexOf('url.pathname === "/v1/chat/completions"', messagesStart);
+    expect(countTokensStart).toBeGreaterThan(-1);
+    expect(messagesStart).toBeGreaterThan(countTokensStart);
+    expect(chatStart).toBeGreaterThan(messagesStart);
+    for (const branch of [
+      source.slice(countTokensStart, messagesStart),
+      source.slice(messagesStart, chatStart),
+    ]) {
+      expect(branch).toContain("req,\n          policy,\n        ));");
+      expect(branch).not.toContain("req,\n          config,\n        ));");
+    }
   });
 });
 

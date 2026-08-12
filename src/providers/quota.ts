@@ -39,6 +39,8 @@ export const QUOTA_RESPONSE_MAX_BYTES = 512 * 1024;
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
 const A6API_BASE_URL = "https://api.a6api.com";
+const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const CLINE_BASE_URL = "https://api.cline.bot";
@@ -309,6 +311,10 @@ function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
   return normalized === A6API_BASE_URL || normalized === `${A6API_BASE_URL}/v1`;
 }
 
+function isCanonicalOpenCodeGoBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === OPENCODE_GO_BASE_URL;
+}
+
 function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === OPENROUTER_BASE_URL;
@@ -454,6 +460,54 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
   });
+}
+
+function parseOpenCodeGoUsageWindow(value: unknown): { percent: number; resetAt?: number } | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const percent = normalizePercent(row.percent);
+  if (percent === undefined) return null;
+  const resetAt = normalizeResetAt(row.resetsAt);
+  return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+}
+
+async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never send a configured API key when the provider destination is not the built-in Go endpoint.
+  if (!isCanonicalOpenCodeGoBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const usage = asRecord(body?.usage);
+  if (!usage) return null;
+  const rolling = parseOpenCodeGoUsageWindow(usage.rolling);
+  const weekly = parseOpenCodeGoUsageWindow(usage.weekly);
+  const monthly = parseOpenCodeGoUsageWindow(usage.monthly);
+  const quota: ProviderQuota = {
+    ...(rolling ? {
+      fiveHourPercent: rolling.percent,
+      ...(rolling.resetAt !== undefined ? { fiveHourResetAt: rolling.resetAt } : {}),
+    } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(monthly ? {
+      monthlyPercent: monthly.percent,
+      ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
+    } : {}),
+    updatedAt: Date.now(),
+  };
+  return report(provider, "opencode-go:usage", quota);
 }
 
 /**
@@ -1857,6 +1911,9 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "oauth" && name === "kimi") return fetchKimiQuota(name, provider);
     if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
       return fetchKimiQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "opencode-go") {
+      return fetchOpenCodeGoQuota(name, provider);
     }
     if ((provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl)) {
       return fetchA6apiQuota(name, provider);

@@ -75,12 +75,16 @@ macOS의 자동 연결(`claudeCode.systemEnv`)도 같은 방식으로 판단하�
 네이티브 상태로 유지되고, 같은 세션에서 선택기 별칭을 써서 라우팅 모델도 계속 사용할 수 있어요.
 
 **헤더 처리:** hop-by-hop 헤더와 `host`, `content-length`, `accept-encoding`,
-`x-opencodex-api-key`, `origin`은 전달 전에 제거해요. 그 밖의 헤더(`anthropic-beta`,
-`anthropic-version` 포함)는 그대로 전달해요.
+`x-opencodex-api-key`, `origin`은 항상 전달 전에 제거해요. 비루프백 바인드의 네이티브 패스스루는
+유효한 프록시 자격 증명을 `x-opencodex-api-key`로도 요구하고, 이때 `Authorization`과
+`x-api-key`는 Anthropic 전용이에요. 두 provider 헤더 중 프록시 admission secret이 있으면
+제거하고, 다른 헤더의 실제 provider 자격 증명은 유지해요. 쉼표로 결합된 모호한 자격 증명
+헤더는 전달하지 않아요.
 
-다음 네 조건을 **모두** 충족하면 패스스루가 작동해요. `nativePassthrough`가 `false`가 아니고,
-모델 이름이 `claude` 또는 `anthropic`으로 시작하며, bearer 또는 `x-api-key`가 `sk-ant-`로
-시작하고, 별칭/모델 맵 해석 결과가 변경되지 않은 같은 모델이어야 해요. 그래서 `ocx claude`를
+다음 조건을 **모두** 충족하면 패스스루가 작동해요. `nativePassthrough`가 `false`가 아니고,
+모델 이름이 `claude` 또는 `anthropic`으로 시작하며, bearer 토큰 또는 `x-api-key`가 `sk-ant-`로
+시작하고, 별칭/모델 맵 해석 결과가 변경되지 않은 같은 모델이며, 비루프백 바인드에서는 전용
+프록시 admission 헤더도 유효해야 해요. 그래서 `ocx claude`를
 사용할 때 "claude.ai connectors are disabled" 경고도 더 이상 나타나지 않아요.
 
 `claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를

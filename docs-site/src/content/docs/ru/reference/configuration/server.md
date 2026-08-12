@@ -56,11 +56,17 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
+| `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
 Responses и Chat Completions резервируют `Authorization` под возможный passthrough Codex Direct,
 поэтому там принимается только dedicated admission-header. Сгенерированные в дашборде `apiKeys`
 могут после старта заменить env-token; сравнение кандидатов выполняется constant-time.
+
+Messages и `count_tokens` ради совместимости routed-клиентов по-прежнему принимают все три формы admission. Но на
+non-loopback bind нативный passthrough Anthropic принимает proxy admission только через
+`x-opencodex-api-key`, а `Authorization` и `x-api-key` резервирует под credentials Anthropic.
+Proxy admission secret в этих provider-заголовках удаляется перед пересылкой.
 
 :::caution[Экспозиция в LAN]
 Bind на `0.0.0.0` открывает прокси и доступ к настроенным провайдерам всей локальной сети.
@@ -106,7 +112,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-Эти настройки управляют `/v1/messages`, launcher'ом `ocx claude` и страницей Claude в дашборде.
+Эти настройки управляют `/v1/messages`, `/v1/messages/count_tokens`, launcher'ом `ocx claude` и страницей Claude в дашборде.
 
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |

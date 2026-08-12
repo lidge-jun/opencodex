@@ -54,11 +54,17 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
+| `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
 Responses and Chat Completions reserve `Authorization` for possible Codex Direct passthrough, so only
 the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
 environment token after startup; candidates are compared in constant time.
+
+Messages and `count_tokens` keep accepting all three admission forms for routed-client compatibility. Native
+Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use
+`x-opencodex-api-key`, while `Authorization` and `x-api-key` are reserved for Anthropic credentials.
+Any proxy admission secret placed in those provider headers is removed before forwarding.
 
 :::caution[LAN exposure]
 A `0.0.0.0` bind exposes the proxy and configured provider access to the LAN. Use it only on trusted
@@ -145,7 +151,7 @@ with `POST /api/storage/cleanup-policy/run`.
 
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |

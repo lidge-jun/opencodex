@@ -1231,7 +1231,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
-        return runAdmittedHttpTurn(req, policy, async () => withCors(await handleClaudeCountTokens(req, config), req, policy));
+        return runAdmittedHttpTurn(req, policy, async () => withCors(
+          await handleClaudeCountTokens(req, config, policy),
+          req,
+          policy,
+        ));
       }
 
       if (url.pathname === "/v1/messages" && req.method === "POST") {
@@ -1258,9 +1262,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }),
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
           req,
-          config,
+          policy,
         ));
       }
 

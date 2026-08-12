@@ -95,6 +95,10 @@ export async function describeImage(
         headers,
         body: JSON.stringify(body),
         signal: linkedSignal.signal,
+        // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
+        // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
+        // `session_id`, and `x-codex-turn-metadata` to the redirect target.
+        redirect: "manual",
       }),
       { abortSignal: linkedSignal.signal, label: "vision-sidecar" },
     );

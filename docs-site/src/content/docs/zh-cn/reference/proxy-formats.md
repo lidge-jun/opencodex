@@ -141,10 +141,14 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 
 - Claude Code 配置中尚未禁用原生透传；
 - 请求的模型以 `claude` 或 `anthropic` 开头；
-- 请求携带原生 Anthropic bearer 或 `x-api-key` 凭证；并且
+- 请求携带原生 Anthropic bearer 或 `x-api-key` 凭证；
+- 在非回环监听器上，请求还仅通过 `x-opencodex-api-key` 携带有效代理准入；并且
 - 没有配置的别名或模型映射把该 model id 声明为一个被路由目标。
 
 符合条件的请求会以 Anthropic 方言转发，因此原生 beta 头、thinking 签名和订阅身份都能端到端保留。否则它会走 Responses 往返。
+
+专用准入请求头绝不会转发。`Authorization` 或 `x-api-key` 中的代理准入密钥也会被移除，
+而另一个请求头中的真实 Anthropic 凭据会保留。含逗号拼接的歧义凭据请求头会 fail closed。
 
 `POST /v1/messages/count_tokens` 采用相同的模型解析和透传决策。符合原生条件的请求会转发到 Anthropic 的 count 端点。其他请求会使用本地文档化的估算值，对 system 内容、messages 和 tools 进行统计，并返回：
 

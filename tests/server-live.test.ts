@@ -152,7 +152,9 @@ function multipartLiveBody(
 test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeLiveUpstream(captured);
-  saveConfig(forwardConfig());
+  const config = forwardConfig();
+  config.providers.openai!.baseUrl = "https://chatgpt.com/backend-api/codex///";
+  saveConfig(config);
 
   const server = startServer(0);
   try {
@@ -799,6 +801,9 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
     await import("../src/server/live");
 
   expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex", true)).toBe(
+    "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+  expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex///", true)).toBe(
     "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
   );
   expect(keyedLiveUrl("https://api.openai.com/v1")).toBe(

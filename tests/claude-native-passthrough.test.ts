@@ -205,6 +205,98 @@ test("count_tokens passes through with native credentials", async () => {
   }
 });
 
+test("exposed native passthrough requires dedicated admission and never forwards admission credentials", async () => {
+  const admissionSecret = "sk-ant-api03-key";
+  const providerBearer = "sk-ant-oat01-provider";
+  const providerApiKey = "sk-ant-api03-provider";
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig({
+    ...cfg(upstream.url.toString().replace(/\/$/, "")),
+    hostname: "0.0.0.0",
+    apiKeys: [{ id: "remote", name: "remote", key: admissionSecret, createdAt: "2026-08-12" }],
+  } as OcxConfig);
+  const server = startServer(0);
+  const messagesUrl = `http://127.0.0.1:${server.port}/v1/messages`;
+  try {
+    // The routed Messages surface still accepts legacy bearer admission, but native passthrough
+    // on an exposed bind requires the dedicated header so provider credentials stay unambiguous.
+    const withoutDedicated = await globalThis.fetch(messagesUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${admissionSecret}`,
+        "x-api-key": providerApiKey,
+      },
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(withoutDedicated.status).not.toBe(200);
+    await withoutDedicated.body?.cancel();
+    expect(captured).toHaveLength(0);
+
+    const bearerProvider = await globalThis.fetch(messagesUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-opencodex-api-key": admissionSecret,
+        authorization: `Bearer ${providerBearer}`,
+        "x-api-key": admissionSecret,
+      },
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(bearerProvider.status).toBe(200);
+    await bearerProvider.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe(`Bearer ${providerBearer}`);
+    expect(captured[0].headers.get("x-api-key")).toBeNull();
+    expect(captured[0].headers.get("x-opencodex-api-key")).toBeNull();
+
+    // CodeRabbit follow-up: the inverse layout must also keep the real provider x-api-key while
+    // removing an admission secret carried in Authorization.
+    const apiKeyProvider = await globalThis.fetch(messagesUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-opencodex-api-key": admissionSecret,
+        authorization: `Bearer ${admissionSecret}`,
+        "x-api-key": providerApiKey,
+      },
+      body: JSON.stringify(claudeBody()),
+    });
+    expect(apiKeyProvider.status).toBe(200);
+    await apiKeyProvider.text();
+    expect(captured).toHaveLength(2);
+    expect(captured[1].headers.get("authorization")).toBeNull();
+    expect(captured[1].headers.get("x-api-key")).toBe(providerApiKey);
+    expect(captured[1].headers.get("x-opencodex-api-key")).toBeNull();
+
+    for (const headerName of ["authorization", "x-api-key"] as const) {
+      const headers = new Headers({
+        "content-type": "application/json",
+        "x-opencodex-api-key": admissionSecret,
+      });
+      if (headerName === "authorization") {
+        headers.append(headerName, `Bearer ${providerBearer}`);
+        headers.append(headerName, `Bearer ${admissionSecret}`);
+      } else {
+        headers.append(headerName, providerApiKey);
+        headers.append(headerName, admissionSecret);
+      }
+      const ambiguous = await globalThis.fetch(messagesUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(claudeBody()),
+      });
+      expect(ambiguous.status).not.toBe(200);
+      await ambiguous.body?.cancel();
+      expect(captured).toHaveLength(2);
+    }
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("alias/mapped models and non-anthropic credentials do NOT pass through", async () => {
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);

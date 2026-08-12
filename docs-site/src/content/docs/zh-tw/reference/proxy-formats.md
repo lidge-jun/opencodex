@@ -127,10 +127,14 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 - 原生 passthrough 未在 Claude Code 設定中被停用；
 - 請求的模型以 `claude` 或 `anthropic` 開頭；
-- 請求帶有原生 Anthropic bearer 或 `x-api-key` 憑證；且
+- 請求帶有原生 Anthropic bearer 或 `x-api-key` 憑證；
+- 在非回環 listener 上，請求還只透過 `x-opencodex-api-key` 攜帶有效代理許可；且
 - 無設定的別名或模型映射為路由目標聲明該模型 id。
 
 合格的請求以 Anthropic 方言轉發，使原生 beta 標頭、thinking 簽章與訂閱身分保持端到端。否則它走 Responses 往返。
+
+專用許可標頭絕不轉發。`Authorization` 或 `x-api-key` 中的代理許可密鑰也會被移除，
+而另一標頭中的真正 Anthropic 憑證會保留。以逗號合併的模糊憑證標頭會 fail closed。
 
 `POST /v1/messages/count_tokens` 遵循相同的模型解析與 passthrough 決策。原生合格的請求被轉發到 Anthropic 的計數端點。其他請求使用基於 system 內容、訊息與工具的本機檔案式估計並回傳：
 

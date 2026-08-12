@@ -153,10 +153,15 @@ Responses로 변환되어 일반적으로 라우팅된 뒤, Anthropic JSON 또�
 - Claude Code 설정에서 native passthrough가 비활성화되어 있지 않습니다.
 - 요청한 모델이 `claude` 또는 `anthropic`으로 시작합니다.
 - 요청에 네이티브 Anthropic bearer 또는 `x-api-key` 자격 증명이 들어 있습니다.
+- 비루프백 listener에서는 `x-opencodex-api-key`에만 유효한 프록시 admission이 들어 있습니다.
 - 설정된 alias 또는 model map이 해당 model id를 라우팅 대상으로 점유하고 있지 않습니다.
 
 적합한 요청은 Anthropic 방언으로 전달되므로 네이티브 beta 헤더, thinking 서명, 구독 식별 정보가 끝까지
 유지됩니다. 그렇지 않으면 Responses 왕복을 탑니다.
+
+전용 admission 헤더는 upstream으로 전달되지 않습니다. `Authorization` 또는 `x-api-key`에서
+프록시 admission secret이 발견되어도 제거하며, 별도의 실제 Anthropic 자격 증명은 유지합니다.
+쉼표로 결합된 모호한 자격 증명 헤더는 전달하지 않고 fail closed합니다.
 
 `POST /v1/messages/count_tokens`도 같은 model resolution과 passthrough 판단을 따릅니다. 네이티브로 적합한
 요청은 Anthropic의 count endpoint로 전달됩니다. 그 외 요청은 system content, messages, tools에 대한 로컬
