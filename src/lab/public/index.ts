@@ -14,3 +14,4 @@ export * from "./store";
 export * from "./revocation";
 export * from "./community-authority";
 export * from "./community";
+export * from "./operator";
