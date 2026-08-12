@@ -15,7 +15,6 @@ import {
 } from "../src/lab";
 import {
   createPublicEvidenceRevocation,
-  getOrCreatePublicPublisher,
   importCommunityEvidenceBundle,
   importCommunityEvidenceRevocation,
   listCommunityEvidence,
@@ -181,7 +180,7 @@ describe("CL-10 community quarantine", () => {
       recordedAt: Date.UTC(2026, 7, 12, 18, 0, 0),
     });
 
-    expect(existsSync(localStored.path)).toBe(false);
+    expect(existsSync(localStored)).toBe(false);
     expect(listCommunityEvidence(consumerDir).map((row) => row.bundleId)).toEqual([thirdPartyBundle.bundleId]);
   });
 });
