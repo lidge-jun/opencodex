@@ -2355,16 +2355,24 @@ async function handleResponsesInner(
       });
     }
     if (!upstreamResponse.ok) {
-      if (options.comboAttempt) {
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
-        options.onConsumedComboFailure?.(failure);
-        return failure.response;
+      // Same pre-read guard as the translated path's error branch: a non-2xx passthrough body
+      // is still a Bun fetch body, so an abort landing between fetch resolution and the
+      // consumer attaching its reader orphans the internal rejection (src/lib/abort.ts).
+      const detachPassthroughErrorGuard = cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
+      try {
+        if (options.comboAttempt) {
+          const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+          options.onConsumedComboFailure?.(failure);
+          return failure.response;
+        }
+        const errorText = await upstreamResponse.text().catch(() => "");
+        return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+          statusText: upstreamResponse.statusText,
+          headers,
+        });
+      } finally {
+        detachPassthroughErrorGuard();
       }
-      const errorText = await upstreamResponse.text().catch(() => "");
-      return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
-        statusText: upstreamResponse.statusText,
-        headers,
-      });
     }
 
     // Bun#32111 workaround: passthrough SSE uses tee()+native relay to avoid the

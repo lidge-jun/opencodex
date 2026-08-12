@@ -31,9 +31,11 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     await expect(readBodyCapped(failing, 1024, total => `too large (${total})`)).rejects.toThrow("upstream reset");
     // The stream errored itself, so `cancel()` is not expected to have run.
     expect(cancelled).toBe(false);
-    // Locked-and-settled: a second reader is refused, proving no lock was leaked in a state
-    // where the body could still be pending.
-    expect(() => failing.getReader()).toThrow();
+    // The lock is released even though the cancel rejected with the stored error: holding it
+    // would leave the stream permanently locked for any later consumer. A second reader is
+    // therefore obtainable, and it observes the original failure rather than hanging.
+    expect(failing.locked).toBe(false);
+    await expect(failing.getReader().read()).rejects.toThrow("upstream reset");
   });
 
   test("cancelBodyOnAbort cannot settle a body once a reader holds the lock", async () => {
@@ -60,6 +62,32 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     // The reader itself can still settle it, which is what the new failure path does.
     await reader.cancel(new Error("client closed request"));
     expect(cancelled).toBe(true);
+  });
+
+  // Wiring guard. The unit tests above exercise readBodyCapped and cancelBodyOnAbort
+  // directly, which means they ALL still pass when the /v1/live relay forgets to call the
+  // guard — an earlier revision of this change imported the helper and never invoked it, and
+  // no test noticed. Asserting the call site is crude but it is the thing that was actually
+  // missing.
+  test("the live relay attaches the body guard before consuming the upstream body", async () => {
+    const source = await Bun.file(new URL("../src/server/live.ts", import.meta.url)).text();
+
+    const guardAt = source.indexOf("cancelBodyOnAbort(upstreamResponse.body");
+    const readAt = source.indexOf("payload = await readBodyCapped(");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(readAt).toBeGreaterThan(-1);
+    // Guard first, read second.
+    expect(guardAt).toBeLessThan(readAt);
+    // And detached on the normal path.
+    expect(source).toContain("detachBodyGuard()");
+  });
+
+  test("the passthrough error branch attaches the body guard before consuming it", async () => {
+    const source = await Bun.file(new URL("../src/server/responses/core.ts", import.meta.url)).text();
+
+    const guardAt = source.indexOf("cancelBodyOnAbort(upstreamResponse.body, upstream.signal)");
+    expect(guardAt).toBeGreaterThan(-1);
+    expect(source).toContain("detachPassthroughErrorGuard");
   });
 
   test("a normal read still returns the buffered payload", async () => {

@@ -352,7 +352,6 @@ export async function readBodyCapped(
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  let readFailed = false;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -368,13 +367,16 @@ export async function readBodyCapped(
   } catch (err) {
     // A read that throws leaves the stream neither drained nor cancelled, and releasing the
     // lock alone hands back an unsettled body. Cancel first, then rethrow so the caller's
-    // existing classification (client abort / timeout / connect error) is unchanged.
-    readFailed = true;
+    // existing classification (client abort / timeout / connect error) is unchanged. The
+    // cancel itself can reject with the stream's stored error — that is expected and must not
+    // mask the original failure, so it is swallowed here.
     await reader.cancel(err).catch(() => {});
     throw err;
   } finally {
     try {
-      if (!readFailed) reader.releaseLock();
+      // Always release: `reader.cancel()` does NOT drop the lock, and holding it would leave
+      // the stream permanently locked for any later consumer (audit R-WP5-2).
+      reader.releaseLock();
     } catch {
       // already released / cancelled
     }
@@ -571,11 +573,23 @@ export async function handleLive(
     // Record every completed upstream response before body size handling so account health /
     // cooldown still updates when we reject an oversized payload.
     relay.recordOutcome?.(upstreamResponse.status);
-    const payload = await readBodyCapped(
-      upstreamResponse.body,
-      LIVE_RESPONSE_MAX_BYTES,
-      total => `live response too large (${total} bytes)`,
-    );
+    // Settle the body on abort before the reader attaches. Without this, a client cancel or the
+    // linked timeout landing between fetch resolution and `readBodyCapped`'s `getReader()`
+    // leaves Bun's internal read rejection orphaned off the awaited path, where no caller
+    // try/catch can intercept it (src/lib/abort.ts). The guard covers the window BEFORE the
+    // reader exists; once a reader holds the lock only the reader can cancel, which is why
+    // readBodyCapped also cancels on a failed read. Found while investigating #1419.
+    const detachBodyGuard = cancelBodyOnAbort(upstreamResponse.body, linkedSignal.signal);
+    let payload: ArrayBuffer | Response;
+    try {
+      payload = await readBodyCapped(
+        upstreamResponse.body,
+        LIVE_RESPONSE_MAX_BYTES,
+        total => `live response too large (${total} bytes)`,
+      );
+    } finally {
+      detachBodyGuard();
+    }
     if (payload instanceof Response) return payload;
     const relayHeaders: Record<string, string> = {};
     for (const name of LIVE_RELAY_HEADERS) {
