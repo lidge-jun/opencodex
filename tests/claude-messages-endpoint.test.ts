@@ -657,7 +657,10 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
-    if (url.origin === "https://chatgpt.com" && url.pathname === "/backend-api/codex/responses") {
+    if (url.origin === "https://chatgpt.com") {
+      if (url.pathname !== "/backend-api/codex/responses") {
+        throw new Error(`unexpected canonical Codex path ${url.pathname}`);
+      }
       return originalFetch(new URL("/responses", upstream.url), init);
     }
     return originalFetch(input, init);
