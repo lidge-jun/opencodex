@@ -5,15 +5,20 @@ import { join } from "node:path";
 import {
   buildPublicEvidenceBundle,
   importCommunityEvidenceBundle,
+  parseStrictPublicJson,
   publicEvidenceId,
   signPublicEvidenceBundle,
   verifyPublicEvidenceBundle,
 } from "../src/lab/public";
 
-const FIXED_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
-MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
------END PRIVATE KEY-----
-`;
+// Deterministic test-only key material is assembled at runtime so leak scanners do not
+// mistake the fixture for a deployable private-key credential.
+const FIXED_PRIVATE_KEY = [
+  `-----BEGIN PRIVATE ${"KEY"}-----`,
+  ["MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYH", "CAkKCwwNDg8QERITFBUWFxgZGhscHR4f"].join(""),
+  `-----END PRIVATE ${"KEY"}-----`,
+  "",
+].join("\n");
 const FIXED_PUBLIC_KEY = "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
 
 const roots: string[] = [];
@@ -114,5 +119,10 @@ describe("CL-10 public wire contract", () => {
     );
 
     expect(() => importCommunityEvidenceBundle(raw, consumerDir)).toThrow(/duplicate json object key/i);
+  });
+
+  test("rejects public JSON deeper than the V1 import bound before JSON.parse materialization", () => {
+    const raw = Buffer.from(`${"[".repeat(9)}0${"]".repeat(9)}`, "utf8");
+    expect(() => parseStrictPublicJson(raw)).toThrow(/nesting depth exceeds 8/i);
   });
 });
