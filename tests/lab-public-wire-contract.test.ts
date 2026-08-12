@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildPublicEvidenceBundle,
   importCommunityEvidenceBundle,
   publicEvidenceId,
   signPublicEvidenceBundle,
@@ -13,6 +14,7 @@ const FIXED_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
 -----END PRIVATE KEY-----
 `;
+const FIXED_PUBLIC_KEY = "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -72,7 +74,7 @@ describe("CL-10 public wire contract", () => {
   test("freezes the RFC 8785/domain-separated bundle and Ed25519 signature vector", () => {
     const bundle = fixedBundle(configDir("ocx-cl10-wire-publisher-"));
 
-    expect(bundle.publisher.publicKey).toBe("MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=");
+    expect(bundle.publisher.publicKey).toBe(FIXED_PUBLIC_KEY);
     expect(bundle.publisher.keyId).toBe("4d5a347afcc7a1ac8d2dd4e573f0fbca2d2e90dd472c35df5c72bf2d2afca08f");
     expect(bundle.records[0]!.subjectId).toBe("982a06b98a218df5ed68ae88f5f203e1911a3e875343c6ed8d5d0b74ff4c2b25");
     expect(bundle.records[0]!.recordId).toBe("cae04cc6cfabfd14799cf8bcbcb07563f71de1d570360d87a5e9825eedc59536");
@@ -84,6 +86,22 @@ describe("CL-10 public wire contract", () => {
       signature: "+yZ96y77clEOz5vajcSV7/P/Mjg+V9evhNDIt5alrskUEa5+8aW/vkKqrDnrr7MGKJyYqAlIWvRS7RizbxS5Ag==",
     });
     expect(verifyPublicEvidenceBundle(bundle)).toEqual({ status: "cryptographically_valid" });
+  });
+
+  test("rejects non-canonical publisher public-key Base64", () => {
+    const publicKey = `${FIXED_PUBLIC_KEY}\n`;
+    const publisher = {
+      algorithm: "ed25519" as const,
+      publicKey,
+      keyId: publicEvidenceId("publisher_key", { algorithm: "ed25519", publicKey }),
+    };
+
+    expect(() => buildPublicEvidenceBundle({
+      records: [fixedRecord()],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      publisher,
+    })).toThrow(/canonical base64/i);
   });
 
   test("rejects duplicate JSON object keys before community parsing", () => {
