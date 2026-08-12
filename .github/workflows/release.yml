@@ -26,7 +26,7 @@ on:
         default: true
       expected-sha:
         description: "Immutable release commit this dispatch must publish (fail if the branch moved)"
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -54,7 +54,8 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected-sha }}
         run: |
           if [ -z "$EXPECTED_SHA" ]; then
-            echo "::warning::no expected-sha supplied; publishing whatever the branch currently points at"
+            echo "::error::expected-sha is required; refusing to publish without an audited commit"
+            exit 1
           elif [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::branch moved after the release audit (expected ${EXPECTED_SHA}, got ${GITHUB_SHA}) — refusing to publish an unaudited commit"
             exit 1
