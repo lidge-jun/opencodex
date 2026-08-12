@@ -53,6 +53,24 @@ Unknown fields fail closed on export and import.
 
 Local subject, event, artifact, request, decision, and Fabric IDs never leave the installation. Public IDs are derived only from canonical public-safe bytes under explicit domain-separated hashes.
 
+### Canonical bytes and signatures
+
+CL-10 V1 freezes RFC 8785 JSON Canonicalization Scheme (JCS) over UTF-8 as the canonical byte representation. Raw imported JSON must be valid UTF-8 and must reject duplicate decoded object member names before semantic object construction, including equivalent escaped spellings such as `"a"` and `"\u0061"`.
+
+Every public hash is:
+
+```text
+H(domain, value) = SHA-256(UTF8(domain) || 0x00 || UTF8(JCS(value)))
+```
+
+The exact V1 domains are `ocx-lab-public:subject:v1`, `ocx-lab-public:record:v1`, `ocx-lab-public:bundle:v1`, `ocx-lab-public:bundle-digest:v1`, `ocx-lab-public:artifact:v1`, `ocx-lab-public:publisher-key:v1`, `ocx-lab-public:revocation:v1`, and `ocx-lab-public:route-registry:v1` for their corresponding identities.
+
+For a bundle, `C = {schemaVersion, exportPolicyVersion, createdDayUtc, publisher, records, artifacts}`. `bundleId = H("ocx-lab-public:bundle:v1", C)`. `bundleDigest = H("ocx-lab-public:bundle-digest:v1", {...C, bundleId})`. Therefore `bundleDigest` and `signature` are excluded from the bundle-digest preimage, and `bundleId`, `bundleDigest`, and `signature` are excluded from the bundle-ID preimage. Ed25519 signs the raw 32 bytes obtained by hex-decoding `bundleDigest`; `signature.signedDigest` must equal `bundleDigest` exactly.
+
+A revocation similarly hashes `R = {schemaVersion, issuedDayUtc, publisher, targets, reason}` under `ocx-lab-public:revocation:v1`; `revocationId` and `signature` are excluded from `R`, and Ed25519 signs the raw 32 bytes of `revocationId`. Targets are sorted and unique before hashing.
+
+Import verification order is fixed: byte cap; strict UTF-8 and duplicate-key rejection; JSON syntax/structural bounds; closed schema/version/field validation and publisher-key-ID recomputation; public identity/reference and bundle digest recomputation; `signedDigest` equality; Ed25519 key/signature decoding and verification; repository route/suite/scenario/Fabric authority validation; revocation bootstrap only against an already-verified exact target publisher/bundle; persistence only after every preceding check succeeds.
+
 ### Artifacts
 
 Artifacts require explicit `public_export` policy. A second export sanitizer and secret/PII scan runs before public artifact hashing. Local visibility alone never authorizes export.
@@ -98,7 +116,7 @@ Bundle semantics, signing, import, and trust are frozen before any network publi
 
 ## Validation expectations
 
-The implementation must include adversarial tests for secret/PII canaries, local IDs, private route dimensions, unknown fields, oversized/deep bundles, invalid digest/signature, replay/deduplication, revocation, deterministic export, and complete isolation from local verdicts/routing/CL-08.
+The implementation must include adversarial tests for secret/PII canaries, local IDs, private route dimensions, unknown fields, duplicate JSON object keys, oversized/deep bundles, invalid digest/signature, replay/deduplication, revocation, deterministic export, fixed canonical digest/signature vectors, and complete isolation from local verdicts/routing/CL-08.
 
 The contract review gate is satisfied. Runtime CL-10.1 through CL-10.4 may now land on this PR under TDD and full validation; CL-10.5 remote publishing remains out of scope.
 
