@@ -17,6 +17,7 @@ import {
   encodeJournal,
   hashBytes,
   recoverIfNeeded,
+  sameRecoveryPath,
   type JournalRecord,
 } from "../src/codex/prompt-journal";
 import {
@@ -74,6 +75,13 @@ function read(path: string): string | null {
   return existsSync(path) ? readFileSync(path, "utf8") : null;
 }
 
+function recover(s: ReturnType<typeof scenario>) {
+  return recoverIfNeeded(s.journalPath, {
+    configPath: s.configPath,
+    storePath: s.storePath,
+  });
+}
+
 describe("envelope", () => {
   test("round-trips a record", () => {
     const record = { configPath: "/c", storePath: "/s" } as JournalRecord;
@@ -111,17 +119,32 @@ describe("classification", () => {
   });
 });
 
+describe("path binding", () => {
+  test("normalizes lexical segments without following the recorded path", () => {
+    expect(sameRecoveryPath("/tmp/ocx/a/../config.toml", "/tmp/ocx/config.toml", "linux")).toBe(true);
+  });
+
+  test("uses case-insensitive identity only on Windows", () => {
+    const mixed = "C:\\Users\\Alice\\.codex\\config.toml";
+    expect(sameRecoveryPath(mixed, mixed.toLowerCase(), "win32")).toBe(true);
+    expect(sameRecoveryPath(mixed, mixed.toLowerCase(), "linux")).toBe(false);
+  });
+});
+
 describe("recovery", () => {
   test("no journal is a no-op", () => {
     const dir = root();
-    expect(recoverIfNeeded(join(dir, "absent.journal"))).toEqual({ ok: true, action: "none" });
+    expect(recoverIfNeeded(join(dir, "absent.journal"), {
+      configPath: join(dir, "config.toml"),
+      storePath: join(dir, "opencodex-prompt.json"),
+    })).toEqual({ ok: true, action: "none" });
   });
 
   test("both targets at post-image: commit by deleting the journal", () => {
     // The writes finished; only step 6 was missing. This is the ONE case that
     // does not roll back, and it is not a roll-forward.
     const s = scenario({ config: "POST_C", store: "POST_S" });
-    expect(recoverIfNeeded(s.journalPath)).toEqual({ ok: true, action: "committed" });
+    expect(recover(s)).toEqual({ ok: true, action: "committed" });
     expect(read(s.configPath)).toBe("POST_C");
     expect(read(s.storePath)).toBe("POST_S");
     expect(existsSync(s.journalPath)).toBe(false);
@@ -131,7 +154,7 @@ describe("recovery", () => {
     // Crash after config.toml but before the store. A journal on disk means
     // commit never happened, so the transaction is undone.
     const s = scenario({ config: "POST_C", store: "PRE_S" });
-    expect(recoverIfNeeded(s.journalPath)).toEqual({ ok: true, action: "rolled-back" });
+    expect(recover(s)).toEqual({ ok: true, action: "rolled-back" });
     expect(read(s.configPath)).toBe("PRE_C");
     expect(read(s.storePath)).toBe("PRE_S");
     expect(existsSync(s.journalPath)).toBe(false);
@@ -139,7 +162,7 @@ describe("recovery", () => {
 
   test("nothing applied: leave both alone", () => {
     const s = scenario({ config: "PRE_C", store: "PRE_S" });
-    expect(recoverIfNeeded(s.journalPath).ok).toBe(true);
+    expect(recover(s).ok).toBe(true);
     expect(read(s.configPath)).toBe("PRE_C");
     expect(read(s.storePath)).toBe("PRE_S");
   });
@@ -148,7 +171,7 @@ describe("recovery", () => {
     // THE case this module exists for: crash, then Codex or the user edits
     // config.toml. Recovery must not overwrite it with a stale image.
     const s = scenario({ config: "SOMEONE ELSE WROTE THIS", store: "PRE_S" });
-    const result = recoverIfNeeded(s.journalPath);
+    const result = recover(s);
     expect(result.ok).toBe(false);
     expect(read(s.configPath)).toBe("SOMEONE ELSE WROTE THIS");
     expect(existsSync(s.journalPath)).toBe(true);
@@ -158,7 +181,7 @@ describe("recovery", () => {
     // One unknown target aborts the WHOLE recovery: we never repair one file
     // while the other carries a stranger's edit.
     const s = scenario({ config: "POST_C", store: "SOMEONE ELSE" });
-    expect(recoverIfNeeded(s.journalPath).ok).toBe(false);
+    expect(recover(s).ok).toBe(false);
     expect(read(s.configPath)).toBe("POST_C");
     expect(read(s.storePath)).toBe("SOMEONE ELSE");
   });
@@ -166,7 +189,7 @@ describe("recovery", () => {
   test("a corrupt journal is recovery_required, and nothing is written", () => {
     const s = scenario({ config: "POST_C", store: "PRE_S" });
     writeFileSync(s.journalPath, "ocx-journal-v1 deadbeef\n{\"configPath\":\"/x\"}", "utf8");
-    const result = recoverIfNeeded(s.journalPath);
+    const result = recover(s);
     expect(result.ok).toBe(false);
     expect(read(s.configPath)).toBe("POST_C");
     expect(read(s.storePath)).toBe("PRE_S");
@@ -177,7 +200,7 @@ describe("recovery", () => {
     const s = scenario({ config: "POST_C", store: "PRE_S" });
     const encoded = readFileSync(s.journalPath, "utf8");
     writeFileSync(s.journalPath, encoded.slice(0, encoded.length - 20), "utf8");
-    expect(recoverIfNeeded(s.journalPath).ok).toBe(false);
+    expect(recover(s).ok).toBe(false);
     expect(read(s.configPath)).toBe("POST_C");
   });
 
@@ -195,9 +218,37 @@ describe("recovery", () => {
       preConfigBytes: null, postConfigBytes: "POST_C",
       preStoreBytes: "PRE_S", postStoreBytes: "POST_S",
     }), "utf8");
-    expect(recoverIfNeeded(journalPath).ok).toBe(true);
+    expect(recoverIfNeeded(journalPath, { configPath, storePath }).ok).toBe(true);
     expect(existsSync(configPath)).toBe(false);
   });
+
+  for (const mismatchedTarget of ["configPath", "storePath"] as const) {
+    test(`a valid journal with a different ${mismatchedTarget} is rejected before recovery`, () => {
+      const s = scenario({ config: "PRE_C", store: "PRE_S" });
+      const attackerDir = root();
+      const attackerConfigPath = join(attackerDir, "config.toml");
+      const attackerStorePath = join(attackerDir, "opencodex-prompt.json");
+      writeFileSync(attackerConfigPath, "POST_C", "utf8");
+      writeFileSync(attackerStorePath, "PRE_S", "utf8");
+
+      const forgedRecord: JournalRecord = {
+        ...s.record,
+        configPath: mismatchedTarget === "configPath" ? attackerConfigPath : s.configPath,
+        storePath: mismatchedTarget === "storePath" ? attackerStorePath : s.storePath,
+      };
+      writeFileSync(s.journalPath, encodeJournal(forgedRecord), "utf8");
+
+      const result = recover(s);
+      expect(result).toMatchObject({ ok: false, error: "recovery_required" });
+      if (result.ok) throw new Error("forged journal unexpectedly recovered");
+      expect(result.detail).not.toContain(attackerDir);
+      expect(read(attackerConfigPath)).toBe("POST_C");
+      expect(read(attackerStorePath)).toBe("PRE_S");
+      expect(read(s.configPath)).toBe("PRE_C");
+      expect(read(s.storePath)).toBe("PRE_S");
+      expect(existsSync(s.journalPath)).toBe(true);
+    });
+  }
 });
 
 describe("durable write", () => {
