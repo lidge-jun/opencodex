@@ -304,6 +304,24 @@ function artifactMarkdownUrl(filePath: string): string {
   return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
 }
 
+interface GoogleResponsePart {
+  text?: string;
+  thought?: boolean;
+  functionCall?: { name: string; args: unknown };
+}
+
+/**
+ * Google marks model-internal reasoning as a normal text-bearing part plus `thought: true`.
+ * Keep that provider visibility bit authoritative here so the streaming and buffered parsers
+ * cannot accidentally expose the same hidden reasoning through different event types.
+ */
+function googlePartTextEvent(part: GoogleResponsePart): AdapterEvent | undefined {
+  if (!part.text) return undefined;
+  return part.thought === true
+    ? { type: "reasoning_raw_delta", text: part.text }
+    : { type: "text_delta", text: part.text };
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -602,7 +620,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           sawTerminalSignal = true;
         }
 
-        const parts = candidate.content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
+        const parts = candidate.content?.parts as GoogleResponsePart[] | undefined;
         // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
         // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
         const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
@@ -613,9 +631,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         if (parts) {
           for (const part of parts) {
-            if (part.text) {
+            const textEvent = googlePartTextEvent(part);
+            if (textEvent) {
               emittedContentEvent = true;
-              yield { type: "text_delta", text: part.text };
+              yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
@@ -817,7 +836,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const events: AdapterEvent[] = [];
 
-      const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
+      const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
       if (!candidates?.length) {
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
@@ -833,7 +852,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
-          if (part.text) events.push({ type: "text_delta", text: part.text });
+          const textEvent = googlePartTextEvent(part);
+          if (textEvent) events.push(textEvent);
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
             if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {

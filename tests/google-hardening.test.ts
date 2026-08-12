@@ -293,6 +293,70 @@ describe("google provider hardening", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
+  test("thought text stays hidden reasoning in streaming and non-streaming responses", async () => {
+    const body = {
+      candidates: [{
+        content: { parts: [{ thought: true, text: "private analysis" }] },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "private analysis" });
+      expect(events).not.toContainEqual({ type: "text_delta", text: "private analysis" });
+    }
+  });
+
+  test("thought text preserves ordering before function calls in both response modes", async () => {
+    const body = {
+      candidates: [{
+        content: {
+          parts: [
+            { thought: true, text: "choose the tool" },
+            { functionCall: { name: "lookup", args: { id: 7 } } },
+          ],
+        },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events.slice(0, 4)).toEqual([
+        { type: "reasoning_raw_delta", text: "choose the tool" },
+        { type: "tool_call_start", id: expect.stringMatching(/^call_/), name: "lookup" },
+        { type: "tool_call_delta", arguments: '{"id":7}' },
+        { type: "tool_call_end" },
+      ]);
+      expect(events).not.toContainEqual({ type: "text_delta", text: "choose the tool" });
+    }
+  });
+
+  test("ordinary Google text remains visible in both response modes", async () => {
+    const body = {
+      candidates: [{ content: { parts: [{ text: "visible answer" }] }, finishReason: "STOP" }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "text_delta", text: "visible answer" });
+      expect(events).not.toContainEqual({ type: "reasoning_raw_delta", text: "visible answer" });
+    }
+  });
+
   test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {
     const direct = createGoogleAdapter(provider({
       modelReasoningEfforts: {

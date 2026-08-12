@@ -437,6 +437,23 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
 
+## Google thought-text visibility boundary
+
+Google-family responses may represent model-internal reasoning as a text-bearing part with
+`thought: true`. The Google adapter maps that text to the internal `reasoning_raw_delta` event;
+only text without the marker becomes visible `text_delta`. Streaming SSE and buffered JSON share
+one classifier so transport selection cannot change whether provider-declared reasoning is shown
+as assistant output. Thought-signature observation still runs on the original parts before text
+classification, preserving the opaque continuation state independently of display semantics.
+
+[Decision Log]
+- 목적과 의도: Prevent provider-marked internal reasoning from appearing as ordinary assistant text while preserving reasoning and tool-call continuation.
+- 기존 구현 및 제약 조건: Both Google response paths emitted every non-empty `Part.text` as visible text; function calls, inline images, and Antigravity/Vertex thought-signature replay already depended on the original part ordering.
+- 검토한 주요 대안: Drop thought text; classify it separately in each parser; remove the marker and keep visible text; use one shared classifier without mutating the provider parts.
+- 선택한 방식: Map `thought: true` text to `reasoning_raw_delta` through one helper used by streaming and buffered parsing, leaving part order and signature observation unchanged.
+- 다른 대안 대신 이 방식을 선택한 이유: Dropping the text loses reasoning replay/display policy input, while duplicated parser rules can drift and exposing marked thoughts violates the provider's visibility boundary.
+- 장점, 단점 및 영향: Internal reasoning no longer leaks into normal answers and both transports stay consistent; downstream reasoning policy still decides whether raw reasoning is rendered or only preserved, and malformed non-boolean markers remain ordinary text rather than broadening hidden-content inference.
+
 ## Google tool-call thought-signature replay
 
 Gemini may attach an opaque `thoughtSignature` to a `functionCall` and requires that exact value on
