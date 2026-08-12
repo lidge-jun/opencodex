@@ -131,6 +131,104 @@ describe("GET /v1/catalog admission (#809)", () => {
   });
 });
 
+describe("HEAD /v1/catalog (#809)", () => {
+  test("answers the same status and headers as GET, with no body", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const get = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      const head = await fetch(new URL("/v1/catalog", server.url), {
+        method: "HEAD",
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(head.status).toBe(get.status);
+      for (const header of ["content-type", "cache-control", "x-content-type-options"]) {
+        expect(head.headers.get(header)).toBe(get.headers.get(header));
+      }
+      // The reason to offer HEAD at all: a client can learn the size and version
+      // skew before spending the download.
+      expect(head.headers.get("content-length")).toBe(
+        String(Buffer.byteLength(JSON.stringify(CATALOG_FIXTURE), "utf8")),
+      );
+      expect(await head.text()).toBe("");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an absent catalog fails the same way it does for GET", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-head-missing-");
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        method: "HEAD",
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a missing credential is rejected before the catalog is read", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), { method: "HEAD" });
+      expect(response.status).toBe(401);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("/v1/catalog is read-only (#809)", () => {
+  test.each(["POST", "PUT", "PATCH", "DELETE"])("%s is rejected with Allow: GET, HEAD", async method => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        method,
+        headers: { "content-type": "application/json", "x-opencodex-api-key": DATA_PLANE_KEY },
+        ...(method === "DELETE" ? {} : { body: JSON.stringify({ models: [] }) }),
+      });
+      expect(response.status).toBe(405);
+      expect(response.headers.get("allow")).toBe("GET, HEAD");
+      const body = await response.json() as { error?: { code?: string } };
+      expect(body.error?.code).toBe("method_not_allowed");
+      // A rejected mutation must not have been treated as a catalog write.
+      expect(JSON.stringify(body)).not.toContain("gpt-5.3-codex");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each(["POST", "DELETE"])("%s without a credential is rejected as unauthenticated, not as a bad method", async method => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        method,
+        headers: { "content-type": "application/json" },
+        ...(method === "DELETE" ? {} : { body: "{}" }),
+      });
+      // Admission runs first on purpose: an anonymous caller learns nothing about
+      // which methods the route would have accepted.
+      expect(response.status).toBe(401);
+      expect(response.headers.get("allow")).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("catalog authority is shared with the management route (#809)", () => {
   test("both routes serve byte-identical catalog documents", async () => {
     writeCatalogFixture();
