@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { DATA_PLANE_CATALOG_MAX_BYTES } from "../src/server/data-plane-catalog";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import type { OcxConfig } from "../src/types";
 
@@ -16,6 +17,11 @@ import type { OcxConfig } from "../src/types";
 
 const DATA_PLANE_KEY = "ocx_data_catalogreader";
 const ADMIN_TOKEN = "admin-secret-for-v1-catalog";
+const PROVIDER_API_KEY = "sk-provider-secret-shouldnotleak";
+const CODEX_ACCOUNT_ID = "codex-account-privateid-9f2c";
+const CODEX_ACCOUNT_EMAIL = "operator@private.example";
+/** An operator-chosen public namespace; the catalog may carry it, the account id may not. */
+const PUBLIC_SELECTOR = "workspace-a";
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
@@ -59,9 +65,52 @@ function remoteConfig(): OcxConfig {
   } as OcxConfig;
 }
 
+/**
+ * A configuration carrying every class of secret the response must never echo: a provider
+ * API key, a management token, the caller's own admission key, and a private Codex account
+ * identity behind a public selector.
+ */
+function secretfulConfig(): OcxConfig {
+  return {
+    ...remoteConfig(),
+    providers: {
+      fixture: {
+        adapter: "openai-chat",
+        baseUrl: "https://fixture.test/v1",
+        apiKey: PROVIDER_API_KEY,
+        disabled: true,
+        models: ["gpt-fixture"],
+      },
+    },
+    codexAccountPickerEnabled: true,
+    codexAccounts: [{ id: CODEX_ACCOUNT_ID, email: CODEX_ACCOUNT_EMAIL, isMain: false }],
+    codexAccountNamespaces: { [PUBLIC_SELECTOR]: CODEX_ACCOUNT_ID },
+  } as OcxConfig;
+}
+
 function writeCatalogFixture(): void {
   codexHome = installIsolatedCodexHome("ocx-v1-catalog-");
   writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(CATALOG_FIXTURE), "utf8");
+}
+
+/** A catalog that legitimately carries an account-bound entry keyed by the public selector. */
+function writeAccountBoundCatalogFixture(): void {
+  codexHome = installIsolatedCodexHome("ocx-v1-catalog-account-");
+  const catalog = {
+    models: [
+      ...CATALOG_FIXTURE.models,
+      {
+        slug: `${PUBLIC_SELECTOR}/gpt-5.3-codex`,
+        display_name: `${PUBLIC_SELECTOR} / 5.3 Codex`,
+        description: "fixture account-bound entry",
+        priority: 3,
+        visibility: "list",
+        input_modalities: ["text"],
+        opencodex_catalog_kind: "account-selector-v1",
+      },
+    ],
+  };
+  writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(catalog), "utf8");
 }
 
 beforeEach(() => {
@@ -301,6 +350,148 @@ describe("the catalog read buys nothing on the management plane (#809)", () => {
       });
       expect(response.status).toBe(401);
       expect(await response.text()).not.toContain("slug");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("the data-plane catalog response carries no management state (#809)", () => {
+  /** Every byte a caller can observe: status line values, header values, and the body. */
+  async function observableSurface(response: Response): Promise<string> {
+    const headers = [...response.headers.entries()].map(([name, value]) => `${name}: ${value}`).join("\n");
+    return `${response.status}\n${headers}\n${await response.text()}`;
+  }
+
+  function forbiddenStrings(): Array<[string, string]> {
+    return [
+      ["provider API key", PROVIDER_API_KEY],
+      ["management token", ADMIN_TOKEN],
+      ["the caller's own data-plane key", DATA_PLANE_KEY],
+      ["Codex account id", CODEX_ACCOUNT_ID],
+      ["Codex account email", CODEX_ACCOUNT_EMAIL],
+      ["raw provider base URL", "fixture.test"],
+      ["the Codex home path", codexHome?.path ?? "«no codex home»"],
+      ["the opencodex home path", testHome],
+    ];
+  }
+
+  test("a successful read exposes no credential, account identity, provider config, or local path", async () => {
+    writeAccountBoundCatalogFixture();
+    saveConfig(secretfulConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(200);
+      const surface = await observableSurface(response);
+      // Guard against a vacuous pass: the account-bound entry really is in the
+      // document, so the assertions below are about redaction, not about an empty
+      // catalog that happens to mention nothing.
+      expect(surface).toContain(`${PUBLIC_SELECTOR}/gpt-5.3-codex`);
+      for (const [label, secret] of forbiddenStrings()) {
+        expect({ label, leaked: surface.includes(secret) }).toEqual({ label, leaked: false });
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the absent-catalog error names no path on the operator's disk", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-leak-missing-");
+    saveConfig(secretfulConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(404);
+      const surface = await observableSurface(response);
+      for (const [label, secret] of forbiddenStrings()) {
+        expect({ label, leaked: surface.includes(secret) }).toEqual({ label, leaked: false });
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("data-plane catalog response boundaries (#809)", () => {
+  test("declares its type, refuses intermediary caching, and blocks sniffing", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("application/json");
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("reports the selected Codex version when the proxy has an authoritative one", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    writeFileSync(join(testHome, "codex-runtime.json"), JSON.stringify({
+      version: 1,
+      command: "codex",
+      source: "path",
+      selectedVersion: "0.133.0",
+      updatedAt: "2026-08-12T00:00:00.000Z",
+    }), "utf8");
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.headers.get("x-opencodex-codex-version")).toBe("0.133.0");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("omits the version header rather than inventing one when no runtime is recorded", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-opencodex-codex-version")).toBeNull();
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("refuses a catalog beyond the declared response ceiling instead of streaming it", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-oversized-");
+    const oversized = {
+      models: [{
+        slug: "fixture/oversized",
+        display_name: "oversized",
+        description: "x".repeat(DATA_PLANE_CATALOG_MAX_BYTES + 1024),
+        visibility: "list",
+        input_modalities: ["text"],
+      }],
+    };
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(oversized), "utf8");
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(500);
+      const body = await response.json() as { error?: { code?: string } };
+      expect(body.error?.code).toBe("catalog_too_large");
     } finally {
       await server.stop(true);
     }
