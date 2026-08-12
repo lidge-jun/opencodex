@@ -21,6 +21,7 @@ import {
   subagentRosterText,
 } from "../src/server/responses/collaboration";
 import { estimateTokens } from "../src/lib/token-estimate";
+import { COMPACT_PROMPT } from "../src/responses/compaction";
 
 setDefaultTimeout(30_000);
 
@@ -445,26 +446,35 @@ describe("responses input-size guard", () => {
     }) as typeof fetch;
     // The pre-auth guards pass (the compaction_trigger item is dropped from messages),
     // but normalization is followed by the routed compaction prompt (~425 chars); only
-    // the final pre-construction guard can catch the resulting over-limit request.
+    // the final pre-construction guard can catch the resulting over-limit request. The
+    // fixture is bound to the actual COMPACT_PROMPT so a prompt change fails loudly.
     const LIMIT = 1_000_000;
-    const inputTokens = LIMIT - 100;
+    const compactPromptTokens = estimateTokens(COMPACT_PROMPT, "deepseek-v4-flash");
+    expect(compactPromptTokens).toBeGreaterThan(100);
+    // Within (LIMIT - prompt, LIMIT): pre-auth guards pass, the final guard must reject.
+    const inputTokens = LIMIT - Math.ceil(compactPromptTokens / 2);
+    const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const res = await postResponses(deepseekConfig(), {
       model: "deepseek/deepseek-v4-flash",
       input: [
         { type: "compaction_trigger" },
         {
           role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1),
-            },
-          ],
+          content: [{ type: "input_text", text: bigText }],
         },
       ],
     });
     await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
+
+    // Positive control: the same near-limit input WITHOUT compaction_trigger is not a
+    // compaction turn, gets no prompt injection, and reaches upstream normally.
+    const control = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+    });
+    expect(control.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
   });
 
   test("counts a deeply nested tool schema without overflowing the call stack", async () => {

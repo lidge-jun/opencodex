@@ -50,7 +50,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { estimateTokens } from "../../lib/token-estimate";
+import { charsPerToken, estimateTokens } from "../../lib/token-estimate";
 import { walkJsonTree } from "../../lib/json-walk";
 import { candidateCapabilityEvidence } from "../../routing/capability";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
@@ -1639,28 +1639,56 @@ async function handleResponsesInner(
    * catalog-dependent parts). `extraText` adds a pre-computed projection of later
    * prompt-bearing mutations (bridge tool injections) for the final pre-construction guard.
    */
-  const inputGuardFor = (
-    candidateRoute: typeof route,
-    options: { estimateGuidance?: boolean; extraText?: string } = {},
-  ): Response | undefined => {
-    const effectiveLimit =
+  /** The routed model's effective input limit: per-model maximum input, then the context
+   *  window resolved through the shared route-capability chain. */
+  const effectiveInputLimitFor = (candidateRoute: typeof route): number | undefined => {
+    const limit =
       candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
       ?? candidateCapabilityEvidence(config, candidateRoute.providerName, candidateRoute.modelId).contextWindow;
-    if (typeof effectiveLimit !== "number" || effectiveLimit <= 0) return undefined;
+    return typeof limit === "number" && limit > 0 ? limit : undefined;
+  };
+
+  const oversizedInputResponse = (
+    modelId: string,
+    effectiveLimit: number,
+    estimatedInputTokens: number,
+  ): Response => Response.json(
+    {
+      error: {
+        type: "request_too_large",
+        code: "input_context_window_exceeded",
+        message: `input (≈${estimatedInputTokens} tokens) exceeds ${modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
+      },
+    },
+    { status: 413 },
+  );
+
+  /**
+   * Walk the parsed request once and estimate the adapter-bound input tokens for
+   * `modelId`, stopping as soon as the running estimate crosses `cap` so an oversized
+   * payload never forces a full scan before the 413. The counted content is identical
+   * across fallback candidates — only the chars-per-token ratio and the limit vary — so
+   * the candidate loop calls this once per distinct ratio against the strictest limit.
+   */
+  const estimateAdmissionInput = (
+    modelId: string,
+    cap: number,
+    options: { estimateGuidance?: boolean; extraText?: string } = {},
+  ): number => {
     let estimatedInputTokens = 0;
     const countText = (text: string) => {
-      estimatedInputTokens += estimateTokens(text, candidateRoute.modelId);
+      estimatedInputTokens += estimateTokens(text, modelId);
     };
     /**
      * Estimate a JSON payload structurally instead of serializing a full copy: the walk
-     * stops as soon as the running estimate crosses the effective limit, so an oversized
-     * schema never materializes as one giant string before the 413. Traversal is the
-     * shared read-only walker (iterative frames, lazy keys), so the walk keeps O(depth)
-     * memory instead of materializing sibling lists or key arrays for the whole payload.
+     * stops as soon as the running estimate crosses the cap, so an oversized schema never
+     * materializes as one giant string before the 413. Traversal is the shared read-only
+     * walker (iterative frames, lazy keys), so the walk keeps O(depth) memory instead of
+     * materializing sibling lists or key arrays for the whole payload.
      */
     const countJsonTokens = (value: unknown): void => {
       walkJsonTree(value, {
-        isDone: () => estimatedInputTokens > effectiveLimit,
+        isDone: () => estimatedInputTokens > cap,
         onValue: (current) => {
           if (typeof current === "string") {
             countText(current);
@@ -1746,17 +1774,18 @@ async function handleResponsesInner(
     if (parsed._imageGeneration?.originalTool !== undefined) {
       countJsonTokens(parsed._imageGeneration.originalTool);
     }
+    return estimatedInputTokens;
+  };
+
+  const inputGuardFor = (
+    candidateRoute: typeof route,
+    options: { estimateGuidance?: boolean; extraText?: string } = {},
+  ): Response | undefined => {
+    const effectiveLimit = effectiveInputLimitFor(candidateRoute);
+    if (effectiveLimit === undefined) return undefined;
+    const estimatedInputTokens = estimateAdmissionInput(candidateRoute.modelId, effectiveLimit, options);
     if (estimatedInputTokens > effectiveLimit) {
-      return Response.json(
-        {
-          error: {
-            type: "request_too_large",
-            code: "input_context_window_exceeded",
-            message: `input (≈${estimatedInputTokens} tokens) exceeds ${candidateRoute.modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
-          },
-        },
-        { status: 413 },
-      );
+      return oversizedInputResponse(candidateRoute.modelId, effectiveLimit, estimatedInputTokens);
     }
     return undefined;
   };
@@ -1812,6 +1841,11 @@ async function handleResponsesInner(
         ...resolveAgentModelFallbackForPrimary(parsed.modelId, undefined, config.codexAccountNamespaces),
       ];
       const seenCandidates = new Set<string>();
+      // Resolve every candidate once; the payload walk below is identical across
+      // candidates (only the chars-per-token ratio and the limit vary), so re-scanning
+      // per candidate would multiply a near-limit conversation scan by the candidate
+      // count on the request thread before any I/O.
+      const candidateLimits: Array<{ route: typeof route; limit: number }> = [];
       for (const candidate of candidateChain) {
         if (typeof candidate !== "string" || candidate.length === 0) continue;
         if (seenCandidates.has(candidate)) continue;
@@ -1819,8 +1853,8 @@ async function handleResponsesInner(
         if (slugsEquivalent(candidate, route.modelId)) continue;
         try {
           const candidateRoute = routeModel(config, candidate, evidenceFromBody(parsed._rawBody));
-          const candidateGuard = inputGuardFor(candidateRoute, { estimateGuidance: true });
-          if (candidateGuard) return candidateGuard;
+          const limit = effectiveInputLimitFor(candidateRoute);
+          if (limit !== undefined) candidateLimits.push({ route: candidateRoute, limit });
         } catch {
           // A fallback candidate that cannot be routed NOW can never be selected after
           // quota priming, so it carries no admission risk. A stale entry (removed or
@@ -1828,6 +1862,29 @@ async function handleResponsesInner(
           // fail the primary request, which is already routed and guarded above, and
           // must not overwrite the primary decision recorded on that route.
           continue;
+        }
+      }
+      const byRatio = new Map<number, Array<{ route: typeof route; limit: number }>>();
+      for (const entry of candidateLimits) {
+        const ratio = charsPerToken(entry.route.modelId);
+        const group = byRatio.get(ratio) ?? [];
+        group.push(entry);
+        byRatio.set(ratio, group);
+      }
+      for (const group of byRatio.values()) {
+        const minLimit = Math.min(...group.map(entry => entry.limit));
+        // Cap the walk at the strictest limit in the group: if the running estimate
+        // crosses it, that strictest candidate rejects; otherwise the estimate is the
+        // full count and can be compared against every candidate's own limit.
+        const estimate = estimateAdmissionInput(group[0]!.route.modelId, minLimit, { estimateGuidance: true });
+        if (estimate > minLimit) {
+          const strictest = group.find(entry => entry.limit === minLimit)!;
+          return oversizedInputResponse(strictest.route.modelId, minLimit, estimate);
+        }
+        for (const { route: candidateRoute, limit } of group) {
+          if (estimate > limit) {
+            return oversizedInputResponse(candidateRoute.modelId, limit, estimate);
+          }
         }
       }
     }
@@ -2331,8 +2388,7 @@ async function handleResponsesInner(
   // deterministic additions and re-validate before adapter construction or upstream I/O
   // (auth has already happened; this is the last rejection point before any provider call).
   let projectedBridgeToolText = "";
-  const passthroughAdapter = "passthrough" in adapter && adapter.passthrough;
-  if (!routedCompaction && !passthroughAdapter) {
+  if (!routedCompaction && !isPassthrough) {
     const finalWsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
     const finalImgPlan = planImageBridgeSync(config, parsed, route.provider);
     const finalVidPlan = planVideoBridgeSync(config, parsed, route.provider);
@@ -2341,10 +2397,24 @@ async function handleResponsesInner(
       projectedBridgeToolText += JSON.stringify(buildWebSearchTool());
     }
     // The media bridge injects only on streaming requests and only when web search does
-    // not take priority for this turn.
+    // not take priority for this turn, and it skips tools the client already declared
+    // (mirroring the injection path's existingNames duplicate check).
     if (parsed.stream && (finalImgPlan || finalVidPlan) && (!finalWsPlan || adapter.runTurn)) {
-      if (finalImgPlan) projectedBridgeToolText += JSON.stringify(buildImageTool());
-      if (finalVidPlan) projectedBridgeToolText += JSON.stringify(buildVideoTool());
+      const bridgeTools = (parsed.context.tools ?? []).filter(t => {
+        if (t.imageGeneration) return false;
+        if (t.videoGeneration) return false;
+        if (finalImgPlan && finalImgPlan.toolNames.has(t.name)) return false;
+        if (finalImgPlan && t.namespace && finalImgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
+        if (finalVidPlan && !t.namespace && finalVidPlan.toolNames.has(t.name)) return false;
+        return true;
+      });
+      const existingNames = new Set(bridgeTools.map(t => t.name));
+      if (finalImgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) {
+        projectedBridgeToolText += JSON.stringify(buildImageTool());
+      }
+      if (finalVidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) {
+        projectedBridgeToolText += JSON.stringify(buildVideoTool());
+      }
     }
   }
   const finalAdmissionGuard = inputGuardFor(route, { extraText: projectedBridgeToolText });
