@@ -557,17 +557,36 @@ describe("GitHub Actions hardening", () => {
     const workflow = await readText(".github/workflows/release.yml");
     const release = Bun.YAML.parse(workflow) as {
       permissions?: Record<string, string>;
-      jobs?: { publish?: { "runs-on"?: string } };
+      jobs?: {
+        "validate-dispatch"?: {
+          "runs-on"?: string;
+          permissions?: Record<string, string>;
+        };
+        publish?: {
+          "runs-on"?: string;
+          needs?: string;
+          permissions?: Record<string, string>;
+        };
+      };
     };
-
-    // Least privilege + never cancel a publish mid-flight.
-    expect(release.permissions).toEqual({
+    
+    // Keep the workflow unprivileged by default. Dispatch validation gets only
+    // read access; write + OIDC permissions exist only on the gated publish job.
+    expect(release.permissions).toEqual({});
+    
+    expect(release.jobs?.["validate-dispatch"]?.["runs-on"]).toBe("ubuntu-latest");
+    expect(release.jobs?.["validate-dispatch"]?.permissions).toEqual({
+      contents: "read",
+    });
+    
+    expect(release.jobs?.publish?.needs).toBe("validate-dispatch");
+    expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
+    expect(release.jobs?.publish?.permissions).toEqual({
       contents: "write",
       actions: "read",
       "pull-requests": "read",
       "id-token": "write",
     });
-    expect(release.jobs?.publish?.["runs-on"]).toBe("ubuntu-latest");
     expect(workflow).toContain("actions: read");
     expect(workflow).toContain("pull-requests: read");
     expect(workflow).toContain("id-token: write");
