@@ -128,18 +128,18 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
 
+  // Management projection of the catalog document. The bytes and the version header come
+  // from the shared materialization boundary that data-plane `GET /v1/catalog` also uses
+  // (#809), so the two surfaces cannot drift into two serializers. This route keeps its own
+  // management error envelope and CORS.
   if (url.pathname === "/api/catalog" && req.method === "GET") {
-    const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
-    const catalog = readCatalog(readCodexCatalogPath());
-    if (!catalog) return jsonResponse({ error: "catalog not found" }, 404, req, config);
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...corsHeaders(req, config),
-    };
-    const { loadPersistedCodexRuntime } = await import("../../codex/runtime");
-    const version = loadPersistedCodexRuntime()?.selectedVersion;
-    if (version) headers["x-opencodex-codex-version"] = version;
-    return new Response(JSON.stringify(catalog), { status: 200, headers });
+    const { catalogDistributionHeaders, materializeCatalogDistribution } = await import("../../codex/catalog/distribution");
+    const catalog = await materializeCatalogDistribution();
+    if (catalog.status === "missing") return jsonResponse({ error: "catalog not found" }, 404, req, config);
+    return new Response(catalog.body, {
+      status: 200,
+      headers: { ...catalogDistributionHeaders(catalog), ...corsHeaders(req, config) },
+    });
   }
 
   if (url.pathname === "/api/models" && req.method === "GET") {

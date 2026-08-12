@@ -180,6 +180,7 @@ import {
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
+import { buildDataPlaneCatalogResponse, dataPlaneCatalogMethodNotAllowed } from "./data-plane-catalog";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   initializeManagementAuthState,
@@ -1066,6 +1067,31 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);
+      }
+
+      /**
+       * Least-privilege catalog distribution (#809). A client that can already POST
+       * /v1/responses can fetch the generated catalog with the same credential, so a
+       * multi-machine deployment no longer needs the management token on every client.
+       *
+       * Admission is checked BEFORE the method. An unauthenticated POST therefore answers
+       * 401 rather than 405: the narrower disclosure, and consistent with every other
+       * branch in this data plane. A caller that has passed admission gets the accurate
+       * 405 plus `Allow`.
+       *
+       * Not added to `loopbackRouteAllowed`: the unauthenticated loopback listener serves
+       * what a directly-spawned `codex app-server` needs, and it does not need this.
+       */
+      if (url.pathname === "/v1/catalog") {
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
+        }
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          return withCors(dataPlaneCatalogMethodNotAllowed(), req, policy);
+        }
+        return withCors(await buildDataPlaneCatalogResponse(req.method), req, policy);
       }
 
       // Remote compaction v1 (codex-rs with Feature::RemoteCompactionV2 off — the default).
