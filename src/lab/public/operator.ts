@@ -1,9 +1,24 @@
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { replayLabLedger } from "../ledger/store";
 import { labExportDir, labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
+import { validatePublicEvidenceAuthorities } from "./community-authority";
+import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
+import { validatePublicEvidenceRecordPrivacy } from "./privacy";
+import type { ProjectPublicEvidenceRecordInput } from "./project";
+import { projectPublicEvidenceRecord } from "./project";
+import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
+import { writePublicEvidenceBundle } from "./storage";
+import { parseStrictPublicJson } from "./strict-json";
 import { PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION, PUBLIC_EXPORT_POLICY_VERSION } from "./types";
 import type {
   PublicEvidenceBundleV1,
@@ -11,20 +26,25 @@ import type {
   PublicEvidenceRecordV1,
   PublicProjectionNotExportableReason,
 } from "./types";
-import type { ProjectPublicEvidenceRecordInput } from "./project";
-import { projectPublicEvidenceRecord } from "./project";
-import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
-import { writePublicEvidenceBundle } from "./storage";
-import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
-import { parseStrictPublicJson } from "./strict-json";
 import { PublicEvidenceValidationError } from "./validate";
 
 const MAX_OPERATOR_EVENTS = 256;
 const MAX_PUBLIC_FILE_BYTES = 2 * 1024 * 1024;
+const EMPTY_PREVIEW_DAY = "1970-01-01";
+const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
 export interface ProjectPublicEvidenceInput {
-  createdDayUtc: string;
+  /** @deprecated V1 derives this only from records that remain exportable. */
+  createdDayUtc?: string;
   records: ProjectPublicEvidenceRecordInput[];
+}
+
+function utcDay(timestamp: number): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    throw new PublicEvidenceValidationError("public_selection_time", "selected observation has an invalid completion timestamp");
+  }
+  return date.toISOString().slice(0, 10);
 }
 
 export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
@@ -33,17 +53,35 @@ export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
 } {
   const records: PublicEvidenceRecordV1[] = [];
   const excluded: Array<{ index: number; reason: PublicProjectionNotExportableReason }> = [];
+  let latestExportableCompletedAt: number | null = null;
+
   input.records.forEach((recordInput, index) => {
     const projected = projectPublicEvidenceRecord(recordInput);
-    if (projected.status === "exportable") records.push(projected.record);
-    else excluded.push({ index, reason: projected.reason });
+    if (projected.status !== "exportable") {
+      excluded.push({ index, reason: projected.reason });
+      return;
+    }
+    try {
+      validatePublicEvidenceAuthorities([projected.record]);
+      validatePublicEvidenceRecordPrivacy(projected.record);
+      records.push(projected.record);
+      latestExportableCompletedAt = Math.max(
+        latestExportableCompletedAt ?? recordInput.observation.completedAt,
+        recordInput.observation.completedAt,
+      );
+    } catch (error) {
+      if (!(error instanceof PublicEvidenceValidationError)) throw error;
+      excluded.push({ index, reason: "unsafe_public_field" });
+    }
   });
   records.sort((a, b) => a.recordId.localeCompare(b.recordId));
   return {
     bundle: {
       schemaVersion: PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION,
       exportPolicyVersion: PUBLIC_EXPORT_POLICY_VERSION,
-      createdDayUtc: input.createdDayUtc,
+      // Empty previews are intentionally unsignable and use a constant day so excluded
+      // observation timestamps can never influence public output.
+      createdDayUtc: latestExportableCompletedAt === null ? EMPTY_PREVIEW_DAY : utcDay(latestExportableCompletedAt),
       records,
       artifacts: [],
     },
@@ -101,28 +139,25 @@ function assertOperatorEventIds(eventIds: readonly string[]): string[] {
   return unique;
 }
 
-function utcDay(timestamp: number): string {
-  const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) {
-    throw new PublicEvidenceValidationError("public_selection_time", "selected observation has an invalid completion timestamp");
-  }
-  return date.toISOString().slice(0, 10);
-}
-
 function canonicalVerdictForObservation(
   observation: ObservationEvent,
   configDir?: string,
 ): ProjectPublicEvidenceRecordInput["verdict"] | null {
-  const page = queryLabVerdicts(
-    { subjectId: observation.subjectId, layer: observation.evidenceLayer, suiteId: observation.suiteId },
-    undefined,
-    200,
-    configDir,
-  );
-  const verdict = page.items.find((row) =>
-    row.suiteVersion === observation.suiteVersion && row.contributingEventIds.includes(observation.eventId),
-  );
-  return verdict?.verdict ?? null;
+  const filters = {
+    subjectId: observation.subjectId,
+    layer: observation.evidenceLayer,
+    suiteId: observation.suiteId,
+  };
+  let cursor: string | undefined;
+  do {
+    const page = queryLabVerdicts(filters, cursor, 200, configDir);
+    const verdict = page.items.find((row) =>
+      row.suiteVersion === observation.suiteVersion && row.contributingEventIds.includes(observation.eventId),
+    );
+    if (verdict) return verdict.verdict;
+    if (!page.hasMore || !page.nextCursor) return null;
+    cursor = page.nextCursor;
+  } while (true);
 }
 
 export function previewLocalPublicEvidence(
@@ -135,7 +170,7 @@ export function previewLocalPublicEvidence(
   const projectInputs: ProjectPublicEvidenceRecordInput[] = [];
   const projectEventIds: string[] = [];
   const excluded: PublicOperatorExclusionV1[] = [];
-  let latestObservationCompletedAt: number | null = null;
+  let sawObservation = false;
 
   for (const eventId of eventIds) {
     const event = byId.get(eventId);
@@ -147,7 +182,7 @@ export function previewLocalPublicEvidence(
       excluded.push({ eventId, reason: "not_observation" });
       continue;
     }
-    latestObservationCompletedAt = Math.max(latestObservationCompletedAt ?? event.completedAt, event.completedAt);
+    sawObservation = true;
     const projectedEvent = queryLabEventById(eventId, configDir);
     if (!projectedEvent) {
       excluded.push({ eventId, reason: "event_not_found" });
@@ -166,14 +201,11 @@ export function previewLocalPublicEvidence(
     projectEventIds.push(eventId);
   }
 
-  if (latestObservationCompletedAt === null) {
+  if (!sawObservation) {
     throw new PublicEvidenceValidationError("public_selection_empty", "public evidence selection contains no observation events");
   }
 
-  const projected = projectPublicEvidence({
-    createdDayUtc: utcDay(latestObservationCompletedAt),
-    records: projectInputs,
-  });
+  const projected = projectPublicEvidence({ records: projectInputs });
   for (const row of projected.excluded) {
     excluded.push({ eventId: projectEventIds[row.index]!, reason: row.reason });
   }
@@ -215,18 +247,23 @@ export function summarizePublicEvidenceVerification(raw: unknown): PublicVerific
 }
 
 function readBoundedPublicFile(path: string): Buffer {
-  const stats = lstatSync(path);
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
-    throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input must be a regular non-symlink file");
+  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
+      throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input must be a regular non-symlink file");
+    }
+    if (stats.size > MAX_PUBLIC_FILE_BYTES) {
+      throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
+    }
+    const bytes = readFileSync(fd);
+    if (bytes.byteLength > MAX_PUBLIC_FILE_BYTES) {
+      throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
+    }
+    return bytes;
+  } finally {
+    closeSync(fd);
   }
-  if (stats.size > MAX_PUBLIC_FILE_BYTES) {
-    throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
-  }
-  const bytes = readFileSync(path);
-  if (bytes.byteLength > MAX_PUBLIC_FILE_BYTES) {
-    throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
-  }
-  return bytes;
 }
 
 function parsePublicFile(path: string): unknown {
