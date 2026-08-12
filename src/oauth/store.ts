@@ -198,7 +198,7 @@ interface LockSnapshot { bytes: string; dev: number; ino: number; mtimeMs: numbe
 export interface OAuthFileLockOptions { path: string; waitTimeoutMs?: number; staleAfterMs?: number; pollMinMs?: number; pollMaxMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number; random?: () => number; beforeStaleUnlink?: () => void; beforeReleaseUnlink?: () => void; beforeFailedCreateUnlink?: () => void; writeMetadata?: (fd: number, bytes: string) => void }
 export interface OAuthFileLockGuard { readonly ownerId: string; release(): void }
 function errorCode(error: unknown): string | undefined { return error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined; }
-function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path); return { bytes, dev:s.dev, ino:s.ino,mtimeMs:s.mtimeMs,size:s.size }; }
+function snapshot(path: string): LockSnapshot { const bytes = readFileSync(path, "utf8"); const s = statSync(path); return { bytes, dev:s.dev, ino:s.ino, mtimeMs:s.mtimeMs, size:s.size }; }
 function sameSnapshot(a: LockSnapshot,b: LockSnapshot): boolean { return a.bytes===b.bytes&&a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
 function sameFd(a: LockSnapshot,b: ReturnType<typeof fstatSync>): boolean { return a.dev===b.dev&&a.ino===b.ino&&a.mtimeMs===b.mtimeMs&&a.size===b.size; }
 export function createOAuthFileLock(options: OAuthFileLockOptions): { acquire(): Promise<OAuthFileLockGuard> } {
