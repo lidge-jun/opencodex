@@ -17,5 +17,5 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
-      - run: bun test tests/lab-public-evidence.test.ts
+      - run: bun test tests/lab-public-evidence.test.ts tests/lab-public-evidence-signature.test.ts
       - run: bun x tsc --noEmit
