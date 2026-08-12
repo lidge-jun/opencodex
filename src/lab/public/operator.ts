@@ -16,6 +16,7 @@ import { projectPublicEvidenceRecord } from "./project";
 import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
 import { writePublicEvidenceBundle } from "./storage";
 import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
+import { parseStrictPublicJson } from "./strict-json";
 import { PublicEvidenceValidationError } from "./validate";
 
 const MAX_OPERATOR_EVENTS = 256;
@@ -229,12 +230,7 @@ function readBoundedPublicFile(path: string): Buffer {
 }
 
 function parsePublicFile(path: string): unknown {
-  const bytes = readBoundedPublicFile(path);
-  try {
-    return JSON.parse(bytes.toString("utf8"));
-  } catch {
-    throw new PublicEvidenceValidationError("public_file_json", "public evidence input is not valid JSON");
-  }
+  return parseStrictPublicJson(readBoundedPublicFile(path), "public evidence input", "public_file_json");
 }
 
 export function verifyPublicEvidenceFile(path: string): PublicVerificationSummaryV1 {
