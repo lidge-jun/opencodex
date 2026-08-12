@@ -1,4 +1,5 @@
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { InboundWire } from "../../providers/registry";
 import { subjectIdForSubject } from "../../lab/digest";
 import { buildRouteSubjectV1 } from "../../lab/subject/route-subject";
 import { buildProtocolSubjectV1 } from "../../lab/subject/protocol-subject";
@@ -15,7 +16,7 @@ import {
 import { readOpenCodexCompatibilityVersion } from "./version";
 import type { RoutingCompatibilityEvidenceLayer } from "./types";
 
-const POLICY_INBOUND_PROTOCOL = "openai-responses";
+const POLICY_INBOUND_WIRE: InboundWire = "responses";
 
 export interface ResolvedPolicyRouteSubject {
   subjectId: string;
@@ -26,6 +27,15 @@ export interface ResolvedPolicyRouteSubject {
 export interface ResolvedPolicyCompatibilitySubjects {
   subjectIds: Partial<Record<RoutingCompatibilityEvidenceLayer, string>>;
   route?: ResolvedPolicyRouteSubject;
+}
+
+/** Canonical Lab protocol identity for a production request wire. */
+export function inboundProtocolForWire(inboundWire: InboundWire): string {
+  switch (inboundWire) {
+    case "responses": return "openai-responses";
+    case "chat": return "openai-chat";
+    case "anthropic": return "anthropic-messages";
+  }
 }
 
 function destinationSnapshotFromBaseUrl(baseUrl: string, fingerprint: string): LabDestinationV1 {
@@ -43,36 +53,29 @@ function destinationSnapshotFromBaseUrl(baseUrl: string, fingerprint: string): L
   });
 }
 
-function resolveEffectivePolicyProvider(
-  providerName: string,
-  modelId: string,
-  routed: OcxProviderConfig,
-): OcxProviderConfig {
-  return resolveWireProtocolOverride(providerName, modelId, routed, "responses");
-}
-
 /**
- * Resolve the subject identities a policy candidate may legitimately consume.
- * Protocol and live-route layers deliberately use different canonical subjects.
- * No network, projection rebuild, ledger replay, or Lab-state creation occurs.
+ * Resolve subject identities for one exact inbound wire without network I/O,
+ * projection reads/rebuilds, ledger replay, or Lab-state creation.
  */
-export function resolvePolicyCompatibilitySubjects(
+export function resolveCompatibilitySubjectsForInboundWire(
   config: OcxConfig,
   providerName: string,
   modelId: string,
   routed: OcxProviderConfig,
+  inboundWire: InboundWire,
   configDir?: string,
 ): ResolvedPolicyCompatibilitySubjects {
-  const effective = resolveEffectivePolicyProvider(providerName, modelId, routed);
+  const effective = resolveWireProtocolOverride(providerName, modelId, routed, inboundWire);
   const baseUrl = typeof effective.baseUrl === "string" ? effective.baseUrl.trim() : "";
   const adapter = effective.adapter ?? "openai-responses";
+  const inboundProtocol = inboundProtocolForWire(inboundWire);
   const upstreamProtocol = upstreamProtocolForAdapter(adapter);
-  const surface = surfaceForProtocols(POLICY_INBOUND_PROTOCOL, upstreamProtocol);
+  const surface = surfaceForProtocols(inboundProtocol, upstreamProtocol);
   const subjectIds: ResolvedPolicyCompatibilitySubjects["subjectIds"] = {};
 
   try {
     const protocolSubject = buildProtocolSubjectV1({
-      inboundProtocol: POLICY_INBOUND_PROTOCOL,
+      inboundProtocol,
       upstreamProtocol,
       surface,
     }, adapter);
@@ -110,7 +113,7 @@ export function resolvePolicyCompatibilitySubjects(
     clientModelId: modelId,
     upstreamModelId: modelId,
     effectiveAdapter: adapter,
-    inboundProtocol: POLICY_INBOUND_PROTOCOL,
+    inboundProtocol,
     upstreamProtocol,
     surface,
     baseUrl,
@@ -133,6 +136,27 @@ export function resolvePolicyCompatibilitySubjects(
   }
 }
 
+/**
+ * Resolve the subject identities a policy candidate may legitimately consume.
+ * CL-06 policy evaluation is a Responses-surface lookup and remains unchanged.
+ */
+export function resolvePolicyCompatibilitySubjects(
+  config: OcxConfig,
+  providerName: string,
+  modelId: string,
+  routed: OcxProviderConfig,
+  configDir?: string,
+): ResolvedPolicyCompatibilitySubjects {
+  return resolveCompatibilitySubjectsForInboundWire(
+    config,
+    providerName,
+    modelId,
+    routed,
+    POLICY_INBOUND_WIRE,
+    configDir,
+  );
+}
+
 /** Build exact RouteSubjectV1 identity for a policy candidate without network I/O. */
 export function resolvePolicyRouteSubject(
   config: OcxConfig,
@@ -142,4 +166,26 @@ export function resolvePolicyRouteSubject(
   configDir?: string,
 ): ResolvedPolicyRouteSubject | null {
   return resolvePolicyCompatibilitySubjects(config, providerName, modelId, routed, configDir).route ?? null;
+}
+
+/**
+ * Build the exact production-attempt RouteSubjectV1 identity for its actual
+ * inbound wire. Returns null when no existing Lab salt/identity can be read.
+ */
+export function resolveProductionRouteSubject(
+  config: OcxConfig,
+  providerName: string,
+  modelId: string,
+  routed: OcxProviderConfig,
+  inboundWire: InboundWire,
+  configDir?: string,
+): ResolvedPolicyRouteSubject | null {
+  return resolveCompatibilitySubjectsForInboundWire(
+    config,
+    providerName,
+    modelId,
+    routed,
+    inboundWire,
+    configDir,
+  ).route ?? null;
 }
