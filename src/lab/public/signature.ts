@@ -7,23 +7,26 @@ import {
 } from "node:crypto";
 import {
   closeSync,
+  constants as fsConstants,
+  fstatSync,
   fsyncSync,
-  lstatSync,
   openSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
-import { ensureLabDirs } from "../paths";
+import { ensureLabDirs, labPublicPublisherKeyPath } from "../paths";
 import { buildPublicEvidenceBundle, expectedPublicBundleIdentity, type BuildPublicEvidenceBundleInput } from "./bundle";
+import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { publicEvidenceId } from "./ids";
+import { validatePublicEvidencePrivacy, validatePublicEvidenceRecordPrivacy } from "./privacy";
 import type {
   PublicEvidenceBundleV1,
   PublicPublisherV1,
 } from "./types";
 import { PublicEvidenceValidationError } from "./validate";
 
-const PUBLISHER_KEY_FILE = "publisher-ed25519.pem";
+const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 
 export interface PublicPublisherHandle {
   publisher: PublicPublisherV1;
@@ -45,19 +48,27 @@ function publisherForPrivateKey(privateKeyPem: string): PublicPublisherV1 {
 }
 
 function readRestrictedPrivateKey(path: string): string {
-  const stats = lstatSync(path);
-  if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) {
-    throw new Error("public publisher key path is not a private regular file");
+  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_PRIVATE_KEY_BYTES) {
+      throw new Error("public publisher key path is not a bounded private regular file");
+    }
+    if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
+      throw new Error("public publisher key permissions must be 0600");
+    }
+    const pem = readFileSync(fd, "utf8");
+    if (Buffer.byteLength(pem, "utf8") > MAX_PRIVATE_KEY_BYTES) {
+      throw new Error("public publisher key exceeds size bound");
+    }
+    const key = createPrivateKey(pem);
+    if (key.asymmetricKeyType !== "ed25519") {
+      throw new Error("public publisher key must be Ed25519");
+    }
+    return pem;
+  } finally {
+    closeSync(fd);
   }
-  if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
-    throw new Error("public publisher key permissions must be 0600");
-  }
-  const pem = readFileSync(path, "utf8");
-  const key = createPrivateKey(pem);
-  if (key.asymmetricKeyType !== "ed25519") {
-    throw new Error("public publisher key must be Ed25519");
-  }
-  return pem;
 }
 
 function createPrivateKeyFile(path: string): string {
@@ -67,7 +78,7 @@ function createPrivateKeyFile(path: string): string {
   });
   let fd: number | undefined;
   try {
-    fd = openSync(path, "wx", 0o600);
+    fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW, 0o600);
     writeFileSync(fd, privateKey, { encoding: "utf8" });
     fsyncSync(fd);
   } finally {
@@ -77,8 +88,8 @@ function createPrivateKeyFile(path: string): string {
 }
 
 export function getOrCreatePublicPublisher(configDir?: string): PublicPublisherHandle {
-  const paths = ensureLabDirs(configDir);
-  const privateKeyPath = join(paths.root, PUBLISHER_KEY_FILE);
+  ensureLabDirs(configDir);
+  const privateKeyPath = labPublicPublisherKeyPath(configDir);
   let privateKeyPem: string;
   try {
     privateKeyPem = readRestrictedPrivateKey(privateKeyPath);
@@ -93,6 +104,15 @@ export function getOrCreatePublicPublisher(configDir?: string): PublicPublisherH
     }
   }
   return { publisher: publisherForPrivateKey(privateKeyPem), privateKeyPath };
+}
+
+/** Centralized descriptor-bound signing primitive for the installation publisher key. */
+export function signPublicPublisherDigest(handle: PublicPublisherHandle, digestHex: string): string {
+  if (!/^[0-9a-f]{64}$/.test(digestHex)) {
+    throw new PublicEvidenceValidationError("invalid_digest", "publisher signing digest must be lowercase sha256 hex");
+  }
+  const privateKeyPem = readRestrictedPrivateKey(handle.privateKeyPath);
+  return signBytes(null, Buffer.from(digestHex, "hex"), createPrivateKey(privateKeyPem)).toString("base64");
 }
 
 export interface SignPublicEvidenceBundleInput extends Omit<BuildPublicEvidenceBundleInput, "publisher"> {
@@ -113,6 +133,9 @@ export function signPublicEvidenceBundle(input: SignPublicEvidenceBundleInput): 
   // grants public_export. Fail closed before key creation rather than treating local
   // visibility or a caller-supplied artifactClass as export authority.
   assertLocalArtifactExportAuthority(input);
+  validatePublicEvidenceAuthorities(input.records);
+  for (const record of input.records) validatePublicEvidenceRecordPrivacy(record);
+
   const handle = getOrCreatePublicPublisher(input.configDir);
   const unsigned = buildPublicEvidenceBundle({
     records: input.records,
@@ -120,14 +143,13 @@ export function signPublicEvidenceBundle(input: SignPublicEvidenceBundleInput): 
     createdDayUtc: input.createdDayUtc,
     publisher: handle.publisher,
   });
-  const privateKeyPem = readRestrictedPrivateKey(handle.privateKeyPath);
-  const signature = signBytes(null, Buffer.from(unsigned.bundleDigest, "hex"), createPrivateKey(privateKeyPem));
+  validatePublicEvidencePrivacy(unsigned);
   return {
     ...unsigned,
     signature: {
       algorithm: "ed25519",
       signedDigest: unsigned.bundleDigest,
-      signature: signature.toString("base64"),
+      signature: signPublicPublisherDigest(handle, unsigned.bundleDigest),
     },
   };
 }
