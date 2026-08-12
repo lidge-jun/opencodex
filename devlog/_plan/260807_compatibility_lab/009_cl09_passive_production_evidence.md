@@ -1,4 +1,4 @@
-# CL-09 - Passive Production Evidence / Shadow Correlation
+# CL-09 - Passive Production Evidence / Exact-Route Correlation
 
 ## Programme position
 
@@ -100,7 +100,7 @@ CL-09 V1 must guarantee:
 ```text
 0 extra provider requests
 0 duplicated user requests
-0 production request mutation
+0 outbound production request or user-payload mutation
 0 new routing candidates
 0 Routing Profile changes
 0 Router Intelligence score changes
@@ -114,6 +114,8 @@ CL-09 V1 must guarantee:
 ```
 
 A failure in passive evidence capture must never fail or delay the production request.
+
+The invariant against production-request mutation applies to outbound request bytes and user payloads. The metadata-only addition of `labRouteSubjectId` to the existing attempt record is explicitly allowed.
 
 ---
 
@@ -182,9 +184,6 @@ interface PassiveRouteSignalV1 {
   observedAt: number;
   outcome: "success" | "client_cancel" | "route_error" | "environmental" | "unknown";
   httpStatus?: number;
-  terminalStatus?: string;
-  closeReason?: string;
-  errorCode?: string;
 }
 ```
 
