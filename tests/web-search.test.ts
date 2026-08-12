@@ -1187,6 +1187,16 @@ describe("web-search sidecar native web_search_call emission", () => {
 
     const parsed = parseRequest({ model: "routed/model", input: "look up docs", stream: true, tools: [{ type: "web_search" }] });
     parsed._clientThreadId = "web-search-raw-replay";
+    parsed._reasoningReplayScope = {
+      clientThreadId: parsed._clientThreadId,
+      current: {
+        providerName: "routed",
+        providerDestinationIdentity: "destination:routed",
+        adapterName: adapter.name,
+        modelId: "model",
+        credentialIdentity: "key:test",
+      },
+    };
     const response = await runWithWebSearch({
       parsed,
       adapter,
@@ -1386,6 +1396,16 @@ describe("web-search sidecar native web_search_call emission", () => {
 
     const parsed = parseRequest({ model: "deepseek-v4-flash", input: "look up docs", stream: true, tools: [{ type: "web_search" }] });
     parsed._clientThreadId = "web-search-deepseek-replay";
+    parsed._reasoningReplayScope = {
+      clientThreadId: parsed._clientThreadId,
+      current: {
+        providerName: "routed",
+        providerDestinationIdentity: "destination:deepseek",
+        adapterName: "openai-chat",
+        modelId: "deepseek-v4-flash",
+        credentialIdentity: "key:test",
+      },
+    };
     const response = await runWithWebSearch({
       parsed,
       adapter: createOpenAIChatAdapter(deepseekProvider),

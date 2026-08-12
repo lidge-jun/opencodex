@@ -9,10 +9,19 @@ import {
   peekReasoningForCall,
   rememberReasoningForCall,
 } from "../src/responses/reasoning-replay-cache";
-import type { AdapterEvent } from "../src/types";
+import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
 
 const REASONING = "I need to inspect files before answering.";
-const SCOPE = "thread-empty-delta";
+const SCOPE: OcxReasoningReplayScopeRef = {
+  clientThreadId: "thread-empty-delta",
+  current: {
+    providerName: "opencode-free",
+    providerDestinationIdentity: "destination:provider",
+    adapterName: "openai-chat",
+    modelId: "deepseek-v4-flash-free",
+    credentialIdentity: "key:test",
+  },
+};
 
 function reasoningToolRound(intervening: AdapterEvent): AdapterEvent[] {
   return [
@@ -92,7 +101,8 @@ describe("reasoning replay empty-delta robustness", () => {
     const moduleUrl = pathToFileURL(join(import.meta.dir, "../src/responses/reasoning-replay-cache.ts")).href;
     const script = [
       `const cache = await import(${JSON.stringify(moduleUrl)});`,
-      `cache.rememberReasoningForCall("call_disk_guard", ${JSON.stringify(REASONING)}, "disk-guard");`,
+      `const scope = {clientThreadId:"disk-guard",current:{providerName:"test",providerDestinationIdentity:"destination:test",adapterName:"openai-chat",modelId:"model",credentialIdentity:"key:test"}};`,
+      `cache.rememberReasoningForCall("call_disk_guard", ${JSON.stringify(REASONING)}, scope);`,
     ].join("\n");
 
     try {

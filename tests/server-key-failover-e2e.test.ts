@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { deriveXaiConvId } from "../src/providers/xai-transport";
+import { clearReasoningReplayCacheForTests } from "../src/responses/reasoning-replay-cache";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -20,6 +21,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-keyfail-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
   clearKeyCooldowns();
+  clearReasoningReplayCacheForTests();
 });
 
 afterEach(() => {
@@ -31,6 +33,7 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   clearKeyCooldowns();
+  clearReasoningReplayCacheForTests();
 });
 
 describe("server 429 key failover (end-to-end)", () => {
@@ -240,6 +243,124 @@ describe("server 429 key failover (end-to-end)", () => {
       expect(message?.content?.[0]?.text).toBe("ok after rotate");
       expect(seenAuth[0]).toBe("Bearer key-alpha-000111222333");
       expect(seenAuth[1]).toBe("Bearer key-beta-444555666777");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("reasoning replay misses after a 429 rotates to a different physical key", async () => {
+    const model = "reasoning-model";
+    const callId = "call_key_rotation";
+    const privateReasoning = "reasoning from physical key A";
+    const seen: Array<{ auth: string; messages: Array<Record<string, unknown>> }> = [];
+    upstream = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        const body = await req.json() as { messages?: Array<Record<string, unknown>> };
+        seen.push({
+          auth: req.headers.get("authorization") ?? "",
+          messages: body.messages ?? [],
+        });
+        if (seen.length === 1) {
+          return Response.json({
+            id: "chatcmpl-reasoning-seed",
+            object: "chat.completion",
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: null,
+                reasoning_content: privateReasoning,
+                tool_calls: [{
+                  id: callId,
+                  type: "function",
+                  function: { name: "read_file", arguments: "{}" },
+                }],
+              },
+              finish_reason: "tool_calls",
+            }],
+          });
+        }
+        if (seen.length === 2) {
+          return Response.json(
+            { error: { message: "rotate key" } },
+            { status: 429, headers: { "retry-after": "30" } },
+          );
+        }
+        return Response.json({
+          id: "chatcmpl-reasoning-rotated",
+          object: "chat.completion",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "ok after isolated retry" },
+            finish_reason: "stop",
+          }],
+        });
+      },
+    });
+    const config: OcxConfig = {
+      port: 0, hostname: "127.0.0.1", defaultProvider: "reasoning-pool",
+      providers: {
+        "reasoning-pool": {
+          adapter: "openai-chat",
+          baseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+          allowPrivateNetwork: true,
+          apiKey: "key-alpha-000111222333",
+          apiKeyPool: [
+            { id: "k1", key: "key-alpha-000111222333", addedAt: 1 },
+            { id: "k2", key: "key-beta-444555666777", addedAt: 2 },
+          ],
+          preserveReasoningContentModels: [model],
+          requiresReasoningPlaceholderModels: [model],
+        },
+      },
+    } as OcxConfig;
+    saveConfig(config);
+    const server = startServer(0);
+    const headers = {
+      "content-type": "application/json",
+      "x-codex-parent-thread-id": "thread-key-rotation",
+    };
+    try {
+      const first = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: `reasoning-pool/${model}`,
+          input: "inspect the repo",
+          stream: false,
+          tools: [{ type: "function", name: "read_file", parameters: { type: "object" } }],
+        }),
+      });
+      expect(first.status).toBe(200);
+      await first.json();
+
+      const second = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: `reasoning-pool/${model}`,
+          stream: false,
+          input: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: "inspect the repo" }] },
+            { type: "function_call", call_id: callId, name: "read_file", arguments: "{}" },
+            { type: "function_call_output", call_id: callId, output: "contents" },
+          ],
+        }),
+      });
+      expect(second.status).toBe(200);
+      await second.json();
+
+      expect(seen.map(entry => entry.auth)).toEqual([
+        "Bearer key-alpha-000111222333",
+        "Bearer key-alpha-000111222333",
+        "Bearer key-beta-444555666777",
+      ]);
+      const replayed = seen[1]!.messages.find(message => Array.isArray(message.tool_calls));
+      const rotated = seen[2]!.messages.find(message => Array.isArray(message.tool_calls));
+      expect(replayed?.reasoning_content).toBe(privateReasoning);
+      expect(rotated?.reasoning_content).toBe(" ");
+      expect(rotated?.reasoning_content).not.toBe(privateReasoning);
     } finally {
       await server.stop(true);
     }

@@ -616,6 +616,27 @@ Codex app, so tool cells group like native models — while the text still round
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
 `devlog/_fin/260709_native_response_pattern/`.
 
+The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
+thread plus an exact provider destination, wire adapter, final model, and physical credential
+identity. API-key material is represented only by a process-keyed HMAC; OAuth replay is bound to the
+existing credential slot and exact credential generation, and an authentication-header override is
+folded into that identity without retaining the raw value. A token refresh intentionally starts a
+new fail-closed replay namespace. The destination is likewise process-HMACed because a configured
+base-URL path may itself be a credential. Header-only/keyless routes cannot establish a physical
+credential identity and therefore fail closed. Parsed-request copies and already-created bridges
+share one scope holder, and key/account rotation replaces its current identity before rebuilding
+the request. A retry may therefore reuse reasoning on the same physical target, but a provider, model, or
+credential failover receives the provider's configured placeholder instead of another target's raw
+reasoning.
+
+[Decision Log]
+- 목적과 의도: Preserve tool-call continuation compatibility without forwarding one provider or physical account's private reasoning to another fallback target.
+- 기존 구현 및 제약 조건: Conversation-only scoping stopped process-global call-id collisions, but combo and 429 failover can reuse the same thread and provider-generated call id across destinations or credentials.
+- 검토한 주요 대안: Disable replay on every failover-capable provider; key only by provider name; use persisted or truncated secret-derived ids; bind the in-memory cache to an exact process-local route and credential tuple.
+- 선택한 방식: Keep a shared mutable scope holder and key entries by thread, provider name, an opaque destination HMAC, adapter, final model, and an opaque HMAC/account identity; incomplete identities read and write nothing.
+- 다른 대안 대신 이 방식을 선택한 이유: Exact binding preserves same-generation same-target retries while making account switches and OAuth token refreshes fail closed, without logging, persisting, or exposing credential material.
+- 장점, 단점 및 영향: Cross-provider/account replay is blocked and rotations are visible to live bridges; providers without a stable credential identity lose cache replay and use the existing minimal placeholder path.
+
 ## Chat-to-Responses message phase inference
 
 Chat Completions streams do not carry the Responses `message.phase` field. The bridge keeps an

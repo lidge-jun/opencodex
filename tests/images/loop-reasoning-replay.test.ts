@@ -92,6 +92,16 @@ function makeParsed(): OcxParsedRequest {
     stream: true,
     options: {},
     _clientThreadId: "image-replay-test",
+    _reasoningReplayScope: {
+      clientThreadId: "image-replay-test",
+      current: {
+        providerName: "test",
+        providerDestinationIdentity: "destination:test",
+        adapterName: "test",
+        modelId: "test-model",
+        credentialIdentity: "key:test",
+      },
+    },
   } as OcxParsedRequest;
 }
 

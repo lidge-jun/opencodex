@@ -907,7 +907,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }, 2_000,
     {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId,
+      replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,

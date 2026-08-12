@@ -8,6 +8,13 @@ import {
   resolveEnvValue,
 } from "../../config";
 import { parseRequest } from "../../responses/parser";
+import {
+  bindReasoningReplayScope,
+  reasoningReplayCodexCredentialIdentity,
+  reasoningReplayDestinationIdentity,
+  reasoningReplayKeyCredentialIdentity,
+  reasoningReplayOAuthCredentialIdentity,
+} from "../../responses/reasoning-replay-cache";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import {
@@ -255,6 +262,58 @@ export function codexLogAccountId(authCtx: CodexAuthContext): string | null {
   return authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.accountId : null;
 }
 
+function bindRouteReasoningReplayScope(args: {
+  parsed: OcxParsedRequest;
+  providerName: string;
+  provider: OcxProviderConfig;
+  adapterName: string;
+  oauthCredentialSnapshot?: Pick<OAuthAccessSnapshot, "accountId" | "generation">;
+  codexAuthContext?: CodexAuthContext;
+  forwardHeaders?: Headers;
+}): void {
+  const { parsed, providerName, provider, adapterName } = args;
+  let credentialIdentity: string | undefined;
+  if (provider.authMode === "oauth") {
+    credentialIdentity = reasoningReplayOAuthCredentialIdentity(
+      args.oauthCredentialSnapshot,
+      provider.headers,
+    );
+  } else if (provider.authMode === "forward") {
+    const poolContext = args.codexAuthContext?.kind === "pool"
+      || args.codexAuthContext?.kind === "main-pool"
+      ? args.codexAuthContext
+      : undefined;
+    credentialIdentity = reasoningReplayCodexCredentialIdentity({
+      authorization: poolContext
+        ? `Bearer ${poolContext.accessToken}`
+        : args.forwardHeaders?.get("authorization"),
+      chatgptAccountId: poolContext?.chatgptAccountId
+        ?? args.forwardHeaders?.get("chatgpt-account-id"),
+      accountId: poolContext?.accountId,
+      credentialGeneration: poolContext?.kind === "pool"
+        ? poolContext.generation
+        : undefined,
+      writerGeneration: poolContext?.writerGeneration,
+      headers: provider.headers,
+    });
+  } else if (provider.authMode !== "local") {
+    credentialIdentity = reasoningReplayKeyCredentialIdentity(provider);
+  }
+  const providerDestinationIdentity = reasoningReplayDestinationIdentity(provider.baseUrl);
+  bindReasoningReplayScope(
+    parsed._reasoningReplayScope,
+    credentialIdentity && providerDestinationIdentity
+      ? {
+          providerName,
+          providerDestinationIdentity,
+          adapterName,
+          modelId: parsed.modelId,
+          credentialIdentity,
+        }
+      : undefined,
+  );
+}
+
 function isFixedCodexAccount(authCtx: CodexAuthContext): boolean {
   return (authCtx.kind === "pool" || authCtx.kind === "main-pool")
     && authCtx.fixedAccount === true;
@@ -481,6 +540,14 @@ async function retryCodexPoolOnAlternateAccount(
     resolveWireProtocolOverride(route.providerName, route.modelId, retryProvider, inboundWire),
     config.cacheRetention,
   );
+  bindRouteReasoningReplayScope({
+    parsed,
+    providerName: route.providerName,
+    provider: retryProvider,
+    adapterName: retryAdapter.name,
+    codexAuthContext: retryAuthCtx,
+    forwardHeaders: retryHeaders,
+  });
   const request = await retryAdapter.buildRequest(parsed, {
     headers: retryHeaders,
     translatorBudget: options.translatorBudget,
@@ -1454,7 +1521,10 @@ async function handleResponsesInner(
     parsed._providerContinuation = previousResponseProviderState(parsed.previousResponseId);
     parsed._cursorConversationId = parsed._providerContinuation?.cursor?.conversationId;
     const clientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim();
-    if (clientThreadId) parsed._clientThreadId = clientThreadId;
+    if (clientThreadId) {
+      parsed._clientThreadId = clientThreadId;
+      parsed._reasoningReplayScope = { clientThreadId };
+    }
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
@@ -1679,6 +1749,7 @@ async function handleResponsesInner(
   const isOAuth401ReplayProvider = (route.providerName === "xai" || route.providerName === "github-copilot" || route.providerName === "kiro")
     && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
@@ -1714,6 +1785,10 @@ async function handleResponsesInner(
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
       } else {
         const resolved = await getValidAccessTokenSnapshot(route.providerName);
+        replayOAuthCredentialSnapshot = {
+          accountId: resolved.accountId,
+          generation: resolved.generation,
+        };
         if (isOAuth401ReplayProvider) sentOAuthSnapshot = resolved;
         route.provider = { ...route.provider, apiKey: resolved.accessToken };
         if (route.providerName === "kiro") {
@@ -1765,6 +1840,15 @@ async function handleResponsesInner(
     logCtx.provider = route.providerName;
   }
   const adapter = resolveAdapter(adapterProvider, config.cacheRetention);
+  bindRouteReasoningReplayScope({
+    parsed,
+    providerName: route.providerName,
+    provider: adapterProvider,
+    adapterName: adapter.name,
+    oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+    codexAuthContext: authCtx,
+    forwardHeaders: selectedForwardHeaders,
+  });
   logCtx.providerAdapter = adapter.name;
   // Ordinary requests receive one durable attempt only after their final initial
   // adapter is resolved. Combo children own their attempt and retries keep it.
@@ -2726,10 +2810,17 @@ async function handleResponsesInner(
         });
         if (!rotated) return null;
         route.provider = rotated;
-        return resolveAdapter(
+        const rotatedAdapter = resolveAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: route.provider,
+          adapterName: rotatedAdapter.name,
+        });
+        return rotatedAdapter;
       },
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
       ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
@@ -2796,10 +2887,17 @@ async function handleResponsesInner(
         });
         if (!rotated) return null;
         route.provider = rotated;
-        return resolveAdapter(
+        const rotatedAdapter = resolveAdapter(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: route.provider,
+          adapterName: rotatedAdapter.name,
+        });
+        return rotatedAdapter;
       },
       retryOn429Policy: rateLimitRetryPolicyFor(route.provider),
     });
@@ -2866,7 +2964,7 @@ async function handleResponsesInner(
         }, 2_000,
         {
           translatorBudget,
-          replayCacheScope: parsed._clientThreadId,
+          replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -2913,7 +3011,7 @@ async function handleResponsesInner(
     let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId,
+      replayCacheScope: parsed._reasoningReplayScope,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,
@@ -3116,6 +3214,10 @@ async function handleResponsesInner(
           return formatErrorResponse(401, "authentication_error", err instanceof Error ? err.message : String(err));
         }
         sentOAuthSnapshot = refreshed;
+        replayOAuthCredentialSnapshot = {
+          accountId: refreshed.accountId,
+          generation: refreshed.generation,
+        };
         if (route.providerName === "kiro") {
           parsed._kiroAuthContext = { ...(refreshed.kiro ?? {}) };
         }
@@ -3131,6 +3233,13 @@ async function handleResponsesInner(
           resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
           config.cacheRetention,
         );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: refreshedProvider,
+          adapterName: activeAdapter.name,
+          oauthCredentialSnapshot: replayOAuthCredentialSnapshot,
+        });
         const result = await rebuildAndRefetch("oauth-401");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
@@ -3196,6 +3305,12 @@ async function handleResponsesInner(
           resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
           config.cacheRetention,
         );
+        bindRouteReasoningReplayScope({
+          parsed,
+          providerName: route.providerName,
+          provider: route.provider,
+          adapterName: activeAdapter.name,
+        });
         const result = await rebuildAndRefetch("key-429");
         if ("failed" in result) return result.failed;
         upstreamResponse = result;
@@ -3467,6 +3582,12 @@ async function handleResponsesInner(
             resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
             config.cacheRetention,
           );
+          bindRouteReasoningReplayScope({
+            parsed,
+            providerName: route.providerName,
+            provider: route.provider,
+            adapterName: activeAdapter.name,
+          });
           nextContinuationRecoveryKind = "key-429";
           continue;
         }
@@ -3572,7 +3693,7 @@ async function handleResponsesInner(
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
-        replayCacheScope: parsed._clientThreadId,
+        replayCacheScope: parsed._reasoningReplayScope,
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
@@ -3630,7 +3751,7 @@ async function handleResponsesInner(
     let providerState: OcxProviderContinuationState | undefined;
     const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId,
+      replayCacheScope: parsed._reasoningReplayScope,
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       freeformToolNames,

@@ -1,0 +1,211 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { bridgeToResponsesSSE } from "../src/bridge";
+import {
+  bindReasoningReplayScope,
+  clearReasoningReplayCacheForTests,
+  peekReasoningForCall,
+  reasoningReplayCodexCredentialIdentity,
+  reasoningReplayCredentialIdentity,
+  reasoningReplayDestinationIdentity,
+  reasoningReplayKeyCredentialIdentity,
+  reasoningReplayOAuthCredentialIdentity,
+  rememberReasoningForCall,
+} from "../src/responses/reasoning-replay-cache";
+import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
+
+const THREAD = "thread-identity";
+const CALL_ID = "call_identity_collision";
+const REASONING = "private reasoning";
+
+function scope(
+  overrides: Partial<NonNullable<OcxReasoningReplayScopeRef["current"]>> = {},
+): OcxReasoningReplayScopeRef {
+  return {
+    clientThreadId: THREAD,
+    current: {
+      providerName: "provider-a",
+      providerDestinationIdentity: "destination:provider-a",
+      adapterName: "openai-chat",
+      modelId: "deepseek-v4-flash",
+      credentialIdentity: "key:physical-a",
+      ...overrides,
+    },
+  };
+}
+
+async function drain(events: AsyncIterable<AdapterEvent>, replayScope: OcxReasoningReplayScopeRef): Promise<void> {
+  const reader = bridgeToResponsesSSE(
+    events,
+    "deepseek-v4-flash",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { replayCacheScope: replayScope },
+  ).getReader();
+  while (!(await reader.read()).done) {
+    // Drain the bridge so tool-call cache writes complete.
+  }
+}
+
+describe("reasoning replay provider and credential identity", () => {
+  beforeEach(() => clearReasoningReplayCacheForTests());
+  afterEach(() => clearReasoningReplayCacheForTests());
+
+  test("the same tuple replays but provider, destination, wire, model, or credential changes miss", () => {
+    const original = scope();
+    rememberReasoningForCall(CALL_ID, REASONING, original);
+    expect(peekReasoningForCall(CALL_ID, scope())).toBe(REASONING);
+
+    for (const changed of [
+      scope({ providerName: "provider-b" }),
+      scope({ providerDestinationIdentity: "destination:provider-b" }),
+      scope({ adapterName: "openai-responses" }),
+      scope({ modelId: "deepseek-v4" }),
+      scope({ credentialIdentity: "key:physical-b" }),
+    ]) {
+      expect(peekReasoningForCall(CALL_ID, changed)).toBeUndefined();
+    }
+  });
+
+  test("incomplete, unscoped, and legacy thread-only namespaces fail closed", () => {
+    const incomplete: OcxReasoningReplayScopeRef[] = [
+      { clientThreadId: THREAD },
+      scope({ credentialIdentity: "" }),
+    ];
+    for (const candidate of incomplete) {
+      rememberReasoningForCall(CALL_ID, REASONING, candidate);
+      expect(peekReasoningForCall(CALL_ID, candidate)).toBeUndefined();
+    }
+    rememberReasoningForCall(CALL_ID, REASONING);
+    expect(peekReasoningForCall(CALL_ID)).toBeUndefined();
+    rememberReasoningForCall(CALL_ID, REASONING, THREAD as unknown as OcxReasoningReplayScopeRef);
+    expect(peekReasoningForCall(CALL_ID, THREAD as unknown as OcxReasoningReplayScopeRef)).toBeUndefined();
+  });
+
+  test("invalidating a bound holder prevents writes under its stale identity", () => {
+    const bound = scope();
+    const oldIdentity = scope();
+    rememberReasoningForCall(CALL_ID, "old reasoning", oldIdentity);
+
+    bindReasoningReplayScope(bound, undefined);
+    expect(bound.current).toBeUndefined();
+    rememberReasoningForCall(CALL_ID, "stale overwrite", bound);
+
+    expect(peekReasoningForCall(CALL_ID, oldIdentity)).toBe("old reasoning");
+    expect(peekReasoningForCall(CALL_ID, bound)).toBeUndefined();
+  });
+
+  test("credential and destination identities are stable, bounded, and never contain raw material", () => {
+    const provider = {
+      apiKey: "secret-key-a",
+      headers: { Authorization: "Bearer static-secret", "x-session-id": "session-a" },
+    };
+    const first = reasoningReplayKeyCredentialIdentity(provider);
+    const same = reasoningReplayKeyCredentialIdentity({
+      headers: { Authorization: "Bearer static-secret", "x-session-id": "session-b" },
+      apiKey: "secret-key-a",
+    });
+    const different = reasoningReplayKeyCredentialIdentity({ ...provider, apiKey: "secret-key-b" });
+    const overridden = reasoningReplayKeyCredentialIdentity({
+      ...provider,
+      headers: { Authorization: "Bearer other-static-secret" },
+    });
+    expect(first).toBe(same);
+    expect(first).not.toBe(different);
+    expect(first).not.toBe(overridden);
+    expect(reasoningReplayKeyCredentialIdentity({
+      headers: { "x-opencode-client": "desktop" },
+    })).toBeUndefined();
+    expect(first).not.toContain("secret-key-a");
+    expect(first).not.toContain("static-secret");
+
+    const oauthA = reasoningReplayOAuthCredentialIdentity({ accountId: "slot-a", generation: "generation-a" }, {
+      Authorization: "Bearer override-a",
+    });
+    const oauthOverrideB = reasoningReplayOAuthCredentialIdentity({ accountId: "slot-a", generation: "generation-a" }, {
+      Authorization: "Bearer override-b",
+    });
+    const oauthGenerationB = reasoningReplayOAuthCredentialIdentity({ accountId: "slot-a", generation: "generation-b" }, {
+      Authorization: "Bearer override-a",
+    });
+    const oauthAccountB = reasoningReplayOAuthCredentialIdentity({ accountId: "slot-b", generation: "generation-a" }, {
+      Authorization: "Bearer override-a",
+    });
+    expect(oauthA).not.toBe(oauthOverrideB);
+    expect(oauthA).not.toBe(oauthGenerationB);
+    expect(oauthA).not.toBe(oauthAccountB);
+    expect(oauthA).not.toContain("slot-a");
+    expect(oauthA).not.toContain("generation-a");
+    expect(reasoningReplayOAuthCredentialIdentity({ accountId: "", generation: "generation-a" })).toBeUndefined();
+    expect(reasoningReplayOAuthCredentialIdentity({ accountId: "slot-a", generation: "" })).toBeUndefined();
+    expect(oauthA).not.toContain("override-a");
+
+    const forwardA = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer forward-token-a",
+      chatgptAccountId: "workspace-a",
+    });
+    const forwardB = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer forward-token-b",
+      chatgptAccountId: "workspace-a",
+    });
+    const poolA = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer shared-token",
+      chatgptAccountId: "workspace-a",
+      accountId: "pool-a",
+      credentialGeneration: 7,
+      writerGeneration: 11,
+    });
+    const poolB = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer shared-token",
+      chatgptAccountId: "workspace-a",
+      accountId: "pool-b",
+      credentialGeneration: 7,
+      writerGeneration: 11,
+    });
+    const newerPoolA = reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer shared-token",
+      chatgptAccountId: "workspace-a",
+      accountId: "pool-a",
+      credentialGeneration: 8,
+      writerGeneration: 12,
+    });
+    expect(forwardA).not.toBe(forwardB);
+    expect(poolA).not.toBe(poolB);
+    expect(poolA).not.toBe(newerPoolA);
+    expect(poolA).not.toBe(reasoningReplayCodexCredentialIdentity({
+      authorization: "Bearer shared-token",
+      chatgptAccountId: "workspace-a",
+      accountId: "pool-a",
+      credentialGeneration: 7,
+      writerGeneration: 12,
+    }));
+    expect(forwardA).not.toContain("forward-token-a");
+    expect(poolA).not.toContain("pool-a");
+    expect(reasoningReplayCodexCredentialIdentity({ chatgptAccountId: "workspace-a" })).toBeUndefined();
+
+    const destination = reasoningReplayDestinationIdentity("https://provider.example/v1/opaque-secret");
+    expect(destination).toBe(reasoningReplayDestinationIdentity("https://provider.example/v1/opaque-secret/"));
+    expect(destination).not.toBe(reasoningReplayDestinationIdentity("https://provider.example/v1/other-secret"));
+    expect(destination).not.toContain("opaque-secret");
+  });
+
+  test("a bridge created before credential rotation writes under the holder's current identity", async () => {
+    const oldScope = scope();
+    rememberReasoningForCall(CALL_ID, "old reasoning", oldScope);
+    const holder = scope();
+    async function* events(): AsyncGenerator<AdapterEvent> {
+      yield { type: "reasoning_raw_delta", text: "new reasoning" };
+      holder.current = { ...holder.current!, credentialIdentity: "key:physical-b" };
+      yield { type: "tool_call_start", id: CALL_ID, name: "read_file" };
+      yield { type: "tool_call_delta", arguments: "{}" };
+      yield { type: "tool_call_end" };
+      yield { type: "done" };
+    }
+    const pending = drain(events(), holder);
+    await pending;
+    expect(peekReasoningForCall(CALL_ID, oldScope)).toBe("old reasoning");
+    expect(peekReasoningForCall(CALL_ID, holder)).toBe("new reasoning");
+  });
+});

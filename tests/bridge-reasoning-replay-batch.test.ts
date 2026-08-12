@@ -4,7 +4,7 @@ import {
   clearReasoningReplayCacheForTests,
   peekReasoningForCall,
 } from "../src/responses/reasoning-replay-cache";
-import type { AdapterEvent } from "../src/types";
+import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
 
 /**
  * Regression for issue #950's non-streaming path: chat-completions batch
@@ -18,7 +18,17 @@ import type { AdapterEvent } from "../src/types";
  */
 
 const REASONING = "I need to inspect files before answering.";
-const SCOPE = "thread-batch";
+const SCOPE: OcxReasoningReplayScopeRef = {
+  clientThreadId: "thread-batch",
+  current: {
+    providerName: "opencode-free",
+    providerDestinationIdentity: "destination:provider",
+    adapterName: "openai-chat",
+    modelId: "deepseek-v4-flash-free",
+    credentialIdentity: "key:test",
+  },
+};
+const GLOBAL_SCOPE: OcxReasoningReplayScopeRef = { ...SCOPE, clientThreadId: "global" };
 
 function batchOutput(events: AdapterEvent[]): Record<string, unknown> {
   return buildResponseJSON(events, "opencode-free/deepseek-v4-flash-free", {
@@ -26,7 +36,10 @@ function batchOutput(events: AdapterEvent[]): Record<string, unknown> {
   });
 }
 
-async function streamFrames(events: AdapterEvent[], replayScope: string | null = SCOPE): Promise<void> {
+async function streamFrames(
+  events: AdapterEvent[],
+  replayScope: OcxReasoningReplayScopeRef | null = SCOPE,
+): Promise<void> {
   async function* replay(list: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
     for (const event of list) yield event;
   }
@@ -73,7 +86,7 @@ describe("reasoning replay survives empty text deltas (both wire modes)", () => 
 
   test("batch: an unscoped bridge never writes a global replay entry", () => {
     buildResponseJSON(toolRoundEvents(), "opencode-free/deepseek-v4-flash-free", {});
-    expect(peekReasoningForCall("call_batch_1", "global")).toBeUndefined();
+    expect(peekReasoningForCall("call_batch_1", GLOBAL_SCOPE)).toBeUndefined();
   });
 
   test("batch: real text between reasoning and the tool call clears the cache target", () => {
@@ -90,7 +103,7 @@ describe("reasoning replay survives empty text deltas (both wire modes)", () => 
 
   test("stream: an unscoped bridge never writes a global replay entry", async () => {
     await streamFrames(toolRoundEvents(), null);
-    expect(peekReasoningForCall("call_batch_1", "global")).toBeUndefined();
+    expect(peekReasoningForCall("call_batch_1", GLOBAL_SCOPE)).toBeUndefined();
   });
 
   test("stream: real text between reasoning and the tool call clears the cache target", async () => {

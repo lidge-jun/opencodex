@@ -7,7 +7,7 @@ import {
 } from "../src/responses/reasoning-replay-cache";
 import { parseRequest } from "../src/responses/parser";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { AdapterEvent } from "../src/types";
+import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
@@ -33,7 +33,17 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
     });
 }
 
-const REPLAY_SCOPE = "hidden-replay-thread";
+const REPLAY_SCOPE: OcxReasoningReplayScopeRef = {
+  clientThreadId: "hidden-replay-thread",
+  current: {
+    providerName: "routed",
+    providerDestinationIdentity: "destination:provider",
+    adapterName: "openai-chat",
+    modelId: "model",
+    credentialIdentity: "key:test",
+  },
+};
+const GLOBAL_SCOPE: OcxReasoningReplayScopeRef = { ...REPLAY_SCOPE, clientThreadId: "global" };
 const sseOpts = (hide: boolean) => ({ hideThinkingSummary: hide, replayCacheScope: REPLAY_SCOPE });
 
 describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_delta)", () => {
@@ -164,7 +174,7 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
       { type: "tool_call_end" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, { hideThinkingSummary: true }));
-    expect(peekReasoningForCall("call_unscoped_stream", "global")).toBeUndefined();
+    expect(peekReasoningForCall("call_unscoped_stream", GLOBAL_SCOPE)).toBeUndefined();
   });
 
   test("non-streaming hidden: raw reasoning is recorded for the following tool call", () => {

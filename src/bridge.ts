@@ -1,4 +1,10 @@
-import type { AdapterEvent, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "./types";
+import type {
+  AdapterEvent,
+  OcxMessagePhase,
+  OcxProviderContinuationState,
+  OcxReasoningReplayScopeRef,
+  OcxUsage,
+} from "./types";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -186,7 +192,7 @@ export function bridgeToResponsesSSE(
      * Provider call ids are not globally unique; scoping by thread keeps one
      * conversation's reasoning out of another's continuations.
      */
-    replayCacheScope?: string;
+    replayCacheScope?: OcxReasoningReplayScopeRef;
     /**
      * Test seam for the wire/stall beat loop. Production omits this and uses the
      * global timers; injecting here must not change scheduling semantics.
@@ -1362,7 +1368,7 @@ function buildResponseJSONWithBudget(
     onUsage?: (usage: OcxUsage | undefined) => void;
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
-    replayCacheScope?: string;
+    replayCacheScope?: OcxReasoningReplayScopeRef;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;

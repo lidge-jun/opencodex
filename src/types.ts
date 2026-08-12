@@ -1,5 +1,26 @@
 import type { KiroOAuthMetadata } from "./oauth/types";
 
+/** Exact provider/credential namespace for process-local reasoning replay. */
+export interface OcxReasoningReplayIdentity {
+  providerName: string;
+  /** Opaque process-local digest of the exact upstream destination. */
+  providerDestinationIdentity: string;
+  adapterName: string;
+  modelId: string;
+  /** Opaque process-local credential identity; never a raw token or API key. */
+  credentialIdentity: string;
+}
+
+/**
+ * Stable holder shared by parsed-request copies and already-created bridges.
+ * Credential/provider rotation replaces `current` atomically without replacing
+ * the holder, so late tool-call cache writes see the active physical identity.
+ */
+export interface OcxReasoningReplayScopeRef {
+  readonly clientThreadId: string;
+  current?: Readonly<OcxReasoningReplayIdentity>;
+}
+
 export interface OcxParsedRequest {
   modelId: string;
   /** Client-facing model selector retained for Anthropic routes after wire-model normalization. */
@@ -21,6 +42,8 @@ export interface OcxParsedRequest {
   _cursorConversationId?: string;
   /** Stable upstream client thread identity, used only to derive provider-scoped continuation ids. */
   _clientThreadId?: string;
+  /** Provider/account/model-bound namespace for process-local raw-reasoning replay. */
+  _reasoningReplayScope?: OcxReasoningReplayScopeRef;
   /**
    * Optional authenticated tenant/operator namespace for Cursor thread→conversation derivation.
    * When absent (single-operator local proxy), derivation stays local-scoped.
