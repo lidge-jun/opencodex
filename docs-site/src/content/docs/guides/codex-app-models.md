@@ -18,8 +18,10 @@ built-in account-role meaning. Selecting a qualified row uses only its mapped ac
 change the active Pool account, and fails closed instead of switching accounts when the target is
 unavailable. If Codex's account-scoped catalog contains a visible, API-supported OpenAI-family id
 that is not yet in opencodex's static set, the exact id is preserved as a selector-qualified row
-only when its observed account provenance matches an eligible selector; it is not copied to an
-unrelated account and is not added to the bare or API-key model list. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
+for eligible main-account selectors; it is not copied to an unrelated account and is not added to
+the bare or API-key model list. The row is matched on the field shape a real catalog row has,
+which filters malformed entries — it does not prove the id came from an upstream response, since
+the cache is a user-owned file. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
 
 When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
 `codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for

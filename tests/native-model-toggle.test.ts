@@ -183,10 +183,33 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-daybreak-blue-latest"]);
   });
 
-  test("a hand-edited cache row without native catalog provenance is ignored", () => {
+  test("a minimal hand-edited cache row is ignored", () => {
     const handEdited = [{ slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true }];
     expect(accountBoundNativeOpenAiSlugs(handEdited)).not.toContain("gpt-daybreak-blue-latest");
     expect(observedAccountBoundNativeEntries(handEdited)).toEqual([]);
+  });
+
+  // The shape check is NOT a trust control, and this pins that so the next reader does not
+  // assume it is one. `models_cache.json` is a user-owned file with no signature or source
+  // identity to verify, so a complete hand-written row is indistinguishable from a real
+  // observation and is accepted. That is acceptable here only because it grants nothing new:
+  // `router.ts` already routes any bare `gpt-*` id under an account selector regardless of the
+  // catalog, so the effect is advertisement in discovery, not a newly reachable route. If this
+  // test ever needs to flip to rejection, the fix is a real provenance signal, not a longer
+  // list of fields to match.
+  test("a full-shape hand-written row IS accepted — the check is plausibility, not provenance", () => {
+    const forged = [{
+      slug: "gpt-not-a-real-model",
+      visibility: "list",
+      supported_in_api: true,
+      base_instructions: "anything non-empty",
+      comp_hash: null,
+      shell_type: "shell_command",
+      supported_reasoning_levels: [{ effort: "high" }],
+      model_messages: {},
+    }];
+
+    expect(accountBoundNativeOpenAiSlugs(forged)).toContain("gpt-not-a-real-model");
   });
 
   test("exact account disables hide only the matching generated picker row", () => {

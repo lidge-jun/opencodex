@@ -294,7 +294,23 @@ function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
   return !slug.includes("/") && ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX.test(slug);
 }
 
-function hasNativeCatalogProvenance(entry: RawEntry): boolean {
+/**
+ * Shape/plausibility filter for a candidate account-native row. **This is not a trust control.**
+ *
+ * It checks that a row carries the field shape a real Codex catalog row has, which rejects
+ * malformed and minimal hand-written rows. It cannot distinguish a genuine upstream observation
+ * from a complete row typed by hand into `$CODEX_HOME/models_cache.json`: there is no signature,
+ * source identity, or server attestation to check. A full-shape forged row is accepted, and
+ * `observedFullShapeRowIsAccepted` in tests/native-model-toggle.test.ts pins that so nobody
+ * later mistakes this predicate for a security boundary.
+ *
+ * That is acceptable here because the file is user-owned and written by Codex itself: anyone
+ * able to rewrite it can already edit `config.json` or run `ocx` directly, and `router.ts`
+ * accepts any bare `gpt-*` id under an account namespace regardless of this catalog. What the
+ * filter buys is that garbage rows do not get advertised through discovery — not that an
+ * advertised row is proven genuine.
+ */
+function hasNativeCatalogRowShape(entry: RawEntry): boolean {
   const levels = entry.supported_reasoning_levels;
   const messages = entry.model_messages;
   return typeof entry.base_instructions === "string"
@@ -315,7 +331,7 @@ function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
   const slug = accountBound ?? (typeof entry.slug === "string" ? entry.slug : "");
   if (!isAccountBoundOpenAiNativeSlug(slug)
     || entry.supported_in_api !== true
-    || !hasNativeCatalogProvenance(entry)
+    || !hasNativeCatalogRowShape(entry)
     || (entry.visibility !== "list" && entry[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER] !== true)) {
     return undefined;
   }
