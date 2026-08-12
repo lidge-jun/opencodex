@@ -30,7 +30,7 @@ export interface PublicPublisherHandle {
 }
 
 function publicKeyBase64(privateKeyPem: string): string {
-  const publicKey = createPublicKey(createPrivateKey(privateKeyPem));
+  const publicKey = createPublicKey(privateKeyPem);
   return publicKey.export({ type: "spki", format: "der" }).toString("base64");
 }
 
