@@ -9,6 +9,7 @@ import {
   fetchLabPageData,
   fetchMoreVerdicts,
   fetchVerdictDetail,
+  type CommunityEvidenceContextDto,
   type LabPageData,
   type VerdictDetailData,
 } from "./compatibility-matrix-api";
@@ -71,13 +72,7 @@ function localizedFetchError(e: unknown, fallback: string): string {
   return msg || fallback;
 }
 
-function VerdictBadge({
-  verdict,
-  caption,
-  label,
-  selected,
-  onSelect,
-}: {
+function VerdictBadge({ verdict, caption, label, selected, onSelect }: {
   verdict: CompatibilityVerdict;
   caption: string;
   label: string;
@@ -101,12 +96,7 @@ function VerdictBadge({
   );
 }
 
-function VerdictCell({
-  rows,
-  t,
-  selectedKey,
-  onSelect,
-}: {
+function VerdictCell({ rows, t, selectedKey, onSelect }: {
   rows: VerdictDto[];
   t: (key: TKey) => string;
   selectedKey: string | null;
@@ -154,15 +144,27 @@ function StatusCards({ data, t, locale }: {
   );
 }
 
-function DetailPane({
-  verdict,
-  detail,
-  loading,
-  error,
-  t,
-  locale,
-  onClose,
-}: {
+function CommunityEvidencePanel({ community, locale }: {
+  community: CommunityEvidenceContextDto | null;
+  locale: Parameters<typeof labSupplement>[0];
+}) {
+  if (!community || community.evidence.length === 0) return null;
+  const activeRecords = community.evidence.reduce((total, row) => total + row.activeRecordCount, 0);
+  const revokedRecords = community.evidence.reduce((total, row) => total + row.revokedRecordCount, 0);
+  return (
+    <section className="lab-matrix-block" data-testid="lab-community-evidence">
+      <h3 className="lab-matrix-title">{labSupplement(locale, "community.title")}</h3>
+      <p className="muted">{labSupplement(locale, "community.notLocalVerdict")}</p>
+      <dl className="lab-detail-meta">
+        <div><dt>{labSupplement(locale, "community.bundles")}</dt><dd>{community.evidence.length}</dd></div>
+        <div><dt>{labSupplement(locale, "community.activeRecords")}</dt><dd>{activeRecords}</dd></div>
+        <div><dt>{labSupplement(locale, "community.revokedRecords")}</dt><dd>{revokedRecords}</dd></div>
+      </dl>
+    </section>
+  );
+}
+
+function DetailPane({ verdict, detail, loading, error, t, locale, onClose }: {
   verdict: VerdictDto;
   detail: VerdictDetailData | null;
   loading: boolean;
@@ -202,17 +204,6 @@ function DetailPane({
                 {detail.production.summary.lastObservedProductionAttempt !== undefined && (
                   <div><dt>{t("lab.production.lastObserved")}</dt><dd>{formatAsOf(detail.production.summary.lastObservedProductionAttempt, locale)}</dd></div>
                 )}
-              </dl>
-            </section>
-          )}
-          {detail.community && detail.community.evidence.length > 0 && (
-            <section className="lab-detail-section" data-testid="lab-community-evidence">
-              <h4>{labSupplement(locale, "community.title")}</h4>
-              <p className="muted">{labSupplement(locale, "community.notLocalVerdict")}</p>
-              <dl className="lab-detail-meta">
-                <div><dt>{labSupplement(locale, "community.bundles")}</dt><dd>{detail.community.evidence.length}</dd></div>
-                <div><dt>{labSupplement(locale, "community.activeRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.activeRecordCount, 0)}</dd></div>
-                <div><dt>{labSupplement(locale, "community.revokedRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.revokedRecordCount, 0)}</dd></div>
               </dl>
             </section>
           )}
@@ -263,11 +254,7 @@ function DetailPane({
   );
 }
 
-export default function CompatibilityMatrix({
-  apiBase,
-  active = true,
-  onCountChange,
-}: {
+export default function CompatibilityMatrix({ apiBase, active = true, onCountChange }: {
   apiBase: string;
   active?: boolean;
   onCountChange?: (count: number | null) => void;
@@ -287,7 +274,6 @@ export default function CompatibilityMatrix({
 
   const queryFilters = useMemo(() => verdictQueryFromFilters(filters), [filters]);
   const queryKey = JSON.stringify(queryFilters);
-
   const fetchPage = useCallback(
     (signal: AbortSignal) => fetchLabPageData(apiBase, queryFilters, signal),
     [apiBase, queryFilters],
@@ -317,13 +303,7 @@ export default function CompatibilityMatrix({
     setDetailLoading(false);
   }, []);
 
-  useEffect(() => {
-    // A refreshed first page makes any in-flight cursor request stale. The associated
-    // appended-page state is identity-bound below, so it becomes invisible immediately
-    // without synchronously cascading state from this effect.
-    loadMoreRef.current?.abort();
-  }, [surface.data]);
-
+  useEffect(() => { loadMoreRef.current?.abort(); }, [surface.data]);
   useEffect(() => () => {
     loadMoreRef.current?.abort();
     detailRequestRef.current?.abort();
@@ -344,9 +324,7 @@ export default function CompatibilityMatrix({
   const reportedCount = useMemo(() => {
     if (!active || !surface.data?.status.projectionAvailable) return null;
     const total = surface.data.status.verdictCount;
-    return typeof total === "number"
-      ? total
-      : surface.data.verdicts.length + (validExtraPage?.verdicts.length ?? 0);
+    return typeof total === "number" ? total : surface.data.verdicts.length + (validExtraPage?.verdicts.length ?? 0);
   }, [active, surface.data, validExtraPage]);
 
   useEffect(() => { onCountChange?.(reportedCount); }, [onCountChange, reportedCount]);
@@ -373,9 +351,7 @@ export default function CompatibilityMatrix({
       const page = await fetchMoreVerdicts(apiBase, queryFilters, cursor, controller.signal);
       if (controller.signal.aborted) return;
       setExtraPage(current => {
-        const existing = current?.baseData === baseData && current.queryKey === startedKey
-          ? current.verdicts
-          : [];
+        const existing = current?.baseData === baseData && current.queryKey === startedKey ? current.verdicts : [];
         return {
           baseData,
           queryKey: startedKey,
@@ -466,6 +442,7 @@ export default function CompatibilityMatrix({
       {loadError && <Notice tone="err">{loadError}</Notice>}
       {projectionIncompatible && <Notice tone="err">{t("lab.projectionIncompatible")}</Notice>}
       {projectionUnavailable && !projectionIncompatible && <EmptyState title={t("lab.projectionUnavailable")} />}
+      {surface.data && <CommunityEvidencePanel community={surface.data.community} locale={locale} />}
 
       {surface.data && status?.projectionAvailable && !projectionIncompatible && (
         <div className="lab-layout">
