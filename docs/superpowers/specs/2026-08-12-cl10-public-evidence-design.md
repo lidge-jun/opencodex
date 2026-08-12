@@ -2,7 +2,7 @@
 
 ## Status
 
-Design approved for contract drafting on 2026-08-12. Runtime implementation remains blocked on independent acceptance of the CL-10 contract.
+Design approved for contract drafting on 2026-08-12. Independent review accepted the contract on 2026-08-12, and explicit maintainer direction now authorizes CL-10.1 through CL-10.4 runtime implementation on this branch. CL-10.5 remote publishing remains blocked on an exact independently accepted transport/service contract.
 
 Base: `dev` at `4fed8d3fe431ad23be83f3aff2af18ef8b8ecd71`, the CL-09 merge commit from #1489.
 
@@ -39,13 +39,13 @@ community bundle
 
 ### Public route identity
 
-A local route is exportable only when its behavior can be represented entirely through reviewed public registry fields. Private/custom endpoint, header, provider-instance, project/location, tenant, account, or custom model/provider dimensions make the route `not_exportable`.
+A local route is exportable only when its behavior can be represented entirely through entries in the versioned, content-addressed, repo-reviewed `PublicRouteRegistryManifestV1`; dynamic discovery, config, and imported bundles cannot extend that authority. Private/custom endpoint, header, provider-instance, project/location, tenant, account, or custom model/provider dimensions make the route `not_exportable`.
 
 The exporter must never create a broader public claim by deleting a private dimension from an exact local route subject.
 
 ### Public schema
 
-`PublicEvidenceBundleV1` is independently versioned and allowlist-only. It contains only public suite/scenario versions, evidence layer, verdict, UTC-day observation bucket, reviewed public route identity, closed assertion summaries, allowed incident references, and explicitly public artifacts.
+`PublicEvidenceBundleV1` is independently versioned and allowlist-only. Dedicated runtime validators enforce its closed types. Records use a layer-matched public subject union rather than assuming every evidence layer is a route. Incident references are closed `IC-NNN` corpus IDs only, and artifact references resolve only to public artifacts in the same bundle.
 
 Unknown fields fail closed on export and import.
 
@@ -80,7 +80,7 @@ Community evidence cannot:
 
 ### Revocation
 
-Publishers can issue signed revocations with finite reason codes. Consumers suppress revoked records from default community summaries while retaining the audit relation. Remote deletion is transport-specific and does not replace revocation.
+Publishers can issue signed revocations with finite reason codes. Revocation authority bootstraps from the exact publisher key embedded in the already-verified target bundle; V1 permits no cross-key revocation or key rotation, and duplicate identical revocations are idempotent while conflicting replay fails closed. Consumers suppress revoked records from default community summaries while retaining the audit relation. Remote deletion is transport-specific and does not replace revocation. CL-00 sensitive purge still removes every affected local generated export plus locally-originated community-cache copy fail-closed; local purge never depends on network acknowledgement.
 
 ### Remote service
 
@@ -100,7 +100,7 @@ Bundle semantics, signing, import, and trust are frozen before any network publi
 
 The implementation must include adversarial tests for secret/PII canaries, local IDs, private route dimensions, unknown fields, oversized/deep bundles, invalid digest/signature, replay/deduplication, revocation, deterministic export, and complete isolation from local verdicts/routing/CL-08.
 
-Contract PR validation is documentation/hygiene plus independent review only. No runtime CL-10 code belongs in the contract PR.
+The contract review gate is satisfied. Runtime CL-10.1 through CL-10.4 may now land on this PR under TDD and full validation; CL-10.5 remote publishing remains out of scope.
 
 ## Source of truth
 
