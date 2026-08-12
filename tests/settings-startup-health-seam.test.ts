@@ -21,13 +21,13 @@ function baseConfig(): OcxConfig {
 test("settings PUT uses the injected startup-health reader", async () => {
   const config = baseConfig();
   let reads = 0;
-  const deps = {
+  const deps: ManagementApiDeps = {
     saveConfigPreservingClaudeCode: () => {},
     getCachedStartupHealth: async () => {
       reads += 1;
-      return { marker: "deterministic-test-health" };
+      return { marker: "deterministic-test-health" } as never;
     },
-  } as ManagementApiDeps;
+  };
   const req = new Request("http://127.0.0.1:10100/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },
