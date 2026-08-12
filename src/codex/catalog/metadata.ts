@@ -33,7 +33,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
 import type { RawEntry } from "./parsing";
-import { readCurrentCatalogOrCache, unique } from "./bundled";
+import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexModelsCache, unique } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
@@ -214,6 +214,7 @@ export function applyNativeVisibility(
   entries: RawEntry[],
   disabledModels: ReadonlySet<string>,
   hideBareNative = false,
+  observedNativeSlugs: ReadonlySet<string> = new Set(),
 ): RawEntry[] {
   for (const entry of entries) {
     if (isNativeAliasCatalogEntry(entry)) continue;
@@ -222,7 +223,7 @@ export function applyNativeVisibility(
     const nativeSlug = accountBoundSlug ?? slug;
     if (!nativeSlug
       || (!accountBoundSlug && slug.includes("/"))
-      || !SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug)) continue;
+      || (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(nativeSlug) && !observedNativeSlugs.has(nativeSlug))) continue;
     const disabled = disabledModels.has(nativeSlug)
       || (accountBoundSlug !== undefined && disabledModels.has(slug));
     entry.visibility = disabled || (!accountBoundSlug && hideBareNative)
@@ -257,6 +258,77 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 export function nativeOpenAiSlugs(): string[] {
   const live = catalogNativeSlugs();
   return live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+}
+
+const ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX = /^(?:gpt-|o1-|o3-|o4-)/;
+const ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER = "opencodex_account_observed_native";
+
+function isAccountBoundOpenAiNativeSlug(slug: string): boolean {
+  return !slug.includes("/") && ACCOUNT_BOUND_OPENAI_NATIVE_PREFIX.test(slug);
+}
+
+function observedAccountBoundNativeSlug(entry: RawEntry): string | undefined {
+  const accountBound = trustedAccountBoundNativeCatalogSlug(entry);
+  const slug = accountBound ?? (typeof entry.slug === "string" ? entry.slug : "");
+  if (!isAccountBoundOpenAiNativeSlug(slug)
+    || entry.supported_in_api !== true
+    || (entry.visibility !== "list" && entry[ACCOUNT_BOUND_OBSERVED_NATIVE_MARKER] !== true)) {
+    return undefined;
+  }
+  return slug;
+}
+
+/**
+ * Return exact, previously observed account-native rows that are not in the static release set.
+ * The result is used only to carry a hidden observation across startup cache invalidation.
+ */
+export function observedAccountBoundNativeEntries(
+  observedEntries: readonly RawEntry[],
+): RawEntry[] {
+  const seen = new Set<string>();
+  return observedEntries.flatMap(entry => {
+    const slug = observedAccountBoundNativeSlug(entry);
+    // Only carry bare upstream observations across cache replacement. Account-qualified rows are
+    // already a projection of the current selector map and must not preserve private/stale labels.
+    if (!slug
+      || typeof entry.slug !== "string"
+      || entry.slug.includes("/")
+      || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)
+      || seen.has(slug)) return [];
+    seen.add(slug);
+    return [structuredClone(entry)];
+  });
+}
+
+/**
+ * Native ids observed in the user's Codex catalog/cache for account-qualified discovery.
+ *
+ * Unknown ids are deliberately returned only to callers that build selector-qualified rows. The
+ * static bare set remains the source of truth for global/API-key discovery, while this preserves
+ * exact account-scoped ids such as `gpt-daybreak-blue-latest` until the static set catches up.
+ */
+export function accountBoundNativeOpenAiSlugs(
+  observedEntries: readonly RawEntry[] = [
+    ...(readCurrentCodexModelsCache()?.models ?? []),
+    // Existing generated rows are also safe to reuse after a process starts without a cache
+    // invalidation pass; bare user-authored catalog rows are intentionally not trusted here.
+    ...(readCurrentCodexCatalog()?.models ?? []).filter(entry =>
+      trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
+  ],
+): string[] {
+  const observed = observedEntries.flatMap(entry => {
+    const slug = observedAccountBoundNativeSlug(entry);
+    return slug === undefined ? [] : [slug];
+  });
+  return unique([...NATIVE_OPENAI_MODELS, ...observed]);
+}
+
+/** Unknown native ids observed from Codex, excluding the static release set. */
+export function observedAccountBoundNativeOpenAiSlugs(
+  observedEntries?: readonly RawEntry[],
+): string[] {
+  const all = accountBoundNativeOpenAiSlugs(observedEntries);
+  return all.filter(slug => !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug));
 }
 
 function catalogNativeSlugs(): string[] {

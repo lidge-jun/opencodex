@@ -32,6 +32,12 @@ custom catalog remains the native metadata/template authority even when a bundle
 warm. Both paths may use an admitted matching bundled memo only as installed-runtime capability
 evidence to remove unsupported reasoning efforts; convergence never probes Codex itself.
 
+When account selectors are enabled, the sync path may also observe exact, visible, API-supported
+OpenAI-family ids from Codex's user-owned catalog/cache. Unknown ids are carried through startup
+cache invalidation as hidden observations and are emitted only as current-selector-qualified rows;
+they never expand the bare native or API-key model list. This keeps account-scoped upstream ids
+such as `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
+
 The app-server's model list comes from this shared catalog, not from patching the App. Codex Desktop
 may still apply its remote native-only allowlist after `model/list`; an explicitly configured combo
 `nativeAlias` is the bounded compatibility path. It replaces one supported bare native row with a

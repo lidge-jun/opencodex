@@ -11,11 +11,14 @@
 import type { CatalogModel } from "../../codex/catalog";
 import {
   catalogModelSlug,
+  accountBoundNativeOpenAiSlugs,
   nativeDefaultReasoningEffort,
+  NATIVE_OPENAI_MODELS,
   nativeInputModalities,
   nativeModelRows,
   nativeReasoningEfforts,
   uniqueCatalogModelsForPublicList,
+  shouldIncludeAccountBoundNativeOpenAi,
 } from "../../codex/catalog";
 import type { ExportModel } from "../../clients/config-export";
 import { providerContextCap } from "../../providers/context-cap";
@@ -49,7 +52,19 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
   const disabled = new Set(config.disabledModels ?? []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.
-  const native: ManagementModelRow[] = nativeModelRows(config).map(row => {
+  const nativeRows = [
+    ...nativeModelRows(config),
+    ...(shouldIncludeAccountBoundNativeOpenAi(config)
+      ? accountBoundNativeOpenAiSlugs()
+        .filter(slug => !NATIVE_OPENAI_MODELS.includes(slug))
+        .map(slug => ({
+          slug,
+          disabled: disabled.has(slug),
+          contextWindow: undefined,
+        }))
+      : []),
+  ];
+  const native: ManagementModelRow[] = nativeRows.map(row => {
     const reasoningEfforts = nativeReasoningEfforts(row.slug).filter(isVisionReasoningEffort);
     const defaultReasoningEffort = nativeDefaultReasoningEffort(row.slug);
     return {

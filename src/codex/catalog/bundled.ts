@@ -522,6 +522,22 @@ export function readCurrentCatalogOrCache(): RawCatalog | null {
   return readCatalog(path) ?? readCatalog(activeCodexModelsCachePath());
 }
 
+/**
+ * Read the user-owned Codex catalog surfaces without substituting the bundled catalog.
+ *
+ * The bundled catalog is intentionally the authority for static native metadata on the default
+ * path. Account-qualified discovery needs the opposite view: an exact model id that Codex has
+ * observed in the user's catalog/cache may be account-scoped even when this release does not know
+ * it statically yet.
+ */
+export function readCurrentCodexCatalog(): RawCatalog | null {
+  return readCatalog(readCodexCatalogPath());
+}
+
+export function readCurrentCodexModelsCache(): RawCatalog | null {
+  return readCatalog(activeCodexModelsCachePath());
+}
+
 export function loadCatalogTemplate(): RawEntry | null {
   const catalogPath = readCodexCatalogPath();
   const bundled = loadBundledCodexCatalog();

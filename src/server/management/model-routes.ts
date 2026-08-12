@@ -30,7 +30,7 @@ function readInputModalities(raw: unknown): { values?: string[]; error?: string 
   return { values: raw as string[] };
 }
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { accountBoundNativeOpenAiSlugs, catalogModelSlug, configuredNativeAliasSlugs, disabledNativeSlugs, invalidateCodexModelsCache, nativeModelRows, shouldIncludeAccountBoundNativeOpenAi, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
 import {
@@ -234,7 +234,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (!providerConfig && provider !== "openai" && !isVirtualComboNamespace) {
       return jsonResponse({ error: "unknown model visibility provider" }, 400);
     }
-    const supportedNative = new Set(nativeModelRows(config).map(row => row.slug));
+    const supportedNative = new Set([
+      ...nativeModelRows(config).map(row => row.slug),
+      ...(shouldIncludeAccountBoundNativeOpenAi(config) ? accountBoundNativeOpenAiSlugs() : []),
+    ]);
     const targets: Array<{ id: string; native: boolean }> = [];
     const seen = new Set<string>();
     for (const value of body.targets) {

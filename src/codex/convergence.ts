@@ -49,6 +49,8 @@ import {
   import { exactComboCatalogSlugs } from "./catalog/aggregation";
   import {
   isNativeAliasCatalogEntry,
+  accountBoundNativeOpenAiSlugs,
+  observedAccountBoundNativeOpenAiSlugs,
   disabledNativeSlugs,
   desktopAllowlistSuppressedNativeSlugs,
   NATIVE_OPENAI_MODELS,
@@ -216,6 +218,7 @@ function prepareCatalog(
   baselineCatalogModels: readonly Readonly<Record<string, unknown>>[],
   degradedProviderNames: ReadonlySet<string>,
   nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
+  observedAccountNativeEntries: readonly RawEntry[] = [],
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -231,6 +234,12 @@ function prepareCatalog(
   const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
   const accountSelectors = shouldIncludeAccountBoundNativeOpenAi(config)
     ? visibleCodexAccountSelectors(config)
+    : [];
+  const accountNativeSlugs = accountSelectors.length > 0
+    ? accountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
+    : [];
+  const observedNativeSlugs = accountSelectors.length === 0
+    ? observedAccountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
     : [];
   const disabledNative = disabledNativeSlugs(config);
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
@@ -265,6 +274,7 @@ function prepareCatalog(
       suppressedBareNativeSlugs,
       disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
+      accountNativeSlugs,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
@@ -296,6 +306,7 @@ function prepareCatalog(
     suppressedBareNativeSlugs,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+      nativeBackfillSlugs: [...NATIVE_OPENAI_MODELS, ...observedNativeSlugs],
       warningPolicy: "suppress",
     },
   });
@@ -383,6 +394,11 @@ export async function gatherCodexCatalogCandidate(
       [
         catalogFrom(keyedBackupBytes)?.models ?? [],
         catalogFrom(legacyBackupBytes)?.models ?? [],
+      ],
+      [
+        ...(catalogFrom(cacheBytes)?.models ?? []),
+        ...(catalogFrom(activeBytes)?.models ?? []).filter(entry =>
+          trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
       ],
     );
     const preparedCatalogBytes = catalogBytes(preparedCatalog);
