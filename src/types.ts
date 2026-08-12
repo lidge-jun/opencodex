@@ -1439,6 +1439,15 @@ export interface OcxProviderConfig {
    */
   promptCacheKey?: boolean;
   /**
+   * Opt-in: forward `service_tier` to the upstream `/chat/completions` body.
+   * OpenAI-specific extension with the same hazard as `promptCacheKey` — strict backends
+   * reject unknown fields, and 66 registry providers share the `openai-chat` adapter, so a
+   * caller-supplied `service_tier` would otherwise turn working requests into upstream 400s.
+   * `supportsServiceTier` is the Responses-wire flag and does not apply here.
+   * Default off; only enable for providers that document this parameter on the chat wire.
+   */
+  chatServiceTier?: boolean;
+  /**
    * Provider-local passthrough SSE repair for broken openai-responses gateways that reuse exact
    * placeholder message/reasoning ids or omit the terminal id after a stable added event.
    * Disabled by default; function_call ids and call_id pairing are never rewritten.

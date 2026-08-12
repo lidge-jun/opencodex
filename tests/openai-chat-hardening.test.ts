@@ -302,14 +302,35 @@ describe("openai-chat credential hardening", () => {
     expect(body).not.toHaveProperty("prompt_cache_key");
   });
 
-  test("preserves a caller-supplied service tier for the outbound chat body", () => {
-    const adapter = createOpenAIChatAdapter(provider());
+  test("preserves a caller-supplied service tier when the provider opts in", () => {
+    const adapter = createOpenAIChatAdapter(provider({ chatServiceTier: true }));
     const req = parsed();
     req.options.serviceTier = "priority";
 
     const body = JSON.parse(adapter.buildRequest(req).body);
 
     expect(body.service_tier).toBe("priority");
+  });
+
+  // `service_tier` is an OpenAI-specific extension and this adapter serves 66 registry
+  // providers, several of which reject unknown body fields. Forwarding it by default would
+  // turn a caller-supplied tier into an upstream 400 on those routes, so absence of the
+  // opt-in must mean the field is dropped — the same contract `prompt_cache_key` uses.
+  test("drops a caller-supplied service tier when the provider has not opted in", () => {
+    for (const p of [provider(), provider({ chatServiceTier: false })]) {
+      const req = parsed();
+      req.options.serviceTier = "priority";
+
+      const body = JSON.parse(createOpenAIChatAdapter(p).buildRequest(req).body);
+
+      expect(body).not.toHaveProperty("service_tier");
+    }
+  });
+
+  test("an opted-in provider without a caller tier still sends no service_tier", () => {
+    const body = JSON.parse(createOpenAIChatAdapter(provider({ chatServiceTier: true })).buildRequest(parsed()).body);
+
+    expect(body).not.toHaveProperty("service_tier");
   });
 
   test("canonical Kimi Coding Plan routes forward Codex prompt_cache_key", () => {
