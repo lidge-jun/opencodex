@@ -708,7 +708,12 @@ function validateManualIdentity(identity: ManualResetCreditOperationIdentity): {
   return { accountKey: manualPhysicalAccountKey(identity.chatgptAccountId) };
 }
 
-/** Reserve or restore one explicit manual redemption intent. */
+/**
+ * Reserve or restore one explicit manual redemption intent.
+ *
+ * Throws `TypeError` for malformed identity fields or `now`; these are caller
+ * contract violations. Durable-state and runtime failures return a result kind.
+ */
 export function openManualResetCreditOperation(
   identity: ManualResetCreditOperationIdentity,
   now = Date.now(),
@@ -787,6 +792,12 @@ export function openManualResetCreditOperation(
   }
 }
 
+/**
+ * Mark a reserved manual redemption as ambiguous.
+ *
+ * Throws `TypeError` for malformed identity fields or `now`. A missing or
+ * incompatible durable record returns the existing result kind.
+ */
 export function markManualResetCreditOperationAmbiguous(
   identity: ManualResetCreditOperationIdentity,
   now = Date.now(),
@@ -799,6 +810,12 @@ export function markManualResetCreditOperationAmbiguous(
   });
 }
 
+/**
+ * Settle a reserved manual redemption with one terminal consume code.
+ *
+ * Throws `TypeError` for malformed identity fields or `now`; an unsupported
+ * code or incompatible durable record returns `mismatch`.
+ */
 export function settleManualResetCreditOperation(
   identity: ManualResetCreditOperationIdentity,
   code: CodexResetCreditConsumeCode,
