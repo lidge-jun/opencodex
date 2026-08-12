@@ -29,20 +29,55 @@ on:
         required: true
         type: string
 
-permissions:
-  contents: write # create the matching GitHub Release + version tag after npm publish
-  actions: read # verify the release commit already passed Cross-platform CI
-  pull-requests: read # credit-takeovers looks up landing/source PR authors via gh api
-  id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  validate-dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted dispatch guard
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          path: trusted-dispatch
+
+      - name: Validate release dispatch
+        env:
+          EXPECTED_SHA: ${{ inputs.expected-sha }}
+        run: |
+          node - <<'NODE'
+          const { validateReleaseDispatch } = require(
+            "./trusted-dispatch/.github/scripts/release-dispatch-guard.cjs",
+          );
+
+          const failure = validateReleaseDispatch({
+            eventName: process.env.GITHUB_EVENT_NAME,
+            ref: process.env.GITHUB_REF,
+            expectedSha: process.env.EXPECTED_SHA,
+            actualSha: process.env.GITHUB_SHA,
+          });
+
+          if (failure) {
+            console.error(`::error::${failure}`);
+            process.exit(1);
+          }
+          NODE
   publish:
+    needs: validate-dispatch
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
