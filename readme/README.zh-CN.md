@@ -81,7 +81,7 @@ npm install -g @bitkyc08/opencodex   # Node 18+；自动捆绑 Bun 运行时
 ocx start                            # 或使用 `ocx service` 在后台运行
 ```
 
-打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置：添加 provider（40 多个内置
+打开 **http://localhost:10100** ，在 Web 仪表板中完成所有配置：添加 provider（40 多个内置
 provider，或任意 OpenAI 兼容端点）、选择模型并管理账户。随时运行 `ocx gui` 可重新打开仪表板。
 
 ### 面向代理
