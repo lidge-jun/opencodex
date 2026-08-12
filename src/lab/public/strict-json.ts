@@ -1,5 +1,7 @@
 import { PublicEvidenceValidationError } from "./validate";
 
+const MAX_PUBLIC_JSON_DEPTH = 8;
+
 function isJsonWhitespace(value: string | undefined): boolean {
   return value === " " || value === "\n" || value === "\r" || value === "\t";
 }
@@ -10,6 +12,7 @@ function malformedJson(code: string, message: string): never {
 
 function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): void {
   let index = 0;
+  let depth = 0;
 
   function invalid(message: string): never {
     return malformedJson(invalidCode, message);
@@ -66,58 +69,75 @@ function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): voi
     }
   }
 
-  function parseArray(): void {
-    index += 1;
-    skipWhitespace();
-    if (text[index] === "]") {
-      index += 1;
-      return;
+  function enterContainer(): void {
+    depth += 1;
+    if (depth > MAX_PUBLIC_JSON_DEPTH) {
+      invalid(`public JSON nesting depth exceeds ${MAX_PUBLIC_JSON_DEPTH}`);
     }
-    while (index < text.length) {
-      parseValue();
+  }
+
+  function parseArray(): void {
+    enterContainer();
+    try {
+      index += 1;
       skipWhitespace();
       if (text[index] === "]") {
         index += 1;
         return;
       }
-      if (text[index] !== ",") invalid("public JSON array is malformed");
-      index += 1;
-      skipWhitespace();
-      if (text[index] === "]") invalid("public JSON array contains a trailing comma");
+      while (index < text.length) {
+        parseValue();
+        skipWhitespace();
+        if (text[index] === "]") {
+          index += 1;
+          return;
+        }
+        if (text[index] !== ",") invalid("public JSON array is malformed");
+        index += 1;
+        skipWhitespace();
+        if (text[index] === "]") invalid("public JSON array contains a trailing comma");
+      }
+      invalid("public JSON array is unterminated");
+    } finally {
+      depth -= 1;
     }
-    invalid("public JSON array is unterminated");
   }
 
   function parseObject(): void {
-    index += 1;
-    skipWhitespace();
-    if (text[index] === "}") {
+    enterContainer();
+    try {
       index += 1;
-      return;
-    }
-    const keys = new Set<string>();
-    while (index < text.length) {
-      if (text[index] !== '"') invalid("public JSON object key must be a string");
-      const key = parseStringToken();
-      if (keys.has(key)) {
-        throw new PublicEvidenceValidationError("duplicate_json_key", `duplicate JSON object key: ${key}`);
-      }
-      keys.add(key);
-      skipWhitespace();
-      if (text[index] !== ":") invalid("public JSON object is missing a colon");
-      index += 1;
-      parseValue();
       skipWhitespace();
       if (text[index] === "}") {
         index += 1;
         return;
       }
-      if (text[index] !== ",") invalid("public JSON object is malformed");
-      index += 1;
-      skipWhitespace();
-      if (text[index] === "}") invalid("public JSON object contains a trailing comma");
+      const keys = new Set<string>();
+      while (index < text.length) {
+        if (text[index] !== '"') invalid("public JSON object key must be a string");
+        const key = parseStringToken();
+        if (keys.has(key)) {
+          throw new PublicEvidenceValidationError("duplicate_json_key", `duplicate JSON object key: ${key}`);
+        }
+        keys.add(key);
+        skipWhitespace();
+        if (text[index] !== ":") invalid("public JSON object is missing a colon");
+        index += 1;
+        parseValue();
+        skipWhitespace();
+        if (text[index] === "}") {
+          index += 1;
+          return;
+        }
+        if (text[index] !== ",") invalid("public JSON object is malformed");
+        index += 1;
+        skipWhitespace();
+        if (text[index] === "}") invalid("public JSON object contains a trailing comma");
+      }
+      invalid("public JSON object is unterminated");
+    } finally {
+      depth -= 1;
     }
-    invalid("public JSON object is unterminated");
   }
 
   function parseValue(): void {
