@@ -19,3 +19,6 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test tests/lab-public-evidence.test.ts tests/lab-public-evidence-signature.test.ts tests/lab-community-evidence.test.ts tests/lab-community-publisher-continuity.test.ts tests/lab-public-surfaces.test.ts
       - run: bun x tsc --noEmit
+      - run: cd gui && bun install --frozen-lockfile
+      - run: cd gui && bun test tests/compatibility-community-evidence.test.ts tests/compatibility-lab-i18n.test.ts
+      - run: cd gui && bun x tsc -b --pretty false
