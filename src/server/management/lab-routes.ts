@@ -263,11 +263,12 @@ function publicBundleValue(raw: unknown): unknown {
 }
 
 function publicErrorResponse(err: unknown, ctx: ManagementContext): Response {
-  const message = err instanceof Error ? err.message : "public evidence operation failed";
-  const code = err instanceof PublicEvidenceValidationError
-    ? err.code
-    : "public_evidence_error";
-  return errorResponse(code, message, 400, ctx);
+  if (err instanceof PublicEvidenceValidationError) {
+    return errorResponse(err.code, err.message, 400, ctx);
+  }
+  const projected = projectionErrorResponse(err, ctx);
+  if (projected) return projected;
+  return errorResponse("public_evidence_internal", "internal public evidence failure", 500, ctx);
 }
 
 export async function handleLabRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -363,10 +364,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     if (layerParsed instanceof Response) return layerParsed;
     const suiteId = url.searchParams.get("suiteId")?.trim() || url.searchParams.get("suite")?.trim() || undefined;
     try {
-      const scenarios = queryLabCatalogEntries({
-        layer: layerParsed,
-        suiteId,
-      });
+      const scenarios = queryLabCatalogEntries({ layer: layerParsed, suiteId });
       return jsonResponse({ scenarios }, 200, req, config);
     } catch (err) {
       const mapped = projectionErrorResponse(err, ctx);
@@ -405,11 +403,7 @@ export async function handleLabRoutes(ctx: ManagementContext): Promise<Response 
     const limit = parseLimit(url.searchParams.get("limit"), ctx);
     if (limit instanceof Response) return limit;
     try {
-      const page = queryLabSubjects(
-        url.searchParams.get("kind")?.trim() || undefined,
-        url.searchParams.get("cursor"),
-        limit,
-      );
+      const page = queryLabSubjects(url.searchParams.get("kind")?.trim() || undefined, url.searchParams.get("cursor"), limit);
       return jsonResponse(paginatedEnvelope(page, "subjects"), 200, req, config);
     } catch (err) {
       const mapped = projectionErrorResponse(err, ctx);
