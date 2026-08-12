@@ -73,9 +73,23 @@ export function canForwardServiceTierForModel(
   providerName?: string,
   inbound: InboundWire = "responses",
 ): boolean {
+  return serviceTierSupportForModel(provider, modelId, providerName, inbound) === true;
+}
+
+/**
+ * Return the tri-state capability after resolving the model's final wire adapter.
+ * `false` means either an explicit provider/model denial or an adapter that cannot carry the
+ * field; `undefined` keeps the existing conservative contract for an unclassified OpenAI wire.
+ */
+export function serviceTierSupportForModel(
+  provider: ServiceTierCapabilityProvider,
+  modelId: string,
+  providerName?: string,
+  inbound: InboundWire = "responses",
+): boolean | undefined {
   const adapter = providerName === undefined
     ? provider.adapter
     : serviceTierAdapterForModel(providerName, provider, modelId, inbound);
-  return SERVICE_TIER_ADAPTERS.has(adapter)
-    && supportsServiceTierForModel(provider, modelId) === true;
+  if (!SERVICE_TIER_ADAPTERS.has(adapter)) return false;
+  return supportsServiceTierForModel(provider, modelId);
 }

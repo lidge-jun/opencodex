@@ -113,7 +113,7 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
-import { SERVICE_TIER_ADAPTERS, supportsServiceTierForModel } from "../../providers/service-tier";
+import { SERVICE_TIER_ADAPTERS, serviceTierSupportForModel } from "../../providers/service-tier";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -1067,7 +1067,12 @@ async function applyFinalRouteRequestNormalization(args: {
 
   // Fast mode override only where the final provider/model route explicitly documents
   // service-tier support. The same model-scoped resolver is used by catalog generation.
-  const modelServiceTierSupport = supportsServiceTierForModel(route.provider, route.modelId);
+  const modelServiceTierSupport = serviceTierSupportForModel(
+    route.provider,
+    route.modelId,
+    route.providerName,
+    inboundWire,
+  );
   if (config.fastMode !== undefined
     && SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
     && modelServiceTierSupport === true) {
@@ -1078,8 +1083,15 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.options.serviceTier = tier;
   }
-  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options, route.modelId);
-  if (SERVICE_TIER_ADAPTERS.has(route.provider.adapter) && modelServiceTierSupport === false) {
+  applyServiceTierGate(
+    route.provider,
+    parsed._rawBody,
+    parsed.options,
+    route.modelId,
+    route.providerName,
+    inboundWire,
+  );
+  if (modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
     logCtx.requestedSpeedLabel = undefined;
   }
@@ -1441,11 +1453,17 @@ export function applyServiceTierGate(
   rawBody: unknown,
   options: { serviceTier?: string },
   modelId?: string,
+  providerName?: string,
+  inbound: InboundWire = "responses",
 ): void {
-  if (!SERVICE_TIER_ADAPTERS.has(provider.adapter)) return;
+  // A direct unit caller without a model id retains the historical tri-state behavior for
+  // adapters outside the OpenAI service-tier family. Once a model is known, resolve the final
+  // model adapter as well: an explicit override to Anthropic (or another non-OpenAI wire) must
+  // not carry a caller-supplied `service_tier` through a route that cannot forward it.
+  if (modelId === undefined && !SERVICE_TIER_ADAPTERS.has(provider.adapter)) return;
   const support = modelId === undefined
     ? provider.supportsServiceTier
-    : supportsServiceTierForModel(provider, modelId);
+    : serviceTierSupportForModel(provider, modelId, providerName, inbound);
   if (support !== false) return;
   if (rawBody && typeof rawBody === "object") {
     delete (rawBody as Record<string, unknown>).service_tier;

@@ -11,7 +11,7 @@ import { providerConfigSeed, enrichProviderFromRegistry } from "../src/providers
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import type { RequestLogContext } from "../src/server/request-log";
 import { applyServiceTierGate, handleResponses } from "../src/server/responses/core";
-import { supportsServiceTierForModel } from "../src/providers/service-tier";
+import { canForwardServiceTierForModel, supportsServiceTierForModel } from "../src/providers/service-tier";
 import { serviceTierAdapterForModel } from "../src/providers/service-tier";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -76,6 +76,11 @@ describe("service-tier capability is exact-model and provider-scoped", () => {
     } as const;
     expect(serviceTierAdapterForModel("custom-relay", provider, "responses-model")).toBe("openai-responses");
     expect(serviceTierAdapterForModel("custom-relay", provider, "chat-model")).toBe("openai-chat");
+    expect(canForwardServiceTierForModel({
+      ...provider,
+      adapter: "anthropic",
+      supportsServiceTier: true,
+    }, "anthropic-model", "custom-relay")).toBe(false);
   });
 });
 
@@ -122,6 +127,18 @@ describe("applyServiceTierGate fails closed", () => {
       supportsServiceTier: true,
       modelSupportsServiceTier: { "gpt-5.6-sol": false },
     }, body, options, "gpt-5.6-sol");
+    expect(body).not.toHaveProperty("service_tier");
+    expect(options.serviceTier).toBeUndefined();
+  });
+
+  test("a final non-service-tier adapter strips the caller tier after route resolution", () => {
+    const body = { model: "anthropic-model", service_tier: "priority" };
+    const options: { serviceTier?: string } = { serviceTier: "priority" };
+    applyServiceTierGate({
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      supportsServiceTier: true,
+    }, body, options, "anthropic-model", undefined);
     expect(body).not.toHaveProperty("service_tier");
     expect(options.serviceTier).toBeUndefined();
   });
