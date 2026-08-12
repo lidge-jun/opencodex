@@ -17,7 +17,22 @@ import { PublicEvidenceValidationError } from "./validate";
 function validateRouteAuthority(subject: PublicRouteSubjectV1): void {
   const entry = findPublicRouteRegistryEntry(subject.providerId, subject.modelId);
   if (!entry || !entry.adapterFamilies.includes(subject.adapterFamily)) {
-    throw new PublicEvidenceValidationError("community_authority", "public route is not in reviewed registry authority");
+    throw new PublicEvidenceValidationError("public_authority", "public route is not in reviewed registry authority");
+  }
+}
+
+function validateAssertionAuthority(
+  record: PublicEvidenceRecordV1,
+  assertions: readonly { id: string; required: boolean }[],
+): void {
+  const allowed = new Map(assertions.map((assertion) => [assertion.id, assertion.required] as const));
+  for (const assertion of record.assertions) {
+    if (!allowed.has(assertion.id) || allowed.get(assertion.id) !== assertion.required) {
+      throw new PublicEvidenceValidationError(
+        "public_authority",
+        "public assertion id/required flag is not in reviewed scenario authority",
+      );
+    }
   }
 }
 
@@ -37,8 +52,9 @@ function validateTaskAuthority(record: PublicEvidenceRecordV1): void {
     || record.subject.verifierManifestDigest !== verifierManifestDigest()
     || record.subject.fabricCompatibilityVersion !== FABRIC_COMPATIBILITY_VERSION
   ) {
-    throw new PublicEvidenceValidationError("community_authority", "task scenario/verifier authority mismatch");
+    throw new PublicEvidenceValidationError("public_authority", "task scenario/verifier authority mismatch");
   }
+  validateAssertionAuthority(record, caseRecord.assertions);
   validateRouteAuthority(record.subject.route);
 }
 
@@ -56,18 +72,24 @@ function validateScenarioAuthority(record: PublicEvidenceRecordV1): void {
     || record.scenarioVersion !== String(authority.manifestDefaults.version)
     || record.suiteVersion !== String(authority.manifestDefaults.suiteVersion)
   ) {
-    throw new PublicEvidenceValidationError("community_authority", "scenario/suite authority mismatch");
+    throw new PublicEvidenceValidationError("public_authority", "scenario/suite authority mismatch");
   }
+  validateAssertionAuthority(record, caseRecord.assertions);
 
   if (record.evidenceLayer === "live_route_compatibility") {
     if (record.subject.subjectKind !== "route") {
-      throw new PublicEvidenceValidationError("community_authority", "live route subject mismatch");
+      throw new PublicEvidenceValidationError("public_authority", "live route subject mismatch");
     }
     validateRouteAuthority(record.subject);
   }
 }
 
+/** Repository-owned authority gate used by both local signing and community imports. */
+export function validatePublicEvidenceAuthorities(records: readonly PublicEvidenceRecordV1[]): void {
+  for (const record of records) validateScenarioAuthority(record);
+}
+
 export function validateCommunityEvidenceAuthorities(bundle: PublicEvidenceBundleV1): PublicEvidenceBundleV1 {
-  for (const record of bundle.records) validateScenarioAuthority(record);
+  validatePublicEvidenceAuthorities(bundle.records);
   return bundle;
 }
