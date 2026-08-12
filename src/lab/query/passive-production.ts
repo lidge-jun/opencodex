@@ -26,9 +26,6 @@ export interface PassiveRouteSignalV1 {
   observedAt: number;
   outcome: PassiveProductionOutcome;
   httpStatus?: number;
-  terminalStatus?: string;
-  closeReason?: string;
-  errorCode?: string;
 }
 
 export interface PassiveProductionSummaryV1 {
@@ -85,7 +82,6 @@ function classifyOutcome(entry: PersistedUsageEntry, attempt: PersistedUsageAtte
 function signalFor(entry: PersistedUsageEntry, attempt: PersistedUsageAttempt): PassiveRouteSignalV1 | null {
   const subjectId = attempt.labRouteSubjectId;
   if (!isLabRouteSubjectId(subjectId)) return null;
-  const finalAttempt = isFinalAttempt(entry, attempt);
   return {
     schemaVersion: 1,
     subjectId,
@@ -96,9 +92,6 @@ function signalFor(entry: PersistedUsageEntry, attempt: PersistedUsageAttempt): 
     observedAt: entry.timestamp,
     outcome: classifyOutcome(entry, attempt),
     httpStatus: attempt.status,
-    ...(finalAttempt && entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
-    ...(finalAttempt && entry.closeReason ? { closeReason: entry.closeReason } : {}),
-    ...(attempt.errorCode ? { errorCode: attempt.errorCode } : {}),
   };
 }
 
