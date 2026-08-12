@@ -141,6 +141,21 @@ function purgeBoundedDirectory(dirPath: string): void {
   }
 }
 
+function normalizePurgeError(err: unknown, completed: readonly string[]): PurgeError {
+  if (err instanceof PurgeError) {
+    return new PurgeError(
+      err.code,
+      err.message,
+      [...new Set([...completed, ...err.completedActions])],
+    );
+  }
+  return new PurgeError(
+    "purge_failed",
+    err instanceof Error ? err.message : String(err),
+    [...completed],
+  );
+}
+
 /**
  * Exceptional sensitive-evidence purge:
  * physically remove targeted JSONL lines and artifacts, append purge_tombstone,
@@ -188,14 +203,23 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
 
   let dir: TrustedArtifactDir | null = null;
   const completed: string[] = [];
+  let deferredExportError: PurgeError | null = null;
+  let operationError: PurgeError | null = null;
+
   try {
     if (purgeActions.includes("scratch")) {
       purgeBoundedDirectory(paths.scratchDir);
       completed.push("scratch");
     }
     if (purgeActions.includes("export")) {
-      purgeLocalPublicEvidenceCopies(req.configDir);
-      completed.push("export");
+      try {
+        purgeLocalPublicEvidenceCopies(req.configDir);
+        completed.push("export");
+      } catch (err) {
+        // Export deletion is independent from artifact/ledger/sqlite deletion. Keep
+        // deleting every other requested sensitive copy, then report this failure.
+        deferredExportError = normalizePurgeError(err, completed);
+      }
     }
 
     if (purgeActions.includes("artifact")) {
@@ -223,18 +247,26 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       rebuildLabProjection(req.configDir);
       completed.push("sqlite");
     }
-
-    return tombstone;
   } catch (err) {
-    if (err instanceof PurgeError) {
-      throw new PurgeError(err.code, err.message, [...completed, ...err.completedActions]);
-    }
-    throw new PurgeError(
-      "purge_failed",
-      err instanceof Error ? err.message : String(err),
-      completed,
-    );
+    operationError = normalizePurgeError(err, completed);
   } finally {
     if (dir) closeTrustedArtifactDir(dir);
   }
+
+  if (operationError && deferredExportError) {
+    throw new PurgeError(
+      "purge_failed",
+      `export purge failed: ${deferredExportError.message}; subsequent purge failure (${operationError.code}): ${operationError.message}`,
+      [...new Set([...completed, ...deferredExportError.completedActions, ...operationError.completedActions])],
+    );
+  }
+  if (operationError) throw operationError;
+  if (deferredExportError) {
+    throw new PurgeError(
+      deferredExportError.code,
+      deferredExportError.message,
+      [...new Set([...completed, ...deferredExportError.completedActions])],
+    );
+  }
+  return tombstone;
 }
