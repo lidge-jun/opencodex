@@ -1,11 +1,18 @@
 import { expect, test } from "bun:test";
 import {
+  fetchLabPageData,
+  fetchVerdictDetail,
   parseCommunityEvidenceContext,
   type CommunityEvidenceContextDto,
 } from "../src/pages/compatibility-matrix-api";
-import { labSupplement, type LabLocale } from "../src/i18n/lab-translations";
+import type { VerdictDto } from "../src/pages/compatibility-matrix-shared";
+import {
+  LAB_CATALOG_OVERRIDES,
+  labSupplement,
+  type LabLocale,
+} from "../src/i18n/lab-translations";
 
-const LOCALES: LabLocale[] = ["en", "de", "ja", "ko", "ru", "tr", "zh", "zh-TW"];
+const LOCALES = Object.keys(LAB_CATALOG_OVERRIDES) as LabLocale[];
 
 function validContext(): CommunityEvidenceContextDto {
   return {
@@ -24,17 +31,45 @@ function validContext(): CommunityEvidenceContextDto {
   };
 }
 
-test("Compatibility Matrix parses only quarantined community evidence context", () => {
+function json(value: unknown): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+test("Compatibility Matrix parses only bounded quarantined community evidence context", () => {
   expect(parseCommunityEvidenceContext(validContext())).toEqual(validContext());
   expect(parseCommunityEvidenceContext({ ...validContext(), locallyVerified: true })).toBeNull();
   expect(parseCommunityEvidenceContext({ ...validContext(), trustClass: "local" })).toBeNull();
+  expect(parseCommunityEvidenceContext({ ...validContext(), unexpected: true })).toBeNull();
+  expect(parseCommunityEvidenceContext({
+    ...validContext(),
+    evidence: [{ ...validContext().evidence[0]!, unexpected: true }],
+  })).toBeNull();
+  expect(parseCommunityEvidenceContext({
+    ...validContext(),
+    evidence: [{ ...validContext().evidence[0]!, bundleId: "A".repeat(64) }],
+  })).toBeNull();
+  expect(parseCommunityEvidenceContext({
+    ...validContext(),
+    evidence: [{ ...validContext().evidence[0]!, publisherKeyId: "z".repeat(64) }],
+  })).toBeNull();
   expect(parseCommunityEvidenceContext({
     ...validContext(),
     evidence: [{ ...validContext().evidence[0]!, activeRecordCount: -1 }],
   })).toBeNull();
   expect(parseCommunityEvidenceContext({
     ...validContext(),
+    evidence: [{ ...validContext().evidence[0]!, activeRecordCount: 1.5 }],
+  })).toBeNull();
+  expect(parseCommunityEvidenceContext({
+    ...validContext(),
     evidence: [{ ...validContext().evidence[0]!, status: "locally_verified" }],
+  })).toBeNull();
+  expect(parseCommunityEvidenceContext({
+    ...validContext(),
+    evidence: Array.from({ length: 4097 }, () => validContext().evidence[0]!),
   })).toBeNull();
 });
 
@@ -49,10 +84,58 @@ test("Compatibility Matrix community copy is localized and explicitly non-author
   expect(labSupplement("en", "community.notLocalVerdict")).toMatch(/untrusted|not included|local verdict/i);
 });
 
-test("Compatibility Matrix renders community evidence as separate context, never a combined score", async () => {
-  const source = await Bun.file(new URL("../src/pages/CompatibilityMatrix.tsx", import.meta.url)).text();
-  expect(source).toContain('data-testid="lab-community-evidence"');
-  expect(source).toContain('labSupplement(locale, "community.notLocalVerdict")');
-  expect(source).not.toMatch(/combined.?score/i);
-  expect(source).not.toMatch(/community.*verdict\s*=|verdict\s*=.*community/i);
+test("community evidence is fetched once as page-global context, never as verdict detail", async () => {
+  const originalFetch = globalThis.fetch;
+  const requested: string[] = [];
+  const context = validContext();
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.endsWith("/api/lab/status")) {
+      return json({
+        projectionAvailable: true,
+        subjectCount: 0,
+        verdictCount: 0,
+        observationCount: 0,
+        eventCount: 0,
+      });
+    }
+    if (url.includes("/api/lab/verdicts?")) return json({ verdicts: [], hasMore: false });
+    if (url.includes("/api/lab/subjects?")) return json({ subjects: [], hasMore: false });
+    if (url.endsWith("/api/lab/public/community")) return json(context);
+    if (url.endsWith("/api/lab/subjects/subject-alpha")) {
+      return json({ subject: { subjectKind: "protocol", subjectSchemaVersion: 1, inboundProtocol: "openai-chat" } });
+    }
+    if (url.includes("/api/lab/observations?")) return json({ observations: [], hasMore: false });
+    throw new Error(`unexpected optional detail request: ${url}`);
+  }) as typeof fetch;
+
+  try {
+    const signal = new AbortController().signal;
+    const page = await fetchLabPageData("http://127.0.0.1:4096", {}, signal);
+    expect(page.community).toEqual(context);
+    expect(requested.filter(url => url.endsWith("/api/lab/public/community"))).toHaveLength(1);
+
+    const verdict: VerdictDto = {
+      projectionKey: "v1",
+      subjectId: "subject-alpha",
+      evidenceLayer: "protocol_conformance",
+      suiteId: "responses-core",
+      suiteVersion: "1",
+      suiteManifestDigest: "digest-a",
+      projectionSpecVersion: "cl-02.v1",
+      verdict: "VERIFIED",
+      asOf: 1_700_000_000_000,
+      scenarioManifestDigests: [],
+      claimSourceDigest: null,
+      contributingEventIds: [],
+      contradictingEventIds: [],
+      notes: [],
+    };
+    const detail = await fetchVerdictDetail("http://127.0.0.1:4096", verdict, signal);
+    expect(detail).not.toHaveProperty("community");
+    expect(requested.filter(url => url.endsWith("/api/lab/public/community"))).toHaveLength(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
