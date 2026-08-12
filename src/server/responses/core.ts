@@ -1618,14 +1618,14 @@ async function handleResponsesInner(
   // bug, issue #314), taking every active thread down at once. Fail one request cleanly
   // instead. Reuse the model/CJK-aware estimate that already drives usage and compact
   // decisions; summing parts avoids materializing another copy of a multi-megabyte request.
-  const inputGuard = (): Response | undefined => {
+  const inputGuardFor = (candidateRoute: typeof route): Response | undefined => {
     const effectiveLimit =
-      route.provider.modelMaxInputTokens?.[route.modelId]
-      ?? route.provider.modelContextWindows?.[route.modelId];
+      candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
+      ?? candidateRoute.provider.modelContextWindows?.[candidateRoute.modelId];
     if (typeof effectiveLimit !== "number" || effectiveLimit <= 0) return undefined;
     let estimatedInputTokens = 0;
     const countText = (text: string) => {
-      estimatedInputTokens += estimateTokens(text, route.modelId);
+      estimatedInputTokens += estimateTokens(text, candidateRoute.modelId);
     };
     for (const msg of parsed.context.messages) {
       const content = msg.content;
@@ -1657,7 +1657,7 @@ async function handleResponsesInner(
           error: {
             type: "request_too_large",
             code: "input_context_window_exceeded",
-            message: `input (≈${estimatedInputTokens} tokens) exceeds ${route.modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
+            message: `input (≈${estimatedInputTokens} tokens) exceeds ${candidateRoute.modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
           },
         },
         { status: 413 },
@@ -1675,7 +1675,7 @@ async function handleResponsesInner(
   const initialInputGuard = hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
     ? undefined
-    : inputGuard();
+    : inputGuardFor(route);
   if (initialInputGuard) return initialInputGuard;
 
   // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
@@ -1699,6 +1699,54 @@ async function handleResponsesInner(
   const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
 
   try {
+    // Validate the locally selectable fallback candidate before quota priming: a
+    // thread-spawn request must not run the Codex quota probe (upstream I/O) for an
+    // input that the fallback target would reject. The initial route is guarded above;
+    // the final route is re-validated after fallback selection below.
+    if (
+      threadSpawn
+      && !options.comboAttempt
+      && route.codexAccountId === undefined
+      && !(hasUnexpandedPreviousResponse && isCanonicalOpenAiForwardProvider(route.provider))
+    ) {
+      const candidateParsed = {
+        ...parsed,
+        ...(parsed._rawBody && typeof parsed._rawBody === "object"
+          ? { _rawBody: { ...(parsed._rawBody as Record<string, unknown>) } }
+          : {}),
+      } as typeof parsed;
+      const candidateFallback = applySubagentModelFallback(
+        candidateParsed,
+        req.headers,
+        config,
+        previewCodexAccountForRequest(
+          req.headers.get("x-codex-parent-thread-id"),
+          config,
+          Date.now(),
+          undefined,
+          previewSelectionOptions,
+        ),
+        Date.now(),
+        unreadableEncryptedAgentTask,
+        previewSelectionOptions,
+      );
+      if (candidateFallback?.to && !slugsEquivalent(candidateFallback.to, route.modelId)) {
+        try {
+          const candidateRoute = routeModel(config, candidateFallback.to, evidenceFromBody(candidateParsed._rawBody));
+          const candidateGuard = inputGuardFor(candidateRoute);
+          if (candidateGuard) return candidateGuard;
+        } catch (err) {
+          if (err instanceof NoAvailableComboTargetsError) {
+            return comboUnavailableResponse(err.message);
+          }
+          if (err instanceof NoEligiblePolicyCandidateError) {
+            logCtx.routeDecision = err.trace;
+          }
+          return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
+        }
+      }
+    }
+
     if (
       threadSpawn
       && route.codexAccountId === undefined
@@ -1877,7 +1925,7 @@ async function handleResponsesInner(
 
   // Input-size guard, final route: subagent fallback may have settled a different model or
   // provider, so re-validate before auth, adapter construction, or upstream I/O.
-  const finalInputGuard = inputGuard();
+  const finalInputGuard = inputGuardFor(route);
   if (finalInputGuard) return finalInputGuard;
 
   // Captured before normalization: whether the CLIENT asked for SSE. The

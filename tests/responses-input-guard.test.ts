@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  resetSubagentModelFallbackStateForTests,
+  setSubagentQuotaPrimeForTests,
+} from "../src/codex/subagent-model-fallback";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import type { RequestLogContext } from "../src/server/request-log";
@@ -25,9 +29,11 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
+  resetSubagentModelFallbackStateForTests();
 });
 
 afterEach(() => {
+  resetSubagentModelFallbackStateForTests();
   globalThis.fetch = originalFetch;
   rmSync(testDir, { recursive: true, force: true });
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -132,6 +138,7 @@ describe("responses input-size guard", () => {
 
   test("rejects an oversized thread-spawn request before any quota polling", async () => {
     let upstreamCalls = 0;
+    let quotaPrimeCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
       return Response.json({
@@ -142,6 +149,9 @@ describe("responses input-size guard", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       });
     }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {
+      quotaPrimeCalls += 1;
+    });
     const bigText = "a".repeat(4_200_000);
     const res = await postResponses(
       deepseekConfig(),
@@ -153,6 +163,7 @@ describe("responses input-size guard", () => {
     );
     await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
+    expect(quotaPrimeCalls).toBe(0);
   });
 
   test("rejects an oversized instructions value without calling upstream", async () => {
