@@ -927,6 +927,39 @@ describe("stateless Responses upstreams get no stateful parameters", () => {
     const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
     expect(body.input).toEqual(input);
   });
+  test("DeepSeek leaves reversed outputs in their original order", () => {
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const callB = { type: "function_call", call_id: "call_b", name: "read_file", arguments: "{}" };
+    const outputB = { type: "function_call_output", call_id: "call_b", output: "B" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const injected = { type: "message", role: "developer", content: [{ type: "input_text", text: "context" }] };
+    const input = [callA, callB, injected, outputB, outputA];
+
+    const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
+    expect(body.input).toEqual(input);
+  });
+
+  test("DeepSeek keeps a valid pair in order when an unrelated output has no matching call", () => {
+    // The orphan-output repair runs before the normalizer and flattens the unmatched
+    // tool result into a user message, so the matched pair is still normalized and the
+    // unmatchable output is never forwarded as a raw tool output.
+    const callA = { type: "function_call", call_id: "call_a", name: "read_file", arguments: "{}" };
+    const outputA = { type: "function_call_output", call_id: "call_a", output: "A" };
+    const injected = { type: "message", role: "developer", content: [{ type: "input_text", text: "context" }] };
+    const orphanOutput = { type: "function_call_output", call_id: "call_orphan", output: "orphan" };
+    const tail = { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] };
+    const input = [callA, injected, outputA, orphanOutput, tail];
+
+    const body = buildBody(deepseekProvider(), { input }) as { input: unknown[] };
+    expect(body.input[0]).toEqual(callA);
+    expect(body.input[1]).toEqual(outputA);
+    expect(body.input).toContainEqual(injected);
+    expect(body.input).toContainEqual(tail);
+    expect(body.input.some(item => item.type === "function_call_output")).toBe(true);
+    // The orphan output must not be forwarded raw; it is flattened into a user message.
+    expect(body.input.some(item => item.type === "function_call_output" && item.call_id === "call_orphan")).toBe(false);
+  });
+
 
   test("tolerant Responses providers keep interleaved tool history unchanged", () => {
     const provider: OcxProviderConfig = {

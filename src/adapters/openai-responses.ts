@@ -586,6 +586,13 @@ function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
     if (outputIndex <= callIndex) return body;
     pairs.push({ callIndex, outputIndex });
   }
+  // Reject any collected output that lacks exactly one matching call. A lone or
+  // duplicated output is ambiguous, and normalizing on top of it could sever a
+  // result from the reasoning-bearing call turn it belongs to.
+  for (const [key, outputIndices] of outputs) {
+    const callIndices = calls.get(key);
+    if (!callIndices || callIndices.length !== 1 || outputIndices.length !== 1) return body;
+  }
   pairs.sort((left, right) => left.callIndex - right.callIndex);
 
   const movedIndices = new Set<number>();
@@ -598,6 +605,13 @@ function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
       group.push(pairs[next]!);
       firstOutputIndex = Math.min(firstOutputIndex, pairs[next]!.outputIndex);
       next += 1;
+    }
+
+    // Within one reasoning turn the outputs must appear in the same order as their
+    // calls. If they are reversed, normalizing would fabricate a new output order;
+    // leave the ambiguous history untouched instead.
+    for (let groupIndex = 1; groupIndex < group.length; groupIndex += 1) {
+      if (group[groupIndex]!.outputIndex < group[groupIndex - 1]!.outputIndex) return body;
     }
 
     const batch = [

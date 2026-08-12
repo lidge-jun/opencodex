@@ -1228,8 +1228,8 @@ export interface OcxProviderConfig {
   statelessResponses?: boolean;
   /**
    * Responses upstream whose parser requires an unambiguous call batch and its matched
-   * result batch to remain contiguous. Intervening messages are preserved after the
-   * batch, and parallel calls stay together with the reasoning turn that produced them.
+   * result batch to remain contiguous. Hook-injected context that splits the batch is
+   * preserved after it, and parallel calls stay together with the reasoning turn that produced them.
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**

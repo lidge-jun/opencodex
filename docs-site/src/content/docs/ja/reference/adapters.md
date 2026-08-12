@@ -51,6 +51,11 @@ interface ProviderAdapter {
 先立って、同じキーで同一リクエストを待機して再送します。カスタム `runTurn` トランスポートは
 HTTP リトライ ループの対象外です。
 
+- DeepSeek のステートレス Responses パーサーは、プロバイダーにスコープされた履歴正規化を受けます: フックで
+  注入されたコンテキストは、あいまいさのない tool-call/result バッチの後に移動します。並列呼び出しは、
+  それぞれの出力の前にグループ化されたままなので、すべての呼び出しが推論を含むアシスタントターンにとどまり
+  ます。寛容なプロバイダーと、重複・欠落・順序不正の call ID は元の入力順を保持します。
+
 - `forward` URL → `{baseUrl}/responses`。`key` provider はデフォルトで従来の `{baseUrl}/v1/responses` 構築を使います。
 - `key` provider は検証済みの相対 `responsesPath` を設定できます。adapter は `baseUrl` 末尾の `/` を 1 つ除き、`{trimmedBaseUrl}{responsesPath}` に送信します。Ark Agent Plan では `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` と `responsesPath: "/responses"` を使います。
 - `forward` モードでは安全なヘッダー許可リスト（`FORWARD_HEADERS`）だけを中継します。authorization、ChatGPT account id、OpenAI beta/originator/session ヘッダーが対象です。この ChatGPT ログイン経路は [サイドカー](/ja/guides/sidecars/) にも使われます。

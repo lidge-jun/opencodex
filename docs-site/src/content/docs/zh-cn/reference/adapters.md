@@ -54,6 +54,10 @@ interface ProviderAdapter {
 会等待并先于其他处理或故障转移，在相同 key 上重放完全相同请求，与翻译后的
 `openai-chat`/Anthropic 请求路径一致。自定义 `runTurn` 传输不在 HTTP 重试循环之内。
 
+- DeepSeek 的 stateless Responses parser 会收到按 provider 范围的历史归一化：hook 注入的上下文会移动到
+  明确的 tool-call/result 批次之后。并行调用保持在其对应输出之前分组，因此每个调用都留在承载
+  推理的 assistant 回合中。宽容的 provider 和歧义的（重复、缺失或乱序的）call ID 保留原始输入顺序。
+
 - `forward` URL → `{baseUrl}/responses`。`key` provider 默认保留原有的 `{baseUrl}/v1/responses` 构造。
 - `key` provider 可设置经过验证的相对 `responsesPath`；adapter 会移除 `baseUrl` 末尾的一个 `/`，并向 `{trimmedBaseUrl}{responsesPath}` 发送请求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只会转发安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT

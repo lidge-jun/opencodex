@@ -43,6 +43,10 @@ interface ProviderAdapter {
 **不經轉換**地流式傳回。
 **認證：** `forward`（轉發呼叫方 header）或 `key`。
 
+- DeepSeek 的 stateless Responses parser 會收到按 provider 範圍的歷史正規化：hook 注入的內容會移動到
+  明確的 tool-call/result 批次之後。並行呼叫保持在其對應輸出之前分組，因此每個呼叫都留在承載
+  推理的 assistant 回合中。寬容的 provider 和歧義的（重複、缺失或亂序的）call ID 保留原始輸入順序。
+
 - `forward` URL → `{baseUrl}/responses`。`key` provider 預設保留原有的 `{baseUrl}/v1/responses` 構造。
 - `key` provider 可設定經過驗證的相對 `responsesPath`；adapter 會移除 `baseUrl` 末尾的一個 `/`，並向 `{trimmedBaseUrl}{responsesPath}` 傳送請求。Ark Agent Plan 使用 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` 和 `responsesPath: "/responses"`。
 - `forward` 模式只會轉發安全的 header allowlist（`FORWARD_HEADERS`）：authorization、ChatGPT
