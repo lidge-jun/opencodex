@@ -56,14 +56,18 @@ Unknown item types are accepted as loose typed items for forward compatibility. 
 handle only the item types they recognize, and may reject a feature their provider cannot represent.
 
 Requests whose parsed `input` is estimated — using an approximate, model-aware token estimate over
-message text, `instructions`, and tool definitions — to exceed the routed model's effective input
-limit (per-model maximum input, falling back to the advertised context window) are rejected with
-`413 request_too_large` (code `input_context_window_exceeded`) before authentication, adapter
-construction, or model-serving upstream I/O. A thread-spawn request may run a quota probe
-beforehand: that probe is the only upstream I/O that can precede the rejection. Codex compacts well
-before this limit, so an oversized body indicates abnormal duplication — for example a chained
-continuation that resends the full conversation to a stateless provider. Compact the conversation or
-start a new thread and retry; the rejected request is never forwarded upstream.
+message text, `instructions`, tool definitions, structured-output schemas, and non-text content —
+to exceed the routed model's effective input limit (per-model maximum input, falling back to the
+context window resolved from provider, registry, or catalog metadata) are rejected with
+`413 request_too_large` (code `input_context_window_exceeded`) before adapter construction and
+model-serving upstream I/O. Body admission (decompression, size caps, parsing) precedes the guard.
+HTTP requests are also rejected before authentication; WebSocket frames have already passed
+handshake authentication and origin admission, so for them the guard runs before per-turn adapter
+construction and upstream I/O. A thread-spawn request may run a quota probe beforehand — the only
+upstream I/O that can precede the rejection. Codex compacts well before this limit, so an oversized
+body indicates abnormal duplication — for example a chained continuation that resends the full
+conversation to a stateless provider. Compact the conversation or start a new thread and retry; the
+rejected request is never forwarded upstream.
 
 ### JSON and SSE output
 

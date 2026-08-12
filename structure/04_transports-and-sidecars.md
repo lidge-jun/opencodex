@@ -72,9 +72,11 @@ schemas are all counted, without materializing a second copy of the request body
 also count the multi-agent guidance that route normalization would inject (the v1 proactive text,
 or the v2 injectionPrompt with resolved model/effort/roster/fallback placeholders), and input size
 is re-validated once normalization has injected the actual guidance — so the `413` lands before
-authentication, adapter construction, or model-serving upstream I/O. The thread-spawn quota probe
-may still run first: it is upstream I/O that happens when guidance is unavailable (or the actual
-effort roster exceeds the pre-quota estimate) and the request has not been rejected yet.
+adapter construction or model-serving upstream I/O. For HTTP requests it also lands before
+authentication; WebSocket frames have already passed handshake authentication and origin admission,
+so the guard runs before per-turn adapter construction and upstream I/O. The thread-spawn quota
+probe may still run first: it is upstream I/O that happens when guidance is unavailable (or the
+actual effort roster exceeds the pre-quota estimate) and the request has not been rejected yet.
 
 [Decision Log]
 - 목적과 의도: Stop chained-turn replay from compounding stored history and refuse oversized Responses input before upstream I/O.

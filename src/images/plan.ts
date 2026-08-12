@@ -40,11 +40,11 @@ export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | und
   return apiKey || undefined;
 }
 
-export async function planImageBridge(
+export function planImageBridgeSync(
   config: OcxConfig,
   parsed: OcxParsedRequest,
   routedProvider: OcxProviderConfig,
-): Promise<ImageBridgePlan | undefined> {
+): ImageBridgePlan | undefined {
   if (config.images?.bridgeEnabled !== true) return undefined;
   if (!parsed._imageGeneration) return undefined;
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
@@ -84,6 +84,15 @@ export async function planImageBridge(
   };
 }
 
+/** Async wrapper for {@link planImageBridgeSync}; the plan body is fully synchronous. */
+export async function planImageBridge(
+  config: OcxConfig,
+  parsed: OcxParsedRequest,
+  routedProvider: OcxProviderConfig,
+): Promise<ImageBridgePlan | undefined> {
+  return planImageBridgeSync(config, parsed, routedProvider);
+}
+
 const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 
 /**
@@ -94,11 +103,11 @@ const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
  *   2. the routed provider is NOT api.openai.com (native passthrough)
  *   3. an xAI provider with a valid API key is available
  */
-export async function planVideoBridge(
+export function planVideoBridgeSync(
   config: OcxConfig,
   parsed: OcxParsedRequest,
   routedProvider: OcxProviderConfig,
-): Promise<VideoBridgePlan | undefined> {
+): VideoBridgePlan | undefined {
   if (config.images?.videoBridgeEnabled !== true) return undefined;
   const toolNames = new Set<string>();
   toolNames.add(VIDEO_GEN_TOOL_NAME);
@@ -140,4 +149,13 @@ export async function planVideoBridge(
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(artifactsKeepCount !== undefined ? { artifactsKeepCount } : {}),
   };
+}
+
+/** Async wrapper for {@link planVideoBridgeSync}; the plan body is fully synchronous. */
+export async function planVideoBridge(
+  config: OcxConfig,
+  parsed: OcxParsedRequest,
+  routedProvider: OcxProviderConfig,
+): Promise<VideoBridgePlan | undefined> {
+  return planVideoBridgeSync(config, parsed, routedProvider);
 }

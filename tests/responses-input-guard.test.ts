@@ -334,6 +334,139 @@ describe("responses input-size guard", () => {
     expect(upstreamCalls).toBe(0);
   });
 
+  test("enforces a limit supplied only by provider-wide contextWindow metadata", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // No per-model modelContextWindows/modelMaxInputTokens maps: the guard must resolve
+    // the provider-wide contextWindow through the shared route-capability chain.
+    const config = {
+      port: 0,
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.deepseek.com",
+          responsesPath: "/responses",
+          authMode: "key",
+          apiKey: "sk-test",
+          models: ["deepseek-v4-flash"],
+          contextWindow: 1_000_000,
+        },
+      },
+    } as OcxConfig;
+    const res = await postResponses(config, {
+      model: "deepseek/deepseek-v4-flash",
+      input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(4_200_000) }] }],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("counts non-text image content against the window", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // Image parts carry base64 data in the adapter-bound request; a short text message
+    // must not hide an oversized image from the guard.
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: "look" },
+            { type: "input_image", image_url: `data:image/png;base64,${"a".repeat(4_200_000)}` },
+          ],
+        },
+      ],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("counts the structured-output schema against the window", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      text: {
+        format: {
+          type: "json_schema",
+          name: "big",
+          schema: {
+            type: "object",
+            properties: { payload: { type: "string", description: "a".repeat(4_200_000) } },
+          },
+        },
+      },
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("rejects after the routed compaction prompt is added, before any upstream call", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // The pre-auth guards pass (the compaction_trigger item is dropped from messages),
+    // but normalization is followed by the routed compaction prompt (~425 chars); only
+    // the final pre-construction guard can catch the resulting over-limit request.
+    const LIMIT = 1_000_000;
+    const inputTokens = LIMIT - 100;
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [
+        { type: "compaction_trigger" },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1),
+            },
+          ],
+        },
+      ],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
   test("counts a deeply nested tool schema without overflowing the call stack", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {

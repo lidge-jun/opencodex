@@ -52,6 +52,7 @@ import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { estimateTokens } from "../../lib/token-estimate";
 import { walkJsonTree } from "../../lib/json-walk";
+import { candidateCapabilityEvidence } from "../../routing/capability";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
@@ -76,7 +77,7 @@ import {
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
-import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
+import { buildImageTool, buildVideoTool, planImageBridge, planImageBridgeSync, planVideoBridge, planVideoBridgeSync, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
@@ -1623,37 +1624,52 @@ async function handleResponsesInner(
   }
 
   /**
-   * Input-size guard: refuse to forward an input that exceeds the model's effective input
-   * limit (per-model maximum input, falling back to the advertised context window). The
-   * client compacts well before this limit, so an oversized body means abnormal duplication
-   * (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M). Forwarding
-   * it on Windows balloons bun RSS and can native-crash the whole proxy (upstream Bun memory
-   * bug, issue #314), taking every active thread down at once. Fail one request cleanly
-   * instead. Reuse the model/CJK-aware estimate that already drives usage and compact
-   * decisions; summing parts avoids materializing another copy of a multi-megabyte request.
-   */
-  /**
    * Reject a request whose estimated input exceeds the FINAL routed model's effective
-   * limit (modelMaxInputTokens first, then modelContextWindows). `estimateGuidance`
-   * additionally counts the multi-agent guidance that route normalization will inject,
-   * so a pre-quota check cannot let a doomed near-limit request perform upstream quota
-   * I/O first. Only deterministic guidance is counted: the v1 proactive text for
-   * max/ultra effort, and the v2 injectionPrompt with RESOLVED placeholder values
-   * ({{model}}/{{effort}}/{{roster}}/{{fallback}}), using configured candidates as a
-   * safe upper bound for the catalog-dependent parts. The post-normalization
-   * re-validation below re-measures the ACTUAL injected text.
+   * limit: per-model `modelMaxInputTokens` first, then the context window resolved through
+   * the shared route-capability chain (provider `modelContextWindows`, provider-wide
+   * `contextWindow`, provider registry, cached Codex catalog, native metadata, and provider
+   * caps), so a limit advertised through ANY of those sources is enforced. The client
+   * compacts well before this limit, so an oversized body means abnormal duplication
+   * (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M, ballooning
+   * bun RSS and native-crashing the proxy on Windows, issue #314). `estimateGuidance`
+   * additionally counts the multi-agent guidance that route normalization will inject, so
+   * a pre-quota check cannot let a doomed near-limit request perform upstream quota I/O
+   * first (deterministic parts only: the v1 proactive text, and the v2 injectionPrompt with
+   * resolved placeholder values, using configured candidates as a safe upper bound for the
+   * catalog-dependent parts). `extraText` adds a pre-computed projection of later
+   * prompt-bearing mutations (bridge tool injections) for the final pre-construction guard.
    */
   const inputGuardFor = (
     candidateRoute: typeof route,
-    options: { estimateGuidance?: boolean } = {},
+    options: { estimateGuidance?: boolean; extraText?: string } = {},
   ): Response | undefined => {
     const effectiveLimit =
       candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
-      ?? candidateRoute.provider.modelContextWindows?.[candidateRoute.modelId];
+      ?? candidateCapabilityEvidence(config, candidateRoute.providerName, candidateRoute.modelId).contextWindow;
     if (typeof effectiveLimit !== "number" || effectiveLimit <= 0) return undefined;
     let estimatedInputTokens = 0;
     const countText = (text: string) => {
       estimatedInputTokens += estimateTokens(text, candidateRoute.modelId);
+    };
+    /**
+     * Estimate a JSON payload structurally instead of serializing a full copy: the walk
+     * stops as soon as the running estimate crosses the effective limit, so an oversized
+     * schema never materializes as one giant string before the 413. Traversal is the
+     * shared read-only walker (iterative frames, lazy keys), so the walk keeps O(depth)
+     * memory instead of materializing sibling lists or key arrays for the whole payload.
+     */
+    const countJsonTokens = (value: unknown): void => {
+      walkJsonTree(value, {
+        isDone: () => estimatedInputTokens > effectiveLimit,
+        onValue: (current) => {
+          if (typeof current === "string") {
+            countText(current);
+          } else if (typeof current === "number" || typeof current === "boolean") {
+            countText(String(current));
+          }
+        },
+        onObjectKey: (key) => countText(key),
+      });
     };
     if (options.estimateGuidance) {
       const surface = collabSurface(parsed);
@@ -1686,15 +1702,22 @@ async function handleResponsesInner(
         // V2_GUIDANCE_CHAR_BUDGET; the post-normalization guard accounts for it exactly.
       }
     }
+    if (options.extraText !== undefined && options.extraText.length > 0) {
+      countText(options.extraText);
+    }
     for (const msg of parsed.context.messages) {
       const content = msg.content;
       if (typeof content === "string") {
         countText(content);
       } else if (Array.isArray(content)) {
         for (const part of content) {
-          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-            countText((part as { text: string }).text);
-          }
+          if (!part || typeof part !== "object") continue;
+          // Text parts are counted directly; non-text parts (images carrying base64 data,
+          // thinking blocks, tool-call arguments) are counted structurally so the estimate
+          // covers the whole adapter-bound message.
+          const text = (part as { text?: unknown }).text;
+          if (typeof text === "string") countText(text);
+          else countJsonTokens(part);
         }
       }
     }
@@ -1705,31 +1728,23 @@ async function handleResponsesInner(
     for (const prompt of parsed.context.systemPrompt ?? []) {
       countText(prompt);
     }
-    /**
-     * Estimate tool schemas structurally instead of serializing a full copy: the walk
-     * stops as soon as the running estimate crosses the effective limit, so an oversized
-     * schema never materializes as one giant string before the 413. Traversal is
-     * the shared read-only walker (iterative frames, lazy keys), so the walk keeps
-     * O(depth) memory instead of materializing sibling lists or key arrays for the
-     * whole payload.
-     */
-    const countJsonTokens = (value: unknown): void => {
-      walkJsonTree(value, {
-        isDone: () => estimatedInputTokens > effectiveLimit,
-        onValue: (current) => {
-          if (typeof current === "string") {
-            countText(current);
-          } else if (typeof current === "number" || typeof current === "boolean") {
-            countText(String(current));
-          }
-        },
-        onObjectKey: (key) => countText(key),
-      });
-    };
     for (const tool of parsed.context.tools ?? []) {
-      countText(tool.name);
-      countText(tool.description);
-      countJsonTokens(tool.parameters);
+      // Count the whole tool entry (name, description, parameter schema, flags, and any
+      // loose or hosted extra fields) so a short-named tool cannot smuggle a large schema
+      // or hosted configuration past the guard.
+      countJsonTokens(tool);
+    }
+    // Structured-output schemas (text.format) and stashed hosted tool configs also ride the
+    // adapter-bound request; count them so a large response schema or hosted-tool
+    // configuration cannot slip past the guard.
+    if (parsed.options.textFormat !== undefined) {
+      countJsonTokens(parsed.options.textFormat);
+    }
+    if (parsed._webSearch !== undefined) {
+      countJsonTokens(parsed._webSearch);
+    }
+    if (parsed._imageGeneration?.originalTool !== undefined) {
+      countJsonTokens(parsed._imageGeneration.originalTool);
     }
     if (estimatedInputTokens > effectiveLimit) {
       return Response.json(
@@ -2309,6 +2324,31 @@ async function handleResponsesInner(
     }
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
+
+  // FINAL input-size guard: describeImagesInPlace (vision sidecar) and the routed
+  // compaction prompt already mutated the parsed context, and the image/video/web-search
+  // bridge tool injections happen later — all AFTER the pre-auth guard. Project the
+  // deterministic additions and re-validate before adapter construction or upstream I/O
+  // (auth has already happened; this is the last rejection point before any provider call).
+  let projectedBridgeToolText = "";
+  const passthroughAdapter = "passthrough" in adapter && adapter.passthrough;
+  if (!routedCompaction && !passthroughAdapter) {
+    const finalWsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
+    const finalImgPlan = planImageBridgeSync(config, parsed, route.provider);
+    const finalVidPlan = planVideoBridgeSync(config, parsed, route.provider);
+    const webSearchActive = !!finalWsPlan && !adapter.runTurn;
+    if (webSearchActive) {
+      projectedBridgeToolText += JSON.stringify(buildWebSearchTool());
+    }
+    // The media bridge injects only on streaming requests and only when web search does
+    // not take priority for this turn.
+    if (parsed.stream && (finalImgPlan || finalVidPlan) && (!finalWsPlan || adapter.runTurn)) {
+      if (finalImgPlan) projectedBridgeToolText += JSON.stringify(buildImageTool());
+      if (finalVidPlan) projectedBridgeToolText += JSON.stringify(buildVideoTool());
+    }
+  }
+  const finalAdmissionGuard = inputGuardFor(route, { extraText: projectedBridgeToolText });
+  if (finalAdmissionGuard) return finalAdmissionGuard;
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
