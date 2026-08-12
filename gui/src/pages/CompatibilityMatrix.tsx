@@ -205,6 +205,17 @@ function DetailPane({
               </dl>
             </section>
           )}
+          {detail.community && detail.community.evidence.length > 0 && (
+            <section className="lab-detail-section" data-testid="lab-community-evidence">
+              <h4>{labSupplement(locale, "community.title")}</h4>
+              <p className="muted">{labSupplement(locale, "community.notLocalVerdict")}</p>
+              <dl className="lab-detail-meta">
+                <div><dt>{labSupplement(locale, "community.bundles")}</dt><dd>{detail.community.evidence.length}</dd></div>
+                <div><dt>{labSupplement(locale, "community.activeRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.activeRecordCount, 0)}</dd></div>
+                <div><dt>{labSupplement(locale, "community.revokedRecords")}</dt><dd>{detail.community.evidence.reduce((total, row) => total + row.revokedRecordCount, 0)}</dd></div>
+              </dl>
+            </section>
+          )}
           {detail.observations.length > 0 && (
             <section className="lab-detail-section">
               <h4>{t("lab.detailObservations")}</h4>
