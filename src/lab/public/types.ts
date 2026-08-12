@@ -1,6 +1,5 @@
 import type { CompatibilityVerdict, EvidenceLayer } from "../constants";
 
-export const PUBLIC_EVIDENCE_RECORD_SCHEMA_VERSION = "public_evidence_record_v1" as const;
 export const PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION = "public_evidence_bundle_v1" as const;
 export const PUBLIC_EXPORT_POLICY_VERSION = "public_export_policy_v1" as const;
 
@@ -68,7 +67,6 @@ export interface PublicIncidentRefV1 {
 }
 
 export interface PublicEvidenceRecordV1 {
-  schemaVersion: typeof PUBLIC_EVIDENCE_RECORD_SCHEMA_VERSION;
   recordId: string;
   subjectId: string;
   evidenceLayer: EvidenceLayer;
