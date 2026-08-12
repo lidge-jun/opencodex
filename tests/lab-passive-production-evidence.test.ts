@@ -3,6 +3,7 @@ import {
   normalizeUsageEntryForTest,
   type PersistedUsageEntry,
 } from "../src/usage/log";
+import { inboundProtocolForWire } from "../src/routing/compatibility/subject";
 
 function usageEntryWithAttempt(attempt: Record<string, unknown>): PersistedUsageEntry {
   return {
@@ -65,5 +66,11 @@ describe("CL-09 passive production attempt linkage", () => {
       recoveryKinds: [],
       usageStatus: "unreported",
     }]);
+  });
+
+  test("maps each production inbound wire to its canonical Lab protocol identity", () => {
+    expect(inboundProtocolForWire("responses")).toBe("openai-responses");
+    expect(inboundProtocolForWire("chat")).toBe("openai-chat");
+    expect(inboundProtocolForWire("anthropic")).toBe("anthropic-messages");
   });
 });
