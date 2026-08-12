@@ -14,6 +14,7 @@ import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
 import type { PublicEvidenceBundleV1 } from "./types";
 import { verifyPublicEvidenceBundle } from "./signature";
+import { PublicEvidenceValidationError } from "./validate";
 
 function encodedBytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -24,7 +25,17 @@ function bundlePath(bundleId: string, configDir?: string): string {
   return join(ensureLabDirs(configDir).exportDir, `${bundleId}.json`);
 }
 
+function assertLocalArtifactExportAuthority(bundle: PublicEvidenceBundleV1): void {
+  if (bundle.artifacts.length !== 0) {
+    throw new PublicEvidenceValidationError(
+      "public_artifact_authority_required",
+      "artifact bytes require reviewed public_export policy authority before local export storage",
+    );
+  }
+}
+
 export function writePublicEvidenceBundle(bundle: PublicEvidenceBundleV1, configDir?: string): string {
+  assertLocalArtifactExportAuthority(bundle);
   const verification = verifyPublicEvidenceBundle(bundle);
   if (verification.status !== "cryptographically_valid") {
     throw new Error(`public bundle verification failed: ${verification.status}`);
@@ -81,6 +92,7 @@ export function readPublicEvidenceBundle(bundleId: string, configDir?: string): 
   if (encodedBytes(body) > MAX_PUBLIC_BUNDLE_BYTES) throw new Error("public bundle exceeds 2 MiB");
   const parsed = JSON.parse(body) as PublicEvidenceBundleV1;
   if (parsed.bundleId !== bundleId) throw new Error("public export filename does not match bundle id");
+  assertLocalArtifactExportAuthority(parsed);
   const verification = verifyPublicEvidenceBundle(parsed);
   if (verification.status !== "cryptographically_valid") {
     throw new Error(`public bundle verification failed: ${verification.status}`);
