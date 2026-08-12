@@ -35,8 +35,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
   "grok-4.5": ["low", "medium", "high"],
   "grok-4.5-fast": ["low", "medium", "high"],
-  // 260812: cursor-grok-4.6-high was account-verified; low/medium/high mirror the
-  // effort ladder announced for the Cursor launch, including the parameterized Fast variant.
+  // 260812: cursor-grok-4.6-high is the only tier account-verified on the wire. low/medium are
+  // the effort ladder announced for the Cursor launch, not separately recorded wire evidence.
+  // The parameterized Fast variant is inherited from the grok-4.5 encoding, not new verification.
   "grok-4.6": ["low", "medium", "high"],
   "grok-4.6-fast": ["low", "medium", "high"],
   "gpt-5.1": ["low", "high"],

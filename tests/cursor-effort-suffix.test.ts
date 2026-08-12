@@ -13,9 +13,9 @@ const RECORDED_CURSOR_GROK_45_DISCOVERY_IDS = [
 ] as const;
 
 // Account-verified by a successful Cursor Agent run on the 2026-08-12 launch day.
+// Only cursor-grok-4.6-high was confirmed on the wire that day; low/medium are the
+// announced Cursor launch ladder, not recorded wire evidence (covered separately below).
 const RECORDED_CURSOR_GROK_46_DISCOVERY_IDS = [
-  "cursor-grok-4.6-low",
-  "cursor-grok-4.6-medium",
   "cursor-grok-4.6-high",
 ] as const;
 
@@ -142,14 +142,28 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     }
   });
 
-  test("grok-4.6 uses verified wire ids and parameterizes Fast requests", () => {
-    for (const effort of ["low", "medium", "high"] as const) {
-      const requestModelId = modelIdFor("cursor/grok-4.6", effort);
-      expect(requestModelId).toBe(`cursor-grok-4.6-${effort}`);
-      expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain(requestModelId);
-    }
+  test("cursor-grok-4.6-high matches the account-verified wire id", () => {
+    const requestModelId = modelIdFor("cursor/grok-4.6", "high");
+    expect(requestModelId).toBe("cursor-grok-4.6-high");
+    expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain(requestModelId);
+  });
+
+  // Announced Cursor launch ladder, not recorded wire evidence: only -high was observed on the
+  // wire (see RECORDED_CURSOR_GROK_46_DISCOVERY_IDS). This pins the request mapping for the
+  // low/medium tiers as announced, without claiming they were captured from a live run.
+  test("grok-4.6 maps the announced low/medium/high effort ladder", () => {
+    expect(modelIdFor("cursor/grok-4.6", "low")).toBe("cursor-grok-4.6-low");
+    expect(modelIdFor("cursor/grok-4.6", "medium")).toBe("cursor-grok-4.6-medium");
     expect(modelIdFor("cursor/grok-4.6", "xhigh")).toBe("cursor-grok-4.6-high");
     expect(modelIdFor("cursor/grok-4.6")).toBe("cursor-grok-4.6-high");
+    expect(cursorModelEffortLadder("grok-4.6")).toEqual(["low", "medium", "high"]);
+    expect(cursorModelEffortLadder("grok-4.6-fast")).toEqual(["low", "medium", "high"]);
+  });
+
+  // Inherited Fast request encoding: grok-4.6-fast parameterizes exactly like grok-4.5-fast
+  // (base id + effort/fast requested_model parameters) rather than a flat suffixed id. This
+  // mirrors the sibling grok-4.5 behavior; it is not separately verified wire evidence.
+  test("grok-4.6-fast inherits the parameterized Fast encoding", () => {
     expect(selectionFor("cursor/grok-4.6-fast", "low")).toEqual({
       modelId: "grok-4.6",
       parameters: [{ id: "effort", value: "low" }, { id: "fast", value: "true" }],
@@ -166,8 +180,6 @@ describe("Cursor per-model reasoning-effort suffix", () => {
       modelId: "grok-4.6",
       parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
     });
-    expect(cursorModelEffortLadder("grok-4.6")).toEqual(["low", "medium", "high"]);
-    expect(cursorModelEffortLadder("grok-4.6-fast")).toEqual(["low", "medium", "high"]);
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {
