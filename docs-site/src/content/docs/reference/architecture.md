@@ -55,8 +55,8 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 2. `server/responses/core.ts` decompresses and parses JSON, expands locally remembered
    `previous_response_id` input when available — preserving a full-history resend instead of
    prepending the stored history again — then calls `responses/parser.ts`; input estimated to
-   exceed the routed model's context window is rejected with `413 request_too_large` before any
-   upstream I/O.
+   exceed the routed model's effective input limit is rejected with `413 request_too_large`
+   before any upstream I/O.
 3. `router.ts` resolves a bare or `provider/model` id. The server then resolves Codex account
    affinity, refreshes provider OAuth when needed, and applies the selected credential to the route.
 4. Before the main call, `vision/` describes images for models in `noVisionModels`; if no safe

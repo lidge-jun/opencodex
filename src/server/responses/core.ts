@@ -1610,8 +1610,74 @@ async function handleResponsesInner(
     return formatErrorResponse(404, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
 
+  // Input-size guard: refuse to forward an input that exceeds the model's effective input
+  // limit (per-model maximum input, falling back to the advertised context window). The
+  // client compacts well before this limit, so an oversized body means abnormal duplication
+  // (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M). Forwarding
+  // it on Windows balloons bun RSS and can native-crash the whole proxy (upstream Bun memory
+  // bug, issue #314), taking every active thread down at once. Fail one request cleanly
+  // instead. Reuse the model/CJK-aware estimate that already drives usage and compact
+  // decisions; summing parts avoids materializing another copy of a multi-megabyte request.
+  const inputGuard = (): Response | undefined => {
+    const effectiveLimit =
+      route.provider.modelMaxInputTokens?.[route.modelId]
+      ?? route.provider.modelContextWindows?.[route.modelId];
+    if (typeof effectiveLimit !== "number" || effectiveLimit <= 0) return undefined;
+    let estimatedInputTokens = 0;
+    const countText = (text: string) => {
+      estimatedInputTokens += estimateTokens(text, route.modelId);
+    };
+    for (const msg of parsed.context.messages) {
+      const content = msg.content;
+      if (typeof content === "string") {
+        countText(content);
+      } else if (Array.isArray(content)) {
+        for (const part of content) {
+          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+            countText((part as { text: string }).text);
+          }
+        }
+      }
+    }
+    // The selected adapter also forwards prompt-bearing fields that the parser moved out of
+    // `input` (instructions -> systemPrompt) or that never live in messages at all (tool
+    // names, descriptions, and serialized parameter schemas). Count them so a short-message
+    // request cannot smuggle an oversized prompt past the guard.
+    for (const prompt of parsed.context.systemPrompt ?? []) {
+      countText(prompt);
+    }
+    for (const tool of parsed.context.tools ?? []) {
+      countText(tool.name);
+      countText(tool.description);
+      countText(JSON.stringify(tool.parameters) ?? "");
+    }
+    if (estimatedInputTokens > effectiveLimit) {
+      return Response.json(
+        {
+          error: {
+            type: "request_too_large",
+            code: "input_context_window_exceeded",
+            message: `input (≈${estimatedInputTokens} tokens) exceeds ${route.modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
+          },
+        },
+        { status: 413 },
+      );
+    }
+    return undefined;
+  };
+
   const hasUnexpandedPreviousResponse = !!parsed.previousResponseId
     && parsed._previousResponseInputExpanded !== true;
+  // Run admission before thread-spawn quota polling: an oversized request must not perform
+  // upstream I/O (maybePrimeSubagentQuota) before it receives the clean 413. The canonical
+  // OpenAI continuation-miss path is excluded so its existing 400 keeps precedence; that
+  // path already skips quota polling.
+  const initialInputGuard = hasUnexpandedPreviousResponse
+    && isCanonicalOpenAiForwardProvider(route.provider)
+    ? undefined
+    : inputGuard();
+  if (initialInputGuard) return initialInputGuard;
+
   // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
   // also fail closed without polling quota upstream. Cached fallback state can still select a
   // provider with native continuation support below.
@@ -1809,52 +1875,10 @@ async function handleResponsesInner(
     );
   }
 
-  // Input-size guard: refuse to forward an input that exceeds the model's advertised context
-  // window. The client compacts well before this limit, so an oversized body means abnormal
-  // duplication (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M).
-  // Forwarding it on Windows balloons bun RSS and can native-crash the whole proxy (upstream
-  // Bun memory bug, issue #314), taking every active thread down at once. Fail one request
-  // cleanly instead. Reuse the model/CJK-aware estimate that already drives usage and compact
-  // decisions; summing parts avoids materializing another copy of a multi-megabyte request.
-  const advertisedWindow = route.provider.modelContextWindows?.[route.modelId];
-  if (typeof advertisedWindow === "number" && advertisedWindow > 0) {
-    let estimatedInputTokens = 0;
-    const countText = (text: string) => {
-      estimatedInputTokens += estimateTokens(text, route.modelId);
-    };
-    for (const msg of parsed.context.messages) {
-      const content = msg.content;
-      if (typeof content === "string") {
-        countText(content);
-      } else if (Array.isArray(content)) {
-        for (const part of content) {
-          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-            countText((part as { text: string }).text);
-          }
-        }
-      }
-    }
-    // The selected adapter also forwards prompt-bearing fields that the parser moved out of
-    // `input` (instructions -> systemPrompt) or that never live in messages at all (tool
-    // names, descriptions, and serialized parameter schemas). Count them so a short-message
-    // request cannot smuggle an oversized prompt past the guard.
-    for (const prompt of parsed.context.systemPrompt ?? []) {
-      countText(prompt);
-    }
-    for (const tool of parsed.context.tools ?? []) {
-      countText(tool.name);
-      countText(tool.description);
-      countText(JSON.stringify(tool.parameters) ?? "");
-    }
-    if (estimatedInputTokens > advertisedWindow) {
-      return formatErrorResponse(
-        413,
-        "request_too_large",
-        `input (≈${estimatedInputTokens} tokens) exceeds ${route.modelId} context window (${advertisedWindow} tokens); refusing to forward`,
-        { code: "input_context_window_exceeded" },
-      );
-    }
-  }
+  // Input-size guard, final route: subagent fallback may have settled a different model or
+  // provider, so re-validate before auth, adapter construction, or upstream I/O.
+  const finalInputGuard = inputGuard();
+  if (finalInputGuard) return finalInputGuard;
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
   // transport-neutral upstream-streaming policy below may force a bounded JSON

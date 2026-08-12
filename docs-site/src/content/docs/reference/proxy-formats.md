@@ -55,11 +55,13 @@ non-empty `model`. `input` may be a string or an array of Responses items.
 Unknown item types are accepted as loose typed items for forward compatibility. Translated adapters
 handle only the item types they recognize, and may reject a feature their provider cannot represent.
 
-Requests whose parsed `input` is estimated to exceed the routed model's advertised context window are
-rejected with `413 request_too_large` (code `input_context_window_exceeded`) before any upstream I/O.
-Codex compacts well before this limit, so an oversized body indicates abnormal duplication — for
-example a chained continuation that resends the full conversation to a stateless provider. Compact
-the conversation or start a new thread and retry; the rejected request is never forwarded upstream.
+Requests whose parsed `input` is estimated — using an approximate, model-aware token estimate over
+message text, `instructions`, and tool definitions — to exceed the routed model's effective input
+limit (per-model maximum input, falling back to the advertised context window) are rejected with
+`413 request_too_large` (code `input_context_window_exceeded`) before any upstream I/O. Codex
+compacts well before this limit, so an oversized body indicates abnormal duplication — for example a
+chained continuation that resends the full conversation to a stateless provider. Compact the
+conversation or start a new thread and retry; the rejected request is never forwarded upstream.
 
 ### JSON and SSE output
 
@@ -284,7 +286,7 @@ Errors use the client dialect's envelope where needed, but these status/code mea
 | 503 | `combo_unavailable` | Every target in the selected combo is unavailable, in cooldown, disabled, or otherwise ineligible |
 | 400 | `unreadable_encrypted_agent_task` | An encrypted v2 worker task has no eligible native ChatGPT target that can consume it |
 | 426 | `upgrade_required` | The Responses WebSocket transport is disabled or the upgrade failed; use HTTP |
-| 413 | `request_too_large` | Parsed `input` exceeds the routed model's advertised context window (code `input_context_window_exceeded`); rejected before any upstream I/O |
+| 413 | `request_too_large` | Estimated parsed `input` exceeds the routed model's effective input limit (code `input_context_window_exceeded`); rejected before any upstream I/O |
 
 Anthropic-origin failures are rendered in Anthropic's error envelope, so the origin rejection is a
 403 `permission_error` on that dialect rather than the OpenAI-style `origin_rejected` body.

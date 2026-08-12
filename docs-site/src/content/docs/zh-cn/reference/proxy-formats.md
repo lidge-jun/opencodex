@@ -52,10 +52,12 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 未知项目类型会作为宽松的类型化项被接受，以保证前向兼容。已翻译的适配器只处理它们能识别的项目类型，并且可能会拒绝其提供方无法表示的特性。
 
-如果解析后的 `input` 估计会超过目标模型声明的上下文窗口，代理会在任何上游 I/O 之前以
-`413 request_too_large`（code `input_context_window_exceeded`）拒绝该请求。Codex 会远早于该
-限制进行压缩，因此过大的请求体意味着异常重复——例如链式续接把完整对话重新发送给了无状态
-提供方。请压缩对话或新建线程后重试；被拒绝的请求永远不会转发到上游。
+如果解析后的 `input` 估计会超过目标模型的有效输入上限（按模型配置的最大输入，缺失时回退到
+声明的上下文窗口）——这是一个基于模型、对消息文本、`instructions` 和工具定义的近似 token
+估算——代理会在任何上游 I/O 之前以 `413 request_too_large`（code
+`input_context_window_exceeded`）拒绝该请求。Codex 会远早于该限制进行压缩，因此过大的请求体
+意味着异常重复——例如链式续接把完整对话重新发送给了无状态提供方。请压缩对话或新建线程后
+重试；被拒绝的请求永远不会转发到上游。
 
 ### JSON 和 SSE 输出
 
@@ -237,7 +239,7 @@ Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex D
 | 503 | `combo_unavailable` | 所选 combo 中的所有目标都不可用、处于冷却、已禁用或以其他方式不具备资格 |
 | 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可消费它的合格原生 ChatGPT 目标 |
 | 426 | `upgrade_required` | Responses WebSocket 传输被禁用，或升级失败；请改用 HTTP |
-| 413 | `request_too_large` | 解析后的 `input` 超过目标模型声明的上下文窗口（code `input_context_window_exceeded`）；在任何上游 I/O 之前被拒绝 |
+| 413 | `request_too_large` | 估算的 `input` 超过目标模型的有效输入上限（code `input_context_window_exceeded`）；在任何上游 I/O 之前被拒绝 |
 
 Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方言中的 origin 拒绝会是
 403 `permission_error`，而不是 OpenAI 风格的 `origin_rejected` body。

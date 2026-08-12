@@ -53,7 +53,7 @@ src/
    以及 `/v1/responses` 上可选的 WebSocket upgrade。
 2. `server/responses/core.ts` 解压并解析 JSON；如果本地记住了对应输入，则展开
    `previous_response_id`（完整重发的历史会原样保留，不再重复前置已存储的历史），随后调用
-   `responses/parser.ts`；估算超过目标模型上下文窗口的输入会在任何上游 I/O 之前以
+   `responses/parser.ts`；估算超过目标模型有效输入上限的输入会在任何上游 I/O 之前以
    `413 request_too_large` 被拒绝。
 3. `router.ts` 解析 bare id 或 `provider/model` id。server 随后确定 Codex account affinity，
    必要时刷新 provider OAuth，并把选中的 credential 应用到 route。

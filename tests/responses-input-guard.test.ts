@@ -36,7 +36,7 @@ afterEach(() => {
   else process.env.CODEX_HOME = previousCodexHome;
 });
 
-function deepseekConfig(): OcxConfig {
+function deepseekConfig(options: { contextWindow?: number; maxInput?: number } = {}): OcxConfig {
   return {
     port: 0,
     defaultProvider: "deepseek",
@@ -48,22 +48,41 @@ function deepseekConfig(): OcxConfig {
         authMode: "key",
         apiKey: "sk-test",
         models: ["deepseek-v4-flash"],
-        modelContextWindows: { "deepseek-v4-flash": 1_000_000 },
+        ...(options.maxInput !== undefined
+          ? { modelMaxInputTokens: { "deepseek-v4-flash": options.maxInput } }
+          : {}),
+        ...(options.contextWindow !== undefined
+          ? { modelContextWindows: { "deepseek-v4-flash": options.contextWindow } }
+          : { modelContextWindows: { "deepseek-v4-flash": 1_000_000 } }),
       },
     },
   } as OcxConfig;
 }
 
-async function postResponses(config: OcxConfig, body: Record<string, unknown>): Promise<Response> {
+async function postResponses(
+  config: OcxConfig,
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
   return handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...extraHeaders },
       body: JSON.stringify(body),
     }),
     config,
     { model: "", provider: "" } as RequestLogContext,
   );
+}
+
+async function expectOversizedRejection(res: Response): Promise<void> {
+  expect(res.status).toBe(413);
+  expect(await res.json()).toMatchObject({
+    error: {
+      type: "request_too_large",
+      code: "input_context_window_exceeded",
+    },
+  });
 }
 
 describe("responses input-size guard", () => {
@@ -85,7 +104,54 @@ describe("responses input-size guard", () => {
       model: "deepseek/deepseek-v4-flash",
       input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
     });
-    expect(res.status).toBe(413);
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("rejects input above the per-model maximum-input limit even when below the context window", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // OpenAI-style routes advertise 1,050,000 context but cap input at 922,000; an estimate
+    // between the two must be rejected. 3.4M chars ≈ 971k tokens at 3.5 chars/token.
+    const res = await postResponses(deepseekConfig({ maxInput: 922_000, contextWindow: 1_050_000 }), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(3_400_000) }] }],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("rejects an oversized thread-spawn request before any quota polling", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    const bigText = "a".repeat(4_200_000);
+    const res = await postResponses(
+      deepseekConfig(),
+      {
+        model: "deepseek/deepseek-v4-flash",
+        input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+      },
+      { "x-openai-subagent": "collab_spawn" },
+    );
+    await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
   });
 
@@ -109,7 +175,7 @@ describe("responses input-size guard", () => {
       instructions: bigInstructions,
       input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
     });
-    expect(res.status).toBe(413);
+    await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
   });
 
@@ -142,7 +208,7 @@ describe("responses input-size guard", () => {
       ],
       input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
     });
-    expect(res.status).toBe(413);
+    await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
   });
 
@@ -163,5 +229,6 @@ describe("responses input-size guard", () => {
       input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
     });
     expect(upstreamCalls).toBe(1);
+    expect(res.status).toBe(200);
   });
 });
