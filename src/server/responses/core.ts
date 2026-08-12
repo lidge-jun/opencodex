@@ -177,6 +177,10 @@ import {
   relayWithAbort,
   sanitizePassthroughHeaders,
 } from "../relay";
+import {
+  agentTaskRecoveryConfig,
+  recoverEncryptedAgentTask,
+} from "./agent-task-recovery";
 import { relaySseEagerBounded } from "../relay-eager";
 import {
   relayResponsesSseWithTerminalRepair,
@@ -1484,6 +1488,7 @@ async function handleResponsesInner(
   // so an omitted value means a genuine Responses inbound.
   const inboundWire = options.inboundWire ?? "responses";
   const translatorBudget = options.translatorBudget;
+  const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
     body = await readJsonRequestBody(req, translatorBudget);
@@ -1494,7 +1499,7 @@ async function handleResponsesInner(
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     return handleComboResponses(req, body, comboId, config, logCtx, options);
   }
-  const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
+  let unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
   );
   const originalBody = body;
@@ -1622,6 +1627,7 @@ async function handleResponsesInner(
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
   let subagentQuotaFailureModel = parsed.modelId;
+  const parentThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() ?? null;
 
   try {
     if (
@@ -1682,6 +1688,59 @@ async function handleResponsesInner(
   } finally {
     previewSelectionAdmission?.release();
   }
+
+  // Native fallback can consume ciphertext, so recover only after final route selection.
+  if (
+    inboundWire === "responses"
+    &&
+    threadSpawn
+    && unreadableEncryptedAgentTask
+    && agentTaskRecovery
+    && !isCanonicalOpenAiForwardProvider(route.provider)
+    && !options.comboAttempt
+  ) {
+    let recovered = false;
+    try {
+      recovered = await recoverEncryptedAgentTask(
+        req,
+        (body as { input?: unknown } | undefined)?.input,
+        agentTaskRecovery,
+        config,
+        { parentThreadId, abortSignal: options.abortSignal },
+      );
+    } catch {
+      recovered = false;
+    }
+    if (recovered) {
+      unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
+        (body as { input?: unknown } | undefined)?.input,
+      );
+      if (!unreadableEncryptedAgentTask) {
+        try {
+          const reparsed = parseRequest(body);
+          const kept: Array<keyof OcxParsedRequest> = [
+            "_previousResponseInputExpanded",
+            "_providerContinuation",
+            "_cursorConversationId",
+            "_clientThreadId",
+            "_reasoningReplayScope",
+            "_cursorIsolateConversation",
+          ];
+          for (const key of kept) {
+            if (parsed[key] !== undefined) {
+              (reparsed as unknown as Record<string, unknown>)[key] = parsed[key];
+            }
+          }
+          parsed = reparsed;
+          toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+        } catch {
+          unreadableEncryptedAgentTask = true;
+        }
+      }
+    }
+  }
+
+  if (options.abortSignal?.aborted) return clientCancelledResponse();
 
   // Encrypted child tasks may only reach the canonical native backend. This check
   // runs against the FINAL route so native-only fallback can rescue a routed primary.

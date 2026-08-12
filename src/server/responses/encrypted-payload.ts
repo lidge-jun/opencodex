@@ -145,6 +145,10 @@ function isStructurallyValidFernetToken(token: string): boolean {
   return ciphertextLength >= 16 && ciphertextLength % 16 === 0;
 }
 
+export function structurallyValidFernetTokens(payload: string): string[] {
+  return fernetTokenRuns(payload).map(run => run.token);
+}
+
 /** Maximal, boundary-delimited and structurally valid Fernet runs embedded in a slot. */
 function fernetTokenRuns(payload: string): FernetTokenRun[] {
   const runs: FernetTokenRun[] = [];
@@ -305,4 +309,3 @@ export function sanitizeEncryptedContentInPlace(input: unknown): number {
   visit(input);
   return rewritten;
 }
-

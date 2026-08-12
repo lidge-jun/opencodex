@@ -481,6 +481,11 @@ export function consumeStartupCacheInvalidationWrite(): boolean {
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
+  if (config.agentTaskRecovery?.enabled === true) {
+    console.warn("⚠️  Experimental encrypted V2 task recovery is enabled.");
+    console.warn("   Each scoped cache miss sends an additional authenticated request to ChatGPT and may consume quota or add latency.");
+    console.warn("   Recovered model output is retained only in a bounded in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
+  }
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
   assertServerAuthConfig(config);

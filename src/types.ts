@@ -777,6 +777,16 @@ export interface OcxConfig {
    * - "v2": force ALL models to v2 surface (override upstream pins)
    */
   multiAgentMode?: "v1" | "default" | "v2";
+  /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
+  agentTaskRecovery?: {
+    enabled?: boolean;
+    /** ChatGPT model used by the recovery request. Default: gpt-5.6-sol. */
+    model?: string;
+    /** Recovery request timeout in milliseconds. Default: 45000. */
+    timeoutMs?: number;
+    /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
+    cacheEntries?: number;
+  };
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */

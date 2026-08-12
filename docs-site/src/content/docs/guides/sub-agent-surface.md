@@ -131,6 +131,17 @@ Recovery options are to select a native ChatGPT child, add a native ChatGPT targ
 v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `agent_message`
 content when you control the caller.
 
+An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-
+to-routed shape through an additional authenticated request to ChatGPT before provider dispatch.
+It consumes quota, adds latency, briefly retains recovered plaintext in a bounded in-memory cache,
+and depends on undocumented ChatGPT backend behavior. Because a model returns the recovered text,
+byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy callers and preserves
+`unreadable_encrypted_agent_task` on any failure. See
+[Agent configuration: Encrypted v2 task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery)
+for the full trust boundary and configuration.
+Combo routing remains unchanged and continues to consider only canonical native ChatGPT targets for
+encrypted tasks.
+
 ## Changing the mode
 
 ### GUI

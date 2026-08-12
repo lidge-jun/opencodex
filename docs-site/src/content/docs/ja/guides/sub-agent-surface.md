@@ -88,6 +88,8 @@ opencodex は、空のタスクまたは読み取り不可能なタスクを転�
 
 回復オプションは、ネイティブ ChatGPT 子の選択、コンボへのネイティブ ChatGPT ターゲットの追加、異種プロバイダーの委任に v1 を使用する、または呼び出し元を制御するときにタスクをプレーンテキスト v2 `agent_message` コンテンツとして再送信することです。
 
+実験的な `agentTaskRecovery` はデフォルトで無効です。明示的に有効にすると、固定された ChatGPT エンドポイントへの追加の認証済みリクエストでこの形式を回復できますが、クォータと待ち時間が増え、非公開のバックエンド動作に依存します。失敗時は従来の `unreadable_encrypted_agent_task` を維持します。詳細は[英語版の設定リファレンス](/reference/configuration/agents/#encrypted-v2-task-recovery)を参照してください。
+
 ## モードを変更する
 
 ### GUI

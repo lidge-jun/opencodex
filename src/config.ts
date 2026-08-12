@@ -1130,6 +1130,13 @@ const clientIntegrationsSchema = z.object({
   "claude-desktop": z.boolean().optional().catch(undefined),
 }).passthrough();
 
+const agentTaskRecoverySchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.string().trim().min(1).optional(),
+  timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
+  cacheEntries: z.number().int().min(1).max(512).optional(),
+}).strict();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -1168,6 +1175,8 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // Invalid optional recovery config must not discard unrelated provider/account state.
+  agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -1903,6 +1912,20 @@ function warnDegradedUpstreamHostCircuitThreshold(rawParsed: unknown): void {
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
+function malformedAgentTaskRecoveryWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "agentTaskRecovery")) return null;
+  const result = agentTaskRecoverySchema.safeParse(raw.agentTaskRecovery);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `agentTaskRecovery${field ? `.${field}` : ""} ignored: invalid experimental recovery configuration`;
+}
+
+function warnDegradedAgentTaskRecovery(rawParsed: unknown): void {
+  const warning = malformedAgentTaskRecoveryWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
 
 function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
@@ -2005,6 +2028,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedAgentTaskRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2027,6 +2051,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedAgentTaskRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
@@ -2086,6 +2111,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (pickerWarning) warnings.push(pickerWarning);
   const hostCircuitWarning = malformedUpstreamHostCircuitThresholdWarning(rawParsed);
   if (hostCircuitWarning) warnings.push(hostCircuitWarning);
+  const recoveryWarning = malformedAgentTaskRecoveryWarning(rawParsed);
+  if (recoveryWarning) warnings.push(recoveryWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2165,6 +2192,16 @@ function upstreamHostCircuitThresholdError(value: unknown): string | null {
     && threshold >= 0
     && threshold <= UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD) return null;
   return `schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
+}
+
+function agentTaskRecoveryError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "agentTaskRecovery") || raw.agentTaskRecovery === undefined) return null;
+  const result = agentTaskRecoverySchema.safeParse(raw.agentTaskRecovery);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: agentTaskRecovery${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -2262,6 +2299,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
+    ?? agentTaskRecoveryError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
