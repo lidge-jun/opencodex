@@ -53,7 +53,6 @@ export function agentTaskRecoveryConfig(config: OcxConfig): AgentTaskRecoveryOpt
 interface AgentEnvelope {
   itemIndex: number;
   encryptedIndex: number;
-  encryptedSlot: string;
   headerText: string;
   messageType: "NEW_TASK";
   taskName: string;
@@ -88,7 +87,6 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   let taskName: string | null = null;
   let sender: string | null = null;
   let encryptedIndex = -1;
-  let encryptedSlot = "";
   let ciphertext = "";
   let encryptedPartCount = 0;
   let ciphertextCount = 0;
@@ -118,7 +116,6 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
     for (const token of structurallyValidFernetTokens(part.encrypted_content)) {
       ciphertextCount += 1;
       encryptedIndex = index;
-      encryptedSlot = part.encrypted_content;
       ciphertext = token;
     }
   }
@@ -131,6 +128,7 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
     || encryptedIndex < 0
     || encryptedPartCount !== 1
     || ciphertextCount !== 1
+    || (content[encryptedIndex] as { encrypted_content?: unknown }).encrypted_content !== ciphertext
     || Buffer.byteLength(ciphertext) > MAX_CIPHERTEXT_BYTES
   ) return null;
 
@@ -141,7 +139,6 @@ function findEnvelope(input: unknown): AgentEnvelope | null {
   return {
     itemIndex,
     encryptedIndex,
-    encryptedSlot,
     headerText,
     messageType,
     taskName,
@@ -183,13 +180,10 @@ function injectAssignment(input: unknown, envelope: AgentEnvelope, assignment: s
   if (
     !part
     || part.type !== "encrypted_content"
-    || part.encrypted_content !== envelope.encryptedSlot
+    || part.encrypted_content !== envelope.ciphertext
   ) return false;
 
-  const text = envelope.encryptedSlot === envelope.ciphertext
-    ? assignment
-    : envelope.encryptedSlot.replace(envelope.ciphertext, assignment);
-  content[envelope.encryptedIndex] = { type: "input_text", text };
+  content[envelope.encryptedIndex] = { type: "input_text", text: assignment };
   const message = item as Record<string, unknown>;
   message.type = "message";
   message.role = "user";

@@ -135,3 +135,9 @@ export function resetAgentTaskRecoveryCache(): void {
   RECOVERY_FLIGHTS.clear();
   for (const key of [...RECOVERY_CACHE.keys()]) deleteRecoveryCacheEntry(key);
 }
+
+export function agentTaskRecoveryWaiterCountForTests(): number {
+  let count = 0;
+  for (const flight of RECOVERY_FLIGHTS.values()) count += flight.waiters;
+  return count;
+}

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { warnAgentTaskRecoveryStartup } from "../src/server";
 import { resetAgentTaskRecoveryState } from "../src/server/responses/agent-task-recovery";
+import { agentTaskRecoveryWaiterCountForTests } from "../src/server/responses/agent-task-recovery-cache";
 import {
   agentMessage,
   codexHeaders,
@@ -93,6 +95,31 @@ describe("agent task recovery (opt-in, default off)", () => {
     };
 
     expect(await snapshot(routedConfig({ enabled: false }))).toEqual(await snapshot(routedConfig(null)));
+  });
+
+  test("warns at startup only for an explicit recovery opt-in without exposing credentials", () => {
+    const config = routedConfig(null);
+    const secret = "startup-secret-sentinel";
+    config.providers.xai!.apiKey = secret;
+    const originalWarn = console.warn;
+    const capture = (recovery: typeof config.agentTaskRecovery): string[] => {
+      const warnings: string[] = [];
+      config.agentTaskRecovery = recovery;
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+      warnAgentTaskRecoveryStartup(config);
+      return warnings;
+    };
+
+    try {
+      expect(capture(undefined)).toEqual([]);
+      expect(capture({ enabled: false })).toEqual([]);
+      const warnings = capture({ enabled: true });
+      expect(warnings).toHaveLength(3);
+      expect(warnings.join("\n")).toContain("Experimental encrypted V2 task recovery is enabled");
+      expect(warnings.join("\n")).not.toContain(secret);
+    } finally {
+      console.warn = originalWarn;
+    }
   });
 
   test("baseline: encrypted routed task still fails when recovery returns no assignment", async () => {
@@ -377,7 +404,10 @@ describe("agent task recovery (opt-in, default off)", () => {
 
     const first = post(routedConfig(), "xai/grok-4.5", encryptedInput(), headers);
     const second = post(routedConfig(), "xai/grok-4.5", encryptedInput(), headers);
-    await new Promise<void>(resolve => setImmediate(resolve));
+    for (let turn = 0; turn < 200 && agentTaskRecoveryWaiterCountForTests() < 2; turn += 1) {
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(agentTaskRecoveryWaiterCountForTests()).toBe(2);
     releaseRecovery?.();
     const responses = await Promise.all([first, second]);
 

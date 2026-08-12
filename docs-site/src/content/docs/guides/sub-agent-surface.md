@@ -132,7 +132,9 @@ v1 for heterogeneous-provider delegation, or resend the task as plaintext v2 `ag
 content when you control the caller.
 
 An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-
-to-routed shape through an additional authenticated request to ChatGPT before provider dispatch.
+to-routed shape through a raw Responses passthrough to the fixed ChatGPT `/responses` endpoint using
+forward-mode authentication. Only `authorization`, matching `chatgpt-account-id`, `originator`, and
+optional `openai-beta`/`user-agent` metadata are forwarded; no other caller headers cross the boundary.
 It consumes quota, adds latency, briefly retains recovered plaintext in a bounded in-memory cache,
 and depends on undocumented ChatGPT backend behavior. Because a model returns the recovered text,
 byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy callers and preserves
