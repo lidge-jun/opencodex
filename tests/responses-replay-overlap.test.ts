@@ -161,6 +161,42 @@ describe("previous_response_id replay overlap", () => {
     expect(expanded.input).toEqual(full);
   });
 
+  test("web_search_call query/queries backfill skew still canonical-matches", () => {
+    // #930: history recorded before the bridge emitted both keys carries only
+    // `action.query`; the replay-boundary repair (backfillWebSearchQueries) adds
+    // `action.queries` on the outbound body. A stored item and the client resend
+    // therefore differ by exactly that derived field and must still count as the
+    // same history item — otherwise the overlap breaks and the stored history is
+    // prepended again, doubling the request on web-search turns.
+    const storedSearch: Record<string, unknown> = {
+      type: "web_search_call",
+      id: "ws_stored",
+      status: "completed",
+      action: { type: "search", query: "opencodex context bug" },
+    };
+    const resendSearch: Record<string, unknown> = {
+      type: "web_search_call",
+      action: {
+        type: "search",
+        query: "opencodex context bug",
+        queries: ["opencodex context bug"],
+      },
+    };
+    rememberResponseState(
+      { model: MODEL, input: [userItem("hello")] },
+      { id: "resp_websearch", status: "completed", output: [storedSearch] },
+      undefined,
+      { force: true },
+    );
+    const full = [userItem("hello"), resendSearch, userItem("next")];
+    const expanded = expandPreviousResponseInput({
+      model: MODEL,
+      previous_response_id: "resp_websearch",
+      input: full,
+    });
+    expect(expanded.input).toEqual(full);
+  });
+
   test("partial prefix keeps stored history and never drops request items", () => {
     const stored = [userItem("u1"), assistantInputItem("a1"), userItem("u2"), assistantInputItem("a2")];
     rememberResponseState(

@@ -735,9 +735,19 @@ function canonicalReplayValue(value: unknown): unknown {
   if (value && typeof value === "object") {
     // Null prototype so an own JSON `__proto__` key survives as a serializable property
     // instead of being treated as a prototype assignment.
+    const record = value as Record<string, unknown>;
+    // The web-search bridge writes `queries` alongside the singular `query` for single-query
+    // calls, while history recorded before that fix carries only `query` and is repaired
+    // outbound by backfillWebSearchQueries (#930). Normalize BEFORE sorting so the derived
+    // key occupies the same canonical position on both sides; a real batch (`queries`
+    // without `query`) is left untouched.
+    const normalized: Record<string, unknown> = { ...record };
+    if (normalized.type === "search" && typeof normalized.query === "string") {
+      normalized.queries = Array.isArray(normalized.queries) ? normalized.queries : [normalized.query];
+    }
     const out: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = canonicalReplayValue((value as Record<string, unknown>)[key]);
+    for (const key of Object.keys(normalized).sort()) {
+      out[key] = canonicalReplayValue(normalized[key]);
     }
     return out;
   }
