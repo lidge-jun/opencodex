@@ -37,6 +37,8 @@ export interface PersistedUsageAttempt {
   usage?: OcxUsage;
   totalTokens?: number;
   errorCode?: string;
+  /** Installation-local exact Compatibility Lab route-subject digest for this attempt. */
+  labRouteSubjectId?: string;
   /** Target-specific reasoning intent and exact adapter-normalized wire parameter. */
   requestedEffort?: string;
   effectiveEffort?: string;
@@ -195,6 +197,11 @@ const USAGE_STATUSES = new Set<UsageStatus>([
   "unsupported",
   "estimated",
 ]);
+const LAB_ROUTE_SUBJECT_ID_RE = /^[0-9a-f]{64}$/;
+
+export function isLabRouteSubjectId(value: unknown): value is string {
+  return typeof value === "string" && LAB_ROUTE_SUBJECT_ID_RE.test(value);
+}
 
 function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -272,6 +279,9 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       ? { totalTokens: attempt.totalTokens }
       : {}),
     ...(typeof attempt.errorCode === "string" ? { errorCode: attempt.errorCode } : {}),
+    ...(isLabRouteSubjectId(attempt.labRouteSubjectId)
+      ? { labRouteSubjectId: attempt.labRouteSubjectId }
+      : {}),
     ...(typeof attempt.requestedEffort === "string" && attempt.requestedEffort
       ? { requestedEffort: capMetadataString(attempt.requestedEffort) }
       : {}),
