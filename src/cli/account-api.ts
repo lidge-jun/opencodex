@@ -238,7 +238,7 @@ interface OAuthAccountDto {
   needsReauth?: boolean;
 }
 
-async function fetchOAuthRows(deps: AccountDeps, baseUrl: string, name: string): Promise<FamilyRows> {
+export async function fetchOAuthRows(deps: AccountDeps, baseUrl: string, name: string): Promise<FamilyRows> {
   const res = await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts?provider=${encodeURIComponent(name)}`);
   if (res.status === 0) return { rows: [], activeId: null, status: 0, networkDown: true };
   if (res.status !== 200) return { rows: [], activeId: null, status: res.status, errorJson: res.json };

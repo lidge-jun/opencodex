@@ -96,6 +96,13 @@ account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them.
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 
+OAuth providers that support multiple logins (Anthropic, Command Code) get the same
+rotation engine via an opt-in account pool (`config.<provider>AccountPool.enabled`):
+sticky session affinity, 429 failover, and new-session quota / round-robin / fill-first
+picking with per-account 5h + weekly usage bars in the dashboard. The GUI's account
+panel shows an **Add account** button that opens the login and also accepts a pasted
+redirect URL / authorization code / raw API key (Command Code).
+
 ### For agents
 
 ```bash

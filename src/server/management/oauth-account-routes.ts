@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import type { OcxAccountPoolRotationStrategy } from "../../types";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
@@ -33,8 +34,12 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderAccountQu
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import {
+  DEFAULT_ACCOUNT_PRIORITY,
+  MAX_ACCOUNT_PRIORITY,
+  MIN_ACCOUNT_PRIORITY,
   normalizeAccountPoolStickyLimit,
   normalizeAccountPoolStrategy,
+  parseAccountPriority,
   parseAccountPoolStickyLimit,
   parseAccountPoolStrategy,
 } from "../../codex/pool-rotation";
@@ -292,6 +297,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { resetAnthropicRoutingForManualSelection } = await import("../../oauth/anthropic-routing");
       resetAnthropicRoutingForManualSelection(body.accountId);
     }
+    if (provider === "command-code") {
+      const { resetCommandCodeRoutingForManualSelection } = await import("../../oauth/command-code-routing");
+      resetCommandCodeRoutingForManualSelection(body.accountId);
+    }
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
@@ -301,11 +310,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
-  // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
+  // Opt-in OAuth account pools (Anthropic #294 / Command Code): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    const pool = config.anthropicAccountPool ?? {};
+    if (provider !== "anthropic" && provider !== "command-code") {
+      return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    }
+    const pool = provider === "anthropic" ? config.anthropicAccountPool ?? {} : config.commandCodeAccountPool ?? {};
     return jsonResponse({
       provider,
       enabled: pool.enabled === true,
@@ -326,15 +337,20 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       autoSwitchThreshold?: unknown;
       strategy?: unknown;
       stickyLimit?: unknown;
+      accountPriorities?: unknown;
+      activeAccountPinned?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "pool config is only supported for anthropic" }, 400);
-    let enabled = config.anthropicAccountPool?.enabled === true;
+    if (provider !== "anthropic" && provider !== "command-code") {
+      return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    }
+    const poolKey = provider === "anthropic" ? "anthropicAccountPool" : "commandCodeAccountPool";
+    let enabled = config[poolKey]?.enabled === true;
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
       enabled = body.enabled;
     }
-    let threshold = config.anthropicAccountPool?.autoSwitchThreshold ?? 80;
+    let threshold = config[poolKey]?.autoSwitchThreshold ?? 80;
     if (body.autoSwitchThreshold !== undefined) {
       if (
         typeof body.autoSwitchThreshold !== "number"
@@ -346,7 +362,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       threshold = body.autoSwitchThreshold;
     }
-    let strategy = config.anthropicAccountPool?.strategy;
+    let strategy = config[poolKey]?.strategy;
     if (body.strategy !== undefined) {
       const parsed = parseAccountPoolStrategy(body.strategy);
       if (parsed === null) {
@@ -354,7 +370,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       strategy = parsed;
     }
-    let stickyLimit = config.anthropicAccountPool?.stickyLimit;
+    let stickyLimit = config[poolKey]?.stickyLimit;
     if (body.stickyLimit !== undefined) {
       const parsed = parseAccountPoolStickyLimit(body.stickyLimit);
       if (parsed === null) {
@@ -362,11 +378,38 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       stickyLimit = parsed;
     }
-    config.anthropicAccountPool = {
+    const poolConfig = (config[poolKey] ?? {}) as {
+      accountPriorities?: Record<string, number>;
+      activeAccountPinned?: string;
+    };
+    let accountPriorities = poolConfig.accountPriorities;
+    if (body.accountPriorities !== undefined) {
+      if (!isPlainRecord(body.accountPriorities)) {
+        return jsonResponse({ error: "accountPriorities must be an object" }, 400);
+      }
+      const next: Record<string, number> = {};
+      for (const [id, value] of Object.entries(body.accountPriorities)) {
+        if (typeof value !== "number" || !Number.isInteger(value) || value < -100 || value > 100) {
+          return jsonResponse({ error: "accountPriorities values must be integers -100..100" }, 400);
+        }
+        next[id] = value;
+      }
+      accountPriorities = next;
+    }
+    let activeAccountPinned = poolConfig.activeAccountPinned;
+    if (body.activeAccountPinned !== undefined) {
+      if (body.activeAccountPinned !== null && typeof body.activeAccountPinned !== "string") {
+        return jsonResponse({ error: "activeAccountPinned must be a string or null" }, 400);
+      }
+      activeAccountPinned = body.activeAccountPinned === null ? undefined : body.activeAccountPinned;
+    }
+    config[poolKey] = {
       enabled,
       autoSwitchThreshold: threshold,
       ...(strategy !== undefined ? { strategy } : {}),
       ...(stickyLimit !== undefined ? { stickyLimit } : {}),
+      ...(accountPriorities !== undefined ? { accountPriorities } : {}),
+      ...(activeAccountPinned !== undefined ? { activeAccountPinned } : {}),
     };
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
@@ -384,10 +427,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
-    if (provider !== "anthropic") return jsonResponse({ error: "clear-cooldown is only supported for anthropic" }, 400);
+    if (provider !== "anthropic" && provider !== "command-code") {
+      return jsonResponse({ error: "clear-cooldown is only supported for anthropic and command-code" }, 400);
+    }
     if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
-    const cleared = clearAnthropicAccountCooldown(accountId);
+    const cleared = provider === "anthropic"
+      ? (await import("../../oauth/anthropic-routing")).clearAnthropicAccountCooldown(accountId)
+      : (await import("../../oauth/command-code-routing")).clearCommandCodeAccountCooldown(accountId);
     return jsonResponse({ ok: true, cleared });
   }
 
@@ -454,6 +500,62 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!(await setAccountAlias(provider, accountId, alias || undefined))) return jsonResponse({ error: "account not found" }, 404);
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
   }
+  // Selection order (priority) for OAuth account pools (anthropic / command-code):
+  // Codex-pool parity — higher used earlier; setting an order also releases any
+  // manual pin so the newer operator statement wins.
+  if (url.pathname === "/api/oauth/accounts/pool/priority" && req.method === "PUT") {
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; id?: unknown; priority?: unknown };
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const id = typeof body.id === "string" ? body.id.trim() : "";
+    if (provider !== "anthropic" && provider !== "command-code") {
+      return jsonResponse({ error: "priority is only supported for anthropic and command-code pools" }, 400);
+    }
+    if (!id) return jsonResponse({ error: "missing id" }, 400);
+    const { getAccountSet } = await import("../../oauth/store");
+    const set = getAccountSet(provider);
+    if (!set?.accounts.some(a => a.id === id)) return jsonResponse({ error: "account not found" }, 404);
+
+    let priority = DEFAULT_ACCOUNT_PRIORITY;
+    if (body.priority !== null) {
+      const parsed = parseAccountPriority(body.priority);
+      if (parsed === null) {
+        return jsonResponse({
+          error: `priority must be null or an integer ${MIN_ACCOUNT_PRIORITY}-${MAX_ACCOUNT_PRIORITY}`,
+        }, 400);
+      }
+      priority = parsed;
+    }
+
+    const poolKey = provider === "anthropic" ? "anthropicAccountPool" : "commandCodeAccountPool";
+    const existingPool = config[poolKey] as {
+      accountPriorities?: Record<string, number>;
+      activeAccountPinned?: string;
+    };
+    const pool = existingPool ?? {};
+    const priorities = new Map(Object.entries(pool.accountPriorities ?? {}));
+    if (priority === DEFAULT_ACCOUNT_PRIORITY) priorities.delete(id);
+    else priorities.set(id, priority);
+    const next: Record<string, number> = {};
+    for (const [key, value] of priorities) next[key] = value;
+    const merged = {
+      ...(config[poolKey] ?? {}),
+    } as {
+      enabled?: boolean;
+      autoSwitchThreshold?: number;
+      strategy?: OcxAccountPoolRotationStrategy;
+      stickyLimit?: number;
+      accountPriorities?: Record<string, number>;
+      activeAccountPinned?: string;
+    };
+    if (priorities.size > 0) merged.accountPriorities = next;
+    else delete merged.accountPriorities;
+    // Newer statement wins: an order supersedes a manual pin.
+    delete merged.activeAccountPinned;
+    config[poolKey] = merged;
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+    return jsonResponse({ ok: true, provider, id, priority });
+  }
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
     const id = url.searchParams.get("id") ?? "";
@@ -466,6 +568,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearAnthropicAccountCooldown, clearAnthropicSessionAffinityForAccount } = await import("../../oauth/anthropic-routing");
       clearAnthropicAccountCooldown(id);
       clearAnthropicSessionAffinityForAccount(id);
+    }
+    if (provider === "command-code") {
+      const { clearCommandCodeAccountCooldown, clearCommandCodeSessionAffinityForAccount } = await import("../../oauth/command-code-routing");
+      clearCommandCodeAccountCooldown(id);
+      clearCommandCodeSessionAffinityForAccount(id);
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

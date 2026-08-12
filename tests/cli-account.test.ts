@@ -50,6 +50,7 @@ let activeCodexAccountId: string | null = "chatgpt_1";
 let autoSwitchThreshold = 80;
 let activeReadFailure: { status: number; error: string } | null = null;
 let oauthListFailure: { provider: string; status: number; error: string } | null = null;
+let oauthPoolConfig: Record<string, unknown> = { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 };
 let keyListFailure: { provider: string; status: number; error: string } | null = null;
 let codexRefreshFailure: MockFailure | null = null;
 let autoSwitchUpdateFailure: MockFailure | null = null;
@@ -86,6 +87,11 @@ function fixtureConfig(): OcxConfig {
       anthropic: {
         adapter: "anthropic",
         baseUrl: "https://api.anthropic.com",
+        authMode: "oauth",
+      },
+      "command-code": {
+        adapter: "command-code",
+        baseUrl: "https://api.commandcode.ai",
         authMode: "oauth",
       },
       kiro: {
@@ -215,7 +221,7 @@ async function mockManagementApi(req: Request): Promise<Response> {
     if (provider === "anthropic" && lastDeletedType === "oauth" && postDeleteReadFailure) {
       return json({ error: postDeleteReadFailure.error }, postDeleteReadFailure.status);
     }
-    if (provider === "anthropic") {
+    if (provider === "anthropic" || provider === "command-code") {
       return json({ activeAccountId: oauthActiveId, accounts: oauthAccounts.map(account => ({
         ...account,
         active: account.id === oauthActiveId,
@@ -236,6 +242,29 @@ async function mockManagementApi(req: Request): Promise<Response> {
       return json({ error: "anthropic account nope was not found" }, 404);
     }
     return json({ ok: true, activeAccountId: accountId });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/oauth/accounts/pool") {
+    const provider = url.searchParams.get("provider");
+    if (provider !== "anthropic" && provider !== "command-code") {
+      return json({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    }
+    return json({ provider, ...oauthPoolConfig });
+  }
+  if (req.method === "PUT" && url.pathname === "/api/oauth/accounts/pool") {
+    const payload = body as { provider?: string; enabled?: boolean; autoSwitchThreshold?: number };
+    if (payload.provider !== "anthropic" && payload.provider !== "command-code") {
+      return json({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    }
+    oauthPoolConfig = { ...oauthPoolConfig, ...payload };
+    return json({ ok: true, ...oauthPoolConfig });
+  }
+  if (req.method === "PUT" && url.pathname === "/api/oauth/accounts/pool/priority") {
+    const payload = body as { provider?: string; id?: string; priority?: number };
+    if (payload.provider !== "anthropic" && payload.provider !== "command-code") {
+      return json({ error: "priority is only supported for anthropic and command-code pools" }, 400);
+    }
+    return json({ ok: true, provider: payload.provider, id: payload.id, priority: payload.priority });
   }
 
   if (req.method === "POST" && url.pathname === "/api/oauth/accounts/import") {
@@ -409,6 +438,7 @@ beforeEach(() => {
   autoSwitchThreshold = 80;
   activeReadFailure = null;
   oauthListFailure = null;
+  oauthPoolConfig = { enabled: false, autoSwitchThreshold: 80, strategy: "quota", stickyLimit: 1 };
   keyListFailure = null;
   codexRefreshFailure = null;
   autoSwitchUpdateFailure = null;
@@ -780,16 +810,44 @@ describe("ocx account CLI (issue #180 matrix)", () => {
   });
 
   test("21: auto-switch rejects wrong providers, invalid thresholds and missing providers", async () => {
-    const wrongProvider = await run(["auto-switch", "anthropic", "on"]);
+    const wrongProvider = await run(["auto-switch", "kiro", "on"]);
     const invalidThreshold = await run(["auto-switch", "openai", "threshold", "101"]);
     const missingProvider = await run(["auto-switch"]);
 
     expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch only applies to the openai Codex account pool");
+    expect(wrongProvider.stderr).toContain("auto-switch applies to the openai Codex account pool, anthropic, and command-code");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);
     expect(missingProvider.stderr).toContain("Usage:");
+  });
+
+  test("21b: auto-switch on/status works for command-code OAuth pool", async () => {
+    const on = await run(["auto-switch", "command-code", "on"]);
+    const status = await run(["auto-switch", "command-code", "status", "--json"]);
+    const poolPuts = requests.filter(request => request.path === "/api/oauth/accounts/pool");
+
+    expect(on.code).toBe(0);
+    expect(on.stdout).toBe("auto-switch: on (threshold 80%)");
+    expect(poolPuts).toContainEqual(expect.objectContaining({
+      method: "PUT",
+      body: expect.objectContaining({ provider: "command-code", enabled: true, autoSwitchThreshold: 80 }),
+    }));
+    expect(JSON.parse(status.stdout)).toEqual({
+      provider: "command-code",
+      autoSwitchThreshold: 80,
+      enabled: true,
+    });
+  });
+
+  test("21c: priority set/read works for command-code OAuth pool", async () => {
+    oauthAccounts = [{ id: "cc_a", email: "a***@test.com", active: true }];
+    oauthActiveId = "cc_a";
+    const setResult = await run(["priority", "command-code", "cc_a", "first", "--json"]);
+    expect(setResult.code).toBe(0);
+    expect(JSON.parse(setResult.stdout)).toEqual({ ok: true, provider: "command-code", id: "cc_a", priority: 2, preset: "first" });
+    const priorityPut = requests.find(request => request.path === "/api/oauth/accounts/pool/priority");
+    expect(priorityPut?.body).toEqual({ provider: "command-code", id: "cc_a", priority: 2 });
   });
 
   test("22: remove without --yes prints the re-run hint and sends no request", async () => {
@@ -1258,11 +1316,11 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(priorityRequests()).toEqual([]);
     });
 
-    test("non-Codex providers are rejected", async () => {
-      const result = await run(["priority", "anthropic", "acct_1", "first"]);
+    test("unsupported providers are rejected", async () => {
+      const result = await run(["priority", "kiro", "acct_1", "first"]);
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("only applies to the openai Codex account pool");
+      expect(result.stderr).toContain("selection order applies to the openai Codex account pool, anthropic, and command-code");
     });
 
     // Both paths reach the proxy through different helpers — the read through

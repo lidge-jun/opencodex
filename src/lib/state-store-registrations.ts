@@ -31,6 +31,7 @@ import {
   sweepExpiredXaiPermanentFailureVerdicts,
 } from "../oauth";
 import { sweepExpiredAnthropicRoutingHealth } from "../oauth/anthropic-routing";
+import { sweepExpiredOAuthPoolRoutingHealth } from "../oauth/oauth-pool-routing";
 import { listLiveOAuthAccountKeys, reconcileOAuthReauthState } from "../oauth/store";
 import { reconcileGuardianBackoff } from "../oauth/token-guardian";
 import { sweepExpiredApiKeyCooldowns } from "../providers/key-failover";
@@ -81,6 +82,7 @@ export const STATE_STORE_REGISTRATIONS = [
     reconcileGeneration: reconcileComboTargetCooldowns,
   },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
+  { name: "oauth-pool-routing-health", sweepExpired: (now) => sweepExpiredOAuthPoolRoutingHealth("command-code", now) },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
   { name: "responses-continuation", sweepExpired: sweepExpiredResponseStates },
   { name: "antigravity-replay", sweepExpired: sweepExpiredAntigravityReplay },

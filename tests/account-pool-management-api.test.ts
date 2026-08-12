@@ -353,3 +353,195 @@ describe("Anthropic account pool strategy management API", () => {
     }
   });
 });
+
+describe("Command Code account pool strategy management API", () => {
+  let testDir = "";
+  let previousHome: string | undefined;
+  let isolatedCodexHome: IsolatedCodexHome | null = null;
+
+  function baseConfig(): OcxConfig {
+    return {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" },
+      },
+    } as OcxConfig;
+  }
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    isolatedCodexHome = installIsolatedCodexHome("ocx-cc-pool-mgmt-");
+    testDir = mkdtempSync(join(tmpdir(), "ocx-cc-pool-mgmt-"));
+    process.env.OPENCODEX_HOME = testDir;
+    saveConfig(baseConfig());
+    writeFileSync(join(testDir, "auth.json"), JSON.stringify({
+      "command-code": {
+        activeAccountId: "ccaa1111",
+        accounts: [
+          { id: "ccaa1111", credential: { access: "t1", refresh: "t1", expires: 9999999999999, email: "a@example.com", accountId: "cc-acct-1" } },
+        ],
+      },
+    }), { mode: 0o600 });
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    if (testDir) rmSync(testDir, { recursive: true, force: true });
+  });
+
+  test("GET /api/oauth/accounts/pool surfaces strategy defaults for command-code", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        strategy: "quota",
+        stickyLimit: 1,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT /api/oauth/accounts/pool rejects invalid strategy for command-code", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          enabled: true,
+          strategy: "weighted",
+        }),
+      });
+      expect(res.status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT /api/oauth/accounts/pool accepts strategy and stickyLimit for command-code; GET reflects them", async () => {
+    const server = startServer(0);
+    try {
+      const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          enabled: true,
+          autoSwitchThreshold: 70,
+          strategy: "round-robin",
+          stickyLimit: 4,
+        }),
+      });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toMatchObject({
+        ok: true,
+        enabled: true,
+        autoSwitchThreshold: 70,
+        strategy: "round-robin",
+        stickyLimit: 4,
+      });
+
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await get.json()).toMatchObject({
+        enabled: true,
+        autoSwitchThreshold: 70,
+        strategy: "round-robin",
+        stickyLimit: 4,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PUT without strategy fields preserves previously saved strategy for command-code", async () => {
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          enabled: true,
+          strategy: "fill-first",
+          stickyLimit: 9,
+        }),
+      });
+      const put = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          enabled: false,
+          autoSwitchThreshold: 50,
+        }),
+      });
+      expect(put.status).toBe(200);
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await get.json()).toMatchObject({
+        enabled: false,
+        autoSwitchThreshold: 50,
+        strategy: "fill-first",
+        stickyLimit: 9,
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("PATCH with provider+strategy omits enabled and keeps current enabled for command-code", async () => {
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          enabled: true,
+          strategy: "quota",
+        }),
+      });
+      const patch = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "command-code",
+          strategy: "round-robin",
+        }),
+      });
+      expect(patch.status).toBe(200);
+      expect(await patch.json()).toMatchObject({
+        ok: true,
+        enabled: true,
+        strategy: "round-robin",
+      });
+      const get = await fetch(new URL("/api/oauth/accounts/pool?provider=command-code", server.url));
+      expect(await get.json()).toMatchObject({
+        enabled: true,
+        strategy: "round-robin",
+      });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("GET /api/oauth/accounts?quota=1 works for command-code accounts", async () => {
+    const server = startServer(0);
+    try {
+      const res = await fetch(new URL("/api/oauth/accounts?provider=command-code&quota=1", server.url));
+      expect(res.status).toBe(200);
+      const body = await res.json() as { accounts: Array<{ id: string; quota?: unknown }> };
+      expect(body.accounts.length).toBe(1);
+      expect(body.accounts[0]!.id).toBe("ccaa1111");
+    } finally {
+      await server.stop(true);
+    }
+  });
+});

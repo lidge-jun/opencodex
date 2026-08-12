@@ -74,6 +74,8 @@ export type AccountLoadState = "idle" | "loading" | "ready" | "error";
 export interface ProviderAuthHandlers {
   onLogin: (provider: string, addAccount?: boolean) => void | Promise<void>;
   onCancelLogin?: (provider: string) => void;
+  /** Submit a pasted redirect URL / authorization code / raw API key to an in-progress login. */
+  onSubmitManualCode?: (provider: string, input: string) => void | Promise<void>;
   onLogout: (provider: string) => void | Promise<void>;
   onReauth: (provider: string, accountId?: string) => void | Promise<void>;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;

@@ -74,6 +74,18 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
+import {
+  COMMAND_CODE_POOL_MAX_FAILOVERS_PER_REQUEST,
+  bindCommandCodeSessionAffinity,
+  commandCodeSessionKeyFromParts,
+  formatCommandCodeProviderForLog,
+  getCommandCodePoolAccessToken,
+  getCommandCodePoolRetryAfterSeconds,
+  isCommandCodeAccountPoolEnabled,
+  promoteCommandCodeActiveAccount,
+  resolveCommandCodeAccountForSession,
+  rotateCommandCodeAccountOn429,
+} from "../../oauth/command-code-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
@@ -1878,8 +1890,19 @@ async function handleResponsesInner(
   let replayOAuthCredentialSnapshot: Pick<OAuthAccessSnapshot, "accountId" | "generation"> | undefined;
   let anthropicPoolAccountId: string | null = null;
   let anthropicPoolFailovers = 0;
+  let commandCodePoolAccountId: string | null = null;
+  let commandCodePoolFailovers = 0;
   const anthropicSessionKey = route.providerName === "anthropic" && route.provider.authMode === "oauth"
     ? anthropicSessionKeyFromParts({
+      sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
+      threadIdHeader: req.headers.get("thread-id"),
+      promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
+      clientThreadId: typeof parsed._clientThreadId === "string" ? parsed._clientThreadId : null,
+      promptCacheKeyIsSharedCohort: options.promptCacheKeyIsSharedCohort === true,
+    })
+    : null;
+  const commandCodeSessionKey = route.providerName === "command-code" && route.provider.authMode === "oauth"
+    ? commandCodeSessionKeyFromParts({
       sessionIdHeader: sessionIdHeaderFromRequest(req.headers),
       threadIdHeader: req.headers.get("thread-id"),
       promptCacheKey: typeof parsed.options.promptCacheKey === "string" ? parsed.options.promptCacheKey : null,
@@ -1909,6 +1932,26 @@ async function handleResponsesInner(
         promoteAnthropicActiveAccount(selection.accountId);
         route.provider = { ...route.provider, apiKey: accessToken };
         logCtx.provider = formatAnthropicProviderForLog("anthropic", selection.accountId, config);
+      } else if (route.providerName === "command-code" && isCommandCodeAccountPoolEnabled(config)) {
+        const selection = resolveCommandCodeAccountForSession(commandCodeSessionKey, config);
+        if (!selection.accountId) {
+          if (selection.reason === "all-cooled") {
+            const retryAfterSec = getCommandCodePoolRetryAfterSeconds();
+            return formatErrorResponse(
+              429,
+              "rate_limit_error",
+              "All Command Code OAuth accounts are temporarily rate-limited",
+              retryAfterSec !== null ? { retryAfter: String(retryAfterSec) } : undefined,
+            );
+          }
+          return formatErrorResponse(401, "authentication_error", "No eligible Command Code OAuth account available");
+        }
+        const accessToken = await getCommandCodePoolAccessToken(selection.accountId);
+        commandCodePoolAccountId = selection.accountId;
+        bindCommandCodeSessionAffinity(commandCodeSessionKey, selection.accountId);
+        promoteCommandCodeActiveAccount(selection.accountId);
+        route.provider = { ...route.provider, apiKey: accessToken };
+        logCtx.provider = formatCommandCodeProviderForLog("command-code", selection.accountId, config);
       } else {
         const resolved = await getValidAccessTokenSnapshot(route.providerName);
         replayOAuthCredentialSnapshot = {
@@ -3501,6 +3544,42 @@ async function handleResponsesInner(
           break;
         }
       }
+      // Command Code OAuth account pool: cool the failed account and retry
+      // with another eligible OAuth account (bounded per request). Disabled by default.
+      while (
+        upstreamResponse.status === 429
+        && commandCodePoolAccountId
+        && isCommandCodeAccountPoolEnabled(config)
+        && commandCodePoolFailovers < COMMAND_CODE_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCommandCodeAccountOn429(
+          config,
+          commandCodePoolAccountId,
+          upstreamResponse.headers.get("retry-after"),
+          commandCodeSessionKey,
+        );
+        if (!nextAccountId) break;
+        try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+        try {
+          const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
+          commandCodePoolAccountId = nextAccountId;
+          commandCodePoolFailovers += 1;
+          route.provider = { ...route.provider, apiKey: accessToken };
+          invalidateSameTargetRequest();
+          promoteCommandCodeActiveAccount(nextAccountId);
+          logCtx.provider = formatCommandCodeProviderForLog("command-code", nextAccountId, config);
+          activeAdapter = resolveAdapter(
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            config.cacheRetention,
+          );
+          sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+          const result = await rebuildAndRefetch("command-code-oauth-429");
+          if ("failed" in result) return result.failed;
+          upstreamResponse = result;
+        } catch {
+          break;
+        }
+      }
       // Anthropic 413 request_too_large: rebuild once with every image one tier lower
       // (spiral guard: single attempt). The biased response re-enters the 429 check above.
       if (shouldAttemptImageTierRetry({
@@ -3779,6 +3858,40 @@ async function handleResponsesInner(
             );
             sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
             nextContinuationRecoveryKind = "anthropic-oauth-429";
+            continue;
+          } catch {
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      if (
+        response.status === 429
+        && commandCodePoolAccountId
+        && isCommandCodeAccountPoolEnabled(config)
+        && commandCodePoolFailovers < COMMAND_CODE_POOL_MAX_FAILOVERS_PER_REQUEST
+      ) {
+        const nextAccountId = rotateCommandCodeAccountOn429(
+          config,
+          commandCodePoolAccountId,
+          response.headers.get("retry-after"),
+          commandCodeSessionKey,
+        );
+        if (nextAccountId) {
+          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          try {
+            const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
+            commandCodePoolAccountId = nextAccountId;
+            commandCodePoolFailovers += 1;
+            route.provider = { ...route.provider, apiKey: accessToken };
+            invalidateSameTargetRequest();
+            promoteCommandCodeActiveAccount(nextAccountId);
+            logCtx.provider = formatCommandCodeProviderForLog("command-code", nextAccountId, config);
+            activeAdapter = resolveAdapter(
+              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+              config.cacheRetention,
+            );
+            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
+            nextContinuationRecoveryKind = "command-code-oauth-429";
             continue;
           } catch {
             // fall through to emit continuation error below

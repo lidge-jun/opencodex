@@ -1,5 +1,6 @@
 import { getCodexAccountHealthSnapshot, type CodexCooldownSource } from "../codex/routing";
 import { getAnthropicAccountHealthSnapshot } from "./anthropic-routing";
+import { getCommandCodeAccountHealthSnapshot } from "./command-code-routing";
 import { isAccountNeedsReauth } from "../codex/account-runtime-state";
 import { getCodexAccountCredential, listCodexAccountIds } from "../codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
@@ -180,11 +181,15 @@ export function projectStoredOAuthAccountHealth(
   const anthropicSnap = provider === "anthropic"
     ? getAnthropicAccountHealthSnapshot(account.id, now)
     : null;
+  const commandCodeSnap = provider === "command-code"
+    ? getCommandCodeAccountHealthSnapshot(account.id, now)
+    : null;
+  const poolSnap = provider === "anthropic" ? anthropicSnap : commandCodeSnap;
   return projectOAuthAccountHealth({
     needsReauth: account.needsReauth === true,
     reauthReason: account.needsReauth === true ? "refresh_failed" : undefined,
-    cooldownUntilMs: anthropicSnap?.cooldownUntil,
-    cooldownReason: anthropicSnap?.cooldownSource === "retry-after" ? "rate_limit" : anthropicSnap ? "quota" : undefined,
+    cooldownUntilMs: poolSnap?.cooldownUntil,
+    cooldownReason: poolSnap?.cooldownSource === "retry-after" ? "rate_limit" : poolSnap ? "quota" : undefined,
     warningReason: detectOAuthWarning(provider, account, opts.observeOnly === true, now),
     now,
   });

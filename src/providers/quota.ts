@@ -1268,6 +1268,93 @@ async function fetchAnthropicQuota(provider: string): Promise<ProviderQuotaRepor
   return report(provider, "anthropic:oauth-usage", quota);
 }
 
+/**
+ * Command Code `GET /alpha/billing/credits` — the plan's rolling 5-hour and
+ * weekly caps in credit value (used/cap), plus the monthly credit pool.
+ * Mirrors Claude's 5h/weekly windows in the canonical fields so the dashboard
+ * renders them with the standard labels.
+ */
+const commandCodeUsageInflight = new Map<string, Promise<ProviderQuota | null>>();
+
+async function fetchCommandCodeUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
+  const joinable = commandCodeUsageInflight.get(accessToken);
+  if (joinable) return joinable;
+
+  const probe = (async (): Promise<ProviderQuota | null> => {
+    const response = await fetch("https://api.commandcode.ai/alpha/billing/credits", {
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "cli",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const body = asRecord(await readQuotaJson(response));
+    if (!body) return null;
+    const credits = asRecord(body.credits);
+    const windows = asRecord(body.windowLimits);
+    const fiveHour = asRecord(windows?.fiveHour);
+    const weekly = asRecord(windows?.weekly);
+    const percent = (used: unknown, cap: unknown): number | undefined => {
+      const usedNum = toFiniteNumber(used);
+      const capNum = toFiniteNumber(cap);
+      if (usedNum === undefined || capNum === undefined || capNum <= 0) return undefined;
+      return Math.max(0, Math.min(100, (usedNum / capNum) * 100));
+    };
+    const quota: ProviderQuota = { updatedAt: Date.now() };
+    const fiveHourPercent = percent(fiveHour?.used, fiveHour?.cap);
+    const weeklyPercent = percent(weekly?.used, weekly?.cap);
+    if (fiveHourPercent !== undefined) quota.fiveHourPercent = fiveHourPercent;
+    if (weeklyPercent !== undefined) quota.weeklyPercent = weeklyPercent;
+    const fiveHourResetAt = normalizeResetAt(fiveHour?.resetAt);
+    const weeklyResetAt = normalizeResetAt(weekly?.resetAt);
+    if (fiveHourResetAt !== undefined) quota.fiveHourResetAt = fiveHourResetAt;
+    if (weeklyResetAt !== undefined) quota.weeklyResetAt = weeklyResetAt;
+    // Monthly credit pool is the plan's headline balance; surface as a custom window.
+    const monthly = credits?.monthlyCredits;
+    const totalMonthly = credits?.monthlyCredits;
+    if (typeof monthly === "number" && typeof totalMonthly === "number" && totalMonthly > 0) {
+      const monthlyPercent = percent(monthly, totalMonthly);
+      if (monthlyPercent !== undefined) {
+        quota.monthlyPercent = monthlyPercent;
+      }
+    }
+    // Empty / schema-changed payloads must not cache as "success with no bars".
+    return hasQuotaRows(quota) ? quota : null;
+  })().finally(() => {
+    if (commandCodeUsageInflight.get(accessToken) === probe) commandCodeUsageInflight.delete(accessToken);
+  });
+  commandCodeUsageInflight.set(accessToken, probe);
+  return probe;
+}
+
+async function fetchCommandCodeQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  // Capture the account we intend to probe before awaiting — a mid-flight active
+  // switch must not seed the wrong account's cache with this response.
+  const probedAccountId = getAccountSet("command-code")?.activeAccountId;
+  const probedAccountKey = probedAccountId ? accountCacheKey("command-code", probedAccountId) : null;
+  const writerGeneration = captureConfigGeneration();
+  let accessToken: string;
+  try {
+    accessToken = await getValidAccessToken("command-code");
+  } catch {
+    return null;
+  }
+  const quota = await fetchCommandCodeUsageQuota(accessToken);
+  if (!quota) return null;
+  // Share the active-account probe with the per-account cache so Providers-page
+  // loads do not double-hit the billing endpoint.
+  if (probedAccountId && probedAccountKey) {
+    const stillOwnsToken = getAccountCredential("command-code", probedAccountId)?.access === accessToken;
+    if (stillOwnsToken && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota });
+    }
+  }
+  return report(provider, "command-code:billing-credits", quota);
+}
+
 // ---------------------------------------------------------------------------
 // Per-account quota (multiauth)
 // ---------------------------------------------------------------------------
@@ -1311,7 +1398,7 @@ export interface ProviderAccountQuota {
 
 /** Providers whose per-account quota can be probed. Extend as other OAuth APIs are covered. */
 export function supportsPerAccountQuota(provider: string): boolean {
-  return provider === "anthropic";
+  return provider === "anthropic" || provider === "command-code";
 }
 
 function accountCacheKey(provider: string, accountId: string): string {
@@ -1431,7 +1518,9 @@ async function fetchAccountQuota(
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
       const token = await getTokenForAccountQuotaProbe(provider, accountId);
-      const quota = await fetchAnthropicUsageQuota(token);
+      const quota = provider === "anthropic"
+        ? await fetchAnthropicUsageQuota(token)
+        : await fetchCommandCodeUsageQuota(token);
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
         // negative-cache instead of re-probing on every GUI poll.
@@ -1911,6 +2000,7 @@ async function maybeFetchProviderQuota(
     }
     if (provider.authMode === "oauth" && name === "xai") return fetchXaiQuota(name);
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
+    if (provider.authMode === "oauth" && name === "command-code") return fetchCommandCodeQuota(name);
     if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
     // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical

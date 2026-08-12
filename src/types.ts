@@ -923,6 +923,25 @@ export interface OcxConfig {
     /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
     stickyLimit?: number;
   };
+  /**
+   * Opt-in Command Code OAuth account pool (mirrors the Anthropic pool).
+   * Default OFF. Failover on 429 + sticky affinity; new sessions may pick
+   * lowest known 5h usage. Experimental — see the Anthropic pool docs before
+   * enabling.
+   */
+  commandCodeAccountPool?: {
+    enabled?: boolean;
+    /** Usage % threshold for new-session auto-pick. Default 80. 0 = disabled (affinity/active only). */
+    autoSwitchThreshold?: number;
+    /** New-session rotation strategy. Default quota (today's behaviour). */
+    strategy?: OcxAccountPoolRotationStrategy;
+    /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
+    stickyLimit?: number;
+    /** Selection order per account id, higher used earlier. Absent = 0. Range -100..100. */
+    accountPriorities?: Record<string, number>;
+    /** Account id the operator last selected by hand. Suppresses upward priority preemption. */
+    activeAccountPinned?: string;
+  };
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**

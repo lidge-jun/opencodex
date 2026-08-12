@@ -11,6 +11,7 @@ import {
   apiJson,
   classifyAccount,
   fetchCodexRows,
+  fetchOAuthRows,
   fetchProviderQuotaReport,
   fetchRows,
   proxyUnreachable,
@@ -345,8 +346,10 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const action = args.shift();
   if (!name || !action) return usage();
   const classified = configAndType(deps, name);
-  if ("error" in classified || classified.type !== "codex") {
-    return usage("Error: auto-switch only applies to the openai Codex account pool");
+  const oauthPool = !("error" in classified) && classified.type === "oauth"
+    && (name === "anthropic" || name === "command-code");
+  if ("error" in classified || (classified.type !== "codex" && !oauthPool)) {
+    return usage("Error: auto-switch applies to the openai Codex account pool, anthropic, and command-code");
   }
   let threshold: number | undefined;
   if (action === "on" && args.length === 0) threshold = 80;
@@ -359,14 +362,22 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
   if (action === "status") {
-    const response = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
+    const response = oauthPool
+      ? await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts/pool?provider=${encodeURIComponent(name)}`)
+      : await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
     if (response.status === 0) return proxyUnreachable();
     if (response.status !== 200 || typeof response.json.autoSwitchThreshold !== "number") {
       return apiError(response.json, "failed to read auto-switch status");
     }
     threshold = response.json.autoSwitchThreshold;
   } else {
-    const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/auto-switch", { threshold });
+    const response = oauthPool
+      ? await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/pool", {
+        provider: name,
+        autoSwitchThreshold: threshold,
+        enabled: threshold! > 0,
+      })
+      : await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/auto-switch", { threshold });
     if (response.status === 0) return proxyUnreachable();
     if (response.status !== 200) return apiError(response.json, "failed to update auto-switch");
   }
@@ -582,13 +593,16 @@ export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promi
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  if (classified.type !== "codex") {
-    return usage(`Error: ${name} is not a Codex account pool; cooldown clearing applies to Codex accounts only`);
+  const oauthPool = classified.type === "oauth" && (name === "anthropic" || name === "command-code");
+  if (classified.type !== "codex" && !oauthPool) {
+    return usage(`Error: ${name} cooldown clearing applies to Codex, anthropic, and command-code pools only`);
   }
   const id = requestedId === "main" ? MAIN_ID : requestedId;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
-  const response = await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id });
+  const response = oauthPool
+    ? await apiJson(deps, baseUrl, "POST", "/api/oauth/accounts/clear-cooldown", { provider: name, accountId: id })
+    : await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id });
   if (response.status === 0) return proxyUnreachable();
   if (response.status !== 200) return apiError(response.json, `failed to clear cooldown for ${requestedId}`);
   const cleared = response.json?.cleared === true;
@@ -642,8 +656,9 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  if (classified.type !== "codex") {
-    return usage("Error: selection order only applies to the openai Codex account pool");
+  const oauthPool = classified.type === "oauth" && (name === "anthropic" || name === "command-code");
+  if (classified.type !== "codex" && !oauthPool) {
+    return usage("Error: selection order applies to the openai Codex account pool, anthropic, and command-code");
   }
   const id = requestedId === "main" ? MAIN_ID : requestedId;
 
@@ -661,7 +676,9 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
 
   // No value means "show" — a read must not rewrite what it is reporting.
   if (priority === undefined) {
-    const result = await fetchCodexRows(deps, baseUrl);
+    const result = oauthPool
+      ? await fetchOAuthRows(deps, baseUrl, name)
+      : await fetchCodexRows(deps, baseUrl);
     const failed = familyFailure(result, `failed to read ${name} accounts`);
     if (failed !== null) return failed;
     const row = result.rows.find(candidate => candidate.id === id);
@@ -679,7 +696,9 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
     return 0;
   }
 
-  const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/priority", { id, priority });
+  const response = oauthPool
+    ? await apiJson(deps, baseUrl, "PUT", "/api/oauth/accounts/pool/priority", { provider: name, id, priority })
+    : await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/priority", { id, priority });
   if (response.status === 0) return proxyUnreachable();
   if (response.status !== 200) return apiError(response.json, `failed to set selection order for ${requestedId}`);
   const applied = typeof response.json.priority === "number" ? response.json.priority : (priority ?? 0);

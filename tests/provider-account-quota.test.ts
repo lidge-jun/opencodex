@@ -419,3 +419,103 @@ describe("fetchProviderAccountQuotas", () => {
     expect(getCachedProviderAccountQuota("anthropic", first!.id)).toBeNull();
   });
 });
+
+describe("command-code per-account quota", () => {
+  async function seedCommandCodeAccounts() {
+    const expires = Date.now() + 60 * 60_000;
+    await saveCredential("command-code", {
+      access: "cc-token-first", refresh: "cc-token-first", expires,
+      accountId: "cc-acct-first", email: "cc-first@example.com",
+    });
+    await saveCredential("command-code", {
+      access: "cc-token-second", refresh: "cc-token-second", expires,
+      accountId: "cc-acct-second", email: "cc-second@example.com",
+    });
+  }
+
+  function creditsBody(fiveHourUsed: number, fiveHourCap: number, weeklyUsed: number, weeklyCap: number): string {
+    return JSON.stringify({
+      credits: { monthlyCredits: 80, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: {
+        limited: true,
+        exceeded: null,
+        fiveHour: { used: fiveHourUsed, cap: fiveHourCap, exceeded: false, resetAt: "2026-07-05T12:00:00Z" },
+        weekly: { used: weeklyUsed, cap: weeklyCap, exceeded: false, resetAt: "2026-07-08T12:00:00Z" },
+      },
+    });
+  }
+
+  test("reports each account's own 5h/weekly caps from /alpha/billing/credits", async () => {
+    await seedCommandCodeAccounts();
+    const seenTokens: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://api.commandcode.ai/alpha/billing/credits");
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      seenTokens.push(auth);
+      // Distinct upstream numbers per credential — the whole point of a per-account probe.
+      const body = auth.endsWith("cc-token-first") ? creditsBody(3, 10, 6, 10) : creditsBody(0.5, 10, 1, 10);
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("command-code");
+    expect(rows.length).toBe(2);
+    const values = rows.map(row => `${row.quota?.fiveHourPercent}/${row.quota?.weeklyPercent}`).sort();
+    // 3/10 = 30%, 6/10 = 60%; 0.5/10 = 5%, 1/10 = 10%
+    expect(values).toEqual(["30/60", "5/10"]);
+    expect(seenTokens.sort()).toEqual(["Bearer cc-token-first", "Bearer cc-token-second"]);
+    for (const row of rows) expect(row.quota?.customWindows).toBeUndefined();
+  });
+
+  test("supportsPerAccountQuota includes command-code", async () => {
+    expect(supportsPerAccountQuota("command-code")).toBe(true);
+  });
+
+  test("a failing command-code probe is flagged unavailable without dropping the sibling", async () => {
+    await seedCommandCodeAccounts();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (auth.endsWith("cc-token-first")) return new Response("rate limited", { status: 429 });
+      return new Response(creditsBody(1, 10, 2, 10), { status: 200 });
+    }) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("command-code");
+    const failed = rows.find(row => row.quota === null);
+    const ok = rows.find(row => row.quota !== null);
+    expect(failed?.unavailable).toBe(true);
+    expect(ok?.quota?.fiveHourPercent).toBe(10);
+    expect(ok?.quota?.weeklyPercent).toBe(20);
+  });
+
+  test("provider-report probe seeds the active command-code account cache", async () => {
+    await seedCommandCodeAccounts();
+    const { getAccountSet, setActiveAccount } = await import("../src/oauth/store");
+    const set = getAccountSet("command-code");
+    const first = set?.accounts.find(a => a.credential.email === "cc-first@example.com");
+    expect(first).toBeTruthy();
+    await setActiveAccount("command-code", first!.id);
+
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      const body = auth.endsWith("cc-token-first") ? creditsBody(3, 10, 6, 10) : creditsBody(0.5, 10, 1, 10);
+      return new Response(body, { status: 200 });
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 1455,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code",
+          authMode: "oauth",
+          baseUrl: "https://api.commandcode.ai",
+        },
+      },
+    };
+    await fetchProviderQuotaReports(config, true);
+    expect(calls).toBe(1);
+    // The active-account probe seeded the per-account cache.
+    expect(getCachedProviderAccountQuota("command-code", first!.id)?.fiveHourPercent).toBe(30);
+  });
+});
