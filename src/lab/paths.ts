@@ -81,18 +81,19 @@ export function labScratchDir(configDir = getConfigDir()): string {
   return join(labRoot(configDir), "scratch");
 }
 
+/** Shared Lab export directory. Public evidence bundles intentionally live here too. */
 export function labExportDir(configDir = getConfigDir()): string {
   return join(labRoot(configDir), "export");
 }
-
-export const labPublicExportsDir = labExportDir;
 
 export function labCommunityDir(configDir = getConfigDir()): string {
   return join(labRoot(configDir), "community");
 }
 
+export const LAB_PUBLIC_PUBLISHER_KEY_FILE = "publisher-ed25519.pem";
+
 export function labPublicPublisherKeyPath(configDir = getConfigDir()): string {
-  return join(labRoot(configDir), "publisher-ed25519.pem");
+  return join(labRoot(configDir), LAB_PUBLIC_PUBLISHER_KEY_FILE);
 }
 
 /** Opaque per-installation salt for local fingerprinting (never exported as evidence). */
