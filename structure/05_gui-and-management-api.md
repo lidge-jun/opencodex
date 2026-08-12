@@ -37,6 +37,16 @@ capability, and an unexpected management response so a reachable `401` cannot be
 their detailed CLI health remains unavailable until restarted with an attested runtime record and
 capability-aware server.
 
+OAuth and API-key login use the same process-bound pattern for live provider
+convergence without transporting provider credentials. After the CLI durably saves
+`config.json`, it challenges the exact runtime listener and sends one bodyless
+`POST /api/providers/reload` capability bound to the provider name, method, path,
+nonce, PID, port, and short expiry. The server consumes it once, re-reads that named
+provider from the protected disk config, and updates only live state; the request
+contains no provider object, API key, OAuth value, custom header, reusable management
+credential, or config digest. Both the proof and reload request use the direct local
+transport so environment HTTP proxies cannot observe or fabricate the exchange.
+
 [Decision Log]
 - 목적과 의도: Keep a lower-privileged local process from collecting the management bearer by impersonating `/healthz` on an unused port.
 - 기존 구현 및 제약 조건: Liveness must remain public and backward-compatible, but its service string and reported PID are assertions made by the listener itself.

@@ -31,6 +31,30 @@ async function close(server: Server): Promise<void> {
 }
 
 describe("local management direct transport", () => {
+  test("sends a bodyless POST directly with explicit zero content length", async () => {
+    let observed: { method: string; contentLength: string | null; body: string } | null = null;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        observed = {
+          method: request.method,
+          contentLength: request.headers.get("content-length"),
+          body: await request.text(),
+        };
+        return Response.json({ ok: true });
+      },
+    });
+    try {
+      const response = await directLocalHttpFetch(`http://127.0.0.1:${server.port}/api/providers/reload`, {
+        method: "POST",
+      });
+      expect(response.status).toBe(200);
+      expect(observed).toEqual({ method: "POST", contentLength: "0", body: "" });
+    } finally {
+      await server.stop(true);
+    }
+  });
   test("preserves an AbortError for an already-cancelled request", async () => {
     const controller = new AbortController();
     controller.abort();

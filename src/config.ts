@@ -78,6 +78,7 @@ import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import {
   COST4_RATE_KEYS,
   isValidCost4Rate,
+  refreshPreservedProviderOwner,
   refreshUserCostOverlays,
   withPreservedDiskOnlyProviders,
 } from "./usage/user-cost-overlays";
@@ -2742,6 +2743,24 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+}
+
+/**
+ * Adopt one schema-validated provider that was read from the authoritative disk
+ * config into a long-lived server config without rebasing any unrelated field.
+ * Updating the matching baseline row keeps a later guarded save from treating the
+ * adopted provider as an unsaved live edit that should defeat a newer disk change.
+ */
+export function adoptPersistedProviderIntoLiveConfig(
+  config: OcxConfig,
+  name: string,
+  provider: OcxProviderConfig,
+  persistedConfig?: OcxConfig,
+): void {
+  config.providers[name] = structuredClone(provider);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) baseline.providers[name] = structuredClone(provider);
+  if (persistedConfig) refreshPreservedProviderOwner(config, persistedConfig);
 }
 
 /** Test seam only: is this instance armed? */

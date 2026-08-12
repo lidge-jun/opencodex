@@ -3,10 +3,11 @@ import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "../src/config";
+import { loadConfig, saveConfig, writePid, writeRuntimePort } from "../src/config";
 import { upsertOAuthProvider } from "../src/oauth";
 import { notifyRunningProxy, notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
+import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -55,12 +56,14 @@ afterEach(() => {
 describe("CLI OAuth live-update credential preservation", () => {
   test("does not post provider credentials when a legacy health listener has no verified pid", async () => {
     const receivedPaths: string[] = [];
+    let healthProbeCount = 0;
     const listener = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
         if (url.pathname === "/healthz") {
+          healthProbeCount += 1;
           return Response.json({ status: "ok", version: "2.6.16", uptime: 5 });
         }
         receivedPaths.push(url.pathname);
@@ -70,18 +73,55 @@ describe("CLI OAuth live-update credential preservation", () => {
     try {
       saveConfig(keyModeXaiConfig(listener.port));
 
-      await notifyRunningProxy("xai", { apiKey: "live-update-sentinel-key" });
+      await notifyRunningProxy("xai");
 
+      expect(healthProbeCount).toBeGreaterThan(0);
       expect(receivedPaths).toEqual([]);
     } finally {
       await listener.stop(true);
     }
   }, 15_000);
 
+  test("does not probe or post for a provider outside the login-owned allowlist", async () => {
+    const receivedPaths: string[] = [];
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        receivedPaths.push(new URL(request.url).pathname);
+        return Response.json({ status: "ok" });
+      },
+    });
+    try {
+      const custom = keyModeXaiConfig(listener.port);
+      custom.defaultProvider = "custom";
+      custom.providers.custom = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom.example.test/v1",
+        apiKey: "custom-sentinel-key",
+      };
+      saveConfig(custom);
+
+      await notifyRunningProxy("custom");
+
+      expect(receivedPaths).toEqual([]);
+    } finally {
+      await listener.stop(true);
+    }
+  });
+
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
-    const server = startServer(0);
+    const localAttestationSecret = createLocalAttestationSecret();
+    const server = startServer(0, { localAttestationSecret });
     try {
       const port = server.port!;
+      writeRuntimePort({
+        pid: process.pid,
+        port,
+        hostname: "127.0.0.1",
+        attestationSecret: localAttestationSecret,
+      });
+      writePid(process.pid);
       const boot = loadConfig();
       boot.port = port;
       saveConfig(boot);
@@ -93,6 +133,7 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(afterLogin.providers.xai!.authMode).toBe("key");
       expect(afterLogin.providers.xai!.apiKey).toBe("live-update-sentinel-key");
 
+      const beforeNotify = readFileSync(join(testDir, "config.json"));
       await notifyRunningProxyAfterOAuthLogin("xai");
 
       const listed = await fetch(new URL("/api/providers", server.url)).then(r => r.json()) as Array<{
@@ -115,6 +156,7 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(disk.providers.xai!.authMode).toBe("key");
       expect(disk.providers.xai!.apiKey).toBe("live-update-sentinel-key");
       expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === "live-update-sentinel-key")).toBe(true);
+      expect(readFileSync(join(testDir, "config.json"))).toEqual(beforeNotify);
     } finally {
       await server.stop(true);
     }

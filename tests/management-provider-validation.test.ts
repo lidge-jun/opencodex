@@ -36,6 +36,7 @@ import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import * as destinationPolicy from "../src/lib/destination-policy";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { LOCAL_PROVIDER_RELOAD_NAME_HEADER, LOCAL_PROVIDER_RELOAD_PATH } from "../src/lib/local-provider-reload-contract";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -125,6 +126,120 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider reload adopts only the validated disk row without rewriting config", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: "old-live-key",
+        },
+        stable: {
+          adapter: "openai-chat",
+          baseUrl: "https://stable.example.test/v1",
+          apiKey: "stable-live-key",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const diskConfig = structuredClone(liveConfig);
+    diskConfig.providers.xai = {
+      ...diskConfig.providers.xai!,
+      apiKey: "new-disk-key",
+      headers: { "x-operator-header": "operator-owned" },
+    };
+    saveConfig(diskConfig);
+    const diskBefore = readFileSync(join(TEST_DIR, "config.json"));
+    const stableBefore = structuredClone(liveConfig.providers.stable);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+    try {
+      const request = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+        method: "POST",
+        headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+      });
+      const response = await handleManagementAPI(
+        request,
+        new URL(request.url),
+        liveConfig,
+        { createManagementConvergeCodex: catalogConvergenceFactory() },
+        "local-provider-reload-capability",
+      );
+      expect(response?.status).toBe(200);
+      expect(liveConfig.providers.xai).toEqual(diskConfig.providers.xai);
+      expect(liveConfig.providers.stable).toEqual(stableBefore);
+      expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(diskBefore);
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
+  test("provider reload rejects an untrusted principal and a disk rewrite during DNS validation", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: "old-live-key",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const diskConfig = structuredClone(liveConfig);
+    diskConfig.providers.xai = { ...diskConfig.providers.xai!, apiKey: "first-disk-key" };
+    saveConfig(diskConfig);
+
+    const untrusted = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+      method: "POST",
+      headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+    });
+    expect((await handleManagementAPI(
+      untrusted,
+      new URL(untrusted.url),
+      liveConfig,
+      { createManagementConvergeCodex: catalogConvergenceFactory() },
+      "admin-token",
+    ))?.status).toBe(403);
+
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockImplementation(async () => {
+        const changed = loadConfig();
+        changed.providers.xai = { ...changed.providers.xai!, apiKey: "second-disk-key" };
+        saveConfig(changed);
+        return null;
+      });
+    try {
+      const request = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+        method: "POST",
+        headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+      });
+      const response = await handleManagementAPI(
+        request,
+        new URL(request.url),
+        liveConfig,
+        { createManagementConvergeCodex: catalogConvergenceFactory() },
+        "local-provider-reload-capability",
+      );
+      expect(response?.status).toBe(409);
+      expect(liveConfig.providers.xai?.apiKey).toBe("old-live-key");
+      expect(loadConfig().providers.xai?.apiKey).toBe("second-disk-key");
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
   test("validates and exposes structured-output model opt-outs", () => {
     const provider = {
       adapter: "openai-chat",

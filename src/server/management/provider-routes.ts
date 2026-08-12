@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { clearGatherRoutedModelsInflight } from "../../codex/catalog/provider-fetch";
 import {
   DEFAULT_SUBAGENT_MODELS,
+  adoptPersistedProviderIntoLiveConfig,
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
@@ -12,6 +14,7 @@ import {
   normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  readConfigAdmissionSnapshot,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
 } from "../../config";
@@ -39,12 +42,13 @@ import {
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
-import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
+import { clearKeyCooldowns } from "../../providers/key-failover";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
-import { getProviderDiscoveryStatus } from "../../codex/model-cache";
+import { clearModelCache, getProviderDiscoveryStatus } from "../../codex/model-cache";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -68,6 +72,11 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
+import {
+  LOCAL_PROVIDER_RELOAD_NAME_HEADER,
+  LOCAL_PROVIDER_RELOAD_PATH,
+} from "../../lib/local-provider-reload-contract";
+import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -288,7 +297,7 @@ function applyProviderPatchFields(
 }
 
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/provider-quotas" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
@@ -313,6 +322,78 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       codexAccountMode: providerCodexAccountMode(name, p),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
+  }
+
+  if (url.pathname === LOCAL_PROVIDER_RELOAD_PATH && req.method === "POST") {
+    if (principal !== "local-provider-reload-capability") {
+      return jsonResponse({ error: "provider reload capability required" }, 403);
+    }
+    const name = req.headers.get(LOCAL_PROVIDER_RELOAD_NAME_HEADER) ?? "";
+    if (!isValidProviderName(name)) return jsonResponse({ error: "invalid provider reload target" }, 400);
+
+    const admitted = readConfigAdmissionSnapshot();
+    if (
+      admitted.kind !== "read"
+      || admitted.diagnostics.source !== "file"
+      || admitted.diagnostics.error !== null
+    ) {
+      return jsonResponse({ error: "provider reload source unavailable" }, 409);
+    }
+    const diskConfig = admitted.diagnostics.config;
+    if (!hasOwnProvider(diskConfig.providers, name)) {
+      return jsonResponse({ error: "provider reload target unavailable" }, 404);
+    }
+    const provider = diskConfig.providers[name]!;
+    const providerError = providerManagementConfigError(name, provider);
+    if (providerError) return jsonResponse({ error: "provider reload target invalid" }, 409);
+    const namespaceCollision = codexAccountNamespaceProviderCollisionError(
+      diskConfig.codexAccountNamespaces,
+      name,
+    );
+    if (namespaceCollision) return jsonResponse({ error: "provider reload target conflicts with routing" }, 409);
+    const allowBenchmarkAddresses = name === "openai" && isCanonicalOpenAiForwardProvider(provider);
+    const resolvedError = await providerDestinationResolvedError(name, provider, { allowBenchmarkAddresses });
+    if (resolvedError) return jsonResponse({ error: "provider reload target rejected" }, 409);
+
+    // Destination validation awaits DNS. A cooperating writer holds the same SQLite
+    // mutation lock, so the final exact-byte check and live adoption happen as one
+    // synchronous authority decision. The route does not save or reserialize disk.
+    let currentDiskConfig: OcxConfig | null = null;
+    let sourceChanged = false;
+    withConfigMutationLockSync(() => {
+      const current = readConfigAdmissionSnapshot();
+      if (
+        current.kind !== "read"
+        || current.diagnostics.source !== "file"
+        || current.diagnostics.error !== null
+        || current.contentSha256 !== admitted.contentSha256
+      ) {
+        sourceChanged = true;
+        return;
+      }
+      currentDiskConfig = current.diagnostics.config;
+      adoptPersistedProviderIntoLiveConfig(
+        config,
+        name,
+        current.diagnostics.config.providers[name]!,
+        current.diagnostics.config,
+      );
+    });
+    if (sourceChanged || currentDiskConfig === null) {
+      return jsonResponse({ error: "provider reload source changed" }, 409);
+    }
+    reconcileLiveStateStores();
+    // The complete disk snapshot owns display overlays, including providers that this
+    // live routing instance deliberately does not adopt.
+    refreshUserCostOverlays(currentDiskConfig);
+    clearGatherRoutedModelsInflight();
+    (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
+    clearAccountQuotaCache(name);
+    clearKeyCooldowns(name);
+    clearModelCache(name);
+    if (name === "openai") (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
+    const catalogRefresh = await convergeCodexCatalog();
+    return jsonResponse({ success: true, name, catalogRefresh });
   }
 
   // Add (or overwrite) a single provider. Merges into the live in-memory config and

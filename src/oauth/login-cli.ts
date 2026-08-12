@@ -1,12 +1,18 @@
 import * as readline from "node:readline";
 import { openUrl } from "../lib/open-url";
 import { loadConfig, saveConfig } from "../config";
-import { findLiveProxy, probeHostname } from "../server/proxy-liveness";
+import { findLiveProxy } from "../server/proxy-liveness";
+import { requestBoundLocalProviderReload } from "../server/local-provider-reload-client";
 import { isPublicOAuthProvider, listOAuthProviders, runLogin } from "./index";
 import { KEY_LOGIN_PROVIDERS, isKeyLoginProvider, validateApiKey, type KeyLoginProvider } from "./key-providers";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { configuredAdminToken } from "../lib/admin-secrets";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
+
+const LIVE_RELOAD_PROVIDERS = new Set<string>([
+  ...listOAuthProviders(),
+  ...Object.keys(KEY_LOGIN_PROVIDERS),
+]);
 
 export function runningProxyUpdateHeaders(): Headers {
   const headers = new Headers({ "Content-Type": "application/json" });
@@ -15,34 +21,21 @@ export function runningProxyUpdateHeaders(): Headers {
   return headers;
 }
 
-/** Push the new provider into a running proxy's live config so it routes without a restart. */
-export async function notifyRunningProxy(name: string, provider: unknown): Promise<void> {
-  // Identity-checked runtime-port lookup: reaches a fallback-port proxy and avoids
-  // posting credentials-adjacent config to whatever else answers on config.port.
+/** Ask the attested runtime to reload one already-persisted provider. */
+export async function notifyRunningProxy(name: string): Promise<void> {
+  if (!LIVE_RELOAD_PROVIDERS.has(name)) return;
   const live = await findLiveProxy();
-  if (!live || live.pid === null) return;
-  try {
-    await fetch(`http://${probeHostname(live.hostname)}:${live.port}/api/providers`, {
-      method: "POST",
-      headers: runningProxyUpdateHeaders(),
-      body: JSON.stringify({ name, provider }),
-    });
-  } catch {
-    /* proxy unreachable; disk config loads on next start */
-  }
+  if (!live) return;
+  await requestBoundLocalProviderReload(live, name);
 }
 
 /**
  * After `runLogin()` has persisted the merged provider (including preserved apiKey /
- * apiKeyPool / authMode), push that on-disk entry into a running proxy.
- *
- * Must not send `OAUTH_PROVIDERS[name].providerConfig`: POST /api/providers replaces the
- * live entry and saves it, which would drop the preserved key billing state.
+ * apiKeyPool / authMode), ask the attested proxy to reload that exact on-disk entry.
  */
 export async function notifyRunningProxyAfterOAuthLogin(name: string): Promise<void> {
-  const provider = loadConfig().providers[name];
-  if (!provider) return;
-  await notifyRunningProxy(name, provider);
+  if (!loadConfig().providers[name]) return;
+  await notifyRunningProxy(name);
 }
 
 export async function handleLogin(provider?: string): Promise<void> {
@@ -138,7 +131,7 @@ export async function commitKeyLoginProvider(
   const mergedProvider = mergeKeyLoginProviderRow(provider, config.providers[name]);
   config.providers[name] = mergedProvider;
   saveConfig(config);
-  await notifyRunningProxy(name, mergedProvider);
+  await notifyRunningProxy(name);
   return mergedProvider;
 }
 

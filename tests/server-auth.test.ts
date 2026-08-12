@@ -42,6 +42,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
+import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../src/lib/local-provider-reload-contract";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -689,6 +690,7 @@ describe("server local API auth", () => {
       expect(Object.keys(healthBody).sort()).toEqual([
         "pid",
         "port",
+        "providerReloadCapability",
         "restartCapability",
         "service",
         "status",
@@ -696,6 +698,7 @@ describe("server local API auth", () => {
         "version",
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
+      expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {
       await server.stop(true);
