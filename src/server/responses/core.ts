@@ -1748,6 +1748,11 @@ async function handleResponsesInner(
           else countJsonTokens(part);
         }
       }
+      // Message-level metadata rides the adapter-bound request too: Kiro's
+      // `kiroRedactedReasoning` is an opaque blob the adapter replays verbatim, and
+      // tool-result messages serialize `toolCallId`/`toolName`/`toolNamespace`/`isError`.
+      // Count the envelope without double-counting content (dropped via undefined).
+      countJsonTokens({ ...msg, content: undefined });
     }
     // The selected adapter also forwards prompt-bearing fields that the parser moved out of
     // `input` (instructions -> systemPrompt) or that never live in messages at all (tool
@@ -2387,19 +2392,24 @@ async function handleResponsesInner(
   // bridge tool injections happen later — all AFTER the pre-auth guard. Project the
   // deterministic additions and re-validate before adapter construction or upstream I/O
   // (auth has already happened; this is the last rejection point before any provider call).
+  // planWebSearch reads the auth store (which hardens files and may back up invalid
+  // config), so compute it ONCE here and reuse it in the dispatch path below instead of
+  // repeating that synchronous filesystem work.
+  const wsPlan = !routedCompaction && !isPassthrough
+    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
+    : undefined;
   let projectedBridgeToolText = "";
   if (!routedCompaction && !isPassthrough) {
-    const finalWsPlan = planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar);
     const finalImgPlan = planImageBridgeSync(config, parsed, route.provider);
     const finalVidPlan = planVideoBridgeSync(config, parsed, route.provider);
-    const webSearchActive = !!finalWsPlan && !adapter.runTurn;
+    const webSearchActive = !!wsPlan && !adapter.runTurn;
     if (webSearchActive) {
       projectedBridgeToolText += JSON.stringify(buildWebSearchTool());
     }
     // The media bridge injects only on streaming requests and only when web search does
     // not take priority for this turn, and it skips tools the client already declared
     // (mirroring the injection path's existingNames duplicate check).
-    if (parsed.stream && (finalImgPlan || finalVidPlan) && (!finalWsPlan || adapter.runTurn)) {
+    if (parsed.stream && (finalImgPlan || finalVidPlan) && (!wsPlan || adapter.runTurn)) {
       const bridgeTools = (parsed.context.tools ?? []).filter(t => {
         if (t.imageGeneration) return false;
         if (t.videoGeneration) return false;
@@ -3152,9 +3162,6 @@ async function handleResponsesInner(
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
-  const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
-    : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;
   const canRunWebSearch = !!wsPlan && !adapter.runTurn;

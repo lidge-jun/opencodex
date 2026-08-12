@@ -22,6 +22,7 @@ import {
 } from "../src/server/responses/collaboration";
 import { estimateTokens } from "../src/lib/token-estimate";
 import { COMPACT_PROMPT } from "../src/responses/compaction";
+import { encodeReasoningEnvelope } from "../src/responses/reasoning-envelope";
 
 setDefaultTimeout(30_000);
 
@@ -427,6 +428,39 @@ describe("responses input-size guard", () => {
         },
       },
       input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+    });
+    await expectOversizedRejection(res);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  test("counts message-level metadata such as Kiro redacted reasoning", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_x",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+    // A krc-only reasoning item attaches the opaque Kiro blob to the preceding assistant
+    // message; the adapter replays it verbatim, so it must count against the window even
+    // though it is not part of the message content.
+    const res = await postResponses(deepseekConfig(), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "ok" }],
+        },
+        {
+          type: "reasoning",
+          encrypted_content: encodeReasoningEnvelope({ krc: "a".repeat(4_200_000) }),
+        },
+      ],
     });
     await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
