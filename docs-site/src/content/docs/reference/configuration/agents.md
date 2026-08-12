@@ -131,13 +131,17 @@ then converts only that task item to a standard user message before routed-provi
 This is not local decryption and does not fix the Codex wire protocol. It depends on undocumented
 ChatGPT backend behavior and may stop working after a backend change. The recovered assignment is
 model output, not a cryptographically verified plaintext, so byte-for-byte fidelity is not
-guaranteed. Each scoped cache miss adds one authenticated ChatGPT request, consumes account quota,
-and adds latency before the routed request. Concurrent requests for the same scoped task share one
+guaranteed. A scoped cache miss may add an authenticated ChatGPT request, consume account quota, and
+add latency before the routed request. Concurrent requests for the same scoped task share one
 recovery request. Startup prints a warning whenever the feature is enabled.
 
 Admission and retention are deliberately narrow:
 
-- only a native Codex caller with a matching ChatGPT bearer/account pair is eligible;
+- recovery is available only while the proxy is bound to loopback;
+- only a native Codex caller with a matching ChatGPT bearer/account pair is eligible. This is the
+  credential shape used by the canonical `openai` provider with `authMode: "forward"`; recovery uses
+  only the pair on the incoming request and never substitutes API-key authentication, another
+  provider credential, or another Codex account;
 - callers using `x-opencodex-api-key`, `x-api-key`, generic API credentials, or a proxy admission
   secret keep the existing `unreadable_encrypted_agent_task` failure;
 - raw ChatGPT credentials are sent only to the hard-coded ChatGPT endpoint and are never placed in

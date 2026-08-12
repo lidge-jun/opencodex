@@ -133,8 +133,11 @@ content when you control the caller.
 
 An experimental, disabled-by-default `agentTaskRecovery` option can recover this specific native-
 to-routed shape through a raw Responses passthrough to the fixed ChatGPT `/responses` endpoint using
-forward-mode authentication. Only `authorization`, matching `chatgpt-account-id`, `originator`, and
-optional `openai-beta`/`user-agent` metadata are forwarded; no other caller headers cross the boundary.
+the incoming credential shape used by the canonical `openai` provider with `authMode: "forward"`.
+Recovery is available only while the proxy is bound to loopback. It never substitutes API-key
+authentication, another provider credential, or another Codex account. Only `authorization`, matching
+`chatgpt-account-id`, `originator`, and optional `openai-beta`/`user-agent` metadata are forwarded;
+`content-type` and `accept` are generated locally, and no other caller headers cross the boundary.
 It consumes quota, adds latency, briefly retains recovered plaintext in a bounded in-memory cache,
 and depends on undocumented ChatGPT backend behavior. Because a model returns the recovered text,
 byte-for-byte fidelity is not guaranteed. It rejects generic/API-key proxy callers and preserves
