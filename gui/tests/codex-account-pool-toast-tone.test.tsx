@@ -18,6 +18,8 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let originalConfirm: typeof window.confirm;
+let consumeAttempts = 0;
+let consumedOperationIds: string[] = [];
 
 const account: CodexAccountEntry = {
   id: "pool-1",
@@ -74,6 +76,8 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalConfirm = window.confirm;
   window.confirm = () => true;
+  consumeAttempts = 0;
+  consumedOperationIds = [];
 
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
@@ -83,6 +87,10 @@ beforeEach(() => {
         return Response.json({ credits: [] });
       }
       if (url.pathname === "/api/codex-auth/reset-credits/consume" && (init?.method ?? "GET") === "POST") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
         return Response.json({ code: "already_redeemed", remaining: 2 });
       }
       if (url.pathname.startsWith("/api/codex-auth/")) {
@@ -260,4 +268,54 @@ test("successful redeem clears a stale error toast tone", async () => {
 
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeTruthy();
+});
+
+test("LAN fallback UUID remains stable across a failed redeem retry", async () => {
+  const cryptoObject = globalThis.crypto;
+  const originalRandomUUID = cryptoObject.randomUUID;
+  Object.defineProperty(cryptoObject, "randomUUID", {
+    configurable: true,
+    value: () => { throw new Error("randomUUID requires a secure context"); },
+  });
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits/consume") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
+        if (consumeAttempts === 1) return Response.json({ error: "lost" }, { status: 502 });
+        return Response.json({ code: "already_redeemed", remaining: 2 });
+      }
+      return baseFetch(input, init);
+    },
+  });
+  try {
+    await mountPool(makeController());
+    const resetBtn = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { resetBtn.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    )!;
+    await act(async () => { useCredit.click(); });
+    const redeem = () => [...host.querySelectorAll("button")].find(button => {
+      const text = (button.textContent ?? "").trim();
+      return text === "Use Credit" || text.startsWith("Resetting");
+    })!;
+    await act(async () => { redeem().click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    await act(async () => { redeem().click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    expect(consumeAttempts).toBe(2);
+    expect(new Set(consumedOperationIds).size).toBe(1);
+    expect(consumedOperationIds[0]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+  } finally {
+    Object.defineProperty(cryptoObject, "randomUUID", {
+      configurable: true,
+      value: originalRandomUUID,
+    });
+  }
 });

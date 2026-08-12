@@ -10,7 +10,7 @@ import {
   type CodexResetCreditRecoveryGeneration,
   type CodexReservedOperationId,
 } from "./reset-credit-recovery";
-import { isValidCodexAccountId } from "./account-id";
+import { isValidCodexAccountId, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
 export const MAX_RESET_CREDIT_OPERATION_ACCOUNTS = 128;
 const ACCOUNT_KEY_PATTERN = /^[0-9a-f]{64}$/;
@@ -26,11 +26,13 @@ const TERMINAL_STATE_BY_CODE: Readonly<Record<
 const STATES: ReadonlySet<string> = new Set(["pending", "ambiguous", "confirmed", "stopped"]);
 
 type ResetCreditOperationState = "pending" | "ambiguous" | "confirmed" | "stopped";
+type ResetCreditOperationKind = "recovery" | "manual";
 
 type ResetCreditOperationRecord = Readonly<{
   accountKey: string;
-  credentialGeneration: number;
-  exhaustionGeneration: number;
+  operationKind: ResetCreditOperationKind;
+  credentialGeneration?: number;
+  exhaustionGeneration?: number;
   operationId: string;
   state: ResetCreditOperationState;
   code?: CodexResetCreditConsumeCode;
@@ -40,6 +42,7 @@ type ResetCreditOperationRecord = Readonly<{
 
 type ResetCreditOperationRow = {
   account_key: unknown;
+  operation_kind: unknown;
   credential_generation: unknown;
   exhaustion_generation: unknown;
   operation_id: unknown;
@@ -58,8 +61,41 @@ export type UpdateResetCreditOperationResult =
   | Readonly<{ kind: "updated" }>
   | Readonly<{ kind: "mismatch" | "unavailable" }>;
 
+export type ManualResetCreditOperationIdentity = Readonly<{
+  accountId: string;
+  chatgptAccountId: string;
+  operationId: string;
+}>;
+
+export type OpenManualResetCreditOperationResult =
+  | Readonly<{ kind: "execute"; operationId: CodexReservedOperationId; resumed: boolean }>
+  | Readonly<{ kind: "terminal"; operationId: CodexReservedOperationId; code: CodexResetCreditConsumeCode }>
+  | Readonly<{ kind: "capacity" | "unavailable" }>;
+
 const TABLE_NAME = "reset_credit_operations";
 const CREATE_TABLE = `CREATE TABLE main.reset_credit_operations (
+    account_key TEXT PRIMARY KEY,
+    operation_kind TEXT NOT NULL CHECK (operation_kind IN ('recovery', 'manual')),
+    credential_generation INTEGER,
+    exhaustion_generation INTEGER,
+    operation_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    code TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= created_at),
+    CHECK (
+      (operation_kind = 'recovery'
+        AND credential_generation IS NOT NULL AND credential_generation >= 0
+        AND exhaustion_generation IS NOT NULL AND exhaustion_generation >= 0)
+      OR
+      (operation_kind = 'manual'
+        AND credential_generation IS NULL AND exhaustion_generation IS NULL)
+    )
+  ) STRICT, WITHOUT ROWID`;
+const EXPECTED_SCHEMA_SQL = CREATE_TABLE.replace("main.", "");
+export const RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS = EXPECTED_SCHEMA_SQL;
+const LEGACY_TABLE_NAME = "reset_credit_operations_legacy_v1";
+const LEGACY_CREATE_TABLE = `CREATE TABLE reset_credit_operations (
     account_key TEXT PRIMARY KEY,
     credential_generation INTEGER NOT NULL CHECK (credential_generation >= 0),
     exhaustion_generation INTEGER NOT NULL CHECK (exhaustion_generation >= 0),
@@ -69,35 +105,42 @@ const CREATE_TABLE = `CREATE TABLE main.reset_credit_operations (
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= created_at)
   ) STRICT, WITHOUT ROWID`;
-const EXPECTED_SCHEMA_SQL = CREATE_TABLE.replace("main.", "");
-export const RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS = EXPECTED_SCHEMA_SQL;
+export const RESET_CREDIT_OPERATION_LEGACY_SCHEMA_SQL_FOR_TESTS = LEGACY_CREATE_TABLE;
 const SELECT_ALL = `
-  SELECT account_key, credential_generation, exhaustion_generation, operation_id,
+  SELECT account_key, operation_kind, credential_generation,
+         exhaustion_generation, operation_id,
          state, code, created_at, updated_at
     FROM main.reset_credit_operations
    ORDER BY account_key
    LIMIT ${MAX_RESET_CREDIT_OPERATION_ACCOUNTS + 1}`;
 const SELECT_BY_KEY = `
-  SELECT account_key, credential_generation, exhaustion_generation, operation_id,
+  SELECT account_key, operation_kind, credential_generation,
+         exhaustion_generation, operation_id,
          state, code, created_at, updated_at
     FROM main.reset_credit_operations
    WHERE account_key = ?
    LIMIT 2`;
+const SELECT_KEY_BY_OPERATION_ID = `
+  SELECT account_key
+    FROM main.reset_credit_operations
+   WHERE operation_id = ?
+   LIMIT 2`;
 const INSERT_RECORD = `
   INSERT INTO main.reset_credit_operations (
-    account_key, credential_generation, exhaustion_generation, operation_id,
-    state, code, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+    account_key, operation_kind, credential_generation, exhaustion_generation,
+    operation_id, state, code, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const REPLACE_RECORD = `
   UPDATE main.reset_credit_operations
-     SET credential_generation = ?, exhaustion_generation = ?, operation_id = ?,
-         state = ?, code = ?, created_at = ?, updated_at = ?
+     SET operation_kind = ?, credential_generation = ?, exhaustion_generation = ?,
+         operation_id = ?, state = ?, code = ?,
+         created_at = ?, updated_at = ?
    WHERE account_key = ?`;
 const UPDATE_RECORD = `
   UPDATE main.reset_credit_operations
      SET state = ?, code = ?, updated_at = ?
-   WHERE account_key = ? AND credential_generation = ?
-     AND exhaustion_generation = ? AND operation_id = ?`;
+   WHERE account_key = ? AND operation_kind = ? AND operation_id = ?
+     AND credential_generation IS ? AND exhaustion_generation IS ?`;
 
 type SchemaObjectRow = {
   type: unknown;
@@ -127,6 +170,18 @@ type TableColumnRow = {
 
 const EXPECTED_COLUMNS = Object.freeze([
   Object.freeze({ name: "account_key", type: "TEXT", notnull: 1, pk: 1 }),
+  Object.freeze({ name: "operation_kind", type: "TEXT", notnull: 1, pk: 0 }),
+  Object.freeze({ name: "credential_generation", type: "INTEGER", notnull: 0, pk: 0 }),
+  Object.freeze({ name: "exhaustion_generation", type: "INTEGER", notnull: 0, pk: 0 }),
+  Object.freeze({ name: "operation_id", type: "TEXT", notnull: 1, pk: 0 }),
+  Object.freeze({ name: "state", type: "TEXT", notnull: 1, pk: 0 }),
+  Object.freeze({ name: "code", type: "TEXT", notnull: 0, pk: 0 }),
+  Object.freeze({ name: "created_at", type: "INTEGER", notnull: 1, pk: 0 }),
+  Object.freeze({ name: "updated_at", type: "INTEGER", notnull: 1, pk: 0 }),
+]);
+
+const LEGACY_COLUMNS = Object.freeze([
+  Object.freeze({ name: "account_key", type: "TEXT", notnull: 1, pk: 1 }),
   Object.freeze({ name: "credential_generation", type: "INTEGER", notnull: 1, pk: 0 }),
   Object.freeze({ name: "exhaustion_generation", type: "INTEGER", notnull: 1, pk: 0 }),
   Object.freeze({ name: "operation_id", type: "TEXT", notnull: 1, pk: 0 }),
@@ -138,6 +193,20 @@ const EXPECTED_COLUMNS = Object.freeze([
 
 function accountKey(accountId: string): string {
   return createHash("sha256").update(`codex-reset-credit-operation\0${accountId}`).digest("hex");
+}
+
+function validateManualAccountId(accountId: string): void {
+  if (accountId !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(accountId)) {
+    throw new TypeError("invalid manual reset-credit account");
+  }
+}
+
+function manualPhysicalAccountKey(chatgptAccountId: string): string {
+  const normalized = chatgptAccountId.trim();
+  if (!normalized) throw new TypeError("invalid manual reset-credit credential identity");
+  return createHash("sha256")
+    .update(`codex-reset-credit-manual-physical\0${normalized}`)
+    .digest("hex");
 }
 
 function isGenerationNumber(value: unknown): value is number {
@@ -157,13 +226,20 @@ function parseRecord(row: ResetCreditOperationRow | null): ResetCreditOperationR
   const state = row.state;
   const code = row.code;
   if (typeof row.account_key !== "string" || !ACCOUNT_KEY_PATTERN.test(row.account_key)
-    || !isGenerationNumber(row.credential_generation)
-    || !isGenerationNumber(row.exhaustion_generation)
+    || (row.operation_kind !== "recovery" && row.operation_kind !== "manual")
     || !isCodexResetCreditOperationId(row.operation_id)
     || typeof state !== "string" || !STATES.has(state)
     || !isGenerationNumber(row.created_at)
     || !isGenerationNumber(row.updated_at)
     || row.updated_at < row.created_at) {
+    return undefined;
+  }
+  const recovery = row.operation_kind === "recovery";
+  const manual = row.operation_kind === "manual";
+  if (recovery !== (isGenerationNumber(row.credential_generation)
+      && isGenerationNumber(row.exhaustion_generation))
+    || manual !== (row.credential_generation === null
+      && row.exhaustion_generation === null)) {
     return undefined;
   }
   const terminal = state === "confirmed" || state === "stopped";
@@ -175,14 +251,119 @@ function parseRecord(row: ResetCreditOperationRow | null): ResetCreditOperationR
   if (terminal && state !== terminalState) return undefined;
   return Object.freeze({
     accountKey: row.account_key,
-    credentialGeneration: row.credential_generation,
-    exhaustionGeneration: row.exhaustion_generation,
+    operationKind: row.operation_kind,
+    ...(recovery
+      ? {
+          credentialGeneration: row.credential_generation as number,
+          exhaustionGeneration: row.exhaustion_generation as number,
+        }
+      : {}),
     operationId: row.operation_id,
     state: state as ResetCreditOperationState,
     ...(terminal ? { code: code as CodexResetCreditConsumeCode } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
+}
+
+function assertColumnLayout(
+  database: Database,
+  tableName: string,
+  expectedColumns: readonly Readonly<{ name: string; type: string; notnull: number; pk: number }>[],
+): void {
+  const tableRows = database.query<TableListRow, []>("PRAGMA main.table_list").all()
+    .filter(row => row.name === tableName);
+  if (tableRows.length !== 1) throw new Error("invalid reset-credit operation ledger table");
+  const table = tableRows[0]!;
+  if (table.schema !== "main" || table.type !== "table" || table.ncol !== expectedColumns.length
+    || table.wr !== 1 || table.strict !== 1) {
+    throw new Error("invalid reset-credit operation ledger table");
+  }
+  const columns = database.query<TableColumnRow, []>(
+    `PRAGMA main.table_xinfo(${tableName})`,
+  ).all();
+  if (columns.length !== expectedColumns.length) {
+    throw new Error("invalid reset-credit operation ledger columns");
+  }
+  for (let index = 0; index < expectedColumns.length; index += 1) {
+    const actual = columns[index]!;
+    const expected = expectedColumns[index]!;
+    if (actual.cid !== index || actual.name !== expected.name || actual.type !== expected.type
+      || actual.notnull !== expected.notnull || actual.dflt_value !== null
+      || actual.pk !== expected.pk || actual.hidden !== 0) {
+      throw new Error("invalid reset-credit operation ledger columns");
+    }
+  }
+}
+
+function assertNoLedgerTriggers(database: Database, tableName: string): void {
+  const mainTrigger = database.query<{ name: unknown }, [string]>(`
+    SELECT name FROM main.sqlite_schema
+     WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE LIMIT 1
+  `).get(tableName);
+  const tempTrigger = database.query<{ name: unknown }, [string]>(`
+    SELECT name FROM temp.sqlite_schema
+     WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE LIMIT 1
+  `).get(tableName);
+  if (mainTrigger || tempTrigger) throw new Error("reset-credit operation ledger triggers are forbidden");
+}
+
+function migrateLegacyTable(database: Database): void {
+  assertColumnLayout(database, TABLE_NAME, LEGACY_COLUMNS);
+  assertNoLedgerTriggers(database, TABLE_NAME);
+  const legacyRows = database.query<{
+    account_key: unknown;
+    credential_generation: unknown;
+    exhaustion_generation: unknown;
+    operation_id: unknown;
+    state: unknown;
+    code: unknown;
+    created_at: unknown;
+    updated_at: unknown;
+  }, []>(`
+    SELECT account_key, credential_generation, exhaustion_generation, operation_id,
+           state, code, created_at, updated_at
+      FROM main.reset_credit_operations
+     ORDER BY account_key
+     LIMIT ${MAX_RESET_CREDIT_OPERATION_ACCOUNTS + 1}
+  `).all();
+  if (legacyRows.length > MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
+    throw new Error("invalid reset-credit operation ledger capacity");
+  }
+  const keys = new Set<string>();
+  const operations = new Set<string>();
+  for (const row of legacyRows) {
+    const record = parseRecord({ ...row, operation_kind: "recovery" });
+    if (!record || keys.has(record.accountKey) || operations.has(record.operationId)) {
+      throw new Error("invalid reset-credit operation ledger state");
+    }
+    keys.add(record.accountKey);
+    operations.add(record.operationId);
+  }
+  database.exec(`ALTER TABLE main.${TABLE_NAME} RENAME TO ${LEGACY_TABLE_NAME}`);
+  database.exec(CREATE_TABLE);
+  database.exec(`
+    INSERT INTO main.${TABLE_NAME} (
+      account_key, operation_kind, credential_generation, exhaustion_generation,
+      operation_id, state, code, created_at, updated_at
+    )
+    SELECT account_key, 'recovery', credential_generation, exhaustion_generation,
+           operation_id, state, code, created_at, updated_at
+      FROM main.${LEGACY_TABLE_NAME}
+  `);
+  database.exec(`DROP TABLE main.${LEGACY_TABLE_NAME}`);
+}
+
+function isExactLegacySchema(database: Database, schema: SchemaObjectRow): boolean {
+  if (schema.type !== "table" || schema.name !== TABLE_NAME || schema.tbl_name !== TABLE_NAME
+    || schema.sql !== LEGACY_CREATE_TABLE) return false;
+  try {
+    assertColumnLayout(database, TABLE_NAME, LEGACY_COLUMNS);
+    assertNoLedgerTriggers(database, TABLE_NAME);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function assertCanonicalTable(database: Database): void {
@@ -195,6 +376,8 @@ function assertCanonicalTable(database: Database): void {
   `).all(TABLE_NAME, TABLE_NAME);
   if (schemaRows.length === 0) {
     database.exec(CREATE_TABLE);
+  } else if (schemaRows.length === 1 && isExactLegacySchema(database, schemaRows[0]!)) {
+    migrateLegacyTable(database);
   } else if (schemaRows.length !== 1
     || schemaRows[0]?.type !== "table"
     || schemaRows[0]?.name !== TABLE_NAME
@@ -202,41 +385,8 @@ function assertCanonicalTable(database: Database): void {
     || schemaRows[0]?.sql !== EXPECTED_SCHEMA_SQL) {
     throw new Error("invalid reset-credit operation ledger schema");
   }
-
-  const tableRows = database.query<TableListRow, []>("PRAGMA main.table_list").all()
-    .filter(row => row.name === TABLE_NAME);
-  if (tableRows.length !== 1) throw new Error("invalid reset-credit operation ledger table");
-  const table = tableRows[0]!;
-  if (table.schema !== "main" || table.type !== "table" || table.ncol !== EXPECTED_COLUMNS.length
-    || table.wr !== 1 || table.strict !== 1) {
-    throw new Error("invalid reset-credit operation ledger table");
-  }
-
-  const columns = database.query<TableColumnRow, []>(
-    `PRAGMA main.table_xinfo(${TABLE_NAME})`,
-  ).all();
-  if (columns.length !== EXPECTED_COLUMNS.length) {
-    throw new Error("invalid reset-credit operation ledger columns");
-  }
-  for (let index = 0; index < EXPECTED_COLUMNS.length; index += 1) {
-    const actual = columns[index]!;
-    const expected = EXPECTED_COLUMNS[index]!;
-    if (actual.cid !== index || actual.name !== expected.name || actual.type !== expected.type
-      || actual.notnull !== expected.notnull || actual.dflt_value !== null
-      || actual.pk !== expected.pk || actual.hidden !== 0) {
-      throw new Error("invalid reset-credit operation ledger columns");
-    }
-  }
-
-  const mainTrigger = database.query<{ name: unknown }, [string]>(`
-    SELECT name FROM main.sqlite_schema
-     WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE LIMIT 1
-  `).get(TABLE_NAME);
-  const tempTrigger = database.query<{ name: unknown }, [string]>(`
-    SELECT name FROM temp.sqlite_schema
-     WHERE type = 'trigger' AND tbl_name = ? COLLATE NOCASE LIMIT 1
-  `).get(TABLE_NAME);
-  if (mainTrigger || tempTrigger) throw new Error("reset-credit operation ledger triggers are forbidden");
+  assertColumnLayout(database, TABLE_NAME, EXPECTED_COLUMNS);
+  assertNoLedgerTriggers(database, TABLE_NAME);
 }
 
 function initializeTable(database: Database): number {
@@ -267,8 +417,19 @@ function readRecord(database: Database, key: string): ResetCreditOperationRecord
   return record;
 }
 
+function operationOwner(database: Database, operationId: string): string | undefined {
+  const rows = database.query<{ account_key: unknown }, [string]>(SELECT_KEY_BY_OPERATION_ID).all(operationId);
+  if (rows.length > 1) throw new Error("duplicate reset-credit operation ids");
+  const owner = rows[0]?.account_key;
+  if (owner !== undefined && (typeof owner !== "string" || !ACCOUNT_KEY_PATTERN.test(owner))) {
+    throw new Error("invalid reset-credit operation owner");
+  }
+  return owner;
+}
+
 function sameRecord(left: ResetCreditOperationRecord, right: ResetCreditOperationRecord): boolean {
   return left.accountKey === right.accountKey
+    && left.operationKind === right.operationKind
     && left.credentialGeneration === right.credentialGeneration
     && left.exhaustionGeneration === right.exhaustionGeneration
     && left.operationId === right.operationId
@@ -294,8 +455,8 @@ function compareGeneration(
 ): -1 | 0 | 1 {
   return compareCodexResetCreditRecoveryGenerationOrder({
     accountId: generation.accountId,
-    credentialGeneration: record.credentialGeneration,
-    exhaustionGeneration: record.exhaustionGeneration,
+    credentialGeneration: record.credentialGeneration!,
+    exhaustionGeneration: record.exhaustionGeneration!,
   }, generation);
 }
 
@@ -373,6 +534,9 @@ export function openResetCreditOperation(
       const key = accountKey(generation.accountId);
       const current = readRecord(database, key);
       if (current) {
+        if (current.operationKind !== "recovery") {
+          return Object.freeze({ kind: "unresolved-prior-generation" as const });
+        }
         const comparison = compareGeneration(current, generation);
         if (comparison > 0) return Object.freeze({ kind: "stale-generation" as const });
         if (comparison === 0) {
@@ -397,6 +561,7 @@ export function openResetCreditOperation(
       const operationId = randomUUID();
       if (!isCodexResetCreditOperationId(operationId)) throw new Error("runtime generated invalid UUID");
       const values = [
+        "recovery",
         generation.credentialGeneration,
         generation.exhaustionGeneration,
         operationId,
@@ -404,14 +569,14 @@ export function openResetCreditOperation(
         null,
         now,
         now,
-        key,
       ] as const;
       const result = current
-        ? database.query(REPLACE_RECORD).run(...values)
-        : database.query(INSERT_RECORD).run(key, ...values.slice(0, 7));
+        ? database.query(REPLACE_RECORD).run(...values, key)
+        : database.query(INSERT_RECORD).run(key, ...values);
       if (result.changes !== 1) throw new Error("reset-credit operation reservation lost ownership");
       assertStoredRecord(database, Object.freeze({
         accountKey: key,
+        operationKind: "recovery",
         credentialGeneration: generation.credentialGeneration,
         exhaustionGeneration: generation.exhaustionGeneration,
         operationId,
@@ -432,18 +597,23 @@ export function openResetCreditOperation(
 }
 
 function updateOperation(
-  generation: CodexResetCreditRecoveryGeneration,
+  owner: Readonly<{
+    accountKey: string;
+    operationKind: ResetCreditOperationKind;
+    credentialGeneration?: number;
+    exhaustionGeneration?: number;
+  }>,
   operationId: string,
   update: (record: ResetCreditOperationRecord) => ResetCreditOperationRecord | undefined,
 ): UpdateResetCreditOperationResult {
-  validateGeneration(generation);
   if (!isCodexResetCreditOperationId(operationId)) return Object.freeze({ kind: "mismatch" });
   try {
     return withLedger(database => {
-      const key = accountKey(generation.accountId);
-      const current = readRecord(database, key);
+      const current = readRecord(database, owner.accountKey);
       if (!current
-        || compareGeneration(current, generation) !== 0
+        || current.operationKind !== owner.operationKind
+        || current.credentialGeneration !== owner.credentialGeneration
+        || current.exhaustionGeneration !== owner.exhaustionGeneration
         || current.operationId !== operationId) {
         return Object.freeze({ kind: "mismatch" as const });
       }
@@ -453,10 +623,11 @@ function updateOperation(
         updated.state,
         updated.code ?? null,
         updated.updatedAt,
-        key,
-        generation.credentialGeneration,
-        generation.exhaustionGeneration,
+        owner.accountKey,
+        owner.operationKind,
         operationId,
+        owner.credentialGeneration ?? null,
+        owner.exhaustionGeneration ?? null,
       );
       if (result.changes !== 1) throw new Error("reset-credit operation update lost ownership");
       assertStoredRecord(database, updated);
@@ -478,7 +649,13 @@ export function markResetCreditOperationAmbiguous(
   now = Date.now(),
 ): UpdateResetCreditOperationResult {
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
-  return updateOperation(generation, operationId, record => {
+  validateGeneration(generation);
+  return updateOperation({
+    accountKey: accountKey(generation.accountId),
+    operationKind: "recovery",
+    credentialGeneration: generation.credentialGeneration,
+    exhaustionGeneration: generation.exhaustionGeneration,
+  }, operationId, record => {
     if (isTerminal(record)) return undefined;
     return Object.freeze({
       ...record,
@@ -504,7 +681,135 @@ export function settleResetCreditOperation(
   if (!Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)) {
     return Object.freeze({ kind: "mismatch" });
   }
-  return updateOperation(generation, operationId, record => {
+  validateGeneration(generation);
+  return updateOperation({
+    accountKey: accountKey(generation.accountId),
+    operationKind: "recovery",
+    credentialGeneration: generation.credentialGeneration,
+    exhaustionGeneration: generation.exhaustionGeneration,
+  }, operationId, record => {
+    if (isTerminal(record)) return record.code === code ? record : undefined;
+    return Object.freeze({
+      ...record,
+      state: TERMINAL_STATE_BY_CODE[code],
+      code,
+      updatedAt: Math.max(record.updatedAt, now),
+    });
+  });
+}
+
+function validateManualIdentity(identity: ManualResetCreditOperationIdentity): {
+  accountKey: string;
+} {
+  if (!isCodexResetCreditOperationId(identity.operationId)) {
+    throw new TypeError("invalid manual reset-credit operation id");
+  }
+  validateManualAccountId(identity.accountId);
+  return { accountKey: manualPhysicalAccountKey(identity.chatgptAccountId) };
+}
+
+/** Reserve or restore one explicit manual redemption intent. */
+export function openManualResetCreditOperation(
+  identity: ManualResetCreditOperationIdentity,
+  now = Date.now(),
+): OpenManualResetCreditOperationResult {
+  const owner = validateManualIdentity(identity);
+  if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
+  try {
+    return withLedger((database, recordCount) => {
+      const current = readRecord(database, owner.accountKey);
+      if (current) {
+        if (current.operationKind !== "manual") {
+          return Object.freeze({ kind: "unavailable" as const });
+        }
+        if (current.operationId !== identity.operationId) {
+          if (!isTerminal(current)) {
+            return Object.freeze({
+              kind: "execute" as const,
+              operationId: current.operationId as CodexReservedOperationId,
+              resumed: true,
+            });
+          }
+        } else if (isTerminal(current)) {
+          return Object.freeze({
+            kind: "terminal" as const,
+            operationId: current.operationId as CodexReservedOperationId,
+            code: current.code!,
+          });
+        } else {
+          return Object.freeze({
+            kind: "execute" as const,
+            operationId: current.operationId as CodexReservedOperationId,
+            resumed: true,
+          });
+        }
+      } else if (recordCount >= MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
+        return Object.freeze({ kind: "capacity" as const });
+      }
+
+      const existingOwner = operationOwner(database, identity.operationId);
+      if (existingOwner !== undefined && existingOwner !== owner.accountKey) {
+        return Object.freeze({ kind: "unavailable" as const });
+      }
+
+      const record: ResetCreditOperationRecord = Object.freeze({
+        accountKey: owner.accountKey,
+        operationKind: "manual",
+        operationId: identity.operationId,
+        state: "pending",
+        createdAt: now,
+        updatedAt: now,
+      });
+      const values = [
+        "manual",
+        null,
+        null,
+        identity.operationId,
+        "pending",
+        null,
+        now,
+        now,
+      ] as const;
+      const result = current
+        ? database.query(REPLACE_RECORD).run(...values, owner.accountKey)
+        : database.query(INSERT_RECORD).run(owner.accountKey, ...values);
+      if (result.changes !== 1) throw new Error("manual reset-credit reservation lost ownership");
+      assertStoredRecord(database, record);
+      return Object.freeze({
+        kind: "execute" as const,
+        operationId: identity.operationId as CodexReservedOperationId,
+        resumed: false,
+      });
+    });
+  } catch (error) {
+    warnLedgerUnavailable(error);
+    return Object.freeze({ kind: "unavailable" });
+  }
+}
+
+export function markManualResetCreditOperationAmbiguous(
+  identity: ManualResetCreditOperationIdentity,
+  now = Date.now(),
+): UpdateResetCreditOperationResult {
+  const owner = validateManualIdentity(identity);
+  if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
+  return updateOperation({ ...owner, operationKind: "manual" }, identity.operationId, record => {
+    if (isTerminal(record)) return undefined;
+    return Object.freeze({ ...record, state: "ambiguous", code: undefined, updatedAt: Math.max(record.updatedAt, now) });
+  });
+}
+
+export function settleManualResetCreditOperation(
+  identity: ManualResetCreditOperationIdentity,
+  code: CodexResetCreditConsumeCode,
+  now = Date.now(),
+): UpdateResetCreditOperationResult {
+  const owner = validateManualIdentity(identity);
+  if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
+  if (!Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)) {
+    return Object.freeze({ kind: "mismatch" });
+  }
+  return updateOperation({ ...owner, operationKind: "manual" }, identity.operationId, record => {
     if (isTerminal(record)) return record.code === code ? record : undefined;
     return Object.freeze({
       ...record,

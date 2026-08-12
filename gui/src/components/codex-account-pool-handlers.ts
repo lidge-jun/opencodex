@@ -12,6 +12,7 @@ function remainingCreditsToast(
 export async function redeemResetCredit(
   apiBase: string,
   accountId: string,
+  operationId: string,
   t: TFn,
   load: (refresh?: boolean) => Promise<boolean>,
 ): Promise<{ ok: boolean; toast?: string; close?: boolean }> {
@@ -19,7 +20,7 @@ export async function redeemResetCredit(
     const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits/consume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accountId }),
+      body: JSON.stringify({ accountId, operationId }),
     });
     const result = await readJsonIfOk<{ code: string; remaining?: number }>(resp);
     if (!result) return { ok: false, toast: t("codexAuth.resetError") };

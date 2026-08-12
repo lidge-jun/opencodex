@@ -5,9 +5,13 @@ import { join } from "node:path";
 import { withConfigMutationLockSync } from "../src/config";
 import {
   MAX_RESET_CREDIT_OPERATION_ACCOUNTS,
+  RESET_CREDIT_OPERATION_LEGACY_SCHEMA_SQL_FOR_TESTS,
   RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS,
+  markManualResetCreditOperationAmbiguous,
   markResetCreditOperationAmbiguous,
+  openManualResetCreditOperation,
   openResetCreditOperation,
+  settleManualResetCreditOperation,
   settleResetCreditOperation,
 } from "../src/codex/reset-credit-operation-ledger";
 import {
@@ -80,6 +84,120 @@ afterEach(async () => {
 });
 
 describe("Codex reset-credit operation ledger", () => {
+  test("migrates the exact prior recovery schema without changing durable state", () => {
+    const database = new Database(databasePath(), { create: true });
+    const key = createHash("sha256")
+      .update(`codex-reset-credit-operation\0${GENERATION.accountId}`)
+      .digest("hex");
+    const operationId = fixtureOperationId(699);
+    try {
+      database.exec(RESET_CREDIT_OPERATION_LEGACY_SCHEMA_SQL_FOR_TESTS);
+      database.prepare(`
+        INSERT INTO reset_credit_operations VALUES (?, ?, ?, ?, 'ambiguous', NULL, 100, 200)
+      `).run(key, GENERATION.credentialGeneration, GENERATION.exhaustionGeneration, operationId);
+    } finally {
+      database.close();
+    }
+
+    expect(openResetCreditOperation(GENERATION, 300)).toEqual({
+      kind: "execute",
+      operationId,
+      resumed: true,
+    });
+    const migrated = new Database(databasePath(), { readonly: true });
+    try {
+      expect(migrated.query<Record<string, unknown>, []>(
+        "SELECT * FROM reset_credit_operations",
+      ).get()).toMatchObject({
+        account_key: key,
+        operation_kind: "recovery",
+        credential_generation: GENERATION.credentialGeneration,
+        exhaustion_generation: GENERATION.exhaustionGeneration,
+        operation_id: operationId,
+        state: "ambiguous",
+        created_at: 100,
+        updated_at: 200,
+      });
+    } finally {
+      migrated.close();
+    }
+  });
+
+  test("manual operations resume one intent and short-circuit its terminal result", () => {
+    const identity = {
+      accountId: "pool-manual",
+      chatgptAccountId: "chatgpt-manual",
+      operationId: fixtureOperationId(700),
+    };
+    expect(openManualResetCreditOperation(identity, 100)).toEqual({
+      kind: "execute",
+      operationId: identity.operationId,
+      resumed: false,
+    });
+    expect(markManualResetCreditOperationAmbiguous(identity, 200)).toEqual({ kind: "updated" });
+    expect(openManualResetCreditOperation(identity, 300)).toEqual({
+      kind: "execute",
+      operationId: identity.operationId,
+      resumed: true,
+    });
+    expect(settleManualResetCreditOperation(
+      identity,
+      "not-a-reset-code" as never,
+      350,
+    )).toEqual({ kind: "mismatch" });
+    expect(settleManualResetCreditOperation(identity, "already_redeemed", 400))
+      .toEqual({ kind: "updated" });
+    expect(openManualResetCreditOperation(identity, 500)).toEqual({
+      kind: "terminal",
+      operationId: identity.operationId,
+      code: "already_redeemed",
+    });
+  });
+
+  test("manual operations share one physical-account intent across local aliases", () => {
+    const first = {
+      accountId: "pool-manual-fence",
+      chatgptAccountId: "chatgpt-a",
+      operationId: fixtureOperationId(701),
+    };
+    expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
+    expect(openManualResetCreditOperation({ ...first, operationId: fixtureOperationId(702) }, 200))
+      .toEqual({ kind: "execute", operationId: first.operationId, resumed: true });
+    expect(openManualResetCreditOperation({
+      ...first,
+      accountId: "pool-manual-alias",
+      operationId: fixtureOperationId(703),
+    }, 300)).toEqual({ kind: "execute", operationId: first.operationId, resumed: true });
+    const otherPhysical = {
+      ...first,
+      chatgptAccountId: "chatgpt-b",
+      operationId: fixtureOperationId(704),
+    };
+    expect(openManualResetCreditOperation(otherPhysical, 400))
+      .toEqual({ kind: "execute", operationId: otherPhysical.operationId, resumed: false });
+  });
+
+  test("manual operations reject a caller UUID already owned by another physical account", () => {
+    const operationId = fixtureOperationId(705);
+    const first = {
+      accountId: "pool-manual-first",
+      chatgptAccountId: "chatgpt-first",
+      operationId,
+    };
+    const second = {
+      accountId: "pool-manual-second",
+      chatgptAccountId: "chatgpt-second",
+      operationId,
+    };
+    expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
+    expect(openManualResetCreditOperation(second, 200)).toEqual({ kind: "unavailable" });
+    expect(openManualResetCreditOperation(first, 300)).toEqual({
+      kind: "execute",
+      operationId,
+      resumed: true,
+    });
+  });
+
   test("creates the exact canonical SQLite schema", () => {
     expect(openResetCreditOperation(GENERATION, 100))
       .toMatchObject({ kind: "execute", resumed: false });
@@ -248,9 +366,9 @@ describe("Codex reset-credit operation ledger", () => {
         .digest("hex");
       database.prepare(`
         INSERT INTO reset_credit_operations (
-          account_key, credential_generation, exhaustion_generation, operation_id,
+          account_key, operation_kind, credential_generation, exhaustion_generation, operation_id,
           state, code, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'pending', NULL, 1, 1)`)
+        ) VALUES (?, 'recovery', ?, ?, ?, 'pending', NULL, 1, 1)`)
         .run(
           secondKey,
           GENERATION.credentialGeneration,
@@ -330,9 +448,9 @@ describe("Codex reset-credit operation ledger", () => {
     try {
       const insert = database.prepare(`
         INSERT INTO reset_credit_operations (
-          account_key, credential_generation, exhaustion_generation, operation_id,
+          account_key, operation_kind, credential_generation, exhaustion_generation, operation_id,
           state, code, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'pending', NULL, 1, 1)`);
+        ) VALUES (?, 'recovery', ?, ?, ?, 'pending', NULL, 1, 1)`);
       database.exec("BEGIN IMMEDIATE");
       for (let index = 1; index < MAX_RESET_CREDIT_OPERATION_ACCOUNTS; index += 1) {
         const accountId = `pool-${index}`;
@@ -361,9 +479,9 @@ describe("Codex reset-credit operation ledger", () => {
         .digest("hex");
       overflow.prepare(`
         INSERT INTO reset_credit_operations (
-          account_key, credential_generation, exhaustion_generation, operation_id,
+          account_key, operation_kind, credential_generation, exhaustion_generation, operation_id,
           state, code, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, 'pending', NULL, 1, 1)`)
+        ) VALUES (?, 'recovery', ?, ?, ?, 'pending', NULL, 1, 1)`)
         .run(
           key,
           GENERATION.credentialGeneration,

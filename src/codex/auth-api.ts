@@ -111,6 +111,13 @@ import {
   consumeCodexResetCredit,
 } from "./reset-credit-consume";
 import {
+  markManualResetCreditOperationAmbiguous,
+  openManualResetCreditOperation,
+  settleManualResetCreditOperation,
+  type ManualResetCreditOperationIdentity,
+} from "./reset-credit-operation-ledger";
+import { isCodexResetCreditOperationId, type CodexResetCreditConsumeCode } from "./reset-credit-recovery";
+import {
   oauthAccountHealthFields,
   projectCodexAccountHealth,
   type OAuthAccountHealth,
@@ -260,6 +267,33 @@ interface ResetCreditAuth {
   chatgptAccountId: string;
   nativeMainLease?: AdmissionLease;
   nativeMainSharedClaimHeld?: true;
+}
+
+const manualResetCreditFlights = new Map<string, Promise<Response>>();
+
+function manualResetCreditFlightKey(chatgptAccountId: string): string {
+  return chatgptAccountId.trim();
+}
+
+function manualResetCreditBusyResponse(): Response {
+  const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
+  response.headers.set("Retry-After", "1");
+  return response;
+}
+
+async function runManualResetCreditFlight(
+  chatgptAccountId: string,
+  start: () => Promise<Response>,
+): Promise<Response> {
+  const key = manualResetCreditFlightKey(chatgptAccountId);
+  if (manualResetCreditFlights.has(key)) return manualResetCreditBusyResponse();
+  const flight = start();
+  manualResetCreditFlights.set(key, flight);
+  try {
+    return await flight;
+  } finally {
+    if (manualResetCreditFlights.get(key) === flight) manualResetCreditFlights.delete(key);
+  }
 }
 
 async function withResetCreditAuth<T>(
@@ -1694,43 +1728,88 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/reset-credits/consume" && req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as { accountId?: string };
+    const body = (await req.json().catch(() => ({}))) as { accountId?: string; operationId?: string };
     if (!body.accountId) return jsonResponse({ error: "accountId required" }, 400);
+    if (body.accountId !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(body.accountId)) {
+      return jsonResponse({ error: "Invalid account id format" }, 400);
+    }
+    if (!body.operationId || !isCodexResetCreditOperationId(body.operationId)) {
+      return jsonResponse({ error: "operationId must be an RFC 4122 version 4 UUID" }, 400);
+    }
+    const requestedOperationId = body.operationId;
     const accountId = body.accountId;
 
     try {
-      const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
-        const result = await consumeCodexResetCredit({
-          accessToken: auth.accessToken,
-          chatgptAccountId: auth.chatgptAccountId,
-          operationId: crypto.randomUUID(),
-          signal: req.signal,
-        });
-        // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
-        // and return remaining only when that refresh freshly parsed available_count.
-        // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
-        if (result.code === "reset" || result.code === "already_redeemed") {
-          let freshResetCredits: number | undefined;
-          if (auth.isMain) {
-            ({ freshResetCredits } = await fetchMainAccountInfoAttempt(
-              true,
-              1,
-              auth.nativeMainLease,
-              auth.nativeMainSharedClaimHeld === true,
-            ));
-          } else {
-            const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
-            ({ freshResetCredits } = await fetchPoolAccountQuota(accountId, true, account?.plan));
+      const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, auth =>
+        runManualResetCreditFlight(auth.chatgptAccountId, async () => {
+          const identity: ManualResetCreditOperationIdentity = {
+            accountId,
+            chatgptAccountId: auth.chatgptAccountId,
+            operationId: requestedOperationId,
+          };
+          const opened = openManualResetCreditOperation(identity);
+          if (opened.kind === "capacity" || opened.kind === "unavailable") {
+            const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
+            response.headers.set("Retry-After", "1");
+            return response;
           }
-          return jsonResponse({
-            code: result.code,
-            ...(typeof freshResetCredits === "number" && Number.isFinite(freshResetCredits)
-              ? { remaining: freshResetCredits }
-              : {}),
-          });
-        }
-        return jsonResponse({ code: result.code });
-      });
+          let code: CodexResetCreditConsumeCode;
+          if (opened.kind === "terminal") {
+            code = opened.code;
+          } else {
+            if (opened.kind !== "execute") {
+              const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
+              response.headers.set("Retry-After", "1");
+              return response;
+            }
+            const effectiveIdentity: ManualResetCreditOperationIdentity = {
+              ...identity,
+              operationId: opened.operationId,
+            };
+            try {
+              const result = await consumeCodexResetCredit({
+                accessToken: auth.accessToken,
+                chatgptAccountId: auth.chatgptAccountId,
+                operationId: opened.operationId,
+                signal: req.signal,
+              });
+              code = result.code;
+            } catch (error) {
+              markManualResetCreditOperationAmbiguous(effectiveIdentity);
+              throw error;
+            }
+            const settled = settleManualResetCreditOperation(effectiveIdentity, code);
+            if (settled.kind !== "updated") {
+              const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
+              response.headers.set("Retry-After", "1");
+              return response;
+            }
+          }
+          // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
+          // and return remaining only when that refresh freshly parsed available_count.
+          // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
+          if (code === "reset" || code === "already_redeemed") {
+            let freshResetCredits: number | undefined;
+            if (auth.isMain) {
+              ({ freshResetCredits } = await fetchMainAccountInfoAttempt(
+                true,
+                1,
+                auth.nativeMainLease,
+                auth.nativeMainSharedClaimHeld === true,
+              ));
+            } else {
+              const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
+              ({ freshResetCredits } = await fetchPoolAccountQuota(accountId, true, account?.plan));
+            }
+            return jsonResponse({
+              code,
+              ...(typeof freshResetCredits === "number" && Number.isFinite(freshResetCredits)
+                ? { remaining: freshResetCredits }
+                : {}),
+            });
+          }
+          return jsonResponse({ code });
+        }));
       return operation.ok ? operation.value : operation.response;
     } catch (e) {
       if (e instanceof PoolQuotaProbeBusyError) {

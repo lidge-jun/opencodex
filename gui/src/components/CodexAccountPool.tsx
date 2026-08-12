@@ -21,6 +21,7 @@ import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
+import { newBrowserUuid } from "../lib/uuid";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
@@ -73,6 +74,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
+  const [resetOperationId, setResetOperationId] = useState<string | null>(null);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
@@ -240,6 +242,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const openResetPopup = async (account: CodexAccountEntry) => {
     setResetPopup(account);
+    setResetOperationId(newBrowserUuid());
     setResetConfirm(false);
     setCreditDetails(null);
     setCreditDetailsLoading(true);
@@ -259,9 +262,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const handleRedeem = async (accountId: string) => {
     setRedeeming(true);
     try {
-      const result = await redeemResetCredit(apiBase, accountId, t, load);
+      const operationId = resetOperationId ?? newBrowserUuid();
+      if (!resetOperationId) setResetOperationId(operationId);
+      const result = await redeemResetCredit(apiBase, accountId, operationId, t, load);
       if (result.close) {
         setResetPopup(null);
+        setResetOperationId(null);
         setResetConfirm(false);
       }
       if (result.toast) {
@@ -421,7 +427,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           creditDetails={creditDetails}
           creditDetailsLoading={creditDetailsLoading}
           redeeming={redeeming}
-          onClose={() => { setResetPopup(null); setResetConfirm(false); setCreditDetails(null); }}
+          onClose={() => { setResetPopup(null); setResetOperationId(null); setResetConfirm(false); setCreditDetails(null); }}
           onShowConfirm={() => setResetConfirm(true)}
           onCancelConfirm={() => setResetConfirm(false)}
           onRedeem={() => { void handleRedeem(resetPopup.id); }}

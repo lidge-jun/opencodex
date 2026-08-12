@@ -141,6 +141,10 @@ async function mockManagementApi(req: Request): Promise<Response> {
     return json({ accounts: codexAccounts });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/codex-auth/reset-credits/consume") {
+    return json({ code: "reset" });
+  }
+
   if (req.method === "DELETE" && url.pathname === "/api/codex-auth/accounts") {
     if (deleteFailure) return json({ error: deleteFailure.error }, deleteFailure.status);
     const id = url.searchParams.get("id");
@@ -1401,6 +1405,22 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.code).toBe(2);
       expect(result.stderr).toContain("input was empty");
       expect(requests).toHaveLength(before);
+    });
+
+    test("reset-credit consume sends one UUIDv4 operation identity", async () => {
+      const result = await run(["reset-credits", "main", "--consume", "--yes", "--json"]);
+
+      expect(result.code).toBe(0);
+      expect(requests.at(-1)).toEqual(expect.objectContaining({
+        method: "POST",
+        path: "/api/codex-auth/reset-credits/consume",
+        body: expect.objectContaining({
+          accountId: "__main__",
+          operationId: expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+          ),
+        }),
+      }));
     });
 
     test("a silent pipe times out and cleans up its listeners", async () => {

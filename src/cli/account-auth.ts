@@ -1,4 +1,5 @@
 import { writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import {
   CliUsageError,
@@ -232,7 +233,10 @@ async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void>
   rejectArgs(args, USAGE);
   const accountId = rawId === "main" ? "__main__" : rawId;
   const result = consume
-    ? await runtimeRequest("/api/codex-auth/reset-credits/consume", { method: "POST", body: JSON.stringify({ accountId }) }, deps)
+    ? await runtimeRequest("/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        body: JSON.stringify({ accountId, operationId: randomUUID() }),
+      }, deps)
     : await runtimeRequest(`/api/codex-auth/reset-credits?accountId=${encodeURIComponent(accountId)}`, {}, deps);
   printData(result, wantsJson);
 }
