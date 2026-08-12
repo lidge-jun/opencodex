@@ -74,12 +74,13 @@ describe("CL-09 bounded passive production projection", () => {
   test("projects only the strict passive allowlist and labels it not verification", () => {
     const subjectId = "b".repeat(64);
     const secret = "CL09-PROMPT-SECRET-CANARY";
-    const entry = usageEntryWithAttempt({ labRouteSubjectId: subjectId });
+    const entry = usageEntryWithAttempt({ labRouteSubjectId: subjectId, errorCode: `opaque-${secret}` });
     entry.timestamp = 1234;
     entry.apiKeyId = `account-${secret}`;
     entry.conversationId = `conversation-${secret}`;
     entry.upstreamError = `raw-error-${secret}`;
     entry.requestedEffort = secret;
+    entry.terminalStatus = `terminal-${secret}`;
     (entry as unknown as Record<string, unknown>).prompt = `prompt-${secret}`;
     (entry as unknown as Record<string, unknown>).responseText = `response-${secret}`;
     (entry.attempts?.[0] as unknown as Record<string, unknown>).toolArguments = `tool-${secret}`;
@@ -144,6 +145,33 @@ describe("CL-09 bounded passive production projection", () => {
     expect(result.signals).toHaveLength(1);
     expect(result.signals[0]?.subjectId).toBe(subjectA);
     expect(result.signals[0]?.requestRef).toBe("ocx-cl09-passive");
+  });
+
+  test("keeps fallback attempts attributable to the exact route that executed them", () => {
+    const subjectA = "2".repeat(64);
+    const subjectB = "3".repeat(64);
+    const entry = usageEntryWithAttempt({ labRouteSubjectId: subjectA, status: 503 });
+    entry.status = 200;
+    entry.attempts!.push({
+      ordinal: 2,
+      provider: "provider-b",
+      model: "model-b",
+      adapter: "openai-responses",
+      status: 200,
+      durationMs: 3,
+      sendCount: 1,
+      recoveryKinds: [],
+      usageStatus: "unreported",
+      labRouteSubjectId: subjectB,
+    });
+
+    const firstRoute = derivePassiveProductionSignals([entry], subjectA);
+    const fallbackRoute = derivePassiveProductionSignals([entry], subjectB);
+
+    expect(firstRoute.signals).toHaveLength(1);
+    expect(firstRoute.signals[0]).toMatchObject({ attemptOrdinal: 1, subjectId: subjectA, httpStatus: 503 });
+    expect(fallbackRoute.signals).toHaveLength(1);
+    expect(fallbackRoute.signals[0]).toMatchObject({ attemptOrdinal: 2, subjectId: subjectB, httpStatus: 200 });
   });
 
   test("passive visibility disappears with its existing usage-history source", () => {
