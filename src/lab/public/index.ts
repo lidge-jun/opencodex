@@ -9,5 +9,6 @@ export * from "./storage";
 export * from "./community-authority";
 export * from "./revocation";
 export * from "./community";
+export * from "./strict-json";
 export * from "./operator";
 export * from "./purge";
