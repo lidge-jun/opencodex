@@ -7,17 +7,18 @@ import type {
 import { PUBLIC_ROUTE_REGISTRY_SCHEMA_VERSION } from "./types";
 
 const REGISTRY_DOMAIN = "ocx-lab:public-route-registry:v1";
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 const entries: PublicRouteRegistryEntryV1[] = [
-  { providerId: "openai-apikey", modelId: "gpt-5.5", adapterFamilies: ["openai-responses"] },
-  { providerId: "openai-apikey", modelId: "gpt-5.6-luna", adapterFamilies: ["openai-responses"] },
-  { providerId: "openai-apikey", modelId: "gpt-5.6-sol", adapterFamilies: ["openai-responses"] },
-  { providerId: "openai-apikey", modelId: "gpt-5.6-terra", adapterFamilies: ["openai-responses"] },
+  { providerId: "openai-apikey", modelId: "gpt-5.5", adapterFamilies: ["openai-responses"], canonicalBaseUrl: OPENAI_API_BASE_URL },
+  { providerId: "openai-apikey", modelId: "gpt-5.6-luna", adapterFamilies: ["openai-responses"], canonicalBaseUrl: OPENAI_API_BASE_URL },
+  { providerId: "openai-apikey", modelId: "gpt-5.6-sol", adapterFamilies: ["openai-responses"], canonicalBaseUrl: OPENAI_API_BASE_URL },
+  { providerId: "openai-apikey", modelId: "gpt-5.6-terra", adapterFamilies: ["openai-responses"], canonicalBaseUrl: OPENAI_API_BASE_URL },
 ];
 
 const manifestPayload = {
   schemaVersion: PUBLIC_ROUTE_REGISTRY_SCHEMA_VERSION,
-  registryVersion: "2026-08-12.1",
+  registryVersion: "2026-08-12.2",
   sourceCommit: "4fed8d3fe431ad23be83f3aff2af18ef8b8ecd71",
   entries,
 };

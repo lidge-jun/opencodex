@@ -1,4 +1,7 @@
 export * from "./types";
 export * from "./registry";
+export * from "./ids";
+export * from "./authority";
 export * from "./validate";
 export * from "./project";
+export * from "./bundle";

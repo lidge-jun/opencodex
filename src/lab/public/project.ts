@@ -1,47 +1,24 @@
-import { domainHash, jcsStringify } from "../digest";
-import type { ObservationEvent, ProtocolSubjectV1, RouteSubjectV1 } from "../events/types";
-import { PUBLIC_ROUTE_REGISTRY_V1, findPublicRouteRegistryEntry } from "./registry";
+import type { ObservationEvent, ProtocolSubjectV1 } from "../events/types";
+import {
+  isTrustedPublicRouteAuthority,
+  isTrustedPublicTaskAuthority,
+  toPublicAdapterFamily,
+} from "./authority";
+import { publicEvidenceId } from "./ids";
 import type {
-  PublicAdapterFamilyV1,
   PublicEvidenceRecordV1,
   PublicEvidenceSubjectV1,
   PublicProjectionResult,
   PublicProtocolSubjectV1,
   PublicRouteAuthorityV1,
+  PublicTaskAuthorityV1,
 } from "./types";
 import { isPublicIncidentRef, validatePublicEvidenceRecord } from "./validate";
 
-const PUBLIC_ID_DOMAINS = {
-  subject: "ocx-lab:public-subject:v1",
-  record: "ocx-lab:public-record:v1",
-  bundle: "ocx-lab:public-bundle:v1",
-  artifact: "ocx-lab:public-artifact:v1",
-  publisher: "ocx-lab:public-publisher:v1",
-  revocation: "ocx-lab:public-revocation:v1",
-} as const;
-
-export type PublicEvidenceIdKind = keyof typeof PUBLIC_ID_DOMAINS;
-
-export function publicEvidenceId(kind: PublicEvidenceIdKind, payload: unknown): string {
-  return domainHash(PUBLIC_ID_DOMAINS[kind], jcsStringify(payload));
-}
-
-function publicAdapterFamily(value: string): PublicAdapterFamilyV1 | null {
-  switch (value) {
-    case "openai-responses": return "openai-responses";
-    case "openai-chat": return "openai-chat";
-    case "anthropic":
-    case "anthropic-messages": return "anthropic-messages";
-    case "responses": return "openai-responses";
-    case "chat": return "openai-chat";
-    default: return null;
-  }
-}
-
 function publicProtocolSubject(subject: ProtocolSubjectV1): PublicProtocolSubjectV1 | null {
-  const adapterFamily = publicAdapterFamily(subject.effectiveAdapter);
-  const inboundProtocol = publicAdapterFamily(subject.inboundProtocol);
-  const upstreamProtocol = publicAdapterFamily(subject.upstreamProtocol);
+  const adapterFamily = toPublicAdapterFamily(subject.effectiveAdapter);
+  const inboundProtocol = toPublicAdapterFamily(subject.inboundProtocol);
+  const upstreamProtocol = toPublicAdapterFamily(subject.upstreamProtocol);
   if (!adapterFamily || !inboundProtocol || !upstreamProtocol) return null;
   return {
     subjectKind: "protocol",
@@ -53,34 +30,11 @@ function publicProtocolSubject(subject: ProtocolSubjectV1): PublicProtocolSubjec
   };
 }
 
-function routeAuthorityMatches(
-  subject: RouteSubjectV1,
-  localSubjectId: string,
-  authority: PublicRouteAuthorityV1 | undefined,
-): boolean {
-  if (!authority || authority.localSubjectId !== localSubjectId) return false;
-  if (subject.dependencies.length !== 0) return false;
-  if (subject.clientModelId !== subject.upstreamModelId) return false;
-  const descriptor = authority.descriptor;
-  if (descriptor.subjectKind !== "route") return false;
-  if (descriptor.providerId !== subject.providerId || descriptor.modelId !== subject.upstreamModelId) return false;
-  if (descriptor.registryDigest !== PUBLIC_ROUTE_REGISTRY_V1.manifestDigest
-    || descriptor.registryVersion !== PUBLIC_ROUTE_REGISTRY_V1.registryVersion) return false;
-  const adapterFamily = publicAdapterFamily(subject.effectiveAdapter);
-  const inboundProtocol = publicAdapterFamily(subject.inboundProtocol);
-  const upstreamProtocol = publicAdapterFamily(subject.upstreamProtocol);
-  if (!adapterFamily || !inboundProtocol || !upstreamProtocol) return false;
-  if (descriptor.adapterFamily !== adapterFamily
-    || descriptor.inboundProtocol !== inboundProtocol
-    || descriptor.upstreamProtocol !== upstreamProtocol
-    || descriptor.surface !== subject.surface
-    || descriptor.compatibilityVersion !== subject.opencodexCompatibilityVersion) return false;
-  return findPublicRouteRegistryEntry(descriptor.providerId, descriptor.modelId, descriptor.adapterFamily) !== null;
-}
-
 function observedDayUtc(observation: ObservationEvent): string {
   const value = Number.isFinite(observation.completedAt) ? observation.completedAt : observation.recordedAt;
-  return new Date(value).toISOString().slice(0, 10);
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error("invalid observation timestamp");
+  return date.toISOString().slice(0, 10);
 }
 
 export interface ProjectPublicEvidenceRecordInput {
@@ -88,6 +42,7 @@ export interface ProjectPublicEvidenceRecordInput {
   verdict: PublicEvidenceRecordV1["verdict"];
   incidentRefs?: string[];
   routeAuthority?: PublicRouteAuthorityV1;
+  taskAuthority?: PublicTaskAuthorityV1;
 }
 
 export function projectPublicEvidenceRecord(input: ProjectPublicEvidenceRecordInput): PublicProjectionResult {
@@ -103,12 +58,18 @@ export function projectPublicEvidenceRecord(input: ProjectPublicEvidenceRecordIn
     subject = projected;
   } else if (observation.evidenceLayer === "live_route_compatibility") {
     if (observation.subject.subjectKind !== "route"
-      || !routeAuthorityMatches(observation.subject, observation.subjectId, input.routeAuthority)) {
+      || !isTrustedPublicRouteAuthority(input.routeAuthority)
+      || input.routeAuthority.localSubjectId !== observation.subjectId) {
       return { status: "not_exportable", reason: "private_route_identity" };
     }
-    subject = input.routeAuthority!.descriptor;
+    subject = input.routeAuthority.descriptor;
   } else {
-    return { status: "not_exportable", reason: "task_authority_unavailable" };
+    if (observation.subject.subjectKind !== "task"
+      || !isTrustedPublicTaskAuthority(input.taskAuthority)
+      || input.taskAuthority.localSubjectId !== observation.subjectId) {
+      return { status: "not_exportable", reason: "task_authority_unavailable" };
+    }
+    subject = input.taskAuthority.descriptor;
   }
 
   let incidentRefs: Array<{ corpusId: string }> | undefined;

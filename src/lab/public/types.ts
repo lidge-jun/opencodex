@@ -1,6 +1,7 @@
 import type { CompatibilityVerdict, EvidenceLayer } from "../constants";
 
 export const PUBLIC_ROUTE_REGISTRY_SCHEMA_VERSION = "public_route_registry_v1" as const;
+export const PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION = "public_evidence_bundle_v1" as const;
 export const PUBLIC_EXPORT_POLICY_VERSION = "public_export_policy_v1" as const;
 
 export const PUBLIC_ADAPTER_FAMILIES = [
@@ -14,6 +15,8 @@ export interface PublicRouteRegistryEntryV1 {
   providerId: string;
   modelId: string;
   adapterFamilies: PublicAdapterFamilyV1[];
+  /** Reviewed canonical public endpoint used only as local export authority. */
+  canonicalBaseUrl: string;
 }
 
 export interface PublicRouteRegistryManifestV1 {
@@ -85,6 +88,22 @@ export interface PublicEvidenceRecordV1 {
   artifactRefs?: string[];
 }
 
+export interface PublicArtifactV1 {
+  artifactId: string;
+  mediaType: "application/json" | "text/plain; charset=utf-8";
+  byteCount: number;
+  contentBase64: string;
+}
+
+export interface PublicEvidenceBundleUnsignedV1 {
+  schemaVersion: typeof PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION;
+  exportPolicyVersion: typeof PUBLIC_EXPORT_POLICY_VERSION;
+  bundleId: string;
+  createdDayUtc: string;
+  records: PublicEvidenceRecordV1[];
+  artifacts: PublicArtifactV1[];
+}
+
 export type PublicProjectionNotExportableReason =
   | "private_route_identity"
   | "unsupported_public_adapter"
@@ -95,12 +114,14 @@ export type PublicProjectionResult =
   | { status: "exportable"; record: PublicEvidenceRecordV1 }
   | { status: "not_exportable"; reason: PublicProjectionNotExportableReason };
 
-/**
- * Trusted local proof for an exact route. Callers must derive this from the same
- * effective route subject that produced the local observation, never from an
- * imported bundle or user-supplied public descriptor.
- */
+/** Opaque runtime capability. Plain-object copies are intentionally untrusted. */
 export interface PublicRouteAuthorityV1 {
   localSubjectId: string;
   descriptor: PublicRouteSubjectV1;
+}
+
+/** Opaque runtime capability. Plain-object copies are intentionally untrusted. */
+export interface PublicTaskAuthorityV1 {
+  localSubjectId: string;
+  descriptor: PublicTaskSubjectV1;
 }
