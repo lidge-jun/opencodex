@@ -13,6 +13,7 @@ import {
 } from "../constants";
 import type { LabEvent, PurgeTombstoneEvent } from "../events/types";
 import { assignEventId, validateLabEvent } from "../events/validate";
+import { purgeLocalPublicEvidenceCopies } from "../public/purge";
 import {
   artifactDeletionPlan,
   expandSensitiveArtifactEventTargets,
@@ -195,7 +196,7 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       completed.push("scratch");
     }
     if (purgeActions.includes("export")) {
-      purgeBoundedDirectory(paths.exportDir);
+      purgeLocalPublicEvidenceCopies(req.configDir);
       completed.push("export");
     }
 
