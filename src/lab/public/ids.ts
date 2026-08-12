@@ -7,14 +7,19 @@ const PUBLIC_ID_DOMAINS = {
   artifact: "ocx-lab:public-artifact:v1",
   publisher: "ocx-lab:public-publisher:v1",
   revocation: "ocx-lab:public-revocation:v1",
+  bundleDigest: "ocx-lab:public-bundle-digest:v1",
 } as const;
 
-export type PublicEvidenceIdKind = keyof typeof PUBLIC_ID_DOMAINS;
-
-export function publicEvidenceId(kind: Exclude<PublicEvidenceIdKind, "artifact">, payload: unknown): string {
+export type PublicEvidenceIdKind = "subject" | "record" | "bundle" | "publisher" | "revocation";
+export function publicEvidenceId(kind: PublicEvidenceIdKind, payload: unknown): string {
   return domainHash(PUBLIC_ID_DOMAINS[kind], jcsStringify(payload));
 }
-
 export function publicArtifactId(bytes: Uint8Array): string {
   return domainHash(PUBLIC_ID_DOMAINS.artifact, bytes);
+}
+export function publicPublisherKeyId(publicKeyDer: Uint8Array): string {
+  return domainHash(PUBLIC_ID_DOMAINS.publisher, publicKeyDer);
+}
+export function publicBundleDigest(payload: unknown): string {
+  return domainHash(PUBLIC_ID_DOMAINS.bundleDigest, jcsStringify(payload));
 }

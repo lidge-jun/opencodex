@@ -5,3 +5,5 @@ export * from "./authority";
 export * from "./validate";
 export * from "./project";
 export * from "./bundle";
+export * from "./signing";
+export * from "./store";
