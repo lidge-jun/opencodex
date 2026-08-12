@@ -2,6 +2,7 @@ import type { CompatibilityVerdict, EvidenceLayer } from "../constants";
 
 export const PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION = "public_evidence_bundle_v1" as const;
 export const PUBLIC_EXPORT_POLICY_VERSION = "public_export_policy_v1" as const;
+export const PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION = "public_evidence_revocation_v1" as const;
 
 export const PUBLIC_ADAPTER_FAMILIES = [
   "openai-responses",
@@ -115,6 +116,48 @@ export interface PublicEvidenceBundleUnsignedV1 {
 
 export interface PublicEvidenceBundleV1 extends PublicEvidenceBundleUnsignedV1 {
   signature: PublicBundleSignatureV1;
+}
+
+export interface PublicEvidencePreviewBundleV1 {
+  schemaVersion: typeof PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION;
+  exportPolicyVersion: typeof PUBLIC_EXPORT_POLICY_VERSION;
+  createdDayUtc: string;
+  records: PublicEvidenceRecordV1[];
+  artifacts: PublicArtifactV1[];
+}
+
+export type PublicRevocationReasonV1 =
+  | "publisher_retracted"
+  | "privacy_retraction"
+  | "evidence_invalidated"
+  | "superseded";
+
+export interface PublicRevocationTargetV1 {
+  kind: "bundle" | "record";
+  id: string;
+}
+
+export interface PublicEvidenceRevocationV1 {
+  schemaVersion: typeof PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION;
+  revocationId: string;
+  issuedDayUtc: string;
+  publisher: PublicPublisherV1;
+  targets: PublicRevocationTargetV1[];
+  reason: PublicRevocationReasonV1;
+  signature: PublicBundleSignatureV1;
+}
+
+export type PublicRevocationVerificationResult =
+  | { status: "cryptographically_valid"; revocation: PublicEvidenceRevocationV1 }
+  | { status: "schema_rejected" | "digest_invalid" | "signature_invalid" | "publisher_mismatch" | "unknown_target"; detail?: string };
+
+export interface CommunityEvidenceSummaryV1 {
+  trustClass: "community_untrusted_v1";
+  status: "cryptographically_valid";
+  bundleId: string;
+  publisherKeyId: string;
+  activeRecordCount: number;
+  revokedRecordCount: number;
 }
 
 export type PublicProjectionNotExportableReason =
