@@ -717,6 +717,7 @@ jobs:
         run: ocx help
 
   # The one check name that means "CI passed".
+  #
   # Shard names move whenever the shard count changes, and the platform legs come
   # and go by trigger. Neither is a stable thing to require in branch protection.
   # This job is: it depends on every other job and asserts each result. `dev` has
