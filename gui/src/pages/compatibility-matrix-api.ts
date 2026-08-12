@@ -242,7 +242,7 @@ export async function fetchPassiveProductionSummary(
 ): Promise<PassiveProductionSummaryDto> {
   const raw = await fetchLabJson<unknown>(
     apiBase,
-    `/api/lab/production-signals?subjectId=${encodeURIComponent(subjectId)}&limit=50`,
+    `/api/lab/production-signals?${buildQuery({ subjectId })}`,
     signal,
   );
   return parsePassiveProductionSummary(raw);
