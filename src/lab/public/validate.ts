@@ -75,6 +75,14 @@ function assertHex(value: unknown, field: string): string {
   return text;
 }
 
+function assertGitCommit(value: unknown, field: string): string {
+  const text = assertString(value, field, 40);
+  if (!/^[0-9a-f]{40}$/.test(text)) {
+    throw new PublicEvidenceValidationError("invalid_git_commit", `${field} must be a lowercase 40-character git commit id`);
+  }
+  return text;
+}
+
 function assertAdapter(value: unknown, field: string): PublicAdapterFamilyV1 {
   const text = assertString(value, field, 64);
   if (!(PUBLIC_ADAPTER_FAMILIES as readonly string[]).includes(text)) {
@@ -265,7 +273,7 @@ export function validatePublicRouteRegistryManifest(raw: unknown): PublicRouteRe
     throw new PublicEvidenceValidationError("unsupported_version", "public route registry schema version");
   }
   const registryVersion = assertPublicToken(raw.registryVersion, "registryVersion", 128);
-  const sourceCommit = assertHex(raw.sourceCommit, "sourceCommit");
+  const sourceCommit = assertGitCommit(raw.sourceCommit, "sourceCommit");
   if (!Array.isArray(raw.entries) || raw.entries.length === 0 || raw.entries.length > MAX_REGISTRY_ENTRIES) {
     throw new PublicEvidenceValidationError("invalid_registry", "registry entries are invalid or oversized");
   }
