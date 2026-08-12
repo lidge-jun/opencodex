@@ -759,7 +759,7 @@ export const ko: Record<TKey, string> = {
   "usage.range.all": "전체",
   "usage.range.available": "사용 가능한 기록",
   "usage.historyTruncated": "이전 사용 기록을 불러오지 않아 합계는 사용 가능한 기록만 포함합니다.",
-  "usage.historyTruncatedWindow": "합계는 {start}부터 {end}까지 불러온 사용량만 포함합니다. 그보다 오래된 기록은 읽기 한도를 넘어 선택한 기간이 완전하지 않을 수 있습니다.",
+  "usage.historyTruncatedWindow": "불러온 기록의 요청 시작 시각은 {start}부터 {end} 사이입니다. 읽기 한도 때문에 파일 앞부분의 기록이 빠졌으므로 선택한 기간이 완전하지 않을 수 있습니다.",
   "usage.range.30d": "30일",
   "usage.range.7d": "7일",
   "usage.card.requests": "요청",

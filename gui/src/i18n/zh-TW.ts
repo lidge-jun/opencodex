@@ -1586,7 +1586,7 @@ export const zhTW: Record<TKey, string> = {
   "provider.name.volcengineAgentPlan": "Volcengine Ark Agent Plan",
   "usage.range.available": "可用歷史紀錄",
   "usage.historyTruncated": "總計僅涵蓋可用歷史紀錄，因為較舊的用量未被載入。",
-  "usage.historyTruncatedWindow": "總計僅涵蓋從 {start} 到 {end} 已載入的用量。更早的紀錄超出讀取上限，因此所選期間可能不完整。",
+  "usage.historyTruncatedWindow": "已載入紀錄的請求開始時間介於 {start} 到 {end} 之間。受讀取上限限制，檔案較前的項目已被略過，所選期間可能不完整。",
   "codexAuth.autoSwitchQuotaDesc": "配額：使用率達 {threshold}% 或以上時，下一個請求可能移至用量較低的合格帳號，包括已綁定的任務；Go/Free 僅使用 30 天。",
   "codexAuth.autoSwitchQuotaOffDesc": "基於用量的主動切換已關閉。新增/未綁定分派與故障恢復仍然適用。",
   "codexAuth.autoSwitchRoundRobinDesc": "輪詢分派不使用此閾值；它會繼續輪換新增/未綁定的任務。",

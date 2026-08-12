@@ -737,7 +737,7 @@ export const de: Record<TKey, string> = {
   "usage.range.all": "Alle",
   "usage.range.available": "Verfügbarer Verlauf",
   "usage.historyTruncated": "Die Summen beziehen sich nur auf den verfügbaren Verlauf, da ältere Nutzungsdaten nicht geladen wurden.",
-  "usage.historyTruncatedWindow": "Die Summen umfassen nur die von {start} bis {end} geladene Nutzung. Ältere Einträge überschreiten das Leselimit, daher kann jeder gewählte Zeitraum unvollständig sein.",
+  "usage.historyTruncatedWindow": "Die geladenen Zeilen haben Anfragestartzeiten zwischen {start} und {end}. Frühere Dateieinträge wurden durch das Leselimit ausgelassen, daher kann jeder gewählte Zeitraum unvollständig sein.",
   "usage.range.30d": "30d",
   "usage.range.7d": "7d",
   "usage.card.requests": "Anfragen",

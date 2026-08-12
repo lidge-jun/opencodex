@@ -726,7 +726,7 @@ export const ja: Record<TKey, string> = {
   "usage.range.all": "すべて",
   "usage.range.available": "利用可能な履歴",
   "usage.historyTruncated": "古い利用履歴が読み込まれていないため、合計は利用可能な履歴のみを対象とします。",
-  "usage.historyTruncatedWindow": "合計は {start} から {end} までに読み込まれた利用量のみを対象とします。それより古い記録は読み取り上限を超えるため、選択した期間が不完全な場合があります。",
+  "usage.historyTruncatedWindow": "読み込まれた行のリクエスト開始時刻は {start} から {end} の範囲です。読み取り上限によりファイル前方の記録が除外されているため、選択した期間は不完全な場合があります。",
   "usage.range.30d": "30日",
   "usage.range.7d": "7日",
   "usage.card.requests": "リクエスト",

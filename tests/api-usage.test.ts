@@ -163,18 +163,88 @@ describe("GET /api/usage", () => {
     });
 
     test("the window describes the read, so range and surface filters do not move it", async () => {
-      writeFixture(Date.now());
-      saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: 256 });
+      // A tail small enough to truncate but large enough to retain rows the filters will
+      // actually discard. Retaining a single row would make every filter a no-op and the
+      // assertions vacuous, which is exactly what an earlier version of this test did.
+      const now = Date.now();
+      const oldest = now - 200 * 86_400_000;
+      const rows = [
+        // Dropped by the byte limit: only here to make the read truncated.
+        ...Array.from({ length: 40 }, (_, i) => ({
+          requestId: `ocx-prefix-${i}`,
+          timestamp: oldest,
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "reported" as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+          totalTokens: 2,
+        })),
+        // Retained, and deliberately outside a 30d window so the range filter discards it.
+        {
+          requestId: "ocx-window-old",
+          timestamp: now - 90 * 86_400_000,
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "reported" as const,
+          usage: { inputTokens: 10, outputTokens: 5 },
+          totalTokens: 15,
+        },
+        // Retained and inside 30d, but a Codex surface so the claude filter discards it.
+        {
+          requestId: "ocx-window-codex",
+          timestamp: now - 2 * 86_400_000,
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "reported" as const,
+          usage: { inputTokens: 10, outputTokens: 5 },
+          totalTokens: 15,
+        },
+        // Retained, inside 30d, and a claude surface: survives every filter.
+        {
+          requestId: "ocx-window-claude",
+          timestamp: now - 1 * 86_400_000,
+          provider: "anthropic",
+          model: "claude-x",
+          surface: "claude",
+          status: 200,
+          durationMs: 5,
+          usageStatus: "reported" as const,
+          usage: { inputTokens: 10, outputTokens: 5 },
+          totalTokens: 15,
+        },
+      ];
+      writeFileSync(join(testDir, "usage.jsonl"), `${rows.map(r => JSON.stringify(r)).join("\n")}\n`);
+      // Sized to keep the last three rows and drop the 40-row prefix.
+      const tailBytes = rows.slice(-3).reduce((sum, r) => sum + Buffer.byteLength(`${JSON.stringify(r)}\n`), 0);
+      saveConfig({ ...baseConfig(), managementUsageMaxReadBytes: tailBytes + 8 });
       const server = startServer(0);
       try {
         const all = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
         const thirty = await fetch(new URL("/api/usage?range=30d", server.url)).then(r => r.json());
         const claude = await fetch(new URL("/api/usage?range=all&surface=claude", server.url)).then(r => r.json());
 
-        expect(thirty.snapshotWindowStart).toBe(all.snapshotWindowStart);
-        expect(thirty.snapshotWindowEnd).toBe(all.snapshotWindowEnd);
-        expect(claude.snapshotWindowStart).toBe(all.snapshotWindowStart);
-        expect(claude.snapshotWindowEnd).toBe(all.snapshotWindowEnd);
+        expect(all.historyTruncated).toBe(true);
+        // The retained set really is what the filters will cut down.
+        expect(all.summary.requests).toBe(3);
+        expect(thirty.summary.requests).toBe(2);
+        expect(claude.summary.requests).toBe(1);
+
+        // Exact bounds, computed independently of the reader.
+        expect(all.snapshotWindowStart).toBe(now - 90 * 86_400_000);
+        expect(all.snapshotWindowEnd).toBe(now - 1 * 86_400_000);
+
+        for (const body of [thirty, claude]) {
+          expect(typeof body.snapshotWindowStart).toBe("number");
+          expect(typeof body.snapshotWindowEnd).toBe("number");
+          expect(body.snapshotWindowStart).toBe(all.snapshotWindowStart);
+          expect(body.snapshotWindowEnd).toBe(all.snapshotWindowEnd);
+        }
       } finally {
         await server.stop(true);
       }
@@ -214,6 +284,11 @@ describe("GET /api/usage", () => {
       try {
         const first = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
         const second = await fetch(new URL("/api/usage?range=all", server.url)).then(r => r.json());
+        // Prove the second response is a cache hit rather than a second full read; otherwise
+        // this asserts nothing about the cache path.
+        expect(usageReadCacheStatsForTests().fullReads).toBe(1);
+        expect(typeof first.snapshotWindowStart).toBe("number");
+        expect(typeof first.snapshotWindowEnd).toBe("number");
         expect(second.snapshotWindowStart).toBe(first.snapshotWindowStart);
         expect(second.snapshotWindowEnd).toBe(first.snapshotWindowEnd);
       } finally {

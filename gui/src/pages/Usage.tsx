@@ -827,15 +827,16 @@ export default function Usage({ apiBase }: { apiBase: string }) {
             // they claim (#1497). `warn` rather than `ok` because a total that silently omits
             // in-range rows is a caveat, not a status update.
             <Notice tone="warn">
-              {/* `!= null` rather than `!== null`: an older proxy that predates these fields
-                  omits them entirely, and an undefined bound must fall back to the generic
-                  wording instead of rendering "Invalid Date". */}
-              {data.snapshotWindowStart != null && data.snapshotWindowEnd != null
-                ? t("usage.historyTruncatedWindow", {
-                  start: new Date(data.snapshotWindowStart).toLocaleString(),
-                  end: new Date(data.snapshotWindowEnd).toLocaleString(),
-                })
-                : t("usage.historyTruncated")}
+              {(() => {
+                // Both bounds must be renderable before the detailed wording is used: an older
+                // proxy omits the fields entirely, and a hand-edited row can carry a timestamp
+                // outside Date's range. Either way the generic string is the honest fallback.
+                const start = renderableInstant(data.snapshotWindowStart);
+                const end = renderableInstant(data.snapshotWindowEnd);
+                return start !== null && end !== null
+                  ? t("usage.historyTruncatedWindow", { start, end })
+                  : t("usage.historyTruncated");
+              })()}
             </Notice>
           )}
           <UsageWorkspaceBody
@@ -855,4 +856,13 @@ export default function Usage({ apiBase }: { apiBase: string }) {
       )}
     </>
   );
+}
+function renderableInstant(value: number | null | undefined): string | null {
+  // The reader preserves whatever timestamp a row carries, including hand-edited values far
+  // outside Date's supported range. A presence check alone would then render the literal
+  // string "Invalid Date" in a notice whose whole job is to be trustworthy, so the bound is
+  // only used once it round-trips through Date.
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const at = new Date(value);
+  return Number.isFinite(at.getTime()) ? at.toLocaleString() : null;
 }

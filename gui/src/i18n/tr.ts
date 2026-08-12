@@ -765,7 +765,7 @@ export const tr: Record<TKey, string> = {
   "usage.range.all": "Tümü",
   "usage.range.available": "Mevcut geçmiş",
   "usage.historyTruncated": "Toplamlar yalnızca mevcut geçmişi kapsar.",
-  "usage.historyTruncatedWindow": "Toplamlar yalnızca {start} - {end} aralığında yüklenen kullanımı kapsar. Daha eski kayıtlar okuma sınırını aştığı için seçilen aralık eksik olabilir.",
+  "usage.historyTruncatedWindow": "Yüklenen satırların istek başlangıç zamanları {start} ile {end} arasındadır. Dosyanın önceki kayıtları okuma sınırı nedeniyle atlandı, bu yüzden seçilen aralık eksik olabilir.",
   "usage.range.30d": "30 gün",
   "usage.range.7d": "7 gün",
   "usage.card.requests": "İstekler",
