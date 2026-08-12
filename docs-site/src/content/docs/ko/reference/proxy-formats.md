@@ -54,6 +54,11 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 알 수 없는 항목 유형은 앞으로의 호환성을 위해 느슨한 형식의 typed item으로 허용됩니다. 변환된 어댑터는
 자신이 인식하는 항목 유형만 처리하며, 제공자가 표현할 수 없는 기능은 거부할 수 있습니다.
 
+파싱된 `input`이 라우팅된 모델의 공표된 컨텍스트 창을 초과할 것으로 추정되는 요청은 모든 업스트림 I/O 전에
+`413 request_too_large`(code `input_context_window_exceeded`)로 거부됩니다. Codex는 이 제한보다 훨씬 전에
+압축하므로, 과도한 본문은 비정상적인 중복(예: 상태 비저장 제공자에게 전체 대화를 다시 보내는 체인 연속)을
+나타냅니다. 대화를 압축하거나 새 스레드를 시작한 후 다시 시도하세요. 거부된 요청은 업스트림으로 전달되지 않습니다.
+
 ### JSON과 SSE 출력
 
 `stream: true`이면 응답은 `text/event-stream`입니다. 브리지는 `response.created`, output-item과 text/tool
@@ -254,6 +259,7 @@ data-plane key는 management credential이 아닙니다. management API는 별�
 | 503 | `combo_unavailable` | 선택한 combo의 모든 대상이 사용할 수 없거나, cooldown 중이거나, 비활성화되어 있거나, 다른 이유로 부적합합니다 |
 | 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 소비할 수 있는 적격 네이티브 ChatGPT 대상이 없습니다 |
 | 426 | `upgrade_required` | Responses WebSocket transport가 비활성화되어 있거나 업그레이드에 실패했습니다. HTTP를 사용하십시오 |
+| 413 | `request_too_large` | 파싱된 `input`이 라우팅된 모델의 공표된 컨텍스트 창을 초과합니다 (code `input_context_window_exceeded`). 업스트림 I/O 전에 거부 |
 
 Anthropic-origin 실패는 Anthropic의 error envelope로 렌더링됩니다. 따라서 해당 방언에서 origin 거부는
 OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입니다.

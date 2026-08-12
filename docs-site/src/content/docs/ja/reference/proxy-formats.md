@@ -47,6 +47,12 @@ provider events → internal adapter events → client dialect
 
 未知の項目タイプは、前方互換性のためにルーズタイプの項目として受け入れられます。変換されたアダプターは、認識する項目タイプのみを処理し、プロバイダーが表現できない機能を拒否する場合があります。
 
+解析済みの `input` がルーティング先モデルの公称コンテキスト ウィンドウを超えると推定されるリクエストは、
+上流 I/O の前に `413 request_too_large`（code `input_context_window_exceeded`）で拒否されます。Codex は
+この制限よりかなり前に圧縮するため、過大な本文は異常な重複を示します（たとえば、ステートレス
+プロバイダーへのチェーン継続が会話全体を再送するケース）。会話を圧縮するか新しいスレッドを開始して
+再試行してください。拒否されたリクエストは上流に転送されません。
+
 ### JSON および SSE 出力
 
 `stream: true` の場合、応答は `text/event-stream` となります。ブリッジは、`response.created`、出力項目およびテキスト/ツール デルタ、および 1 つの端末 `response.completed`、`response.failed`、または `response.incomplete` イベントなどの応答イベントを発行します。通常のストリームは `data: [DONE]` で終了します。
@@ -211,6 +217,7 @@ Responses-family および Chat リクエストは、プロバイダーまたは
 | 503 | `combo_unavailable` |選択したコンボ内のすべてのターゲットは使用不可、クールダウン中、無効、またはその他の理由で不適格です。
 | 400 | `unreadable_encrypted_agent_task` |暗号化された v2 ワーカー タスクには、それを使用できる適格なネイティブ ChatGPT ターゲットがありません。
 | 426 | `upgrade_required` |応答 WebSocket トランスポートが無効になっているか、アップグレードが失敗しました。 HTTP を使用する |
+| 413 | `request_too_large` | 解析済みの `input` がルーティング先モデルの公称コンテキスト ウィンドウを超える（code `input_context_window_exceeded`）。上流 I/O の前に拒否 |
 
 Anthropic オリジンの失敗は Anthropic のエラー エンベロープでレンダリングされるため、オリジンの拒否は OpenAI スタイルの `origin_rejected` 本体ではなく、その方言上の 403 `permission_error` になります。
 

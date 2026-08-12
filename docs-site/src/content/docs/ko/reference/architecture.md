@@ -51,7 +51,8 @@ HTTP 경계는 `server/index.ts`가 맡고, Responses 데이터 플레인은 `se
    호출 생성, `server/live.ts`가 중계)와 `/v1/live/{callId}` 사이드밴드 WebSocket,
    그리고 `/v1/responses`의 선택적 WebSocket 업그레이드를 제공합니다.
 2. `server/responses/core.ts`가 압축을 풀고 JSON을 읽습니다. 기억해 둔 `previous_response_id` 입력이 있으면
-   펼친 다음 `responses/parser.ts`로 넘깁니다.
+   펼칩니다(전체 기록 재전송은 그대로 유지하고 저장된 기록을 다시 앞에 붙이지 않습니다). 이후 `responses/parser.ts`로
+   넘기며, 라우팅된 모델의 컨텍스트 창을 초과할 것으로 추정되는 입력은 업스트림 I/O 전에 `413 request_too_large`로 거부됩니다.
 3. `router.ts`가 일반 모델 id 또는 `provider/model` id를 해석합니다. 이어서 Codex 계정 affinity를
    결정하고, 필요하면 프로바이더 OAuth를 갱신해 선택된 자격 증명을 route에 적용합니다.
 4. 본 요청 전에 `vision/`이 `noVisionModels` 모델용 이미지 설명을 만듭니다. 안전한 사이드카 경로가

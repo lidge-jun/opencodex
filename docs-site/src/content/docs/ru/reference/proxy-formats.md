@@ -57,6 +57,13 @@ control и safety ответа всё равно происходят на гр�
 Translated-adapter'ы обрабатывают только известные им типы и могут отвергнуть функцию, которую
 их провайдер не умеет выразить.
 
+Запросы, чей разобранный `input` по оценке превышает заявленное контекстное окно маршрутизируемой
+модели, отклоняются с `413 request_too_large` (code `input_context_window_exceeded`) до любого
+upstream-I/O. Codex выполняет сжатие задолго до этого предела, поэтому слишком большой body означает
+аномальное дублирование — например, цепное продолжение, повторно отправляющее весь разговор
+stateless-провайдеру. Сожмите разговор или начните новый тред и повторите; отклонённый запрос
+никогда не уходит upstream.
+
 ### JSON и SSE-вывод
 
 При `stream: true` ответ идёт как `text/event-stream`. Мост испускает события Responses вроде
@@ -272,6 +279,7 @@ Direct, поэтому remote proxy key здесь обязан идти чер�
 | 503 | `combo_unavailable` | Все цели выбранной combo недоступны, в cooldown, отключены или иным образом не подходят |
 | 400 | `unreadable_encrypted_agent_task` | У шифрованной задачи воркера v2 нет подходящей нативной цели ChatGPT, способной её прочитать |
 | 426 | `upgrade_required` | Транспорт Responses WebSocket выключен или upgrade не удался; используйте HTTP |
+| 413 | `request_too_large` | Разобранный `input` превышает заявленное контекстное окно маршрутизируемой модели (code `input_context_window_exceeded`); отклоняется до upstream-I/O |
 
 Сбои, пришедшие с Anthropic-side, отрисовываются в error envelope Anthropic, поэтому отклонение
 origin превращается в 403 `permission_error`, а не в OpenAI-style body `origin_rejected`.

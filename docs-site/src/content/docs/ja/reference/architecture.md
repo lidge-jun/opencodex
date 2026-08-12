@@ -48,7 +48,7 @@ HTTP の境界は `server/index.ts` が担い、Responses データプレーン�
    `POST /v1/live` / `POST /v1/realtime/calls`（ChatGPT / Codex App 音声と OpenAI Realtime
    の call-create、`server/live.ts` が中継）と `/v1/live/{callId}` サイドバンド WebSocket、
    `/v1/responses` のオプション WebSocket アップグレードを提供します。
-2. `server/responses/core.ts` が展開し JSON を読みます。覚えておいた `previous_response_id` 入力があれば展開したのち `responses/parser.ts` に渡します。
+2. `server/responses/core.ts` が展開し JSON を読みます。覚えておいた `previous_response_id` 入力があれば展開します（完全な履歴の再送はそのまま保持し、保存済み履歴を再度前置しません）。その後 `responses/parser.ts` に渡します。ルーティング先モデルのコンテキスト ウィンドウを超えると推定される入力は、上流 I/O の前に `413 request_too_large` で拒否されます。
 3. `router.ts` が通常のモデル id または `provider/model` id を解決します。続いて Codex アカウント affinity を決定し、必要ならプロバイダー OAuth を更新して選択された認証情報を route に適用します。
 4. 本リクエストの前に `vision/` が `noVisionModels` モデル用の画像説明を作ります。安全なサイドカー経路がないときはテキスト専用の上流に画像を送らず取り除きます。
 5. `server/adapter-resolve.ts` がモデル別の wire override を適用し、7つのアダプターのいずれかを作ります。
