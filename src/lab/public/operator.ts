@@ -75,7 +75,7 @@ export interface LocalPublicExportV1 {
 
 export type PublicVerificationSummaryV1 =
   | { status: "cryptographically_valid"; bundleId: string; publisherKeyId: string; locallyVerified: false }
-  | { status: "schema_rejected" | "digest_invalid" | "signature_invalid"; locallyVerified: false };
+  | { status: "schema_rejected" | "digest_invalid" | "signature_invalid"; locallyVerified: false; detail?: string };
 
 function assertOperatorEventIds(eventIds: readonly string[]): string[] {
   if (eventIds.length === 0 || eventIds.length > MAX_OPERATOR_EVENTS) {
