@@ -268,7 +268,15 @@ describe("CL-10 management local public evidence", () => {
 
   test("does not expose a remote publish endpoint", async () => {
     const home = tempHome();
-    const res = await api(home, "/api/lab/public/publish", { method: "POST", body: {} });
-    expect(res.status).toBe(404);
+    process.env.OPENCODEX_HOME = home;
+    const req = new ManagementRequest("http://127.0.0.1/api/lab/public/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    const res = await handleManagementAPI(req, new URL(req.url), config(home), {
+      refreshCodexCatalog: async () => {},
+    });
+    expect(res).toBeNull();
   });
 });

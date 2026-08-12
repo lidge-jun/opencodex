@@ -42,6 +42,14 @@ import {
   queryLabVerdicts,
   queryPassiveProductionSignals,
 } from "../../lab/query";
+import {
+  exportLocalPublicEvidence,
+  importCommunityEvidenceValue,
+  listCommunityEvidenceContext,
+  previewLocalPublicEvidence,
+  summarizePublicEvidenceVerification,
+  PublicEvidenceValidationError,
+} from "../../lab/public";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
@@ -186,9 +194,154 @@ function paginatedEnvelope<T>(page: { items: T[]; nextCursor?: string; hasMore: 
   };
 }
 
+const MAX_PUBLIC_REQUEST_BYTES = 2 * 1024 * 1024;
+
+async function readBoundedPublicJson(req: Request): Promise<unknown> {
+  const lengthRaw = req.headers.get("content-length");
+  if (lengthRaw) {
+    const length = Number(lengthRaw);
+    if (!Number.isFinite(length) || length < 0 || length > MAX_PUBLIC_REQUEST_BYTES) {
+      throw new PublicEvidenceValidationError(
+        "public_request_too_large",
+        "public evidence request exceeds 2 MiB",
+      );
+    }
+  }
+  if (!req.body) {
+    throw new PublicEvidenceValidationError("public_request_body", "JSON body is required");
+  }
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_PUBLIC_REQUEST_BYTES) {
+      await reader.cancel();
+      throw new PublicEvidenceValidationError(
+        "public_request_too_large",
+        "public evidence request exceeds 2 MiB",
+      );
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    throw new PublicEvidenceValidationError("public_request_json", "request body is not valid JSON");
+  }
+}
+
+function publicEventIds(raw: unknown): string[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PublicEvidenceValidationError("public_request_body", "request body must be an object");
+  }
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || keys[0] !== "eventIds") {
+    throw new PublicEvidenceValidationError("public_request_body", "only eventIds is accepted");
+  }
+  const eventIds = (raw as { eventIds?: unknown }).eventIds;
+  if (!Array.isArray(eventIds) || !eventIds.every((value) => typeof value === "string")) {
+    throw new PublicEvidenceValidationError("public_request_body", "eventIds must be a string array");
+  }
+  return eventIds as string[];
+}
+
+function publicBundleValue(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PublicEvidenceValidationError("public_request_body", "request body must be an object");
+  }
+  const keys = Object.keys(raw);
+  if (keys.length !== 1 || keys[0] !== "bundle") {
+    throw new PublicEvidenceValidationError("public_request_body", "only bundle is accepted");
+  }
+  return (raw as { bundle?: unknown }).bundle;
+}
+
+function publicErrorResponse(err: unknown, ctx: ManagementContext): Response {
+  const message = err instanceof Error ? err.message : "public evidence operation failed";
+  const code = err instanceof PublicEvidenceValidationError
+    ? err.code
+    : "public_evidence_error";
+  return errorResponse(code, message, 400, ctx);
+}
+
 export async function handleLabRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
   if (!url.pathname.startsWith("/api/lab")) return null;
+
+  if (req.method === "GET" && url.pathname === "/api/lab/public/community") {
+    try {
+      return jsonResponse(listCommunityEvidenceContext(), 200, req, config);
+    } catch (err) {
+      return publicErrorResponse(err, ctx);
+    }
+  }
+
+  if (req.method === "POST") {
+    if (url.pathname === "/api/lab/public/preview") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          previewLocalPublicEvidence({ eventIds: publicEventIds(body) }),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/export") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          exportLocalPublicEvidence({ eventIds: publicEventIds(body) }),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/verify") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        const result = summarizePublicEvidenceVerification(publicBundleValue(body));
+        return jsonResponse(
+          result,
+          result.status === "cryptographically_valid" ? 200 : 400,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    if (url.pathname === "/api/lab/public/community/import") {
+      try {
+        const body = await readBoundedPublicJson(req);
+        return jsonResponse(
+          importCommunityEvidenceValue(publicBundleValue(body)),
+          200,
+          req,
+          config,
+        );
+      } catch (err) {
+        return publicErrorResponse(err, ctx);
+      }
+    }
+    return null;
+  }
+
   if (req.method !== "GET") return null;
 
   if (url.pathname === "/api/lab/status") {
