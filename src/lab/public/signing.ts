@@ -92,7 +92,8 @@ function createPrivateKeyFile(path: string): KeyObject {
 }
 
 function publisherForPrivateKey(privateKey: KeyObject): PublicPublisherV1 {
-  const publicKey = createPublicKey(privateKey);
+  const privatePem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const publicKey = createPublicKey(privatePem);
   const der = publicKey.export({ type: "spki", format: "der" });
   return Object.freeze({
     algorithm: "ed25519" as const,
