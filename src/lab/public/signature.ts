@@ -21,6 +21,7 @@ import type {
   PublicEvidenceBundleV1,
   PublicPublisherV1,
 } from "./types";
+import { PublicEvidenceValidationError } from "./validate";
 
 const PUBLISHER_KEY_FILE = "publisher-ed25519.pem";
 
@@ -98,7 +99,20 @@ export interface SignPublicEvidenceBundleInput extends Omit<BuildPublicEvidenceB
   configDir?: string;
 }
 
+function assertLocalArtifactExportAuthority(input: SignPublicEvidenceBundleInput): void {
+  if (input.artifacts.length !== 0) {
+    throw new PublicEvidenceValidationError(
+      "public_artifact_authority_required",
+      "artifact bytes require reviewed public_export policy authority before local signing",
+    );
+  }
+}
+
 export function signPublicEvidenceBundle(input: SignPublicEvidenceBundleInput): PublicEvidenceBundleV1 {
+  // V1 has no trusted runtime handle proving a local artifact's policy explicitly
+  // grants public_export. Fail closed before key creation rather than treating local
+  // visibility or a caller-supplied artifactClass as export authority.
+  assertLocalArtifactExportAuthority(input);
   const handle = getOrCreatePublicPublisher(input.configDir);
   const unsigned = buildPublicEvidenceBundle({
     records: input.records,
