@@ -38,6 +38,8 @@ describe("Cursor discovery metadata", () => {
     expect(ids).toContain("kimi-k2.7-code");
     expect(ids).toContain("kimi-k3");
     expect(ids).toContain("claude-opus-4-7-fast");
+    expect(ids).toContain("grok-4.6");
+    expect(ids).toContain("grok-4.6-fast");
     // 260709 refresh: stale ids dropped from the static seed (cursor.com docs); gpt-5.5-extra
     // stays — it survives the live GetUsableModels filter (004_live_snapshot.md).
     expect(ids).not.toContain("grok-4.20");
@@ -86,6 +88,17 @@ describe("Cursor discovery metadata", () => {
       ["cursor-grok-4.5-high", "cursor-grok-4.5-high-fast"],
     );
     expect(grok.map(model => model.id)).toEqual(["grok-4.5", "grok-4.5-fast"]);
+
+    expect(isCursorModelAvailableForAccount("grok-4.6", ["cursor-grok-4.6-high"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.6-fast", ["cursor-grok-4.6-low-fast"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.6-fast", ["cursor-grok-4.6-fast-medium"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.6-fast", ["cursor-grok-4.6-high"])).toBe(false);
+    expect(isCursorModelAvailableForAccount("grok-4.6", ["cursor-grok-4.6-high-fast"])).toBe(false);
+    const grok46 = filterCursorConfiguredModelsByLiveDiscovery(
+      [{ id: "grok-4.6" }, { id: "grok-4.6-fast" }],
+      ["cursor-grok-4.6-high", "cursor-grok-4.6-high-fast"],
+    );
+    expect(grok46.map(model => model.id)).toEqual(["grok-4.6", "grok-4.6-fast"]);
   });
 
   test("live discovery filter always keeps all router levels when GetUsableModels omits them", () => {
@@ -130,6 +143,8 @@ describe("Cursor discovery metadata", () => {
     expect(inferCursorContextWindow("gemini-3.5-flash")).toBe(1_000_000);
     expect(inferCursorContextWindow("glm-5.2")).toBe(1_000_000);
     expect(inferCursorContextWindow("grok-4.3")).toBe(256_000);
+    expect(inferCursorContextWindow("grok-4.6")).toBe(500_000);
+    expect(inferCursorContextWindow("grok-4.6-fast")).toBe(500_000);
     expect(inferCursorContextWindow("gpt-5.5")).toBe(272_000);
   });
 
@@ -148,6 +163,8 @@ describe("Cursor discovery metadata", () => {
       { id: "claude-opus-4-8", supportsReasoningEffort: true },
       { id: "glm-5.2", supportsReasoningEffort: true },
       { id: "grok-4.3", supportsReasoningEffort: true },
+      { id: "grok-4.6", supportsReasoningEffort: true },
+      { id: "grok-4.6-fast", supportsReasoningEffort: true },
       { id: "unknown-reasoning-model", supportsReasoningEffort: true },
       { id: "composer-2.5", supportsReasoningEffort: false },
     ]);
@@ -157,6 +174,8 @@ describe("Cursor discovery metadata", () => {
     expect(efforts["claude-opus-4-8"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(efforts["glm-5.2"]).toEqual(["high", "max"]);
     expect(efforts["grok-4.3"]).toEqual([]);
+    expect(efforts["grok-4.6"]).toEqual(["low", "medium", "high"]);
+    expect(efforts["grok-4.6-fast"]).toEqual(["low", "medium", "high"]);
     expect(efforts["unknown-reasoning-model"]).toEqual([]);
     expect(efforts["composer-2.5"]).toEqual([]);
   });

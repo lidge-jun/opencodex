@@ -240,7 +240,7 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
   { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
-  // 260813 preemptive: grok-4.6 seeded ahead of Cursor's lineup update (mirrors grok-4.5).
+  // 260812: xAI launched Grok 4.6 in Cursor; account-verified with cursor-grok-4.6-high.
   { id: "grok-4.6", contextWindow: 500_000, supportsReasoningEffort: true },
   { id: "grok-4.6-fast", contextWindow: 500_000, supportsReasoningEffort: true },
 ]);

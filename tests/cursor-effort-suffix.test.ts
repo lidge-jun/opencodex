@@ -12,6 +12,13 @@ const RECORDED_CURSOR_GROK_45_DISCOVERY_IDS = [
   "cursor-grok-4.5-high",
 ] as const;
 
+// Account-verified by a successful Cursor Agent run on the 2026-08-12 launch day.
+const RECORDED_CURSOR_GROK_46_DISCOVERY_IDS = [
+  "cursor-grok-4.6-low",
+  "cursor-grok-4.6-medium",
+  "cursor-grok-4.6-high",
+] as const;
+
 function modelIdFor(modelId: string, reasoning?: string): string {
   const parsed: OcxParsedRequest = {
     modelId,
@@ -133,6 +140,34 @@ describe("Cursor per-model reasoning-effort suffix", () => {
       expect(requestModelId).toBe(`cursor-grok-4.5-${effort}`);
       expect(RECORDED_CURSOR_GROK_45_DISCOVERY_IDS).toContain(requestModelId);
     }
+  });
+
+  test("grok-4.6 uses verified wire ids and parameterizes Fast requests", () => {
+    for (const effort of ["low", "medium", "high"] as const) {
+      const requestModelId = modelIdFor("cursor/grok-4.6", effort);
+      expect(requestModelId).toBe(`cursor-grok-4.6-${effort}`);
+      expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain(requestModelId);
+    }
+    expect(modelIdFor("cursor/grok-4.6", "xhigh")).toBe("cursor-grok-4.6-high");
+    expect(modelIdFor("cursor/grok-4.6")).toBe("cursor-grok-4.6-high");
+    expect(selectionFor("cursor/grok-4.6-fast", "low")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "low" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.6-fast", "medium")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "medium" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.6-fast", "high")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.6-fast", "xhigh")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "high" }, { id: "fast", value: "true" }],
+    });
+    expect(cursorModelEffortLadder("grok-4.6")).toEqual(["low", "medium", "high"]);
+    expect(cursorModelEffortLadder("grok-4.6-fast")).toEqual(["low", "medium", "high"]);
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

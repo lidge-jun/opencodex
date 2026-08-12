@@ -35,8 +35,8 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
   "grok-4.5": ["low", "medium", "high"],
   "grok-4.5-fast": ["low", "medium", "high"],
-  // 260813 preemptive: grok-4.6 tiers mirrored from grok-4.5 ahead of Cursor's lineup update,
-  // so the suffix/wire handling is already correct the day the slugs appear.
+  // 260812: cursor-grok-4.6-high was account-verified; low/medium/high mirror the
+  // effort ladder announced for the Cursor launch, including the parameterized Fast variant.
   "grok-4.6": ["low", "medium", "high"],
   "grok-4.6-fast": ["low", "medium", "high"],
   "gpt-5.1": ["low", "high"],
