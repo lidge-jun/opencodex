@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   LAB_EVENT_SCHEMA_VERSION,
   LAB_PRODUCER,
@@ -11,12 +14,37 @@ import {
 import {
   PUBLIC_ROUTE_REGISTRY_V1,
   PublicEvidenceValidationError,
+  buildPublicEvidenceBundle,
+  getOrCreatePublicPublisher,
   isPublicIncidentRef,
   projectPublicEvidenceRecord,
   publicEvidenceId,
+  readPublicEvidenceBundle,
+  signPublicEvidenceBundle,
   validatePublicEvidenceRecord,
   validatePublicRouteRegistryManifest,
+  verifyPublicEvidenceBundle,
+  writePublicEvidenceBundle,
 } from "../src/lab/public";
+
+const HOMES: string[] = [];
+
+function tempHome(): string {
+  const dir = join(tmpdir(), `ocx-lab-public-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  HOMES.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of HOMES.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
 
 function hex(seed: string): string {
   return Bun.CryptoHasher.hash("sha256", seed, "hex");
@@ -100,6 +128,12 @@ function routeObservation(): ObservationEvent {
   }) as ObservationEvent;
 }
 
+function exportedProtocolRecord() {
+  const result = projectPublicEvidenceRecord({ observation: protocolObservation(), verdict: "VERIFIED" });
+  if (result.status !== "exportable") throw new Error("expected exportable protocol record");
+  return result.record;
+}
+
 describe("CL-10 public authority", () => {
   test("ships a closed, self-consistent public route registry manifest", () => {
     const manifest = validatePublicRouteRegistryManifest(PUBLIC_ROUTE_REGISTRY_V1);
@@ -169,5 +203,76 @@ describe("CL-10 public projection", () => {
     if (result.status !== "exportable") throw new Error("expected exportable protocol record");
     const withUnknown = { ...result.record, localSubjectId: "PRIVATE" };
     expect(() => validatePublicEvidenceRecord(withUnknown)).toThrow(PublicEvidenceValidationError);
+  });
+});
+
+describe("CL-10 public bundle and publisher", () => {
+  test("builds deterministic bundle ids and digests from public-safe bytes", () => {
+    const home = tempHome();
+    const publisher = getOrCreatePublicPublisher(home).publisher;
+    const input = {
+      records: [exportedProtocolRecord()],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      publisher,
+    };
+    const a = buildPublicEvidenceBundle(input);
+    const b = buildPublicEvidenceBundle(input);
+    expect(a.bundleId).toBe(b.bundleId);
+    expect(a.bundleDigest).toBe(b.bundleDigest);
+    expect(a.bundleId).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.bundleDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(a.bundleId).not.toBe(a.bundleDigest);
+  });
+
+  test("creates one installation-local Ed25519 publisher key with restrictive permissions", () => {
+    const home = tempHome();
+    const first = getOrCreatePublicPublisher(home);
+    const second = getOrCreatePublicPublisher(home);
+    expect(first.publisher).toEqual(second.publisher);
+    expect(first.publisher.algorithm).toBe("ed25519");
+    expect(first.publisher.keyId).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.publisher.publicKey.length).toBeGreaterThan(20);
+    const privateKey = readFileSync(first.privateKeyPath, "utf8");
+    expect(privateKey).toContain("PRIVATE KEY");
+    if (process.platform !== "win32") {
+      expect(statSync(first.privateKeyPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  test("signs and verifies exact canonical bundle bytes without serializing private key material", () => {
+    const home = tempHome();
+    const handle = getOrCreatePublicPublisher(home);
+    const bundle = signPublicEvidenceBundle({
+      records: [exportedProtocolRecord()],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      configDir: home,
+    });
+    expect(verifyPublicEvidenceBundle(bundle)).toEqual({ status: "cryptographically_valid" });
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain(handle.privateKeyPath);
+    expect(serialized).not.toContain(readFileSync(handle.privateKeyPath, "utf8").trim());
+
+    const badDigest = { ...bundle, bundleDigest: hex("tampered-bundle") };
+    expect(verifyPublicEvidenceBundle(badDigest)).toEqual({ status: "digest_invalid" });
+    const badSignature = {
+      ...bundle,
+      signature: { ...bundle.signature, signature: Buffer.from("tampered").toString("base64") },
+    };
+    expect(verifyPublicEvidenceBundle(badSignature)).toEqual({ status: "signature_invalid" });
+  });
+
+  test("writes and reads a bounded local export by public bundle id", () => {
+    const home = tempHome();
+    const bundle = signPublicEvidenceBundle({
+      records: [exportedProtocolRecord()],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      configDir: home,
+    });
+    const path = writePublicEvidenceBundle(bundle, home);
+    expect(path).toBe(join(home, "lab", "export", `${bundle.bundleId}.json`));
+    expect(readPublicEvidenceBundle(bundle.bundleId, home)).toEqual(bundle);
   });
 });
