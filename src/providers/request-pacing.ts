@@ -3,6 +3,9 @@ import type { OcxProviderConfig, RequestPacingRule } from "../types";
 export const REQUEST_PACING_MAX_QUEUE_DEPTH = 256;
 export const REQUEST_PACING_MAX_QUEUE_AGE_MS = 60_000;
 
+let maxQueueDepth = REQUEST_PACING_MAX_QUEUE_DEPTH;
+let maxQueueAgeMs = REQUEST_PACING_MAX_QUEUE_AGE_MS;
+
 export type RequestPacingQueueOverloadReason = "queue_full" | "queue_expired";
 
 export class RequestPacingQueueOverloadError extends Error {
@@ -98,7 +101,7 @@ function pacingRetryAfterSeconds(state: ProviderPacer, modelId: string | undefin
 function rejectExpiredWaiters(providerName: string, state: ProviderPacer, now: number): void {
   for (let index = state.queue.length - 1; index >= 0; index -= 1) {
     const waiter = state.queue[index]!;
-    if (now - waiter.queuedAt < REQUEST_PACING_MAX_QUEUE_AGE_MS) continue;
+    if (now - waiter.queuedAt < maxQueueAgeMs) continue;
     state.queue.splice(index, 1);
     if (waiter.abort) waiter.signal?.removeEventListener("abort", waiter.abort);
     waiter.reject(new RequestPacingQueueOverloadError(
@@ -134,7 +137,7 @@ function runQueue(providerName: string, state: ProviderPacer): void {
     for (const waiter of state.queue) {
       const modelReadyAt = waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0;
       const readyAt = Math.max(providerReadyAt, modelReadyAt);
-      const expiresAt = waiter.queuedAt + REQUEST_PACING_MAX_QUEUE_AGE_MS;
+      const expiresAt = waiter.queuedAt + maxQueueAgeMs;
       earliestAt = Math.min(earliestAt, readyAt, expiresAt);
     }
     const delayMs = Math.max(0, earliestAt - now);
@@ -192,7 +195,7 @@ export async function waitForProviderRequestSlot(
     state.timer = undefined;
   }
   runQueue(providerName, state);
-  if (state.queue.length >= REQUEST_PACING_MAX_QUEUE_DEPTH) {
+  if (state.queue.length >= maxQueueDepth) {
     throw new RequestPacingQueueOverloadError(
       providerName,
       "queue_full",
@@ -251,7 +254,17 @@ export function providerRequestPacingStatus(
   };
 }
 
+export function setProviderRequestPacingLimitsForTest(limits: {
+  maxQueueDepth?: number;
+  maxQueueAgeMs?: number;
+}): void {
+  if (limits.maxQueueDepth !== undefined) maxQueueDepth = limits.maxQueueDepth;
+  if (limits.maxQueueAgeMs !== undefined) maxQueueAgeMs = limits.maxQueueAgeMs;
+}
+
 export function resetProviderRequestPacingForTest(): void {
   for (const state of pacers.values()) if (state.timer) clearTimeout(state.timer);
   pacers.clear();
+  maxQueueDepth = REQUEST_PACING_MAX_QUEUE_DEPTH;
+  maxQueueAgeMs = REQUEST_PACING_MAX_QUEUE_AGE_MS;
 }
