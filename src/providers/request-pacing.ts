@@ -1,9 +1,28 @@
 import type { OcxProviderConfig, RequestPacingRule } from "../types";
 
+export const REQUEST_PACING_MAX_QUEUE_DEPTH = 256;
+export const REQUEST_PACING_MAX_QUEUE_AGE_MS = 60_000;
+
+export type RequestPacingQueueOverloadReason = "queue_full" | "queue_expired";
+
+export class RequestPacingQueueOverloadError extends Error {
+  constructor(
+    public readonly providerName: string,
+    public readonly reason: RequestPacingQueueOverloadReason,
+    public readonly retryAfterSeconds: number,
+  ) {
+    super(reason === "queue_full"
+      ? `request pacing queue for provider '${providerName}' is full`
+      : `request pacing queue for provider '${providerName}' exceeded the maximum queued age`);
+    this.name = "RequestPacingQueueOverloadError";
+  }
+}
+
 interface Waiter {
   modelId?: string;
   providerIntervalMs: number;
   modelIntervalMs: number;
+  queuedAt: number;
   signal?: AbortSignal;
   resolve: () => void;
   reject: (reason: unknown) => void;
@@ -65,6 +84,31 @@ function requestPacingIntervals(provider: OcxProviderConfig, modelId?: string): 
   };
 }
 
+function waiterReadyAt(state: ProviderPacer, modelId: string | undefined): number {
+  return Math.max(
+    state.providerNextStartAt,
+    modelId ? (state.modelNextStartAt.get(modelId) ?? 0) : 0,
+  );
+}
+
+function pacingRetryAfterSeconds(state: ProviderPacer, modelId: string | undefined, now: number): number {
+  return Math.max(1, Math.ceil(Math.max(0, waiterReadyAt(state, modelId) - now) / 1000));
+}
+
+function rejectExpiredWaiters(providerName: string, state: ProviderPacer, now: number): void {
+  for (let index = state.queue.length - 1; index >= 0; index -= 1) {
+    const waiter = state.queue[index]!;
+    if (now - waiter.queuedAt < REQUEST_PACING_MAX_QUEUE_AGE_MS) continue;
+    state.queue.splice(index, 1);
+    if (waiter.abort) waiter.signal?.removeEventListener("abort", waiter.abort);
+    waiter.reject(new RequestPacingQueueOverloadError(
+      providerName,
+      "queue_expired",
+      pacingRetryAfterSeconds(state, waiter.modelId, now),
+    ));
+  }
+}
+
 function runQueue(providerName: string, state: ProviderPacer): void {
   if (state.active) return;
   if (state.queue.length === 0) {
@@ -77,8 +121,11 @@ function runQueue(providerName: string, state: ProviderPacer): void {
   for (const [modelId, readyAt] of state.modelNextStartAt) {
     if (readyAt <= now) state.modelNextStartAt.delete(modelId);
   }
+  rejectExpiredWaiters(providerName, state, now);
+  if (state.queue.length === 0) return;
+
   const providerReadyAt = Math.max(now, state.providerNextStartAt);
-  let waiterIndex = state.queue.findIndex(waiter => {
+  const waiterIndex = state.queue.findIndex(waiter => {
     const modelReadyAt = waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0;
     return Math.max(providerReadyAt, modelReadyAt) <= now;
   });
@@ -86,7 +133,9 @@ function runQueue(providerName: string, state: ProviderPacer): void {
     let earliestAt = Number.POSITIVE_INFINITY;
     for (const waiter of state.queue) {
       const modelReadyAt = waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0;
-      earliestAt = Math.min(earliestAt, Math.max(providerReadyAt, modelReadyAt));
+      const readyAt = Math.max(providerReadyAt, modelReadyAt);
+      const expiresAt = waiter.queuedAt + REQUEST_PACING_MAX_QUEUE_AGE_MS;
+      earliestAt = Math.min(earliestAt, readyAt, expiresAt);
     }
     const delayMs = Math.max(0, earliestAt - now);
     state.timer = setTimeout(() => {
@@ -134,8 +183,25 @@ export async function waitForProviderRequestSlot(
     queue: [], providerNextStartAt: 0, modelNextStartAt: new Map<string, number>(), active: false,
   };
   pacers.set(providerName, state);
+
+  // Give already-eligible or expired waiters a chance to leave before applying the
+  // admission bound to the newest request. This preserves FIFO-ish fairness while
+  // keeping the retained queue strictly bounded under burst load.
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = undefined;
+  }
+  runQueue(providerName, state);
+  if (state.queue.length >= REQUEST_PACING_MAX_QUEUE_DEPTH) {
+    throw new RequestPacingQueueOverloadError(
+      providerName,
+      "queue_full",
+      pacingRetryAfterSeconds(state, modelId, Date.now()),
+    );
+  }
+
   await new Promise<void>((resolve, reject) => {
-    const waiter: Waiter = { modelId, ...intervals, signal, resolve, reject };
+    const waiter: Waiter = { modelId, ...intervals, queuedAt: Date.now(), signal, resolve, reject };
     waiter.abort = () => {
       const index = state.queue.indexOf(waiter);
       if (index >= 0) state.queue.splice(index, 1);
@@ -169,10 +235,11 @@ export function providerRequestPacingStatus(
   const state = pacers.get(providerName);
   let nextSlotAt = state?.providerNextStartAt ?? 0;
   if (state && state.queue.length > 0) {
-    nextSlotAt = Math.min(...state.queue.map(waiter => Math.max(
-      state.providerNextStartAt,
-      waiter.modelId ? (state.modelNextStartAt.get(waiter.modelId) ?? 0) : 0,
-    )));
+    let earliestQueuedSlotAt = Number.POSITIVE_INFINITY;
+    for (const waiter of state.queue) {
+      earliestQueuedSlotAt = Math.min(earliestQueuedSlotAt, waiterReadyAt(state, waiter.modelId));
+    }
+    if (Number.isFinite(earliestQueuedSlotAt)) nextSlotAt = earliestQueuedSlotAt;
   }
   return {
     provider: providerName,
