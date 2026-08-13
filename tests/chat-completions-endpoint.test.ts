@@ -737,7 +737,7 @@ test("chat-native non-stream budget overflow returns 413 without hanging", async
       return Response.json({ id: "chatcmpl_ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
     },
   });
-  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/\$/, "")}/v1`));
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -763,15 +763,85 @@ test("chat-native non-stream budget overflow returns 413 without hanging", async
   }
 });
 
-test("chat-native non-stream invalid JSON is forwarded as 200 passthrough", async () => {
-  // The native JSON path forwards verbatim when parsing fails (bridges legacy behavior for untrusted upstreams).
+test("chat-native streaming synthesizes SSE from valid Chat JSON", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({ id: "chatcmpl_synth", object: "chat.completion", created: 1, model: "mock/test-model", choices: [{ index: 0, message: { role: "assistant", content: "hello" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    expect(text).toContain("chat.completion.chunk");
+    expect(text).toContain("hello");
+    expect(text).toContain("data: [DONE]");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming with invalid Chat JSON returns SSE error not fabricated success", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      // missing choices
+      return Response.json({ id: "chatcmpl_bad", object: "chat.completion" });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(502);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming with malformed JSON returns 502 not success", async () => {
   const upstream = Bun.serve({
     port: 0,
     fetch() {
       return new Response("not-json-at-all", { headers: { "content-type": "application/json" } });
     },
   });
-  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/\$/, "")}/v1`));
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(502);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native non-stream invalid JSON returns 502", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("not-json-at-all", { headers: { "content-type": "application/json" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
@@ -779,8 +849,37 @@ test("chat-native non-stream invalid JSON is forwarded as 200 passthrough", asyn
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
     });
+    expect(response.status).toBe(502);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native streaming with tool_calls synthesizes via JSON path", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({
+        id: "chatcmpl_tc",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{\"q\":1}" } }] }, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: true, messages: [{ role: "user", content: "hi" }], tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }] }),
+    });
     expect(response.status).toBe(200);
-    expect(await response.text()).toBe("not-json-at-all");
+    const text = await response.text();
+    expect(text).toContain("lookup");
+    expect(text).toContain("tool_calls");
   } finally {
     await server.stop(true);
     upstream.stop(true);

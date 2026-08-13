@@ -292,6 +292,7 @@ async function handleChatCompletionsWithBudget(
     } catch (err) {
       const overflow = isTranslatorBudgetExceededError(err);
       const status = overflow ? 413 : 500;
+      finishRequestAttempt(attempt, status, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
       return chatCompletionsErrorResponse(
         status,
@@ -391,7 +392,7 @@ async function handleChatCompletionsWithBudget(
         const msg = err instanceof Error ? err.message : String(err);
         finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
         if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
-        break;
+        return chatCompletionsErrorResponse(502, redactSecretString(msg).slice(0, 500), "server_error");
       }
     }
     {
@@ -471,27 +472,28 @@ async function handleChatCompletionsWithBudget(
           if (!reader) {
             text = await response.text();
           } else {
-            const decoder = new TextDecoder();
-            let acc = "";
-            // Bound the error body to 8 KiB — enough for structured error, avoids unbounded buffering.
-            const limit = 8192;
-            let consumed = 0;
+            const limitBytes = 8192;
+            let accBytes = 0;
+            const accChunks: Uint8Array[] = [];
             for (;;) {
               const { done, value } = await reader.read();
               if (done) break;
               if (value) {
-                const chunk = decoder.decode(value, { stream: true });
-                if (consumed + chunk.length > limit) {
-                  acc += chunk.slice(0, limit - consumed);
+                if (accBytes + value.byteLength > limitBytes) {
+                  const slice = value.subarray(0, limitBytes - accBytes);
+                  if (slice.byteLength > 0) accChunks.push(slice);
+                  accBytes = limitBytes;
                   try { void reader.cancel().catch(() => {}); } catch { /* noop */ }
                   break;
                 }
-                acc += chunk;
-                consumed += chunk.length;
+                accChunks.push(value);
+                accBytes += value.byteLength;
               }
             }
-            acc += decoder.decode();
-            text = acc;
+            const bounded = new Uint8Array(accBytes);
+            let off = 0;
+            for (const c of accChunks) { bounded.set(c, off); off += c.byteLength; }
+            text = new TextDecoder().decode(bounded);
           }
         } catch {
           text = "";
@@ -652,8 +654,17 @@ async function handleChatCompletionsWithBudget(
               try { parsed = JSON.parse(payload); } catch { continue; }
               if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
               const rec = parsed as Rec;
-              // Already a proper chunk — forward as-is.
+              // Already a proper chunk — forward as-is, but retain usage accounting.
               if (rec.object === "chat.completion.chunk") {
+                if (isRec(rec.usage)) {
+                  const u = rec.usage as Rec;
+                  const prompt = typeof u.prompt_tokens === "number" ? u.prompt_tokens : undefined;
+                  const comp = typeof u.completion_tokens === "number" ? u.completion_tokens : undefined;
+                  if (prompt !== undefined || comp !== undefined) {
+                    logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 };
+                    if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage;
+                  }
+                }
                 noteSseFirstOutput();
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(rec)}\n\n`));
                 continue;
@@ -754,20 +765,32 @@ async function handleChatCompletionsWithBudget(
       let synthParsed: unknown | null = null;
       try { synthParsed = JSON.parse(synthJsonText); } catch { synthParsed = null; }
       const rec2 = isRec(synthParsed) ? synthParsed as Rec : null;
-      const choices2 = rec2 && Array.isArray(rec2.choices) ? rec2.choices as Rec[] : [];
-      const msg2 = choices2[0] && isRec(choices2[0].message) ? choices2[0].message as Rec : null;
-      const usage2 = rec2 && isRec(rec2.usage) ? rec2.usage as Rec : undefined;
+      // Validate as Chat completion shape; otherwise surface as upstream protocol error, not silent success.
+      if (!rec2 || !Array.isArray(rec2.choices) || (rec2.choices as unknown[]).length === 0) {
+        finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(502, "upstream returned an invalid chat completion", "server_error");
+      }
+      const choices2 = rec2.choices as unknown[] as Rec[];
+      const firstChoice2 = choices2[0] as Rec;
+      if (!isRec(firstChoice2.message) && firstChoice2.finish_reason === undefined) {
+        finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(502, "upstream returned an invalid chat completion", "server_error");
+      }
+      const msg2 = isRec(firstChoice2.message) ? firstChoice2.message as Rec : null;
+      const usage2 = isRec(rec2.usage) ? rec2.usage as Rec : undefined;
       if (usage2) {
         const prompt = typeof usage2.prompt_tokens === "number" ? usage2.prompt_tokens : undefined;
         const comp = typeof usage2.completion_tokens === "number" ? usage2.completion_tokens : undefined;
         if (prompt !== undefined || comp !== undefined) { logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 }; if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage; }
       }
-      const synthId = (rec2?.id as string) || `chatcmpl-${Date.now().toString(36)}`;
-      const synthCreated = typeof rec2?.created === "number" ? rec2?.created as number : Math.floor(Date.now() / 1000);
-      const synthModel = typeof rec2?.model === "string" ? rec2?.model as string : requestedModel;
-      const content2 = msg2 && typeof msg2.content === "string" ? msg2.content as string : (msg2?.content ?? null);
+      const synthId = typeof rec2.id === "string" ? rec2.id as string : `chatcmpl-${Date.now().toString(36)}`;
+      const synthCreated = typeof rec2.created === "number" ? rec2.created as number : Math.floor(Date.now() / 1000);
+      const synthModel = typeof rec2.model === "string" ? rec2.model as string : requestedModel;
+      const content2 = msg2 && typeof msg2.content === "string" ? msg2.content as string : (msg2 ? (msg2.content as unknown) : null);
       const toolCalls2 = msg2 && Array.isArray(msg2.tool_calls) ? msg2.tool_calls as unknown[] : undefined;
-      const finish2 = choices2[0] && typeof choices2[0].finish_reason === "string" ? choices2[0].finish_reason as string : "stop";
+      const finish2 = typeof firstChoice2.finish_reason === "string" ? firstChoice2.finish_reason as string : "stop";
       const encoder2 = new TextEncoder();
       const synthStream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -877,7 +900,16 @@ async function handleChatCompletionsWithBudget(
     }
     cleanup();
     let parsedJson: unknown | null = null;
-    try { parsedJson = JSON.parse(jsonText); } catch { parsedJson = null; }
+    try { parsedJson = JSON.parse(jsonText); } catch {
+      finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(502, "upstream returned an invalid chat completion", "server_error");
+    }
+    if (!isRec(parsedJson) || !Array.isArray((parsedJson as Rec).choices)) {
+      finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(502, "upstream returned an invalid chat completion", "server_error");
+    }
     if (isRec(parsedJson) && isRec((parsedJson as Rec).usage)) {
       const usage = (parsedJson as Rec).usage as Rec;
       const prompt = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
