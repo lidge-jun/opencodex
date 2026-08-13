@@ -12,27 +12,50 @@ import { formatErrorResponse } from "../bridge";
  * gains no data-plane exception.
  *
  * The document itself is not produced here. It comes from the same materialization
- * boundary `/api/catalog` uses, so there is exactly one catalog serializer. What this
- * module owns is the data-plane transport contract: read-only methods, a declared
- * response ceiling, cache policy, and the data-plane error envelope.
+ * boundary `/api/catalog` uses — including the source read bound and the
+ * safe-to-distribute verdict — so there is exactly one catalog reader and serializer.
+ * What this module owns is the data-plane transport contract: read-only methods, a
+ * declared response ceiling, cache policy, and the data-plane error envelope.
  */
 
 /** Methods this surface serves. The catalog is read-only; no `/v1` mutation exists. */
 export const DATA_PLANE_CATALOG_ALLOWED_METHODS = "GET, HEAD";
 
 /**
- * Declared ceiling on the catalog document this route will ship.
+ * Declared ceiling on the serialized catalog document this route will ship, measured in
+ * UTF-8 response bytes.
  *
- * Not a memory guard — the document is already resident once it has been read and
- * serialized. It is a stated upper bound for the remote half of the workflow: a client
- * redirecting this route into `opencodex-catalog.json` gets a bounded file or a
- * deterministic refusal, never an unbounded stream. A real generated catalog is orders of
+ * Not a memory guard — the source read bound in the shared materializer is what protects
+ * parsing. This is a stated upper bound for the remote half of the workflow: a client
+ * saving this route's output gets a bounded file or a deterministic refusal, never an
+ * unbounded stream and never a truncated document. A real generated catalog is orders of
  * magnitude below this, so the bound refuses only a pathological document.
  *
- * The management route keeps its existing unbounded behavior. The bound is specific to the
- * remotely reachable transport, which is the surface that needs one.
+ * The management route does not apply this response ceiling. The bound is specific to
+ * the remotely reachable transport, which is the surface that needs one.
  */
 export const DATA_PLANE_CATALOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Cache and content-hygiene headers for EVERY `/v1/catalog` outcome — success, HEAD, and
+ * each error — applied as the last step so no branch can miss them.
+ *
+ * `no-store` matters on errors as much as on the document: a cached `404
+ * catalog_not_found` would keep telling a client there is no catalog after the operator
+ * generates one. The document itself additionally tracks live provider, visibility, and
+ * account-selector state and is served per credential, so a shared intermediary must not
+ * retain or replay any of it.
+ */
+export function withDataPlaneCatalogResponseHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Cache-Control", "no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 export function dataPlaneCatalogMethodNotAllowed(): Response {
   const response = formatErrorResponse(
@@ -45,12 +68,25 @@ export function dataPlaneCatalogMethodNotAllowed(): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+function catalogTooLargeResponse(): Response {
+  return new Response(JSON.stringify({
+    error: {
+      type: "server_error",
+      code: "catalog_too_large",
+      message: `catalog document exceeds the ${DATA_PLANE_CATALOG_MAX_BYTES} byte data-plane limit`,
+    },
+  }), { status: 500, headers: { "Content-Type": "application/json" } });
+}
+
 /**
  * Serve the catalog to an already-admitted data-plane caller.
  *
  * `HEAD` answers with the status and headers `GET` would produce, including the byte count
  * a `GET` would deliver, and no body — that is the whole point of offering it, so a client
  * can check size and version skew before downloading.
+ *
+ * The caller wraps every return value in {@link withDataPlaneCatalogResponseHeaders};
+ * cache and hygiene headers are deliberately owned there rather than repeated per branch.
  */
 export async function buildDataPlaneCatalogResponse(method: "GET" | "HEAD"): Promise<Response> {
   const { catalogDistributionHeaders, materializeCatalogDistribution } = await import("../codex/catalog/distribution");
@@ -61,23 +97,26 @@ export async function buildDataPlaneCatalogResponse(method: "GET" | "HEAD"): Pro
     // yet". Neither answer names a path on the operator's disk.
     return formatErrorResponse(404, "catalog_not_found", "Codex catalog is not materialized");
   }
-  if (catalog.byteLength > DATA_PLANE_CATALOG_MAX_BYTES) {
+  if (catalog.status === "unsafe") {
+    // Content-free by contract: the shared safety walk returns only a verdict, so this
+    // branch cannot echo the key or value that made the document unsafe.
     return new Response(JSON.stringify({
       error: {
         type: "server_error",
-        code: "catalog_too_large",
-        message: `catalog document exceeds the ${DATA_PLANE_CATALOG_MAX_BYTES} byte data-plane limit`,
+        code: "catalog_unsafe",
+        message: "catalog document contains values that are not safe to distribute",
       },
     }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
-  const headers = new Headers({
-    ...catalogDistributionHeaders(catalog),
-    // The catalog tracks live provider, model-visibility, and account-selector state, and
-    // this response is served per credential. A shared intermediary must not keep a copy to
-    // hand to the next caller, nor serve a stale one after an operator changes visibility.
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff",
-  });
+  if (catalog.status === "source-too-large") {
+    // Same client story as the response ceiling: the catalog is too large to distribute.
+    // Which bound tripped is an operator fact, not a client one.
+    return catalogTooLargeResponse();
+  }
+  if (catalog.byteLength > DATA_PLANE_CATALOG_MAX_BYTES) {
+    return catalogTooLargeResponse();
+  }
+  const headers = new Headers(catalogDistributionHeaders(catalog));
   if (method === "HEAD") {
     headers.set("Content-Length", String(catalog.byteLength));
     return new Response(null, { status: 200, headers });

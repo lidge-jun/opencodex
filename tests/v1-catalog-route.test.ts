@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { CATALOG_SOURCE_MAX_BYTES, materializeCatalogDistribution } from "../src/codex/catalog/distribution";
 import { startServer } from "../src/server";
 import { DATA_PLANE_CATALOG_MAX_BYTES } from "../src/server/data-plane-catalog";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -24,6 +25,19 @@ const CODEX_ACCOUNT_ID = "codex-account-privateid-9f2c";
 const CODEX_ACCOUNT_EMAIL = "operator@pool.example.test";
 /** An operator-chosen public namespace; the catalog may carry it, the account id may not. */
 const PUBLIC_SELECTOR = "workspace-a";
+
+/**
+ * Sentinels written INTO the catalog file itself, one per forbidden content class, so the
+ * tests exercise the document that is actually serialized rather than config that never
+ * reaches the wire. Shapes stay within what `scripts/privacy-scan.ts` recognizes as fake;
+ * the Authorization value is assembled at runtime so this source file carries no literal
+ * `Bearer <token>` for the scanner to flag.
+ */
+const CATALOG_KEY_SENTINEL = "sk-test-809catalogkeyprobe";
+const CATALOG_OCX_SENTINEL = ["ocx", "data", "catalogunsafeprobe"].join("_");
+const CATALOG_BEARER_SENTINEL = ["Bearer", "catalogbearerprobe1234567890"].join(" ");
+const CATALOG_EMAIL_SENTINEL = "leaked-account@pool.example.test";
+const CATALOG_PATH_SENTINEL = "/Users/example/.opencodex/config.json";
 const previousHome = process.env.OPENCODEX_HOME;
 const previousDataToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousAdminToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
@@ -419,6 +433,124 @@ describe("the data-plane catalog response carries no management state (#809)", (
   });
 });
 
+describe("an unsafe catalog is refused, not distributed (#809)", () => {
+  /**
+   * `RawCatalog` keeps unknown fields because Codex owns the schema, so the distribution
+   * boundary cannot assume every field is model metadata. These fixtures put forbidden
+   * content into the DOCUMENT that gets serialized — top-level and nested, key-triggered
+   * and value-triggered — and pin that the whole response surface (status line, headers,
+   * body) never carries a byte of it.
+   */
+  async function observableSurface(response: Response): Promise<string> {
+    const headers = [...response.headers.entries()].map(([name, value]) => `${name}: ${value}`).join("\n");
+    return `${response.status}\n${headers}\n${await response.text()}`;
+  }
+
+  function writeUnsafeCatalog(mutate: (catalog: Record<string, unknown>) => void): void {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-unsafe-");
+    const catalog = JSON.parse(JSON.stringify(CATALOG_FIXTURE)) as Record<string, unknown>;
+    mutate(catalog);
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(catalog), "utf8");
+  }
+
+  type Models = Array<Record<string, unknown>>;
+  const unsafeCases: Array<[string, (catalog: Record<string, unknown>) => void, string[]]> = [
+    [
+      "a top-level field carrying a provider-key-shaped value",
+      catalog => { catalog.release_notes = `rotated to ${CATALOG_KEY_SENTINEL}`; },
+      [CATALOG_KEY_SENTINEL],
+    ],
+    [
+      "a top-level key that names management state, with an innocuous value",
+      catalog => { catalog.provider_api_key = "unset"; },
+      ["provider_api_key"],
+    ],
+    [
+      "a nested model field carrying a proxy admission secret",
+      catalog => { ((catalog.models as Models)[0]!).notes = CATALOG_OCX_SENTINEL; },
+      [CATALOG_OCX_SENTINEL],
+    ],
+    [
+      "a nested model key that names provider transport config",
+      catalog => { ((catalog.models as Models)[1]!).headers = { "x-upstream": "value" }; },
+      ["x-upstream"],
+    ],
+    [
+      "an email address inside instruction text",
+      catalog => { ((catalog.models as Models)[0]!).base_instructions = `escalate to ${CATALOG_EMAIL_SENTINEL}`; },
+      [CATALOG_EMAIL_SENTINEL],
+    ],
+    [
+      "a local home path inside a description",
+      catalog => { ((catalog.models as Models)[1]!).description = `generated from ${CATALOG_PATH_SENTINEL}`; },
+      [CATALOG_PATH_SENTINEL],
+    ],
+    [
+      "an Authorization value nested inside an unknown structure",
+      catalog => { ((catalog.models as Models)[0]!).debug = { captured: [CATALOG_BEARER_SENTINEL] }; },
+      [CATALOG_BEARER_SENTINEL],
+    ],
+  ];
+
+  test.each(unsafeCases)("%s is rejected without echoing it", async (_label, mutate, sentinels) => {
+    writeUnsafeCatalog(mutate);
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(500);
+      const surface = await observableSurface(response);
+      const body = JSON.parse(surface.slice(surface.lastIndexOf("\n") + 1)) as { error?: { code?: string } };
+      expect(body.error?.code).toBe("catalog_unsafe");
+      for (const sentinel of sentinels) {
+        expect({ sentinel, leaked: surface.includes(sentinel) }).toEqual({ sentinel, leaked: false });
+      }
+      // The refusal must not echo the rest of the document either — the error is a
+      // verdict, not a partial catalog.
+      expect(surface).not.toContain("gpt-5.3-codex");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the management route shares the same verdict and echoes nothing", async () => {
+    writeUnsafeCatalog(catalog => { catalog.notes = CATALOG_OCX_SENTINEL; });
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/catalog", server.url), {
+        headers: { "x-opencodex-api-key": ADMIN_TOKEN },
+      });
+      // One materialization boundary: the same document that /v1/catalog refuses is
+      // refused here, so the safety rule cannot fork between the two planes.
+      expect(response.status).toBe(500);
+      const surface = await observableSurface(response);
+      expect(surface).not.toContain(CATALOG_OCX_SENTINEL);
+      expect(surface).not.toContain("gpt-5.3-codex");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("HEAD reports the same refusal status", async () => {
+    writeUnsafeCatalog(catalog => { catalog.notes = CATALOG_OCX_SENTINEL; });
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/catalog", server.url), {
+        method: "HEAD",
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(response.status).toBe(500);
+      expect(await response.text()).not.toContain(CATALOG_OCX_SENTINEL);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
 describe("data-plane catalog response boundaries (#809)", () => {
   test("declares its type, refuses intermediary caching, and blocks sniffing", async () => {
     writeCatalogFixture();
@@ -473,18 +605,80 @@ describe("data-plane catalog response boundaries (#809)", () => {
     }
   });
 
-  test("refuses a catalog beyond the declared response ceiling instead of streaming it", async () => {
-    codexHome = installIsolatedCodexHome("ocx-v1-catalog-oversized-");
-    const oversized = {
+  /**
+   * A distinctive fragment inside the oversized padding. A refusal that echoed any part
+   * of the document would carry it; the assertions below say the refusal carries none.
+   */
+  const PADDING_FRAGMENT = "oversizedcatalogfragment";
+
+  /** A catalog whose compact serialization is exactly `targetBytes` UTF-8 bytes. */
+  function catalogOfSerializedBytes(targetBytes: number, padUnit: string): string {
+    const shape = (description: string) => JSON.stringify({
       models: [{
-        slug: "fixture/oversized",
-        display_name: "oversized",
-        description: "x".repeat(DATA_PLANE_CATALOG_MAX_BYTES + 1024),
+        slug: "fixture/padded",
+        display_name: "padded",
+        description,
         visibility: "list",
         input_modalities: ["text"],
       }],
-    };
-    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(oversized), "utf8");
+    });
+    const overhead = Buffer.byteLength(shape(""), "utf8");
+    const unitBytes = Buffer.byteLength(padUnit, "utf8");
+    const seed = PADDING_FRAGMENT;
+    const remaining = targetBytes - overhead - Buffer.byteLength(seed, "utf8");
+    if (remaining < 0) throw new Error(`cannot hit ${targetBytes} bytes: fixed overhead is larger`);
+    // Bulk-pad with the requested unit; settle the sub-unit remainder with single-byte
+    // ASCII so any target byte count is reachable with any unit width.
+    const padding = padUnit.repeat(Math.floor(remaining / unitBytes)) + "x".repeat(remaining % unitBytes);
+    const body = shape(seed + padding);
+    if (Buffer.byteLength(body, "utf8") !== targetBytes) {
+      throw new Error("serialized-size arithmetic drifted");
+    }
+    return body;
+  }
+
+  test("the response ceiling cuts exactly at the byte boundary, and a refusal echoes nothing", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-boundary-");
+    const catalogPath = join(codexHome.path, "opencodex-catalog.json");
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    const read = () => fetch(new URL("/v1/catalog", server.url), {
+      headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+    });
+    try {
+      // One byte under the limit is served whole.
+      writeFileSync(catalogPath, catalogOfSerializedBytes(DATA_PLANE_CATALOG_MAX_BYTES - 1, "x"), "utf8");
+      const under = await read();
+      expect(under.status).toBe(200);
+      expect((await under.arrayBuffer()).byteLength).toBe(DATA_PLANE_CATALOG_MAX_BYTES - 1);
+
+      // Exactly the limit is still within the declared bound.
+      writeFileSync(catalogPath, catalogOfSerializedBytes(DATA_PLANE_CATALOG_MAX_BYTES, "x"), "utf8");
+      const exact = await read();
+      expect(exact.status).toBe(200);
+      expect((await exact.arrayBuffer()).byteLength).toBe(DATA_PLANE_CATALOG_MAX_BYTES);
+
+      // One byte over is refused deterministically — never truncated, never partial.
+      writeFileSync(catalogPath, catalogOfSerializedBytes(DATA_PLANE_CATALOG_MAX_BYTES + 1, "x"), "utf8");
+      const over = await read();
+      expect(over.status).toBe(500);
+      const overText = await over.text();
+      expect((JSON.parse(overText) as { error?: { code?: string } }).error?.code).toBe("catalog_too_large");
+      expect(overText).not.toContain(PADDING_FRAGMENT);
+      expect(overText).not.toContain("fixture/padded");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the ceiling counts UTF-8 bytes, not string length", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-multibyte-");
+    // "✓" is one JS character but three UTF-8 bytes. This document's CHARACTER count is
+    // far below the limit while its byte count is just over it, so a limiter that
+    // measured `string.length` would serve it.
+    const body = catalogOfSerializedBytes(DATA_PLANE_CATALOG_MAX_BYTES + 2, "✓");
+    expect(body.length).toBeLessThan(DATA_PLANE_CATALOG_MAX_BYTES);
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), body, "utf8");
     saveConfig(remoteConfig());
     const server = startServer(0);
     try {
@@ -492,8 +686,125 @@ describe("data-plane catalog response boundaries (#809)", () => {
         headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
       });
       expect(response.status).toBe(500);
-      const body = await response.json() as { error?: { code?: string } };
-      expect(body.error?.code).toBe("catalog_too_large");
+      const parsed = await response.json() as { error?: { code?: string } };
+      expect(parsed.error?.code).toBe("catalog_too_large");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a source file beyond the read bound is refused before parsing", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-source-bound-");
+    // Not JSON at all: if this ever reaches JSON.parse the test still fails (it would
+    // report `missing`, not `source-too-large`), so the status doubles as proof that
+    // the bound was applied before parsing rather than after.
+    writeFileSync(
+      join(codexHome.path, "opencodex-catalog.json"),
+      Buffer.alloc(CATALOG_SOURCE_MAX_BYTES + 1, 0x78),
+    );
+    expect(await materializeCatalogDistribution()).toEqual({ status: "source-too-large" });
+  });
+});
+
+describe("cache and hygiene headers cover every /v1/catalog outcome (#809)", () => {
+  function expectCatalogResponseHeaders(label: string, response: Response): void {
+    expect({
+      label,
+      cacheControl: response.headers.get("cache-control"),
+      nosniff: response.headers.get("x-content-type-options"),
+    }).toEqual({ label, cacheControl: "no-store", nosniff: "nosniff" });
+  }
+
+  test("200, HEAD, 401, 403, 404, 405, and 500 all refuse caching and sniffing", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-headers-");
+    const catalogPath = join(codexHome.path, "opencodex-catalog.json");
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    const url = new URL("/v1/catalog", server.url);
+    try {
+      // 404 first — no catalog exists yet.
+      const missing = await fetch(url, { headers: { "x-opencodex-api-key": DATA_PLANE_KEY } });
+      expect(missing.status).toBe(404);
+      expectCatalogResponseHeaders("404", missing);
+
+      // A no-store 404 must not stick: the catalog generated afterwards is observable
+      // on the very next request.
+      writeFileSync(catalogPath, JSON.stringify(CATALOG_FIXTURE), "utf8");
+      const generated = await fetch(url, { headers: { "x-opencodex-api-key": DATA_PLANE_KEY } });
+      expect(generated.status).toBe(200);
+      expectCatalogResponseHeaders("200", generated);
+
+      const head = await fetch(url, { method: "HEAD", headers: { "x-opencodex-api-key": DATA_PLANE_KEY } });
+      expect(head.status).toBe(200);
+      expectCatalogResponseHeaders("HEAD 200", head);
+      // The success HEAD keeps its exact byte count alongside the hygiene headers.
+      expect(head.headers.get("content-length")).toBe(
+        String(Buffer.byteLength(JSON.stringify(CATALOG_FIXTURE), "utf8")),
+      );
+
+      const anonymous = await fetch(url);
+      expect(anonymous.status).toBe(401);
+      expectCatalogResponseHeaders("401", anonymous);
+
+      const crossOrigin = await fetch(url, {
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY, origin: "http://attacker.example" },
+      });
+      expect(crossOrigin.status).toBe(403);
+      expectCatalogResponseHeaders("403", crossOrigin);
+
+      const mutation = await fetch(url, {
+        method: "POST",
+        headers: { "x-opencodex-api-key": DATA_PLANE_KEY, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(mutation.status).toBe(405);
+      expectCatalogResponseHeaders("405", mutation);
+      expect(mutation.headers.get("allow")).toBe("GET, HEAD");
+
+      writeFileSync(catalogPath, JSON.stringify({ ...CATALOG_FIXTURE, notes: CATALOG_OCX_SENTINEL }), "utf8");
+      const unsafe = await fetch(url, { headers: { "x-opencodex-api-key": DATA_PLANE_KEY } });
+      expect(unsafe.status).toBe(500);
+      expectCatalogResponseHeaders("500", unsafe);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("CORS preflight admits a browser HEAD (#809)", () => {
+  test("OPTIONS answers 204 with HEAD and the dedicated header allowed, and the HEAD then succeeds", async () => {
+    writeCatalogFixture();
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    const url = new URL("/v1/catalog", server.url);
+    const origin = new URL(server.url).origin;
+    try {
+      // The global preflight exception: OPTIONS is answered bodyless BEFORE route
+      // authentication, for this route as for every other. This is why the route's
+      // "anonymous requests get 401" property is stated per mutation method, not as
+      // "every non-read method".
+      const preflight = await fetch(url, {
+        method: "OPTIONS",
+        headers: {
+          origin,
+          "access-control-request-method": "HEAD",
+          "access-control-request-headers": "x-opencodex-api-key",
+        },
+      });
+      expect(preflight.status).toBe(204);
+      expect(await preflight.text()).toBe("");
+      const allowedMethods = preflight.headers.get("access-control-allow-methods") ?? "";
+      expect(allowedMethods.split(",").map(m => m.trim())).toContain("HEAD");
+      expect((preflight.headers.get("access-control-allow-headers") ?? "").toLowerCase())
+        .toContain("x-opencodex-api-key");
+      expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+
+      // The request the preflight promised is genuinely admitted.
+      const head = await fetch(url, {
+        method: "HEAD",
+        headers: { origin, "x-opencodex-api-key": DATA_PLANE_KEY },
+      });
+      expect(head.status).toBe(200);
     } finally {
       await server.stop(true);
     }

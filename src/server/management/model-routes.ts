@@ -128,14 +128,22 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
 
-  // Management projection of the catalog document. The bytes and the version header come
-  // from the shared materialization boundary that data-plane `GET /v1/catalog` also uses
-  // (#809), so the two surfaces cannot drift into two serializers. This route keeps its own
-  // management error envelope and CORS.
+  // Management projection of the catalog document. The bytes, the version header, the
+  // source read bound, and the safe-to-distribute verdict all come from the shared
+  // materialization boundary that data-plane `GET /v1/catalog` also uses (#809), so the
+  // two surfaces cannot drift into two serializers — or two safety rules. This route
+  // keeps its own management error envelope and CORS. Both refusal messages are
+  // deliberately content-free: echoing what made the document unsafe would be the leak.
   if (url.pathname === "/api/catalog" && req.method === "GET") {
     const { catalogDistributionHeaders, materializeCatalogDistribution } = await import("../../codex/catalog/distribution");
     const catalog = await materializeCatalogDistribution();
     if (catalog.status === "missing") return jsonResponse({ error: "catalog not found" }, 404, req, config);
+    if (catalog.status === "unsafe") {
+      return jsonResponse({ error: "catalog contains values that are not safe to distribute" }, 500, req, config);
+    }
+    if (catalog.status === "source-too-large") {
+      return jsonResponse({ error: "catalog file is too large to read" }, 500, req, config);
+    }
     return new Response(catalog.body, {
       status: 200,
       headers: { ...catalogDistributionHeaders(catalog), ...corsHeaders(req, config) },
