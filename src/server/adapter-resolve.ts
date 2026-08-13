@@ -1,16 +1,8 @@
-import { createAnthropicAdapter } from "../adapters/anthropic";
-import { createAzureAdapter } from "../adapters/azure";
-import { createCursorAdapter } from "../adapters/cursor";
-import { createGoogleAdapter } from "../adapters/google";
-import { createKiroAdapter } from "../adapters/kiro";
-import { createMimoFreeAdapter } from "../adapters/mimo-free";
-import { createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { createCommandCodeAdapter } from "../adapters/command-code";
-import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
+import { createRegisteredAdapter } from "../adapters/registry";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -35,11 +27,7 @@ export function resolveWireProtocolOverride(
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };
   }
-  // Re-check the allow-list here, not just in the config validator: the file may have
-  // been hand-edited, or written by a build that allowed more values.
   const configured = providerConfig.modelAdapters?.[modelId];
-  // An explicit allowed override wins, including one naming the provider-wide adapter (the
-  // opt-out from a registry default). Invalid hand-edited values fall through to the default.
   const requested = configured && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(configured)
     ? configured
     : providerModelWireDefault(providerName, providerConfig, modelId, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound);
@@ -47,8 +35,6 @@ export function resolveWireProtocolOverride(
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter
     && !isWirePinnedModel(providerName, modelId)
-    // A forward provider hands the caller's own credential upstream; the chat adapter
-    // only ever sends provider.apiKey, so switching wires here would drop the auth.
     && !isCanonicalOpenAiForwardProvider(providerConfig)) {
     return { ...providerConfig, adapter: requested };
   }
@@ -57,27 +43,5 @@ export function resolveWireProtocolOverride(
 
 /** Build the provider adapter for a resolved provider config. */
 export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-  switch (providerConfig.adapter) {
-    case "command-code":
-      return createCommandCodeAdapter(providerConfig);
-    case "openai-chat":
-      return createOpenAIChatAdapter(providerConfig);
-    case "anthropic":
-      return createAnthropicAdapter(providerConfig, cacheRetention);
-    case "openai-responses":
-      return createResponsesPassthroughAdapter(providerConfig);
-    case "google":
-      return createGoogleAdapter(providerConfig);
-    case "kiro":
-      return createKiroAdapter(providerConfig);
-    case "azure":
-    case "azure-openai":
-      return createAzureAdapter(providerConfig);
-    case "cursor":
-      return createCursorAdapter(providerConfig);
-    case "mimo-free":
-      return createMimoFreeAdapter(providerConfig);
-    default:
-      throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
-  }
+  return createRegisteredAdapter(providerConfig, { cacheRetention });
 }
