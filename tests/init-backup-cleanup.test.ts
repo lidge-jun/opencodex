@@ -492,6 +492,7 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
       expect(existsSync(claimed.claimedPath)).toBe(true);
       expect(readFileSync(claimed.claimedPath, "utf8")).toBe(bytesA);
       expect((claimed.cause as Error).message).toBe("read claimed failed");
+      expect(existsSync(backup)).toBe(false);
     }
   });
 });
