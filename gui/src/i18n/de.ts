@@ -366,7 +366,7 @@ export const de: Record<TKey, string> = {
   "prov.pasteRedirect": "Redirect-URL oder Code einfügen",
   "prov.pasteRedirectHint": "Falls der Browser einen localhost-Fehler zeigt, kopieren Sie die vollständige URL aus der Adressleiste und fügen Sie sie hier ein (oder fügen Sie den Autorisierungscode ein).",
   "prov.pasteCommandCodePlaceholder": "Command-Code-API-Schlüssel oder Redirect-URL einfügen",
-  "prov.pasteCommandCodeHint": "Fügen Sie einen Command-Code-API-Schlüssel (user_… aus ~/.commandcode/auth.json) ein, um ihn als weiteres Konto hinzuzufügen, oder die Redirect-URL aus dem Browser.",
+  "prov.pasteCommandCodeHint": "Fügen Sie einen Command-Code-API-Schlüssel (user_… aus ~/.commandcode/auth.json) ein, um ihn als weiteres Konto hinzuzufügen. Alternativ können Sie die Redirect-URL aus dem Browser einfügen.",
   "prov.pasteSubmit": "Senden",
   "prov.pasteSubmitting": "Wird gesendet…",
   "prov.pasteOk": "Code gesendet — Anmeldung wird abgeschlossen…",

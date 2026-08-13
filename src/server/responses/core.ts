@@ -3864,40 +3864,6 @@ async function handleResponsesInner(
           }
         }
       }
-      if (
-        response.status === 429
-        && commandCodePoolAccountId
-        && isCommandCodeAccountPoolEnabled(config)
-        && commandCodePoolFailovers < COMMAND_CODE_POOL_MAX_FAILOVERS_PER_REQUEST
-      ) {
-        const nextAccountId = rotateCommandCodeAccountOn429(
-          config,
-          commandCodePoolAccountId,
-          response.headers.get("retry-after"),
-          commandCodeSessionKey,
-        );
-        if (nextAccountId) {
-          try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-          try {
-            const accessToken = await getCommandCodePoolAccessToken(nextAccountId);
-            commandCodePoolAccountId = nextAccountId;
-            commandCodePoolFailovers += 1;
-            route.provider = { ...route.provider, apiKey: accessToken };
-            invalidateSameTargetRequest();
-            promoteCommandCodeActiveAccount(nextAccountId);
-            logCtx.provider = formatCommandCodeProviderForLog("command-code", nextAccountId, config);
-            activeAdapter = resolveAdapter(
-              resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
-              config.cacheRetention,
-            );
-            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, activeAdapter.name, logCtx.accountLogLabel);
-            nextContinuationRecoveryKind = "command-code-oauth-429";
-            continue;
-          } catch {
-            // fall through to emit continuation error below
-          }
-        }
-      }
       if (shouldAttemptImageTierRetry({
         status: response.status,
         adapterName: activeAdapter.name,
