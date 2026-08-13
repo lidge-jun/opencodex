@@ -1,0 +1,142 @@
+---
+title: Nasıl Çalışır
+description: Tam opencodex istek yaşam döngüsü — ayrıştırma, yönlendirme, uyarlama, köprüleme ve akış.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+Codex, OpenAI **Responses API** protokolünü konuşur. opencodex, Server-Sent
+Events ile HTTP üzerinden `POST /v1/responses` isteklerini ve aynı yol üzerinde
+isteğe bağlı bir WebSocket yükseltmesini kabul eder. İsteği sağlayıcınızın hat
+formatına ve yanıtı tekrar Responses olaylarına dönüştürür — böylece Codex
+OpenAI ile konuşmadığını asla anlamaz.
+
+```
+            ┌──────────────────────────── opencodex ────────────────────────────┐
+            │                                                                     │
+  Codex ──▶ │  ayrıştırıcı ──▶ yönlendirici ──▶ [vizyon] ──▶ adaptör ──▶ sağlayıcı│  ──▶ Codex
+  (/v1/     │     │                 │              │           │           │      │   (SSE / WS)
+  responses)│ OcxParsed         sağlayıcı       görselleri  buildRequest parseStream
+            │ Request           +adaptör        açıkla      + fetch   AdapterEvent[]
+            │                                                      │       │      │
+            │                                         [web araması] köprü ─▶ SSE  │
+            └─────────────────────────────────────────────────────────────────────┘
+```
+
+![Codex çoklu hesap yönlendirmesi: mevcut iş parçacıkları aynı ChatGPT hesabını
+korurken, yeni oturumlar kotayı yenileyebilir ve daha düşük kullanımlı sağlıklı
+bir hesap seçebilir.](../../../../assets/multi-auth-routing.svg)
+
+## Codex kimlik doğrulama hesabı seçimi
+
+Seçilen sağlayıcı ChatGPT/Codex doğrudan geçişi olduğunda, opencodex istek
+yukarı akışa iletilmeden önce depolanan bir havuz hesabını seçebilir. Kural
+kasıtlı olarak ikiye ayrılmıştır:
+
+- **Mevcut iş parçacığı kimlikleri (thread id) bağlılığı korur.** Bir iş
+  parçacığı onu başlatan hesap nesline bağlanır, böylece uzun bir SSH, tmux veya
+  mobile bağlı Codex oturumu görüşmenin ortasında yeniden dengelenmek yerine tek
+  bir hesabı kullanmaya devam eder.
+- **Yeni oturumlar yeniden dengelenebilir.** Yeni bir iş parçacığı için
+  opencodex, `accountPoolStrategy` (varsayılan olarak `quota` veya `round-robin`
+  / `fill-first`) kullanarak uygun hesaplar arasından seçim yapar. `quota`
+  stratejisi, 5 saatlik, haftalık ve 30 günlük pencerelerdeki bilinen kullanımı
+  karşılaştırır ve aktif hesap `autoSwitchThreshold` eşiğini aştığında daha
+  düşük kullanımlı bir hesaba geçebilir. Bekleme modunda (cooldown) olan veya
+  yeniden kimlik doğrulaması gereken hesaplar, stratejiden bağımsız olarak
+  atlanır.
+- **Kota ve hata sinyalleri yönlendirmeyi besler.** Kontrol paneli `GET
+  /api/codex-auth/accounts?refresh=1` ile bir kota yenilemesini zorlayabilir;
+  başarılı yukarı akış yanıtları kota başlıklarını yakalar, 429 bir hesabı
+  bekleme moduna alır ve 401/403 onu yeniden kimlik doğrulama için işaretler.
+
+## Alt ajan model seçimi
+
+Yeni bir kurulumda `subagentModels`, Codex'in alt ajan seçicisinde `gpt-5.5`,
+GPT-5.6 Sol/Terra/Luna üçlüsü ve `gpt-5.4-mini` modellerini sunar. Kontrol
+paneli, en fazla beş girdiyi yerel veya yönlendirilmiş modellerle yeniden
+sıralayabilir veya değiştirebilir. v1 işbirliği istekleri için isteğe bağlı
+`injectionModel` ve `injectionEffort` ayarları, `spawn_agent`'a hangi modeli ve
+akıl yürütme çabasını kullanacağını bildiren geliştirici rehberliği ekler; v2
+istekleri Codex'in yerel çoklu ajan rehberliğini korur.
+
+## Yaşam döngüsü
+
+<Steps>
+
+1. **Ayrıştırma (Parse)** — `responses/parser.ts`, isteği bir Zod şemasıyla
+   (`responses/schema.ts`) doğrular ve onu dahili bir `OcxParsedRequest`
+   nesnesine indirger: sistem istemi, normalleştirilmiş bir mesaj listesi
+   (metin, görseller, araç çağrıları, araç sonuçları), araç tanımları, üretim
+   seçenekleri ve `_webSearch` (barındırılan web araması istendi) ve
+   `_structuredOutput` (bir JSON şeması / JSON nesnesi `text.format` ayarlandı)
+   gibi özellik bayrakları. Görseller asla base64 metin olarak satır içine
+   alınmaz — gerçek içerik parçaları olarak korunur.
+
+2. **Yönlendirme (Route)** — `router.ts`, istenen model kimliğini sabit bir
+   öncelik sırası kullanarak yapılandırılmış bir sağlayıcıyla eşleştirir: açık
+   `provider/model` → sağlayıcının `defaultModel` değeri → yerleşik önek
+   kalıpları (`claude-`, `gpt-`, `o1-`/`o3-`/`o4-`,
+   `llama-`/`mixtral-`/`gemma-`) → sağlayıcının `models[]` listesi →
+   `defaultProvider` geri dönüşü. Bkz. [Model
+   Yönlendirme](/tr/guides/model-routing/).
+
+3. **Kimlik Doğrulama (Authenticate)** — bir `oauth` sağlayıcısı için opencodex,
+   taşıyıcı anahtar olarak yeni, otomatik olarak yenilenmiş bir erişim belirteci
+   yerleştirir, böylece mevcut adaptörler değişmeden kimlik doğrulaması yapar.
+   ChatGPT/Codex havuz hesapları için `codex/auth-context.ts` önce hesabı çözer
+   ve gerekli havuz kimlik bilgisi mevcut değilse doğrudan geçiş adaptörü devam
+   etmeyi reddeder.
+
+4. **Vizyon sidecar'ı (isteğe bağlı)** — yönlendirilen model
+   `provider.noVisionModels` listesinde yer alıyorsa ve istek bir görsel
+   taşıyorsa, opencodex her görseli yapılandırılmış ChatGPT vizyon sidecar'ı ile
+   tanımlar ve metinle değiştirir; böylece salt metin bir model bile görsel
+   hakkında akıl yürütebilir. Bkz. [Sidecar'lar](/tr/guides/sidecars/).
+
+5. **Doğrudan geçiş hızlı yolu (Passthrough fast path)** — adaptör bir Responses
+   doğrudan geçişi ise (`openai-responses` veya `azure-openai`), opencodex
+   Responses gövdesini korur, hedeflenen yönlendirme ve uyumluluk yeniden
+   yazımlarını uygular, ardından sağlayıcının yanıtını `AdapterEvent`'ler
+   üzerinden dönüştürmeden iletir.
+
+6. **Web araması sidecar'ı (isteğe bağlı)** — Codex barındırılan `web_search`
+   özelliğini etkinleştirdiyse ancak yönlendirilen model OpenAI harici bir
+   modelse, opencodex sentetik bir `web_search` fonksiyon aracı sunar ve modeli
+   küçük bir ajan döngüsünde çalıştırarak varsayılan olarak `gpt-5.6-luna`
+   üzerinden ChatGPT oturumunuzla gerçek aramalar yapar ve sonuçları araç
+   sonuçları olarak geri enjekte eder.
+
+7. **Sıkıştırma (istendiğinde Compact)** — Codex v1 `POST /v1/responses/compact`
+   çağrısı yapar; v2 ise bir Responses turuna `compaction_trigger` ekler. Yerel
+   doğrudan geçiş sıkıştırmayı yukarı akışa yönlendirirken, yönlendirilen bir
+   model araçsız bir özetleyici olarak çalışır ve Codex'in beklediği yedek
+   geçmiş biçimini döndürür.
+
+8. **Uyarlama (Adapt)** — aksi takdirde seçilen adaptörün `buildRequest()`
+   fonksiyonu, sağlayıcının yerel formatında yukarı akış HTTP isteğini (URL,
+   başlıklar, gövde) üretir ve opencodex bunu `fetch` eder.
+
+9. **Köprüleme (Bridge)** — adaptörün `parseStream()` (veya `parseResponse()`)
+   fonksiyonu dahili `AdapterEvent`'leri (metin, akıl yürütme, araç çağrısı
+   başlangıcı/farkı/sonu, tamamlandı, hata) üretir. `bridge.ts` bu akışı tekrar
+   Responses SSE olaylarına dönüştürür — `response.output_text.delta`,
+   `response.reasoning_summary_text.delta`,
+   `response.function_call_arguments.delta`, `response.completed` vb. İsteğe
+   bağlı WebSocket aktarımı, aynı olay yüklerini metin çerçeveleri olarak
+   gönderir.
+
+</Steps>
+
+## Neden bir Codex çatalı (fork) değil de bir proxy?
+
+Codex, Responses API'sini sabit kodlamıştır. opencodex protokol sınırında çeviri
+yaparak Codex **CLI, App ve SDK** ile değişmeden çalışır, Codex
+güncellemelerinden etkilenmez ve Codex'in kendisine dokunmadan istek başına
+sağlayıcıları değiştirmenize olanak tanır. Çeviri çift yönlüdür ve akışa
+sadıktır: akıl yürütme özetleri, MCP araç ad alanları, serbest biçimli
+(`apply_patch`) araçlar ve `tool_search` keşfi doğru şekilde gidiş-dönüş yapar.
+Olay olay eşleme için [Mimari referansı](/tr/reference/architecture/) sayfasına
+bakın.
+
+

@@ -300,7 +300,7 @@ jobs:
             // One consolidated comment. The gate finds its own comment by the
             // single GATE_MARKER; the legacy enforcer/readiness markers are
             // matched only to migrate pre-consolidation PRs.
-            const gateComment = comments.find(
+            let gateComment = comments.find(
               comment =>
                 comment.user?.login === "github-actions[bot]" &&
                 comment.body?.includes(GATE_MARKER)
@@ -406,12 +406,22 @@ jobs:
                 );
               }
               if (gateCommentId) {
+                // Skip the write when the rebuilt body matches what is already
+                // posted. A no-op comment edit is still a mutation event to
+                // review bots, so updating an identical body would re-wake the
+                // CodeRabbit status signal that triggered this run and create
+                // a self-sustaining loop.
+                if (gateComment?.body === body) {
+                  await migrateLegacyCommentsIfNeeded();
+                  return;
+                }
                 await github.rest.issues.updateComment({
                   owner,
                   repo,
                   comment_id: gateCommentId,
                   body
                 });
+                gateComment.body = body;
                 await migrateLegacyCommentsIfNeeded();
                 return;
               }
@@ -422,6 +432,7 @@ jobs:
                 body
               });
               gateCommentId = created.data.id;
+              gateComment = { id: gateCommentId, body };
               await migrateLegacyCommentsIfNeeded();
             }
 
@@ -1351,7 +1362,7 @@ jobs:
                     ? "This pull request has been marked Ready for Review."
                     : "This pull request is already Ready for Review.",
                 readyMoment
-                  ? `The ${inlineCode(REVIEW_READY_LABEL)} label marks this PR as ready; review automation runs independently. If no CodeRabbit review appears, comment ${inlineCode("@coderabbitai review")} to request one.`
+                  ? `The ${inlineCode(REVIEW_READY_LABEL)} label marks this PR as ready; review automation runs independently.`
                   : "",
                 notified && maintainers.length > 0
                   ? `Maintainers notified: ${maintainers

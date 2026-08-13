@@ -112,6 +112,26 @@ describe("enforce-pr-target workflow", () => {
     assert.match(workflow, /reviewReadyDesired/);
   });
 
+  it("does not embed a literal CodeRabbit review command in the ready notice", () => {
+    // A literal "@coderabbitai review" inside the gate comment is executed by
+    // CodeRabbit as a review command even when rendered as inline code. Its
+    // success status then wakes this workflow again, which rewrites the same
+    // comment, which CodeRabbit reads as a new command -- a self-sustaining
+    // loop that only stops on CodeRabbit's per-hour rate limit. The ready
+    // notice must describe the label without issuing a command (PR #1630).
+    assert.doesNotMatch(workflow, /coderabbitai review/);
+  });
+
+  it("does not rewrite the gate comment when the rebuilt body is unchanged", () => {
+    // The ready-path rebuild is deterministic: on a CodeRabbit status wake the
+    // gate recomputes the same READY body and would call updateComment on it.
+    // That no-op edit is still a mutation event to review bots and restarts the
+    // loop above, so the upsert must skip the write when body equals the posted
+    // comment body (PR #1630).
+    assert.match(workflow, /if \(gateComment\?\.body === body\)/);
+    assert.match(workflow, /let body = buildGateCommentBody/);
+  });
+
   it("keeps CodeRabbit auto-review unfiltered so maintainer PRs are not starved", () => {
     // A positive `labels:` filter under `reviews.auto_review` in
     // `.coderabbit.yaml` would restrict ALL automatic reviews to PRs carrying
