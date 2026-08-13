@@ -14,6 +14,7 @@ import {
   providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   retryOn429PolicyConfigError,
+  requestPacingConfigError,
   sanitizeModelCostsForDisplay,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
@@ -453,6 +454,8 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // modelCosts is a user-owned display overlay, not part of the canonical
     // forward seed; it is validated separately below (providerModelCostsConfigError).
     delete canonicalCandidate.modelCosts;
+    // requestPacing is a user-owned transport overlay, not part of the canonical seed.
+    delete canonicalCandidate.requestPacing;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -476,6 +479,10 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const requestPacingError = requestPacingConfigError(raw.requestPacing);
+  if (requestPacingError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
   }
   const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
   if (modelCostsError) {
@@ -580,6 +587,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "keyOptional",
       "freeTier",
       "liveModels",
+      "requestPacing",
       "models",
       "contextWindow",
       "modelContextWindows",

@@ -1226,12 +1226,28 @@ export interface ProviderCostOverlay {
   cacheWrite: number;
 }
 
+export interface RequestPacingRule {
+  /** Evenly spread request starts to this many requests per minute. */
+  requestsPerMinute?: number;
+  /** Minimum delay between request starts. The slower configured value wins. */
+  minIntervalMs?: number;
+}
+
+export interface ProviderRequestPacingConfig extends RequestPacingRule {
+  /** False preserves legacy behavior with no client-side waiting. */
+  enabled: boolean;
+  /** Exact upstream model-id overrides; other models inherit the provider rule. */
+  models?: Record<string, RequestPacingRule>;
+}
+
 /**
  * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
 export interface OcxProviderConfig {
   adapter: string;
+  /** Optional outbound request-start pacing shared by this provider and its model overrides. */
+  requestPacing?: ProviderRequestPacingConfig;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;

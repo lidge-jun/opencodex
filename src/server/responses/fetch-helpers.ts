@@ -97,6 +97,7 @@ import {
 } from "../relay";
 import { hasResponsesItemIdRepair, relaySseWithResponsesItemIdRepair } from "../responses-item-id-repair";
 import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 
 
 export function disableResponsesRequestTimeout(req: Request, server: Pick<Server<WsData>, "timeout"> | undefined): boolean {
@@ -131,18 +132,33 @@ export function safeOriginLabel(url: string): string {
 
 
 
-export function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
+interface PaceAwareFetch {
+  waitForPacing?: (signal?: AbortSignal) => Promise<void>;
+  unpacedFetch?: typeof globalThis.fetch;
+}
+
+export function providerFetch(provider: OcxProviderConfig, providerName?: string, modelId?: string): typeof globalThis.fetch {
   const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
   // ChatGPT Codex backend: streaming turns ride the responses_websockets
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
-  const wrapped = (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+  const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
     if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init)) {
       return codexWsUpstreamFetch(input, init, base);
     }
     return base(input, init);
   };
-  return wrapped as typeof globalThis.fetch;
+  const waitForPacing = (signal?: AbortSignal) => providerName
+    ? waitForProviderRequestSlot(providerName, provider, modelId, signal)
+    : Promise.resolve();
+  const wrapped = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    await waitForPacing(init?.signal ?? undefined);
+    return unpaced(input, init);
+  };
+  const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
+    base.preconnect?.(...args);
+  };
+  return Object.assign(wrapped, { preconnect, waitForPacing, unpacedFetch: Object.assign(unpaced, { preconnect }) });
 }
 
 
@@ -156,6 +172,9 @@ export async function fetchWithHeaderTimeout(
   executor: typeof globalThis.fetch = globalThis.fetch,
   manualRedirect = false,
 ): Promise<Response> {
+  const pacing = executor as typeof globalThis.fetch & PaceAwareFetch;
+  await pacing.waitForPacing?.(abortSignal);
+  const fetchExecutor = pacing.unpacedFetch ?? executor;
   const timeout = new AbortController();
   const timer = setTimeout(() => {
     if (!timeout.signal.aborted) timeout.abort(new DOMException("Timeout elapsed", "TimeoutError"));
@@ -167,7 +186,7 @@ export async function fetchWithHeaderTimeout(
     headers.set("accept-encoding", "identity");
   }
   try {
-    return await executor(url, {
+    return await fetchExecutor(url, {
       ...init,
       headers,
       // Credential-bearing sends opt into manual redirects so a 3xx is relayed

@@ -439,6 +439,69 @@ describe("provider management validation", () => {
     expect(secretNameError).toContain("[REDACTED]");
   });
 
+  test("provider request pacing PATCH persists provider and model limits without catalog churn", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "nvidia",
+      providers: {
+        nvidia: {
+          adapter: "openai-chat",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "sk-nvidia",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    let catalogRefreshes = 0;
+    const request = async (path: string, init?: RequestInit) => {
+      const req = new Request(`http://127.0.0.1${path}`, init);
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
+      });
+    };
+    const policy = {
+      enabled: true,
+      requestsPerMinute: 38,
+      minIntervalMs: 1_600,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
+    };
+
+    const saved = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: policy }),
+    });
+    expect(saved?.status).toBe(200);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+    expect(loadConfig().providers.nvidia?.requestPacing).toEqual(policy);
+    expect(catalogRefreshes).toBe(0);
+
+    const providers = await request("/api/providers");
+    expect((await providers?.json()).find((row: { name: string }) => row.name === "nvidia").requestPacing).toEqual(policy);
+    const status = await request("/api/provider-request-pacing?name=nvidia");
+    expect(await status?.json()).toMatchObject({ provider: "nvidia", enabled: true, queued: 0, nextSlotInMs: 0 });
+
+    const invalid = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: { enabled: true, requestsPerMinute: -1 } }),
+    });
+    expect(invalid?.status).toBe(400);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+
+    const timerOverflow = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: { enabled: true, requestsPerMinute: 0.001 } }),
+    });
+    expect(timerOverflow?.status).toBe(400);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+  });
+
   test("provider discovery status is additive and omitted before an attempt", async () => {
     markProviderDiscoveryFailed("auth-broken", { reason: "http", httpStatus: 401 });
     try {

@@ -335,6 +335,15 @@ once the server observes the client disconnect (Bun propagates it asynchronously
 cancelled with 499 before any replay; because the propagation is async, a replay may precede
 the cancel if the interval elapses first (bounded by the same `attempts` budget).
 
+Provider-level `requestPacing` is the proactive companion to `retryOn429`. It reserves outbound
+request-start slots before transport work begins, so a known RPM ceiling does not have to fail once
+before the proxy reacts. One provider-wide lane enforces the aggregate ceiling. Exact model lanes
+may add a slower interval without lowering the provider-wide interval or blocking an otherwise
+eligible sibling model. Queue wait is abort-aware and happens before the response-header timeout is
+armed. The shared fetch boundary covers HTTP and Responses WebSocket sends; explicit adapter
+`fetchResponse` calls reserve the same lane at their call sites. Custom `runTurn` transports stay
+outside this policy because they own their complete request lifecycle.
+
 [Decision Log]
 - 목적과 의도: Prevent Kiro progress from becoming a false final answer, reject invalid empty completion retries, and stop concurrent transient 429s from consuming independent retry budgets.
 - 기존 구현 및 제약 조건: Kiro text has no trustworthy phase; stop metadata arrives only at stream end; the private completion tool is adapter-owned; normal parallel tool traffic must remain parallel; client cancellation must interrupt all waits.

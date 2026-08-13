@@ -490,7 +490,7 @@ export async function handleResponsesCompact(
         req.signal,
         connectMs,
         false,
-        providerFetch(sendProvider),
+        providerFetch(sendProvider, route.providerName, route.modelId),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
         sendProvider.authMode === "forward",

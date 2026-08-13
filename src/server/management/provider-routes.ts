@@ -14,6 +14,7 @@ import {
   normalizeNonBlankStringArray,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  requestPacingConfigError,
   readConfigAdmissionSnapshot,
   saveConfigPreservingClaudeCode,
   withConfigMutationLockSync,
@@ -44,6 +45,7 @@ import {
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearKeyCooldowns } from "../../providers/key-failover";
+import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { codexAccountNamespaceProviderCollisionError } from "../../codex/account-namespace-match";
 import { clearThreadAccountMap } from "../../codex/routing";
@@ -177,6 +179,20 @@ function applyProviderPatchFields(
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "requestPacing")) {
+    const value = rawBody.requestPacing;
+    if (value === null) {
+      delete next.requestPacing;
+    } else {
+      if (!isPlainRecord(value)) return { error: "requestPacing must be a plain object or null" };
+      const pacingError = requestPacingConfigError(value);
+      if (pacingError) return { error: pacingError };
+      // `requestPacingConfigError` is the runtime narrowing boundary above; keep the
+      // assertion explicit because a generic plain record cannot express `enabled`.
+      next.requestPacing = structuredClone(value) as unknown as OcxProviderConfig["requestPacing"];
+    }
+    touched = true;
+  }
   // The Models page edits the catalog hints in place; keep them on the existing
   // provider mutation path so validation, cache invalidation, and convergence stay unified (#1073).
   if (Object.hasOwn(rawBody, "contextWindow")) {
@@ -304,6 +320,22 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse(await fetchProviderQuotaReports(config, forceRefresh));
   }
 
+  if (url.pathname === "/api/provider-request-pacing" && req.method === "GET") {
+    const name = url.searchParams.get("name")?.trim();
+    if (name) {
+      if (!isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+        return jsonResponse({ error: "unknown provider" }, 404);
+      }
+      return jsonResponse(providerRequestPacingStatus(name, config.providers[name]!));
+    }
+    return jsonResponse(Object.fromEntries(
+      Object.entries(config.providers).map(([providerName, provider]) => [
+        providerName,
+        providerRequestPacingStatus(providerName, provider),
+      ]),
+    ));
+  }
+
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
@@ -312,6 +344,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
+      requestPacing: p.requestPacing,
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
@@ -437,6 +470,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // call can never fire.
     const submittedContextWindow = Object.hasOwn(prov, "contextWindow");
     const submittedModelContextWindows = Object.hasOwn(prov, "modelContextWindows");
+    const submittedRequestPacing = Object.hasOwn(prov, "requestPacing");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -453,6 +487,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
     // through PATCH with an explicit null (#1409).
     const existing = config.providers[name];
+    if (!submittedRequestPacing && existing?.requestPacing) {
+      prov.requestPacing = structuredClone(existing.requestPacing);
+    }
     if (!submittedContextWindow && existing?.contextWindow !== undefined) {
       prov.contextWindow = existing.contextWindow;
     }
@@ -548,7 +585,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if ("error" in applied) return jsonResponse({ error: applied.error }, 400);
     const next = applied.next;
 
-    if (applied.editorTouched) {
+    const pacingOnly = keys.every(key => key === "requestPacing");
+    if (applied.editorTouched && !pacingOnly) {
       const providerError = providerManagementConfigError(name, next);
       if (providerError) return jsonResponse({ error: providerError }, 400);
       const resolvedError = await providerDestinationResolvedError(name, next);
@@ -575,7 +613,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         replayError = replay.error;
         return;
       }
-      if (replay.editorTouched) {
+      if (replay.editorTouched && !pacingOnly) {
         const syncError = providerManagementConfigError(name, replay.next);
         if (syncError) {
           replayError = syncError;
@@ -592,11 +630,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
-    if (applied.editorTouched) {
+    if (applied.editorTouched && !pacingOnly) {
       const { clearModelCache } = await import("../../codex/model-cache");
       clearModelCache(name);
     }
-    const catalogRefresh = await convergeCodexCatalog();
+    const catalogRefresh = pacingOnly ? null : await convergeCodexCatalog();
     return jsonResponse({
       success: true,
       name,
