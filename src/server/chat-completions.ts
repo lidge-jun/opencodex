@@ -41,7 +41,7 @@ import {
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses, linkAbortSignal } from "./responses";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel } from "./responses/fetch-helpers";
-import { fetchWithTransientRetry } from "../lib/upstream-retry";
+import { fetchWithTransientRetry, sleepWithAbort } from "../lib/upstream-retry";
 import { cancelBodyOnAbort } from "../lib/abort";
 import { trackStreamLifetime } from "./lifecycle";
 import {
@@ -92,7 +92,10 @@ export async function handleChatCompletions(
 }
 
 function isChatNativeEligibleProvider(provider: OcxProviderConfig): boolean {
-  return provider.adapter === "openai-chat" && provider.authMode !== "forward";
+  return (
+    provider.adapter === "openai-chat"
+    && (provider.authMode === undefined || provider.authMode === "key" || provider.authMode === "local")
+  );
 }
 
 function shouldBridgeChatNative(raw: Rec): boolean {
@@ -138,23 +141,6 @@ async function handleChatCompletionsWithBudget(
   const requestedModel = (chatBody as Rec).model as string;
   const requestedStream = internalBody.stream === true;
   const chatStreamForUpstream = (chatBody as Rec).stream === true;
-  // Chat-native path must also respect the translator turn budget on the raw
-  // Chat body size (Responses does this via JSON stringify charge). Without it,
-  // the 33 MiB overflow test escapes as a 502 after routing.
-  try {
-    const rawJson = JSON.stringify(chatBody);
-    translatorBudget.chargeRetained(new TextEncoder().encode(rawJson).byteLength, { kind: "request_copies" });
-  } catch (err) {
-    const overflow = isTranslatorBudgetExceededError(err);
-    const status = overflow ? 413 : 500;
-    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
-    return chatCompletionsErrorResponse(
-      status,
-      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
-      overflow ? "request_too_large" : undefined,
-      overflow ? "translation_buffer_limit" : undefined,
-    );
-  }
   // Best-effort Grok attribution: the managed fence stamps this header on every model
   // it registers (extra_headers, sent verbatim by upstream Grok). Dashboard usage
   // bucketing only — never an auth or billing signal.
@@ -206,7 +192,11 @@ async function handleChatCompletionsWithBudget(
       isChatNativeEligibleProvider(route.provider)
       && !shouldBridgeChatNative(chatBody as Rec)
     ) {
-      chatNativeRoute = route as unknown as ChatNativeRoute;
+      chatNativeRoute = {
+        providerName: route.providerName,
+        provider: route.provider,
+        modelId: route.modelId,
+      };
     }
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {
@@ -260,9 +250,9 @@ async function handleChatCompletionsWithBudget(
     (logCtx.attempts ??= []).push(attempt);
     sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, "openai-chat", logCtx.accountLogLabel);
 
-    const upstreamHeaders = new Headers(headers);
-    // Chat-native always sends the provider's own credential; forward-mode is excluded above.
-    // Keep any caller Authorization only when it was explicitly forwarded (directRoute).
+    // Never inherit the Responses-bridge header set: it carries the main ChatGPT
+    // OAuth token and chatgpt-account-id which must not reach a third-party host.
+    const upstreamHeaders = new Headers({ "content-type": "application/json" });
     const providerConfig: OcxProviderConfig = routeInfo.provider;
     const providerApiKey: string | undefined = providerConfig.apiKey;
     const hasProviderKey = typeof providerApiKey === "string" && providerApiKey.trim().length > 0;
@@ -285,8 +275,22 @@ async function handleChatCompletionsWithBudget(
       delete chatBodyForWire.response_format;
     }
     const bodyJson = JSON.stringify(chatBodyForWire);
+    try {
+      translatorBudget.chargeRetained(new TextEncoder().encode(bodyJson).byteLength, { kind: "request_copies" });
+    } catch (err) {
+      const overflow = isTranslatorBudgetExceededError(err);
+      const status = overflow ? 413 : 500;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(
+        status,
+        overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+        overflow ? "request_too_large" : undefined,
+        overflow ? "translation_buffer_limit" : undefined,
+      );
+    }
+    // Match openai-chat adapter: `${baseUrl}/chat/completions` (no slash stripping).
     const base = providerConfig.baseUrl ?? "";
-    const url = `${base.replace(/\/$/, "")}/chat/completions`;
+    const url = `${base}/chat/completions`;
 
     const ac = new AbortController();
     const cleanup = linkAbortSignal(ac, req.signal);
@@ -337,13 +341,21 @@ async function handleChatCompletionsWithBudget(
       const retryAfter = response.headers.get("retry-after");
       const delayMs = rateLimitRetryDelayMs(rateLimitPolicy, retryAfter, Date.now());
       try { void response.body?.cancel().catch(() => {}); } catch { /* noop */ }
-      await new Promise<void>((resolve, reject) => {
-        const t = setTimeout(resolve, delayMs);
-        const onAbort = () => { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); };
-        if (ac.signal.aborted || req.signal.aborted) { clearTimeout(t); reject(new DOMException("aborted", "AbortError")); return; }
-        ac.signal.addEventListener("abort", onAbort, { once: true });
-        req.signal.addEventListener("abort", onAbort, { once: true });
-      }).catch(() => {});
+      const combinedSignal = typeof AbortSignal.any === "function"
+        ? AbortSignal.any([ac.signal, req.signal])
+        : ac.signal;
+      let detachReq: (() => void) | undefined;
+      if (typeof AbortSignal.any !== "function" && !combinedSignal.aborted) {
+        const acAbort = () => {};
+        const onReqAbort = () => {
+          try { (ac as unknown as { abort: (r?: unknown) => void }).abort(req.signal.reason); } catch { /* noop */ }
+        };
+        void acAbort;
+        req.signal.addEventListener("abort", onReqAbort, { once: true });
+        detachReq = () => req.signal.removeEventListener("abort", onReqAbort);
+      }
+      await sleepWithAbort(delayMs, combinedSignal).catch(() => {});
+      detachReq?.();
       if (ac.signal.aborted || req.signal.aborted) break;
       sameTargetRetries += 1;
       noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, "rate-limit-429");
@@ -360,38 +372,48 @@ async function handleChatCompletionsWithBudget(
         break;
       }
     }
-    while (
-      response.status === 429
-      && hasKeyPoolFailover(providerConfig)
-      && !ac.signal.aborted
-      && !req.signal.aborted
-    ) {
-      const rotated = rotateProviderTransportOn429(config, routeInfo.providerName, providerConfig as OcxProviderConfig, {
-        retryAfter: response.headers.get("retry-after"),
-        now: Date.now(),
-        attemptedKey: providerApiKey,
-      });
-      if (!rotated) break;
-      // Adopt rotated provider for the retry.
-      const nextProvider: OcxProviderConfig = rotated as unknown as OcxProviderConfig;
-      if (nextProvider.apiKey) upstreamHeaders.set("authorization", `Bearer ${nextProvider.apiKey.trim()}`);
-      if (nextProvider.headers) for (const [k, v] of Object.entries(nextProvider.headers)) upstreamHeaders.set(k, v);
-      try { void response.body?.cancel().catch(() => {}); } catch { /* noop */ }
-      noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, "key-429");
-      try {
-        response = await fetchWithHeaderTimeout(
-          url,
-          { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson },
-          ac.signal,
-          connectMs,
-          stream,
-          providerFetch(nextProvider),
-        );
-      } catch {
-        break;
+    {
+      let currentKey: string | undefined = providerApiKey;
+      let rotations = 0;
+      const maxRotations = Array.isArray((providerConfig as unknown as { apiKeyPool?: unknown[] }).apiKeyPool)
+        ? ((providerConfig as unknown as { apiKeyPool: unknown[] }).apiKeyPool.length)
+        : (hasKeyPoolFailover(providerConfig) ? 10 : 0);
+      let activeProvider: OcxProviderConfig = providerConfig;
+      while (
+        response.status === 429
+        && hasKeyPoolFailover(activeProvider)
+        && !ac.signal.aborted
+        && !req.signal.aborted
+        && rotations < maxRotations
+      ) {
+        const rotated = rotateProviderTransportOn429(config, routeInfo.providerName, activeProvider, {
+          retryAfter: response.headers.get("retry-after"),
+          now: Date.now(),
+          attemptedKey: currentKey,
+        });
+        if (!rotated) break;
+        const nextProvider: OcxProviderConfig = rotated as unknown as OcxProviderConfig;
+        if (nextProvider.apiKey) upstreamHeaders.set("authorization", `Bearer ${nextProvider.apiKey.trim()}`);
+        if (nextProvider.headers) for (const [k, v] of Object.entries(nextProvider.headers)) upstreamHeaders.set(k, v);
+        try { void response.body?.cancel().catch(() => {}); } catch { /* noop */ }
+        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, "key-429");
+        try {
+          response = await fetchWithHeaderTimeout(
+            url,
+            { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson },
+            ac.signal,
+            connectMs,
+            stream,
+            providerFetch(nextProvider),
+          );
+        } catch {
+          break;
+        }
+        activeProvider = nextProvider;
+        currentKey = nextProvider.apiKey;
+        rotations += 1;
+        routeInfo.provider = nextProvider;
       }
-      // Keep provider reference coherent for logging on this turn.
-      (routeInfo as { provider: OcxProviderConfig }).provider = nextProvider;
     }
 
     if (req.signal.aborted || ac.signal.aborted) {
@@ -487,10 +509,50 @@ async function handleChatCompletionsWithBudget(
         const modelForChunk = requestedModel;
         let buffer = "";
         let forwardedDone = false;
+        let sseFirstOutputRecorded = false;
+        const noteSseFirstOutput = () => {
+          if (sseFirstOutputRecorded || !logIds) return;
+          sseFirstOutputRecorded = true;
+          recordFirstOutput(logCtx, logIds.start);
+        };
         outStream = new ReadableStream<Uint8Array>({
           async pull(controller) {
             const { done, value } = await reader.read();
             if (done) {
+              buffer += decoder.decode();
+              const tail = buffer.trim();
+              buffer = "";
+              if (tail.startsWith("data: ")) {
+                const payload = tail.slice(6).trim();
+                if (payload === "[DONE]") {
+                  forwardedDone = true;
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                } else if (payload.length > 0) {
+                  // Normalize trailing frame the same as regular frames.
+                  let parsed: unknown;
+                  try { parsed = JSON.parse(payload); } catch { parsed = null; }
+                  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                    const rec = parsed as Rec;
+                    if (rec.object === "chat.completion.chunk") {
+                      noteSseFirstOutput();
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(rec)}\n\n`));
+                    } else {
+                      const choices = Array.isArray(rec.choices) ? rec.choices as Rec[] : [];
+                      const choice0 = choices[0] as Rec | undefined;
+                      const chunk: Rec = {
+                        id,
+                        object: "chat.completion.chunk",
+                        created,
+                        model: modelForChunk,
+                        choices: [{ index: 0, delta: (choice0?.delta as Rec) ?? {}, finish_reason: (choice0?.finish_reason as string | null) ?? null }],
+                        ...(rec.usage ? { usage: rec.usage } : {}),
+                      };
+                      noteSseFirstOutput();
+                      controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+                    }
+                  }
+                }
+              }
               if (!forwardedDone) {
                 controller.enqueue(encoder.encode("data: [DONE]\n\n"));
                 forwardedDone = true;
@@ -540,15 +602,26 @@ async function handleChatCompletionsWithBudget(
                 }],
                 ...(rec.usage ? { usage: rec.usage } : {}),
               };
+              noteSseFirstOutput();
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
             }
           },
           cancel(reason) { try { void reader.cancel(reason); } catch { /* noop */ } },
         });
       } else {
-        outStream = upstreamBody;
+        let firstOutputRecorded = false;
+        const noteFirstOutputPassthrough = () => {
+          if (firstOutputRecorded || !logIds) return;
+          firstOutputRecorded = true;
+          recordFirstOutput(logCtx, logIds.start);
+        };
+        outStream = upstreamBody.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) {
+            noteFirstOutputPassthrough();
+            controller.enqueue(chunk);
+          },
+        }));
       }
-      if (logIds) recordFirstOutput(logCtx, logIds.start);
       const tracked = trackStreamLifetime(outStream, ac, () => {
         cleanup();
         if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 200, { closeReason: "terminal" });
@@ -562,65 +635,85 @@ async function handleChatCompletionsWithBudget(
       return withAbort;
     }
 
-    // Non-streaming: upstream may have returned SSE (mock always does) or JSON.
-    // Normalize both into chat.completion JSON so callers/tests stay green.
-    let parsedJson: unknown | null = null;
-    let jsonText: string | null = null;
+    // Non-streaming: reuse collectChatCompletion so tool_calls/finish_reason survive
+    // the fold, and bound the JSON read via translatorBudget instead of raw text().
     if (isSseContentType && response.body) {
-      // Fold SSE into a completion JSON (same as the legacy bridge does for
-      // non-streaming clients via collectChatCompletion, but lighter: the
-      // mock already emits stop+usage, so just collect text deltas).
-      const text = await response.text();
-      cleanup();
-      let content = "";
-      let usage: Rec | undefined;
-      for (const block of text.split("\n\n")) {
-        const line = block.trim();
-        if (!line.startsWith("data: ")) continue;
-        const payload = line.slice(6).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const parsed = JSON.parse(payload) as Rec;
-          const choices = Array.isArray(parsed.choices) ? parsed.choices as Rec[] : [];
-          const delta = (choices[0] as Rec | undefined)?.delta as Rec | undefined;
-          if (delta && typeof delta.content === "string") content += delta.content;
-          if (parsed.usage && isRec(parsed.usage)) usage = parsed.usage as Rec;
-        } catch { /* skip malformed delta */ }
-      }
-      parsedJson = {
-        id: `chatcmpl-${Date.now().toString(36)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: requestedModel,
-        choices: [{ index: 0, message: { role: "assistant", content: content || null }, finish_reason: "stop", logprobs: null }],
-        usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      };
-      if (isRec(usage)) {
-        const prompt = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
-        const completion = typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
-        if (prompt !== undefined || completion !== undefined) {
-          logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: completion ?? 0 };
-          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage;
+      try {
+        const completion = await collectChatCompletion(response.body, requestedModel, translatorBudget);
+        cleanup();
+        const parsedJson = completion as unknown as Rec;
+        const usage = isRec(parsedJson.usage) ? parsedJson.usage as Rec : undefined;
+        if (usage) {
+          const prompt = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
+          const comp = typeof usage.completion_tokens === "number" ? usage.completion_tokens : undefined;
+          if (prompt !== undefined || comp !== undefined) {
+            logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 };
+            if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage;
+          }
         }
+        finishRequestAttempt(attempt, 200, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        const okResp = new Response(JSON.stringify(parsedJson), { status: 200, headers: { "Content-Type": "application/json" } });
+        if (logIds) {
+          addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 200, { closeReason: "non_stream" });
+          return responseWithDeferredRequestLog(okResp, logIds.requestId, logIds.start, logCtx);
+        }
+        return okResp;
+      } catch (err) {
+        cleanup();
+        if (isChatCompletionsStreamError(err)) {
+          const s = (err as { status?: number }).status ?? 502;
+          finishRequestAttempt(attempt, s, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+          if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, s, { closeReason: "non_stream" });
+          return chatCompletionsErrorResponse(s, err.message, (err as { type?: string }).type, (err as { code?: string | null }).code ?? null);
+        }
+        if (isTranslatorBudgetExceededError(err)) {
+          finishRequestAttempt(attempt, 413, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+          if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
+          return chatCompletionsErrorResponse(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+        }
+        finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
       }
-      finishRequestAttempt(attempt, 200, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
-      const okResp = new Response(JSON.stringify(parsedJson), { status: 200, headers: { "Content-Type": "application/json" } });
-      if (logIds) {
-        addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 200, { closeReason: "non_stream" });
-        return responseWithDeferredRequestLog(okResp, logIds.requestId, logIds.start, logCtx);
-      }
-      return okResp;
     }
+    let jsonText: string;
     try {
-      jsonText = await response.text();
-    } catch {
+      const reader = response.body ? response.body.getReader() : null;
+      if (!reader) {
+        jsonText = await response.text();
+        translatorBudget.chargeRetained(new TextEncoder().encode(jsonText).byteLength, { kind: "request_copies" });
+      } else {
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            translatorBudget.chargeRetained(value.byteLength, { kind: "request_copies" });
+            chunks.push(value);
+            total += value.byteLength;
+          }
+        }
+        const merged = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
+        jsonText = new TextDecoder().decode(merged);
+      }
+    } catch (err) {
+      if (isTranslatorBudgetExceededError(err)) {
+        cleanup();
+        finishRequestAttempt(attempt, 413, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+      }
       cleanup();
       finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
       return chatCompletionsErrorResponse(502, "upstream returned a non-JSON response", "server_error");
     }
     cleanup();
-    try { parsedJson = JSON.parse(jsonText!); } catch { parsedJson = null; }
+    let parsedJson: unknown | null = null;
+    try { parsedJson = JSON.parse(jsonText); } catch { parsedJson = null; }
     if (isRec(parsedJson) && isRec((parsedJson as Rec).usage)) {
       const usage = (parsedJson as Rec).usage as Rec;
       const prompt = typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : undefined;
@@ -632,7 +725,7 @@ async function handleChatCompletionsWithBudget(
     }
     finishRequestAttempt(attempt, 200, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
     const outHeaders: Record<string, string> = { "Content-Type": "application/json" };
-    const outBody = parsedJson !== null ? JSON.stringify(parsedJson) : jsonText!;
+    const outBody = parsedJson !== null ? JSON.stringify(parsedJson) : jsonText;
     const okResp = new Response(outBody, { status: 200, headers: outHeaders });
     if (logIds) {
       addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 200, { closeReason: "non_stream" });
