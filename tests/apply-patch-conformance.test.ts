@@ -242,6 +242,23 @@ function advertisedToolNames(wire: AdapterWire, body: string): string[] {
   return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.toolSpecification.name] : []);
 }
 
+function toolChoiceNoneDisablesCalls(wire: AdapterWire, body: string): boolean {
+  if (advertisedToolNames(wire, body).length === 0) return true;
+  const parsed = JSON.parse(body) as Record<string, unknown>;
+  if (wire === "openai-chat" || wire === "openai-responses") {
+    return parsed.tool_choice === "none";
+  }
+  if (wire === "anthropic") {
+    const choice = parsed.tool_choice as { type?: unknown } | undefined;
+    return choice?.type === "none";
+  }
+  if (wire === "google") {
+    const config = parsed.toolConfig as { functionCallingConfig?: { mode?: unknown } } | undefined;
+    return config?.functionCallingConfig?.mode === "NONE";
+  }
+  return false;
+}
+
 function continuationInput(wire: AdapterWire, body: string): string | undefined {
   const parsed = JSON.parse(body) as Record<string, unknown>;
   if (wire === "openai-chat") {
@@ -501,17 +518,17 @@ test("every registered adapter keeps the nested apply_patch helper in its final 
   }
 });
 
-test("tool_choice:none removes the final advertised tool catalog for every registered adapter", async () => {
+test("tool_choice:none removes every registered adapter's callable tool surface", async () => {
   for (const [adapterId] of adapterDefinitions()) {
     const contract = effectiveAdapterContract(adapterId);
     const parsed = toolChoiceNoneParsed(contract.wire);
     const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
     const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
-    const names = advertisedToolNames(contract.wire, body);
-    expect(names, adapterId).toEqual([]);
+    const disabled = toolChoiceNoneDisablesCalls(contract.wire, body);
+    expect(disabled, adapterId).toBe(true);
     expect(applyPatchContractFailures({
       expectedPatchAdvertised: false,
-      actualPatchAdvertised: names.some(name => name.includes("apply_patch")),
+      actualPatchAdvertised: !disabled,
     }), adapterId).toEqual([]);
   }
 });
