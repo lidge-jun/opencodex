@@ -428,10 +428,21 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   const canonicalId = canonicalCommandCodeModelId(modelId);
   const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
   if (!supported) return undefined;
-  // Command Code's official profiles describe xhigh and ultra as the CLI labels that map to
-  // the wire value `max`; preserve that mapping without advertising a synthetic tier.
-  const wire = (requested === "xhigh" || requested === "ultra") && supported.includes("max") ? "max" : requested;
-  return supported.includes(wire) ? wire : undefined;
+  // Only remap xhigh/ultra→max for models whose official profile documents that
+  // aliasing (deepseek v4, glm-5.2). Muse Spark's upstream accepts xhigh as a
+  // distinct wire value and rejects ultra, so it must not be collapsed.
+  let wire = requested;
+  const lower = canonicalId.toLowerCase();
+  const needsAlias =
+    lower === "deepseek/deepseek-v4-pro" ||
+    lower === "deepseek/deepseek-v4-flash" ||
+    lower === "zai-org/glm-5.2";
+  if (requested === "xhigh" && !supported.includes("xhigh") && supported.includes("max")) {
+    wire = "max";
+  } else if (requested === "ultra" && needsAlias && supported.includes("max")) {
+    wire = "max";
+  }
+  return (supported as readonly string[]).includes(wire) ? wire : undefined;
 }
 
 export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderAdapter {

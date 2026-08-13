@@ -13,6 +13,24 @@ const COMMAND_CODE_MODEL_EFFORTS = {
     efforts: ["high", "max"],
     profileUrl: "https://commandcode.ai/models/glm-5-2",
   },
+  // Muse Spark: CLI currently prints "has no adjustable reasoning effort" and
+  // blocks --effort locally, but the upstream /alpha/generate endpoint accepts
+  // reasoning_effort low..max for meta/muse-spark-1.2-contributor (verified
+  // 2026-08-13: direct upstream POST with low/medium/high/xhigh/max all 200,
+  // ultra 400; reasoningTokens differentiated 114..253; proxy previously stripped
+  // the field so effort changes had no effect).
+  "meta/muse-spark-1.2": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.2",
+  },
+  "meta/muse-spark-1.2-contributor": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.2-contributor",
+  },
+  "meta/muse-spark-1.1": {
+    efforts: ["low", "medium", "high", "xhigh", "max"],
+    profileUrl: "https://commandcode.ai/models/meta-muse-spark-1.1",
+  },
 } as const;
 
 /**

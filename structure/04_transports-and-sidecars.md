@@ -22,6 +22,14 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+[Decision Log]
+- 목적과 의도: Prevent routed models from turning invented or neighboring-agent tool names into client-executable Responses calls.
+- 기존 구현 및 제약 조건: The request catalog already controlled custom-tool restoration and the non-OpenAI prompt nudge, but an undeclared upstream name still fell through as an ordinary `function_call`; Codex then reduced the mismatch to a bare `aborted` result.
+- 검토한 주요 대안: Rely only on prompt guidance; automatically translate undeclared `apply_patch` into Code Mode; validate returned names against the request-visible catalog at the final bridge.
+- 선택한 방식: Retain the allowed wire-name set with the existing bridge maps and fail the turn with an explicit compatibility error before emitting any undeclared tool item.
+- 다른 대안 대신 이 방식을 선택한 이유: Model guidance is not an enforcement boundary, while automatic translation would invent executable caller intent and arguments after generation.
+- 장점, 단점 및 영향: Streaming and non-streaming routed responses now fail closed with an actionable provider-contract error; providers that emit aliases they never advertised must correct their adapter mapping instead of relying on client abort behavior.
+
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
 the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
@@ -586,6 +594,22 @@ opt-out (registry-seeded, router-backfilled; an explicit user value always wins)
 adapters advertise the catalog bit only on explicit `true`; cursor keeps its own special-casing.
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
 ledger: `devlog/_fin/260709_parallel_tool_calls/`.
+
+## Volcengine Ark assistant continuation shapes
+
+The `openai-chat` adapter keeps Volcengine's pay-as-you-go Chat endpoint and Coding Plan endpoint
+on separate empty-assistant contracts. The pay-as-you-go `/api/v3` route retains the structured
+`[{ "type": "text", "text": "" }]` placeholder inferred for #796, while `/api/coding/v3` uses the
+ordinary empty string accepted by its live tool-call continuation contract (#1571). Matching only
+the shared Ark hostname is too broad because the two endpoint families reject opposite shapes.
+
+[Decision Log]
+- 목적과 의도: Preserve multi-turn tool-call continuations across both Ark Chat endpoint families.
+- 기존 구현 및 제약 조건: The #796 workaround was host-wide and unverified; live Coding Plan evidence shows its structured placeholder returns HTTP 400 while an empty string succeeds.
+- 검토한 주요 대안: Remove the workaround globally, select by model ID, or scope it by endpoint path.
+- 선택한 방식: Apply the structured placeholder only to recognized Ark hosts whose normalized base path is exactly `/api/v3`.
+- 다른 대안 대신 이 방식을 선택한 이유: Global removal would reopen #796, while model IDs can appear behind multiple Ark products and therefore do not identify the wire contract.
+- 장점, 단점 및 영향: Coding Plan regains its accepted continuation shape without changing generic providers; any future Ark endpoint family must provide evidence before inheriting the pay-as-you-go quirk.
 
 ## Chat structured-output compatibility
 

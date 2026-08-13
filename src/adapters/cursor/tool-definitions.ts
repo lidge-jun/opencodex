@@ -7,6 +7,9 @@ import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
 export const CODEX_SHELL_COMMAND_TOOL = "shell_command";
+/** Codex Desktop unified-exec client tool. Companion of `wait`; not an `exec_command` schema alias. */
+export const CODEX_UNIFIED_EXEC_TOOL = "exec";
+export const CODEX_WAIT_TOOL = "wait";
 export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
 export const CURSOR_EDIT_FILE_TOOL = "edit_file";
 export const CURSOR_MULTI_EDIT_TOOL = "multi_edit";
@@ -165,6 +168,27 @@ function cursorToolChoiceMatches(
 
 export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
   return !tool.namespace && isCodexShellBridgeToolName(tool.name);
+}
+
+function isCursorResponsesProvider(namespace: string | undefined): boolean {
+  return !namespace || namespace === OCX_RESPONSES_TOOL_PROVIDER;
+}
+
+const CURSOR_EXECUTION_PATH_TOOL_NAMES = [
+  CODEX_UNIFIED_EXEC_TOOL,
+  CODEX_EXEC_COMMAND_TOOL,
+  CODEX_SHELL_COMMAND_TOOL,
+] as const;
+
+/** True for the Codex execution path that must survive Cursor transport truncation. */
+export function isCursorExecutionPathTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+  return isCursorResponsesProvider(tool.namespace)
+    && (CURSOR_EXECUTION_PATH_TOOL_NAMES as readonly string[]).includes(tool.name);
+}
+
+/** `wait` only resumes a yielded exec cell; it is unusable without an execution-path tool. */
+export function isCursorWaitTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+  return isCursorResponsesProvider(tool.namespace) && tool.name === CODEX_WAIT_TOOL;
 }
 
 /** @deprecated Prefer isBareCodexShellBridgeTool; kept for older call sites/tests. */

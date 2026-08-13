@@ -90,7 +90,7 @@ per-model identity и метаданные вместо приближения �
 | OpenAI (API key) | Ровно восемь namespaced-строк: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и три виртуальных id `*-pro` (контекст 1,050,000; максимум входа 922,000 у всех восьми) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Статический fallback включает `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` и `cursor/gpt-5.6-luna` (1,000,000), а также `cursor/grok-4.5` и `cursor/grok-4.5-fast` (500,000); какие из них останутся видимыми, решает live-discovery аккаунта. |
-| xAI | Live-discovery авторитетно; fallback-каталог по умолчанию содержит `xai/grok-4.5` с окном 500,000 токенов и reasoning-control `low` / `medium` / `high`. |
+| xAI | Live-discovery авторитетно. Fallback-каталог включает `xai/grok-4.6`, а моделью по умолчанию остаётся `xai/grok-4.5`; у обеих окно 500,000 токенов. Grok 4.6 поддерживает `low` / `medium` / `high` / `xhigh` (upstream-default: `high`), а Grok 4.5 — только до `high`. |
 
 Закреплённые записи GPT-5.6 сохраняют точную upstream-лестницу. Sol и Terra дают диапазон от
 `low` до `ultra`; у Luna верхняя ступень — `max`. По умолчанию у Sol стоит `low`, а у Terra и

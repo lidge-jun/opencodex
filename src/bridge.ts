@@ -186,6 +186,8 @@ export function bridgeToResponsesSSE(
      * from this callback instead of re-parsing the bridged SSE.
      */
     onUsage?: (usage: OcxUsage | undefined) => void;
+    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    declaredToolNames?: ReadonlySet<string>;
     translatorBudget?: TranslatorBudget;
     /**
      * Conversation identity for the reasoning replay cache (issue #950).
@@ -974,6 +976,23 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) closeCurrentToolCall();
               const mapped = toolNsMap?.get(event.name);
               const realName = mapped?.name ?? event.name;
+              if (options?.declaredToolNames && !options.declaredToolNames.has(event.name)) {
+                const failure = responseError(
+                  502,
+                  "upstream_error",
+                  `routed provider emitted undeclared client tool "${event.name}"; only request-declared tools may be called`,
+                );
+                emit("response.failed", {
+                  response: {
+                    ...responseSnapshot("failed", finishedItems),
+                    error: failure,
+                    last_error: failure,
+                  },
+                });
+                reportTerminal("failed");
+                terminalEvent = true;
+                break;
+              }
               const ns = mapped?.namespace;
               const toolSearch = toolSearchToolNames?.has(realName) ?? false;
               const freeform = !toolSearch && (freeformToolNames?.has(realName) ?? false);
@@ -1359,6 +1378,8 @@ function buildResponseJSONWithBudget(
   options?: {
     hideThinkingSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string }>;
+    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    declaredToolNames?: ReadonlySet<string>;
     freeformToolNames?: Set<string>;
     toolSearchToolNames?: Set<string>;
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
@@ -1641,6 +1662,15 @@ function buildResponseJSONWithBudget(
           rememberReasoningForCall(e.id, rawReasoningForNextToolCall, replayCacheScope);
         }
         flushToolCall();
+        if (options?.declaredToolNames && !options.declaredToolNames.has(e.name)) {
+          errorEvent = {
+            type: "error",
+            message: `routed provider emitted undeclared client tool "${e.name}"; only request-declared tools may be called`,
+            status: 502,
+            errorType: "upstream_error",
+          };
+          break;
+        }
         currentToolCallId = e.id;
         budget?.openCall(e.id);
         currentToolCallName = e.name;

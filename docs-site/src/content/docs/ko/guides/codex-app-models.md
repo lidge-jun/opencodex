@@ -18,15 +18,38 @@ opencodex는 매핑된 계정별로 `<selector>/<native-openai-model>` 행을 �
 다른 계정으로 전환하지 않고 요청이 실패합니다. 자세한 내용은 [명시적 Codex 계정 selector](/reference/configuration/routing/#exact-codex-account-selectors)를
 참고하세요.
 
+계정 한정 행에서 `gpt-daybreak-blue-latest`는 계정 카탈로그에 관측됐을 때만 보존되며 bare native
+allowlist에는 추가되지 않습니다. 이와 별개로 canonical Codex 로그인 forward provider에 다음과 같은
+명시적 `customModels` 항목을 두면 같은 wire id를 `openai/gpt-daybreak-blue-latest`로 노출할 수 있습니다.
+
+```json
+{
+  "customModels": [
+    {
+      "id": "daybreak-codex-forward",
+      "provider": "openai",
+      "modelId": "gpt-daybreak-blue-latest"
+    }
+  ]
+}
+```
+
+정확히 이 provider, endpoint, model id 조합만 고정된 Sol capability snapshot을 상속합니다. 컨텍스트는
+372,000, 자동 압축점은 334,800이며 native reasoning ladder와 Codex tool metadata도 보존됩니다. 요청의
+wire id는 계속 `gpt-daybreak-blue-latest`이고 Sol로 다시 쓰지 않으며 bare 행이나 계정 사용 권한을 만들지
+않습니다. 별도 과금 경로인 `openai-apikey/daybreak-blue-latest`의 1,050,000 / 922,000 한도는 Codex 로그인
+행으로 복사되지 않습니다.
+
 `codexAccountNamespaces` map이 비어 있으면 계정 한정 선택기 행은 꺼집니다. 비어 있지 않은 map에서
 `codexAccountPickerEnabled`를 생략하면 이전 버전과의 호환성을 위해 활성화된 것으로 취급됩니다. `false`로
 설정하면 매핑을 삭제하거나 명시적 `<selector>/<native-openai-model>` 라우팅을 비활성화하지 않은 채 생성된
 qualified 행을 숨기고 선택기에 bare native 행을 복원합니다.
 
-API GPT-5.6 항목은 context 1,050,000 / max input 922,000을
+API GPT-5.6과 Daybreak 항목은 context 1,050,000 / max input 922,000을
 쓰고, `*-pro` picker id는 로그, 사용량, picker 상태에는 가상 id를 유지한 채 wire에서는 base model과
-`reasoning.mode: "pro"`로 풀립니다. API 카탈로그는 `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 그리고 세 개의
-Pro 가상 id까지 정확히 여덟 개로 고정되어 있으며, 일반적인 `gpt-5.6-pro` 별칭은 없습니다. Compact 요청은
+`reasoning.mode: "pro"`로 풀립니다. API 카탈로그는 `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 세 개의
+Pro 가상 id, `daybreak-red-latest`, `daybreak-blue-latest`까지 정확히 열 개로 고정되어 있으며,
+일반적인 `gpt-5.6-pro` 별칭은 없습니다. Compact 요청은
 선택한 tier를 유지하되 reasoning 객체 없이 base model만 보냅니다.
 
 선택기 id로 credential 경로를 명시적으로 선택하세요. Pool/Direct는 Providers 페이지에서 바꾸며,
@@ -36,6 +59,9 @@ Pro 가상 id까지 정확히 여덟 개로 고정되어 있으며, 일반적인
 gpt-5.6-sol                         # Pool 또는 Direct를 통한 bare Codex 로그인 경로
 <selector>/gpt-5.6-sol              # 해당 selector에 매핑된 저장된 Codex 계정
 openai-apikey/gpt-5.6-sol           # API key
+openai/gpt-daybreak-blue-latest     # 명시적 Codex-forward custom 행 (372,000)
+<selector>/gpt-daybreak-blue-latest # 사용 가능할 때 관측되는 계정 한정 native id
+openai-apikey/daybreak-blue-latest  # 별도 API-key 경로 (1,050,000 / 922,000)
 ```
 
 새로 설치한 환경과 저장된 모드가 없는 설정은 Pool이 기본값입니다. 현재 설정은 마커 2를 사용하고,
@@ -81,13 +107,15 @@ GPT-5.6에만 사용합니다. 오래된 템플릿으로 근사하지 않고 모
 | --- | --- |
 | Codex 로그인(계정 한정 선택기 행 비활성) | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` 같은 bare native id를 표시하고 `codexAccountMode`에 따라 Pool 또는 Direct를 사용합니다. GPT-5.6 행의 카탈로그 창은 372,000토큰입니다. |
 | Codex 로그인(계정 한정 선택기 행 활성, 유효한 selector 있음) | 유효한 selector와 지원되는 native model의 각 조합마다 `<selector>/<native-openai-model>` 행을 표시합니다. 각 행은 매핑된 계정만 사용하며 bare native 행은 선택기에서 숨깁니다. Native metadata와 context window는 보존됩니다. |
-| OpenAI(API key) | 정확히 여덟 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 그리고 세 개의 `*-pro` 가상 id (모두 컨텍스트 1,050,000; 최대 입력 922,000) |
+| Codex 로그인(명시적 Daybreak forward 행) | canonical `openai` provider에 정확한 `customModels` 항목이 있을 때만 `openai/gpt-daybreak-blue-latest`를 표시합니다. Daybreak wire id를 유지하고 고정된 Sol capability snapshot(컨텍스트 372,000; 자동 압축점 334,800)을 사용합니다. |
+| OpenAI(API key) | 정확히 열 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 세 개의 `*-pro` 가상 id, 두 Daybreak 별칭 (모두 컨텍스트 1,050,000; 최대 입력 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 `cursor/grok-4.5`, `cursor/grok-4.5-fast` (500,000)가 들어갑니다. 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
-| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그의 기본값은 `xai/grok-4.5`이고, 컨텍스트 500,000과 `low` / `medium` / `high` 추론 제어를 제공합니다. |
+| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그에는 `xai/grok-4.6`이 포함되며 기본값은 `xai/grok-4.5`입니다. 두 모델 모두 컨텍스트 창은 500,000입니다. Grok 4.6은 `low` / `medium` / `high` / `xhigh`(업스트림 기본값: `high`)를 제공하고, Grok 4.5는 `high`까지만 제공합니다. |
 
 고정된 GPT-5.6 항목은 업스트림 ladder를 그대로 보존합니다. Sol과 Terra는 `low`부터 `ultra`까지 노출하고,
-Luna는 `max`에서 멈춥니다. Sol의 기본값은 `low`이고, Terra와 Luna의 기본값은 `medium`입니다. `ultra`는
+Luna는 `max`에서 멈춥니다. Sol의 기본값은 `low`이고, Terra와 Luna의 기본값은 `medium`입니다. 명시적
+Codex-forward Daybreak Blue 행도 wire id를 바꾸지 않은 채 Sol의 ladder와 기본값을 상속합니다. `ultra`는
 최대 reasoning과 선제적 delegation을 묶은 클라이언트 선택지이며 백엔드에는 `max`로 전달됩니다. picker 항목이
 보인다는 것은 카탈로그가 준비됐다는 뜻일 뿐입니다. 연결된 계정이나 API key에 실제 사용 권한이 있어야
 합니다.

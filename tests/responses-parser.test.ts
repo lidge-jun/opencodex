@@ -124,23 +124,27 @@ describe("Responses parser", () => {
     expect([...maps.toolNsMap]).toEqual([
       ["mcp__tools__safe", { namespace: "mcp__tools", name: "safe" }],
     ]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe", "apply_patch"]);
     expect([...maps.freeformToolNames]).toEqual(["apply_patch"]);
     expect([...maps.toolSearchToolNames]).toEqual([]);
 
     parsed.options.toolChoice = { allowedTools: ["mcp__tools__safe"], mode: "required" };
     maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap.keys()]).toEqual(["mcp__tools__safe"]);
+    expect([...maps.declaredToolNames]).toEqual(["mcp__tools__safe"]);
     expect([...maps.freeformToolNames]).toEqual([]);
 
     parsed.options.toolChoice = { name: "tool_search" };
     maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap]).toEqual([]);
+    expect([...maps.declaredToolNames]).toEqual(["tool_search"]);
     expect([...maps.freeformToolNames]).toEqual([]);
     expect([...maps.toolSearchToolNames]).toEqual(["tool_search"]);
 
     parsed.options.toolChoice = "none";
     maps = buildToolBridgeMaps(parsed);
     expect([...maps.toolNsMap]).toEqual([]);
+    expect([...maps.declaredToolNames]).toEqual([]);
     expect([...maps.freeformToolNames]).toEqual([]);
     expect([...maps.toolSearchToolNames]).toEqual([]);
   });

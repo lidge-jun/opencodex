@@ -673,16 +673,18 @@ const VOLCENGINE_ARK_HOSTNAMES = new Set([
   "ark.ap-southeast.volces.com",
 ]);
 
-function isVolcengineArkTarget(provider: OcxProviderConfig): boolean {
+function isVolcengineArkPaygChatTarget(provider: OcxProviderConfig): boolean {
   try {
-    return VOLCENGINE_ARK_HOSTNAMES.has(new URL(provider.baseUrl).hostname);
+    const url = new URL(provider.baseUrl);
+    const pathname = url.pathname.replace(/\/+$/, "") || "/";
+    return VOLCENGINE_ARK_HOSTNAMES.has(url.hostname) && pathname === "/api/v3";
   } catch {
     return false;
   }
 }
 
 function emptyAssistantContent(provider: OcxProviderConfig): string | { type: "text"; text: string }[] {
-  return isVolcengineArkTarget(provider) ? [{ type: "text", text: "" }] : "";
+  return isVolcengineArkPaygChatTarget(provider) ? [{ type: "text", text: "" }] : "";
 }
 
 function ensureRootObjectType(parameters: unknown): Record<string, unknown> {

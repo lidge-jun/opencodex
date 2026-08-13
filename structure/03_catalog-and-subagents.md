@@ -7,6 +7,10 @@
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
   (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+- upgrades either an observed selector-qualified `*/gpt-daybreak-blue-latest` account row or an
+  explicitly configured canonical `openai/gpt-daybreak-blue-latest` Codex-forward row from the
+  pinned Sol capability metadata while preserving its selector and Daybreak wire identity;
+  this never expands the bare/API-key model lists or rewrites the wire model to `gpt-5.6-sol`;
 - clones a native template for routed `provider/model` entries;
 - forces strict Codex catalog fields required by the current parser;
 - hides `disabledModels` without blocking direct routing (routed provider ids are excluded;

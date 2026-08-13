@@ -27,7 +27,7 @@ import {
   submitManualLoginCode,
   upsertOAuthProvider,
 } from "../../oauth";
-import { removeCredential } from "../../oauth/store";
+import { replaceProviderAccountSet } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
@@ -765,6 +765,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const droppedCustomModels = dropProviderCustomModels(config, name);
     setProviderContextCap(config, name, false);
     save(config);
+    await replaceProviderAccountSet(name, null);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);

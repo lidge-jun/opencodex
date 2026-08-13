@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_OPENAI_MODELS, nativeOpenAiContextWindow, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel } from "../src/codex/catalog";
+import { applyNativeVisibility, augmentRoutedModelsWithMetadata, augmentRoutedModelsWithRegistryOpenAiApiRows, buildCatalogEntries, buildComboCatalogOmission, catalogModelSlug, clampCatalogModelsToCodexSupport, clampEntryToCodexSupportedEfforts, clampedDefaultEffort, CODEX_ACCOUNT_BOUND_CATALOG_KIND, CODEX_NATIVE_ALIAS_CATALOG_KIND, comboCatalogOmissionReason, deriveComboCatalogModel, exactComboCatalogSlugs, filterCatalogVisibleModels, filterSupportedNativeSlugs, gatherRoutedModels as gatherRoutedModelsDirect, isDatedVariantId, isMediaGenerationModelId, loadBundledCodexCatalog, materializeBundledCodexCatalog, mergeCatalogEntriesForSync, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_OPENAI_MODELS, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiCapabilitySourceSlug, nativeOpenAiContextWindow, nativeReasoningEfforts, normalizeRoutedCatalogEntry, resetCatalogRuntimeStateForTests, resetOpenAiApiCatalogWarningStateForTests, resolveComboCatalogMember, shouldExposeRoutedModel, upstreamNativeEntry } from "../src/codex/catalog";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
   CODEX_PROVIDER_MODEL_CATALOG_KIND,
@@ -2517,6 +2517,163 @@ describe("Codex catalog routed normalization", () => {
     expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(372_000);
     // Non-5.6 natives are capped the same way.
     expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBe(272_000);
+  });
+
+  test("account-scoped Daybreak Blue inherits Sol capabilities without expanding the bare allowlist", () => {
+    expect(NATIVE_DAYBREAK_BLUE_MODEL).toBe("gpt-daybreak-blue-latest");
+    expect(nativeOpenAiCapabilitySourceSlug(NATIVE_DAYBREAK_BLUE_MODEL)).toBe("gpt-5.6-sol");
+    expect(nativeOpenAiContextWindow(NATIVE_DAYBREAK_BLUE_MODEL)).toBe(372_000);
+    expect(nativeInputModalities(NATIVE_DAYBREAK_BLUE_MODEL)).toEqual(["text", "image"]);
+    expect(nativeReasoningEfforts(NATIVE_DAYBREAK_BLUE_MODEL))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(nativeDefaultReasoningEffort(NATIVE_DAYBREAK_BLUE_MODEL)).toBe("low");
+
+    const source = upstreamNativeEntry(NATIVE_DAYBREAK_BLUE_MODEL);
+    expect(source).toMatchObject({
+      slug: NATIVE_DAYBREAK_BLUE_MODEL,
+      display_name: "Daybreak Blue",
+      context_window: 372_000,
+      max_context_window: 372_000,
+      comp_hash: "3000",
+      tool_mode: "code_mode_only",
+      use_responses_lite: true,
+      supports_parallel_tool_calls: true,
+      supports_search_tool: true,
+      multi_agent_version: "v2",
+    });
+    expect(source).not.toHaveProperty("availability_nux");
+    expect(source?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(source?.base_instructions).not.toContain("based on GPT-5");
+    expect((source?.model_messages as { instructions_template?: string })?.instructions_template)
+      .toContain("powered by the gpt-daybreak-blue-latest");
+
+    const projected = buildCatalogEntries(
+      nativeTemplate(),
+      NATIVE_OPENAI_MODELS,
+      [],
+      undefined,
+      false,
+      "default",
+      new Set(),
+      ["main"],
+      new Set(),
+      new Set(),
+      undefined,
+      [...NATIVE_OPENAI_MODELS, NATIVE_DAYBREAK_BLUE_MODEL],
+      new Map([["main", [...NATIVE_OPENAI_MODELS, NATIVE_DAYBREAK_BLUE_MODEL]]]),
+    );
+    const daybreak = projected.find(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`);
+    const sol = projected.find(entry => entry.slug === "gpt-5.6-sol");
+    expect(daybreak).toBeDefined();
+    expect(daybreak?.auto_compact_token_limit).toBe(334_800);
+    expect(daybreak).toMatchObject({
+      context_window: sol?.context_window,
+      max_context_window: sol?.max_context_window,
+      comp_hash: sol?.comp_hash,
+      tool_mode: sol?.tool_mode,
+      use_responses_lite: sol?.use_responses_lite,
+      supports_parallel_tool_calls: sol?.supports_parallel_tool_calls,
+      input_modalities: sol?.input_modalities,
+    });
+    expect(projected.some(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toBe(false);
+    expect(projected.some(entry => entry.slug === "daybreak-blue-latest")).toBe(false);
+  });
+
+  test("configured ChatGPT-forward Daybreak gets Sol native metadata without API-key crossover", async () => {
+    globalThis.fetch = (() => { throw new Error("forward providers must not fetch /models"); }) as typeof fetch;
+    const forwardConfig: OcxConfig = {
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          // The built-in OpenAI provider defaults an omitted authMode to forward.
+          codexAccountMode: "pool",
+        },
+      },
+      codexAccountPickerEnabled: false,
+      codexAccountNamespaces: { main: "@main" },
+      customModels: [{
+        id: "daybreak-codex-forward",
+        provider: "openai",
+        modelId: NATIVE_DAYBREAK_BLUE_MODEL,
+        // An API-sized user value may lower neither the installed Codex native contract nor
+        // accidentally collapse this row into the separately billed API-key surface.
+        contextWindow: 1_050_000,
+      }],
+    };
+
+    const models = await gatherRoutedModels(forwardConfig);
+    const model = models.find(row => row.provider === "openai" && row.id === NATIVE_DAYBREAK_BLUE_MODEL);
+    expect(model).toMatchObject({
+      id: NATIVE_DAYBREAK_BLUE_MODEL,
+      provider: "openai",
+      displayName: "Daybreak Blue",
+      catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
+      codexForwardNativeCapabilityAlias: true,
+      contextWindow: 372_000,
+      inputModalities: ["text", "image"],
+      reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      defaultReasoningEffort: "low",
+      parallelToolCalls: true,
+    });
+
+    const entries = buildCatalogEntries(nativeTemplate(), [], models);
+    const daybreak = entries.find(entry => entry.slug === `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`);
+    expect(daybreak).toMatchObject({
+      slug: `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`,
+      display_name: "Daybreak Blue",
+      context_window: 372_000,
+      max_context_window: 372_000,
+      auto_compact_token_limit: 334_800,
+      comp_hash: "3000",
+      tool_mode: "code_mode_only",
+      use_responses_lite: true,
+      supports_parallel_tool_calls: true,
+      supports_search_tool: true,
+      multi_agent_version: "v2",
+      opencodex_catalog_kind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
+    });
+    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(daybreak?.model_messages).toBeDefined();
+    expect(entries.some(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toBe(false);
+    expect(entries.some(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`)).toBe(false);
+
+    const apiRows = augmentRoutedModelsWithRegistryOpenAiApiRows([], openAiApiCatalogConfig());
+    expect(apiRows.find(row => row.provider === "openai-apikey" && row.id === "daybreak-blue-latest"))
+      .toMatchObject({ contextWindow: 1_050_000, maxInputTokens: 922_000 });
+  });
+
+  test("Daybreak metadata inheritance rejects noncanonical providers", async () => {
+    const models = await gatherRoutedModels({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.invalid/v1",
+          authMode: "key",
+          liveModels: false,
+        },
+      },
+      customModels: [{
+        id: "not-codex-forward",
+        provider: "openai",
+        modelId: NATIVE_DAYBREAK_BLUE_MODEL,
+      }],
+    });
+    const model = models.find(row => row.provider === "openai" && row.id === NATIVE_DAYBREAK_BLUE_MODEL);
+    expect(model?.codexForwardNativeCapabilityAlias).toBeUndefined();
+    const row = buildCatalogEntries(nativeTemplate(), [], models)
+      .find(entry => entry.slug === `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`);
+    expect(row?.context_window).toBe(128_000);
+    expect(row?.use_responses_lite).toBeUndefined();
+    // Not a Daybreak-inheritance signal: `supports_search_tool` is the ordinary routed default for
+    // every non-Cursor row since fcbef381e restored deferred tool discovery. The inheritance
+    // rejection is proven by the native-only fields above and below.
+    expect(row?.supports_search_tool).toBe(true);
+    expect(row?.multi_agent_version).toBeUndefined();
   });
 
   test("catalog sync upgrades fallback-quality gpt-5.6 entries but preserves genuine ones", () => {

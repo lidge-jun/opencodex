@@ -33,6 +33,7 @@ import {
   previousResponseProviderState,
   previousResponseReplayFailure,
   previousResponseReplayPrefixLength,
+  previousResponseScopeMismatch,
   recoverStaleResponseStateTemps,
   rememberResponseState,
   responseAdmissionCountersForTests,
@@ -149,6 +150,51 @@ describe("Responses previous_response_id state", () => {
       (first.output as unknown[])[0],
       { type: "function_call_output", call_id: "call_1", output: "ok" },
     ]);
+  });
+
+  test("replays continuation only inside the originating client task", () => {
+    const firstBody = { model: "cursor/auto", input: "private task A history", store: true };
+    const first = fixedResponse("resp_task_scoped", [
+      { type: "message", role: "assistant", content: "task A answer" },
+    ]);
+    rememberResponseState(firstBody, first, undefined, { clientThreadId: "task-a" });
+
+    const sameTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "continue task A",
+    }, "task-a") as { previous_response_id?: string; input: unknown[] };
+    expect(sameTask.previous_response_id).toBe(first.id);
+    expect(sameTask.input).toEqual([
+      { role: "user", content: "private task A history" },
+      first.output[0],
+      { role: "user", content: "continue task A" },
+    ]);
+    expect(previousResponseScopeMismatch(sameTask)).toBe(false);
+
+    const foreignTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "brand-new task B",
+    }, "task-b") as { previous_response_id?: string; input: string };
+    expect(foreignTask).toEqual({ model: "cursor/auto", input: "brand-new task B" });
+    expect(previousResponseScopeMismatch(foreignTask)).toBe(true);
+    expect(previousResponseReplayPrefixLength(foreignTask)).toBe(0);
+    expect(responseStateMetrics().replayScopeMismatchDrops).toBe(1);
+  });
+
+  test("scoped tasks reject legacy unscoped continuation state", () => {
+    const first = fixedResponse("resp_legacy_unscoped", [
+      { type: "message", role: "assistant", content: "legacy answer" },
+    ]);
+    rememberResponseState({ input: "legacy history" }, first);
+
+    const freshTask = expandPreviousResponseInput({
+      previous_response_id: first.id,
+      input: "new task",
+    }, "task-new");
+    expect(freshTask).toEqual({ input: "new task" });
+    expect(previousResponseScopeMismatch(freshTask)).toBe(true);
   });
 
   test("stores incomplete partial output for previous_response_id replay", () => {
@@ -710,13 +756,27 @@ describe("Responses previous_response_id state", () => {
 
   test("replays a durable spill after simulated process restart", async () => {
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_spill_restart", "r".repeat(8_000));
+    rememberResponseState(
+      { model: "test/model", input: "r".repeat(8_000), store: false },
+      fixedResponse("resp_spill_restart", [{ type: "message", role: "assistant", content: "stored" }]),
+      undefined,
+      { force: true, clientThreadId: "task-spill" },
+    );
     await flushResponseState();
     clearResponseStateMemoryForTests();
     setResponseStateByteCapForTests(1_024);
-    const expanded = expandPreviousResponseInput({ previous_response_id: "resp_spill_restart", input: "next" });
+    const expanded = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "next" },
+      "task-spill",
+    );
     expect((expanded as { input: unknown[] }).input).toHaveLength(3);
     expect(responseStateMetrics().spillStubCount).toBe(1);
+
+    const foreign = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "foreign" },
+      "task-other",
+    );
+    expect(foreign).toEqual({ input: "foreign" });
   });
 
   test("spill references bind the expected response id and use the locked digest basename", () => {
@@ -1757,6 +1817,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
     });
 
@@ -1814,6 +1875,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
 
       // The real request path DOES load; the probe then reflects the loaded entry.

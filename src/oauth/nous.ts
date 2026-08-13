@@ -39,6 +39,7 @@ import { join } from "node:path";
 import type { OAuthController, OAuthCredentials } from "./types";
 import { getAuthStorePath } from "./store";
 import { atomicWriteFile, hardenConfigDir, hardenExistingSecret } from "../config";
+import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBytes } from "../lib/bounded-body";
 
 export const NOUS_PORTAL_BASE_URL = "https://portal.nousresearch.com";
 export const NOUS_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1";
@@ -85,6 +86,44 @@ interface NousJwtPayload {
   exp?: unknown;
   scope?: unknown;
   [key: string]: unknown;
+}
+
+async function readOAuthBytes(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  const { bytes, oversized } = await readBoundedResponseBytes(response, {
+    maxBytes: BOUNDED_BODY_MAX_BYTES,
+    signal,
+  });
+  if (oversized) {
+    throw new NousTokenError(
+      response.status,
+      "response_too_large",
+      `Nous Portal OAuth response exceeded the ${BOUNDED_BODY_MAX_BYTES}-byte limit`,
+    );
+  }
+  return bytes;
+}
+
+function parseOAuthJson(bytes: Uint8Array): unknown {
+  const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+async function readOAuthJson(response: Response, signal: AbortSignal): Promise<unknown> {
+  return parseOAuthJson(await readOAuthBytes(response, signal));
+}
+
+async function readOAuthJsonOrEmpty(response: Response, signal: AbortSignal): Promise<unknown> {
+  const bytes = await readOAuthBytes(response, signal);
+  try {
+    return parseOAuthJson(bytes);
+  } catch {
+    // Preserve the pre-PR behavior for empty/HTML/malformed JSON only. Body
+    // read failures, timeouts, caller cancellation, and size-limit errors have
+    // already escaped readOAuthBytes and must retain their real identity.
+    return {};
+  }
 }
 
 // ── Durable refresh-intent (review blocker #2) ──────────────────────────────
@@ -495,6 +534,7 @@ async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
   expiresInMs: number;
   intervalMs: number;
 }> {
+  const effectiveSignal = requestSignal(signal);
   const response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/device/code`, {
     method: "POST",
     headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
@@ -503,14 +543,16 @@ async function requestDeviceAuthorization(signal?: AbortSignal): Promise<{
       scope: NOUS_OAUTH_SCOPE,
     }),
     redirect: "error",
-    signal: requestSignal(signal),
+    signal: effectiveSignal,
   });
-  if (!response.ok) throw tokenErrorFromPayload(response.status, await response.json().catch(() => ({})));
+  if (!response.ok) {
+    throw tokenErrorFromPayload(response.status, await readOAuthJsonOrEmpty(response, effectiveSignal));
+  }
   // A successful HTTP response may still carry an empty/HTML/non-JSON body.
   // Fall back to an empty object so the required-field check below produces the
   // clear "missing required fields" validation error instead of leaking a raw
   // JSON parser exception.
-  const payload = (await response.json().catch(() => ({}))) as NousDeviceAuthorizationResponse;
+  const payload = await readOAuthJsonOrEmpty(response, effectiveSignal) as NousDeviceAuthorizationResponse;
   const userCode = nonEmptyString(payload.user_code);
   const deviceCode = nonEmptyString(payload.device_code);
   const verificationUri = nonEmptyString(payload.verification_uri_complete) ?? nonEmptyString(payload.verification_uri);
@@ -549,6 +591,7 @@ async function pollForToken(
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error("Login cancelled");
     let response: Response;
+    const effectiveSignal = requestSignal(signal);
     try {
       response = await fetch(`${resolvePortalBaseUrl()}/api/oauth/token`, {
         method: "POST",
@@ -559,7 +602,7 @@ async function pollForToken(
           grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         }),
         redirect: "error",
-        signal: requestSignal(signal),
+        signal: effectiveSignal,
       });
     } catch (netErr) {
       // Genuine cancellation must abort immediately. Any other transport-level
@@ -571,13 +614,15 @@ async function pollForToken(
       if (await sleepUntilDeadline(waitMs)) continue;
       break;
     }
+    // Parse under the same deadline that covered the request headers. Keep the
+    // read outside the fetch retry catch: a bounded-reader error or caller
+    // cancellation is an observed response failure, not a safe poll retry.
+    const payload = await readOAuthJsonOrEmpty(response, effectiveSignal) as NousTokenResponse;
     // Parse once and pass the payload through to the failure path (review #8),
     // so we never try to re-read a body that has already been consumed.
     // Normalize a successful-but-non-object body (for example valid JSON
     // `null`) to an empty object so the required-field validation below
     // produces a terminal NousTokenError instead of a raw TypeError.
-    const parsed = (await response.json().catch(() => ({}))) as unknown;
-    const payload = (parsed && typeof parsed === "object" ? parsed : {}) as NousTokenResponse;
     if (Date.now() >= deadline) break;
     if (response.ok) return parseTokenPayload(payload, "");
     const error = payload.error;
@@ -670,6 +715,7 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   }
 
   let response: Response;
+  const effectiveSignal = requestSignal(signal);
   try {
     response = await fetch(`${baseUrl}/api/oauth/token`, {
       method: "POST",
@@ -683,7 +729,7 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
         client_id: NOUS_OAUTH_CLIENT_ID,
       }),
       redirect: "error",
-      signal: requestSignal(signal),
+      signal: effectiveSignal,
     });
   } catch (netErr) {
     // The request may have reached the server and rotated the token even on a
@@ -703,7 +749,6 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
 
   if (!response.ok) {
     const status = response.status;
-    const payload = await response.json().catch(() => ({}));
     // The request reached the Portal's token endpoint. A non-2xx response does
     // NOT establish that the single-use refresh token was not consumed: 429
     // rate limits, unknown/custom 4xx, and gateway-generated client-class
@@ -719,6 +764,7 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
       // The pre-dispatch "submitted" intent is still on disk, which also
       // blocks replay; surface the original HTTP error below.
     }
+    const payload = await readOAuthJsonOrEmpty(response, effectiveSignal);
     throw tokenErrorFromPayload(status, payload);
   }
 
@@ -727,7 +773,10 @@ export async function refreshNousToken(refreshToken: string, signal?: AbortSigna
   // replay it. On success we deliberately LEAVE the intent as "submitted"
   // (the store clears it once the rotated token is persisted).
   try {
-    const creds = parseTokenPayload((await response.json()) as NousTokenResponse, refreshToken);
+    const creds = parseTokenPayload(
+      (await readOAuthJson(response, effectiveSignal)) as NousTokenResponse,
+      refreshToken,
+    );
     return creds;
   } catch (e) {
     try {

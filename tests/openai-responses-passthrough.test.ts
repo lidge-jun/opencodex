@@ -239,6 +239,162 @@ describe("DeepSeek Responses endpoint contract", () => {
 });
 
 describe("OpenAI Responses passthrough sanitization", () => {
+  const deferredToolBody = {
+    model: "routed-model",
+    input: [
+      {
+        type: "tool_search_call",
+        call_id: "call_search",
+        execution: "client",
+        arguments: { query: "deferred read" },
+      },
+      {
+        type: "tool_search_output",
+        call_id: "call_search",
+        status: "completed",
+        execution: "client",
+        tools: [{
+          type: "namespace",
+          name: "workspace",
+          description: "Workspace tools",
+          tools: [{
+            type: "function",
+            name: "deferred_read",
+            description: "Read deferred data",
+            strict: false,
+            defer_loading: true,
+            parameters: {
+              type: "object",
+              properties: { id: { type: "string" } },
+              required: ["id"],
+              additionalProperties: false,
+            },
+          }, {
+            type: "function",
+            name: "declared_deferred_read",
+            description: "Read declared deferred data",
+            defer_loading: true,
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          }],
+        }],
+      },
+    ],
+    tools: [
+      {
+        type: "namespace",
+        name: "workspace",
+        description: "Workspace tools",
+        tools: [{
+          type: "function",
+          name: "upfront_read",
+          description: "Read upfront data",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        }, {
+          type: "function",
+          name: "declared_deferred_read",
+          description: "Read declared deferred data",
+          defer_loading: true,
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        }],
+      },
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Search deferred tools",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  };
+
+  test("routed passthrough promotes tool-search results into the active namespace", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "key",
+      apiKey: "test-key",
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{
+        type: string;
+        name?: string;
+        tools?: Array<{ name: string; defer_loading?: boolean }>;
+      }>;
+    };
+
+    const namespace = body.tools.find(tool => tool.type === "namespace" && tool.name === "workspace");
+    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
+      "upfront_read",
+      "declared_deferred_read",
+      "deferred_read",
+    ]);
+    expect(namespace?.tools?.find(tool => tool.name === "declared_deferred_read"))
+      .not.toHaveProperty("defer_loading");
+    expect(namespace?.tools?.find(tool => tool.name === "deferred_read"))
+      .not.toHaveProperty("defer_loading");
+  });
+
+  test("canonical forward passthrough leaves tool-search loading to the native backend", () => {
+    const body = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers({ authorization: "Bearer test" }) }).body) as { tools: unknown[] };
+
+    expect(body.tools).toEqual(deferredToolBody.tools);
+  });
+
+  test("routed passthrough promotes tool-search results into Responses Lite additional tools", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "key",
+      apiKey: "test-key",
+    });
+    const { tools, ...bodyWithoutTools } = deferredToolBody;
+    const rawBody = {
+      ...bodyWithoutTools,
+      input: [
+        ...bodyWithoutTools.input,
+        { type: "additional_tools", role: "developer", tools },
+      ],
+    };
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: rawBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    }, { headers: new Headers() }).body) as {
+      tools?: unknown[];
+      input: Array<{
+        type: string;
+        tools?: Array<{ type: string; name?: string; tools?: Array<{ name: string }> }>;
+      }>;
+    };
+
+    expect(body.tools).toBeUndefined();
+    const additionalTools = body.input.find(item => item.type === "additional_tools")?.tools;
+    const namespace = additionalTools?.find(tool => tool.type === "namespace" && tool.name === "workspace");
+    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
+      "upfront_read",
+      "declared_deferred_read",
+      "deferred_read",
+    ]);
+  });
+
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
     const validParameters = {
       type: "object",

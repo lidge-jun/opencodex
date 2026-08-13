@@ -34,6 +34,7 @@ export interface ResponseSpillPayload {
   version: 1;
   responseId: string;
   createdAt: number;
+  clientThreadId?: string;
   items: unknown[];
   providers?: OcxProviderContinuationState;
 }
@@ -260,9 +261,11 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "items", "providers"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providers"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
+  if (payload.clientThreadId !== undefined
+    && (typeof payload.clientThreadId !== "string" || payload.clientThreadId.trim().length === 0)) return false;
   if (!Array.isArray(payload.items)) return false;
   if (payload.providers !== undefined) {
     if (!payload.providers || typeof payload.providers !== "object" || Array.isArray(payload.providers)) return false;
@@ -284,6 +287,7 @@ export function writeResponseSpillDurably(
       version: 1,
       responseId,
       createdAt: state.createdAt,
+      ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
       items: state.items,
       ...(state.providers ? { providers: state.providers } : {}),
     };

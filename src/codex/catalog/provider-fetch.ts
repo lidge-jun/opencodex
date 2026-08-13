@@ -69,7 +69,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
+import { disabledNativeSlugs, hasComboTargets, isNativeOpenAiCapabilityAliasModel, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
@@ -207,6 +207,15 @@ interface GatherInflightEntry {
    */
   readonly providerGraphIdentity: string;
   readonly promise: Promise<GatherFlightResult>;
+}
+
+function withCanonicalOpenAiForwardAuthDefault(
+  name: string,
+  provider: OcxProviderConfig,
+): OcxProviderConfig {
+  if (name !== OPENAI_CODEX_PROVIDER_ID || provider.authMode !== undefined) return provider;
+  const candidate = { ...provider, authMode: "forward" as const };
+  return isCanonicalOpenAiForwardProvider(candidate) ? candidate : provider;
 }
 
 const gatherInflight = new Map<string, GatherInflightEntry[]>();
@@ -390,7 +399,7 @@ function captureProviderGather(
   authResolver: ModelsAuthResolver,
   retainConfiguredModelIds?: ReadonlySet<string>,
 ): CapturedProviderGather {
-  const enriched = detachedClone(configured);
+  const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
   const provider = recursivelyFreeze(enriched);
   const observedAuth = authResolver.kind === "observed"
@@ -1714,16 +1723,49 @@ async function gatherRoutedModelsUncached(
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
     const rawProvider = config.providers[cm.provider];
+    // Registry routing backfills an omitted authMode on the built-in OpenAI provider to
+    // forward. Keep the catalog projection on the same contract while still failing closed
+    // for every explicit non-forward mode and every non-canonical endpoint.
+    const providerForCanonicalCheck = rawProvider
+      ? withCanonicalOpenAiForwardAuthDefault(cm.provider, rawProvider)
+      : undefined;
+    const codexForwardNativeCapabilityAlias = cm.provider === OPENAI_CODEX_PROVIDER_ID
+      && providerForCanonicalCheck !== undefined
+      && isCanonicalOpenAiForwardProvider(providerForCanonicalCheck)
+      && isNativeOpenAiCapabilityAliasModel(cm.modelId);
+    const nativeAliasContextWindow = codexForwardNativeCapabilityAlias
+      ? nativeOpenAiContextWindow(cm.modelId, providerContextCap(config, OPENAI_CODEX_PROVIDER_ID))
+      : undefined;
+    const customContextWindow = cm.contextWindow
+      ? nativeAliasContextWindow !== undefined
+        ? Math.min(cm.contextWindow, nativeAliasContextWindow)
+        : cm.contextWindow
+      : nativeAliasContextWindow;
+    const nativeAliasDefaultEffort = codexForwardNativeCapabilityAlias
+      ? nativeDefaultReasoningEffort(cm.modelId)
+      : undefined;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
       catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
       // Display-only label: never feeds routing (customModels are keyed by routedSlug below).
-      ...(cm.displayName ? { displayName: cm.displayName } : {}),
-      ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
-      ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+      ...(cm.displayName
+        ? { displayName: cm.displayName }
+        : codexForwardNativeCapabilityAlias ? { displayName: "Daybreak Blue" } : {}),
+      ...(customContextWindow !== undefined ? { contextWindow: customContextWindow } : {}),
+      ...(cm.inputModalities
+        ? { inputModalities: cm.inputModalities }
+        : codexForwardNativeCapabilityAlias ? { inputModalities: nativeInputModalities(cm.modelId) } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+      ...(codexForwardNativeCapabilityAlias
+        ? {
+          codexForwardNativeCapabilityAlias: true,
+          reasoningEfforts: nativeReasoningEfforts(cm.modelId),
+          parallelToolCalls: nativeParallelToolCalls(cm.modelId),
+          ...(nativeAliasDefaultEffort ? { defaultReasoningEffort: nativeAliasDefaultEffort } : {}),
+        }
+        : {}),
     };
     // #962: the dedupe below drops the provider-derived row this custom row replaces. Inherit that
     // row's provider capability metadata (reasoning ladder, default effort, parallel tool calls,

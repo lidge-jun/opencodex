@@ -21,6 +21,8 @@ import {
   cursorToolsForActivePrompt,
   isCursorStructuredEditToolName,
   isBareCodexShellBridgeTool,
+  isCursorExecutionPathTool,
+  isCursorWaitTool,
 } from "./tool-definitions";
 import { lookupCursorThreadConversation } from "./thread-continuity";
 
@@ -39,21 +41,25 @@ function explicitlySelectedNames(choice: OcxToolChoice | undefined): Set<string>
 }
 
 function toolPriority(tool: OcxTool, selectedNames: ReadonlySet<string>): number {
-  // Shell bridge and apply_patch outrank unrelated allowed_tools entries so a large
-  // selected filler cannot starve the Codex execution path during truncation (#399).
+  // Execution path (bare or opencodex-responses `exec` / `exec_command` / `shell_command`)
+  // outranks filler so a crowded catalog cannot drop the Codex shell bridge (#399).
+  if (isCursorExecutionPathTool(tool)) return 0;
   if (isBareCodexShellBridgeTool(tool)) return 0;
-  if (!tool.namespace && tool.name === "apply_patch") return 1;
+  // `wait` only resumes a yielded exec cell. Keep it with the execution path, but after
+  // `exec` itself so a large wait schema cannot starve the tool that creates the cell.
+  if (isCursorWaitTool(tool)) return 1;
+  if (!tool.namespace && tool.name === "apply_patch") return 2;
   // Structured edit tools convert to apply_patch on the return path, so they must survive the
   // same byte/count truncation as the freeform tool they stand in for (#1017).
-  if (!tool.namespace && isCursorStructuredEditToolName(tool.name)) return 1;
-  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 2;
-  if (tool.loadedFromToolSearch) return 3;
-  if (!tool.namespace) return 4;
-  return 5;
+  if (!tool.namespace && isCursorStructuredEditToolName(tool.name)) return 2;
+  if (cursorToolChoiceAliases(tool).some(name => selectedNames.has(name))) return 3;
+  if (tool.loadedFromToolSearch) return 4;
+  if (!tool.namespace) return 5;
+  return 6;
 }
 
 function isPinnedCursorTool(tool: OcxTool, selectedNames: ReadonlySet<string>): boolean {
-  return toolPriority(tool, selectedNames) <= 2;
+  return toolPriority(tool, selectedNames) <= 3;
 }
 
 /**
@@ -96,7 +102,7 @@ export function applyCursorToolBudget(
     return true;
   };
 
-  // Phase 1: selected tools + shell bridge + apply_patch (priority <= 2).
+  // Phase 1: selected tools + execution path + apply_patch (priority <= 3).
   // Pins are admitted before filler so a crowded catalog cannot drop the Codex execution path (#399).
   for (const candidate of candidates) {
     if (!isPinnedCursorTool(candidate.tool, selectedNames)) continue;
@@ -106,6 +112,44 @@ export function applyCursorToolBudget(
   // Phase 2: remaining tools by priority.
   for (const candidate of candidates) {
     tryKeep(candidate.tool);
+  }
+
+  const evictNonExecutionPath = (needBytes: number): void => {
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const occupant = kept[i];
+      if (!occupant || isCursorExecutionPathTool(occupant)) continue;
+      kept.splice(i, 1);
+      keptSet.delete(occupant);
+      keptBytes -= cursorMcpToolEncodedSize(occupant, toolChoice);
+      if (kept.length < CURSOR_TOOL_COUNT_LIMIT && keptBytes + needBytes <= CURSOR_TOOL_BYTES_LIMIT) {
+        return;
+      }
+    }
+  };
+
+  // Force-admit at least one execution-path tool when one was eligible. Priority-0
+  // admission can still fail if the tool itself is larger than leftover room after
+  // earlier same-priority pins; evict wait/patch/filler rather than ship wait-only.
+  for (const tool of eligible) {
+    if (!isCursorExecutionPathTool(tool) || keptSet.has(tool)) continue;
+    const need = cursorMcpToolEncodedSize(tool, toolChoice);
+    if (need > CURSOR_TOOL_BYTES_LIMIT) continue;
+    evictNonExecutionPath(need);
+    tryKeep(tool);
+    if (keptSet.has(tool)) break;
+  }
+
+  const eligibleHasExecutionPath = eligible.some(isCursorExecutionPathTool);
+  const keptHasExecutionPath = eligible.some(tool => keptSet.has(tool) && isCursorExecutionPathTool(tool));
+  // Never advertise `wait` after dropping the tool that creates the exec cell.
+  if (eligibleHasExecutionPath && !keptHasExecutionPath) {
+    for (const tool of eligible) {
+      if (!isCursorWaitTool(tool) || !keptSet.has(tool)) continue;
+      keptSet.delete(tool);
+      const index = kept.indexOf(tool);
+      if (index >= 0) kept.splice(index, 1);
+      keptBytes -= cursorMcpToolEncodedSize(tool, toolChoice);
+    }
   }
 
   return {

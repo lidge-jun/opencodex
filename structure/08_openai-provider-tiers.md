@@ -68,7 +68,10 @@ view exactly when it is doing the most work — suppressing every higher tier.
 
 ```text
 gpt-5.6-sol                         # openai; Pool or Direct follows the provider option
+main/gpt-daybreak-blue-latest       # openai; observed account-native Daybreak, Sol capability metadata
+openai/gpt-daybreak-blue-latest     # Codex forward; explicit Daybreak row with Sol native metadata
 openai-apikey/gpt-5.6-sol           # OpenAI API key
+openai-apikey/daybreak-blue-latest  # API Daybreak alias; separate approval/provisioning
 openai-apikey/gpt-5.6-sol-pro       # API Pro virtual model
 ```
 
@@ -107,6 +110,10 @@ migration.
   change catalog, selected, requested, or wire model identity.
 - `openai-apikey` exposes namespaced API rows. Its trusted catalog contains `gpt-5.5`, `gpt-5.6`,
   Sol/Terra/Luna, and the three corresponding Pro variants. No generic `gpt-5.6-pro` alias exists.
+- The selector-qualified account-native `*/gpt-daybreak-blue-latest` and API-key
+  `daybreak-blue-latest` are distinct wire surfaces. An observed native row follows the pinned Sol
+  capability metadata, but routing strips only the account selector and keeps
+  `gpt-daybreak-blue-latest` byte-for-byte; it never expands the bare list or substitutes Sol.
 - API GPT-5.6 rows use 1,050,000 context tokens and 922,000 max input tokens. Codex-login rows keep
   the native 372,000-token contract.
 - `*-pro` selected ids rewrite to the base wire id with `reasoning.mode: "pro"`; request logs,

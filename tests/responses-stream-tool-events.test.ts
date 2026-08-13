@@ -27,6 +27,23 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("Responses streaming tool event contract", () => {
+  test("undeclared upstream tool names fail closed with a compatibility error", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_bad", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: '{"input":"*** Begin Patch"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "deepseek/deepseek-v4-flash", undefined, undefined, undefined, undefined, undefined, {
+      declaredToolNames: new Set(["exec"]),
+    }));
+
+    expect(frames.some(frame => frame.event === "response.output_item.added")).toBe(false);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
+    expect((failed.error as Record<string, unknown>).message).toContain("undeclared client tool");
+    expect((failed.error as Record<string, unknown>).message).toContain("apply_patch");
+  });
+
   test("adapter tool events produce OpenAI-compatible streamed function-call frames", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "tool_call_start", id: "call_1", name: "read_file" },

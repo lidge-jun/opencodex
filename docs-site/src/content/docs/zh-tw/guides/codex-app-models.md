@@ -92,7 +92,7 @@ GPT-5.6，以便提供每個模型真實的身份和後設資料，而不是套�
 | OpenAI（API key） | 恰好八個帶名稱空間的列：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna 與三個 `*-pro` 虛擬 id（全部八個都是 1,050,000 context；922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna`（1,050,000） |
 | Cursor | 靜態回退目錄包含 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`（1,000,000），以及 `cursor/grok-4.5`、`cursor/grok-4.5-fast`（500,000）；帳號的即時發現結果決定最終顯示哪些模型。 |
-| xAI | 以即時發現結果為準；回退目錄預設使用 `xai/grok-4.5`，視窗為 500,000 token，並提供 `low` / `medium` / `high` reasoning 控制。 |
+| xAI | 以即時發現結果為準。回退目錄包含 `xai/grok-4.6`，預設模型仍為 `xai/grok-4.5`；兩者的 context window 均為 500,000。Grok 4.6 提供 `low` / `medium` / `high` / `xhigh`（上游預設值為 `high`），Grok 4.5 最高為 `high`。 |
 
 固定的 GPT-5.6 條目會保留精確的上游 reasoning 階梯。Sol 和 Terra 從 `low` 到 `ultra`，Luna
 最高到 `max`。Sol 預設使用 `low`，Terra 和 Luna 預設使用 `medium`。`ultra` 是用戶端側的

@@ -6,6 +6,7 @@ import { clearNousRefreshIntent, identityFromNousTokens, loginNous, nousRefreshI
 import { getCredential, listAccounts, saveCredential } from "../src/oauth/store";
 import type { OAuthController } from "../src/oauth/types";
 import * as configModule from "../src/config";
+import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-nous-oauth-test");
 const TEST_PORTAL = "https://portal.test";
@@ -147,6 +148,93 @@ describe("Nous token-response wiring", () => {
     expect(jwtPayloadOf(cred.access).sub).toBe("device-user");
     expect(cred.refresh).toBe("device-refresh");
     expect(cred.accountId).toBe("device-user");
+  });
+
+  test.each([200, 400])("rejects oversized device-authorization responses with HTTP %i", async (status) => {
+    globalThis.fetch = (async () =>
+      new Response("x".repeat(BOUNDED_BODY_MAX_BYTES + 1), { status })) as typeof fetch;
+
+    await expect(loginNous({ onAuth() {} })).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "response_too_large",
+    });
+  });
+
+  test("normalizes a null device-authorization response before required-field validation", async () => {
+    globalThis.fetch = (async () =>
+      new Response("null", { status: 200 })) as typeof fetch;
+
+    await expect(loginNous({ onAuth() {} })).rejects.toThrow(
+      "Nous Portal device authorization response missing required fields",
+    );
+  });
+
+  test("propagates caller abort while the device-authorization body is pending", async () => {
+    const controller = new AbortController();
+    const abortReason = new DOMException("caller stopped", "AbortError");
+    let bodyReadStarted!: () => void;
+    const started = new Promise<void>(resolve => { bodyReadStarted = resolve; });
+    let cancelReason: unknown;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull() {
+        bodyReadStarted();
+        return new Promise<void>(() => {});
+      },
+      cancel(reason) {
+        cancelReason = reason;
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const pending = loginNous({ onAuth() {}, signal: controller.signal });
+    await started;
+    controller.abort(abortReason);
+
+    await expect(pending).rejects.toBe(abortReason);
+    await Bun.sleep(0);
+    expect(cancelReason).toBe(abortReason);
+  });
+
+  test("rejects oversized device-token responses at the bounded OAuth reader", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/oauth/device/code")) {
+        return new Response(JSON.stringify({
+          device_code: "dev-123",
+          user_code: "ABCD-EFGH",
+          verification_uri: "https://portal.nousresearch.com/activate",
+          expires_in: 60,
+          interval: 1,
+        }), { status: 200 });
+      }
+      return new Response("x".repeat(BOUNDED_BODY_MAX_BYTES + 1), { status: 200 });
+    }) as typeof fetch;
+
+    await expect(loginNous({ onAuth() {} })).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "response_too_large",
+    });
+  });
+
+  test.each([200, 400])("rejects oversized refresh responses with HTTP %i", async (status) => {
+    globalThis.fetch = (async () =>
+      new Response("x".repeat(BOUNDED_BODY_MAX_BYTES + 1), { status })) as typeof fetch;
+
+    await expect(refreshNousToken(`old-refresh-${status}`)).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "response_too_large",
+    });
+    expect(nousRefreshIntentBlocksReplay(`old-refresh-${status}`)).toBe(true);
+  });
+
+  test("normalizes a null refresh response to a terminal token error and blocks replay", async () => {
+    globalThis.fetch = (async () =>
+      new Response("null", { status: 200 })) as typeof fetch;
+
+    await expect(refreshNousToken("old-refresh-null")).rejects.toMatchObject({
+      name: "NousTokenError",
+      oauthError: "invalid_token",
+      terminal: true,
+    });
+    expect(nousRefreshIntentBlocksReplay("old-refresh-null")).toBe(true);
   });
 
   test("an implausible JWT exp falls back to expires_in instead of pinning a never-expiring credential", async () => {

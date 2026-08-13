@@ -440,6 +440,96 @@ describe("Cursor request builder", () => {
     expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
   });
 
+  test("pins Codex Desktop unified exec through count truncation", () => {
+    const regular = Array.from({ length: CURSOR_TOOL_COUNT_LIMIT + 20 }, (_, index) => ({
+      name: `regular_${index}`,
+      namespace: "mcp__regular",
+      description: "Regular",
+      parameters: {},
+    }));
+    const exec = { name: "exec", description: "Run", parameters: { type: "object", properties: { cmd: { type: "string" } } } };
+    const budget = applyCursorToolBudget([...regular, exec], "auto");
+
+    expect(budget.tools).toContain(exec);
+    expect(budget.omitted).not.toContain(exec);
+    expect(budget.tools.length).toBeLessThanOrEqual(CURSOR_TOOL_COUNT_LIMIT);
+  });
+
+  test("pins namespaced opencodex-responses exec ahead of filler", () => {
+    const filler = Array.from({ length: 80 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "y".repeat(3_000),
+      parameters: { type: "object", properties: {} },
+    }));
+    const exec = {
+      name: "exec",
+      namespace: "opencodex-responses",
+      description: "Run",
+      parameters: { type: "object", properties: { cmd: { type: "string" } } },
+    };
+    const wait = {
+      name: "wait",
+      namespace: "opencodex-responses",
+      description: "Resume",
+      parameters: { type: "object", properties: { id: { type: "string" } } },
+    };
+    const catalog = [...filler, wait, exec];
+    expect(cursorMcpToolsEncodedSize(catalog, "auto")).toBeGreaterThan(CURSOR_TOOL_BYTES_LIMIT);
+    const budget = applyCursorToolBudget(catalog, "auto");
+
+    expect(budget.tools).toContain(exec);
+    expect(budget.tools).toContain(wait);
+    expect(budget.omitted.some(tool => tool.namespace === "mcp__filler")).toBe(true);
+  });
+
+  test("keeps unified exec when a large apply_patch would otherwise consume the byte budget first", () => {
+    const hugePatch = {
+      name: "apply_patch",
+      description: "x".repeat(Math.floor(CURSOR_TOOL_BYTES_LIMIT * 0.7)),
+      parameters: { type: "object", properties: {} },
+      freeform: true,
+    };
+    const exec = {
+      name: "exec",
+      description: "Run",
+      parameters: { type: "object", properties: { cmd: { type: "string" } } },
+    };
+    const wait = {
+      name: "wait",
+      description: "Resume",
+      parameters: { type: "object", properties: { id: { type: "string" } } },
+    };
+    const filler = Array.from({ length: 40 }, (_, index) => ({
+      name: `filler_${index}`,
+      namespace: "mcp__filler",
+      description: "y".repeat(2_000),
+      parameters: { type: "object", properties: {} },
+    }));
+    const budget = applyCursorToolBudget([hugePatch, wait, ...filler, exec], "auto");
+
+    expect(budget.tools).toContain(exec);
+    expect(cursorMcpToolsEncodedSize(budget.tools, "auto")).toBeLessThanOrEqual(CURSOR_TOOL_BYTES_LIMIT);
+  });
+
+  test("omits wait when the execution path cannot fit in the Cursor byte budget", () => {
+    const exec = {
+      name: "exec",
+      description: "x".repeat(CURSOR_TOOL_BYTES_LIMIT + 10_000),
+      parameters: { type: "object", properties: {} },
+    };
+    const wait = {
+      name: "wait",
+      description: "Resume",
+      parameters: { type: "object", properties: { id: { type: "string" } } },
+    };
+    const budget = applyCursorToolBudget([wait, exec], "auto");
+
+    expect(budget.tools).not.toContain(exec);
+    expect(budget.tools).not.toContain(wait);
+    expect(budget.omitted).toEqual(expect.arrayContaining([exec, wait]));
+  });
+
   test("adds an honest recovery note only when tool_search survives", () => {
     const tools = [
       { name: "tool_search", description: "Discover", parameters: {}, toolSearch: true },

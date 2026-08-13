@@ -248,6 +248,9 @@ export function deriveEntry(
   contextCap?: number,
 ): RawEntry {
   const preserveExact = isExactComboCatalogModel(model, exactComboSlugs);
+  const codexForwardNativeCapabilityAlias = model?.codexForwardNativeCapabilityAlias === true
+    ? upstreamNativeEntry(model.id)
+    : null;
   const isRouted = model !== undefined;
   if (!isRouted && !slug.includes("/")) {
     // Supported native slug covered by the upstream snapshot: use the REAL entry (exact
@@ -256,8 +259,8 @@ export function deriveEntry(
     const upstream = upstreamNativeEntry(slug);
     if (upstream) return finishUpstreamNativeEntry(upstream, priority, contextCap);
   }
-  if (template) {
-    const e = JSON.parse(JSON.stringify(template)) as RawEntry;
+  if (template || codexForwardNativeCapabilityAlias) {
+    const e = JSON.parse(JSON.stringify(codexForwardNativeCapabilityAlias ?? template)) as RawEntry;
     e.slug = slug;
     e.display_name = routedDisplayName(slug);
     e.description = desc;
@@ -272,9 +275,11 @@ export function deriveEntry(
       // window when /models omits context metadata (#992). Known metadata
       // restores exact values below; otherwise the strict-fields fallback
       // supplies the conservative 128k triple.
-      delete e.context_window;
-      delete e.max_context_window;
-      delete e.auto_compact_token_limit;
+      if (!codexForwardNativeCapabilityAlias) {
+        delete e.context_window;
+        delete e.max_context_window;
+        delete e.auto_compact_token_limit;
+      }
       // Native id for identity text + metadata lookups — the slug may be an encoded
       // alias (`provider/vendor-model`); the model object carries the native id.
       const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
@@ -283,8 +288,17 @@ export function deriveEntry(
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
         e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
       }
-      applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
-      normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
+      applyReasoningLevels(
+        e,
+        model?.reasoningEfforts,
+        model?.defaultReasoningEffort,
+        preserveExact || codexForwardNativeCapabilityAlias !== null,
+      );
+      // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
+      // native tool/search/responses-lite contract while preserving the routed slug and wire id.
+      if (!codexForwardNativeCapabilityAlias) {
+        normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
+      }
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
       if (model?.catalogKind) e.opencodex_catalog_kind = model.catalogKind;

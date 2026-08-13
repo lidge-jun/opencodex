@@ -37,6 +37,7 @@ const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 interface ResidentResponseState {
   kind: "resident";
   createdAt: number;
+  clientThreadId?: string;
   items: unknown[];
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
@@ -45,6 +46,7 @@ interface ResidentResponseState {
 interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
+  clientThreadId?: string;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -65,6 +67,7 @@ export type PreviousResponseReplayFailure = {
 };
 
 const states = new Map<string, StoredResponseState>();
+const replayScopeMismatches = new WeakSet<object>();
 let storedResponseBytes = 0;
 let residentResponseBytes = 0;
 let oldestResidentId: string | undefined;
@@ -80,6 +83,7 @@ const spillCounters = { writes: 0, writeFailures: 0, readFailures: 0 };
  * snapshot files refused before parse.
  */
 const admissionCounters = { directSpills: 0, oversizedDrops: 0, snapshotOversizedRefusals: 0 };
+let replayScopeMismatchDrops = 0;
 
 /** Test-only: admission-boundary counters (proves the new paths fire). */
 export function responseAdmissionCountersForTests(): Readonly<typeof admissionCounters> {
@@ -124,6 +128,7 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
   const sizeBytes = serializedBytes({
     responseId: id,
     createdAt: entry.createdAt,
+    ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
     items: entry.items,
     ...(entry.providers ? { providers: entry.providers } : {}),
   });
@@ -224,6 +229,7 @@ function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: 
   const base: Omit<SpilledResponseState, "sizeBytes"> = {
     kind: "spill",
     createdAt: expected.createdAt,
+    ...(expected.clientThreadId ? { clientThreadId: expected.clientThreadId } : {}),
     ...(expected.providers ? { providers: expected.providers } : {}),
     spill: ref,
   };
@@ -244,12 +250,14 @@ function replaceSpillEntryAtomically(
   try {
     const ref = writeResponseSpillDurably(id, {
       createdAt: candidate.createdAt,
+      ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -322,6 +330,7 @@ function admitOversizedCandidate(
   try {
     const ref = writeResponseSpillDurably(id, {
       createdAt: candidate.createdAt,
+      ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
@@ -337,6 +346,7 @@ function admitOversizedCandidate(
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -385,6 +395,7 @@ function snapshotPath(): string {
 
 interface LegacySnapshotState {
   createdAt?: unknown;
+  clientThreadId?: unknown;
   items?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
@@ -405,11 +416,15 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const rec = value as LegacySnapshotState & { kind?: unknown; spill?: unknown };
   if (typeof rec.createdAt !== "number" || !Number.isFinite(rec.createdAt)) return;
+  const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
+    ? rec.clientThreadId.trim()
+    : undefined;
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
+      ...(clientThreadId ? { clientThreadId } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -434,6 +449,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     : undefined);
   const resident = measureResidentEntry(id, {
     createdAt: rec.createdAt,
+    ...(clientThreadId ? { clientThreadId } : {}),
     items: rec.items,
     ...(providers ? { providers } : {}),
   });
@@ -747,6 +763,7 @@ function pruneResponses(at = now()): void {
     try {
       const ref = writeResponseSpillDurably(oldestId, {
         createdAt: entry.createdAt,
+        ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
         items: entry.items,
         ...(entry.providers ? { providers: entry.providers } : {}),
       });
@@ -788,6 +805,7 @@ export function evictOldestResponseContinuationForBudget(): number {
   try {
     const ref = writeResponseSpillDurably(id, {
       createdAt: entry.createdAt,
+      ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
       items: entry.items,
       ...(entry.providers ? { providers: entry.providers } : {}),
     });
@@ -828,6 +846,7 @@ function materializeEntry(
   }
   const state = measureResidentEntry(id, {
     createdAt: result.payload.createdAt,
+    ...(result.payload.clientThreadId ? { clientThreadId: result.payload.clientThreadId } : {}),
     items: result.payload.items,
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
   });
@@ -840,7 +859,16 @@ function materializeEntry(
   return { ok: true, state };
 }
 
-export function expandPreviousResponseInput(body: unknown): unknown {
+function normalizedClientThreadId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function withoutPreviousResponseId(request: Record<string, unknown>): Record<string, unknown> {
+  const { previous_response_id: _previousResponseId, ...freshRequest } = request;
+  return freshRequest;
+}
+
+export function expandPreviousResponseInput(body: unknown, clientThreadId?: string): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const request = body as Record<string, unknown>;
   const previousId = typeof request.previous_response_id === "string" ? request.previous_response_id : undefined;
@@ -853,6 +881,16 @@ export function expandPreviousResponseInput(body: unknown): unknown {
   if (!materialized.ok) {
     replayFailures.set(request, materialized.failure);
     return body;
+  }
+  const requestThreadId = normalizedClientThreadId(clientThreadId);
+  const storedThreadId = normalizedClientThreadId(materialized.state.clientThreadId);
+  // A Codex task must never inherit another task's continuation, nor a legacy unscoped entry.
+  // Unscoped callers retain backward-compatible replay only with other unscoped entries.
+  if (requestThreadId !== storedThreadId) {
+    const freshRequest = withoutPreviousResponseId(request);
+    replayScopeMismatches.add(freshRequest);
+    replayScopeMismatchDrops += 1;
+    return freshRequest;
   }
   const expanded = {
     ...request,
@@ -871,6 +909,11 @@ export function previousResponseReplayFailure(body: unknown): PreviousResponseRe
 export function previousResponseReplayPrefixLength(body: unknown): number {
   if (!body || typeof body !== "object" || Array.isArray(body)) return 0;
   return replayedInputPrefixLengths.get(body) ?? 0;
+}
+
+/** True when a stale or foreign previous_response_id was removed from this exact request body. */
+export function previousResponseScopeMismatch(body: unknown): boolean {
+  return !!body && typeof body === "object" && replayScopeMismatches.has(body as object);
 }
 
 export function previousResponseConversationId(responseId: string | undefined): string | undefined {
@@ -898,6 +941,7 @@ export interface ResponseStateMetrics {
   spillWrites: number;
   spillWriteFailures: number;
   spillReadFailures: number;
+  replayScopeMismatchDrops: number;
 }
 
 /**
@@ -940,6 +984,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillWrites: spillCounters.writes,
     spillWriteFailures: spillCounters.writeFailures,
     spillReadFailures: spillCounters.readFailures,
+    replayScopeMismatchDrops,
   };
 }
 
@@ -972,7 +1017,7 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; clientThreadId?: string },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
@@ -998,8 +1043,10 @@ export function rememberResponseState(
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     });
   }
+  const clientThreadId = normalizedClientThreadId(opts?.clientThreadId);
   setResidentEntry(response.id, {
     createdAt: now(),
+    ...(clientThreadId ? { clientThreadId } : {}),
     items: [...inputItems(request.input), ...response.output],
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
     // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
@@ -1045,6 +1092,7 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writes = 0;
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
+  replayScopeMismatchDrops = 0;
   persistAttemptHookForTests = null;
   loaded = false;
 }

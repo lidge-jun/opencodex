@@ -102,18 +102,22 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 
 export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: TranslatorBudget): {
   toolNsMap: Map<string, { namespace: string; name: string }>;
+  declaredToolNames: Set<string>;
   freeformToolNames: Set<string>;
   toolSearchToolNames: Set<string>;
 } {
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
+  const declaredToolNames = new Set<string>();
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
   const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
     // Upstream output is untrusted: only restore calls for tools the caller authorized.
     if (!toolAllowed(t)) continue;
+    const wireName = namespacedToolName(t.namespace, t.name);
+    budget?.chargeRetained(new TextEncoder().encode(wireName).byteLength, { kind: "retained_collectors" });
+    declaredToolNames.add(wireName);
     if (t.namespace) {
-      const wireName = namespacedToolName(t.namespace, t.name);
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
       toolNsMap.set(wireName, { namespace: t.namespace, name: t.name });
     }
@@ -126,7 +130,7 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
       toolSearchToolNames.add(t.name);
     }
   }
-  return { toolNsMap, freeformToolNames, toolSearchToolNames };
+  return { toolNsMap, declaredToolNames, freeformToolNames, toolSearchToolNames };
 }
 
 

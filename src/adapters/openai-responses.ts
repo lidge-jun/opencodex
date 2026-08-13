@@ -400,6 +400,112 @@ function normalizeToolSchemas(body: unknown): unknown {
   return normalizedBody;
 }
 
+function activateDeferredTool(tool: Record<string, unknown>): Record<string, unknown> {
+  const { defer_loading: _, ...activeTool } = tool;
+  if (tool.type !== "namespace" || !Array.isArray(tool.tools)) return activeTool;
+  return {
+    ...activeTool,
+    tools: tool.tools.map(inner => isPlainObject(inner) ? activateDeferredTool(inner) : inner),
+  };
+}
+
+function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unknown[] {
+  const merged = [...declaredTools];
+  let changed = false;
+
+  for (const candidate of loadedTools) {
+    if (!isPlainObject(candidate) || typeof candidate.name !== "string") continue;
+    const loaded = activateDeferredTool(candidate);
+    if (loaded.type === "namespace" && Array.isArray(loaded.tools)) {
+      const namespaceIndex = merged.findIndex(tool =>
+        isPlainObject(tool) && tool.type === "namespace" && tool.name === loaded.name
+      );
+      if (namespaceIndex < 0) {
+        merged.push(loaded);
+        changed = true;
+        continue;
+      }
+
+      const namespace = merged[namespaceIndex];
+      if (!isPlainObject(namespace)) continue;
+      const namespaceTools = Array.isArray(namespace.tools) ? namespace.tools : [];
+      const nextNamespaceTools = [...namespaceTools];
+      let namespaceChanged = "defer_loading" in namespace;
+      for (const tool of loaded.tools) {
+        if (!isPlainObject(tool) || typeof tool.name !== "string") continue;
+        const declaredIndex = nextNamespaceTools.findIndex(declared =>
+          isPlainObject(declared) && declared.name === tool.name
+        );
+        if (declaredIndex < 0) {
+          nextNamespaceTools.push(tool);
+          namespaceChanged = true;
+          continue;
+        }
+        const declared = nextNamespaceTools[declaredIndex];
+        if (isPlainObject(declared) && "defer_loading" in declared) {
+          nextNamespaceTools[declaredIndex] = activateDeferredTool(declared);
+          namespaceChanged = true;
+        }
+      }
+      if (!namespaceChanged) continue;
+      const { defer_loading: _, ...activeNamespace } = namespace;
+      merged[namespaceIndex] = { ...activeNamespace, tools: nextNamespaceTools };
+      changed = true;
+      continue;
+    }
+
+    const declaredIndex = merged.findIndex(tool =>
+      isPlainObject(tool) && tool.type !== "namespace" && tool.name === loaded.name
+    );
+    if (declaredIndex < 0) {
+      merged.push(loaded);
+      changed = true;
+    } else {
+      const declared = merged[declaredIndex];
+      if (isPlainObject(declared) && "defer_loading" in declared) {
+        merged[declaredIndex] = activateDeferredTool(declared);
+        changed = true;
+      }
+    }
+  }
+
+  return changed ? merged : declaredTools;
+}
+
+/**
+ * Client-executed tool search only changes Codex's parsed tool context. Routed passthrough keeps
+ * serializing the raw request, so activate those returned definitions for upstreams that do not
+ * implement the native deferred-loading handshake themselves.
+ */
+function promoteClientLoadedTools(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  const loadedTools = body.input.flatMap(item =>
+    isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
+      ? item.tools
+      : []
+  );
+  if (loadedTools.length === 0) return body;
+
+  if (Array.isArray(body.tools)) {
+    const tools = mergeLoadedTools(body.tools, loadedTools);
+    return tools === body.tools ? body : { ...body, tools };
+  }
+
+  const additionalToolsIndex = body.input.findIndex(item =>
+    isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+  );
+  if (additionalToolsIndex < 0) return { ...body, tools: mergeLoadedTools([], loadedTools) };
+
+  const additionalTools = body.input[additionalToolsIndex];
+  if (!isPlainObject(additionalTools) || !Array.isArray(additionalTools.tools)) return body;
+  const tools = mergeLoadedTools(additionalTools.tools, loadedTools);
+  if (tools === additionalTools.tools) return body;
+  const input = [...body.input];
+  input[additionalToolsIndex] = { ...additionalTools, tools };
+  return { ...body, input };
+}
+
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
 const REPAIRED_CALL_ID_PREFIX = "call_ocx_";
 const REPAIRED_CALL_ID_DIGEST_LENGTH = MAX_RESPONSES_CALL_ID_LENGTH - REPAIRED_CALL_ID_PREFIX.length;
@@ -1297,6 +1403,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // rewrite while the server still routes it as a summarizer turn (#422).
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
+      }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = promoteClientLoadedTools(outBody);
       }
       if (provider.authMode !== "forward") {
         outBody = rewriteRoutedCustomToolsForUpstream(outBody).body;

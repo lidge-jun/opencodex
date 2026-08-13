@@ -9,9 +9,9 @@ import type { OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/typ
  * tool-call turn.
  *
  * This cannot be fixed globally. xAI rejects the opposite way -- "Each message must have at least
- * one content element" -- and the existing "" is what satisfies it. So the two contracts conflict
- * and the fix is host-gated, which is exactly what these tests have to prove: every case runs the
- * SAME input through Ark and a generic host and asserts the two diverge.
+ * one content element" -- and the existing "" is what satisfies it. Ark's Coding Plan endpoint
+ * also rejects the structured placeholder while accepting "" (#1571). The contracts therefore
+ * diverge by endpoint family, so these tests pin both the exact host and the exact Ark path.
  *
  * Scope of these tests: they verify the WIRE SHAPE we emit and that the host gate is real. They
  * cannot verify that Ark accepts it -- no request here reaches Volcengine. The array form is
@@ -23,6 +23,7 @@ function providerFor(baseUrl: string): OcxProviderConfig {
 }
 
 const ark = providerFor("https://ark.cn-beijing.volces.com/api/v3");
+const arkCodingPlan = providerFor("https://ark.cn-beijing.volces.com/api/coding/v3");
 const generic = providerFor("https://example.test/v1");
 
 interface ChatMsg {
@@ -80,6 +81,12 @@ describe("Volcengine Ark empty assistant content (#796)", () => {
     expect(assistant.content).toBe("");
   });
 
+  test("Ark Coding Plan keeps the accepted empty-string continuation", () => {
+    const [assistant] = assistantsOf(wire(arkCodingPlan, history));
+    expect(assistant.tool_calls).toHaveLength(1);
+    expect(assistant.content).toBe("");
+  });
+
   test("a synthesized orphan tool-call assistant follows the same rule", () => {
     // A tool result with no matching call: the adapter fabricates the assistant turn, and that
     // fabricated message hits the same Ark validator.
@@ -93,11 +100,17 @@ describe("Volcengine Ark empty assistant content (#796)", () => {
     expect(genericOrphan?.content).toBe("");
   });
 
-  test("the gate matches the host, not the path or a substring of it", () => {
-    // A lookalike host must not inherit the quirk: the fix keys on an exact hostname set, so a
-    // provider merely mentioning the string in its path stays on the default contract.
+  test("the gate matches the host and pay-as-you-go path, not a substring", () => {
+    // A lookalike host must not inherit the quirk: a provider merely mentioning the Ark hostname
+    // in its path stays on the default contract.
     const lookalike = providerFor("https://example.test/ark.cn-beijing.volces.com/v1");
     const [assistant] = assistantsOf(wire(lookalike, history));
+    expect(assistant.content).toBe("");
+  });
+
+  test("an unrelated path on the real Ark host does not inherit the pay-as-you-go quirk", () => {
+    const unrelatedArkPath = providerFor("https://ark.cn-beijing.volces.com/api/custom/v3");
+    const [assistant] = assistantsOf(wire(unrelatedArkPath, history));
     expect(assistant.content).toBe("");
   });
 

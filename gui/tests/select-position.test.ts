@@ -115,3 +115,17 @@ test("right alignment anchors the menu to the trigger's right edge", () => {
   expect(style.right).toBe(704);
   expect(style.left).toBeUndefined();
 });
+
+test("automatically defaults to right alignment when trigger sits in right half of viewport", () => {
+  const style = computeSelectMenuStyle({
+    top: 120,
+    bottom: 156,
+    left: 800,
+    right: 960,
+    width: 160,
+    height: 36,
+  }, { menuHeight: 120 });
+  expect(style.right).toBe(64);
+  expect(style.left).toBeUndefined();
+});
+
