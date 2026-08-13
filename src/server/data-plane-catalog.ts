@@ -68,13 +68,19 @@ export function dataPlaneCatalogMethodNotAllowed(): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
-function catalogTooLargeResponse(): Response {
+/**
+ * Content-free refusal envelope for the two size limits.
+ *
+ * The codes are kept distinct because the messages make different claims and only one of
+ * them can be true for a given file: a 33 MiB pretty-printed source may well compact
+ * below 8 MiB, so answering the source refusal with the serialized-limit message would be
+ * a false statement about the document. Whether `catalog_source_too_large` is the right
+ * public code, and whether 500 is the right status for either, is flagged for maintainer
+ * review in `structure/05_gui-and-management-api.md`.
+ */
+function catalogSizeRefusal(code: "catalog_too_large" | "catalog_source_too_large", message: string): Response {
   return new Response(JSON.stringify({
-    error: {
-      type: "server_error",
-      code: "catalog_too_large",
-      message: `catalog document exceeds the ${DATA_PLANE_CATALOG_MAX_BYTES} byte data-plane limit`,
-    },
+    error: { type: "server_error", code, message },
   }), { status: 500, headers: { "Content-Type": "application/json" } });
 }
 
@@ -109,12 +115,18 @@ export async function buildDataPlaneCatalogResponse(method: "GET" | "HEAD"): Pro
     }), { status: 500, headers: { "Content-Type": "application/json" } });
   }
   if (catalog.status === "source-too-large") {
-    // Same client story as the response ceiling: the catalog is too large to distribute.
-    // Which bound tripped is an operator fact, not a client one.
-    return catalogTooLargeResponse();
+    // Says only what is known: the stored file was too large to read safely. Nothing was
+    // parsed, so the serialized size is genuinely unknown here and must not be asserted.
+    return catalogSizeRefusal(
+      "catalog_source_too_large",
+      "stored catalog exceeds the safe source read limit",
+    );
   }
   if (catalog.byteLength > DATA_PLANE_CATALOG_MAX_BYTES) {
-    return catalogTooLargeResponse();
+    return catalogSizeRefusal(
+      "catalog_too_large",
+      `catalog document exceeds the ${DATA_PLANE_CATALOG_MAX_BYTES} byte data-plane limit`,
+    );
   }
   const headers = new Headers(catalogDistributionHeaders(catalog));
   if (method === "HEAD") {
