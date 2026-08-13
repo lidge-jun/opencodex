@@ -13,6 +13,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let submit: (provider: string, input: string) => Promise<void>;
+let rejection: unknown;
 
 const item: WorkspaceItem = {
   name: "command-code",
@@ -25,7 +26,8 @@ beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
-  submit = mock(async () => { throw new Error("invalid authorization code"); });
+  rejection = new Error("invalid authorization code");
+  submit = mock(async () => { throw rejection; });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: win.document }, window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator }, localStorage: { configurable: true, value: win.localStorage },
@@ -79,4 +81,11 @@ test("masks pasted Command Code credentials and preserves rejection feedback", a
   });
   expect(submit).toHaveBeenCalledWith("command-code", "user_secret");
   expect(host.textContent).toContain("invalid authorization code");
+
+  rejection = null;
+  await act(async () => {
+    (host.querySelector(".pwi-auth-paste button") as HTMLButtonElement).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  });
+  expect(host.textContent).toContain("Could not submit code: Network error. Check that the proxy is running and try again.");
 });

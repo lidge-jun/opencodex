@@ -211,7 +211,7 @@ export default function ProviderAuthPanel({
       setManualCodeMsg(t("prov.pasteOk"));
     } catch (error) {
       setManualCodeOk(false);
-      const message = error instanceof Error && error.message.trim() ? error.message : "network error";
+      const message = error instanceof Error && error.message.trim() ? error.message : t("prov.networkError");
       setManualCodeMsg(t("prov.pasteFail", { error: message }));
     } finally {
       setManualCodeBusy(false);
