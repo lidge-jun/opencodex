@@ -857,7 +857,13 @@ describe("summarizeUsage", () => {
     const todayMidnight = new Date(2026, 7, 13, 0, 0, 0, 0).getTime();
     const dayMs = 86_400_000;
 
-    // Day -6 (2026-08-07) at 02:30 AM
+    // Day -29 (2026-07-15) at 04:00 AM (for 30d boundary)
+    const dayMinus29Date = new Date(todayMidnight);
+    dayMinus29Date.setDate(dayMinus29Date.getDate() - 29);
+    dayMinus29Date.setHours(4, 0, 0, 0);
+    const dayMinus29Ts = dayMinus29Date.getTime();
+
+    // Day -6 (2026-08-07) at 02:30 AM (for 7d boundary)
     const dayMinus6Early = todayMidnight - 6 * dayMs + 2.5 * 3600_000;
     // Yesterday (2026-08-12) at 03:00 AM
     const yesterdayEarly = todayMidnight - 1 * dayMs + 3 * 3600_000;
@@ -867,19 +873,26 @@ describe("summarizeUsage", () => {
     const todayMorning = todayMidnight + 8 * 3600_000;
 
     const entries: PersistedUsageEntry[] = [
+      entry({ ts: dayMinus29Ts, usageStatus: "reported", usage: { inputTokens: 600, outputTokens: 600 }, totalTokens: 1200 }),
       entry({ ts: dayMinus6Early, usageStatus: "reported", usage: { inputTokens: 250, outputTokens: 250 }, totalTokens: 500 }),
       entry({ ts: yesterdayEarly, usageStatus: "reported", usage: { inputTokens: 400, outputTokens: 400 }, totalTokens: 800 }),
       entry({ ts: yesterdayLate, usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 100 }, totalTokens: 200 }),
       entry({ ts: todayMorning, usageStatus: "reported", usage: { inputTokens: 150, outputTokens: 150 }, totalTokens: 300 }),
     ];
 
-    // Summary at 09:00 AM today
-    const sumMorning = summarizeUsage(entries, "7d", todayMidnight + 9 * 3600_000);
-    const day6Morning = sumMorning.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
-    const yesterdayMorningTotal = sumMorning.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+    // Summary at 09:00 AM today (7d)
+    const sumMorning7d = summarizeUsage(entries, "7d", todayMidnight + 9 * 3600_000);
+    const day6Morning = sumMorning7d.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayMorningTotal = sumMorning7d.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
 
     expect(day6Morning).toBe(500);
     expect(yesterdayMorningTotal).toBe(1000);
+
+    // Summary at 09:00 AM today (30d)
+    const sumMorning30d = summarizeUsage(entries, "30d", todayMidnight + 9 * 3600_000);
+    const day29Morning = sumMorning30d.days.find(d => d.date.endsWith("07-15"))?.totalTokens;
+    expect(sumMorning30d.days).toHaveLength(30);
+    expect(day29Morning).toBe(1200);
 
     // Summary at 23:30 PM today (later in the day) with an additional turn today
     const todayEvening = todayMidnight + 20 * 3600_000;
@@ -887,16 +900,25 @@ describe("summarizeUsage", () => {
       ...entries,
       entry({ ts: todayEvening, usageStatus: "reported", usage: { inputTokens: 50, outputTokens: 50 }, totalTokens: 100 }),
     ];
-    const sumEvening = summarizeUsage(entriesLater, "7d", todayMidnight + 23.5 * 3600_000);
-    const day6Evening = sumEvening.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
-    const yesterdayEveningTotal = sumEvening.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
-    const todayEveningTotal = sumEvening.days.find(d => d.date.endsWith("08-13"))?.totalTokens;
 
-    // Critical assertion: completed days NEVER lose tokens as hours progress
+    // 7d evening
+    const sumEvening7d = summarizeUsage(entriesLater, "7d", todayMidnight + 23.5 * 3600_000);
+    const day6Evening = sumEvening7d.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayEveningTotal = sumEvening7d.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+    const todayEveningTotal = sumEvening7d.days.find(d => d.date.endsWith("08-13"))?.totalTokens;
+
+    // Critical assertion: completed days NEVER lose tokens as hours progress in 7d
     expect(day6Evening).toBe(500);
     expect(yesterdayEveningTotal).toBe(1000);
     expect(todayEveningTotal).toBe(400); // 300 + 100
-    expect(sumMorning.since).toBe(sumEvening.since);
+    expect(sumMorning7d.since).toBe(sumEvening7d.since);
+
+    // 30d evening
+    const sumEvening30d = summarizeUsage(entriesLater, "30d", todayMidnight + 23.5 * 3600_000);
+    const day29Evening = sumEvening30d.days.find(d => d.date.endsWith("07-15"))?.totalTokens;
+    expect(sumEvening30d.days).toHaveLength(30);
+    expect(day29Evening).toBe(1200);
+    expect(sumMorning30d.since).toBe(sumEvening30d.since);
   });
 
 });
