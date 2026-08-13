@@ -67,12 +67,13 @@ test("settings saves provider pacing and a slower model override", async () => {
   const save = container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
   await act(async () => { save.click(); await Promise.resolve(); });
 
-  expect(patches).toHaveLength(1);
-  expect(patches[0]?.requestPacing).toEqual({
-    enabled: true,
-    requestsPerMinute: 38,
-    models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
-  });
+  expect(patches).toEqual([{
+    requestPacing: {
+      enabled: true,
+      requestsPerMinute: 38,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
+    },
+  }]);
   expect(container.textContent).toContain("deepseek-ai/deepseek-v4-flash-0731");
   await act(async () => { root.unmount(); });
 });
