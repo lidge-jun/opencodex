@@ -1,6 +1,19 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizePackageModes } from "../scripts/prepare-package";
 
 // Windows CI runners spawn Node/Bun child processes slowly ("Slow filesystem detected");
 // the package-main import test measured 9.4s there vs bun's 5s default. Same remedy as
@@ -9,6 +22,15 @@ setDefaultTimeout(30_000);
 
 const root = new URL("../", import.meta.url);
 const repoRoot = fileURLToPath(root);
+
+function mode(path: string): number {
+  return statSync(path).mode & 0o777;
+}
+
+function removeModeFixture(path: string): void {
+  try { chmodSync(path, 0o700); } catch { /* best-effort cleanup */ }
+  try { rmSync(path, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+}
 
 async function readText(path: string): Promise<string> {
   return await Bun.file(new URL(path, root)).text();
@@ -114,5 +136,91 @@ describe("install scripts", () => {
     expect(script).toContain('"--commit"');
     expect(script).toContain("createdAt,databaseId,headSha,status,url");
     expect(script).toContain("await watchRun(releaseRun.databaseId)");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "package mode normalization skips direct and nested filesystem links",
+    () => {
+      const fixtureRoot = mkdtempSync(join(tmpdir(), "ocx-package-modes-"));
+      const packageRoot = join(fixtureRoot, "package");
+      const externalRoot = join(fixtureRoot, "external");
+      const externalLauncher = join(externalRoot, "package-main.mjs");
+      const externalDirectory = join(externalRoot, "dashboard");
+      const externalAsset = join(externalDirectory, "asset.js");
+
+      try {
+        mkdirSync(join(packageRoot, "bin"), { recursive: true });
+        mkdirSync(join(packageRoot, "gui", "dist", "nested"), { recursive: true });
+        mkdirSync(externalDirectory, { recursive: true });
+
+        writeFileSync(join(packageRoot, "bin", "ocx.mjs"), "launcher");
+        writeFileSync(join(packageRoot, "gui", "dist", "asset.js"), "asset");
+        writeFileSync(join(packageRoot, "gui", "dist", "nested", "chunk.js"), "chunk");
+        writeFileSync(externalLauncher, "external launcher");
+        writeFileSync(externalAsset, "external asset");
+
+        chmodSync(join(packageRoot, "bin", "ocx.mjs"), 0o600);
+        chmodSync(join(packageRoot, "gui", "dist"), 0o700);
+        chmodSync(join(packageRoot, "gui", "dist", "asset.js"), 0o600);
+        chmodSync(join(packageRoot, "gui", "dist", "nested"), 0o700);
+        chmodSync(join(packageRoot, "gui", "dist", "nested", "chunk.js"), 0o600);
+        chmodSync(externalLauncher, 0o600);
+        chmodSync(externalDirectory, 0o700);
+        chmodSync(externalAsset, 0o600);
+
+        const launcherLink = join(packageRoot, "bin", "package-main.mjs");
+        const nestedDirectoryLink = join(packageRoot, "gui", "dist", "nested", "external");
+        symlinkSync(externalLauncher, launcherLink, "file");
+        symlinkSync(externalDirectory, nestedDirectoryLink, "dir");
+
+        normalizePackageModes(packageRoot);
+
+        expect(lstatSync(launcherLink).isSymbolicLink()).toBeTrue();
+        expect(lstatSync(nestedDirectoryLink).isSymbolicLink()).toBeTrue();
+        expect(mode(externalLauncher)).toBe(0o600);
+        expect(mode(externalDirectory)).toBe(0o700);
+        expect(mode(externalAsset)).toBe(0o600);
+        expect(mode(join(packageRoot, "bin", "ocx.mjs"))).toBe(0o755);
+        expect(mode(join(packageRoot, "gui", "dist"))).toBe(0o755);
+        expect(mode(join(packageRoot, "gui", "dist", "asset.js"))).toBe(0o644);
+        expect(mode(join(packageRoot, "gui", "dist", "nested"))).toBe(0o755);
+        expect(mode(join(packageRoot, "gui", "dist", "nested", "chunk.js"))).toBe(0o644);
+      } finally {
+        try { chmodSync(externalLauncher, 0o600); } catch { /* best-effort cleanup */ }
+        try { chmodSync(externalDirectory, 0o700); } catch { /* best-effort cleanup */ }
+        try { chmodSync(externalAsset, 0o600); } catch { /* best-effort cleanup */ }
+        removeModeFixture(fixtureRoot);
+      }
+    },
+  );
+
+  test("package mode normalization does not traverse a linked output root", () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "ocx-package-root-link-"));
+    const packageRoot = join(fixtureRoot, "package");
+    const externalOutput = join(fixtureRoot, "external-output");
+    const externalAsset = join(externalOutput, "asset.js");
+
+    try {
+      mkdirSync(join(packageRoot, "gui"), { recursive: true });
+      mkdirSync(externalOutput, { recursive: true });
+      writeFileSync(externalAsset, "external asset");
+      chmodSync(externalOutput, 0o555);
+      chmodSync(externalAsset, 0o444);
+
+      const outputLink = join(packageRoot, "gui", "dist");
+      symlinkSync(externalOutput, outputLink, process.platform === "win32" ? "junction" : "dir");
+      const directoryModeBefore = mode(externalOutput);
+      const assetModeBefore = mode(externalAsset);
+
+      normalizePackageModes(packageRoot);
+
+      expect(lstatSync(outputLink).isSymbolicLink()).toBeTrue();
+      expect(mode(externalOutput)).toBe(directoryModeBefore);
+      expect(mode(externalAsset)).toBe(assetModeBefore);
+    } finally {
+      try { chmodSync(externalAsset, 0o600); } catch { /* best-effort cleanup */ }
+      try { chmodSync(externalOutput, 0o700); } catch { /* best-effort cleanup */ }
+      removeModeFixture(fixtureRoot);
+    }
   });
 });
