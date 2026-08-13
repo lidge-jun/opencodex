@@ -30,7 +30,7 @@ async function collectTypeScriptFiles(dir: string): Promise<string[]> {
 async function directAdapterFactoryImports(path: string): Promise<string[]> {
   const source = await readFile(path, "utf8");
   return [...source.matchAll(
-    /from\s+["'][^"']*adapters\/(?!registry(?:["']))[^"']+["']/g,
+    /import\s+\{[^}]*\bcreate\w+Adapter\b[^}]*\}\s+from\s+["'][^"']*adapters\/(?!registry(?:["']))[^"']+["']/gs,
   )].map(match => match[0]!);
 }
 
