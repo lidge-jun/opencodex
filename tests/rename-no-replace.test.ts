@@ -43,6 +43,28 @@ describe("atomic no-replace rename", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")("refuses a dangling destination symlink", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-rename-no-replace-dangling-"));
+    try {
+      const source = join(dir, "source");
+      const destination = join(dir, "destination");
+      const missingTarget = join(dir, "missing");
+      writeFileSync(source, "source", "utf8");
+      symlinkSync(missingTarget, destination, "file");
+
+      let thrown: unknown;
+      try { renameNoReplace(source, destination); } catch (error) { thrown = error; }
+
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EEXIST");
+      expect(readFileSync(source, "utf8")).toBe("source");
+      expect(lstatSync(destination).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(destination)).toBe(missingTarget);
+      expect(existsSync(destination)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform === "win32")("moves the symlink entry rather than its target", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-rename-no-replace-link-"));
     try {
