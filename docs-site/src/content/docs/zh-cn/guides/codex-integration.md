@@ -228,7 +228,8 @@ ocx sync-cache
 工具（在可信机器上）的管理平面路由；它需要 admin secret，而该密钥同时还授权 provider 配置、OAuth 管理和
 proxy 关闭。
 
-响应就是原始的 `opencodex-catalog.json` 文档（不含 provider 凭据）。当可用时，
+响应是生成的 `opencodex-catalog.json` 文档。数据平面路由会应用当前的 catalog 分发安全检查，并拒绝它能够
+识别为形似凭据、身份或配置的内容；具体的执行策略仍在维护者评审中。当可用时，
 `x-opencodex-codex-version` header 会报告服务器上的 Codex runtime 版本，方便客户端发现版本偏移。
 
 你也可以通过管理 API（`POST /api/custom-models`、带 `displayName` 字符串的 `PUT /api/custom-models/<id>`）

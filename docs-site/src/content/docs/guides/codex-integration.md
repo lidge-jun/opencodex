@@ -258,9 +258,11 @@ same document but is a management-plane route for the dashboard and operator too
 trusted machine; it requires the admin secret, which also authorizes provider configuration,
 OAuth management, and proxy shutdown.
 
-The response is the raw `opencodex-catalog.json` document (no provider credentials). When
-available, the `x-opencodex-codex-version` header reports the Codex runtime version on the
-server so clients can spot version skew.
+The response is the generated `opencodex-catalog.json` document. The data-plane route applies
+the current catalog-distribution safety checks and refuses content it recognizes as
+credential-, identity-, or configuration-shaped; the enforcement strategy remains subject to
+maintainer review. When available, the `x-opencodex-codex-version` header reports the Codex
+runtime version on the server so clients can spot version skew.
 
 You can also set or edit it through the management API (`POST /api/custom-models`,
 `PUT /api/custom-models/<id>` with a `displayName` string) and the web dashboard. A `/` is rejected

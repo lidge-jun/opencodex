@@ -233,7 +233,8 @@ ocx sync-cache
 切勿為此把管理 token 送到客戶端機器。`GET /api/catalog` 回傳同一份文件，但它是面向儀表板與運維工具
 （在可信機器上）的管理平面 route；它需要管理秘密，而該秘密同時也授權供應商設定、OAuth 管理與 proxy 關閉。
 
-回應是原始的 `opencodex-catalog.json` 文件，不包含 provider 憑證。若可用，
+回應是產生的 `opencodex-catalog.json` 文件。data-plane route 會套用目前的目錄分發安全檢查，並拒絕它能
+辨識為形似憑證、身分或設定的內容；實際的執行策略仍在維護者評審中。若可用，
 `x-opencodex-codex-version` 標頭會回報伺服器上的 Codex runtime 版本，讓 client 能辨識版本差異。
 
 也可以透過管理 API（`POST /api/custom-models`、`PUT /api/custom-models/<id>`，搭配 `displayName`

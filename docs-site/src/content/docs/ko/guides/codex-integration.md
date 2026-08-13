@@ -172,7 +172,7 @@ ocx sync-cache
 신뢰된 머신의 dashboard와 운영 도구를 위한 management 평면 경로입니다. admin secret이 필요하고, 그 secret은
 provider 설정·OAuth 관리·proxy 종료까지 함께 authorize합니다.
 
-응답은 원시 `opencodex-catalog.json` 문서입니다( provider credential 없음). 사용 가능할 때는 `x-opencodex-codex-version` header가 서버 쪽 Codex runtime version을 보고해서 client가 version skew를 알아볼 수 있습니다.
+응답은 생성된 `opencodex-catalog.json` 문서입니다. data-plane 경로는 현재의 catalog 배포 안전 검사를 적용하고 credential·신원·설정 모양으로 인식되는 내용을 거부합니다. 적용 방식은 아직 maintainer 검토 중입니다. 사용 가능할 때는 `x-opencodex-codex-version` header가 서버 쪽 Codex runtime version을 보고해서 client가 version skew를 알아볼 수 있습니다.
 
 또한 management API(`POST /api/custom-models`, `PUT /api/custom-models/<id>`의 `displayName` string)와 웹 대시보드에서도 설정하거나 수정할 수 있습니다. `/`는 routed-slug separator와 충돌하므로 거부됩니다.
 
