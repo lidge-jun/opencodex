@@ -144,7 +144,9 @@ export function corsHeaders(req?: Request, config?: RequestPolicyView): Record<s
   const allowOrigin = origin && req && config && isAllowedRequestOrigin(req, config) ? origin : _corsOrigin;
   return {
     "Access-Control-Allow-Origin": allowOrigin,
-    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    // HEAD is a served data-plane method (HEAD /v1/catalog, #809); a preflighted HEAD —
+    // one carrying x-opencodex-api-key — is refused by browsers unless it is listed here.
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
     // ChatGPT-Account-Id is required for browser/Electron ChatGPT & Codex App voice preflights
     // (direct forward auth matches the bearer to this account id). The OpenAI-Alpha .. X-OAI-Attestation
     // block covers GPT-Live voice protocol headers relayed by the /v1/live call-create path.
@@ -343,6 +345,10 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/chat/completions", bearer: "rejected", dedicated: "required", xApiKey: "rejected" },
   { endpoint: "/v1/messages", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   { endpoint: "/v1/models", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
+  // Read-only catalog distribution (#809). Same broad admission as /v1/models: neither
+  // route forwards Authorization upstream, and a remote client fetching model metadata is
+  // the same caller, with the same credential, as the one listing models.
+  { endpoint: "/v1/catalog", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */
