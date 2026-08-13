@@ -1,6 +1,6 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
-import { createCursorAdapter } from "./cursor";
+import { createCursorAdapter, type CursorAdapterDeps } from "./cursor";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
@@ -14,6 +14,14 @@ import {
   type AdapterFactoryContext,
   type DirectAdapterDefinitionInput,
 } from "./contracts";
+
+type RegistryFactoryContext = AdapterFactoryContext & {
+  cursorDeps?: CursorAdapterDeps;
+};
+
+function createRegisteredCursorAdapter(provider: OcxProviderConfig, context: AdapterFactoryContext) {
+  return createCursorAdapter(provider, (context as RegistryFactoryContext).cursorDeps);
+}
 
 export const ADAPTER_REGISTRY = defineAdapterRegistry({
   "command-code": {
@@ -66,7 +74,7 @@ export const ADAPTER_REGISTRY = defineAdapterRegistry({
     kind: "direct",
     wire: "cursor",
     mutation: "mutation.codex-owned-with-gated-native-fallback",
-    create: (provider, context) => createCursorAdapter(provider, context.cursorDeps),
+    create: createRegisteredCursorAdapter,
   },
   "mimo-free": {
     kind: "wrapper",
@@ -106,7 +114,7 @@ export function effectiveAdapterContract(adapterId: string): EffectiveAdapterCon
 
 export function createRegisteredAdapter(
   provider: OcxProviderConfig,
-  context: AdapterFactoryContext = {},
+  context: RegistryFactoryContext = {},
 ) {
   const definition = getAdapterDefinition(provider.adapter);
   if (!definition) throw new Error(`Unknown adapter: ${provider.adapter}`);
