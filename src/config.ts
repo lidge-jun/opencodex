@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -373,7 +373,21 @@ export class OpenAiTierBackupRollbackError extends Error {
 }
 
 export class OpenAiTierBackupCollisionError extends Error {
-  constructor() { super("Existing OpenAI tier backup differs from the current config"); this.name = "OpenAiTierBackupCollisionError"; }
+  readonly configPath?: string;
+  constructor(configPath?: string) {
+    super("Existing OpenAI tier backup differs from the current config");
+    this.name = "OpenAiTierBackupCollisionError";
+    this.configPath = configPath;
+  }
+}
+
+export class OpenAiTierRollbackPreserveError extends Error {
+  readonly code?: "missing" | "not-rollback" | "mismatch" | "exhausted";
+  constructor(message: string, options?: ErrorOptions & { code?: OpenAiTierRollbackPreserveError["code"] }) {
+    super(message, options);
+    this.name = "OpenAiTierRollbackPreserveError";
+    this.code = options?.code;
+  }
 }
 
 export class OpenAiTierBackupSecretResidualError extends Error {
@@ -461,7 +475,7 @@ export function backupConfigBeforeOpenAiTierMigration(
       // point would be surprising and potentially destructive.
       const backupBytes = io.read(backup);
       if (classifyOpenAiTierBackup(backupBytes) === "rollback") {
-        throw new OpenAiTierBackupCollisionError();
+        throw new OpenAiTierBackupCollisionError(source);
       }
       console.warn("[openai-provider-migration] Replacing stale pre-migration backup (post-migration config was rewritten since last migration).");
       io.unlink(backup);
@@ -516,7 +530,7 @@ export function backupConfigBeforeOpenAiTierMigration(
     } catch (cause) {
       if (!isAlreadyExistsError(cause)) throw cause;
       const winner = io.read(backup);
-      if (!sameBytes(original, winner)) throw new OpenAiTierBackupCollisionError();
+      if (!sameBytes(original, winner)) throw new OpenAiTierBackupCollisionError(source);
       scrubUnpublishedTemp();
       return "reused";
     }
@@ -550,6 +564,67 @@ export function backupConfigBeforeOpenAiTierMigration(
     }
     throw cause;
   }
+}
+
+export interface OpenAiTierRollbackPreserveIO {
+  exists(path: string): boolean;
+  read(path: string): Uint8Array;
+  copyExclusive(source: string, destination: string): void;
+  unlink(path: string): void;
+}
+
+const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
+  exists: existsSync,
+  read: target => readFileSync(target),
+  copyExclusive: (source, destination) => {
+    copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
+  },
+  unlink: unlinkSync,
+};
+
+const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
+
+/**
+ * Copy a rollback-classified `.pre-openai-tiers-v2.bak` to a unique
+ * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then unlink the
+ * blocking v2 name. The original bytes are copied with no-replace publication;
+ * the v2 path is removed only after the copy is verified. Shared by startup
+ * migration recovery and `ocx init` cleanup so the two paths cannot drift.
+ */
+export function preserveOpenAiTierRollbackSnapshot(
+  configPath = getConfigPath(),
+  io: OpenAiTierRollbackPreserveIO = DEFAULT_ROLLBACK_PRESERVE_IO,
+): string {
+  const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+  if (!io.exists(backup)) {
+    throw new OpenAiTierRollbackPreserveError("OpenAI tier rollback backup is missing", { code: "missing" });
+  }
+  const original = io.read(backup);
+  if (classifyOpenAiTierBackup(original) !== "rollback") {
+    throw new OpenAiTierRollbackPreserveError("OpenAI tier backup is not a rollback snapshot", { code: "not-rollback" });
+  }
+  for (let attempt = 0; attempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; attempt++) {
+    const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
+    try {
+      io.copyExclusive(backup, preserved);
+    } catch (error) {
+      if (isAlreadyExistsError(error)) continue;
+      throw error;
+    }
+    let copied: Uint8Array;
+    try {
+      copied = io.read(preserved);
+    } catch (error) {
+      throw new OpenAiTierRollbackPreserveError("Failed to read preserved rollback snapshot", { cause: error, code: "mismatch" });
+    }
+    if (!sameBytes(original, copied)) {
+      try { io.unlink(preserved); } catch { /* keep the original backup; incomplete copy is best-effort */ }
+      throw new OpenAiTierRollbackPreserveError("Preserved rollback snapshot does not match source bytes", { code: "mismatch" });
+    }
+    io.unlink(backup);
+    return preserved;
+  }
+  throw new OpenAiTierRollbackPreserveError("Unable to find a unique rollback snapshot path", { code: "exhausted" });
 }
 
 /**

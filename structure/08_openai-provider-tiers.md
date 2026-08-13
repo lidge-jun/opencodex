@@ -99,10 +99,11 @@ shipped v1 shape; the next startup re-migrates to the same marker-2 bytes.
 
 A pre-existing snapshot that differs from the current config is classified before anything is written
 (`src/config.ts` `classifyOpenAiTierBackup`): a snapshot that parses as a valid pre-migration (v1)
-config is a user-intentional rollback point and blocks migration; a snapshot that is unparseable or
-already tier-v2 is stale and is replaced with a warning. The distinction matters because silently
-discarding a rollback point is destructive, while preserving a stale one would block every later
-migration.
+config is a user-intentional rollback point and is copied to a unique
+`config.json.pre-openai-tiers-v1-rollback.<timestamp>.bak` path before startup retries the v2
+migration backup; a snapshot that is unparseable or already tier-v2 is stale and is replaced with a
+warning. The distinction matters because silently discarding a rollback point is destructive, while
+preserving a stale one would block every later migration.
 
 ## Model and wire identity
 

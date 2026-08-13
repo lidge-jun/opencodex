@@ -70,6 +70,16 @@ This goal is intentionally **one docs-only work-phase**. Implementation of ranke
 | `004_simple_korean_explainer.md` | Child-friendly explanation |
 | `005_ranking_snapshot.json` | Machine-readable queue snapshot |
 | `006_audit_synthesis.md` | Independent + main audit evidence |
+| `010_landing_round.md` | What actually landed in the evening round + per-PR dispositions |
+| `011_remaining_simple_korean.md` | Child-level Korean explanation of the REMAINING surface |
+
+## Amendment (2026-08-13 evening)
+
+The docs-only scope above describes the morning cycle. The user then authorized landing
+work: merge the legitimately mergeable PRs (rebasing/repairing them ourselves where
+needed), ship the Moonshot China fix, dedupe the issues, and re-explain what remains.
+That round is recorded in `010`/`011`; `001`–`006` are left as the morning snapshot
+rather than rewritten, so the before/after contrast stays readable.
 
 ## Loop-spec
 
