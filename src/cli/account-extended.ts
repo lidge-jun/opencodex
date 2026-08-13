@@ -346,10 +346,9 @@ export async function cmdAutoSwitch(args: string[], deps: AccountDeps): Promise<
   const action = args.shift();
   if (!name || !action) return usage();
   const classified = configAndType(deps, name);
-  const oauthPool = !("error" in classified) && classified.type === "oauth"
-    && (name === "anthropic" || name === "command-code");
+  const oauthPool = !('error' in classified) && classified.type === "oauth" && name === "command-code";
   if ("error" in classified || (classified.type !== "codex" && !oauthPool)) {
-    return usage("Error: auto-switch applies to the openai Codex account pool, anthropic, and command-code");
+    return usage("Error: auto-switch applies to the openai Codex account pool and command-code");
   }
   let threshold: number | undefined;
   if (action === "on" && args.length === 0) threshold = 80;
@@ -583,8 +582,8 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
  * `devlog/_plan/260726_cooldown_lockout_hardening`: injected routing makes the proxy the
  * only model path for Codex Desktop, so a stuck cooldown reads as "the whole app is dead".
  *
- * Codex accounts only. API-key pools already reset their own 429 cooldowns through key
- * management (`clearKeyCooldowns`), and OAuth providers have no equivalent state here.
+ * Codex and Command Code OAuth accounts. API-key pools reset their own 429 cooldowns
+ * through key management (`clearKeyCooldowns`).
  */
 export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promise<number> {
   const wantsJson = flag(args, "--json");
@@ -593,9 +592,9 @@ export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promi
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  const oauthPool = classified.type === "oauth" && (name === "anthropic" || name === "command-code");
+  const oauthPool = classified.type === "oauth" && name === "command-code";
   if (classified.type !== "codex" && !oauthPool) {
-    return usage(`Error: ${name} cooldown clearing applies to Codex, anthropic, and command-code pools only`);
+    return usage(`Error: ${name} cooldown clearing applies to Codex and command-code pools only`);
   }
   const id = requestedId === "main" ? MAIN_ID : requestedId;
   const baseUrl = await resolveBaseUrl(deps);
@@ -656,9 +655,9 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
   if (!name || !requestedId || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  const oauthPool = classified.type === "oauth" && (name === "anthropic" || name === "command-code");
+  const oauthPool = classified.type === "oauth" && name === "command-code";
   if (classified.type !== "codex" && !oauthPool) {
-    return usage("Error: selection order applies to the openai Codex account pool, anthropic, and command-code");
+    return usage("Error: selection order applies to the openai Codex account pool and command-code");
   }
   const id = requestedId === "main" ? MAIN_ID : requestedId;
 

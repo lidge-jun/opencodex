@@ -96,14 +96,13 @@ account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them.
 selection order when one of them — usually your Codex Desktop login — should only be reached for
 once the others are drained.
 
-OAuth providers that support multiple logins (Anthropic, Command Code) get the same
-rotation engine via an opt-in account pool (`config.anthropicAccountPool.enabled` or
-`config.commandCodeAccountPool.enabled`):
+Command Code supports an opt-in OAuth account pool
+(`config.commandCodeAccountPool.enabled`):
 sticky session affinity, 429 failover, and new-session quota / round-robin / fill-first
 picking with per-account 5h + weekly usage bars in the dashboard. The GUI's account
 panel shows an **Add account** button that opens the login and also accepts a pasted
 redirect URL / authorization code / raw API key (Command Code).
-Pool settings are explicit under `anthropicAccountPool` or `commandCodeAccountPool`:
+Pool settings are explicit under `commandCodeAccountPool`:
 `enabled`, `autoSwitchThreshold` (0–100), `strategy` (`quota`, `round-robin`, or
 `fill-first`), and `stickyLimit` (1–100). Command Code also supports
 `accountPriorities` (-100–100 per account) and `activeAccountPinned`.

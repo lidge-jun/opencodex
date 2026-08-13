@@ -390,6 +390,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       }
       stickyLimit = parsed;
     }
+    if (provider !== "command-code" && (body.accountPriorities !== undefined || body.activeAccountPinned !== undefined)) {
+      return jsonResponse({ error: "account priorities and manual pins are only supported for command-code" }, 400);
+    }
     const poolConfig = (config[poolKey] ?? {}) as {
       accountPriorities?: Record<string, number>;
       activeAccountPinned?: string;
@@ -512,15 +515,15 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!(await setAccountAlias(provider, accountId, alias || undefined))) return jsonResponse({ error: "account not found" }, 404);
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
   }
-  // Selection order (priority) for OAuth account pools (anthropic / command-code):
+  // Selection order (priority) for the Command Code OAuth account pool:
   // Codex-pool parity — higher used earlier; setting an order also releases any
   // manual pin so the newer operator statement wins.
   if (url.pathname === "/api/oauth/accounts/pool/priority" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; id?: unknown; priority?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const id = typeof body.id === "string" ? body.id.trim() : "";
-    if (provider !== "anthropic" && provider !== "command-code") {
-      return jsonResponse({ error: "priority is only supported for anthropic and command-code pools" }, 400);
+    if (provider !== "command-code") {
+      return jsonResponse({ error: "priority is only supported for the command-code pool" }, 400);
     }
     if (!id) return jsonResponse({ error: "missing id" }, 400);
     const { getAccountSet } = await import("../../oauth/store");
@@ -538,8 +541,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       priority = parsed;
     }
 
-    const poolKey = provider === "anthropic" ? "anthropicAccountPool" : "commandCodeAccountPool";
-    const existingPool = config[poolKey] as {
+    const existingPool = config.commandCodeAccountPool as {
       accountPriorities?: Record<string, number>;
       activeAccountPinned?: string;
     };
@@ -550,7 +552,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const next: Record<string, number> = {};
     for (const [key, value] of priorities) next[key] = value;
     const merged = {
-      ...(config[poolKey] ?? {}),
+      ...(config.commandCodeAccountPool ?? {}),
     } as {
       enabled?: boolean;
       autoSwitchThreshold?: number;
@@ -563,7 +565,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     else delete merged.accountPriorities;
     // Newer statement wins: an order supersedes a manual pin.
     delete merged.activeAccountPinned;
-    config[poolKey] = merged;
+    config.commandCodeAccountPool = merged;
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     return jsonResponse({ ok: true, provider, id, priority });

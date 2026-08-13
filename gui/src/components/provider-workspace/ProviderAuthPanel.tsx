@@ -385,7 +385,12 @@ export default function ProviderAuthPanel({
                         </button>
                       </div>
                       {manualCodeMsg && (
-                        <div className="text-label" style={{ color: manualCodeOk ? "var(--accent-hover)" : "var(--amber)" }}>
+                        <div
+                          role={manualCodeOk ? "status" : "alert"}
+                          aria-atomic="true"
+                          className="text-label"
+                          style={{ color: manualCodeOk ? "var(--accent-hover)" : "var(--amber)" }}
+                        >
                           {manualCodeMsg}
                         </div>
                       )}

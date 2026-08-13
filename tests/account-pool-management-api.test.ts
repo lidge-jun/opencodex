@@ -579,3 +579,18 @@ describe("Command Code account pool strategy management API", () => {
     }
   });
 });
+
+test("Anthropic pool rejects Command Code priority and pin controls", async () => {
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "anthropic", enabled: true, accountPriorities: { account: 1 } }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "account priorities and manual pins are only supported for command-code" });
+  } finally {
+    await server.stop(true);
+  }
+});

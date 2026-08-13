@@ -3,6 +3,8 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { clearCommandCodeAccountPoolState } from "../src/oauth/command-code-routing";
+import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
@@ -19,6 +21,7 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-ratelimit-e2e-"));
   process.env.OPENCODEX_HOME = testDir;
   clearKeyCooldowns();
+  clearCommandCodeAccountPoolState();
 });
 
 afterEach(() => {
@@ -28,6 +31,7 @@ afterEach(() => {
   isolatedCodexHome = null;
   if (testDir) removeTreeWithRetry(testDir);
   clearKeyCooldowns();
+  clearCommandCodeAccountPoolState();
 });
 
 const okChatCompletion = JSON.stringify({
@@ -47,6 +51,61 @@ async function postResponses(serverUrl: string, model: string): Promise<Response
 }
 
 describe("server same-target 429 retry (end-to-end)", () => {
+  test("Command Code OAuth pool rotates accounts on consecutive 429s and stops when all are cooled", async () => {
+    const originalFetch = globalThis.fetch;
+    const seenAuth: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url === "https://api.commandcode.ai/alpha/generate") {
+        seenAuth.push(new Headers(init?.headers).get("authorization") ?? "");
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+
+    let server: ReturnType<typeof startServer> | null = null;
+    try {
+      for (const [accountId, access] of [["account-a", "access-a"], ["account-b", "access-b"], ["account-c", "access-c"]] as const) {
+        await saveCredential("command-code", {
+          access,
+          refresh: access,
+          expires: Date.now() + 3_600_000,
+          accountId,
+          email: `${accountId}@example.test`,
+        });
+      }
+      const accounts = getAccountSet("command-code")!.accounts;
+      const first = accounts.find(account => account.credential.accountId === "account-a")!;
+      await setActiveAccount("command-code", first.id);
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "command-code",
+        providers: {
+          "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth" },
+        },
+        commandCodeAccountPool: { enabled: true, autoSwitchThreshold: 80 },
+      } as OcxConfig);
+      server = startServer(0);
+
+      const response = await postResponses(server.url, "command-code/deepseek/deepseek-v4-flash");
+      expect(response.status).toBe(429);
+      // Each rotation invalidates the same-target request cache: the next send
+      // is rebuilt with the next OAuth bearer, not replayed with the cooled one.
+      expect(seenAuth).toEqual(["Bearer access-a", "Bearer access-b", "Bearer access-c"]);
+      expect(seenAuth).toHaveLength(3);
+    } finally {
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  });
+
   test("single-key provider replays the identical request until upstream succeeds", async () => {
     const originalFetch = globalThis.fetch;
     const seenBodies: string[] = [];

@@ -818,7 +818,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     const missingProvider = await run(["auto-switch"]);
 
     expect(wrongProvider.code).toBe(1);
-    expect(wrongProvider.stderr).toContain("auto-switch applies to the openai Codex account pool, anthropic, and command-code");
+    expect(wrongProvider.stderr).toContain("auto-switch applies to the openai Codex account pool and command-code");
     expect(invalidThreshold.code).toBe(1);
     expect(invalidThreshold.stderr).toContain("integer 0-100");
     expect(missingProvider.code).toBe(1);
@@ -1327,7 +1327,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       const result = await run(["priority", "kiro", "acct_1", "first"]);
 
       expect(result.code).toBe(1);
-      expect(result.stderr).toContain("selection order applies to the openai Codex account pool, anthropic, and command-code");
+      expect(result.stderr).toContain("selection order applies to the openai Codex account pool and command-code");
     });
 
     // Both paths reach the proxy through different helpers — the read through
