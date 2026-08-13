@@ -135,6 +135,13 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     }
   });
 
+  test("grok-4.6 exposes Cursor's xhigh tier", () => {
+    expect(modelIdFor("cursor/grok-4.6", "low")).toBe("cursor-grok-4.6-low");
+    expect(modelIdFor("cursor/grok-4.6", "high")).toBe("cursor-grok-4.6-high");
+    expect(modelIdFor("cursor/grok-4.6", "xhigh")).toBe("cursor-grok-4.6-xhigh");
+    expect(cursorModelEffortLadder("grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
   test("kimi-k3 maps to its live effort-suffixed variants", () => {
     expect(modelIdFor("cursor/kimi-k3", "low")).toBe("kimi-k3-low");
     expect(modelIdFor("cursor/kimi-k3", "medium")).toBe("kimi-k3-high");
