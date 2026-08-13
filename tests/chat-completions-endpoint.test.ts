@@ -639,6 +639,89 @@ test("POST /v1/responses honors the per-model response_format opt-out", async ()
   }
 });
 
+test("chat-native does not forward ChatGPT account headers to third-party providers", async () => {
+  const seen: Array<{ authorization: string | null; account: string | null }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      seen.push({
+        authorization: req.headers.get("authorization"),
+        account: req.headers.get("chatgpt-account-id"),
+      });
+      return Response.json({
+        id: "chatcmpl_safe",
+        object: "chat.completion",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    },
+  });
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "chat-main-access", account_id: "chat-main-account" },
+  }));
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    apiKey: "third-party-key",
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([{ authorization: "Bearer third-party-key", account: null }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native non-stream fold preserves tool calls and finish reason", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "lookup", arguments: '{"q":' } }] } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 2, completion_tokens: 1 } })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "use lookup" }],
+        tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as {
+      choices: Array<{ finish_reason: string; message: { tool_calls?: unknown[] } }>;
+    };
+    expect(json.choices[0]?.finish_reason).toBe("tool_calls");
+    expect(json.choices[0]?.message.tool_calls).toEqual([{
+      id: "call_1",
+      type: "function",
+      function: { name: "lookup", arguments: '{"q":"x"}' },
+    }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("POST /v1/chat/completions direct mode forwards caller Authorization", async () => {
   const seen: Array<{ authorization: string | null }> = [];
   const upstream = Bun.serve({
