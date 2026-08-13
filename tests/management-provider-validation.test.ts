@@ -37,6 +37,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isol
 import * as destinationPolicy from "../src/lib/destination-policy";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
 import { LOCAL_PROVIDER_RELOAD_NAME_HEADER, LOCAL_PROVIDER_RELOAD_PATH } from "../src/lib/local-provider-reload-contract";
+import { getAccountSet, saveCredential } from "../src/oauth/store";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -1448,6 +1449,51 @@ describe("provider management validation", () => {
         method: "DELETE",
       });
       expect(response.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider deletion removes the deleted provider's OAuth credential", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "test-key",
+        },
+        removable: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.removable.test/v1",
+          apiKey: "test-key",
+        },
+      },
+    });
+    await saveCredential("removable", {
+      access: "credential-to-delete",
+      refresh: "refresh-to-delete",
+      expires: Date.now() + 60_000,
+    });
+    await saveCredential("retained", {
+      access: "credential-to-keep",
+      refresh: "refresh-to-keep",
+      expires: Date.now() + 60_000,
+    });
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=removable", server.url), {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(200);
+
+      expect(getAccountSet("removable")).toBeNull();
+      expect(getAccountSet("retained")).not.toBeNull();
     } finally {
       await server.stop(true);
     }
