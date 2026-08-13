@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../src/adapters/openai-responses";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const execDescription =
   "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
@@ -23,15 +24,15 @@ test("routed Responses conversion preserves the nested Code Mode apply_patch dec
     context: { messages: [] },
     _rawBody: rawBody,
   } as OcxParsedRequest;
-  const adapter = createResponsesPassthroughAdapter({
+  const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter({
     adapter: "openai-responses",
     baseUrl: "https://api.deepseek.com",
     responsesPath: "/responses",
     authMode: "key",
     apiKey: "test-key",
-  } as OcxProviderConfig);
+  } as OcxProviderConfig));
 
-  const request = adapter.buildRequest(parsed, { headers: new Headers() });
+  const request = adapter.buildRequest(parsed);
   const body = JSON.parse(request.body) as {
     tools: Array<Record<string, unknown>>;
   };
@@ -43,4 +44,5 @@ test("routed Responses conversion preserves the nested Code Mode apply_patch dec
     description: execDescription,
   });
   expect(JSON.stringify(body.tools[0])).toContain("apply_patch");
+  request.releaseBodyObservation?.();
 });
