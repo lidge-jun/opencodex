@@ -89,7 +89,7 @@ test("Code Mode exec round-trips JavaScript that invokes nested tools.apply_patc
     status: "completed",
   });
   expect(execDone?.input).toContain("tools.apply_patch");
-  expect(execDone?.input).toContain(patch);
+  expect(execDone?.input).toContain(JSON.stringify(patch));
   expect(frames.some(frame => frame.event === "response.failed")).toBe(false);
 });
 
