@@ -288,11 +288,15 @@ error. Foreign tasks and operations can never emit the automatic-elevation marke
 dashboard UAC prompt or rerun `ocx service install` in an elevated PowerShell window.
 
 For a fresh install where the OpenCodex scheduler task is confirmed absent, UAC approval now
-happens before the installer stops any existing proxy. The task is registered without being run;
-only after registration succeeds does OpenCodex stop the old listener, publish the service assets,
-and start the scheduled task. Cancelling or denying UAC therefore leaves the working proxy and its
-Codex routing in place. Existing or conflicting scheduler registrations continue to fail closed
-rather than being deleted as an unsafe best-effort rollback.
+happens before the installer stops any existing proxy. Its unique registration XML is staged in
+an ACL-hardened private directory outside the OpenCodex config root, and the task is registered
+without being run. Only after
+registration succeeds does OpenCodex remove that XML, require ownership metadata for a genuinely
+new config root, stop the old listener, remove and boundedly re-verify any native WinSW
+registration, publish the service assets, and start the scheduled task. Cancelling or denying UAC,
+or failing to claim a new root safely, therefore leaves the working proxy and its Codex routing in
+place. Existing or conflicting scheduler registrations continue to fail closed rather than being
+deleted as an unsafe best-effort rollback.
 
 ### `ocx codex-shim <install|status|uninstall|remove>`
 

@@ -211,9 +211,15 @@ to be non-elevated. An unavailable probe remains `other` and cannot trigger UAC.
 native-service, file-write, and foreign task failures never use this fallback.
 
 For a fresh scheduler install whose task is proven absent, registration is the non-destructive
-first phase. OpenCodex writes a unique temporary XML definition and asks Task Scheduler to create
-the owned task without running it. Only after that succeeds may service-manager cleanup stop the
-existing proxy, publish the canonical scheduler assets, run the task, and write install state.
+first phase. OpenCodex writes a unique temporary XML definition in an ACL-hardened private directory
+outside its config root and asks Task Scheduler to create the owned task without running it. Only
+after that succeeds may it discard
+the consumed staging XML, require scheduler ownership for a config root that was absent at entry,
+stop existing service managers and the proxy, remove and boundedly re-verify any native WinSW
+registration, publish the canonical scheduler assets, run the task, and write install state. A
+legacy non-empty unowned root remains conservatively unclaimed. This prevents the fresh path from
+leaving either an unowned new installation or two registered managers that can both respawn the
+proxy.
 UAC cancellation or create failure removes the temporary XML before any manager/proxy stop, so the
 working proxy's shutdown cleanup cannot strip Codex routing merely because elevation was refused.
 The Dashboard does not apply its ordinary 60-second child timeout to this Windows service command:

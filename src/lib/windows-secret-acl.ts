@@ -388,6 +388,13 @@ export function forgetEphemeralSecretPath(tempPath: string): void {
   timedOutPaths.delete(`optional:${tempPath}`);
 }
 
+/** Directory counterpart for a proven-absent ephemeral staging root. */
+export function forgetEphemeralSecretDir(tempPath: string): void {
+  hardenedDirectories.delete(tempPath);
+  timedOutPaths.delete(`required:${tempPath}`);
+  timedOutPaths.delete(`optional:${tempPath}`);
+}
+
 /** Test seam: timeout memo sets return to baseline after ephemeral cleanup. */
 export function timedOutSecretPathCountForTests(): number {
   return timedOutPaths.size;

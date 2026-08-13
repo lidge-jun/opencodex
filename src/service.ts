@@ -7,8 +7,8 @@
  */
 import { execFileSync, execSync, spawnSync } from "node:child_process";
 import { findLiveProxy, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "./server/proxy-liveness";
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, readPid, removePid, removeRuntimePort, verifyPidIdentity } from "./config";
 import { loadConfig } from "./config";
@@ -27,6 +27,7 @@ import {
   resolveTrustedWindowsSchtasksExe,
   startElevatedSchtasksCreateAndRun,
   runWindowsElevated,
+  runWindowsElevatedScheduledTaskRegistration,
   toWindowsSchtasksError,
   WindowsElevationError,
   WindowsSchtasksError,
@@ -35,7 +36,12 @@ import {
   type ElevatedSchtasksCreateAndRunResult,
 } from "./lib/windows-elevation";
 import { defaultWinswEntry, installWinswService, startWinswService, stopWinswService, statusWinswRaw, uninstallWinswService, winswStatusSummary, winswXmlPath, WINSW_SERVICE_ID, WINSW_SHA256, WINSW_VERSION, type WinswStatus } from "./lib/winsw";
-import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
+import {
+  forgetEphemeralSecretDir,
+  forgetEphemeralSecretPath,
+  hardenSecretDir,
+  hardenSecretPath,
+} from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
 import { maybeShowStarPrompt } from "./cli/star-prompt";
@@ -1896,22 +1902,115 @@ function writeWindowsSchedulerAssets(): void {
   writeServiceAssetWithRetry(windowsTaskXmlPath(), `\uFEFF${buildWindowsTaskXml(script)}`, "utf16le");
 }
 
-function stageWindowsSchedulerRegistrationXml(attemptNonce: string): string {
-  if (!existsSync(getConfigDir())) mkdirSync(getConfigDir(), { recursive: true, mode: 0o700 });
-  const path = join(getConfigDir(), `.opencodex-service-task.${randomUUID()}.xml`);
-  // This document points at the canonical launcher but does not publish or rewrite that
-  // launcher. UAC can therefore be refused while the current proxy still owns its port.
-  writeServiceAssetWithRetry(
-    path,
-    `\uFEFF${buildWindowsTaskXml(windowsServiceScriptPath(), windowsLauncherVbsPath(), attemptNonce)}`,
-    "utf16le",
+const WINDOWS_SCHEDULER_STAGE_PREFIX = "opencodex-service-stage-";
+const ownedWindowsSchedulerStages = new Set<string>();
+
+export interface WindowsSchedulerRegistrationStageDeps {
+  createStageDir?: () => string;
+  hardenDir?: (path: string) => void;
+  writeXml?: (path: string, contents: string) => void;
+  hardenPath?: (path: string) => void;
+  removeStageDir?: (path: string) => void;
+}
+
+function cleanupWindowsSchedulerStage(
+  stageDir: string,
+  xmlPath: string,
+  removeStageDir: (path: string) => void,
+): void {
+  let cleanupError: unknown;
+  try {
+    unlinkSync(xmlPath);
+    forgetEphemeralSecretPath(xmlPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      forgetEphemeralSecretPath(xmlPath);
+    } else {
+      cleanupError = error;
+    }
+  }
+  try {
+    removeStageDir(stageDir);
+    forgetEphemeralSecretDir(stageDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      forgetEphemeralSecretDir(stageDir);
+    } else if (cleanupError) {
+      throw new AggregateError([cleanupError, error], "Task Scheduler staging cleanup failed.");
+    } else {
+      cleanupError = error;
+    }
+  }
+  if (cleanupError) throw cleanupError;
+}
+
+export function stageWindowsSchedulerRegistrationXml(
+  attemptNonce: string,
+  deps: WindowsSchedulerRegistrationStageDeps = {},
+): string {
+  const createStageDir = deps.createStageDir
+    ?? (() => mkdtempSync(join(tmpdir(), WINDOWS_SCHEDULER_STAGE_PREFIX)));
+  const hardenDir = deps.hardenDir
+    ?? ((path: string) => { hardenSecretDir(path, { required: true }); });
+  const writeXml = deps.writeXml ?? ((path: string, contents: string) => {
+    writeFileSync(path, contents, { encoding: "utf16le", flag: "wx", mode: 0o600 });
+  });
+  const hardenPath = deps.hardenPath
+    ?? ((path: string) => { hardenSecretPath(path, { required: true }); });
+  const removeStageDir = deps.removeStageDir
+    ?? ((path: string) => { rmdirSync(path); });
+
+  let stageDir: string | null = null;
+  let xmlPath: string | null = null;
+  try {
+    stageDir = createStageDir();
+    try { chmodSync(stageDir, 0o700); } catch { /* required Windows ACL is authoritative */ }
+    hardenDir(stageDir);
+    xmlPath = join(stageDir, "task.xml");
+    // This document points at the canonical launcher but does not publish or rewrite it.
+    // The hardened private directory prevents another local account from replacing the
+    // document while UAC is pending; the file harden independently proves its identity.
+    writeXml(
+      xmlPath,
+      `\uFEFF${buildWindowsTaskXml(windowsServiceScriptPath(), windowsLauncherVbsPath(), attemptNonce)}`,
+    );
+    hardenPath(xmlPath);
+    ownedWindowsSchedulerStages.add(xmlPath);
+    return xmlPath;
+  } catch (error) {
+    if (stageDir) {
+      try {
+        cleanupWindowsSchedulerStage(stageDir, xmlPath ?? join(stageDir, "task.xml"), removeStageDir);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Task Scheduler staging failed and its private temporary directory could not be removed.",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+function removeWindowsSchedulerRegistrationStage(xmlPath: string): void {
+  if (!ownedWindowsSchedulerStages.has(xmlPath)) {
+    throw new Error("Refusing to remove an unrecognized Task Scheduler staging path.");
+  }
+  const stageDir = dirname(xmlPath);
+  cleanupWindowsSchedulerStage(
+    stageDir,
+    xmlPath,
+    path => { rmdirSync(path); },
   );
-  return path;
+  if (existsSync(stageDir)) {
+    throw new Error("The private Task Scheduler staging directory still exists after cleanup.");
+  }
+  ownedWindowsSchedulerStages.delete(xmlPath);
 }
 
 export interface FreshWindowsSchedulerRegistrationDeps {
   create?: (args: string[]) => void;
-  elevate?: (args: string[]) => Promise<void>;
+  elevate?: (taskName: string, xml: string) => Promise<void>;
   probe?: () => WindowsSchedulerTaskProbe;
   queryXml?: () => string;
   rollback?: () => Promise<string | null>;
@@ -1923,6 +2022,16 @@ export async function registerFreshWindowsSchedulerTask(
   deps: FreshWindowsSchedulerRegistrationDeps = {},
 ): Promise<void> {
   const args = buildWindowsSchtasksCreateArgsForXml(xmlPath);
+  // Capture and validate the exact definition before an access-denied attempt can
+  // cross the UAC boundary. The elevated fallback receives these immutable bytes,
+  // never the caller-writable staging pathname.
+  const expectedXml = decodeSchtasksOutput(readFileSync(xmlPath));
+  if (
+    !windowsTaskRegistrationHealthy(expectedXml)
+    || !windowsTaskRegistrationOwnedByAttempt(expectedXml, attemptNonce)
+  ) {
+    throw new Error("The staged Task Scheduler registration failed OpenCodex ownership or shape validation.");
+  }
   try {
     (deps.create ?? schtasks)(args);
   } catch (error) {
@@ -1933,9 +2042,13 @@ export async function registerFreshWindowsSchedulerTask(
     ) {
       throw error;
     }
-    // The elevated command is still the fixed trusted schtasks executable plus the
-    // owned create shape. It registers only; the task is not run until cleanup commits.
-    await (deps.elevate ?? elevateSchtasks)(args);
+    // Register from the captured XML string inside the elevated process. Another
+    // same-user process can mutate its own temp files, but cannot change this command.
+    const elevate = deps.elevate ?? (async (taskName: string, xml: string) => {
+      const exitCode = await runWindowsElevatedScheduledTaskRegistration(taskName, xml);
+      if (exitCode !== 0) throw new Error(`Background service install failed with exit code ${exitCode}.`);
+    });
+    await elevate(TASK, expectedXml);
   }
 
   const rollbackTask = deps.rollback ?? (() => rollbackWindowsSchedulerTaskOwnedByAttempt(attemptNonce, TASK));
@@ -1978,21 +2091,47 @@ export async function registerFreshWindowsSchedulerTask(
   }
 }
 
-function installWindows(): void {
-  recordOwnedConfigPath(getConfigDir(), serviceStatePath());
+function recordWindowsSchedulerOwnership(): boolean {
+  // Ownership claiming is deliberately conservative: a legacy non-empty config root
+  // without metadata stays unclaimed, but that must not turn a service reinstall into
+  // an outage after prepareServiceInstall has stopped the previous manager.
+  return recordOwnedConfigPath(getConfigDir(), serviceStatePath());
+}
+
+export interface RemoveNativeWindowsServiceDeps {
+  status?: () => WinswStatus;
+  uninstall?: () => void;
+  sleep?: (ms: number) => void;
+  settleChecks?: number;
+}
+
+export function removeNativeWindowsServiceForScheduler(
+  deps: RemoveNativeWindowsServiceDeps = {},
+): void {
+  const status = deps.status ?? statusWinswRaw;
+  const uninstall = deps.uninstall ?? uninstallWinswService;
+  const sleep = deps.sleep ?? Bun.sleepSync;
+  const settleChecks = Math.max(1, deps.settleChecks ?? 20);
   // Transactional backend switch: installing the scheduler backend removes a native
   // service first — two live managers would both respawn the proxy (conflict).
-  if (statusWinswRaw() !== "nonexistent") {
+  if (status() !== "nonexistent") {
     console.log("🔁 Removing the native (WinSW) service before installing the Task Scheduler backend...");
     try {
-      uninstallWinswService();
+      uninstall();
     } catch (err) {
       throw new Error(`Cannot remove the native service before switching to Task Scheduler: ${err instanceof Error ? err.message : String(err)}. Remove it manually with 'sc delete ${WINSW_SERVICE_ID}' or retry.`);
     }
-    if (statusWinswRaw() !== "nonexistent") {
-      throw new Error(`Native service registration could not be re-verified after the removal attempt — aborting switch. Check 'sc.exe query ${WINSW_SERVICE_ID}' and remove it manually if present.`);
+    for (let check = 0; check < settleChecks; check++) {
+      if (status() === "nonexistent") return;
+      if (check + 1 < settleChecks) sleep(250);
     }
+    throw new Error(`Native service registration could not be re-verified after the removal attempt — aborting switch. Check 'sc.exe query ${WINSW_SERVICE_ID}' and remove it manually if present.`);
   }
+}
+
+function installWindows(): void {
+  recordWindowsSchedulerOwnership();
+  removeNativeWindowsServiceForScheduler();
   // End a running task BEFORE rewriting the assets it is executing — cmd.exe reading the
   // script mid-rewrite runs a torn batch file, and its open handle can fail the write.
   try { stopWindows(); } catch { /* not running */ }
@@ -2595,7 +2734,9 @@ export async function installServiceSafely(
 export interface FreshWindowsSchedulerInstallDeps {
   stageRegistrationXml?: (attemptNonce: string) => string;
   register?: (xmlPath: string, attemptNonce: string) => Promise<void>;
+  recordOwnership?: () => boolean;
   prepare?: () => Promise<void>;
+  removeNativeService?: () => void;
   publishAssets?: () => void;
   runTask?: () => void;
   writeState?: () => void;
@@ -2616,7 +2757,9 @@ export async function installFreshWindowsSchedulerSafely(
 ): Promise<void> {
   const stage = deps.stageRegistrationXml ?? stageWindowsSchedulerRegistrationXml;
   const register = deps.register ?? registerFreshWindowsSchedulerTask;
+  const recordOwnership = deps.recordOwnership ?? recordWindowsSchedulerOwnership;
   const prepare = deps.prepare ?? (() => prepareServiceInstall("scheduler"));
+  const removeNativeService = deps.removeNativeService ?? removeNativeWindowsServiceForScheduler;
   const publishAssets = deps.publishAssets ?? writeWindowsSchedulerAssets;
   const runTask = deps.runTask ?? startWindows;
   const writeState = deps.writeState ?? (() => writeServiceInstallState("scheduler"));
@@ -2624,11 +2767,12 @@ export async function installFreshWindowsSchedulerSafely(
     rollbackWindowsSchedulerTaskOwnedByAttempt(attemptNonce, TASK)
   ));
   const removeStagedXml = deps.removeStagedXml ?? ((path: string) => {
-    if (existsSync(path)) unlinkSync(path);
+    removeWindowsSchedulerRegistrationStage(path);
   });
 
   let stagedXml: string | null = null;
   const attemptNonce = randomUUID();
+  const configRootWasAbsent = !existsSync(getConfigDir());
   let registered = false;
   let started = false;
   try {
@@ -2637,7 +2781,19 @@ export async function installFreshWindowsSchedulerSafely(
     registered = true;
 
     // The destructive boundary begins only after Task Scheduler accepted the definition.
+    // The registration has consumed its temporary XML. Remove it before claiming a newly
+    // created config root, because ownership initialization intentionally requires emptiness.
+    removeStagedXml(stagedXml);
+    stagedXml = null;
+    const ownershipRecorded = recordOwnership();
+    if (!ownershipRecorded && configRootWasAbsent) {
+      throw new Error(
+        "The fresh OpenCodex config root could not be claimed for safe uninstall; "
+        + "aborting before service-manager cleanup or asset publication.",
+      );
+    }
     await prepare();
+    removeNativeService();
     publishAssets();
     runTask();
     started = true;
@@ -2663,8 +2819,11 @@ export async function installFreshWindowsSchedulerSafely(
   } finally {
     if (stagedXml) {
       try { removeStagedXml(stagedXml); } catch (error) {
+        const code = error && typeof error === "object" && "code" in error
+          ? String((error as NodeJS.ErrnoException).code)
+          : "";
         console.error(
-          `⚠️  Failed to remove temporary Task Scheduler XML ${stagedXml}: ${error instanceof Error ? error.message : String(error)}`,
+          `⚠️  Failed to remove the private Task Scheduler staging directory${code ? ` (${code})` : ""}.`,
         );
       }
     }

@@ -138,14 +138,6 @@ describe("winsw fail-closed lifecycle", () => {
     ).rejects.toThrow(/Could not query the native service state/);
   });
 
-  test("a failed status query is treated as possibly-installed by lifecycle consumers", () => {
-    // stopServiceIfInstalled/installWindows gate on `!== "nonexistent"` — "unknown"
-    // must therefore route INTO stop/uninstall attempts, never skip them.
-    const service = readFileSync(new URL("../src/service.ts", import.meta.url), "utf8");
-    expect(service).not.toContain('statusWinswRaw() === "unknown"');
-    expect((service.match(/statusWinswRaw\(\) !== "nonexistent"/g) ?? []).length).toBeGreaterThanOrEqual(3);
-  });
-
   test("exe missing + non-Windows is confirmed absence; on Windows the SCM is queried", () => {
     // This test host has no WinSW binary installed, so the missing-exe branch runs:
     // off-Windows it must short-circuit to "nonexistent" (no sc.exe exists here).
