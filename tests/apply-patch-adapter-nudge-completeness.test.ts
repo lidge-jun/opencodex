@@ -5,7 +5,21 @@ import { fileURLToPath } from "node:url";
 
 const adaptersDir = fileURLToPath(new URL("../src/adapters/", import.meta.url));
 const regressionTestPath = fileURLToPath(new URL("./apply-patch-adapter-nudge-regression.test.ts", import.meta.url));
+const adapterResolvePath = fileURLToPath(new URL("../src/server/adapter-resolve.ts", import.meta.url));
 const nudgeImport = /(?:from\s+|import\s*\()\s*["'][^"']*tool-catalog-nudge(?:\.[cm]?[jt]s)?["']/;
+
+const APPLY_PATCH_ADAPTER_STRATEGIES = {
+  "command-code": "nudge-routed",
+  "openai-chat": "nudge-routed",
+  anthropic: "nudge-routed",
+  "openai-responses": "responses-native",
+  google: "nudge-routed",
+  kiro: "nudge-routed",
+  azure: "responses-native-wrapper",
+  "azure-openai": "responses-native-wrapper",
+  cursor: "cursor-special",
+  "mimo-free": "openai-chat-wrapper",
+} as const;
 
 async function discoverNudgeCallSites(dir = adaptersDir): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -37,6 +51,19 @@ async function discoverCoveredAdapterModules(): Promise<string[]> {
     .sort();
 }
 
+async function discoverResolvedAdapterNames(): Promise<string[]> {
+  const source = await readFile(adapterResolvePath, "utf8");
+  return [...source.matchAll(/case\s+["']([^"']+)["']\s*:/g)]
+    .map(match => match[1]!)
+    .sort();
+}
+
 test("every tool-catalog-nudge adapter has outbound apply_patch coverage", async () => {
   expect(await discoverNudgeCallSites()).toEqual(await discoverCoveredAdapterModules());
+});
+
+test("every resolved adapter has an explicit apply_patch strategy", async () => {
+  expect(await discoverResolvedAdapterNames()).toEqual(
+    Object.keys(APPLY_PATCH_ADAPTER_STRATEGIES).sort(),
+  );
 });
