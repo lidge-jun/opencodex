@@ -72,6 +72,12 @@ bridge, the same condition emits a 502 `websocket_protocol_error` and cancels th
 A complete Responses terminal frame is authoritative: oversized or malformed trailing bytes after
 that terminal are dropped rather than replacing the completed turn with a transport failure.
 
+For canonical ChatGPT forward streaming, stable Bun 1.4.0 or newer may transparently use
+Codex's upstream WebSocket transport. Bundled Bun 1.3.14, prereleases, and unverifiable runtime
+identities use HTTP/SSE. The upstream WS adapter keeps the same downstream SSE contract, caps both
+the raw JSON frame and its SSE envelope at 4 MiB, and closes the upstream when its 8 MiB byte queue
+would overflow.
+
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
 
@@ -94,6 +100,9 @@ reported,” not necessarily “the provider performed no such work.”
 When `websockets` is enabled, a client may upgrade `/v1/responses` instead of opening an HTTP POST.
 Authentication and origin admission happen during the WebSocket handshake. They are not repeated
 inside each frame.
+
+This client-facing upgrade is separate from the transparent upstream ChatGPT WebSocket selection
+described above; the `websockets` setting controls only the client-facing endpoint.
 
 The client sends JSON text frames:
 

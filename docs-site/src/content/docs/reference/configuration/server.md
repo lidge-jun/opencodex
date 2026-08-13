@@ -16,7 +16,7 @@ runs helper features around provider requests.
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
-| `websockets?` | `boolean` | `false` | Advertise `supports_websockets` for the Responses WebSocket path. False keeps HTTP/SSE. |
+| `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |

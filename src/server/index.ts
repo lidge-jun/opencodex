@@ -417,6 +417,9 @@ function attachLiveSidebandUpstream(
 // upstream cannot hold Codex open after response.completed; darwin no-rewrite traffic
 // requires explicit config-eager opt-in (`auto` always stays tee on darwin).
 // selectEagerPath(process.platform, needsClientRewrite, config.streamMode ?? "auto")
+// bunSupportsBoundedCodexWsRelay
+// isCodexWsUpstreamResponse(upstreamResponse)
+// forceCodexWsEagerRelay || eagerPath?.useEagerRelay || win32EagerRewrite
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
 // new Response(eagerBody,
 // Default shape (tee + background inspection):

@@ -12,14 +12,79 @@
 // returned event frames as an SSE byte stream, so every downstream consumer
 // (passthrough relay, adapter parsers, usage sniffing) is unchanged.
 
+import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
+import { compareBunVersions } from "../../lib/bun-stream-caps";
+
 const CODEX_RESPONSES_HTTP_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const WS_BETA = "responses_websockets=2026-02-06";
 // If the 101 never arrives (network black hole), give SSE a chance well before
 // the caller's connect timeout (default 200s) would fire.
 const UPGRADE_DEADLINE_MS = 10_000;
+// Keep the push-based WS transport inside the same memory envelope as the
+// bounded SSE relays that consume this response. Unlike fetch response bodies,
+// a WebSocket cannot be paused when a ReadableStream applies backpressure, so
+// an upstream that outruns the consumer must be disconnected.
+export const MAX_CODEX_WS_FRAME_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
+export const MAX_CODEX_WS_QUEUE_BYTES = 8 * 1024 * 1024;
+export const MIN_BOUNDED_CODEX_WS_BUN_VERSION = "1.4.0";
 
-export function shouldUseCodexWsUpstream(url: string, init?: RequestInit): boolean {
+export type BunRuntimeIdentity = {
+  version: string;
+  versionWithSha: string;
+};
+
+export type BunRuntimeGateInput = string | BunRuntimeIdentity;
+
+const codexWsUpstreamResponses = new WeakSet<Response>();
+
+/** True only for a successful Codex WebSocket upgrade, never an HTTP fallback. */
+export function isCodexWsUpstreamResponse(response: Response): boolean {
+  return codexWsUpstreamResponses.has(response);
+}
+
+export function currentBunRuntimeIdentity(): BunRuntimeIdentity {
+  return {
+    version: Bun.version,
+    versionWithSha: Bun.version_with_sha,
+  };
+}
+
+function boundedRelayVersion(input: BunRuntimeGateInput): string | null {
+  if (typeof input === "string") return input.trim() || null;
+  const numericVersion = input.version.trim();
+  const numericMatch = /^(\d+\.\d+\.\d+)$/.exec(numericVersion);
+  const detailedMatch = /^v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\s+\([0-9a-fA-F]+\)$/.exec(
+    input.versionWithSha.trim(),
+  );
+  if (!numericMatch || !detailedMatch) return null;
+  const detailedNumeric = /^(\d+\.\d+\.\d+)/.exec(detailedMatch[1])?.[1];
+  return detailedNumeric === numericMatch[1] ? detailedMatch[1] : null;
+}
+
+/**
+ * Bun 1.3.14 does not propagate a stalled HTTP response socket back to a JS
+ * ReadableStream producer on Windows. A real raw-TCP slow-client probe drained
+ * the entire upstream despite the eager relay queue; Bun 1.4.0-canary.1 stopped
+ * below one MiB. Prereleases still fail closed; release builds before 1.4.0
+ * fall back to HTTP SSE.
+ */
+export function bunSupportsBoundedCodexWsRelay(
+  runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
+): boolean {
+  const version = boundedRelayVersion(runtime);
+  if (!version) return false;
+  if (/^\d+\.\d+\.\d+-/.test(version.trim())) return false;
+  const comparison = compareBunVersions(version, MIN_BOUNDED_CODEX_WS_BUN_VERSION);
+  return comparison !== null && comparison >= 0;
+}
+
+export function shouldUseCodexWsUpstream(
+  url: string,
+  init?: RequestInit,
+  runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
+): boolean {
+  if (!bunSupportsBoundedCodexWsRelay(runtime)) return false;
   if (url !== CODEX_RESPONSES_HTTP_URL) return false;
   if ((init?.method ?? "GET").toUpperCase() !== "POST") return false;
   const body = init?.body;
@@ -41,7 +106,11 @@ export function codexWsUpstreamFetch(
   url: string,
   init: RequestInit,
   sseFallback: typeof globalThis.fetch,
+  runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
 ): Promise<Response> {
+  if (!bunSupportsBoundedCodexWsRelay(runtime)) {
+    return sseFallback(url, init);
+  }
   const signal = init.signal ?? undefined;
   if (signal?.aborted) {
     return Promise.reject(signal.reason ?? new DOMException("The operation was aborted.", "AbortError"));
@@ -91,6 +160,13 @@ export function codexWsUpstreamFetch(
     let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
     const encoder = new TextEncoder();
 
+    const failStream = (message: string) => {
+      if (terminal) return;
+      terminal = true;
+      try { controller?.error(new Error(message)); } catch { /* stream already done */ }
+      try { ws.close(); } catch { /* already closing */ }
+    };
+
     const upgradeTimer = setTimeout(() => {
       if (opened || settledPreOpen) return;
       settledPreOpen = true;
@@ -110,12 +186,14 @@ export function codexWsUpstreamFetch(
         reject(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError"));
         return;
       }
-      try { ws.close(); } catch { /* already closing */ }
       if (controller && !terminal) {
         terminal = true;
         // Mirror an aborted fetch: the body read rejects with the abort reason.
         try { controller.error(signal?.reason ?? new DOMException("The operation was aborted.", "AbortError")); } catch { /* stream already done */ }
       }
+      // Error the body before close(): test doubles and some runtimes dispatch
+      // close synchronously, and the caller's abort reason must stay authoritative.
+      try { ws.close(); } catch { /* already closing */ }
     };
     signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -138,19 +216,33 @@ export function codexWsUpstreamFetch(
       const stream = new ReadableStream<Uint8Array>({
         start(c) { controller = c; },
         cancel() { try { ws.close(); } catch { /* already closing */ } },
-      });
-      resolve(new Response(stream, {
+      }, new ByteLengthQueuingStrategy({ highWaterMark: MAX_CODEX_WS_QUEUE_BYTES }));
+      const response = new Response(stream, {
         status: 200,
         // The 101 response headers (x-codex-*-reset-at quota hints) are not
         // exposed by Bun's WebSocket; the periodic quota poller covers those.
         headers: { "content-type": "text/event-stream; charset=utf-8" },
-      }));
+      });
+      codexWsUpstreamResponses.add(response);
+      resolve(response);
     });
 
     ws.addEventListener("message", (event) => {
       if (!controller || terminal) return;
       const text = typeof event.data === "string" ? event.data : "";
       if (!text) return;
+      // UTF-8 byte length is always at least the JS string length. Reject this
+      // cheap lower bound before parsing so an obviously oversized frame does
+      // not create another large object graph.
+      if (text.length > MAX_CODEX_WS_FRAME_BYTES) {
+        failStream("codex websocket frame exceeds the response size limit");
+        return;
+      }
+      const encodedText = encoder.encode(text);
+      if (encodedText.byteLength > MAX_CODEX_WS_FRAME_BYTES) {
+        failStream("codex websocket frame exceeds the response size limit");
+        return;
+      }
       let type: unknown;
       try { type = (JSON.parse(text) as { type?: unknown }).type; } catch { return; }
       if (typeof type !== "string") return;
@@ -158,10 +250,26 @@ export function codexWsUpstreamFetch(
       // frames (codex.rate_limits, responsesapi.websocket_timing) are dropped
       // so downstream clients see exactly the stream shape they always got.
       if (!type.startsWith("response.") && type !== "error") return;
-      try {
-        controller.enqueue(encoder.encode(`event: ${type}\ndata: ${text}\n\n`));
-      } catch {
+      const prefix = encoder.encode(`event: ${type}\ndata: `);
+      const suffix = encoder.encode("\n\n");
+      const frameBytes = prefix.byteLength + encodedText.byteLength + suffix.byteLength;
+      if (frameBytes > MAX_CLIENT_SSE_FRAME_BYTES) {
+        failStream("codex websocket frame exceeds the response size limit");
         return;
+      }
+      const availableBytes = controller.desiredSize ?? 0;
+      if (frameBytes > availableBytes) {
+        failStream("codex websocket response exceeded the buffered queue limit");
+        return;
+      }
+      const sseFrame = new Uint8Array(frameBytes);
+      sseFrame.set(prefix);
+      sseFrame.set(encodedText, prefix.byteLength);
+      sseFrame.set(suffix, prefix.byteLength + encodedText.byteLength);
+      try {
+        controller.enqueue(sseFrame);
+      } catch {
+        failStream("codex websocket response stream closed while enqueueing");
       }
       if (type === "response.completed" || type === "response.failed" || type === "response.incomplete" || type === "error") {
         terminal = true;

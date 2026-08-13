@@ -92,6 +92,16 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
 
+Canonical ChatGPT forward streaming has one transport-specific exception. A
+stable Bun runtime at or above 1.4.0 may use Codex's upstream
+`responses_websockets` transport; bundled Bun 1.3.14, prereleases, and
+unverifiable runtime identities stay on HTTP/SSE. A successful upstream WS
+response is re-encoded to the same SSE surface and forced through the bounded
+eager single-reader relay instead of `tee()`: raw and enveloped frames are capped
+at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream.
+Pre-open HTTP fallback remains unmarked and follows the ordinary configured
+stream path.
+
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
 the same byte-bounded, discard-and-resynchronize frame policy and ensures the
@@ -242,6 +252,10 @@ The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
 HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/server/ws-bridge.ts`.
 If Codex still attempts a WebSocket upgrade while the feature is disabled, `/v1/responses` rejects
 the upgrade with 426 so Codex falls back to HTTP cleanly.
+
+That setting controls the client-facing upgrade only. The transparent upstream
+ChatGPT WS optimization described above is selected independently and still
+returns the same downstream SSE contract.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.

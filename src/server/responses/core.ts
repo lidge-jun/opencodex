@@ -190,6 +190,7 @@ import {
 } from "../responses-terminal-repair";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { isCodexWsUpstreamResponse, type BunRuntimeGateInput } from "./ws-upstream";
 import {
   createResponsesItemIdPayloadRewrite,
   hasResponsesItemIdRepair,
@@ -418,6 +419,7 @@ interface CodexPoolAccountRetryArgs {
     // needs the inbound scope or the retry could land on a different wire than the
     // first attempt.
     inboundWire?: InboundWire;
+    codexWsRuntimeIdentity?: BunRuntimeGateInput;
     translatorBudget: TranslatorBudget;
     turnAdmissionLease?: AdmissionLease;
   };
@@ -590,7 +592,7 @@ async function retryCodexPoolOnAlternateAccount(
       upstream.signal,
       connectMs,
       stream,
-      providerFetch(route.provider),
+      providerFetch(route.provider, options.codexWsRuntimeIdentity),
       // Credential-bearing forward send: never follow a redirect into a
       // dead-host rejection after the credential was seen (#914).
       route.provider.authMode === "forward",
@@ -730,6 +732,8 @@ export interface HandleResponsesOptions {
   onNativePassthroughCancel?: () => void;
   /** Internal deterministic clock/timer seam for provider terminal repair. */
   responsesTerminalRepairScheduler?: ResponsesTerminalRepairScheduler;
+  /** Internal deterministic runtime-identity seam for Codex upstream WS selection tests. */
+  codexWsRuntimeIdentity?: BunRuntimeGateInput;
   /**
    * When true, body `prompt_cache_key` is a Claude Desktop shared cache cohort
    * (system/tools hash), not a per-session id — do not use it for Anthropic pool affinity.
@@ -2266,7 +2270,8 @@ async function handleResponsesInner(
             method: request.method,
             headers: request.headers,
             body: request.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+          }, recovery), upstream.signal, connectMs, parsed.stream,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
@@ -2327,7 +2332,8 @@ async function handleResponsesInner(
               method: request.method,
               headers: request.headers,
               body: request.body,
-            }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider),
+            }, recovery), upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity),
               route.provider.authMode === "forward")
               .then(res => {
                 settleObservedHostResponse();
@@ -2574,9 +2580,14 @@ async function handleResponsesInner(
         needsClientRewrite,
         config.streamMode ?? "auto",
       );
+      // A successful Codex WS upgrade is a push source. If it entered tee(),
+      // the inspection branch could drain continuously while the slow client
+      // branch retained bytes without a bound. Force the existing bounded,
+      // single-reader relay before tee; HTTP fallback responses stay unmarked.
+      const forceCodexWsEagerRelay = isCodexWsUpstreamResponse(upstreamResponse);
       const inlineEagerRewrite = needsClientRewrite
-        && (win32EagerRewrite || eagerPath?.useEagerRelay === true);
-      if (eagerPath?.useEagerRelay || win32EagerRewrite) {
+        && (forceCodexWsEagerRelay || win32EagerRewrite || eagerPath?.useEagerRelay === true);
+      if (forceCodexWsEagerRelay || eagerPath?.useEagerRelay || win32EagerRewrite) {
         const turnAc = new AbortController();
         linkAbortSignal(upstream, turnAc.signal);
         registerTurn(turnAc, options.turnAdmissionLease);
@@ -2634,9 +2645,9 @@ async function handleResponsesInner(
           onDone: () => unregisterTurn(turnAc),
         }, inlineEagerRewrite ? { rewriteBudget: translatorBudget } : undefined);
         // When selected, this relay closes response.completed even if upstream
-        // keeps the connection alive. Windows forced-rewrite traffic and Darwin
-        // explicit eager traffic apply client rewrites inline rather than via
-        // the tee()+JS-pull chain.
+        // keeps the connection alive. Marked Codex WS traffic, Windows
+        // forced-rewrite traffic, and Darwin explicit eager traffic apply
+        // client rewrites inline rather than via the tee()+JS-pull chain.
         if (!headers.has("content-type")) headers.set("content-type", "text/event-stream");
         return markEagerRelaySseResponse(
           markNativePassthroughSseResponse(new Response(eagerBody, {
@@ -2926,7 +2937,7 @@ async function handleResponsesInner(
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       stallTimeoutSec: config.stallTimeoutSec,
-      fetchImpl: providerFetch(route.provider),
+      fetchImpl: providerFetch(route.provider, options.codexWsRuntimeIdentity),
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
       ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
@@ -3250,7 +3261,8 @@ async function handleResponsesInner(
             method: builtInitialRequest.method,
             headers: builtInitialRequest.headers,
             body: builtInitialRequest.body,
-          }, recovery), upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+          }, recovery), upstream.signal, connectMs, parsed.stream,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
       );
@@ -3329,7 +3341,8 @@ async function handleResponsesInner(
             ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
             : await fetchWithHeaderTimeout(retryRequest.url, {
               method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-            }, upstream.signal, connectMs, parsed.stream, providerFetch(route.provider));
+            }, upstream.signal, connectMs, parsed.stream,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity));
         } finally {
           retryRequest.releaseBodyObservation?.();
         }
@@ -3653,7 +3666,7 @@ async function handleResponsesInner(
               upstream.signal,
               connectMs,
               nextParsed.stream,
-              providerFetch(route.provider),
+              providerFetch(route.provider, options.codexWsRuntimeIdentity),
             );
           },
           { abortSignal: upstream.signal, label: safeHostLabel(builtContinuationRequest.url) },

@@ -15,7 +15,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `stallTimeoutSec?` | `number` | `300` | `response.incomplete` より前にアップストリーム データがない秒数。最小 1。
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
-| `websockets?` | `boolean` | `false` |応答 WebSocket パスとして `supports_websockets` をアドバタイズします。 False は HTTP/SSE を維持します。 |
+| `websockets?` | `boolean` | `false` | クライアント向け Responses WebSocket パスを広告して許可します。false の場合クライアントは HTTP/SSE を使いますが、対象となる canonical ChatGPT upstream WS 最適化は無効にしません。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 追加の正確な CORS origin。ループバック origin は常に許可します。`chrome-extension://<extension-id>` など authority ベースのブラウザー拡張 origin に対応し、`*` はワイルドカードではありません。Firefox と Safari は拡張 UUID を（インストール/ブラウザー起動ごとに）再生成するため、origin が変わったらエントリを更新してください。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` |生成された `ocx_…` 資格情報は、非ループバック バインドでの管理およびデータ プレーン認証によって受け入れられました。ダッシュボードで管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |

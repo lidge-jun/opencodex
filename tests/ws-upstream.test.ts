@@ -1,9 +1,33 @@
 import { afterEach, describe, expect, jest, test } from "bun:test";
 import { providerFetch } from "../src/server/responses/fetch-helpers";
-import { codexWsUpstreamFetch, shouldUseCodexWsUpstream } from "../src/server/responses/ws-upstream";
+import { handleResponses } from "../src/server/responses";
+import { isEagerRelaySseResponse } from "../src/server/relay";
+import {
+  bunSupportsBoundedCodexWsRelay,
+  codexWsUpstreamFetch as rawCodexWsUpstreamFetch,
+  currentBunRuntimeIdentity,
+  isCodexWsUpstreamResponse,
+  MAX_CODEX_WS_FRAME_BYTES,
+  MAX_CODEX_WS_QUEUE_BYTES,
+  shouldUseCodexWsUpstream as rawShouldUseCodexWsUpstream,
+} from "../src/server/responses/ws-upstream";
 import type { OcxProviderConfig } from "../src/types";
+import type { OcxConfig } from "../src/types";
 
 const CODEX_URL = "https://chatgpt.com/backend-api/codex/responses";
+const BOUNDED_WS_RUNTIME = "1.4.0";
+
+function shouldUseCodexWsUpstream(url: string, init?: RequestInit): boolean {
+  return rawShouldUseCodexWsUpstream(url, init, BOUNDED_WS_RUNTIME);
+}
+
+function codexWsUpstreamFetch(
+  url: string,
+  init: RequestInit,
+  fallback: typeof fetch,
+): Promise<Response> {
+  return rawCodexWsUpstreamFetch(url, init, fallback, BOUNDED_WS_RUNTIME);
+}
 
 function streamingInit(body: Record<string, unknown> = {}): RequestInit {
   return {
@@ -14,6 +38,57 @@ function streamingInit(body: Record<string, unknown> = {}): RequestInit {
 }
 
 describe("shouldUseCodexWsUpstream", () => {
+  test("uses HTTP SSE on runtimes without a bounded response sink", async () => {
+    expect(bunSupportsBoundedCodexWsRelay("1.3.14")).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay("1.4.0-canary.1")).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay("garbage")).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay("1.4.0")).toBe(true);
+    expect(bunSupportsBoundedCodexWsRelay("1.5.0")).toBe(true);
+    expect(bunSupportsBoundedCodexWsRelay({
+      version: "1.4.0",
+      versionWithSha: "v1.4.0 (0123abcd)",
+    })).toBe(true);
+    expect(bunSupportsBoundedCodexWsRelay({
+      version: "1.4.0",
+      versionWithSha: "v1.4.0-canary.1 (0123abcd)",
+    })).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay({
+      version: "1.4.0",
+      versionWithSha: "v1.5.0 (0123abcd)",
+    })).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay({
+      version: "1.4.0",
+      versionWithSha: "malformed",
+    })).toBe(false);
+    expect(bunSupportsBoundedCodexWsRelay()).toBe(
+      bunSupportsBoundedCodexWsRelay(currentBunRuntimeIdentity()),
+    );
+    if (Bun.version_with_sha.includes("-")) {
+      expect(bunSupportsBoundedCodexWsRelay()).toBe(false);
+    }
+    expect(rawShouldUseCodexWsUpstream(CODEX_URL, streamingInit(), "1.3.14")).toBe(false);
+
+    const sentinel = new Response("http-sse");
+    const response = await rawCodexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit(),
+      (async () => sentinel) as typeof fetch,
+      "1.3.14",
+    );
+    expect(response).toBe(sentinel);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+
+    const canarySentinel = new Response("canary-http-sse");
+    const canaryResponse = await rawCodexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit(),
+      (async () => canarySentinel) as typeof fetch,
+      { version: "1.4.0", versionWithSha: "v1.4.0-canary.1 (0123abcd)" },
+    );
+    expect(canaryResponse).toBe(canarySentinel);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   test("matches only streaming POSTs to the Codex backend", () => {
     expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit())).toBe(true);
     // Non-streaming turns keep HTTP: the WS path only speaks the event protocol.
@@ -87,9 +162,11 @@ class FakeWebSocket {
 }
 
 const RealWebSocket = globalThis.WebSocket;
+const RealFetch = globalThis.fetch;
 
 afterEach(() => {
   globalThis.WebSocket = RealWebSocket;
+  globalThis.fetch = RealFetch;
   FakeWebSocket.instances = [];
   FakeWebSocket.script = () => {};
 });
@@ -100,6 +177,25 @@ function installFake(script: (ws: FakeWebSocket) => void) {
 }
 
 describe("providerFetch routing", () => {
+  test("a canary runtime identity cannot open the WS transport", async () => {
+    const sentinel = new Response("base");
+    let baseCalls = 0;
+    const provider = {
+      fetch: (async () => {
+        baseCalls += 1;
+        return sentinel;
+      }) as typeof fetch,
+    } as OcxProviderConfig;
+    const wrapped = providerFetch(provider, {
+      version: "1.4.0",
+      versionWithSha: "v1.4.0-canary.1 (0123abcd)",
+    });
+
+    expect(await wrapped(CODEX_URL, streamingInit())).toBe(sentinel);
+    expect(baseCalls).toBe(1);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   test("routes eligible Codex streaming turns to WS and everything else to the base fetch", async () => {
     installFake(ws => {
       ws.emit("open", {});
@@ -113,7 +209,7 @@ describe("providerFetch routing", () => {
         return sentinel.clone();
       }) as unknown as typeof fetch,
     } as unknown as OcxProviderConfig;
-    const wrapped = providerFetch(provider);
+    const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
     // Eligible: WS adapter serves it, base fetch untouched.
     const wsResponse = await wrapped(CODEX_URL, streamingInit());
@@ -132,6 +228,112 @@ describe("providerFetch routing", () => {
   });
 });
 
+describe("handleResponses Codex WS relay selection", () => {
+  function forwardConfig(): OcxConfig {
+    return {
+      port: 0,
+      defaultProvider: "openai",
+      streamMode: "legacy-tee",
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+          codexAccountMode: "direct",
+        },
+      },
+    } as OcxConfig;
+  }
+
+  function request(): Request {
+    return new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test" },
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: "hello", stream: true }),
+    });
+  }
+
+  test("a successful WS upgrade bypasses the configured legacy tee path", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({ type: "response.completed", response: { id: "r1", status: "completed", output: [] } }),
+      });
+    });
+
+    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+
+    expect(response.status).toBe(200);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const text = await response.text();
+    expect(text).toContain("response.completed");
+    expect(text).toContain("data: [DONE]");
+  });
+
+  test("an HTTP fallback remains on the configured legacy tee path", async () => {
+    installFake(ws => ws.close());
+    globalThis.fetch = (async () => new Response(
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed",
+        response: { id: "r-http", status: "completed", output: [] },
+      })}\n\n`,
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    )) as typeof fetch;
+
+    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(isEagerRelaySseResponse(response)).toBe(false);
+    expect(await response.text()).toContain("response.completed");
+  });
+
+  test("a WS queue overflow fails closed through the bounded eager relay", async () => {
+    const delta = "x".repeat(Math.floor(MAX_CODEX_WS_QUEUE_BYTES / 3));
+    installFake(ws => {
+      ws.emit("open", {});
+      for (let index = 0; index < 4; index += 1) {
+        ws.emit("message", {
+          data: JSON.stringify({ type: "response.output_text.delta", delta, index }),
+        });
+      }
+    });
+
+    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
+      codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
+    });
+
+    expect(isEagerRelaySseResponse(response)).toBe(true);
+    const text = await response.text();
+    expect(text).toContain("event: response.failed");
+    expect(text).toContain("data: [DONE]");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test.skipIf(bunSupportsBoundedCodexWsRelay())(
+    "an older runtime stays on HTTP SSE without opening a WebSocket",
+    async () => {
+      globalThis.fetch = (async () => new Response(
+        `event: response.completed\ndata: ${JSON.stringify({
+          type: "response.completed",
+          response: { id: "r-old", status: "completed", output: [] },
+        })}\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )) as typeof fetch;
+
+      const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" });
+
+      expect(FakeWebSocket.instances).toHaveLength(0);
+      expect(isEagerRelaySseResponse(response)).toBe(false);
+      expect(await response.text()).toContain("response.completed");
+    },
+  );
+});
+
 describe("codexWsUpstreamFetch", () => {
   test("relays event frames as an SSE response and sends one response.create frame", async () => {
     installFake(ws => {
@@ -146,6 +348,7 @@ describe("codexWsUpstreamFetch", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(isCodexWsUpstreamResponse(response)).toBe(true);
     const text = await response.text();
     // WS-only frames are dropped so clients see the exact SSE surface they always got.
     expect(text).not.toContain("codex.rate_limits");
@@ -186,6 +389,7 @@ describe("codexWsUpstreamFetch", () => {
     const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback);
     // The real HTTP status must reach the existing refresh/rotation handlers.
     expect(response).toBe(sentinel);
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
     expect(fallbackCalls).toBe(1);
   });
 
@@ -206,6 +410,7 @@ describe("codexWsUpstreamFetch", () => {
       const response = await responsePromise;
 
       expect(response).toBe(sentinel);
+      expect(isCodexWsUpstreamResponse(response)).toBe(false);
       expect(fallbackCalls).toBe(1);
       expect(FakeWebSocket.instances[0].closed).toBe(true);
     } finally {
@@ -229,6 +434,7 @@ describe("codexWsUpstreamFetch", () => {
     // pre-stream HTTP error/refresh/failover machinery.
     const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), fallback);
     expect(response).toBe(sentinel);
+    expect(isCodexWsUpstreamResponse(response)).toBe(false);
     expect(fallbackCalls).toBe(1);
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
@@ -245,6 +451,54 @@ describe("codexWsUpstreamFetch", () => {
     // relaySseWithFailedTail() only synthesizes response.failed when the body
     // read throws. The read must therefore reject, like a reset TCP socket.
     await expect(response.text()).rejects.toThrow("closed before a Responses terminal event");
+  });
+
+  test("rejects an oversized upstream frame before parsing or enqueueing it", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: "x".repeat(MAX_CODEX_WS_FRAME_BYTES + 1) });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    await expect(response.text()).rejects.toThrow("frame exceeds the response size limit");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test("rejects a raw frame whose SSE envelope would exceed the shared frame limit", async () => {
+    const type = "response." + "x".repeat(64);
+    const base = JSON.stringify({ type, padding: "" });
+    const text = JSON.stringify({ type, padding: "x".repeat(MAX_CODEX_WS_FRAME_BYTES - base.length) });
+    expect(new TextEncoder().encode(text).byteLength).toBe(MAX_CODEX_WS_FRAME_BYTES);
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: text });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    await expect(response.text()).rejects.toThrow("frame exceeds the response size limit");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  test("disconnects an upstream that fills the bounded response queue", async () => {
+    const delta = "x".repeat(Math.floor(MAX_CODEX_WS_QUEUE_BYTES / 3));
+    installFake(ws => {
+      ws.emit("open", {});
+      for (let index = 0; index < 4; index += 1) {
+        ws.emit("message", {
+          data: JSON.stringify({ type: "response.output_text.delta", delta, index }),
+        });
+      }
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    await expect(response.text()).rejects.toThrow("buffered queue limit");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
   test("a mid-stream drop surfaces as a synthesized failed terminal through the passthrough relay", async () => {
@@ -310,5 +564,20 @@ describe("codexWsUpstreamFetch", () => {
     }) as unknown as typeof fetch);
     controller.abort();
     await expect(promise).rejects.toThrow();
+  });
+
+  test("aborting after open preserves the caller's abort reason", async () => {
+    installFake(ws => ws.emit("open", {}));
+    const controller = new AbortController();
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      { ...streamingInit(), signal: controller.signal },
+      (() => { throw new Error("fallback must not run"); }) as unknown as typeof fetch,
+    );
+
+    controller.abort(new Error("turn cancelled"));
+
+    await expect(response.text()).rejects.toThrow("turn cancelled");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 });
