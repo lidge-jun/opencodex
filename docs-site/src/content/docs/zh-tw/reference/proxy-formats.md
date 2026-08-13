@@ -163,8 +163,8 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | --- | --- |
 | 方法 | 僅 `GET` 與 `HEAD`。此介面為唯讀，`/v1` 之下不存在任何目錄變更 API |
 | Body | 目錄文件，與 `GET /api/catalog` 回傳的位元組完全相同 |
-| 內容型別 | `application/json`，並帶 `X-Content-Type-Options: nosniff` |
-| 快取 | 每一個回應都帶 `Cache-Control: no-store` —— 文件本身與每種錯誤皆然。該文件追蹤即時的供應商、可見性與 selector 狀態，且按憑證提供，因此中介不得保留或重播它；被快取的 404 也不得掩蓋之後生成的目錄 |
+| 內容型別 | `application/json` |
+| 快取與嗅探 | 此路由自身產生的每一個回應 —— 文件、`HEAD` 以及每種錯誤 —— 都帶 `Cache-Control: no-store` 與 `X-Content-Type-Options: nosniff`。該文件追蹤即時的供應商、可見性與 selector 狀態，且按憑證提供，因此中介不得保留或重播它；被快取的 404 也不得掩蓋之後生成的目錄。全域的無本文 `OPTIONS` 預檢在路由執行之前就被回應，因此不帶這兩個路由層級標頭 |
 | 版本中繼資料 | `x-opencodex-codex-version` 回報本代理選定的 Codex 版本。當代理沒有權威的執行期版本時，此標頭會被省略，而不是猜測一個值 |
 | `HEAD` | 與 `GET` 相同的狀態與標頭，另加 `Content-Length`，且沒有 body —— 在下載前檢查大小與版本偏差 |
 | 回應上限 | 8 MiB。更大的文件會被確定性地拒絕，而不是繼續傳輸 |
@@ -187,24 +187,39 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# 在每一條退出路徑上都刪除暫存檔，包含 Ctrl-C 與 SIGTERM。
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# 清理只掛在 EXIT 上，因此在每一條退出路徑上恰好執行一次。訊號處理器執行 exit 而不是只做清理：
+# 單純的 `trap 'rm -f ...' INT` 會取代預設的終止動作，shell 可能在它執行後繼續進入 curl 或 mv。
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "目錄下載失敗；保留原有目錄" >&2
   exit 1
 fi
 
 # 同目錄內重新命名：在它成功之前，原有目錄始終保持不變。
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "目錄安裝失敗；保留原有目錄" >&2
   exit 1
 fi
+
+# 暫存路徑已不存在；清除所有處理器，使結束時不再執行任何動作。
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 

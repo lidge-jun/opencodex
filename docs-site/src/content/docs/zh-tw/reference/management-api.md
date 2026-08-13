@@ -128,7 +128,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 | 方法與路徑 | 用途 | Notable errors |
 | --- | --- | --- |
-| `GET /api/catalog` | 回傳已安裝的 Codex 目錄檔案 | 404 目錄未找到 |
+| `GET /api/catalog` | 回傳已安裝的 Codex 目錄檔案 | 404 目錄未找到；500 目錄含有不得散布的值；500 目錄檔案過大無法讀取 |
 | `GET /api/models` | 回傳儀表板／CLI 模型列 | 收集飽和時 `catalog_busy` |
 | `GET /api/client-config?client=...` | 建構唯讀的 OpenCode 或 Pi 客戶端設定檔案 | 400 不支援客戶端；503 目錄不可用 |
 | `PUT /api/disabled-models` | 取代共享的 disabled-model 清單 | 400 無效 JSON |
@@ -140,6 +140,24 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 `GET /api/catalog` 面向儀表板與運維工具。當遠端客戶端需要目錄時，請使用 data-plane 路由
 `GET /v1/catalog`：它由同一個生成器回傳同一份文件，因此客戶端機器永遠不需要取得管理秘密。
 請見 [Proxy API Formats](/zh-tw/reference/proxy-formats/)。
+
+兩個路由共用同一個物化步驟，因此本路由繼承了它的兩種拒絕。每一種都以一般的管理錯誤封裝
+`{ "error": "<message>" }` 回傳，而不是 data-plane 的 `type`/`code` 封裝，所以 `/v1/catalog` 的錯誤
+代碼不會出現在這裡：
+
+| 狀態 | 回應本文 | 意義 |
+| --- | --- | --- |
+| 404 | `{ "error": "catalog not found" }` | 讀取不到任何目錄文件 |
+| 500 | `{ "error": "catalog contains values that are not safe to distribute" }` | 儲存的目錄帶有形似憑證、身分或設定的內容。此訊息刻意不含任何內容 |
+| 500 | `{ "error": "catalog file is too large to read" }` | 儲存的檔案超過安全的 32 MiB 來源讀取上限，因此在解析之前就被拒絕 |
+
+本路由**不**套用 data-plane 的 8 MiB 序列化回應上限；該邊界只屬於可遠端存取的傳輸面。
+
+:::note
+把這個共用的拒絕套用到管理路由，是單一物化步驟帶來的結果，而不是已獲核准的政策：在此之前，本路由
+會提供任何可解析的目錄檔案。管理平面是否應繼續受同一拒絕約束，是記錄在
+`structure/05_gui-and-management-api.md` 中的待定維護者決策。
+:::
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰
 

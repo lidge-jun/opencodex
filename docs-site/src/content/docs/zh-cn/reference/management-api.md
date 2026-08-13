@@ -128,7 +128,7 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET /api/catalog` | 返回已安装的 Codex 目录文档 | 404 未找到目录 |
+| `GET /api/catalog` | 返回已安装的 Codex 目录文档 | 404 未找到目录；500 目录包含不得分发的值；500 目录文件过大无法读取 |
 | `GET /api/models` | 返回仪表板/CLI 模型行 | 收集饱和时返回 `catalog_busy` |
 | `GET /api/client-config?client=...` | 为任意支持的文件集成构建只读客户端配置 | 400 不支持的客户端；503 目录不可用 |
 | `PUT /api/disabled-models` | 替换共享的禁用模型列表 | 400 无效 JSON |
@@ -140,6 +140,24 @@ Authorization: Bearer <admin-token>
 `GET /api/catalog` 面向 Dashboard 和运维工具。当远程客户端需要 catalog 时，请使用数据平面路由
 `GET /v1/catalog`：它由同一个生成器返回同一份文档，因此客户端机器永远不需要拿到 admin secret。
 参见 [Proxy API Formats](/zh-cn/reference/proxy-formats/)。
+
+两个路由共用同一个物化步骤，因此本路由继承了它的两种拒绝。每一种都以普通的管理错误封装
+`{ "error": "<message>" }` 返回，而不是数据平面的 `type`/`code` 封装，所以 `/v1/catalog` 的错误
+code 不会出现在这里：
+
+| 状态 | 响应体 | 含义 |
+| --- | --- | --- |
+| 404 | `{ "error": "catalog not found" }` | 读取不到任何 catalog 文档 |
+| 500 | `{ "error": "catalog contains values that are not safe to distribute" }` | 存储的 catalog 携带形似凭证、身份或配置的内容。该消息刻意不包含任何内容 |
+| 500 | `{ "error": "catalog file is too large to read" }` | 存储的文件超过安全的 32 MiB 源读取上限，因此在解析之前就被拒绝 |
+
+本路由**不**应用数据平面的 8 MiB 序列化响应上限；该边界只属于可远程访问的传输面。
+
+:::note
+把这个共用的拒绝应用到管理路由，是单一物化步骤带来的结果，而不是已获批准的策略：在此之前，本路由
+会提供任何可解析的 catalog 文件。管理平面是否应继续受同一拒绝约束，是记录在
+`structure/05_gui-and-management-api.md` 中的待定维护者决策。
+:::
 
 ### OAuth 账户、provider 密钥和数据平面密钥
 

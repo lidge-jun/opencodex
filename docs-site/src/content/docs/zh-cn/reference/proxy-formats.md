@@ -177,8 +177,8 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 | --- | --- |
 | 方法 | 只有 `GET` 和 `HEAD`。该表面是只读的，`/v1` 下不存在任何 catalog 变更 API |
 | Body | catalog 文档，与 `GET /api/catalog` 返回的字节完全一致 |
-| 内容类型 | `application/json`，并带 `X-Content-Type-Options: nosniff` |
-| 缓存 | 每一个响应都带 `Cache-Control: no-store` —— 文档本身和每种错误都一样。该文档跟踪实时的 provider、可见性和 selector 状态，并按凭证提供，因此中间层不得保留或重放它；被缓存的 404 也不得掩盖之后生成的 catalog |
+| 内容类型 | `application/json` |
+| 缓存与嗅探 | 该路由自身生成的每一个响应 —— 文档、`HEAD` 以及每种错误 —— 都带 `Cache-Control: no-store` 和 `X-Content-Type-Options: nosniff`。该文档跟踪实时的 provider、可见性和 selector 状态，并按凭证提供，因此中间层不得保留或重放它；被缓存的 404 也不得掩盖之后生成的 catalog。全局的无正文 `OPTIONS` 预检在路由运行之前就被应答，因此不携带这两个路由级响应头 |
 | 版本元数据 | `x-opencodex-codex-version` 报告本代理选定的 Codex 版本。当代理没有权威运行时版本时，该头会被省略，而不是猜测一个值 |
 | `HEAD` | 与 `GET` 相同的状态和响应头，另外带 `Content-Length`，且没有 body —— 在下载前检查大小和版本偏差 |
 | 响应上限 | 8 MiB。更大的文档会被确定性地拒绝，而不是继续传输 |
@@ -201,24 +201,39 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# 在每一条退出路径上都删除临时文件，包括 Ctrl-C 和 SIGTERM。
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# 清理只挂在 EXIT 上，因此在每一条退出路径上恰好执行一次。信号处理器执行 exit 而不是只做清理：
+# 单纯的 `trap 'rm -f ...' INT` 会替换默认的终止动作，shell 可能在它运行后继续进入 curl 或 mv。
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "catalog 下载失败；保留原有 catalog" >&2
   exit 1
 fi
 
 # 同目录内重命名：在它成功之前，原有 catalog 始终保持不变。
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "catalog 安装失败；保留原有 catalog" >&2
   exit 1
 fi
+
+# 临时路径已不存在；清除所有处理器，使退出时不再执行任何动作。
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 

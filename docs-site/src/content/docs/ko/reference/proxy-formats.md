@@ -197,8 +197,8 @@ data-plane 예외를 추가하지도 않았습니다.
 | --- | --- |
 | 메서드 | `GET`과 `HEAD`만 허용합니다. 이 표면은 읽기 전용이며 `/v1` 아래에 카탈로그 변경 API는 없습니다 |
 | Body | 카탈로그 문서로, `GET /api/catalog`가 반환하는 바이트와 동일합니다 |
-| 콘텐츠 타입 | `application/json`, 그리고 `X-Content-Type-Options: nosniff` |
-| 캐싱 | 모든 응답에 `Cache-Control: no-store`가 붙습니다 — 문서 본문과 각 오류 모두 동일합니다. 이 문서는 실시간 provider, 표시 여부, selector 상태를 반영하고 credential별로 제공되므로 중간 계층이 보관하거나 재전송해서는 안 되고, 캐시된 404가 이후 생성된 카탈로그를 가려서도 안 됩니다 |
+| 콘텐츠 타입 | `application/json` |
+| 캐싱과 스니핑 | 이 경로가 직접 생성하는 모든 응답 — 문서, `HEAD`, 각 오류 — 에 `Cache-Control: no-store`와 `X-Content-Type-Options: nosniff`가 붙습니다. 이 문서는 실시간 provider, 표시 여부, selector 상태를 반영하고 credential별로 제공되므로 중간 계층이 보관하거나 재전송해서는 안 되고, 캐시된 404가 이후 생성된 카탈로그를 가려서도 안 됩니다. 전역 본문 없는 `OPTIONS` preflight는 경로가 실행되기 전에 응답되므로 이 두 경로 헤더를 담지 않습니다 |
 | 버전 메타데이터 | `x-opencodex-codex-version`은 이 프록시가 선택한 Codex 버전을 보고합니다. 프록시에 신뢰할 수 있는 런타임 버전이 없으면 헤더는 추측되지 않고 생략됩니다 |
 | `HEAD` | `GET`과 같은 상태와 헤더에 `Content-Length`를 더하고 body는 없습니다. 내려받기 전에 크기와 버전 차이를 확인할 수 있습니다 |
 | 응답 상한 | 8 MiB. 더 큰 문서는 스트리밍되지 않고 결정적으로 거부됩니다 |
@@ -225,24 +225,40 @@ preflight는 어떤 경로 인증보다도 먼저 전역 핸들러가 본문 없
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# Ctrl-C와 SIGTERM을 포함한 모든 종료 경로에서 임시 파일을 제거합니다.
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# 정리는 EXIT에만 걸어 두므로 모든 종료 경로에서 정확히 한 번만 실행됩니다. 시그널 핸들러는
+# 정리만 하지 않고 exit합니다. 단순한 `trap 'rm -f ...' INT`는 기본 종료 동작을 대체하므로
+# 핸들러가 실행된 뒤에도 셸이 curl이나 mv로 계속 진행할 수 있습니다.
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
 
 # 같은 디렉터리 안에서의 이름 변경: 이것이 성공할 때까지 기존 카탈로그는 그대로 남습니다.
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "catalog install failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# 임시 경로는 이제 존재하지 않습니다. 모든 핸들러를 해제해 종료 시 아무것도 실행되지 않게 합니다.
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 

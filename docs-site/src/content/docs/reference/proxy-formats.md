@@ -219,8 +219,8 @@ data-plane exception was added to the `/api/*` management prefix.
 | --- | --- |
 | Methods | `GET` and `HEAD` only. The surface is read-only and there is no catalog mutation API under `/v1` |
 | Body | The catalog document, byte-identical to what `GET /api/catalog` returns |
-| Content type | `application/json`, with `X-Content-Type-Options: nosniff` |
-| Caching | `Cache-Control: no-store` on every response — the document and each error alike. The document tracks live provider, visibility, and selector state and is served per credential, so an intermediary must not retain or replay it, and a cached 404 must not hide a catalog generated later |
+| Content type | `application/json` |
+| Caching and sniffing | Every response the route itself generates — the document, `HEAD`, and each error — carries `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. The document tracks live provider, visibility, and selector state and is served per credential, so an intermediary must not retain or replay it, and a cached 404 must not hide a catalog generated later. The global bodyless `OPTIONS` preflight is answered before the route runs and does not carry these two route headers |
 | Version metadata | `x-opencodex-codex-version` reports the Codex version this proxy selected. The header is omitted rather than guessed when the proxy has no authoritative runtime version |
 | `HEAD` | Same status and headers as `GET`, plus `Content-Length`, and no body — check size and version skew before downloading |
 | Response ceiling | 8 MiB. A larger document is refused deterministically instead of being streamed |
@@ -249,24 +249,40 @@ travels only in the request header, never in the URL:
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# Remove the temporary file on every exit path, including Ctrl-C and SIGTERM.
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# Cleanup runs on EXIT only, so it happens exactly once on every exit path. The signal
+# handlers exit instead of merely cleaning up: a bare `trap 'rm -f ...' INT` would replace
+# the default terminate action, and the shell could continue into curl or mv after it ran.
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
 
 # Same-directory rename: the previous catalog survives until this succeeds.
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "catalog install failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# The temporary path no longer exists; drop every handler so nothing runs on exit.
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 

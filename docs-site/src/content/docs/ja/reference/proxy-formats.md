@@ -160,8 +160,8 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 | --- | --- |
 |メソッド | `GET` と `HEAD` のみ。このサーフェスは読み取り専用で、`/v1` 配下にカタログ変更 API はありません |
 | Body |カタログ ドキュメント。`GET /api/catalog` が返すバイト列と同一です |
-|コンテンツ タイプ | `application/json`、および `X-Content-Type-Options: nosniff` |
-|キャッシュ |すべての応答に `Cache-Control: no-store` が付きます — ドキュメント本体も各エラーも同様です。このドキュメントはライブのプロバイダー、可視性、セレクター状態を反映し、資格情報ごとに提供されるため、中間層が保持または再送してはなりません。キャッシュされた 404 が、後から生成されたカタログを隠すこともあってはなりません |
+|コンテンツ タイプ | `application/json` |
+|キャッシュとスニッフィング |このルート自身が生成する応答 — ドキュメント、`HEAD`、各エラー — にはすべて `Cache-Control: no-store` と `X-Content-Type-Options: nosniff` が付きます。このドキュメントはライブのプロバイダー、可視性、セレクター状態を反映し、資格情報ごとに提供されるため、中間層が保持または再送してはなりません。キャッシュされた 404 が、後から生成されたカタログを隠すこともあってはなりません。グローバルな本文なし `OPTIONS` プリフライトはルートの実行前に応答されるため、この 2 つのルート固有ヘッダーを持ちません |
 |バージョン メタデータ | `x-opencodex-codex-version` はこのプロキシが選択した Codex バージョンを報告します。プロキシに信頼できるランタイム バージョンがない場合、ヘッダーは推測されるのではなく省略されます |
 | `HEAD` | `GET` と同じステータスとヘッダーに加えて `Content-Length` を返し、本文はありません。ダウンロード前にサイズとバージョン差分を確認できます |
 |応答上限 | 8 MiB。これを超えるドキュメントは中継されず、確定的に拒否されます |
@@ -184,24 +184,40 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# Ctrl-C や SIGTERM を含む、あらゆる終了経路で一時ファイルを削除します。
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# クリーンアップは EXIT だけに掛けるので、どの終了経路でもちょうど一度だけ実行されます。
+# シグナル ハンドラーは掃除だけでなく exit します。単なる `trap 'rm -f ...' INT` は既定の終了
+# 動作を置き換えてしまい、シェルがハンドラー実行後に curl や mv へ進む可能性があります。
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
 
 # 同一ディレクトリ内でのリネーム。これが成功するまで既存のカタログはそのまま残ります。
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "catalog install failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# 一時パスはもう存在しません。すべてのハンドラーを外し、終了時に何も実行させません。
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 

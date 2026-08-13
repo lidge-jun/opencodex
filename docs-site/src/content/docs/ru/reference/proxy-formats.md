@@ -212,8 +212,8 @@ management-префикс `/api/*` не добавлено никакого ис
 | --- | --- |
 | Методы | Только `GET` и `HEAD`. Surface только для чтения; под `/v1` нет API изменения каталога |
 | Body | Документ каталога, побайтово совпадающий с тем, что возвращает `GET /api/catalog` |
-| Content type | `application/json`, вместе с `X-Content-Type-Options: nosniff` |
-| Кэширование | `Cache-Control: no-store` на каждом ответе — и на документе, и на каждой ошибке. Документ отражает актуальное состояние провайдеров, visibility и selector'ов и отдаётся под конкретный credential, поэтому промежуточный узел не должен его сохранять или переотдавать, а закэшированный 404 не должен скрывать каталог, сгенерированный позже |
+| Content type | `application/json` |
+| Кэширование и sniffing | Каждый ответ, который формирует сам маршрут — документ, `HEAD` и каждая ошибка — несёт `Cache-Control: no-store` и `X-Content-Type-Options: nosniff`. Документ отражает актуальное состояние провайдеров, visibility и selector'ов и отдаётся под конкретный credential, поэтому промежуточный узел не должен его сохранять или переотдавать, а закэшированный 404 не должен скрывать каталог, сгенерированный позже. Глобальный бестелесный preflight `OPTIONS` отвечается до входа в маршрут и этих двух маршрутных заголовков не несёт |
 | Metadata версии | `x-opencodex-codex-version` сообщает версию Codex, выбранную этим прокси. Если у прокси нет авторитетной runtime-версии, заголовок опускается, а не угадывается |
 | `HEAD` | Тот же статус и заголовки, что у `GET`, плюс `Content-Length`, и без body — можно проверить размер и расхождение версий до загрузки |
 | Предел ответа | 8 MiB. Более крупный документ детерминированно отклоняется, а не отдаётся потоком |
@@ -242,24 +242,40 @@ plane. Скачивайте во временный файл и атомарно
 
 ```bash
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
-mkdir -p "$codex_dir"
-tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-# Удаляем временный файл на любом пути выхода, включая Ctrl-C и SIGTERM.
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
+mkdir -p -- "$codex_dir" || exit 1
+
+# Очистка висит только на EXIT, поэтому выполняется ровно один раз на любом пути выхода.
+# Обработчики сигналов делают exit, а не только уборку: простой `trap 'rm -f ...' INT`
+# заменяет действие завершения по умолчанию, и оболочка может продолжить в curl или mv.
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
-    https://proxy.example.com/v1/catalog; then
+    -- https://proxy.example.com/v1/catalog; then
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
 
 # Переименование внутри той же директории: прежний каталог жив, пока оно не удалось.
-if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
   echo "catalog install failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# Временного пути больше нет; снимаем все обработчики, чтобы на выходе ничего не выполнялось.
+tmp=""
 trap - EXIT HUP INT TERM
 ```
 
