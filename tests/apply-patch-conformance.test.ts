@@ -1,5 +1,8 @@
+import { create, fromBinary } from "@bufbuild/protobuf";
 import { expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,7 +13,18 @@ import {
 } from "../src/adapters/registry";
 import { REQUIRED_ROUTED_TOOL_CONTRACTS } from "../src/adapters/contracts";
 import type { AdapterWire } from "../src/adapters/contracts";
-import { bridgeToResponsesSSE } from "../src/bridge";
+import {
+  AgentClientMessageSchema,
+  ExecServerMessageSchema,
+  WriteArgsSchema,
+} from "../src/adapters/cursor/gen/agent_pb";
+import { handleCursorNativeExec } from "../src/adapters/cursor/native-exec";
+import { createCursorRequest } from "../src/adapters/cursor/request-builder";
+import {
+  cursorRequestAdvertisesApplyPatch,
+  isCursorSyntheticStructuredEditTool,
+} from "../src/adapters/cursor/tool-definitions";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import { ensureStrictCatalogFields, normalizeRoutedCatalogEntry } from "../src/codex/catalog/parsing";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { parseRequest } from "../src/responses/parser";
@@ -91,7 +105,7 @@ function codeModeParsed(wire: AdapterWire): OcxParsedRequest {
   return prepareWireParsed({
     modelId: model,
     stream: true,
-    options: { toolChoice: { name: "exec" } },
+    options: {},
     context: {
       systemPrompt: ["Use apply_patch for local file edits."],
       messages: [{ role: "user", content: "Patch the requested file.", timestamp: 0 }],
@@ -104,7 +118,6 @@ function codeModeParsed(wire: AdapterWire): OcxParsedRequest {
       model,
       input: "Patch the requested file.",
       stream: true,
-      tool_choice: { type: "custom", name: "exec" },
       tools: [{
         type: "custom",
         name: "exec",
@@ -124,6 +137,51 @@ function freeformParsed(wire: AdapterWire): OcxParsedRequest {
   }), wire);
 }
 
+function toolChoiceNoneParsed(wire: AdapterWire): OcxParsedRequest {
+  return prepareWireParsed(parseRequest({
+    model: WIRE_MODELS[wire],
+    input: "Do not call a tool.",
+    stream: true,
+    tool_choice: "none",
+    tools: [
+      { type: "custom", name: "apply_patch", description: "Apply a patch" },
+      {
+        type: "function",
+        name: "noop",
+        description: "No operation",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+    ],
+  }), wire);
+}
+
+function continuationParsed(wire: AdapterWire): OcxParsedRequest {
+  return prepareWireParsed(parseRequest({
+    model: WIRE_MODELS[wire],
+    input: [
+      {
+        type: "custom_tool_call",
+        id: "ctc_patch",
+        call_id: "call_continue_patch",
+        name: "apply_patch",
+        input: APPLY_PATCH_FIXTURE,
+      },
+      {
+        type: "custom_tool_call_output",
+        call_id: "call_continue_patch",
+        output: "Done!",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Continue after patch." }],
+      },
+    ],
+    stream: true,
+    tools: [{ type: "custom", name: "apply_patch", description: "Apply a patch" }],
+  }), wire);
+}
+
 function parseResponsesFrames(text: string): Array<{ event?: string; data: Record<string, unknown> }> {
   return text.split("\n\n")
     .map(frame => frame.trim())
@@ -136,18 +194,158 @@ function parseResponsesFrames(text: string): Array<{ event?: string; data: Recor
     });
 }
 
+function inputFromValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    try {
+      const row = JSON.parse(value) as { input?: unknown };
+      return typeof row.input === "string" ? row.input : value;
+    } catch {
+      return value;
+    }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const input = (value as Record<string, unknown>).input;
+    if (typeof input === "string") return input;
+  }
+  return undefined;
+}
+
+function advertisedToolNames(wire: AdapterWire, body: string): string[] {
+  const parsed = JSON.parse(body) as Record<string, unknown>;
+  if (wire === "openai-chat") {
+    const tools = parsed.tools as Array<{ function?: { name?: string } }> | undefined;
+    return (tools ?? []).flatMap(tool => typeof tool.function?.name === "string" ? [tool.function.name] : []);
+  }
+  if (wire === "anthropic" || wire === "openai-responses" || wire === "cursor") {
+    const tools = parsed.tools as Array<{ name?: string }> | undefined;
+    return (tools ?? []).flatMap(tool => typeof tool.name === "string" ? [tool.name] : []);
+  }
+  if (wire === "google") {
+    const tools = parsed.tools as Array<{ functionDeclarations?: Array<{ name?: string }> }> | undefined;
+    return (tools ?? []).flatMap(group =>
+      (group.functionDeclarations ?? []).flatMap(tool => typeof tool.name === "string" ? [tool.name] : []));
+  }
+  if (wire === "command-code") {
+    const params = parsed.params as { tools?: Array<{ name?: string }> } | undefined;
+    return (params?.tools ?? []).flatMap(tool => typeof tool.name === "string" ? [tool.name] : []);
+  }
+  const state = parsed.conversationState as {
+    currentMessage?: {
+      userInputMessage?: {
+        userInputMessageContext?: {
+          tools?: Array<{ toolSpecification?: { name?: string } }>;
+        };
+      };
+    };
+  } | undefined;
+  const tools = state?.currentMessage?.userInputMessage?.userInputMessageContext?.tools ?? [];
+  return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.toolSpecification.name] : []);
+}
+
+function continuationInput(wire: AdapterWire, body: string): string | undefined {
+  const parsed = JSON.parse(body) as Record<string, unknown>;
+  if (wire === "openai-chat") {
+    const messages = parsed.messages as Array<{
+      tool_calls?: Array<{ function?: { name?: string; arguments?: unknown } }>;
+    }> | undefined;
+    for (const message of messages ?? []) {
+      for (const call of message.tool_calls ?? []) {
+        if (call.function?.name?.includes("apply_patch")) return inputFromValue(call.function.arguments);
+      }
+    }
+    return undefined;
+  }
+  if (wire === "anthropic") {
+    const messages = parsed.messages as Array<{ content?: unknown }> | undefined;
+    for (const message of messages ?? []) {
+      if (!Array.isArray(message.content)) continue;
+      for (const block of message.content) {
+        if (!block || typeof block !== "object" || Array.isArray(block)) continue;
+        const row = block as Record<string, unknown>;
+        if (row.type === "tool_use" && typeof row.name === "string" && row.name.includes("apply_patch")) {
+          return inputFromValue(row.input);
+        }
+      }
+    }
+    return undefined;
+  }
+  if (wire === "google") {
+    const contents = parsed.contents as Array<{
+      parts?: Array<{ functionCall?: { name?: string; args?: unknown } }>;
+    }> | undefined;
+    for (const content of contents ?? []) {
+      for (const part of content.parts ?? []) {
+        if (part.functionCall?.name?.includes("apply_patch")) return inputFromValue(part.functionCall.args);
+      }
+    }
+    return undefined;
+  }
+  if (wire === "command-code") {
+    const params = parsed.params as {
+      messages?: Array<{ content?: Array<Record<string, unknown>> }>;
+    } | undefined;
+    for (const message of params?.messages ?? []) {
+      for (const part of message.content ?? []) {
+        if (part.type === "tool-call" && typeof part.toolName === "string" && part.toolName.includes("apply_patch")) {
+          return inputFromValue(part.input);
+        }
+      }
+    }
+    return undefined;
+  }
+  if (wire === "kiro") {
+    const state = parsed.conversationState as {
+      history?: Array<{ assistantResponseMessage?: { toolUses?: Array<{ name?: string; input?: unknown }> } }>;
+      currentMessage?: { assistantResponseMessage?: { toolUses?: Array<{ name?: string; input?: unknown }> } };
+    } | undefined;
+    const entries = [...(state?.history ?? []), ...(state?.currentMessage ? [state.currentMessage] : [])];
+    for (const entry of entries) {
+      for (const use of entry.assistantResponseMessage?.toolUses ?? []) {
+        if (use.name?.includes("apply_patch")) return inputFromValue(use.input);
+      }
+    }
+    return undefined;
+  }
+  if (wire === "openai-responses") {
+    const input = parsed.input as Array<Record<string, unknown>> | undefined;
+    for (const item of input ?? []) {
+      if (typeof item.name !== "string" || !item.name.includes("apply_patch")) continue;
+      if (item.type === "custom_tool_call") return inputFromValue(item.input);
+      if (item.type === "function_call") return inputFromValue(item.arguments);
+    }
+    return undefined;
+  }
+  const visit = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = visit(item);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    }
+    const row = value as Record<string, unknown>;
+    if (typeof row.name === "string" && row.name.includes("apply_patch")) {
+      const found = inputFromValue(row.input ?? row.arguments);
+      if (found !== undefined) return found;
+    }
+    for (const nested of Object.values(row)) {
+      const found = visit(nested);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return visit(parsed);
+}
+
 async function restoredFreeformInput(adapterId: string, wire: AdapterWire): Promise<string | undefined> {
   const driver = TOOL_WIRE_DRIVERS[wire];
   if (!driver.streamingToolCall) return undefined;
-
   const parsed = freeformParsed(wire);
   const adapter = createRegisteredAdapter(providerFixture(adapterId, wire));
   const outbound = await driver.observeOutbound(adapter, parsed);
   const wireToolName = driver.extractWireToolName?.(outbound, "apply_patch") ?? "apply_patch";
-  const upstream = driver.streamingToolCall(
-    wireToolName,
-    JSON.stringify({ input: APPLY_PATCH_FIXTURE }),
-  );
+  const upstream = driver.streamingToolCall(wireToolName, JSON.stringify({ input: APPLY_PATCH_FIXTURE }));
   const maps = buildToolBridgeMaps(parsed);
   const bridged = bridgeToResponsesSSE(
     adapter.parseStream(upstream, createTestTranslatorBudget()),
@@ -163,6 +361,82 @@ async function restoredFreeformInput(adapterId: string, wire: AdapterWire): Prom
   return frames.find(frame => frame.event === "response.custom_tool_call_input.done")?.data.input as
     | string
     | undefined;
+}
+
+function bufferedToolResponse(wire: AdapterWire, wireName: string): Response | undefined {
+  const args = { input: APPLY_PATCH_FIXTURE };
+  if (wire === "openai-chat") {
+    return new Response(JSON.stringify({
+      choices: [{
+        message: {
+          role: "assistant",
+          tool_calls: [{
+            id: "call_buffered_patch",
+            type: "function",
+            function: { name: wireName, arguments: JSON.stringify(args) },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+    }));
+  }
+  if (wire === "anthropic") {
+    return new Response(JSON.stringify({
+      content: [{ type: "tool_use", id: "call_buffered_patch", name: wireName, input: args }],
+      stop_reason: "tool_use",
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+  }
+  if (wire === "google") {
+    return new Response(JSON.stringify({
+      candidates: [{
+        content: { parts: [{ functionCall: { name: wireName, args } }] },
+        finishReason: "STOP",
+      }],
+      usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+    }));
+  }
+  return TOOL_WIRE_DRIVERS[wire].streamingToolCall?.(wireName, JSON.stringify(args));
+}
+
+async function restoredBufferedInput(adapterId: string, wire: AdapterWire): Promise<string | undefined> {
+  const parsed = freeformParsed(wire);
+  const adapter = createRegisteredAdapter(providerFixture(adapterId, wire));
+  if (!adapter.parseResponse) return undefined;
+  const driver = TOOL_WIRE_DRIVERS[wire];
+  const outbound = await driver.observeOutbound(adapter, parsed);
+  const wireName = driver.extractWireToolName?.(outbound, "apply_patch") ?? "apply_patch";
+  const response = bufferedToolResponse(wire, wireName);
+  if (!response) return undefined;
+  const events = await adapter.parseResponse(response, createTestTranslatorBudget());
+  const maps = buildToolBridgeMaps(parsed);
+  const built = buildResponseJSON(events, parsed.modelId, {
+    toolNsMap: maps.toolNsMap,
+    declaredToolNames: maps.declaredToolNames,
+    freeformToolNames: maps.freeformToolNames,
+    toolSearchToolNames: maps.toolSearchToolNames,
+  });
+  const output = built.output as Array<Record<string, unknown>>;
+  const call = output.find(item => item.type === "custom_tool_call" && item.name === "apply_patch");
+  return typeof call?.input === "string" ? call.input : undefined;
+}
+
+function writeExec(path: string, text: string) {
+  return create(ExecServerMessageSchema, {
+    id: 7,
+    execId: "apply-patch-conformance",
+    message: {
+      case: "writeArgs",
+      value: create(WriteArgsSchema, { path, fileText: text }),
+    },
+  });
+}
+
+function decodeCursorExec(bytes: Uint8Array) {
+  const message = fromBinary(AgentClientMessageSchema, bytes);
+  expect(message.message.case).toBe("execClientMessage");
+  if (message.message.case !== "execClientMessage") throw new Error("Expected execClientMessage");
+  return message.message.value;
 }
 
 test("global apply_patch precondition forces routed catalog rows to freeform", () => {
@@ -186,10 +460,7 @@ test("global apply_patch precondition forces routed catalog rows to freeform", (
 test("every registered adapter automatically inherits the mandatory routed tool contracts", () => {
   expect(adapterDefinitions().length).toBeGreaterThan(0);
   for (const [adapterId, definition] of adapterDefinitions()) {
-    expect(
-      definition.requiredToolContracts,
-      `${adapterId} must inherit every mandatory routed tool contract`,
-    ).toEqual(REQUIRED_ROUTED_TOOL_CONTRACTS);
+    expect(definition.requiredToolContracts, adapterId).toEqual(REQUIRED_ROUTED_TOOL_CONTRACTS);
   }
 });
 
@@ -219,15 +490,29 @@ test("all configured adapter ids are members of the authoritative adapter regist
   }
 });
 
-test("every registered adapter keeps the nested apply_patch helper in its final post-tool_choice request", async () => {
+test("every registered adapter keeps the nested apply_patch helper in its final request", async () => {
   for (const [adapterId] of adapterDefinitions()) {
     const contract = effectiveAdapterContract(adapterId);
     const parsed = codeModeParsed(contract.wire);
     const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
     const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
     const normalized = body.replace(/\\n/g, " ").replace(/\s+/g, " ");
-
     expect(applyPatchContractFailures({ finalAdvertisement: normalized }), adapterId).toEqual([]);
+  }
+});
+
+test("tool_choice:none removes the final advertised tool catalog for every registered adapter", async () => {
+  for (const [adapterId] of adapterDefinitions()) {
+    const contract = effectiveAdapterContract(adapterId);
+    const parsed = toolChoiceNoneParsed(contract.wire);
+    const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
+    const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
+    const names = advertisedToolNames(contract.wire, body);
+    expect(names, adapterId).toEqual([]);
+    expect(applyPatchContractFailures({
+      expectedPatchAdvertised: false,
+      actualPatchAdvertised: names.some(name => name.includes("apply_patch")),
+    }), adapterId).toEqual([]);
   }
 });
 
@@ -238,6 +523,83 @@ test("every parsed response wire restores the hostile freeform apply_patch input
     const restoredInput = await restoredFreeformInput(adapterId, contract.wire);
     expect(restoredInput, adapterId).toBe(APPLY_PATCH_FIXTURE);
     expect(applyPatchContractFailures({ restoredInput }), adapterId).toEqual([]);
+  }
+});
+
+test("every buffered parser restores the hostile freeform apply_patch input exactly", async () => {
+  for (const [adapterId] of adapterDefinitions()) {
+    const contract = effectiveAdapterContract(adapterId);
+    const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
+    if (!adapter.parseResponse) continue;
+    const restoredInput = await restoredBufferedInput(adapterId, contract.wire);
+    if (restoredInput === undefined && !bufferedToolResponse(contract.wire, "apply_patch")) continue;
+    expect(restoredInput, adapterId).toBe(APPLY_PATCH_FIXTURE);
+  }
+});
+
+test("every registered adapter replays the exact apply_patch input on continuation", async () => {
+  for (const [adapterId] of adapterDefinitions()) {
+    const contract = effectiveAdapterContract(adapterId);
+    const parsed = continuationParsed(contract.wire);
+    const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
+    const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
+    const replayed = continuationInput(contract.wire, body);
+    expect(replayed, adapterId).toBe(APPLY_PATCH_FIXTURE);
+    expect(applyPatchContractFailures({ continuationInput: replayed }), adapterId).toEqual([]);
+  }
+});
+
+test("Cursor mutation ownership follows the registry contract and the final tool catalog", async () => {
+  const contract = effectiveAdapterContract("cursor");
+  expect(contract.mutation).toBe("mutation.codex-owned-with-gated-native-fallback");
+
+  const parsed: OcxParsedRequest = {
+    modelId: "cursor/auto",
+    context: {
+      messages: [{ role: "user", content: "Edit the requested file.", timestamp: 0 }],
+      tools: [
+        { name: "exec", description: "Run JavaScript", parameters: {} },
+        { name: "apply_patch", description: "Apply a Codex patch", parameters: {}, freeform: true },
+      ],
+    },
+    stream: false,
+    options: {},
+  };
+
+  const advertised = createCursorRequest(parsed);
+  const rejectNativeFileMutations = cursorRequestAdvertisesApplyPatch(advertised.tools, advertised.toolChoice);
+  const structuredEditAvailable = advertised.tools?.some(isCursorSyntheticStructuredEditTool) ?? false;
+  expect(rejectNativeFileMutations).toBe(true);
+
+  const blockedDir = mkdtempSync(join(tmpdir(), "ocx-cursor-cplus-blocked-"));
+  const allowedDir = mkdtempSync(join(tmpdir(), "ocx-cursor-cplus-allowed-"));
+  try {
+    const blockedPath = join(blockedDir, "blocked.txt");
+    const blocked = decodeCursorExec((await handleCursorNativeExec(writeExec(blockedPath, "blocked"), {
+      unsafeAllowNativeLocalExec: true,
+      rejectNativeFileMutations,
+      structuredEditAvailable,
+    }))[0]!);
+    expect(blocked.message.case).toBe("writeResult");
+    expect(blocked.message.value.result.case).toBe("rejected");
+    expect(existsSync(blockedPath)).toBe(false);
+
+    const fallback = createCursorRequest({ ...parsed, options: { toolChoice: { name: "exec" } } });
+    const fallbackRejects = cursorRequestAdvertisesApplyPatch(fallback.tools, fallback.toolChoice);
+    expect(fallback.tools?.map(tool => tool.name)).toEqual(["exec"]);
+    expect(fallbackRejects).toBe(false);
+
+    const allowedPath = join(allowedDir, "allowed.txt");
+    const allowed = decodeCursorExec((await handleCursorNativeExec(writeExec(allowedPath, "native fallback"), {
+      unsafeAllowNativeLocalExec: true,
+      rejectNativeFileMutations: fallbackRejects,
+    }))[0]!);
+    expect(allowed.message.case).toBe("writeResult");
+    expect(allowed.message.value.result.case).toBe("success");
+    expect(readFileSync(allowedPath, "utf8")).toBe("native fallback");
+  } finally {
+    rmSync(blockedDir, { recursive: true, force: true });
+    rmSync(allowedDir, { recursive: true, force: true });
   }
 });
 
@@ -279,7 +641,6 @@ test("the conformance oracle catches representative broken implementations", () 
       contract: "mutation.codex-owned",
     },
   ];
-
   for (const fault of cases) {
     expect(applyPatchContractFailures(fault.observation), fault.name).toContain(fault.contract);
   }
