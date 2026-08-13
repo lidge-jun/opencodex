@@ -69,8 +69,8 @@ visibility = "list"
 | Codex 登录（账户限定的选择器行已启用且存在有效 selector） | 为每个有效 selector 与受支持原生模型的组合显示 `<selector>/<native-openai-model>` 行。每行只使用映射账户，裸原生行会从选择器中隐藏。原生 metadata 与 context window 会保留。 |
 | OpenAI（API key） | 恰好八个命名空间行：`gpt-5.5`、`gpt-5.6`、Sol/Terra/Luna，以及三个 `*-pro` 虚拟 id（八个条目均为 1,050,000 context / 922,000 max input） |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`、`openrouter/openai/gpt-5.6-terra`、`openrouter/openai/gpt-5.6-luna`（1,050,000） |
-| Cursor | 静态回退包含 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`（1,000,000），以及 `cursor/grok-4.5` 和 `cursor/grok-4.5-fast`（500,000）；实时账户发现会决定最终哪些条目仍然可见。 |
-| xAI | 实时发现具有权威性；回退目录默认使用 `xai/grok-4.5`，上下文窗口为 500,000，并提供 `low` / `medium` / `high` reasoning 控制。 |
+| Cursor | 静态回退包含 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra`、`cursor/gpt-5.6-luna`（1,000,000），以及 Grok 4.5/4.6 的普通和 Fast 条目（500,000）。4.6 还提供 `xhigh`；实时账户发现会决定最终哪些条目仍然可见。 |
+| xAI | 实时发现具有权威性；回退目录默认使用 `xai/grok-4.5`，并包含 `xai/grok-4.6`（500,000）。4.5 提供 `low` / `medium` / `high`，4.6 还提供 `xhigh`。 |
 
 固定的 GPT-5.6 条目保留了精确的上游阶梯。Sol 和 Terra 暴露从 `low` 到 `ultra` 的档位；Luna 只到 `max`。Sol 默认是 `low`，Terra 和 Luna 默认是 `medium`。`ultra` 是面向客户端的最大 reasoning 加主动委派选项，在后端会以 `max` 传入。选择器里的一个条目只表示目录已经准备好：关联的账户或 API key 仍然必须有权使用该模型。
 

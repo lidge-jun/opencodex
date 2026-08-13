@@ -391,8 +391,9 @@ Cursor は別の実験的アダプターとして追跡します。`adapter: "cu
 Provider ピッカーに実験的 local config 項目として表示され、Cursor の静的フォールバックモデルカタログ
 メタデータを保存します。Cursor アクセストークンを設定すると opencodex は Cursor ライブ HTTP/2 トランスポートを
 使います。バンドル済みフォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
-`grok-4.5` / `grok-4.5-fast`、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
-アカウントに表示するモデルを決定します。Cursor は Kimi K3 を effort サフィックス付きの wire id
+Grok 4.5 / 4.6 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
+アカウントに表示するモデルを決定します。Grok 4.6 は通常・Fast の両方で `xhigh` も公開します。
+Cursor は Kimi K3 を effort サフィックス付きの wire id
 としてのみ提供するため、`cursor/kimi-k3` は `low` / `high` / `max` のラダーを公開し、既定値はモデル
 ドキュメントの API 既定値と同じ `max` です。Cursor サーバーが直接送るネイティブ read/write/delete/ls/grep/shell/fetch 実行は Codex
 承認とサンドボックス経路をバイパスするためデフォルトで無効です。信頼できるローカル実験でのみ

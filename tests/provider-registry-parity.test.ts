@@ -631,6 +631,8 @@ describe("provider registry parity", () => {
     expect(seed.modelContextWindows?.["gpt-5.6-luna"]).toBe(1_000_000);
     expect(seed.modelReasoningEfforts?.["gpt-5.5"]).toEqual(["low", "medium", "high"]);
     expect(seed.modelReasoningEfforts?.["gpt-5.6-sol"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(seed.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(seed.modelReasoningEfforts?.["grok-4.6-fast"]).toEqual(["low", "medium", "high", "xhigh"]);
 
     const savedCursor: OcxProviderConfig = { adapter: "cursor", baseUrl: "https://api2.cursor.sh" };
     enrichProviderFromCatalog("cursor", savedCursor);
@@ -671,8 +673,10 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.6");
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
     expect(antigravityRegistry?.liveModels).toBe(true);
@@ -832,19 +836,31 @@ describe("provider registry parity", () => {
     expect(routed?.max_context_window).toBe(204_800);
   });
 
-  test("grok-4.5 flows from the xai registry seed into a built catalog entry (260709 refresh)", () => {
+  test("Grok 4.5/4.6 effort ladders reach the xAI and Cursor picker entries", () => {
     const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
-    const seed = providerConfigSeed(xai!);
-    const model = applyProviderConfigHints("xai", seed, { id: "grok-4.5", provider: "xai" });
-    expect(model.contextWindow).toBe(500_000);
-    expect(model.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    const xaiSeed = providerConfigSeed(xai!);
+    const xai45 = applyProviderConfigHints("xai", xaiSeed, { id: "grok-4.5", provider: "xai" });
+    const xai46 = applyProviderConfigHints("xai", xaiSeed, { id: "grok-4.6", provider: "xai" });
+    expect(xai45.reasoningEfforts).toEqual(["low", "medium", "high"]);
+    expect(xai46.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
 
-    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
-    const entry = entries.find(e => e.slug === "xai/grok-4.5");
-    expect(entry).toBeTruthy();
-    expect(entry?.context_window).toBe(500_000);
-    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
+    const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
+    const cursorSeed = providerConfigSeed(cursor!);
+    const cursor46 = ["grok-4.6", "grok-4.6-fast"].map(id =>
+      applyProviderConfigHints("cursor", cursorSeed, { id, provider: "cursor" })
+    );
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [xai45, xai46, ...cursor46]);
+    const effortsFor = (slug: string) =>
+      (entries.find(entry => entry.slug === slug)?.supported_reasoning_levels as { effort: string }[])
+        .map(level => level.effort);
+
+    expect(entries.find(entry => entry.slug === "xai/grok-4.6")?.context_window).toBe(500_000);
+    expect(effortsFor("xai/grok-4.5"))
       .toEqual(["low", "medium", "high", "max", "ultra"]);
+    for (const slug of ["xai/grok-4.6", "cursor/grok-4.6", "cursor/grok-4.6-fast"]) {
+      expect(effortsFor(slug)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    }
   });
 
   // The id-list assertion above only proves the preset exists. Pin the contract a user actually

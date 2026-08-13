@@ -363,8 +363,9 @@ adapter。若要将没有内置默认值的模型（例如 `gpt-5.4-nano`）接�
 Cursor 作为单独的实验性 adapter 进行跟踪。`adapter: "cursor"` 会作为实验性本地配置出现在
 `ocx init` 和 dashboard Add Provider picker 中，并保存 Cursor 的静态回退模型目录 metadata。配置
 Cursor access token 后，opencodex 会使用 Cursor live HTTP/2 transport。内置回退列表包含上下文为
-1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 `grok-4.5` / `grok-4.5-fast`，以及上下文为
-262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Cursor 只以带 effort 后缀的 wire id
+1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 Grok 4.5/4.6 普通与 Fast 条目，以及上下文为
+262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Grok 4.6 的普通和 Fast 形式还提供
+`xhigh`。Cursor 只以带 effort 后缀的 wire id
 提供 Kimi K3，因此 `cursor/kimi-k3` 暴露 `low` / `high` / `max` 阶梯，默认值为 `max`，与该模型
 文档中的 API 默认值一致。Cursor 服务器直接发起的
 native read/write/delete/ls/grep/shell/fetch 执行默认禁用，因为它会绕过 Codex 的 approval 和

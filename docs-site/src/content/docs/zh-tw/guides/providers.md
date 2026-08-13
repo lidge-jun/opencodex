@@ -462,8 +462,9 @@ Copilot 的 catalog 混合多種 wire：GPT-5 family（`gpt-5.3-codex`、`gpt-5.
 Cursor 另以實驗性 adapter 追蹤。`adapter: "cursor"` 會在 `ocx init` 與 dashboard Add Provider picker
 出現為實驗性 local config，並帶 Cursor static fallback model catalog metadata。設定 Cursor access token
 後，opencodex 使用 Cursor 即時 HTTP/2 transport。bundled fallback seed 包含 1M context 的
-`gpt-5.6-sol`／`terra`／`luna`、500K 的 `grok-4.5`／`grok-4.5-fast`，以及 262K 的 `kimi-k3`；即時探索
-決定哪些模型對帳號保持可見。Cursor 的 Kimi K3 只以帶 effort suffix 的 wire id 提供，因此
+`gpt-5.6-sol`／`terra`／`luna`、500K 的 Grok 4.5/4.6 一般與 Fast 項目，以及 262K 的 `kimi-k3`；即時探索
+決定哪些模型對帳號保持可見。Grok 4.6 的一般與 Fast 形式還提供 `xhigh`。Cursor 的 Kimi K3 只以帶
+effort suffix 的 wire id 提供，因此
 `cursor/kimi-k3` 暴露 `low`／`high`／`max` ladder，預設為 `max`，符合該模型文件化的 API default。
 Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution 預設停用，因為它會繞過 Codex
 approval 與 sandbox 路徑；只有可信本機實驗才應在 `~/.opencodex/config.json` 的 `providers.cursor`

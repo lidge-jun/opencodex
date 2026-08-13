@@ -89,8 +89,8 @@ per-model identity и метаданные вместо приближения �
 | Вход Codex (строки с указанием аккаунта включены и есть подходящие селекторы) | По одной строке `<selector>/<native-openai-model>` для каждой пары подходящего селектора и поддерживаемой нативной модели; каждая строка использует только сопоставленный аккаунт, а bare native-строки скрыты из picker'а. Нативные метаданные и окна контекста сохраняются. |
 | OpenAI (API key) | Ровно восемь namespaced-строк: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna и три виртуальных id `*-pro` (контекст 1,050,000; максимум входа 922,000 у всех восьми) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
-| Cursor | Статический fallback включает `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` и `cursor/gpt-5.6-luna` (1,000,000), а также `cursor/grok-4.5` и `cursor/grok-4.5-fast` (500,000); какие из них останутся видимыми, решает live-discovery аккаунта. |
-| xAI | Live-discovery авторитетно; fallback-каталог по умолчанию содержит `xai/grok-4.5` с окном 500,000 токенов и reasoning-control `low` / `medium` / `high`. |
+| Cursor | Статический fallback включает `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` и `cursor/gpt-5.6-luna` (1,000,000), а также обычные/Fast-строки Grok 4.5 и 4.6 (500,000). Для 4.6 доступен ещё `xhigh`; какие строки останутся видимыми, решает live-discovery аккаунта. |
+| xAI | Live-discovery авторитетно; fallback-каталог по умолчанию содержит `xai/grok-4.5` и также включает `xai/grok-4.6` (500,000). Для 4.5 доступны `low` / `medium` / `high`, для 4.6 — ещё и `xhigh`. |
 
 Закреплённые записи GPT-5.6 сохраняют точную upstream-лестницу. Sol и Terra дают диапазон от
 `low` до `ultra`; у Luna верхняя ступень — `max`. По умолчанию у Sol стоит `low`, а у Terra и

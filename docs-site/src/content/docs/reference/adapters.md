@@ -198,9 +198,10 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
-- Sends regular `cursor/grok-4.5` tiers with Cursor's exact live-discovery wire ids
-  (`cursor-grok-4.5-low`, `-medium`, or `-high`). Keeps `cursor/grok-4.5-fast` selectable while
-  sending the canonical `grok-4.5` model with separate `effort` and `fast=true` parameters.
+- Sends regular `cursor/grok-4.5` and `cursor/grok-4.6` tiers with Cursor's exact live-discovery
+  wire ids. Grok 4.5 stops at `high`; Grok 4.6 also exposes `xhigh`. Keeps both matching `-fast`
+  rows selectable while sending the canonical Grok base model with separate `effort` and
+  `fast=true` values in `requested_model.parameters`.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy

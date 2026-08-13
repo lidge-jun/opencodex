@@ -4,7 +4,7 @@
  * Cursor model ids encode the reasoning effort as a suffix (`claude-4.6-opus-high`), and the available
  * tiers differ per model — `claude-4.6-opus` tops out at `-max`, `claude-opus-4-8` at `-xhigh`,
  * `claude-4.6-sonnet` only has `-medium`, and most `composer`/`gemini` models take no suffix at all.
- * Grok Fast puts its mode marker after the effort (`grok-4.5-high-fast`). A bare id for a model that
+ * Grok Fast puts its mode marker after the effort (`grok-4.6-xhigh-fast`). A bare id for a model that
  * requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (devlog 350.105).
  *
  * Canonical effort order is always low < medium < high < xhigh < max (max is the top tier, confirmed
@@ -35,10 +35,10 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
   "grok-4.5": ["low", "medium", "high"],
   "grok-4.5-fast": ["low", "medium", "high"],
-  // 260813 preemptive: grok-4.6 tiers mirrored from grok-4.5 ahead of Cursor's lineup update,
-  // so the suffix/wire handling is already correct the day the slugs appear.
-  "grok-4.6": ["low", "medium", "high"],
-  "grok-4.6-fast": ["low", "medium", "high"],
+  // Cursor's 260813 lineup exposes Grok 4.6 Extra High in both regular and Fast forms.
+  // Unlike 4.5, xAI also documents xhigh as a real upstream tier for 4.6 and later.
+  "grok-4.6": ["low", "medium", "high", "xhigh"],
+  "grok-4.6-fast": ["low", "medium", "high", "xhigh"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],

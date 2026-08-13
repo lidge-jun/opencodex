@@ -83,8 +83,8 @@ GPT-5.6에만 사용합니다. 오래된 템플릿으로 근사하지 않고 모
 | Codex 로그인(계정 한정 선택기 행 활성, 유효한 selector 있음) | 유효한 selector와 지원되는 native model의 각 조합마다 `<selector>/<native-openai-model>` 행을 표시합니다. 각 행은 매핑된 계정만 사용하며 bare native 행은 선택기에서 숨깁니다. Native metadata와 context window는 보존됩니다. |
 | OpenAI(API key) | 정확히 여덟 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 그리고 세 개의 `*-pro` 가상 id (모두 컨텍스트 1,050,000; 최대 입력 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
-| Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 `cursor/grok-4.5`, `cursor/grok-4.5-fast` (500,000)가 들어갑니다. 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
-| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그의 기본값은 `xai/grok-4.5`이고, 컨텍스트 500,000과 `low` / `medium` / `high` 추론 제어를 제공합니다. |
+| Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 Grok 4.5/4.6의 일반·Fast 항목(500,000)이 들어갑니다. 4.6은 `xhigh`도 노출하며, 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
+| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그의 기본값은 `xai/grok-4.5`이고 `xai/grok-4.6`(500,000)도 포함합니다. 4.5는 `low` / `medium` / `high`, 4.6은 추가로 `xhigh`를 제공합니다. |
 
 고정된 GPT-5.6 항목은 업스트림 ladder를 그대로 보존합니다. Sol과 Terra는 `low`부터 `ultra`까지 노출하고,
 Luna는 `max`에서 멈춥니다. Sol의 기본값은 `low`이고, Terra와 Luna의 기본값은 `medium`입니다. `ultra`는
