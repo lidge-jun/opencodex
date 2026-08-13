@@ -6,16 +6,17 @@ import {
   linkSync,
   lstatSync,
   openSync,
-  readFileSync,
   readdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export type PrivateFileCommitFault = "before_publish" | "parent_directory_sync" | null;
 let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
 const PRIVATE_STAGE_RE = /^\..+\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
+export const PRIVATE_FILE_STAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function cleanup(path: string): void {
   try { unlinkSync(path); } catch { /* absent/already removed */ }
@@ -75,7 +76,31 @@ export function isPrivateFileStageName(name: string): boolean {
   return PRIVATE_STAGE_RE.test(name);
 }
 
-/** Reclaim all private-file stages in a directory whose writer is definitely dead. */
+function isPrivateRegularStage(stats: Stats): boolean {
+  return stats.isFile() && !stats.isSymbolicLink();
+}
+
+function shouldReclaimPrivateFileStage(dir: string, name: string, nowMs: number): boolean {
+  const match = PRIVATE_STAGE_RE.exec(name);
+  if (!match) return false;
+  const pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+
+  let stats: Stats;
+  try {
+    stats = lstatSync(join(dir, name));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  if (!isPrivateRegularStage(stats)) return false;
+
+  const expired = nowMs - stats.mtimeMs > PRIVATE_FILE_STAGE_RETENTION_MS;
+  const dead = pid !== process.pid && pidDefinitelyDead(pid);
+  return expired || dead;
+}
+
+/** Reclaim private-file stages whose writer is dead or whose crash witness is past the retention window. */
 export function cleanupStalePrivateFileStagesInDir(dir: string): void {
   let names: string[];
   try {
@@ -84,12 +109,10 @@ export function cleanupStalePrivateFileStagesInDir(dir: string): void {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
+  const nowMs = Date.now();
   let changed = false;
   for (const name of names) {
-    const match = PRIVATE_STAGE_RE.exec(name);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
+    if (!shouldReclaimPrivateFileStage(dir, name, nowMs)) continue;
     try {
       unlinkSync(join(dir, name));
       changed = true;
@@ -100,7 +123,7 @@ export function cleanupStalePrivateFileStagesInDir(dir: string): void {
   if (changed) fsyncParentBestEffort(join(dir, "."));
 }
 
-/** Reclaim staging links from writers that are definitely no longer alive. */
+/** Reclaim staging links from dead writers or expired crash witnesses. */
 export function cleanupStalePrivateFileStages(finalPath: string): void {
   cleanupStalePrivateFileStagesInDir(dirname(finalPath));
 }
@@ -201,11 +224,6 @@ export function publishPrivateFileExclusive(
       fsyncParentBestEffort(finalPath);
     }
   }
-}
-
-export function readPublishedPrivateFile(path: string): Buffer {
-  cleanupStalePrivateFileStages(path);
-  return readFileSync(path);
 }
 
 /** Test-only fault seam at the atomic publication point. Import this module directly in tests. */
