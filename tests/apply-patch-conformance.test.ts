@@ -14,6 +14,12 @@ import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import type { AdapterWire } from "../src/adapters/contracts";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../src/types";
+import {
+  APPLY_PATCH_FIXTURE,
+  applyPatchContractFailures,
+  type ApplyPatchContractId,
+  type ApplyPatchObservation,
+} from "./helpers/apply-patch-conformance/contracts";
 import { TOOL_WIRE_DRIVERS } from "./helpers/apply-patch-conformance/wire-drivers";
 
 const serverDir = fileURLToPath(new URL("../src/server/", import.meta.url));
@@ -143,13 +149,51 @@ test("every registered adapter keeps the nested apply_patch helper in its final 
     const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
     const normalized = body.replace(/\\n/g, " ").replace(/\s+/g, " ");
 
-    expect(normalized, adapterId).toContain("apply_patch(input: string)");
-    expect(normalized, adapterId).not.toMatch(
-      /(?:do not|don't|never|must not|cannot|can't)[^.]{0,260}\bapply_patch\b/i,
-    );
-    expect(normalized, adapterId).not.toMatch(
-      /\bapply_patch\b[^.]{0,180}\b(?:forbidden|unavailable|off-limits)\b/i,
-    );
+    expect(applyPatchContractFailures({ finalAdvertisement: normalized }), adapterId).toEqual([]);
+  }
+});
+
+test("the conformance oracle catches representative broken implementations", () => {
+  const truncated = APPLY_PATCH_FIXTURE.slice(0, -1);
+  const cases: Array<{
+    name: string;
+    observation: ApplyPatchObservation;
+    contract: ApplyPatchContractId;
+  }> = [
+    {
+      name: "drops patch declaration",
+      observation: { finalAdvertisement: "declare const tools: {};" },
+      contract: "tools.code-mode-nested-helper",
+    },
+    {
+      name: "forbids advertised patch helper",
+      observation: { finalAdvertisement: `${execDescription} Never use apply_patch.` },
+      contract: "tools.code-mode-nested-helper",
+    },
+    {
+      name: "truncates freeform input",
+      observation: { restoredInput: truncated },
+      contract: "tools.freeform-exact-roundtrip",
+    },
+    {
+      name: "ignores tool choice filtering",
+      observation: { expectedPatchAdvertised: false, actualPatchAdvertised: true },
+      contract: "tools.tool-choice-final-catalog",
+    },
+    {
+      name: "drops continuation input",
+      observation: { continuationInput: truncated },
+      contract: "tools.continuation-replay",
+    },
+    {
+      name: "allows alternate mutation while Codex owns it",
+      observation: { codexOwnsMutation: true, alternateMutationAllowed: true },
+      contract: "mutation.codex-owned",
+    },
+  ];
+
+  for (const fault of cases) {
+    expect(applyPatchContractFailures(fault.observation), fault.name).toContain(fault.contract);
   }
 });
 
