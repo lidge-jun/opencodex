@@ -42,6 +42,11 @@ function assertApplyPatchIsNotForbidden(body: string): void {
   // otherwise a missing nudge would make the prohibition assertion vacuous.
   expect(normalized).toContain("current tool catalog as ground truth");
 
+  // The final provider request must still advertise Codex's nested patch helper.
+  // This pins the actual Code Mode declaration rather than a nonexistent literal
+  // `tools.apply_patch` token in the serialized tool description.
+  expect(normalized).toContain("declare const tools: { apply_patch(input: string): Promise<unknown>; };");
+
   // Protect against both the original shared warning and adapter-specific wording
   // that would steer routed models away from Codex's own patch tool.
   expect(normalized).not.toMatch(/(?:do not|don't|never|must not|cannot|can't)[^.]{0,260}\bapply_patch\b/i);
