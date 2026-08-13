@@ -281,6 +281,8 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 Inspect Codex reset credits for an account. Consuming a credit is destructive and requires both
 `--consume` and `--yes` in a hand-typed user-confirmed run. Agent-driven runs are refused before
 the one-shot local consent capability is minted; a reusable management token cannot substitute.
+The CLI durably reuses the same operation identity until a terminal response is observed, so rerun
+the same command after a timeout instead of trying to start a second redemption.
 
 ### `ocx account main <subcommand>`
 

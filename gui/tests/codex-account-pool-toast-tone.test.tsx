@@ -11,7 +11,7 @@ import { LanguageProvider } from "../src/i18n/provider";
  * Stale toastError must not paint a successful redeem as notice-err (PR #475).
  */
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previous: Record<(typeof globals)[number], unknown>;
 let win: Window;
 let host: HTMLElement;
@@ -70,6 +70,7 @@ beforeEach(() => {
     window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator },
     localStorage: { configurable: true, value: win.localStorage },
+    sessionStorage: { configurable: true, value: win.sessionStorage },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -318,4 +319,56 @@ test("LAN fallback UUID remains stable across a failed redeem retry", async () =
       value: originalRandomUUID,
     });
   }
+});
+
+test("an ambiguous redeem survives modal close and remount with the same operation identity", async () => {
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits/consume") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
+        if (consumeAttempts === 1) return Response.json({ error: "lost" }, { status: 502 });
+        return Response.json({ code: "already_redeemed", remaining: 1 });
+      }
+      return baseFetch(input, init);
+    },
+  });
+
+  const redeemOnce = async () => {
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    )!;
+    await act(async () => { useCredit.click(); });
+    const redeem = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").trim() === "Use Credit",
+    )!;
+    await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+  };
+
+  await mountPool(makeController());
+  await redeemOnce();
+  expect(consumeAttempts).toBe(1);
+  const backdrop = host.querySelector(".modal-backdrop-dismiss") as HTMLButtonElement;
+  await act(async () => { backdrop.click(); });
+  expect(host.querySelector("dialog")).toBeNull();
+
+  const current = root!;
+  await act(async () => { current.unmount(); });
+  root = null;
+  host.remove();
+  host = win.document.createElement("div") as unknown as HTMLElement;
+  win.document.body.appendChild(host as never);
+  await mountPool(makeController());
+  await redeemOnce();
+
+  expect(consumeAttempts).toBe(2);
+  expect(new Set(consumedOperationIds).size).toBe(1);
+  expect(sessionStorage.getItem("ocx.codexResetCreditOperation.v1")).toBeNull();
 });

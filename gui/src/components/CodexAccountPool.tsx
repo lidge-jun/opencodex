@@ -27,6 +27,33 @@ import { newBrowserUuid } from "../lib/uuid";
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
 
 const DOCTOR_CMD = "ocx doctor";
+const RESET_OPERATION_STORAGE_KEY = "ocx.codexResetCreditOperation.v1";
+
+interface PendingResetOperation {
+  accountId: string;
+  operationId: string;
+}
+
+type PendingResetOperations = Record<string, string>;
+
+function readPendingResetOperations(): PendingResetOperations {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(RESET_OPERATION_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string"));
+  } catch {
+    return {};
+  }
+}
+
+function writePendingResetOperations(operations: PendingResetOperations): void {
+  try {
+    if (Object.keys(operations).length > 0) {
+      sessionStorage.setItem(RESET_OPERATION_STORAGE_KEY, JSON.stringify(operations));
+    }
+    else sessionStorage.removeItem(RESET_OPERATION_STORAGE_KEY);
+  } catch { /* storage may be unavailable; component state still preserves the retry */ }
+}
 
 /**
  * Global ChatGPT / Codex account pool (main + extras), extracted from the Codex
@@ -74,11 +101,13 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [refreshingQuota, setRefreshingQuota] = useState(false);
   const [resetPopup, setResetPopup] = useState<CodexAccountEntry | null>(null);
-  const [resetOperationId, setResetOperationId] = useState<string | null>(null);
+  const [pendingResetOperations, setPendingResetOperations] = useState<PendingResetOperations>(readPendingResetOperations);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
+  const resetDetailEpochRef = useRef(0);
+  const redeemingRef = useRef(false);
   const doctorCopy = useCopyFeedback<string>();
 
   const showActionFeedback = useCallback((text: string, tone: NoticeTone = "ok") => {
@@ -241,39 +270,57 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   };
 
   const openResetPopup = async (account: CodexAccountEntry) => {
+    const epoch = ++resetDetailEpochRef.current;
     setResetPopup(account);
-    setResetOperationId(newBrowserUuid());
     setResetConfirm(false);
     setCreditDetails(null);
     setCreditDetailsLoading(true);
     try {
       const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`);
       const data = await readJsonIfOk<{ credits?: { granted_at: string; expires_at: string }[] }>(resp);
-      if (data) {
+      if (data && resetDetailEpochRef.current === epoch) {
         const sorted = (data.credits ?? []).sort((a, b) =>
           new Date(a.granted_at).getTime() - new Date(b.granted_at).getTime()
         );
         setCreditDetails(sorted);
       }
     } catch { /* detail fetch is non-blocking */ }
-    finally { setCreditDetailsLoading(false); }
+    finally {
+      if (resetDetailEpochRef.current === epoch) setCreditDetailsLoading(false);
+    }
   };
 
   const handleRedeem = async (accountId: string) => {
+    if (redeemingRef.current) return;
+    redeemingRef.current = true;
+    const operation: PendingResetOperation = {
+      accountId,
+      operationId: pendingResetOperations[accountId] ?? newBrowserUuid(),
+    };
+    setPendingResetOperations(current => {
+      const next = { ...current, [operation.accountId]: operation.operationId };
+      writePendingResetOperations(next);
+      return next;
+    });
     setRedeeming(true);
     try {
-      const operationId = resetOperationId ?? newBrowserUuid();
-      if (!resetOperationId) setResetOperationId(operationId);
-      const result = await redeemResetCredit(apiBase, accountId, operationId, t, load);
-      if (result.close) {
+      const result = await redeemResetCredit(apiBase, accountId, operation.operationId, t, load);
+      if (result.outcome === "terminal") {
+        setPendingResetOperations(current => {
+          if (current[operation.accountId] !== operation.operationId) return current;
+          const next = { ...current };
+          delete next[operation.accountId];
+          writePendingResetOperations(next);
+          return next;
+        });
         setResetPopup(null);
-        setResetOperationId(null);
         setResetConfirm(false);
       }
       if (result.toast) {
         showActionFeedback(result.toast, result.ok ? "ok" : "err");
       }
     } finally {
+      redeemingRef.current = false;
       setRedeeming(false);
     }
   };
@@ -427,7 +474,13 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           creditDetails={creditDetails}
           creditDetailsLoading={creditDetailsLoading}
           redeeming={redeeming}
-          onClose={() => { setResetPopup(null); setResetOperationId(null); setResetConfirm(false); setCreditDetails(null); }}
+          onClose={() => {
+            if (redeeming) return;
+            resetDetailEpochRef.current += 1;
+            setResetPopup(null);
+            setResetConfirm(false);
+            setCreditDetails(null);
+          }}
           onShowConfirm={() => setResetConfirm(true)}
           onCancelConfirm={() => setResetConfirm(false)}
           onRedeem={() => { void handleRedeem(resetPopup.id); }}

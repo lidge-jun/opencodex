@@ -62,10 +62,12 @@ function sameRuntime(left: RuntimePortState, right: RuntimePortState | null): bo
 }
 
 /**
- * Send one user-confirmed redemption to the exact attested local proxy.
+ * Send one CLI-confirmed redemption to the exact attested local proxy.
  *
  * The request carries no reusable management credential. Its body is empty; the
  * account and idempotency identities are bound into a short-lived, one-shot HMAC.
+ * This proves exact request/process authority, not human presence; the normative
+ * agent rule is the boundary against a determined same-user local process.
  */
 export async function requestBoundCodexResetCreditConsent(
   accountId: string,

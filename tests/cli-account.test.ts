@@ -1409,11 +1409,17 @@ describe("ocx account CLI (issue #180 matrix)", () => {
 
     test("reset-credit consume sends one UUIDv4 identity through the consent-bound client", async () => {
       let requested: { accountId: string; operationId: string } | undefined;
+      let cleared: { accountId: string; operationId: string } | undefined;
       const result = await run(
         ["reset-credits", "main", "--consume", "--yes", "--json"],
         {
           ...defaultDeps(),
           isAgentDrivenImpl: () => false,
+          reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174000",
+          clearResetCreditOperationImpl: (accountId, operationId) => {
+            cleared = { accountId, operationId };
+            return true;
+          },
           requestResetCreditConsentImpl: async (accountId, operationId) => {
             requested = { accountId, operationId };
             return { kind: "response", response: json({ code: "reset" }) };
@@ -1424,11 +1430,37 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.code).toBe(0);
       expect(requested).toEqual({
         accountId: "__main__",
-        operationId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-        ),
+        operationId: "123e4567-e89b-42d3-a456-426614174000",
       });
+      expect(cleared).toEqual(requested);
       expect(JSON.parse(result.stdout)).toEqual({ code: "reset" });
+    });
+
+    test("reset-credit consume reuses durable identity after transport loss and clears only terminal success", async () => {
+      const operationId = "123e4567-e89b-42d3-a456-426614174000";
+      const requested: string[] = [];
+      let clearCalls = 0;
+      const deps: AccountDeps = {
+        ...defaultDeps(),
+        isAgentDrivenImpl: () => false,
+        reserveResetCreditOperationImpl: () => operationId,
+        clearResetCreditOperationImpl: () => {
+          clearCalls += 1;
+          return true;
+        },
+        requestResetCreditConsentImpl: async (_accountId, requestedOperationId) => {
+          requested.push(requestedOperationId);
+          return requested.length === 1
+            ? { kind: "unavailable", reason: "transport" }
+            : { kind: "response", response: json({ code: "already_redeemed" }) };
+        },
+      };
+
+      expect((await run(["reset-credits", "main", "--consume", "--yes"], deps)).code).toBe(2);
+      expect(clearCalls).toBe(0);
+      expect((await run(["reset-credits", "main", "--consume", "--yes"], deps)).code).toBe(0);
+      expect(requested).toEqual([operationId, operationId]);
+      expect(clearCalls).toBe(1);
     });
 
     test("agent-driven reset-credit consumption stops before minting consent", async () => {

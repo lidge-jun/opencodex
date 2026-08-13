@@ -679,7 +679,7 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("busy pool-quota probe maps reset-credit refresh to 503 server_busy with Retry-After 1", async () => {
+  test("busy post-settlement quota refresh preserves the terminal reset result", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "quota-reset-busy", email: "busy@example.test" });
     const cleanup = seedCodexAuthAdmissionForTests({ quotaFlights: 16 });
@@ -693,9 +693,9 @@ describe("codex-auth API", () => {
         body: resetCreditConsumeBody("quota-reset-busy"),
       });
       const response = await handleResetCreditConsume(req, config);
-      expect(response?.status).toBe(503);
-      expect(response?.headers.get("Retry-After")).toBe("1");
-      expect(await response?.json()).toMatchObject({ code: "server_busy" });
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("Retry-After")).toBeNull();
+      expect(await response?.json()).toEqual({ code: "reset" });
     } finally {
       cleanup();
     }
@@ -2294,11 +2294,11 @@ describe("codex-auth API", () => {
 
       const second = await request();
       expect(second?.status).toBe(200);
-      expect(await second?.json()).toEqual({ code: "already_redeemed", remaining: 1 });
+      expect(await second?.json()).toEqual({ code: "already_redeemed" });
 
       const third = await request();
       expect(third?.status).toBe(200);
-      expect(await third?.json()).toEqual({ code: "already_redeemed", remaining: 1 });
+      expect(await third?.json()).toEqual({ code: "already_redeemed" });
       expect(consumeCalls).toBe(2);
       expect(seenOperationIds).toEqual([operationId, operationId]);
     } finally {
@@ -2390,7 +2390,7 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("reset-credit consume returns remaining from refreshed quota, not the consume payload", async () => {
+  test("reset-credit consume returns its terminal code without waiting for quota refresh", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "pool-reset", email: "reset@example.test" });
     // Stale local count before redeem — must not be what the response reports.
@@ -2426,15 +2426,15 @@ describe("codex-auth API", () => {
       });
       const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
-      expect(await resp!.json()).toEqual({ code: "reset", remaining: 2 });
-      expect(usageCalls).toBe(1);
-      expect(getAccountQuota("pool-reset")?.resetCredits).toBe(2);
+      expect(await resp!.json()).toEqual({ code: "reset" });
+      expect(usageCalls).toBe(0);
+      expect(getAccountQuota("pool-reset")?.resetCredits).toBe(9);
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  test("reset-credit already_redeemed refreshes quota and never invents a local decrement", async () => {
+  test("reset-credit already_redeemed returns immediately and never invents a local decrement", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "pool-idempotent", email: "idem@example.test" });
     updateAccountQuota("pool-idempotent", undefined, undefined, undefined, undefined, 3);
@@ -2461,7 +2461,7 @@ describe("codex-auth API", () => {
       });
       const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
-      expect(await resp!.json()).toEqual({ code: "already_redeemed", remaining: 3 });
+      expect(await resp!.json()).toEqual({ code: "already_redeemed" });
       expect(getAccountQuota("pool-idempotent")?.resetCredits).toBe(3);
     } finally {
       globalThis.fetch = originalFetch;
@@ -2605,7 +2605,7 @@ describe("codex-auth API", () => {
     }
   });
 
-  test("reset-credit consume returns remaining from fresh main WHAM credits", async () => {
+  test("reset-credit consume leaves main quota refresh to the caller after settlement", async () => {
     writeFileSync(join(TEST_CODEX_HOME, "auth.json"), JSON.stringify({
       tokens: { access_token: "main-reset-ok", account_id: "acct-main-reset-ok" },
     }));
@@ -2636,8 +2636,8 @@ describe("codex-auth API", () => {
       });
       const resp = await handleResetCreditConsume(req, makeConfig());
       expect(resp!.status).toBe(200);
-      expect(await resp!.json()).toEqual({ code: "reset", remaining: 1 });
-      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.resetCredits).toBe(1);
+      expect(await resp!.json()).toEqual({ code: "reset" });
+      expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.resetCredits).toBe(9);
     } finally {
       globalThis.fetch = originalFetch;
     }

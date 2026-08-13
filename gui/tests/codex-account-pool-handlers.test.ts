@@ -41,7 +41,7 @@ test("balance changed after modal opened: toast uses authoritative remaining, no
 
   expect(loadCalls).toBe(1);
   expect(result.ok).toBe(true);
-  expect(result.close).toBe(true);
+  expect(result.outcome).toBe("terminal");
   expect(result.toast).toBe("codexAuth.resetSuccess:remaining=1");
   expect(result.toast).not.toContain("remaining=2");
   expect(result.toast).not.toContain("remaining=3");
@@ -60,7 +60,7 @@ test("already_redeemed does not decrement and uses the returned remaining count"
 
   expect(loadCalls).toBe(1);
   expect(result.ok).toBe(true);
-  expect(result.close).toBe(true);
+  expect(result.outcome).toBe("terminal");
   expect(result.toast).toBe("codexAuth.resetSuccess:remaining=3");
   expect(result.toast).not.toContain("remaining=2");
 });
@@ -87,5 +87,19 @@ test("failure paths return ok:false so callers can set toastError from result.ok
   const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
 
   expect(result.ok).toBe(false);
+  expect(result.outcome).toBe("terminal");
   expect(result.toast).toBe("codexAuth.resetNoCredit");
+});
+
+test("transport and malformed outcomes remain ambiguous for same-id retry", async () => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => { throw new Error("response lost"); },
+  });
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
+  expect(result).toEqual({
+    ok: false,
+    outcome: "ambiguous",
+    toast: "codexAuth.resetError",
+  });
 });

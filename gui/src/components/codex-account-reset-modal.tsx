@@ -36,8 +36,9 @@ export function CodexAccountResetModal({
 
   const handleCancel = useCallback((e: React.SyntheticEvent) => {
     e.preventDefault();
+    if (redeeming) return;
     onClose();
-  }, [onClose]);
+  }, [onClose, redeeming]);
 
   return (
     <dialog
@@ -47,7 +48,8 @@ export function CodexAccountResetModal({
       onCancel={handleCancel}
      
     >
-      <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onClose} />
+      <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1}
+        onClick={() => { if (!redeeming) onClose(); }} disabled={redeeming} />
       <div className="modal-card" onClick={e => e.stopPropagation()} role="document">
         {!resetConfirm ? (
           <>
@@ -93,7 +95,7 @@ export function CodexAccountResetModal({
               <p className="faint text-label">{t("codexAuth.irreversible")}</p>
             </div>
             <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={onCancelConfirm}>{t("codexAuth.cancel")}</button>
+              <button type="button" className="btn btn-ghost" onClick={onCancelConfirm} disabled={redeeming}>{t("codexAuth.cancel")}</button>
               <button type="button" className="btn btn-primary" onClick={onRedeem} disabled={redeeming}>
                 {redeeming ? t("codexAuth.redeeming") : t("codexAuth.useCredit")}
               </button>

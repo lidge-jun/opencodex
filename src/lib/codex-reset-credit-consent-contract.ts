@@ -72,7 +72,7 @@ function capabilityPayload(
   ].join("\n");
 }
 
-/** One-shot authorization for a user-confirmed reset-credit redemption. */
+/** One-shot exact-request authorization; this is not proof of human presence. */
 export function createCodexResetCreditConsentCapability(
   secret: string,
   nonce: string,

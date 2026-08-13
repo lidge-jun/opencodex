@@ -68,8 +68,12 @@ reads, so the CLI prints one dim line and this file carries the contract.
 
 ## Where the enforcement lives
 
-Reading this file is not what makes the boundary hold — the code refuses
-agent-driven callers regardless:
+Reading this file is not what makes the boundary hold — the code refuses known
+agent-driven callers on the normal path. Like the dashboard session, local
+capability checks are not proof of human presence: a determined process running
+as the same user can reach the same local secrets and browser surface. The rule
+above is the actual boundary and remains binding even when those mechanisms are
+technically reachable:
 
 - [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts) — agent detection.
 - [`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts) — prompt suppression and

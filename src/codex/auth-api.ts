@@ -1796,29 +1796,8 @@ export async function handleCodexAuthAPI(
               return manualResetCreditBusyResponse();
             }
           }
-          // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
-          // and return remaining only when that refresh freshly parsed available_count.
-          // Do not fall back to a preserved cached resetCredits (failed/omitted refresh).
-          if (code === "reset" || code === "already_redeemed") {
-            let freshResetCredits: number | undefined;
-            if (auth.isMain) {
-              ({ freshResetCredits } = await fetchMainAccountInfoAttempt(
-                true,
-                1,
-                auth.nativeMainLease,
-                auth.nativeMainSharedClaimHeld === true,
-              ));
-            } else {
-              const account = configuredPoolAccount(getRuntimeConfig(config), accountId);
-              ({ freshResetCredits } = await fetchPoolAccountQuota(accountId, true, account?.plan));
-            }
-            return jsonResponse({
-              code,
-              ...(typeof freshResetCredits === "number" && Number.isFinite(freshResetCredits)
-                ? { remaining: freshResetCredits }
-                : {}),
-            });
-          }
+          // Settlement is the authoritative result. Return it before any follow-up
+          // quota read so an already-terminal same-id retry cannot time out again.
           return jsonResponse({ code });
         }));
       return operation.ok ? operation.value : operation.response;

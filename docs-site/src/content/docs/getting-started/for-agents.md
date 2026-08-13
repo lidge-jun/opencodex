@@ -59,6 +59,8 @@ Inspecting reset credits is read-only. Never run `ocx account reset-credits <id|
 or call the consume endpoint on the user's behalf. Agent-driven attempts are refused with
 `agent_consent_required`; do not bypass the refusal with an admin token or a client `confirmed`
 field. Only a hand-typed user-confirmed CLI run or the dashboard's GUI session may consume a credit.
+These checks remove the casual automation path but do not prove human presence to a determined
+same-user process; the agent consent rule remains the actual boundary.
 :::
 
 ## Check a headless installation

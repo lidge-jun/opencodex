@@ -60,6 +60,9 @@ export interface AccountDeps {
   stageLeaseClock?: StageLeaseClock;
   /** Test seam for the consent-bound reset-credit client. */
   requestResetCreditConsentImpl?: typeof import("./reset-credit-consent-client").requestBoundCodexResetCreditConsent;
+  /** Test seams for the durable cross-process reset-credit retry identity. */
+  reserveResetCreditOperationImpl?: typeof import("./reset-credit-pending").reservePendingResetCreditOperation;
+  clearResetCreditOperationImpl?: typeof import("./reset-credit-pending").clearPendingResetCreditOperation;
   /** Test seam for the process-level user-consent guard. */
   isAgentDrivenImpl?: () => boolean;
 }

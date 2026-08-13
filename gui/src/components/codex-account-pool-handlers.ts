@@ -15,7 +15,11 @@ export async function redeemResetCredit(
   operationId: string,
   t: TFn,
   load: (refresh?: boolean) => Promise<boolean>,
-): Promise<{ ok: boolean; toast?: string; close?: boolean }> {
+): Promise<{
+  ok: boolean;
+  outcome: "terminal" | "ambiguous";
+  toast?: string;
+}> {
   try {
     const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits/consume`, {
       method: "POST",
@@ -23,9 +27,9 @@ export async function redeemResetCredit(
       body: JSON.stringify({ accountId, operationId }),
     });
     const result = await readJsonIfOk<{ code: string; remaining?: number }>(resp);
-    if (!result) return { ok: false, toast: t("codexAuth.resetError") };
+    if (!result) return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
     if (result.code === "reset" || result.code === "already_redeemed") {
-      await load(true);
+      try { await load(true); } catch { /* the consume outcome is already terminal */ }
       // Authoritative remaining comes from the management endpoint (refreshed quota).
       // Never invent a decrement from a stale modal snapshot.
       const remaining =
@@ -34,15 +38,18 @@ export async function redeemResetCredit(
           : undefined;
       return {
         ok: true,
-        close: true,
+        outcome: "terminal",
         toast: remainingCreditsToast(t, remaining),
       };
     }
-    const key = result.code === "nothing_to_reset" ? "codexAuth.resetNothingToReset"
-      : result.code === "no_credit" ? "codexAuth.resetNoCredit"
-      : "codexAuth.resetError";
-    return { ok: false, close: true, toast: t(key) };
+    if (result.code === "nothing_to_reset" || result.code === "no_credit") {
+      const key = result.code === "nothing_to_reset"
+        ? "codexAuth.resetNothingToReset"
+        : "codexAuth.resetNoCredit";
+      return { ok: false, outcome: "terminal", toast: t(key) };
+    }
+    return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
   } catch {
-    return { ok: false, toast: t("codexAuth.resetError") };
+    return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
   }
 }

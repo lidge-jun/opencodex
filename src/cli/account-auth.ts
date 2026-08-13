@@ -1,7 +1,11 @@
 import { writeSync } from "node:fs";
-import { randomUUID } from "node:crypto";
 import { isAgentDriven } from "./agent-driven";
 import { requestBoundCodexResetCreditConsent } from "./reset-credit-consent-client";
+import {
+  clearPendingResetCreditOperation,
+  reservePendingResetCreditOperation,
+} from "./reset-credit-pending";
+import { isCodexResetCreditConsentAccountId } from "../lib/codex-reset-credit-consent-contract";
 import type { AccountDeps } from "./account-api";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import {
@@ -235,6 +239,9 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
   if (consume && !yes) throw new CliUsageError("consuming a reset credit requires --yes", USAGE);
   rejectArgs(args, USAGE);
   const accountId = rawId === "main" ? "__main__" : rawId;
+  if (!isCodexResetCreditConsentAccountId(accountId)) {
+    throw new CliUsageError("Invalid account id format", USAGE);
+  }
   let result: unknown;
   if (consume) {
     if ((deps.isAgentDrivenImpl ?? isAgentDriven)()) {
@@ -243,7 +250,12 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
         USAGE,
       );
     }
-    const operationId = randomUUID();
+    let operationId: string;
+    try {
+      operationId = (deps.reserveResetCreditOperationImpl ?? reservePendingResetCreditOperation)(accountId);
+    } catch {
+      throw new CliUsageError("reset-credit retry state is unavailable", USAGE);
+    }
     const consent = await (deps.requestResetCreditConsentImpl ?? requestBoundCodexResetCreditConsent)(
       accountId,
       operationId,
@@ -267,6 +279,21 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
         ? (body as { error: string }).error
         : `Reset-credit request failed (${consent.response.status})`;
       throw new CliUsageError(detail, USAGE);
+    }
+    const terminalCode = body && typeof body === "object"
+      ? (body as { code?: unknown }).code
+      : undefined;
+    if (
+      terminalCode === "reset"
+      || terminalCode === "already_redeemed"
+      || terminalCode === "nothing_to_reset"
+      || terminalCode === "no_credit"
+    ) {
+      try {
+        (deps.clearResetCreditOperationImpl ?? clearPendingResetCreditOperation)(accountId, operationId);
+      } catch {
+        throw new CliUsageError("reset-credit retry state could not be cleared", USAGE);
+      }
     }
     result = body;
   } else {
