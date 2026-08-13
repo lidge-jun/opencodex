@@ -69,6 +69,7 @@ canonical ChatGPT forward streaming은 stable Bun 1.4.0 이상에서 Codex 업�
 투명하게 사용할 수 있습니다. 번들 Bun 1.3.14, prerelease, 또는 검증 불가능한 런타임 identity는
 HTTP/SSE를 사용합니다. 업스트림 WS adapter는 같은 downstream SSE 계약을 유지하며, 원시 JSON
 프레임과 SSE envelope를 각각 4 MiB로 제한하고 8 MiB byte queue가 넘치기 전에 업스트림을 닫습니다.
+queue overflow 시 downstream에는 terminal `response.failed` 이벤트와 `[DONE]`을 내보냅니다.
 
 모든 종료 Responses usage 객체에는 제공자가 해당 세부 정보를 보고하지 않았더라도 두 상세 객체가 모두
 포함됩니다.

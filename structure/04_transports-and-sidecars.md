@@ -98,7 +98,8 @@ stable Bun runtime at or above 1.4.0 may use Codex's upstream
 unverifiable runtime identities stay on HTTP/SSE. A successful upstream WS
 response is re-encoded to the same SSE surface and forced through the bounded
 eager single-reader relay instead of `tee()`: raw and enveloped frames are capped
-at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream.
+at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream and
+the downstream relay emits its terminal `response.failed` event plus `[DONE]`.
 Pre-open HTTP fallback remains unmarked and follows the ordinary configured
 stream path.
 

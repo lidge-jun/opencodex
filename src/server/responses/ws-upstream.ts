@@ -270,6 +270,7 @@ export function codexWsUpstreamFetch(
         controller.enqueue(sseFrame);
       } catch {
         failStream("codex websocket response stream closed while enqueueing");
+        return;
       }
       if (type === "response.completed" || type === "response.failed" || type === "response.incomplete" || type === "error") {
         terminal = true;

@@ -145,7 +145,8 @@ Independently of that client-facing setting, canonical ChatGPT forward requests 
 `stream: true` may use Codex's upstream WebSocket transport on stable Bun 1.4.0 or newer.
 Bundled Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE. Successful
 upstream WS responses keep the downstream SSE contract and bypass `tee()` through a bounded eager
-single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue).
+single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
+closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.
 
 Codex context compaction works for routed models. `server/responses/compact.ts` handles
 `POST /v1/responses/compact` by running an internal routed summarization turn and returning compacted

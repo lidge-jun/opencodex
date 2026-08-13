@@ -76,7 +76,8 @@ For canonical ChatGPT forward streaming, stable Bun 1.4.0 or newer may transpare
 Codex's upstream WebSocket transport. Bundled Bun 1.3.14, prereleases, and unverifiable runtime
 identities use HTTP/SSE. The upstream WS adapter keeps the same downstream SSE contract, caps both
 the raw JSON frame and its SSE envelope at 4 MiB, and closes the upstream when its 8 MiB byte queue
-would overflow.
+would overflow. That overflow emits a terminal downstream `response.failed` event followed by
+`[DONE]`.
 
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:

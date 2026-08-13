@@ -121,7 +121,8 @@ Responses 항목 타입으로 구분됩니다 — 따라서 MCP 네임스페이�
 stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을 사용할 수 있습니다. 번들 Bun 1.3.14,
 prerelease, 또는 검증할 수 없는 런타임 identity는 HTTP/SSE를 사용합니다. 성공한 업스트림 WS
 응답은 같은 downstream SSE 계약을 유지하며, 4 MiB 프레임 및 8 MiB producer queue 상한이 있는
-bounded eager single-reader relay를 거칩니다.
+bounded eager single-reader relay를 거칩니다. queue overflow 시 업스트림을 닫고 downstream에는
+terminal `response.failed` 이벤트와 `[DONE]`을 내보냅니다.
 
 Codex 컨텍스트 compaction은 라우팅된 모델에서도 동작합니다. `server/responses/compact.ts`는
 `POST /v1/responses/compact`를 내부 라우팅 요약 턴으로 처리해 압축된 히스토리를 반환합니다.

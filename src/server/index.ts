@@ -417,9 +417,8 @@ function attachLiveSidebandUpstream(
 // upstream cannot hold Codex open after response.completed; darwin no-rewrite traffic
 // requires explicit config-eager opt-in (`auto` always stays tee on darwin).
 // selectEagerPath(process.platform, needsClientRewrite, config.streamMode ?? "auto")
-// bunSupportsBoundedCodexWsRelay
-// isCodexWsUpstreamResponse(upstreamResponse)
-// forceCodexWsEagerRelay || eagerPath?.useEagerRelay || win32EagerRewrite
+// Codex upstream WS runtime gating and the forced bounded single-reader branch
+// are owned by responses/ws-upstream.ts and responses/core.ts respectively.
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
 // new Response(eagerBody,
 // Default shape (tee + background inspection):

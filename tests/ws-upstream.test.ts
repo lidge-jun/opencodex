@@ -378,6 +378,23 @@ describe("codexWsUpstreamFetch", () => {
     expect(frame.type).toBe("response.create");
   });
 
+  test("relays an upstream error frame and closes the stream", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", {
+        data: JSON.stringify({ type: "error", error: { message: "upstream refused the turn" } }),
+      });
+    });
+    const response = await codexWsUpstreamFetch(CODEX_URL, streamingInit(), (() => {
+      throw new Error("fallback must not run after open");
+    }) as unknown as typeof fetch);
+
+    const text = await response.text();
+    expect(text).toContain("event: error");
+    expect(text).toContain("upstream refused the turn");
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
   test("falls back to the HTTP fetch when the upgrade is rejected before open", async () => {
     installFake(ws => ws.close());
     const sentinel = new Response("sse-fallback", { status: 429 });
