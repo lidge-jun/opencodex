@@ -373,10 +373,21 @@ test("convergence preserves an observed account-only native id without creating 
 
   const catalog = await convergeCatalog(config(true));
   const models = catalog.models ?? [];
-  expect(models.find(entry => entry.slug === "desktop/gpt-daybreak-blue-latest")).toMatchObject({
+  const daybreak = models.find(entry => entry.slug === "desktop/gpt-daybreak-blue-latest");
+  expect(daybreak).toMatchObject({
     visibility: "list",
     opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+    context_window: 372_000,
+    max_context_window: 372_000,
+    auto_compact_token_limit: 334_800,
+    comp_hash: "3000",
+    tool_mode: "code_mode_only",
+    use_responses_lite: true,
+    supports_parallel_tool_calls: true,
+    multi_agent_version: "v2",
   });
+  expect((daybreak?.supported_reasoning_levels as Array<{ effort: string }>).map(level => level.effort))
+    .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   expect(models.some(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toBe(false);
   expect(models.some(entry => entry.slug === "gpt-daybreak-blue-latest")).toBe(false);
 });

@@ -23,17 +23,41 @@ the bare or API-key model list. The row is matched on the field shape a real cat
 which filters malformed entries — it does not prove the id came from an upstream response, since
 the cache is a user-owned file. See [Exact Codex account selectors](/reference/configuration/routing/#exact-codex-account-selectors).
 
+`gpt-daybreak-blue-latest` follows that observation-only rule for account-qualified rows and is not
+added to the bare native allowlist. A separate, explicit `customModels` entry can expose the same
+wire id as `openai/gpt-daybreak-blue-latest` through the canonical Codex-login forward provider:
+
+```json
+{
+  "customModels": [
+    {
+      "id": "daybreak-codex-forward",
+      "provider": "openai",
+      "modelId": "gpt-daybreak-blue-latest"
+    }
+  ]
+}
+```
+
+Only that exact provider, endpoint, and model id receive the pinned Sol capability snapshot:
+372,000 context, 334,800 automatic compaction, the native reasoning ladder, and native Codex tool
+metadata. The request still sends `gpt-daybreak-blue-latest`; opencodex does not rewrite it to Sol,
+does not create a bare row, and does not grant account entitlement. The separately billed
+`openai-apikey/daybreak-blue-latest` API row is a different route and its 1,050,000 / 922,000 limits
+are never copied into the Codex-login row.
+
 When the `codexAccountNamespaces` map is empty, account-qualified picker rows are off. If
 `codexAccountPickerEnabled` is omitted with a non-empty map, they are treated as enabled for
 backward compatibility. Set it to `false` to hide generated qualified rows and restore bare native
 rows in the picker without deleting mappings or disabling exact
 `<selector>/<native-openai-model>` routing.
 
-API GPT-5.6 entries use
+API GPT-5.6 and Daybreak entries use
 1,050,000 context / 922,000 max input, and `*-pro` picker ids resolve to the base wire model with
 `reasoning.mode: "pro"` while logs, usage, and picker state keep the virtual id.
-The API catalog is fixed to exactly eight ids: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and their
-three Pro virtual ids; there is no generic `gpt-5.6-pro` alias.
+The API catalog is fixed to exactly ten ids: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, their three Pro
+virtual ids, `daybreak-red-latest`, and `daybreak-blue-latest`; there is no generic
+`gpt-5.6-pro` alias.
 Compact requests keep the selected tier but send the base model without a reasoning object.
 
 Select the credential route represented by the picker id. Change Pool/Direct on the Providers page;
@@ -43,6 +67,9 @@ Select the credential route represented by the picker id. Change Pool/Direct on 
 gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
 <selector>/gpt-5.6-sol              # stored Codex account mapped by that selector
 openai-apikey/gpt-5.6-sol           # API key
+openai/gpt-daybreak-blue-latest     # explicit Codex-forward custom row (372,000)
+<selector>/gpt-daybreak-blue-latest # observed account-qualified native id, when available
+openai-apikey/daybreak-blue-latest  # separate API-key route (1,050,000 / 922,000)
 ```
 
 Fresh installs and configs with no saved mode default to Pool. Current configs use marker 2 and
@@ -102,13 +129,16 @@ metadata instead of an older-template approximation.
 | --- | --- |
 | Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
 | Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
-| OpenAI (API key) | Exactly eight namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, and the three `*-pro` virtual ids (1,050,000 context; 922,000 max input for all eight) |
+| Codex login (explicit Daybreak forward row) | `openai/gpt-daybreak-blue-latest` only when the exact `customModels` row is configured on the canonical `openai` provider. It keeps the Daybreak wire id and uses the pinned Sol capability snapshot (372,000 context; 334,800 automatic compaction). |
+| OpenAI (API key) | Exactly ten namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, the three `*-pro` virtual ids, and the two Daybreak aliases (1,050,000 context; 922,000 max input for all ten) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus `cursor/grok-4.5` and `cursor/grok-4.5-fast` (500,000); live account discovery decides which remain visible. |
 | xAI | Live discovery is authoritative; the fallback catalog defaults to `xai/grok-4.5` with a 500,000-token window and `low` / `medium` / `high` reasoning controls. |
 
 The pinned GPT-5.6 entries preserve the exact upstream ladder. Sol and Terra expose `low` through
 `ultra`; Luna stops at `max`. Sol defaults to `low`, while Terra and Luna default to `medium`.
+The explicit Codex-forward Daybreak Blue row inherits Sol's ladder and default without changing its
+wire identity.
 `ultra` is a client-facing choice for maximum reasoning plus proactive delegation and reaches the
 backend as `max`. A picker entry only means the catalog is ready: the connected account or API key
 must still be entitled to use that model.

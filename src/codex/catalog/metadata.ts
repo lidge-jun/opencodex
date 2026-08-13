@@ -15,7 +15,7 @@ import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../..
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
-import { CODEX_GPT5_IDENTITY_LINE } from "../../adapters/identity";
+import { identifyRoutedModel } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -37,9 +37,23 @@ import type { RawEntry } from "./parsing";
 import { readCurrentCatalogOrCache, readCurrentCodexCatalog, readCurrentCodexModelsCache, unique } from "./bundled";
 import { trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
-import { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
+import {
+  NATIVE_DAYBREAK_BLUE_MODEL,
+  NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
+  NATIVE_OPENAI_MODELS,
+  SUPPORTED_NATIVE_OPENAI_SLUGS,
+  isNativeOpenAiCapabilityAliasModel,
+  nativeOpenAiCapabilitySourceSlug,
+} from "./native-models";
 export { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
-export { NATIVE_OPENAI_MODELS, SUPPORTED_NATIVE_OPENAI_SLUGS } from "./native-models";
+export {
+  NATIVE_DAYBREAK_BLUE_MODEL,
+  NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
+  NATIVE_OPENAI_MODELS,
+  SUPPORTED_NATIVE_OPENAI_SLUGS,
+  isNativeOpenAiCapabilityAliasModel,
+  nativeOpenAiCapabilitySourceSlug,
+} from "./native-models";
 
 export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   "gpt-5.3-codex-spark",
@@ -94,7 +108,17 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   "gpt-5.6-sol": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
   "gpt-5.6-terra": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
   "gpt-5.6-luna": { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
+  [NATIVE_DAYBREAK_BLUE_MODEL]: { contextWindow: NATIVE_GPT56_CONTEXT_WINDOW, maxContextWindow: NATIVE_GPT56_CONTEXT_WINDOW },
 };
+
+const PINNED_UPSTREAM_MODELS: Map<string, RawEntry> = new Map(
+  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
+    .flatMap(model => typeof model.slug === "string" ? [[model.slug, model] as const] : []),
+);
+
+function pinnedNativeCapabilityEntry(slug: string): RawEntry | undefined {
+  return PINNED_UPSTREAM_MODELS.get(nativeOpenAiCapabilitySourceSlug(slug));
+}
 
 /**
  * Pinned capability metadata is safe to use as a fallback for every supported native model.
@@ -102,10 +126,10 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
  * persisted native rows during sync, which is currently intentional only for the GPT-5.6 family.
  */
 const PINNED_NATIVE_CAPABILITY_ENTRIES: Map<string, RawEntry> = new Map(
-  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
-    .filter(m => typeof m.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string))
-    .map(m => [m.slug as string, m]),
+  [...NATIVE_OPENAI_MODELS, ...NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS].flatMap(slug => {
+    const entry = pinnedNativeCapabilityEntry(slug);
+    return entry ? [[slug, entry] as const] : [];
+  }),
 );
 
 export function nativeOpenAiContextWindow(slug: string, contextCap?: number): number | undefined {
@@ -259,12 +283,38 @@ export function applyNativeVisibility(
   return entries;
 }
 
+function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
+  const sourceSlug = nativeOpenAiCapabilitySourceSlug(slug);
+  if (!sourceSlug.startsWith("gpt-5.6-")) return undefined;
+  const source = PINNED_UPSTREAM_MODELS.get(sourceSlug);
+  if (!source) return undefined;
+  if (slug === sourceSlug) return source;
+
+  const alias = structuredClone(source) as RawEntry;
+  alias.slug = slug;
+  alias.display_name = "Daybreak Blue";
+  alias.description = "Frontier general-purpose model with safeguards for defensive cybersecurity work.";
+  if (typeof alias.base_instructions === "string") {
+    alias.base_instructions = identifyRoutedModel(alias.base_instructions, slug);
+  }
+  if (alias.model_messages && typeof alias.model_messages === "object" && !Array.isArray(alias.model_messages)) {
+    const modelMessages = alias.model_messages as Record<string, unknown>;
+    if (typeof modelMessages.instructions_template === "string") {
+      alias.model_messages = {
+        ...modelMessages,
+        instructions_template: identifyRoutedModel(modelMessages.instructions_template, slug),
+      };
+    }
+  }
+  delete alias.availability_nux;
+  return alias;
+}
+
 export const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
-  ((upstreamModelsSnapshot as unknown as { models?: RawEntry[] }).models ?? [])
-    .filter(m => typeof m.slug === "string"
-      && SUPPORTED_NATIVE_OPENAI_SLUGS.has(m.slug as string)
-      && (m.slug as string).startsWith("gpt-5.6-"))
-    .map(m => [m.slug as string, m]),
+  [...NATIVE_OPENAI_MODELS, ...NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS].flatMap(slug => {
+    const entry = upstreamNativeEntryForSlug(slug);
+    return entry ? [[slug, entry] as const] : [];
+  }),
 );
 
 export function upstreamNativeEntry(slug: string): RawEntry | null {
