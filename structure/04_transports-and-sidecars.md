@@ -661,6 +661,25 @@ family shared by unrelated upstreams.
 - 다른 대안 대신 이 방식을 선택한 이유: Global or heuristic rules regress supported providers and make custom gateway names part of the wire contract.
 - 장점, 단점 및 영향: Compatible siblings retain schema enforcement and explicitly incompatible models avoid the upstream 400; operators must classify each unsupported model they route.
 
+## MiniMax Anthropic-compatible clients
+
+The MiniMax platform CLI's text resource posts Anthropic Messages to
+`/anthropic/v1/messages`. `ocx mmx` adapts that hard-coded client path with a temporary
+loopback bridge instead of adding another server route. The bridge accepts only POSTs to the
+messages and count-tokens paths, rewrites them to the existing `/v1/messages` data plane,
+preserves the query and streaming body, strips all incoming credential headers, and pins the
+public loopback placeholder. It stops as soon as the MMX child exits, so the server's
+`AUTH_MATRIX` and authentication surface remain unchanged.
+
+`ocx mmx` exposes only the text resource because the other MMX resources use MiniMax-specific
+image, video, speech, music, vision, search, quota and file endpoints. The launcher isolates
+`~/.mmx` credentials behind a temporary config, removes ambient proxy variables so loopback
+traffic cannot be sent off-machine, owns the temporary bridge lifecycle, and refuses
+destination, region and credential overrides. It is
+loopback-only because MMX cannot carry the dedicated remote-admission header. MiniMax Code uses
+the separate reversible `custom_provider.opencodex` file integration and is likewise
+loopback-only; its generated block never changes `defaultModel`.
+
 ## Anthropic structured-output compatibility
 
 The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON

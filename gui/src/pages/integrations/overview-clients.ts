@@ -142,6 +142,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   kimi: "integrations.tab.kimi",
   gajae: "integrations.tab.gajae",
   dsh: "integrations.tab.dsh",
+  mcode: "integrations.tab.mcode",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */
