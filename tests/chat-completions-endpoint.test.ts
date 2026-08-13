@@ -722,6 +722,70 @@ test("chat-native non-stream fold preserves tool calls and finish reason", async
   }
 });
 
+
+test("chat-native non-stream budget overflow returns 413 without hanging", async () => {
+  // Two sequential requests: first overflows the bounded JSON reader (413), second proves server still responsive.
+  let calls = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      calls += 1;
+      if (calls === 1) {
+        const chunk = new TextEncoder().encode('{"id":"chatcmpl_x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"' + "y".repeat(33 * 1024 * 1024) + '"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}');
+        return new Response(chunk, { headers: { "content-type": "application/json" } });
+      }
+      return Response.json({ id: "chatcmpl_ok", object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/\$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(413);
+    const json = await response.json() as { error?: { code?: string } };
+    expect(json.error?.code).toBe("translation_buffer_limit");
+    const response2 = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response2.status).toBe(200);
+    // Prove the overflow path released the body/reader: second request consumed a fresh upstream response.
+    expect(calls).toBe(2);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-native non-stream invalid JSON is forwarded as 200 passthrough", async () => {
+  // The native JSON path forwards verbatim when parsing fails (bridges legacy behavior for untrusted upstreams).
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response("not-json-at-all", { headers: { "content-type": "application/json" } });
+    },
+  });
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/\$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("not-json-at-all");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
 test("POST /v1/chat/completions direct mode forwards caller Authorization", async () => {
   const seen: Array<{ authorization: string | null }> = [];
   const upstream = Bun.serve({
