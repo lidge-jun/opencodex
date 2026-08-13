@@ -722,6 +722,42 @@ export function openManualResetCreditOperation(
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
     return withLedger((database, recordCount) => {
+      const reserve = (replaceCurrent: boolean): OpenManualResetCreditOperationResult => {
+        const existingOwner = operationOwner(database, identity.operationId);
+        if (existingOwner !== undefined && existingOwner !== owner.accountKey) {
+          return Object.freeze({ kind: "unavailable" as const });
+        }
+
+        const record: ResetCreditOperationRecord = Object.freeze({
+          accountKey: owner.accountKey,
+          operationKind: "manual",
+          operationId: identity.operationId,
+          state: "pending",
+          createdAt: now,
+          updatedAt: now,
+        });
+        const values = [
+          "manual",
+          null,
+          null,
+          identity.operationId,
+          "pending",
+          null,
+          now,
+          now,
+        ] as const;
+        const result = replaceCurrent
+          ? database.query(REPLACE_RECORD).run(...values, owner.accountKey)
+          : database.query(INSERT_RECORD).run(owner.accountKey, ...values);
+        if (result.changes !== 1) throw new Error("manual reset-credit reservation lost ownership");
+        assertStoredRecord(database, record);
+        return Object.freeze({
+          kind: "execute" as const,
+          operationId: identity.operationId as CodexReservedOperationId,
+          resumed: false,
+        });
+      };
+
       const current = readRecord(database, owner.accountKey);
       if (current) {
         if (current.operationKind !== "manual") {
@@ -744,44 +780,13 @@ export function openManualResetCreditOperation(
           });
         }
         // Deliberate: a distinct caller id after a settled intent represents a
-        // new explicit redemption and replaces the terminal record below.
-      } else if (recordCount >= MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
+        // new explicit redemption and replaces exactly that terminal record.
+        return reserve(true);
+      }
+      if (recordCount >= MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
         return Object.freeze({ kind: "capacity" as const });
       }
-
-      const existingOwner = operationOwner(database, identity.operationId);
-      if (existingOwner !== undefined && existingOwner !== owner.accountKey) {
-        return Object.freeze({ kind: "unavailable" as const });
-      }
-
-      const record: ResetCreditOperationRecord = Object.freeze({
-        accountKey: owner.accountKey,
-        operationKind: "manual",
-        operationId: identity.operationId,
-        state: "pending",
-        createdAt: now,
-        updatedAt: now,
-      });
-      const values = [
-        "manual",
-        null,
-        null,
-        identity.operationId,
-        "pending",
-        null,
-        now,
-        now,
-      ] as const;
-      const result = current
-        ? database.query(REPLACE_RECORD).run(...values, owner.accountKey)
-        : database.query(INSERT_RECORD).run(owner.accountKey, ...values);
-      if (result.changes !== 1) throw new Error("manual reset-credit reservation lost ownership");
-      assertStoredRecord(database, record);
-      return Object.freeze({
-        kind: "execute" as const,
-        operationId: identity.operationId as CodexReservedOperationId,
-        resumed: false,
-      });
+      return reserve(false);
     });
   } catch (error) {
     warnLedgerUnavailable(error);

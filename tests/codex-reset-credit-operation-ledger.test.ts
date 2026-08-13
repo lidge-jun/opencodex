@@ -183,6 +183,33 @@ describe("Codex reset-credit operation ledger", () => {
     });
   });
 
+  test("an uppercase terminal id cannot reopen as a lowercase retry", () => {
+    const identity = {
+      accountId: "pool-manual-uppercase-terminal",
+      chatgptAccountId: "chatgpt-uppercase-terminal",
+      operationId: fixtureOperationId(708),
+    };
+    expect(openManualResetCreditOperation(identity, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(identity, "reset", 200)).toEqual({ kind: "updated" });
+    const uppercase = identity.operationId.toUpperCase();
+    const database = new Database(databasePath());
+    try {
+      database.prepare("UPDATE reset_credit_operations SET operation_id = ?").run(uppercase);
+    } finally {
+      database.close();
+    }
+
+    expect(openManualResetCreditOperation(identity, 300)).toEqual({ kind: "unavailable" });
+    const stored = new Database(databasePath(), { readonly: true });
+    try {
+      expect(stored.query<{ operation_id: string; state: string; code: string }, []>(`
+        SELECT operation_id, state, code FROM reset_credit_operations
+      `).get()).toEqual({ operation_id: uppercase, state: "confirmed", code: "reset" });
+    } finally {
+      stored.close();
+    }
+  });
+
   test("manual operations share one physical-account intent across local aliases", () => {
     const first = {
       accountId: "pool-manual-fence",
