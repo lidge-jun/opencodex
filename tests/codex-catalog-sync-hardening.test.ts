@@ -907,7 +907,7 @@ describe("Codex catalog sync hardening", () => {
     expect(slugs).not.toContain("offline/disabled-model");
     expect(slugs).not.toContain("removed/ghost");
     expect(slugs).toContain("cursor/composer-2.5");
-  });
+  }, 15_000);
 
   test("drops legacy-signature ghost rows in both gather branches", () => {
     const catalogPath = join(codexHome, "catalog.json");

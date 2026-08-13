@@ -22,6 +22,7 @@ import { appendLabEvent, replayLabLedger } from "./store";
 import { ensureLabDirs } from "../paths";
 import { rebuildLabProjection } from "../projection/rebuild";
 import { jcsStringify } from "../digest";
+import { purgeLocalPublicEvidenceCopies } from "../public/purge";
 import {
   closeSync,
   existsSync,
@@ -100,8 +101,6 @@ function atomicRewriteLedger(ledgerPath: string, events: LabEvent[]): void {
         closeSync(dirFd);
       }
     } catch (err) {
-      // The rename is already committed and visible. Report durability failure
-      // without pretending the ledger action can be rolled back.
       throw new PurgeError(
         "ledger_durability_failed",
         `ledger rewrite committed but directory fsync failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -142,6 +141,40 @@ function purgeBoundedDirectory(dirPath: string): void {
   }
 }
 
+function normalizePurgeError(err: unknown, completed: readonly string[]): PurgeError {
+  if (err instanceof PurgeError) {
+    return new PurgeError(
+      err.code,
+      err.message,
+      [...new Set([...completed, ...err.completedActions])],
+    );
+  }
+  return new PurgeError(
+    "purge_failed",
+    err instanceof Error ? err.message : String(err),
+    [...completed],
+  );
+}
+
+function buildPurgeTombstone(
+  req: SensitivePurgeRequest,
+  removeIds: ReadonlySet<string>,
+  targetArtifactDigests: string[],
+  purgeActions: Array<(typeof PURGE_ACTIONS)[number]>,
+): PurgeTombstoneEvent {
+  return validateLabEvent(assignEventId({
+    schemaVersion: LAB_EVENT_SCHEMA_VERSION,
+    eventKind: "purge_tombstone" as const,
+    recordedAt: req.recordedAt ?? Date.now(),
+    producer: LAB_PRODUCER,
+    producerVersion: req.producerVersion ?? LAB_PRODUCER_VERSION,
+    targetEventIds: [...removeIds].sort(),
+    targetArtifactDigests,
+    reason: "sensitive_evidence" as const,
+    purgeActions,
+  })) as PurgeTombstoneEvent;
+}
+
 /**
  * Exceptional sensitive-evidence purge:
  * physically remove targeted JSONL lines and artifacts, append purge_tombstone,
@@ -163,19 +196,6 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
     explicitSensitive,
   );
 
-  const tombstonePayload = {
-    schemaVersion: LAB_EVENT_SCHEMA_VERSION,
-    eventKind: "purge_tombstone" as const,
-    recordedAt: req.recordedAt ?? Date.now(),
-    producer: LAB_PRODUCER,
-    producerVersion: req.producerVersion ?? LAB_PRODUCER_VERSION,
-    targetEventIds: [...removeIds].sort(),
-    targetArtifactDigests,
-    reason: "sensitive_evidence" as const,
-    purgeActions,
-  };
-  const tombstone = validateLabEvent(assignEventId(tombstonePayload)) as PurgeTombstoneEvent;
-
   const deletionPlan = purgeActions.includes("artifact")
     ? artifactDeletionPlan(replay.events, index, removeIds, targetArtifactDigests)
     : { deletable: [], retainedExplicit: [] };
@@ -189,14 +209,24 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
 
   let dir: TrustedArtifactDir | null = null;
   const completed: string[] = [];
+  let deferredExportError: PurgeError | null = null;
+  let operationError: PurgeError | null = null;
+  let tombstone: PurgeTombstoneEvent | null = null;
+
   try {
     if (purgeActions.includes("scratch")) {
       purgeBoundedDirectory(paths.scratchDir);
       completed.push("scratch");
     }
     if (purgeActions.includes("export")) {
-      purgeBoundedDirectory(paths.exportDir);
-      completed.push("export");
+      try {
+        purgeLocalPublicEvidenceCopies(req.configDir);
+        completed.push("export");
+      } catch (err) {
+        // Export deletion is independent from artifact/ledger/sqlite deletion. Keep
+        // deleting every other requested sensitive copy, then report this failure.
+        deferredExportError = normalizePurgeError(err, completed);
+      }
     }
 
     if (purgeActions.includes("artifact")) {
@@ -207,35 +237,59 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       completed.push("artifact");
     }
 
-    if (purgeActions.includes("ledger")) {
-      const kept: LabEvent[] = [];
-      for (const event of replay.events) {
-        if (removeIds.has(event.eventId)) continue;
-        kept.push(event);
+    // Never persist a tombstone claiming that export completed when the export purge
+    // failed. Other independent actions remain recordable and continue as requested.
+    const tombstoneActions = deferredExportError
+      ? purgeActions.filter((action) => action !== "export")
+      : purgeActions;
+    const hasTombstoneTarget = removeIds.size > 0
+      || targetArtifactDigests.length > 0
+      || tombstoneActions.includes("scratch")
+      || tombstoneActions.includes("export");
+
+    if (tombstoneActions.length > 0 && (hasTombstoneTarget || !deferredExportError)) {
+      tombstone = buildPurgeTombstone(req, removeIds, targetArtifactDigests, tombstoneActions);
+      if (purgeActions.includes("ledger")) {
+        const kept: LabEvent[] = [];
+        for (const event of replay.events) {
+          if (removeIds.has(event.eventId)) continue;
+          kept.push(event);
+        }
+        kept.push(tombstone);
+        atomicRewriteLedger(paths.ledgerPath, kept);
+        completed.push("ledger");
+      } else {
+        appendLabEvent(paths.ledgerPath, tombstone);
       }
-      kept.push(tombstone);
-      atomicRewriteLedger(paths.ledgerPath, kept);
-    } else {
-      appendLabEvent(paths.ledgerPath, tombstone);
     }
-    completed.push("ledger");
 
     if (purgeActions.includes("sqlite")) {
       rebuildLabProjection(req.configDir);
       completed.push("sqlite");
     }
-
-    return tombstone;
   } catch (err) {
-    if (err instanceof PurgeError) {
-      throw new PurgeError(err.code, err.message, [...completed, ...err.completedActions]);
-    }
-    throw new PurgeError(
-      "purge_failed",
-      err instanceof Error ? err.message : String(err),
-      completed,
-    );
+    operationError = normalizePurgeError(err, completed);
   } finally {
     if (dir) closeTrustedArtifactDir(dir);
   }
+
+  if (operationError && deferredExportError) {
+    throw new PurgeError(
+      "purge_failed",
+      `export purge failed: ${deferredExportError.message}; subsequent purge failure (${operationError.code}): ${operationError.message}`,
+      [...new Set([...completed, ...deferredExportError.completedActions, ...operationError.completedActions])],
+    );
+  }
+  if (operationError) throw operationError;
+  if (deferredExportError) {
+    throw new PurgeError(
+      deferredExportError.code,
+      deferredExportError.message,
+      [...new Set([...completed, ...deferredExportError.completedActions])],
+    );
+  }
+  if (!tombstone) {
+    throw new PurgeError("purge_failed", "purge completed without a durable tombstone", completed);
+  }
+  return tombstone;
 }

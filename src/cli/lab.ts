@@ -63,6 +63,14 @@ import { planManualLabRun } from "../lab/automation/planner";
 import { listLabAutomationRuns } from "../lab/automation/runs-query";
 import { LabAutomationError, type LabAutomationLayer } from "../lab/automation/types";
 import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
+import {
+  exportLocalPublicEvidence,
+  importCommunityEvidenceFile,
+  listCommunityEvidenceContext,
+  previewLocalPublicEvidence,
+  verifyPublicEvidenceFile,
+  type PublicVerificationSummaryV1,
+} from "../lab/public";
 
 const USAGE = `Usage:
   ocx lab status [--json]
@@ -76,6 +84,11 @@ const USAGE = `Usage:
   ocx lab artifacts [--status <s>] [--artifact-class <c>] [--limit <n>] [--cursor <c>] [--json]
   ocx lab artifact <digest> [--json]
   ocx lab catalog [--layer <layer>] [--suite <id>] [--json]
+  ocx lab public preview --event <eventId> [--event <eventId> ...] [--json]
+  ocx lab public export --event <eventId> [--event <eventId> ...] [--json]
+  ocx lab public verify --file <bundle.json> [--json]
+  ocx lab public import --file <bundle.json> [--json]
+  ocx lab public community [--json]
   ocx lab automation status [--json]
   ocx lab automation enable [--protocol] [--live] [--json]
   ocx lab automation disable [--json]
@@ -223,6 +236,120 @@ function runListLines(page: ReturnType<typeof listLabAutomationRuns>): string[] 
   return lines.length > 0 ? lines : ["No automation runs"];
 }
 
+function takeRepeatedOptions(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  while (true) {
+    const index = args.indexOf(flag);
+    if (index < 0) break;
+    const value = args[index + 1];
+    if (!value || value.startsWith("--")) {
+      throw new CliUsageError(`${flag} requires a value`, USAGE);
+    }
+    values.push(value);
+    args.splice(index, 2);
+  }
+  return values;
+}
+
+function publicPreviewLines(result: ReturnType<typeof previewLocalPublicEvidence>): string[] {
+  return [
+    `Public evidence preview: ${result.bundle.records.length} exportable record(s)`,
+    `Excluded: ${result.excluded.length}`,
+    "Unsigned local preview; no publisher key or remote publish is created.",
+  ];
+}
+
+function publicExportLines(result: ReturnType<typeof exportLocalPublicEvidence>): string[] {
+  return [
+    "Public evidence exported locally",
+    `Bundle: ${result.bundle.bundleId}`,
+    `Publisher: ${result.bundle.publisher.keyId}`,
+    `Path: ${result.stored.path}`,
+    `Excluded: ${result.excluded.length}`,
+    "No remote publish occurred.",
+  ];
+}
+
+function publicVerificationLines(result: PublicVerificationSummaryV1): string[] {
+  if (result.status !== "cryptographically_valid") {
+    return [
+      `Public evidence verification: ${result.status}`,
+      "Not locally verified.",
+      ...(result.detail ? [result.detail] : []),
+    ];
+  }
+  return [
+    "Public evidence verification: cryptographically valid",
+    `Bundle: ${result.bundleId}`,
+    `Publisher: ${result.publisherKeyId}`,
+    "Not locally verified. Signature validity proves integrity/continuity only.",
+  ];
+}
+
+function handlePublicLabCommand(
+  argv: string[],
+  wantsJson: boolean,
+  configDir: string,
+): void {
+  const [action, ...restInput] = argv;
+  const rest = [...restInput];
+  switch (action) {
+    case "preview": {
+      const eventIds = takeRepeatedOptions(rest, "--event");
+      rejectArgs(rest, USAGE);
+      const result = previewLocalPublicEvidence({ eventIds }, configDir);
+      printData(result, wantsJson, publicPreviewLines(result));
+      return;
+    }
+    case "export": {
+      const eventIds = takeRepeatedOptions(rest, "--event");
+      rejectArgs(rest, USAGE);
+      const result = exportLocalPublicEvidence({ eventIds }, configDir);
+      printData(result, wantsJson, publicExportLines(result));
+      return;
+    }
+    case "verify": {
+      const path = takeOption(rest, "--file");
+      if (!path) throw new CliUsageError("public verify requires --file", USAGE);
+      rejectArgs(rest, USAGE);
+      const result = verifyPublicEvidenceFile(path);
+      printData(result, wantsJson, publicVerificationLines(result));
+      if (result.status !== "cryptographically_valid") {
+        throw new Error(`public evidence verification failed: ${result.status}`);
+      }
+      return;
+    }
+    case "import": {
+      const path = takeOption(rest, "--file");
+      if (!path) throw new CliUsageError("public import requires --file", USAGE);
+      rejectArgs(rest, USAGE);
+      const result = importCommunityEvidenceFile(path, configDir);
+      printData(result, wantsJson, [
+        `Community evidence imported: ${result.bundleId}`,
+        `Publisher: ${result.publisherKeyId}`,
+        "Trust: community_untrusted_v1; not locally verified.",
+      ]);
+      return;
+    }
+    case "community": {
+      rejectArgs(rest, USAGE);
+      const result = listCommunityEvidenceContext(configDir);
+      const lines = result.evidence.length > 0
+        ? result.evidence.map((row) =>
+          `${row.bundleId} publisher=${row.publisherKeyId} active=${row.activeRecordCount} revoked=${row.revokedRecordCount}`,
+        )
+        : ["No community evidence"];
+      printData(result, wantsJson, [
+        "Community evidence (untrusted, read-only context; not locally verified)",
+        ...lines,
+      ]);
+      return;
+    }
+    default:
+      throw new CliUsageError("unknown public subcommand", USAGE);
+  }
+}
+
 export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): Promise<number> {
   return runCliAction(async () => {
     const configDir = deps.configDir ?? getConfigDir();
@@ -232,6 +359,10 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
 
     try {
       switch (sub) {
+        case "public": {
+          handlePublicLabCommand(rest, wantsJson, configDir);
+          return;
+        }
         case "status": {
           rejectArgs(rest, USAGE);
           const status = queryLabStatus(configDir);
