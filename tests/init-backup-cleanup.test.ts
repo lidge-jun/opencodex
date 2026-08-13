@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { constants as fsConstants, copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { constants as fsConstants, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, rmSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cleanupOpenAiTierBackupAfterInit } from "../src/cli/init";
 import {
   classifyOpenAiTierBackup,
+  OpenAiTierRollbackPreserveClaimError,
   OpenAiTierRollbackPreserveCleanupError,
   OpenAiTierRollbackPreserveError,
   OpenAiTierRollbackPreserveSecretResidualError,
@@ -15,7 +16,6 @@ import {
 function preserveIo(
   backup: string,
   overrides: Partial<OpenAiTierRollbackPreserveIO> = {},
-  options: { allowSourceUnlink?: boolean } = {},
 ): OpenAiTierRollbackPreserveIO {
   return {
     exists: existsSync,
@@ -33,9 +33,13 @@ function preserveIo(
       writeFileSync(path, bytes);
     },
     unlink: path => {
-      if (path === backup && !options.allowSourceUnlink) throw new Error("source unlink must not run");
+      if (path === backup) throw new Error("source unlink must not run");
       unlinkSync(path);
     },
+    mkdirExclusive: path => { mkdirSync(path, { mode: 0o700 }); },
+    claimExclusive: (source, destination) => { renameSync(source, destination); },
+    linkExclusive: (source, destination) => { linkSync(source, destination); },
+    rmdir: path => { rmdirSync(path); },
     ...overrides,
   };
 }
@@ -136,6 +140,10 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
       truncate: () => { throw new Error("truncate must not run"); },
       write: () => { throw new Error("write must not run"); },
       unlink: () => { throw new Error("unlink must not run"); },
+      mkdirExclusive: () => { throw new Error("mkdir must not run"); },
+      claimExclusive: () => { throw new Error("claim must not run"); },
+      linkExclusive: () => { throw new Error("link must not run"); },
+      rmdir: () => { throw new Error("rmdir must not run"); },
     }))).toThrow("copy failed");
     expect(readFileSync(backup, "utf8")).toBe(v1);
     expect(readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"))).toEqual([]);
@@ -164,7 +172,7 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
     expect(readFileSync(`${configPath}.pre-openai-tiers-v1-rollback.${now}-1.bak`, "utf8")).toBe("occupied");
   });
 
-  test("preserveOpenAiTierRollbackSnapshot hardens before unlinking the source", () => {
+  test("preserveOpenAiTierRollbackSnapshot hardens before claiming the source", () => {
     const dir = makeDir();
     const configPath = join(dir, "config.json");
     const backup = `${configPath}.pre-openai-tiers-v2.bak`;
@@ -173,7 +181,7 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
     const calls: string[] = [];
     const preserved = preserveOpenAiTierRollbackSnapshot(configPath, preserveIo(backup, {
       read: path => {
-        calls.push(path === backup ? "read-source" : "read-preserved");
+        calls.push(path === backup ? "read-source" : path.endsWith("claimed.bak") ? "read-claimed" : "read-preserved");
         return readFileSync(path);
       },
       copyExclusive: (source, destination) => {
@@ -184,12 +192,28 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
       truncate: () => { throw new Error("truncate must not run"); },
       write: () => { throw new Error("write must not run"); },
       unlink: path => {
-        calls.push(path === backup ? "unlink-source" : "unlink-other");
-        if (path !== backup) throw new Error("only the source backup may be unlinked after a verified copy");
+        calls.push(path === backup ? "unlink-source" : "unlink-claimed");
+        if (path === backup) throw new Error("source unlink must not run");
         unlinkSync(path);
       },
-    }, { allowSourceUnlink: true }));
-    expect(calls).toEqual(["read-source", "copy", "read-preserved", `harden:${preserved}`, "read-source", "unlink-source"]);
+      mkdirExclusive: path => { calls.push("mkdir-claim"); mkdirSync(path, { mode: 0o700 }); },
+      claimExclusive: (source, destination) => {
+        calls.push("claim");
+        renameSync(source, destination);
+      },
+      rmdir: path => { calls.push("rmdir-claim"); rmdirSync(path); },
+    }));
+    expect(calls).toEqual([
+      "read-source",
+      "copy",
+      "read-preserved",
+      `harden:${preserved}`,
+      "mkdir-claim",
+      "claim",
+      "read-claimed",
+      "unlink-claimed",
+      "rmdir-claim",
+    ]);
     expect(existsSync(backup)).toBe(false);
     expect(readFileSync(preserved, "utf8")).toBe(v1);
   });
@@ -232,12 +256,14 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
       harden: path => { hardened.push(path); },
       truncate: () => { throw new Error("verified hardened copy must not be scrubbed"); },
       write: () => { throw new Error("verified hardened copy must not be overwritten"); },
-    }))).toThrow(OpenAiTierRollbackPreserveError);
+      unlink: () => { throw new Error("claimed mismatch must not delete either snapshot"); },
+    }))).toThrow(OpenAiTierRollbackPreserveClaimError);
     expect(readFileSync(backup, "utf8")).toBe(bytesB);
     const preserved = readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"));
     expect(preserved).toHaveLength(1);
     expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(bytesA);
-    expect(hardened).toEqual([join(dir, preserved[0]!)]);
+    expect(hardened[0]).toBe(join(dir, preserved[0]!));
+    expect(hardened.some(path => path.endsWith("claimed.bak"))).toBe(true);
   });
 
   test("preserveOpenAiTierRollbackSnapshot removes an unverified copy when read(preserved) fails", () => {
@@ -373,5 +399,31 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
       expect(leftoverHarden).toEqual([residual.preservedPath]);
     }
     expect(readFileSync(backup, "utf8")).toBe(v1);
+  });
+
+  test("preserveOpenAiTierRollbackSnapshot claims A and leaves a replacement B at the v2 path", () => {
+    const dir = makeDir();
+    const configPath = join(dir, "config.json");
+    const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+    const bytesA = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+    const bytesB = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai", providers: {} });
+    writeFileSync(backup, bytesA);
+    const unlinks: string[] = [];
+    const preserved = preserveOpenAiTierRollbackSnapshot(configPath, preserveIo(backup, {
+      claimExclusive: (source, destination) => {
+        renameSync(source, destination);
+        writeFileSync(source, bytesB);
+      },
+      unlink: path => {
+        unlinks.push(path);
+        if (path === backup) throw new Error("replacement B must not be unlinked");
+        unlinkSync(path);
+      },
+    }));
+    expect(readFileSync(backup, "utf8")).toBe(bytesB);
+    expect(readFileSync(preserved, "utf8")).toBe(bytesA);
+    expect(unlinks).toHaveLength(1);
+    expect(unlinks[0]!.endsWith("claimed.bak")).toBe(true);
+    expect(existsSync(unlinks[0]!)).toBe(false);
   });
 });

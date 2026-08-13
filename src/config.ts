@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmdirSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -404,6 +404,13 @@ export class OpenAiTierRollbackPreserveCleanupError extends Error {
   }
 }
 
+export class OpenAiTierRollbackPreserveClaimError extends Error {
+  constructor(readonly claimedPath: string, options?: ErrorOptions) {
+    super("OpenAI tier rollback backup was replaced during preserve; the claimed snapshot was kept", options);
+    this.name = "OpenAiTierRollbackPreserveClaimError";
+  }
+}
+
 export class OpenAiTierBackupSecretResidualError extends Error {
   constructor(readonly tempPath: string, options?: ErrorOptions) {
     super("OpenAI tier backup could not scrub or remove a secret-bearing temporary file", options);
@@ -588,6 +595,10 @@ export interface OpenAiTierRollbackPreserveIO {
   truncate(path: string): void;
   write(path: string, bytes: Uint8Array): void;
   unlink(path: string): void;
+  mkdirExclusive(path: string): void;
+  claimExclusive(source: string, destination: string): void;
+  linkExclusive(source: string, destination: string): void;
+  rmdir(path: string): void;
 }
 
 const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
@@ -607,19 +618,23 @@ const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
   truncate: target => truncateSync(target, 0),
   write: (target, bytes) => writeFileSync(target, bytes),
   unlink: unlinkSync,
+  mkdirExclusive: target => { mkdirSync(target, { mode: 0o700 }); },
+  claimExclusive: (source, destination) => { renameSync(source, destination); },
+  linkExclusive: (source, destination) => { linkSync(source, destination); },
+  rmdir: target => { rmdirSync(target); },
 };
 
 const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
 
 /**
  * Copy a rollback-classified `.pre-openai-tiers-v2.bak` to a unique
- * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then unlink the
- * blocking v2 name. Order is copy → verify bytes → harden → re-read source →
- * unlink source. The v2 path is removed only after the copy is verified, the
- * destination is hardened, and the source still matches. Pre-harden failures
- * scrub and remove the unverified destination; they never unlink the source.
- * Shared by startup migration recovery and `ocx init` cleanup so the two paths
- * cannot drift.
+ * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then atomically
+ * claim the blocking v2 name into a private directory. Order is copy → verify
+ * bytes → harden preserved → mkdir claim dir → rename source onto the unique
+ * claim path → read the claimed inode → unlink only the claim. The original
+ * backup path is never unlinked, so a replacement that appears after the claim
+ * stays. Pre-harden failures scrub the unverified destination and never claim
+ * the source. Shared by startup migration recovery and `ocx init` cleanup.
  */
 export function preserveOpenAiTierRollbackSnapshot(
   configPath = getConfigPath(),
@@ -669,6 +684,15 @@ export function preserveOpenAiTierRollbackSnapshot(
     throw cause;
   };
 
+  const restoreClaimedIfVacant = (claimedPath: string): void => {
+    try {
+      io.linkExclusive(claimedPath, backup);
+    } catch (error) {
+      if (isAlreadyExistsError(error)) return;
+      throw error;
+    }
+  };
+
   for (let attempt = 0; attempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; attempt++) {
     const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
     try {
@@ -692,16 +716,61 @@ export function preserveOpenAiTierRollbackSnapshot(
     } catch (error) {
       failUnverifiedCopy(preserved, error);
     }
-    let sourceNow: Uint8Array;
+
+    let claimedDir = "";
+    let claimedPath = "";
+    for (let claimAttempt = 0; claimAttempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; claimAttempt++) {
+      const candidateDir = `${configPath}.pre-openai-tiers-v2-claim.${Date.now()}${claimAttempt ? `-${claimAttempt}` : ""}`;
+      try {
+        io.mkdirExclusive(candidateDir);
+      } catch (error) {
+        if (isAlreadyExistsError(error)) continue;
+        throw error;
+      }
+      const candidatePath = join(candidateDir, "claimed.bak");
+      try {
+        io.claimExclusive(backup, candidatePath);
+      } catch (error) {
+        try { io.rmdir(candidateDir); } catch { /* empty claim dir leftover is not secret-bearing */ }
+        throw error;
+      }
+      claimedDir = candidateDir;
+      claimedPath = candidatePath;
+      break;
+    }
+    if (!claimedPath) {
+      throw new OpenAiTierRollbackPreserveError("Unable to find a unique rollback claim path", { code: "exhausted" });
+    }
+
+    const claimedBytes = (() => {
+      try {
+        return io.read(claimedPath);
+      } catch (error) {
+        throw new OpenAiTierRollbackPreserveError("Failed to read claimed rollback backup", { cause: error, code: "changed" });
+      }
+    })();
+    if (!sameBytes(copied, claimedBytes)) {
+      try { io.harden(claimedPath); } catch { /* claimed leftover must remain inspectable */ }
+      try {
+        restoreClaimedIfVacant(claimedPath);
+      } catch (error) {
+        throw new OpenAiTierRollbackPreserveClaimError(claimedPath, { cause: error });
+      }
+      throw new OpenAiTierRollbackPreserveClaimError(claimedPath);
+    }
+
     try {
-      sourceNow = io.read(backup);
+      io.unlink(claimedPath);
     } catch (error) {
-      throw new OpenAiTierRollbackPreserveError("Failed to re-read OpenAI tier rollback backup before unlink", { cause: error, code: "changed" });
+      if (!isMissingPathError(error)) {
+        throw new OpenAiTierRollbackPreserveCleanupError(claimedPath, false, { cause: error });
+      }
     }
-    if (!sameBytes(copied, sourceNow)) {
-      throw new OpenAiTierRollbackPreserveError("OpenAI tier rollback backup changed after it was copied", { code: "changed" });
+    try {
+      io.rmdir(claimedDir);
+    } catch (error) {
+      throw new OpenAiTierRollbackPreserveCleanupError(claimedDir, true, { cause: error });
     }
-    io.unlink(backup);
     return preserved;
   }
   throw new OpenAiTierRollbackPreserveError("Unable to find a unique rollback snapshot path", { code: "exhausted" });
