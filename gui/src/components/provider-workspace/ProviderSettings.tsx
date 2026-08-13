@@ -215,13 +215,25 @@ export default function ProviderSettings({
       if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.models) {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
-      const patch: ProviderUpdatePatch = { adapter: adapter.trim(), baseUrl: nextBaseUrl, defaultModel: defaultModel.trim(), authMode, note: note.trim(), allowPrivateNetwork };
-      if (pacingDirty) patch.requestPacing = pacingDraft;
-      // Keep omitted legacy values omitted unless the user actually changes this toggle.
-      // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
-      if (liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
-      if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
-      else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+      const pacingOnly = pacingDirty && !dirty;
+      const patch: ProviderUpdatePatch = pacingOnly
+        ? { requestPacing: pacingDraft }
+        : {
+            adapter: adapter.trim(),
+            baseUrl: nextBaseUrl,
+            defaultModel: defaultModel.trim(),
+            authMode,
+            note: note.trim(),
+            allowPrivateNetwork,
+            ...(pacingDirty ? { requestPacing: pacingDraft } : {}),
+          };
+      if (!pacingOnly) {
+        // Keep omitted legacy values omitted unless the user actually changes this toggle.
+        // Otherwise an unrelated settings save manufactures `liveModels: true` provenance.
+        if (liveModels !== (item.liveModels !== false)) patch.liveModels = liveModels;
+        if (supportsApiKeyTransport) patch.apiKeyTransport = apiKeyTransport;
+        else if (item.apiKeyTransport !== undefined) patch.apiKeyTransport = "";
+      }
       const res = await onUpdateProvider(item.name, patch);
       setMsg(res.ok ? { ok: true, text: t("pws.settingsSaved") } : { ok: false, text: res.error || t("prov.saveFailed") });
       return res.ok;
