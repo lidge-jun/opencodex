@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  cleanupStalePrivateFileStages,
   isPrivateFileStageName,
+  PRIVATE_FILE_STAGE_RETENTION_MS,
   publishPrivateFileExclusive,
   setPrivateFileCommitFaultForTests,
 } from "../src/lab/public/private-file";
@@ -52,6 +54,28 @@ describe("CL-10 private-file durability", () => {
 
     setPrivateFileCommitFaultForTests(null);
     expect(publishPrivateFileExclusive(finalPath, bytes)).toEqual({ created: true });
+    expect(readFileSync(finalPath).equals(bytes)).toBe(true);
+    expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
+  });
+
+  test("expired published crash witnesses are reclaimed without requiring a retry", () => {
+    if (process.platform === "win32") return;
+    const root = tempRoot();
+    const finalPath = join(root, "bundle.json");
+    const bytes = Buffer.from("durable-public-evidence", "utf8");
+
+    setCommitFault("parent_directory_sync");
+    expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/directory.*sync|durab/i);
+    setPrivateFileCommitFaultForTests(null);
+
+    const stages = readdirSync(root).filter(isPrivateFileStageName);
+    expect(stages).toHaveLength(1);
+    const stagePath = join(root, stages[0]!);
+    const old = new Date(Date.now() - PRIVATE_FILE_STAGE_RETENTION_MS - 60_000);
+    utimesSync(stagePath, old, old);
+
+    cleanupStalePrivateFileStages(finalPath);
+
     expect(readFileSync(finalPath).equals(bytes)).toBe(true);
     expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
   });
