@@ -21,6 +21,7 @@ export interface ConfiguredProviderSummary {
 
 export interface ProviderModelGroup<Row> {
   provider: string;
+  authMode?: string;
   rows: Row[];
   native: boolean;
   liveModels: boolean;
@@ -56,6 +57,7 @@ export function buildProviderModelGroups<Row extends { provider: string; native?
       const configured = providerByName.get(provider);
       return {
         provider,
+        authMode: configured?.authMode,
         rows: providerRows,
         native: providerRows.length > 0 && providerRows.every(row => row.native === true),
         liveModels: configured?.liveModels !== false,

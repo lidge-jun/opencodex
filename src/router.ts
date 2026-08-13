@@ -254,12 +254,14 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
+  const repairLegacyMimoFreeAuth = providerName === "mimo-free" && provider.authMode === "local";
   const explicitKeyOverride = registryEntry.authKind === "oauth"
     && registryEntry.allowKeyAuthOverride === true
     && provider.authMode === "key"
     && resolvedApiKey !== undefined;
   const canonicalAuthMode = explicitKeyOverride
     ? "key"
+    : repairLegacyMimoFreeAuth ? "key"
     : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
       ? registryEntry.authKind
     : provider.authMode === "forward" ? undefined : provider.authMode;
@@ -343,6 +345,12 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
+    ...(registryEntry.liveModelDiscoverySupported === false
+      ? {
+        liveModels: false,
+        ...(registryEntry.models ? { models: [...registryEntry.models] } : {}),
+      }
+      : {}),
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
     // config omits them, so a minimal `google-vertex`/`google-antigravity` entry still routes
     // through the correct branch (CCA/Vertex) instead of falling back to AI Studio.

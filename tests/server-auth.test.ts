@@ -490,8 +490,10 @@ describe("server local API auth", () => {
         "mimo-free": {
           adapter: "mimo-free",
           baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
-          authMode: "key",
+          authMode: "local",
           keyOptional: true,
+          liveModels: true,
+          models: ["stale-model"],
         },
       },
     } as OcxConfig) as {
@@ -509,6 +511,9 @@ describe("server local API auth", () => {
       adapter: "mimo-free",
       authMode: "key",
       keyOptional: true,
+      liveModelDiscoverySupported: false,
+      liveModels: false,
+      models: ["mimo-auto"],
       hasApiKey: false,
     });
   });

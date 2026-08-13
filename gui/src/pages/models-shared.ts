@@ -25,6 +25,20 @@ export function discoveryFailureLabel(
   }
 }
 
+export function discoveryRecoveryLabel(t: TFn, authMode?: string): string {
+  return authMode === "oauth"
+    ? t("models.discoveryRecoveryReauth")
+    : t("models.discoveryRecoverySettings");
+}
+
+export function discoveryFailureTitle(
+  t: TFn,
+  discovery: Extract<ProviderDiscoverySummary, { status: "failed" }>,
+  authMode?: string,
+): string {
+  return `${discoveryFailureLabel(t, discovery)} ${discoveryRecoveryLabel(t, authMode)}`;
+}
+
 export interface ModelRow {
   provider: string;
   id: string;
@@ -122,5 +136,4 @@ export function writeCollapsedProviders(collapsed: Set<string>, storage: Storage
     /* quota / private-mode */
   }
 }
-
 

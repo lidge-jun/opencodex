@@ -478,6 +478,54 @@ describe("provider management validation", () => {
     }
   });
 
+  test("provider list applies static-only registry authority to legacy saved rows", async () => {
+    markProviderDiscoveryFailed("mimo-free", { reason: "http", httpStatus: 400 });
+    markProviderDiscoveryFailed("cline-pass", { reason: "http", httpStatus: 404 });
+    try {
+      const requestUrl = new URL("http://127.0.0.1/api/providers");
+      const response = await handleManagementAPI(
+        new Request(requestUrl),
+        requestUrl,
+        {
+          port: 10100,
+          defaultProvider: "mimo-free",
+          providers: {
+            "mimo-free": {
+              adapter: "mimo-free",
+              baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+              liveModels: true,
+              models: ["mimo-auto"],
+            },
+            "cline-pass": {
+              adapter: "openai-chat",
+              baseUrl: "https://api.cline.bot/api/v1",
+              authMode: "key",
+              liveModels: true,
+              models: ["cline-pass/kimi-k3"],
+            },
+          },
+        },
+      );
+      const providers = await response!.json() as Array<Record<string, unknown>>;
+
+      expect(providers.find(provider => provider.name === "mimo-free")).toMatchObject({
+        authMode: "key",
+        liveModels: false,
+        liveModelDiscoverySupported: false,
+        models: ["mimo-auto"],
+      });
+      expect(providers.find(provider => provider.name === "mimo-free")).not.toHaveProperty("discovery");
+      expect(providers.find(provider => provider.name === "cline-pass")).toMatchObject({
+        liveModels: false,
+        liveModelDiscoverySupported: false,
+        models: expect.arrayContaining(["cline-pass/qwen3.8-max"]),
+      });
+      expect(providers.find(provider => provider.name === "cline-pass")).not.toHaveProperty("discovery");
+    } finally {
+      clearModelCache();
+    }
+  });
+
   test("provider management rejects externally supplied forward auth providers", async () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });

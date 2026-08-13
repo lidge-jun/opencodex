@@ -49,10 +49,10 @@ afterEach(() => {
   });
 });
 
-function renderHint(liveModels: boolean, discovery?: ProviderDiscoverySummary): string {
+function renderHint(liveModels: boolean, discovery?: ProviderDiscoverySummary, authMode?: string): string {
   return renderToStaticMarkup(
     <LanguageProvider>
-      <EmptyProviderHint liveModels={liveModels} discovery={discovery} />
+      <EmptyProviderHint liveModels={liveModels} discovery={discovery} authMode={authMode} />
     </LanguageProvider>,
   );
 }
@@ -152,6 +152,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     if (url.endsWith("/api/providers")) {
       return Response.json([{
         name: provider,
+        authMode: "oauth",
         liveModels: true,
         models: ids,
         contextWindow: providerContextWindow,
@@ -218,7 +219,10 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(container.textContent).toContain("2/5 visible");
     expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
     expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
-    expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
+    const discoveryBadge = container.querySelector<HTMLElement>(".badge.badge-amber");
+    expect(discoveryBadge?.textContent).toContain("Discovery failed");
+    expect(discoveryBadge?.title).toContain("Re-login to restore live model discovery");
+    expect(discoveryBadge?.title).toContain("Configured models remain available");
     expect(container.textContent).not.toContain("Not selected");
 
     await act(async () => buttonText("Context windows").click());
@@ -546,6 +550,15 @@ test("failed HTTP discovery renders an amber status badge and reason", () => {
   expect(html).toContain('class="badge badge-amber"');
   expect(html).toContain('role="status"');
   expect(html).toContain('class="link-btn"');
+  expect(html).toContain("Configured models remain available");
+  expect(html).toContain("Check the endpoint or disable live model discovery");
+});
+
+test("OAuth discovery failure tells the user to re-login", () => {
+  const html = renderHint(true, { status: "failed", reason: "http", httpStatus: 400 }, "oauth");
+  expect(html).toContain("Re-login to restore live model discovery");
+  expect(html).toContain("Configured models remain available");
+  expect(html).toContain("Open provider login");
 });
 
 test("failed discovery renders each server-owned reason without provider detail", () => {

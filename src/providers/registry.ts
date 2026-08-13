@@ -149,6 +149,8 @@ export interface ProviderRegistryEntry {
   defaultModel?: string;
   models?: string[];
   liveModels?: boolean;
+  /** Registry-only capability: false when the provider has no model-list endpoint contract. */
+  liveModelDiscoverySupported?: false;
   /**
    * Registry-only per-model wire defaults for mixed OpenAI-compatible gateways.
    * These are intentionally not seeded into saved config: an explicit `modelAdapters`
@@ -860,6 +862,7 @@ const CLINE_PASS_MODELS = [
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
   "cline-pass/minimax-m3",
+  "cline-pass/qwen3.8-max",
   "cline-pass/qwen3.7-max",
   "cline-pass/qwen3.7-plus",
 ];
@@ -884,9 +887,10 @@ const CLINE_PASS_IMAGE_MODELS = new Set([
   "cline-pass/minimax-m3",
   "cline-pass/qwen3.7-plus",
 ]);
-const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODELS.filter(id => !CLINE_PASS_IMAGE_MODELS.has(id));
+const CLINE_PASS_MODALITY_KNOWN_MODELS = CLINE_PASS_MODELS.filter(id => id !== "cline-pass/qwen3.8-max");
+const CLINE_PASS_TEXT_ONLY_MODELS = CLINE_PASS_MODALITY_KNOWN_MODELS.filter(id => !CLINE_PASS_IMAGE_MODELS.has(id));
 const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
-  CLINE_PASS_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
+  CLINE_PASS_MODALITY_KNOWN_MODELS.map(id => [id, CLINE_PASS_IMAGE_MODELS.has(id) ? ["text", "image"] : ["text"]]),
 );
 
 export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
@@ -1299,6 +1303,10 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.cline.bot/api/v1",
     authKind: "key",
     dashboardUrl: "https://app.cline.bot",
+    // Cline documents the static ClinePass catalog and Chat Completions endpoint, but no
+    // OpenAI-style GET /models route. Do not probe the API base with an unsupported endpoint.
+    liveModelDiscoverySupported: false,
+    liveModels: false,
     defaultModel: "cline-pass/kimi-k3",
     models: CLINE_PASS_MODELS,
     modelContextWindows: CLINE_PASS_MODEL_CONTEXT_WINDOWS,
@@ -2357,7 +2365,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     keyOptional: true,
     featured: true,
-    liveModels: true,
+    preserveCustomDestination: true,
+    // This bespoke JWT-backed chat endpoint has no model-list contract. The single maintained
+    // model below is authoritative; appending /models only produces a misleading HTTP 400.
+    liveModelDiscoverySupported: false,
+    liveModels: false,
     dashboardUrl: "https://xiaomimimo.com",
     defaultModel: "mimo-auto",
     models: ["mimo-auto"],
@@ -2481,7 +2493,11 @@ export function providerMatchesRegistryTransport(
   if (entry.allowBaseUrlOverride || /\{[^}]*\}/.test(entry.baseUrl)) return false;
   if (typeof provider.baseUrl !== "string") return false;
   if (provider.adapter !== entry.adapter) return false;
-  if (provider.authMode !== undefined && provider.authMode !== "key") return false;
+  // MiMo Free was previously persisted as `local` by the dashboard despite this exact
+  // key-optional transport being registry-owned key auth. Admit only that legacy combination
+  // so enrichment can repair it; every other non-key mode still fails closed.
+  if (provider.authMode !== undefined && provider.authMode !== "key"
+    && !(id === "mimo-free" && provider.authMode === "local")) return false;
   return normalizedProviderEndpoint(provider.baseUrl) === normalizedProviderEndpoint(entry.baseUrl);
 }
 

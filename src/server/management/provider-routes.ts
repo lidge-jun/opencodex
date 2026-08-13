@@ -33,7 +33,7 @@ import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
-import { deriveProviderPresets } from "../../providers/derive";
+import { deriveProviderPresets, enrichProviderFromRegistry } from "../../providers/derive";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
 import {
   extractModelEnvelopeRows,
@@ -305,23 +305,31 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
-    return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
+    return jsonResponse(Object.entries(config.providers).map(([name, configured]) => {
+      const p = { ...configured };
+      enrichProviderFromRegistry(name, p);
+      const registryEntry = providerMatchesRegistryTransport(name, configured)
+        ? getProviderRegistryEntry(name)
+        : undefined;
+      return ({
       name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
       hasApiKey: !!p.apiKey,
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
+      liveModelDiscoverySupported: registryEntry?.liveModelDiscoverySupported !== false,
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
       noStructuredOutputModels: p.noStructuredOutputModels,
-      authMode: p.authMode,
+      authMode: p.authMode ?? registryEntry?.authKind,
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
-    })));
+      });
+    }));
   }
 
   if (url.pathname === LOCAL_PROVIDER_RELOAD_PATH && req.method === "POST") {

@@ -1,6 +1,7 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
-import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../src/providers/derive";
+import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds, enrichProviderFromRegistry } from "../src/providers/derive";
+import { routeModel } from "../src/router";
 import {
   getMimoClientId,
   resetMimoClientIdCache,
@@ -11,7 +12,7 @@ import {
   MIMO_CHAT_URL,
   createMimoFreeAdapter,
 } from "../src/adapters/mimo-free";
-import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 function minimalRequest(model = "mimo-auto"): OcxParsedRequest {
   return {
@@ -32,14 +33,74 @@ describe("mimo-free provider registry", () => {
     expect(entry?.authKind).toBe("key");
     expect(entry?.keyOptional).toBe(true);
     expect(entry?.featured).toBe(true);
-    expect(entry?.liveModels).toBe(true);
+    expect(entry?.preserveCustomDestination).toBe(true);
+    expect(entry?.liveModels).toBe(false);
     expect(entry?.defaultModel).toBe("mimo-auto");
   });
 
   test("providerConfigSeed propagates keyOptional and liveModels", () => {
     const seed = providerConfigSeed(entry!);
     expect(seed.keyOptional).toBe(true);
-    expect(seed.liveModels).toBe(true);
+    expect(seed.liveModels).toBe(false);
+  });
+
+  test("canonical transport overrides a stale saved live-discovery opt-in", () => {
+    const provider = { ...providerConfigSeed(entry!), liveModels: true };
+
+    enrichProviderFromRegistry("mimo-free", provider);
+
+    expect(provider.liveModels).toBe(false);
+  });
+
+  test("canonical transport repairs the legacy optional-key local auth mode", () => {
+    const provider = { ...providerConfigSeed(entry!), authMode: "local" as const, liveModels: true };
+
+    enrichProviderFromRegistry("mimo-free", provider);
+
+    expect(provider.authMode).toBe("key");
+    expect(provider.liveModels).toBe(false);
+  });
+
+  test("request routing uses the repaired canonical auth and static catalog state", () => {
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "mimo-free",
+      providers: {
+        "mimo-free": {
+          adapter: "mimo-free",
+          baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+          authMode: "local",
+          liveModels: true,
+          models: ["stale-model"],
+        },
+      },
+    };
+
+    const route = routeModel(config, "mimo-free/mimo-auto");
+
+    expect(route.provider).toMatchObject({
+      authMode: "key",
+      liveModels: false,
+      models: ["mimo-auto"],
+    });
+  });
+
+  test("same-named custom transport keeps its configured catalog and discovery setting", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "mimo-free",
+      baseUrl: "https://custom.example/free-chat",
+      authMode: "key",
+      models: ["custom-model"],
+      liveModels: true,
+    };
+
+    enrichProviderFromRegistry("mimo-free", provider);
+
+    expect(provider).toMatchObject({
+      baseUrl: "https://custom.example/free-chat",
+      models: ["custom-model"],
+      liveModels: true,
+    });
   });
 
   test("is included in the key-login map", () => {

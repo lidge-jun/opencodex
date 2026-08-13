@@ -19,7 +19,7 @@ import {
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
-import { providerConfigSeed } from "../providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { googleVertexLocationConfigError } from "../providers/google-vertex-location";
@@ -564,7 +564,9 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
 /** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
-  for (const [name, provider] of Object.entries(config.providers)) {
+  for (const [name, configuredProvider] of Object.entries(config.providers)) {
+    const provider = { ...configuredProvider };
+    enrichProviderFromRegistry(name, provider);
     const dto: Record<string, unknown> = {
       adapter: provider.adapter,
       baseUrl: publicProviderBaseUrl(provider.baseUrl),
@@ -609,10 +611,12 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // still pointed at the same vendor route, and a usage restriction the user needs to see
     // must not disappear because the row was renamed. Prefer the same-name entry so an
     // unrenamed provider keeps its exact registry note.
-    const registryNote = (providerMatchesRegistryTransport(name, provider)
+    const registryEntry = providerMatchesRegistryTransport(name, provider)
       ? getProviderRegistryEntry(name)
-      : registryEntryForProviderDestination(provider))?.note;
+      : registryEntryForProviderDestination(provider);
+    const registryNote = registryEntry?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
+    if (registryEntry?.liveModelDiscoverySupported === false) dto.liveModelDiscoverySupported = false;
     const codexAccountMode = providerCodexAccountMode(name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
     providers[name] = dto;

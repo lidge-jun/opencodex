@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
-import { providerConfigSeed } from "../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
 import { routeModel } from "../src/router";
 import type { OcxConfig, OcxParsedRequest } from "../src/types";
@@ -17,6 +17,7 @@ const OFFICIAL_CLINE_PASS_MODELS = [
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
   "cline-pass/minimax-m3",
+  "cline-pass/qwen3.8-max",
   "cline-pass/qwen3.7-max",
   "cline-pass/qwen3.7-plus",
 ];
@@ -63,7 +64,7 @@ describe("ClinePass provider", () => {
     });
     expect(entry?.models).toEqual(OFFICIAL_CLINE_PASS_MODELS);
     expect(entry?.models).toContain(entry?.defaultModel);
-    expect(entry?.liveModels).toBeUndefined();
+    expect(entry?.liveModels).toBe(false);
     expect(entry?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(entry?.modelReasoningEfforts).toBeUndefined();
     expect(entry?.modelMaxInputTokens).toBeUndefined();
@@ -74,6 +75,7 @@ describe("ClinePass provider", () => {
       "cline-pass/mimo-v2.5-pro",
       "cline-pass/qwen3.7-max",
     ]);
+    expect(entry?.modelInputModalities?.["cline-pass/qwen3.8-max"]).toBeUndefined();
     expect(entry?.modelInputModalities?.["cline-pass/kimi-k3"]).toEqual(["text", "image"]);
     expect(entry?.modelInputModalities?.["cline-pass/glm-5.2"]).toEqual(["text"]);
     expect(KEY_LOGIN_PROVIDERS["cline-pass"]?.models).toEqual(OFFICIAL_CLINE_PASS_MODELS);
@@ -110,6 +112,14 @@ describe("ClinePass provider", () => {
       wireField: "reasoning.effort",
       wireValue: "high",
     });
+  });
+
+  test("canonical transport overrides a stale saved live-discovery opt-in", () => {
+    const provider = { ...providerConfigSeed(registryEntry()), liveModels: true };
+
+    enrichProviderFromRegistry("cline-pass", provider);
+
+    expect(provider.liveModels).toBe(false);
   });
 
   test("explicit reasoning disable uses the gateway object instead of leaking reasoning_effort", () => {

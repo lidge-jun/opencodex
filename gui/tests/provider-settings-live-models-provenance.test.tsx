@@ -115,3 +115,33 @@ test("changing an explicit false to true sends an explicit liveModels choice", a
   expect(patches[0]?.liveModels).toBe(true);
   await act(async () => { root.unmount(); });
 });
+
+test("an optional-key preset never submits local auth while changing discovery", async () => {
+  const { root, container, patches } = await mountSettings({
+    name: "mimo-free",
+    adapter: "mimo-free",
+    baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+    defaultModel: "mimo-auto",
+    keyOptional: true,
+    liveModels: true,
+  } as WorkspaceItem);
+  const toggles = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+
+  await act(async () => { toggles[1]!.click(); });
+  await save(container);
+
+  expect(patches[0]).toMatchObject({ authMode: "key", liveModels: false });
+  await act(async () => { root.unmount(); });
+});
+
+test("an unsupported provider disables the live-discovery toggle", async () => {
+  const { root, container } = await mountSettings({
+    ...provider(false),
+    liveModelDiscoverySupported: false,
+  } as WorkspaceItem);
+  const toggles = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+
+  expect(toggles[1]?.disabled).toBe(true);
+  expect(container.textContent).toContain("This provider has no model-list endpoint. OpenCodex uses its maintained static catalog.");
+  await act(async () => { root.unmount(); });
+});

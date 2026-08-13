@@ -36,7 +36,7 @@ export default function ProviderSettings({
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
 }) {
   const t = useT();
-  const initialAuth = String(item.authMode ?? (item.keyOptional ? "local" : "key"));
+  const initialAuth = String(item.authMode ?? "key");
   const [adapter, setAdapter] = useState(item.adapter);
   const [baseUrl, setBaseUrl] = useState(item.baseUrl);
   const [defaultModel, setDefaultModel] = useState(item.defaultModel ?? "");
@@ -59,7 +59,7 @@ export default function ProviderSettings({
     setAdapter(item.adapter);
     setBaseUrl(item.baseUrl);
     setDefaultModel(item.defaultModel ?? "");
-    setAuthMode(String(item.authMode ?? (item.keyOptional ? "local" : "key")));
+    setAuthMode(String(item.authMode ?? "key"));
     setApiKeyTransport(item.apiKeyTransport ?? "x-api-key");
     setNote(item.note ?? "");
     setAllowPrivateNetwork(item.allowPrivateNetwork ?? false);
@@ -112,7 +112,7 @@ export default function ProviderSettings({
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
     || defaultModel.trim() !== (item.defaultModel ?? "")
-    || authMode !== String(item.authMode ?? (item.keyOptional ? "local" : "key"))
+    || authMode !== String(item.authMode ?? "key")
     || (adapter.trim() === "anthropic" && authMode === "key" && apiKeyTransport !== (item.apiKeyTransport ?? "x-api-key"))
     || note.trim() !== (item.note ?? "")
     || allowPrivateNetwork !== (item.allowPrivateNetwork ?? false)
@@ -335,10 +335,17 @@ export default function ProviderSettings({
         <span className="pwi-settings-label">{t("pws.allowPrivateNetwork")}</span>
       </label>
       <label className="pwi-settings-field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
-        <input type="checkbox" checked={liveModels} onChange={e => setLiveModels(e.target.checked)} />
+        <input
+          type="checkbox"
+          checked={liveModels}
+          disabled={item.liveModelDiscoverySupported === false}
+          onChange={e => setLiveModels(e.target.checked)}
+        />
         <span>
           <span className="pwi-settings-label">{t("pws.liveModels")}</span>
-          <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>{t("pws.liveModelsDesc")}</span>
+          <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>
+            {t(item.liveModelDiscoverySupported === false ? "pws.liveModelsUnsupportedDesc" : "pws.liveModelsDesc")}
+          </span>
         </span>
       </label>
       {dirty && (

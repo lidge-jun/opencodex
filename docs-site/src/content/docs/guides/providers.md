@@ -245,6 +245,12 @@ full model slug sent upstream. ClinePass quota is shared by the account across r
 weekly, and monthly limits. A 2026-08-13 live probe verified that every static ClinePass model
 accepts `low`, `medium`, `high`, `xhigh`, and `max` at the gateway input boundary. opencodex
 preserves those requested tiers; any backend-specific normalization remains ClinePass's responsibility.
+Cline documents the Chat Completions route but not an OpenAI-compatible `GET /models` route, so
+opencodex uses the maintained subscription catalog instead of sending an unsupported discovery probe.
+
+**MiMo Free** also uses a maintained static catalog. Its anonymous JWT-backed chat endpoint has no
+model-list contract; `mimo-auto` remains available without an API key and opencodex does not append
+an invalid `/models` probe to the chat URL.
 
 **Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
 (OpenRouter-style ids like `anthropic/claude-sonnet-4-6`). Cline's promotional free models are only

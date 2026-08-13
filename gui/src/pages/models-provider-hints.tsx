@@ -2,15 +2,17 @@ import { IconInfo } from "../icons";
 import { useT } from "../i18n/shared";
 import { navigateHash } from "../hash-routing";
 import type { ProviderDiscoverySummary } from "../models-groups";
-import { discoveryFailureLabel } from "./models-shared";
+import { discoveryFailureLabel, discoveryRecoveryLabel } from "./models-shared";
 
 export function EmptyProviderHint({
   liveModels,
   discovery,
+  authMode,
   showFailureBadge = true,
 }: {
   liveModels: boolean;
   discovery?: ProviderDiscoverySummary;
+  authMode?: string;
   showFailureBadge?: boolean;
 }) {
   const t = useT();
@@ -21,10 +23,10 @@ export function EmptyProviderHint({
       <span>
         {failed && showFailureBadge && <><span className="badge badge-amber">{t("models.discoveryFailedBadge")}</span>{" "}</>}
         {failed
-          ? `${discoveryFailureLabel(t, failed)} `
+          ? `${discoveryFailureLabel(t, failed)} ${discoveryRecoveryLabel(t, authMode)} `
           : `${t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")} `}
         <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
-          {t("models.openProviderSettings")}
+          {t(authMode === "oauth" && failed ? "models.openProviderLogin" : "models.openProviderSettings")}
         </button>
       </span>
     </div>

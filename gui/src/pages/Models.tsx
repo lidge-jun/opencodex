@@ -48,7 +48,7 @@ import {
   THREAD_OPTION_SET,
   THREAD_OPTIONS,
   writeCollapsedProviders,
-  discoveryFailureLabel,
+  discoveryFailureTitle,
   type ModelRow,
   type ProviderContextCapsResponse,
   type ShadowCallData,
@@ -912,7 +912,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
   const selectedModelMap = selectedModels ?? {};
 
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
-    const { provider, rows, native, liveModels, discovery } = group;
+    const { provider, rows, native, liveModels, discovery, authMode } = group;
     const isCollapsed = collapsed.has(provider);
     // Final visibility, not just the disable flag: a model is visible to Codex only when the
     // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
@@ -970,7 +970,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
            <span
              className="badge badge-amber"
              role="status"
-             title={discoveryFailureLabel(t, discoveryFailure)}
+              title={discoveryFailureTitle(t, discoveryFailure, authMode)}
            >
              {t("models.discoveryFailedBadge")}
            </span>
@@ -1054,7 +1054,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           <div className="models-provider-body">
             {isNative && <p className="muted text-label models-provider-hint">{t("models.nativeHint")}</p>}
             {rows.length === 0 && (
-              <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
+              <EmptyProviderHint liveModels={liveModels} discovery={discovery} authMode={authMode} showFailureBadge={false} />
             )}
             {rows.length > PAGE / 2 && (
               <input

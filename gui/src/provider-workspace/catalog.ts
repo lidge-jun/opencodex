@@ -38,6 +38,8 @@ export interface WorkspaceProvider {
   models?: string[];
   /** Whether the proxy fetches the provider's live model catalog (default true). */
   liveModels?: boolean;
+  /** False when the canonical provider has no model-list endpoint contract. */
+  liveModelDiscoverySupported?: boolean;
   authMode?: "key" | "forward" | "oauth" | "local" | string;
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
