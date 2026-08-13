@@ -20,7 +20,9 @@ async function observeHttpOutbound(adapter: ProviderAdapter, parsed: OcxParsedRe
   )) as typeof fetch;
   try {
     const request = await testAdapter.buildRequest(parsed);
-    return request.body;
+    const body = request.body;
+    request.releaseBodyObservation?.();
+    return body;
   } finally {
     globalThis.fetch = originalFetch;
   }
