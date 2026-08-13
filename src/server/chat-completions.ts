@@ -346,11 +346,9 @@ async function handleChatCompletionsWithBudget(
         : ac.signal;
       let detachReq: (() => void) | undefined;
       if (typeof AbortSignal.any !== "function" && !combinedSignal.aborted) {
-        const acAbort = () => {};
         const onReqAbort = () => {
           try { (ac as unknown as { abort: (r?: unknown) => void }).abort(req.signal.reason); } catch { /* noop */ }
         };
-        void acAbort;
         req.signal.addEventListener("abort", onReqAbort, { once: true });
         detachReq = () => req.signal.removeEventListener("abort", onReqAbort);
       }
@@ -677,8 +675,9 @@ async function handleChatCompletionsWithBudget(
       }
     }
     let jsonText: string;
+    let jsonReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     try {
-      const reader = response.body ? response.body.getReader() : null;
+      const reader = response.body ? (jsonReader = response.body.getReader()) : null;
       if (!reader) {
         jsonText = await response.text();
         translatorBudget.chargeRetained(new TextEncoder().encode(jsonText).byteLength, { kind: "request_copies" });
@@ -700,6 +699,9 @@ async function handleChatCompletionsWithBudget(
         jsonText = new TextDecoder().decode(merged);
       }
     } catch (err) {
+      if (jsonReader) {
+        try { void jsonReader.cancel().catch(() => {}); } catch { /* noop */ }
+      }
       if (isTranslatorBudgetExceededError(err)) {
         cleanup();
         finishRequestAttempt(attempt, 413, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
