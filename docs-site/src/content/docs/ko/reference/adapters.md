@@ -58,6 +58,11 @@ interface ProviderAdapter {
 같은 키로 동일 요청을 대기 후 재전송합니다. 커스텀 `runTurn` 전송은 HTTP 재시도 루프에
 포함되지 않습니다.
 
+- DeepSeek의 stateless Responses 파서는 제공자 범위의 기록 정규화를 받습니다: 훅으로
+  주입된 컨텍스트는 명확한 tool-call/result 배치 뒤로 이동합니다. 병렬 호출은 각 결과 앞에
+  함께 묶여 있어 모든 호출이 추론을 담은 어시스턴트 턴에 남습니다. 관대한 제공자와 중복되거나
+  누락되거나 순서가 잘못된 call ID는 원래 입력 순서를 유지합니다.
+
 - `forward` URL → `{baseUrl}/responses`. `key` provider는 기본적으로 기존 `{baseUrl}/v1/responses` 구성을 사용합니다.
 - `key` provider는 검증된 상대 `responsesPath`를 설정할 수 있습니다. adapter는 `baseUrl` 끝의 `/` 하나를 제거하고 `{trimmedBaseUrl}{responsesPath}`로 전송합니다. Ark Agent Plan은 `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"`와 `responsesPath: "/responses"`를 사용합니다.
 - `forward` 모드에서는 안전한 헤더 허용 목록(`FORWARD_HEADERS`)만 중계합니다. authorization,
@@ -86,8 +91,9 @@ interface ProviderAdapter {
 
 - 시스템 프롬프트 → `systemInstruction`; 메시지 → `contents[]`(assistant → `model`); 툴 →
   `functionDeclarations`. data URL 이미지 → `inline_data`.
-- Gemini가 tool-call id를 생략하면 합성합니다. Antigravity에서는 실제 `thoughtSignature` 값을
-  보존하고 재사용해 다음 턴에서도 reasoning 연속성을 유지합니다.
+- Gemini가 tool-call id를 생략하면 합성합니다. Vertex와 Antigravity에서는 불투명한
+  `thoughtSignature` 값을 보존하고 재사용해 tool-result 후속 턴에서도 reasoning 연속성을 유지합니다.
+  서명 캐시는 설정 디렉터리에 스냅샷되므로 프록시 재시작 후에도 후속 턴이 유지됩니다.
 
 ## `kiro`
 

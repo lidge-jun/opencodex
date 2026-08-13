@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveStatusPid, selectListenTarget } from "../src/cli/status";
+import { proxyHealthFailureReason, resolveStatusPid, selectListenTarget } from "../src/cli/status";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -290,6 +290,16 @@ describe("CLI status JSON", () => {
     expect(resolveStatusPid({ pid: 1111 }, 4242)).toBe(1111);
     expect(resolveStatusPid(null, 4242)).toBe(4242);
     expect(resolveStatusPid(null, null)).toBeNull();
+  });
+
+  test("classifies an aborted direct health probe as timed out", () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(proxyHealthFailureReason(new Error("socket closed"), controller.signal)).toBe("timed out");
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+    expect(proxyHealthFailureReason(abortError, new AbortController().signal)).toBe("timed out");
+    expect(proxyHealthFailureReason(new Error("connection refused"), new AbortController().signal)).toBe("unreachable");
   });
 
   test("listen target brackets raw IPv6 hostnames in the health URL", () => {

@@ -67,6 +67,8 @@ Translated-adapter'ы обрабатывают только известные �
 При `stream: false` или при отсутствии `stream` те же события адаптера собираются в один JSON
 Responses. Обе формы сохраняют выбранную модель, output item'ы, terminal status и usage.
 
+Клиентские frame'ы Responses SSE ограничены 4 MiB на frame, считая сырые байты до разделителя SSE-блока. В HTTP незавершённый upstream-frame, превысивший этот предел, завершается fail-closed синтетическим событием `response.failed`, после которого идёт `data: [DONE]`. В мосте Responses WebSocket то же условие даёт 502 `websocket_protocol_error` и отменяет upstream-reader. Если полноценный terminal-frame Responses уже получен, он остаётся авторитетным: слишком большие или некорректные байты после него отбрасываются и не заменяют завершённый ход транспортной ошибкой.
+
 Каждый terminal usage-объект Responses всегда включает оба detail-объекта, даже если провайдер их
 не сообщил:
 
@@ -161,12 +163,18 @@ adapter, вместо тихого изменения смысла вернёт�
 
 - native passthrough не отключён в конфигурации Claude Code;
 - запрошенная модель начинается с `claude` или `anthropic`;
-- запрос несёт нативный bearer Anthropic или `x-api-key`; и
+- запрос несёт нативный bearer Anthropic или `x-api-key`;
+- на non-loopback listener запрос также несёт валидный proxy admission только в
+  `x-opencodex-api-key`; и
 - ни один alias или model map не забирает этот model id в routed-цель.
 
 Если запрос подходит, он пересылается в Anthropic dialect, и нативные beta-header'ы, thinking
 signature'ы и subscription identity проходят сквозь систему end to end. В противном случае запрос
 идёт через round-trip Responses.
+
+Dedicated admission-header никогда не пересылается. Proxy admission secret в `Authorization` или
+`x-api-key` также удаляется, а отдельный настоящий credential Anthropic сохраняется. Неоднозначные
+credential-заголовки, объединённые запятыми, завершаются fail closed.
 
 `POST /v1/messages/count_tokens` использует те же правила разрешения модели и то же решение о
 passthrough. Native-eligible-запрос пересылается в count-endpoint Anthropic. Для остальных запросов

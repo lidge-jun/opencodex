@@ -65,6 +65,13 @@ With `stream: true`, the response is `text/event-stream`. The bridge emits Respo
 With `stream: false` or no `stream`, the same adapter events are collected into one Responses JSON
 object. Both forms preserve the selected model, output items, terminal status, and usage.
 
+Client-facing Responses SSE frames are limited to 4 MiB per frame, measured in raw bytes before the
+SSE block delimiter. On HTTP, an unterminated upstream frame that exceeds the limit fails closed
+with a synthetic `response.failed` event followed by `data: [DONE]`. On the Responses WebSocket
+bridge, the same condition emits a 502 `websocket_protocol_error` and cancels the upstream reader.
+A complete Responses terminal frame is authoritative: oversized or malformed trailing bytes after
+that terminal are dropped rather than replacing the completed turn with a transport failure.
+
 Every terminal Responses usage object includes both detail objects, even when the provider did not
 report those details:
 
@@ -138,6 +145,14 @@ non-empty `messages` array. It translates system, user, assistant, and tool mess
 Responses items; translates function tools, tool choice, images, reasoning effort, and supported
 response formats; runs the normal Responses routing pipeline; then translates the result back.
 
+Structured output is part of that translation: `response_format` with `json_object` or
+`json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
+equivalent request field is `text.format`: native Responses routes preserve it in the raw
+Responses body, and it is translated to `response_format` when the model routes to an
+`openai-chat` provider. A model listed in the provider's `noStructuredOutputModels` omits
+`response_format` on that chat wire; sibling models keep the translation. Unclassified backends
+receive the field and return their own error instead of the proxy guessing their capability.
+
 Non-streaming output has `object: "chat.completion"`. Streaming output uses SSE objects with
 `object: "chat.completion.chunk"`, choice deltas, a terminal choice with `finish_reason`, and
 `data: [DONE]`. Tool-call and usage information are translated back where the source events carry
@@ -157,12 +172,18 @@ Native Anthropic passthrough is eligible only when all of these are true:
 
 - native passthrough has not been disabled in Claude Code configuration;
 - the requested model begins with `claude` or `anthropic`;
-- the request carries a native Anthropic bearer or `x-api-key` credential; and
+- the request carries a native Anthropic bearer or `x-api-key` credential;
+- on a non-loopback listener, the request also carries valid proxy admission only in
+  `x-opencodex-api-key`; and
 - no configured alias or model map claims that model id for a routed target.
 
 An eligible request is forwarded in the Anthropic dialect so native beta headers, thinking
 signatures, and subscription identity remain end to end. Otherwise it takes the Responses
 round-trip.
+
+The dedicated admission header is never forwarded. Proxy admission secrets found in
+`Authorization` or `x-api-key` are also removed; a separate genuine Anthropic credential is
+preserved. Ambiguous comma-joined credential headers fail closed instead of being forwarded.
 
 `POST /v1/messages/count_tokens` follows the same model resolution and passthrough decision. A
 native-eligible request is forwarded to Anthropic's count endpoint. Other requests use the local

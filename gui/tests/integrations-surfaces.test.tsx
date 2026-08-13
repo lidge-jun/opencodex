@@ -123,7 +123,17 @@ beforeEach(() => {
     if (url.includes("/api/claude-desktop/status")) {
       return failExtraSources
         ? json({ error: "nope" }, 500)
-        : json({ applied: false, stale: false, activeProfile: null, appliedAt: null });
+        : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: false, stale: false, activeProfile: null, appliedAt: null });
+    }
+    if (url.includes("/api/native-integrations")) {
+      return json({ clients: [{
+        clientId: "claude-desktop",
+        state: "absent",
+        installed: true,
+        configPath: "/tmp/desktop",
+        desiredEnabled: true,
+        disableBlocked: null,
+      }] });
     }
     if (url.includes("/api/claude-code")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ enabled: false });
@@ -604,8 +614,7 @@ test("every reachable client gets a card, not just the file six", async () => {
     .map(card => card.getAttribute("data-client"));
   expect(switchOwners).toContain("hermes");
   expect(switchOwners).toContain("codex");
-  // Navigation-only cards still have none.
-  expect(switchOwners).not.toContain("claudeDesktop");
+  expect(switchOwners).toContain("claudeDesktop");
 
   // Claude Desktop opens Claude's nested route, not a tab of its own.
   const desktopLink = container.querySelector(

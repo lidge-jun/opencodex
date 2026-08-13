@@ -1,5 +1,8 @@
+import { codexPlanKey, codexPlanValue } from "../codex/plan";
+
 export const CODEX_CONFIGURED_CAPACITY_WEIGHTS = {
   plus: 1,
+  team: 1,
   business: 1,
   prolite: 5,
   pro: 20,
@@ -22,7 +25,7 @@ export type CodexCapacityQuota = {
 export interface CodexCapacityAccount {
   isMain: boolean;
   active?: boolean;
-  plan?: string | null;
+  plan?: unknown;
   paused: boolean;
   needsReauth?: boolean;
   quota: CodexCapacityQuota | null;
@@ -82,8 +85,8 @@ type MutableWindow = {
   oldestUpdatedAt: number;
 };
 
-function configuredWeight(plan: string | null | undefined): number | undefined {
-  const normalized = plan?.trim().toLowerCase();
+function configuredWeight(plan: unknown): number | undefined {
+  const normalized = codexPlanKey(plan);
   return normalized && Object.hasOwn(CODEX_CONFIGURED_CAPACITY_WEIGHTS, normalized)
     ? CODEX_CONFIGURED_CAPACITY_WEIGHTS[normalized as keyof typeof CODEX_CONFIGURED_CAPACITY_WEIGHTS]
     : undefined;
@@ -168,9 +171,10 @@ export function aggregateCodexPoolCapacity(
   const current = accounts.find(account => account.active)
     ?? accounts.find(account => account.isMain)
     ?? accounts[0];
+  const currentPlan = codexPlanValue(current?.plan);
   const currentAccount = current ? {
     isMain: current.isMain,
-    ...(current.plan !== undefined ? { plan: current.plan } : {}),
+    ...(currentPlan !== undefined ? { plan: currentPlan } : {}),
     quota: currentQuotaForDisplay(current, now),
   } : undefined;
   const windows = new Map<string, MutableWindow>();

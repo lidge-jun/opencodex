@@ -1,13 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { runNpmCachePreflight } from "../src/update/npm-cache-preflight.mjs";
 
 const updateSource = readFileSync(join(import.meta.dir, "..", "src", "update", "index.ts"), "utf8");
 const launcherSource = readFileSync(join(import.meta.dir, "..", "bin", "ocx.mjs"), "utf8");
 const serverSource = readFileSync(join(import.meta.dir, "..", "src", "server", "index.ts"), "utf8");
-const cliSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
+const dispatchSource = readFileSync(join(import.meta.dir, "..", "src", "cli", "dispatch.ts"), "utf8");
 
 describe("update stops the running proxy before replacing files", () => {
+  test("a failed cache pre-flight aborts before the stop callback can run", () => {
+    let stopped = false;
+    const malformedSpawn = (() => ({ status: 0, signal: null, stdout: "not-json", stderr: "" })) as never;
+    const preflight = runNpmCachePreflight({ platform: "linux", spawnSyncFn: malformedSpawn });
+
+    if (preflight.ok) stopped = true;
+
+    expect(preflight).toEqual({ ok: false, reason: "worker_output_malformed" });
+    expect(stopped).toBe(false);
+  });
+
   test("bun/source update path gates on the pid file and spawns 'stop' before the package manager", () => {
     expect(updateSource).toContain('spawnSync(process.execPath, [process.argv[1], "stop"]');
     const stopAt = updateSource.indexOf('[process.argv[1], "stop"]');
@@ -26,6 +38,20 @@ describe("update stops the running proxy before replacing files", () => {
     expect(abortAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(stopAt);
     expect(abortAt).toBeLessThan(stopAt);
+  });
+
+  test("cache access gates in both CLI entry points precede every tray/proxy stop", () => {
+    const runtimeGate = updateSource.indexOf("const cachePreflight = runNpmCachePreflight();");
+    const runtimeStop = updateSource.indexOf('[process.argv[1], "stop"]');
+    const launcherGate = launcherSource.indexOf("const cachePreflight = runNpmCachePreflight();");
+    const launcherTrayStop = launcherSource.indexOf('runTrayLifecycle(launcher, "stop")');
+    const launcherProxyStop = launcherSource.indexOf('[launcher, "stop"]');
+
+    expect(runtimeGate).toBeGreaterThan(-1);
+    expect(launcherGate).toBeGreaterThan(-1);
+    expect(runtimeGate).toBeLessThan(runtimeStop);
+    expect(launcherGate).toBeLessThan(launcherTrayStop);
+    expect(launcherGate).toBeLessThan(launcherProxyStop);
   });
 
   test("npm launcher update path stops via its own launcher path before npm install", () => {
@@ -114,9 +140,9 @@ describe("update stops the running proxy before replacing files", () => {
 
 describe("ocx update --help has no side effects (#168)", () => {
   test("the Bun CLI short-circuits help before importing the update runner", () => {
-    const caseAt = cliSource.indexOf('case "update"');
-    const helpAt = cliSource.indexOf('printSubcommandUsage("update")');
-    const runAt = cliSource.indexOf("await runUpdate()");
+    const caseAt = dispatchSource.indexOf('update: async');
+    const helpAt = dispatchSource.indexOf('printSubcommandUsage("update")');
+    const runAt = dispatchSource.indexOf("await runUpdate()");
     expect(caseAt).toBeGreaterThan(-1);
     expect(helpAt).toBeGreaterThan(caseAt);
     expect(helpAt).toBeLessThan(runAt);

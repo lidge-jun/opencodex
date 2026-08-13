@@ -3,9 +3,9 @@ import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
 import type { OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 
 // Issue #888: role:"tool" content is text-only on chat-completions providers, so images inside a
-// tool result were flattened to an "[image]" marker and vision-capable routed models hallucinated
-// what they never saw. Tool-result images now ride in a follow-up user vision message released when
-// the tool round closes, without splitting the round (strict providers reject interleaved users).
+// tool result ride in a follow-up user vision message released when the tool round closes. When
+// text is present, the tool row carries that literal text plus fallback markers only for images
+// that cannot be transported in the follow-up carrier.
 
 const provider: OcxProviderConfig = {
   adapter: "openai-chat",
@@ -56,7 +56,6 @@ function toolResult(callId: string, name: string, content: string | OcxContentPa
   return { role: "toolResult", toolCallId: callId, toolName: name, content, isError: false, timestamp: 0 };
 }
 
-/** The carrier is a user message whose parts start with an "[ocx]" text label followed by image_url parts. */
 function isImageCarrier(msg: ChatMsg): boolean {
   if (msg.role !== "user" || !Array.isArray(msg.content)) return false;
   const [head, ...rest] = msg.content;
@@ -64,7 +63,6 @@ function isImageCarrier(msg: ChatMsg): boolean {
     && rest.length > 0 && rest.every(p => p.type === "image_url");
 }
 
-/** Every role:"tool" message must sit in an unbroken block right after its assistant tool_calls message. */
 function assertRoundsUnbroken(messages: ChatMsg[]): void {
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i];
@@ -85,12 +83,12 @@ test("tool-result images ride a follow-up user message; text, detail, and https 
       { type: "text", text: "1 match found" },
       { type: "image", imageUrl: IMAGE_URL, detail: "high" },
       { type: "image", imageUrl: "https://example.test/shot.png" },
-      { type: "image", imageUrl: "" }, // empty file_id shape: keeps its marker, never reaches the carrier
+      { type: "image", imageUrl: "" },
     ]),
   ]);
   assertRoundsUnbroken(messages);
   const tool = messages.find(m => m.role === "tool")!;
-  expect(tool.content).toBe("1 match found[image][image][image]");
+  expect(tool.content).toBe("1 match found[image]");
   const carrier = messages.find(isImageCarrier)!;
   expect(carrier).toBeDefined();
   expect(messages.indexOf(carrier)).toBe(messages.indexOf(tool) + 1);
@@ -109,7 +107,7 @@ test("images from a multi-call round flush once, only after the whole round clos
   ]);
   assertRoundsUnbroken(messages);
   const toolIdx = messages.map((m, i) => (m.role === "tool" ? i : -1)).filter(i => i >= 0);
-  expect(toolIdx).toEqual([toolIdx[0], toolIdx[0] + 1]); // nothing interleaves the round
+  expect(toolIdx).toEqual([toolIdx[0], toolIdx[0] + 1]);
   const carriers = messages.filter(isImageCarrier);
   expect(carriers.length).toBe(1);
   expect(messages.indexOf(carriers[0])).toBe(toolIdx[1] + 1);

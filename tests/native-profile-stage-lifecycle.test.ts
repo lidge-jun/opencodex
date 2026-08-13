@@ -82,6 +82,32 @@ function fixture() {
   };
 }
 
+function emptyFixture(options: { lockUnavailable?: boolean } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ocx-empty-stage-lifecycle-"));
+  roots.push(root);
+  const codexHome = join(root, "codex");
+  const configDir = join(root, "opencodex");
+  mkdirSync(codexHome, { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+  let profileLockAttempts = 0;
+  const unavailable = Object.assign(new Error("injected unavailable profile lock"), { code: "EACCES" });
+  const manager = new NativeProfileManager({
+    codexHome,
+    configDir,
+    keyProvider: new MemoryKeyProvider(),
+    atomicWrite: atomic,
+    hardenPath: async () => {},
+    processProbe: async () => ({ status: "clear", count: 0 }),
+    ...(options.lockUnavailable ? {
+      stableLockOpen: () => {
+        profileLockAttempts += 1;
+        throw unavailable;
+      },
+    } : {}),
+  });
+  return { root, manager, profileLockAttempts: () => profileLockAttempts };
+}
+
 async function caught(operation: () => Promise<unknown>): Promise<NativeProfileError> {
   try {
     await operation();
@@ -99,6 +125,42 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 }
 
 describe("native main stage writer lifecycle", () => {
+  test("zero-profile startup stays ready without acquiring the profile transaction lock (#1120)", async () => {
+    const f = emptyFixture({ lockUnavailable: true });
+    expect(await f.manager.list()).toMatchObject({ activeProfileId: null, profiles: [] });
+    expect(f.manager.stageSweepRequired()).toBe(false);
+
+    const lifecycle = startNativeMainStartupLifecycle({
+      manager: f.manager,
+      owner: { retryMs: 10, hardenPath: async () => {} },
+      stageSweepIntervalMs: 20,
+    });
+    lifecycles.push(lifecycle);
+
+    expect(await lifecycle.settled).toMatchObject({ status: "ready" });
+    await Bun.sleep(75);
+    expect(f.profileLockAttempts()).toBe(0);
+  });
+
+  test("a present stage artifact keeps the locked fail-closed sweep (#1120)", async () => {
+    const f = emptyFixture({ lockUnavailable: true });
+    mkdirSync(f.manager.context.stagingRoot, { recursive: true });
+    expect(f.manager.stageSweepRequired()).toBe(true);
+
+    const lifecycle = startNativeMainStartupLifecycle({
+      manager: f.manager,
+      owner: { retryMs: 10, hardenPath: async () => {} },
+      stageSweepIntervalMs: 10_000,
+    });
+    lifecycles.push(lifecycle);
+
+    expect(await lifecycle.settled).toMatchObject({
+      status: "blocked",
+      reason: "stage-cleanup-required",
+    });
+    expect(f.profileLockAttempts()).toBeGreaterThan(0);
+  });
+
   test("requires the writer token and heartbeat protects a live login beyond its original lease", async () => {
     const f = fixture();
     await f.manager.register("source");

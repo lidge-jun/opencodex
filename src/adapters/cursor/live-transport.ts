@@ -70,6 +70,7 @@ import {
   cursorToolArgNormalizeSchema,
   cursorToolWireName,
   cursorToolsForActivePrompt,
+  isCursorSyntheticStructuredEditTool,
   isGenericToolUseCountDemoPrompt,
   requestedCursorToolUseCount,
 } from "./tool-definitions";
@@ -540,10 +541,19 @@ class LiveCursorTransport implements CursorTransport {
     this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(request, this.clientToolFinalizeGraceMs);
     const cursorVisibleTools = cursorToolsForActivePrompt(request.tools, activeText, request.toolChoice);
     const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, request.toolChoice);
+    // `request.tools` is the catalog already filtered and budgeted by request-builder. Derive
+    // conversion provenance only from tagged synthetic tools that also survive this final prompt
+    // filter; a client tool with the same wire name can never opt into conversion by collision.
+    const syntheticStructuredEditToolNames = new Set(
+      (cursorVisibleTools ?? [])
+        .filter(isCursorSyntheticStructuredEditTool)
+        .map(cursorToolWireName),
+    );
     this.execContext = {
       ...this.execContext,
       clientToolDefs,
       rejectNativeFileMutations: cursorRequestAdvertisesApplyPatch(request.tools, request.toolChoice),
+      structuredEditAvailable: syntheticStructuredEditToolNames.size > 0,
     };
     const toolSchemas = new Map<string, unknown>();
     const cursorToolNameMap = new Map<string, string>();
@@ -571,6 +581,7 @@ class LiveCursorTransport implements CursorTransport {
         parallelToolCalls: request.parallelToolCalls,
         toolSchemas,
         cursorToolNameMap,
+        syntheticStructuredEditToolNames,
         translatorBudget: this.translatorBudget,
         contextUsage,
         ...(prepared.estimatedInputTokens !== undefined
@@ -1075,12 +1086,25 @@ class LiveCursorTransport implements CursorTransport {
       }
       return;
     }
+    // A completion may carry only callId. Capture its ownership before mapping removes the open
+    // call, because the embedded-tool classifier cannot identify that valid compact frame.
+    const update = message.message.case === "interactionUpdate" ? message.message.value.message : undefined;
+    const completesOpenClientTool = update?.case === "toolCallCompleted"
+      && state.openToolCalls.has(update.value.callId);
     const mapped = mapCursorProtobufServerMessage(message, state);
     if (mapped.length > 0) {
       // A client tool call announced/committed via interactionUpdate (toolCallStarted/partialToolCall/
       // toolCallCompleted) changes the call set, so revoke any finalize armed by an earlier drain.
-      if (isClientToolFrame(message)) this.noteClientToolActivity();
+      // A completion can also commit and drain a late call without a following mcpArgs frame; in
+      // that case re-arm finalization here so the Responses bridge does not wait forever.
+      const clientToolFrame = completesOpenClientTool || isClientToolFrame(message);
+      if (clientToolFrame) this.noteClientToolActivity();
       for (const event of mapped) push(event);
+      if (
+        clientToolFrame
+        && state.openToolCalls.size === 0
+        && mapped.some(event => event.type === "tool_call_end")
+      ) this.scheduleClientToolFinalize(state, push);
       return;
     }
     // The frame produced no outward Responses event (e.g. toolCallStarted / partialToolCall args

@@ -9,12 +9,15 @@ import type {
   OcxConfig,
   OcxRoutingProfileConfig,
   OcxRoutingUnknownEvidenceMode,
+  OcxRoutingUnknownCostCapMode,
 } from "../types";
 import { codexAccountNamespaceEntries } from "../codex/account-namespaces";
 import { listComboIds, resolveComboId } from "../combos";
 import { hasOwnProvider } from "../config";
+import { MAX_COMPATIBILITY_REQUIRED_SUITES } from "./compatibility/types";
+import { POLICY_NAMESPACE } from "./profile-namespace";
 
-export const POLICY_NAMESPACE = "policy";
+export { POLICY_NAMESPACE };
 
 export const POLICY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const POLICY_ALIAS_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(?:\/[A-Za-z0-9][A-Za-z0-9._-]{0,63})?$/;
@@ -33,6 +36,17 @@ export const DEFAULT_UNKNOWN_EVIDENCE: Record<"capability" | "health" | "quota" 
   quota: "penalize",
   cost: "penalize",
 };
+
+export const DEFAULT_DEGRADED_EVIDENCE: OcxRoutingUnknownEvidenceMode = "penalize";
+export const DEFAULT_COMPATIBILITY_UNKNOWN_EVIDENCE: OcxRoutingUnknownEvidenceMode = "exclude";
+
+export interface NormalizedRoutingProfileCompatibility {
+  requiredSuites: Array<{ suiteId: string; evidenceLayer: "protocol_conformance" | "live_route_compatibility" }>;
+  minStatus?: "PROBED" | "VERIFIED";
+  maxEvidenceAgeMs?: number;
+  unknownEvidence: OcxRoutingUnknownEvidenceMode;
+  degradedEvidence: OcxRoutingUnknownEvidenceMode;
+}
 
 export interface RoutingProfileValidationIssue {
   path: Array<string | number>;
@@ -59,8 +73,9 @@ export interface NormalizedRoutingProfile {
   candidates: Array<{ provider: string; model: string }>;
   require: NormalizedRoutingProfileRequirements;
   optimize: { latency: number; health: number; cost: number; quota: number };
-  limits: { maxEstimatedCostUsd?: number };
+  limits: { maxEstimatedCostUsd?: number; onUnknownCost?: OcxRoutingUnknownCostCapMode };
   unknownEvidence: Record<"capability" | "health" | "quota" | "cost", OcxRoutingUnknownEvidenceMode>;
+  compatibility?: NormalizedRoutingProfileCompatibility;
   revision: string;
 }
 
@@ -78,6 +93,7 @@ const REQUIRE_KEYS = [
 ] as const;
 
 const UNKNOWN_EVIDENCE_KEYS = ["capability", "health", "quota", "cost"] as const;
+const EVIDENCE_LAYERS = new Set(["protocol_conformance", "live_route_compatibility"]);
 
 export function isValidPolicyId(id: string): boolean {
   return POLICY_ID_PATTERN.test(id);
@@ -151,8 +167,6 @@ function aliasIssues(
       message: "bare aliases in the OpenAI native family (gpt-*, o1-*, o3-*, o4-*, codex-*) are not allowed",
     });
   }
-  // Cross-namespace collisions: providers, combos, account namespaces, and
-  // sibling profile aliases all own public model ids that must stay unique.
   if (hasOwnProvider(config.providers, alias)) {
     issues.push({ path: ["alias"], message: `alias "${alias}" collides with configured provider name "${alias}"` });
   }
@@ -316,6 +330,11 @@ export function routingProfileIssues(
           || limits.maxEstimatedCostUsd < 0)) {
         issues.push({ path: ["limits", "maxEstimatedCostUsd"], message: "maxEstimatedCostUsd must be a non-negative number" });
       }
+      if (limits.onUnknownCost !== undefined
+        && limits.onUnknownCost !== "allow"
+        && limits.onUnknownCost !== "exclude") {
+        issues.push({ path: ["limits", "onUnknownCost"], message: 'onUnknownCost must be "allow" or "exclude"' });
+      }
     }
   }
 
@@ -330,6 +349,72 @@ export function routingProfileIssues(
             && unknownEvidence[key] !== "penalize"
             && unknownEvidence[key] !== "exclude")) {
           issues.push({ path: ["unknownEvidence", key], message: `${key} must be "allow", "penalize", or "exclude"` });
+        }
+      }
+    }
+  }
+
+  if (body.compatibility !== undefined) {
+    if (!body.compatibility || typeof body.compatibility !== "object" || Array.isArray(body.compatibility)) {
+      issues.push({ path: ["compatibility"], message: "compatibility must be an object" });
+    } else {
+      const compatibility = body.compatibility as Record<string, unknown>;
+      if (compatibility.requiredSuites !== undefined) {
+        if (!Array.isArray(compatibility.requiredSuites)) {
+          issues.push({ path: ["compatibility", "requiredSuites"], message: "requiredSuites must be an array" });
+        } else {
+          if (compatibility.requiredSuites.length > MAX_COMPATIBILITY_REQUIRED_SUITES) {
+            issues.push({
+              path: ["compatibility", "requiredSuites"],
+              message: `requiredSuites must contain at most ${MAX_COMPATIBILITY_REQUIRED_SUITES} entries`,
+            });
+          }
+          const seen = new Set<string>();
+          compatibility.requiredSuites.forEach((rawSuite, index) => {
+            if (!rawSuite || typeof rawSuite !== "object" || Array.isArray(rawSuite)) {
+              issues.push({ path: ["compatibility", "requiredSuites", index], message: "suite entry must be an object" });
+              return;
+            }
+            const suite = rawSuite as Record<string, unknown>;
+            const suiteId = typeof suite.suiteId === "string" ? suite.suiteId.trim() : "";
+            const layer = suite.evidenceLayer;
+            if (!suiteId) {
+              issues.push({ path: ["compatibility", "requiredSuites", index, "suiteId"], message: "suiteId is required" });
+            }
+            if (layer !== "protocol_conformance" && layer !== "live_route_compatibility") {
+              issues.push({
+                path: ["compatibility", "requiredSuites", index, "evidenceLayer"],
+                message: "evidenceLayer must be protocol_conformance or live_route_compatibility",
+              });
+            }
+            if (suiteId && typeof layer === "string" && EVIDENCE_LAYERS.has(layer)) {
+              const key = `${layer}:${suiteId}`;
+              if (seen.has(key)) {
+                issues.push({ path: ["compatibility", "requiredSuites", index], message: `duplicate required suite "${key}"` });
+              } else {
+                seen.add(key);
+              }
+            }
+          });
+        }
+      }
+      if (compatibility.minStatus !== undefined
+        && compatibility.minStatus !== "PROBED"
+        && compatibility.minStatus !== "VERIFIED") {
+        issues.push({ path: ["compatibility", "minStatus"], message: 'minStatus must be "PROBED" or "VERIFIED"' });
+      }
+      if (compatibility.maxEvidenceAgeMs !== undefined
+        && (typeof compatibility.maxEvidenceAgeMs !== "number"
+          || !Number.isInteger(compatibility.maxEvidenceAgeMs)
+          || compatibility.maxEvidenceAgeMs < 0)) {
+        issues.push({ path: ["compatibility", "maxEvidenceAgeMs"], message: "maxEvidenceAgeMs must be a non-negative integer" });
+      }
+      for (const key of ["unknownEvidence", "degradedEvidence"] as const) {
+        if (compatibility[key] !== undefined
+          && compatibility[key] !== "allow"
+          && compatibility[key] !== "penalize"
+          && compatibility[key] !== "exclude") {
+          issues.push({ path: ["compatibility", key], message: `${key} must be "allow", "penalize", or "exclude"` });
         }
       }
     }
@@ -365,6 +450,42 @@ function normalizedUnknownEvidence(raw: OcxRoutingProfileConfig): NormalizedRout
   return out;
 }
 
+function normalizedCompatibility(
+  raw: OcxRoutingProfileConfig,
+): NormalizedRoutingProfileCompatibility | undefined {
+  if (raw.compatibility === undefined) return undefined;
+  const compatibility = raw.compatibility;
+  const requiredSuites = (compatibility.requiredSuites ?? []).map(suite => ({
+    suiteId: suite.suiteId.trim(),
+    evidenceLayer: suite.evidenceLayer,
+  }));
+  const unknownEvidence = compatibility.unknownEvidence === "allow"
+    || compatibility.unknownEvidence === "penalize"
+    || compatibility.unknownEvidence === "exclude"
+    ? compatibility.unknownEvidence
+    : DEFAULT_COMPATIBILITY_UNKNOWN_EVIDENCE;
+  const degradedEvidence = compatibility.degradedEvidence === "allow"
+    || compatibility.degradedEvidence === "penalize"
+    || compatibility.degradedEvidence === "exclude"
+    ? compatibility.degradedEvidence
+    : DEFAULT_DEGRADED_EVIDENCE;
+
+  const hasControls = requiredSuites.length > 0
+    || compatibility.minStatus !== undefined
+    || compatibility.maxEvidenceAgeMs !== undefined
+    || compatibility.unknownEvidence !== undefined
+    || compatibility.degradedEvidence !== undefined;
+  if (!hasControls) return undefined;
+
+  return {
+    requiredSuites,
+    ...(compatibility.minStatus ? { minStatus: compatibility.minStatus } : {}),
+    ...(compatibility.maxEvidenceAgeMs !== undefined ? { maxEvidenceAgeMs: compatibility.maxEvidenceAgeMs } : {}),
+    unknownEvidence,
+    degradedEvidence,
+  };
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -383,6 +504,7 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
   const weights = { ...DEFAULT_PROFILE_WEIGHTS, ...(raw.optimize ?? {}) };
   const weightSum = weights.latency + weights.health + weights.cost + weights.quota;
   const safeSum = weightSum > 0 ? weightSum : 1;
+  const compatibility = normalizedCompatibility(raw);
   const profile: Omit<NormalizedRoutingProfile, "revision"> = {
     id,
     alias: alias || null,
@@ -401,8 +523,12 @@ export function normalizeRoutingProfile(id: string, raw: OcxRoutingProfileConfig
       ...(raw.limits?.maxEstimatedCostUsd !== undefined
         ? { maxEstimatedCostUsd: raw.limits.maxEstimatedCostUsd }
         : {}),
+      ...(raw.limits?.onUnknownCost !== undefined
+        ? { onUnknownCost: raw.limits.onUnknownCost }
+        : {}),
     },
     unknownEvidence: normalizedUnknownEvidence(raw),
+    ...(compatibility ? { compatibility } : {}),
   };
   return { ...profile, revision: profileRevision(profile) };
 }
@@ -417,7 +543,5 @@ export function getRoutingProfile(
 }
 
 export function listRoutingProfileIds(config: { routingProfiles?: Record<string, OcxRoutingProfileConfig> }): string[] {
-  // Code-unit comparison: deterministic across ICU versions/platforms, which
-  // matters for the API/CLI list contract (ids may contain ".", "_", "-").
   return Object.keys(config.routingProfiles ?? {}).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }

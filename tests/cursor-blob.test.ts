@@ -180,7 +180,7 @@ describe("Cursor blob handshake", () => {
     expect((roots[1] as { role?: string }).role).toBe("user");
     expect(JSON.stringify(roots)).toContain("assistant-209");
     expect(JSON.stringify(roots)).not.toContain("user-0");
-  });
+  }, { timeout: 30_000 });
 
   test("caps external root replay by serialized bytes", () => {
     const large = "x".repeat(40_000);
@@ -1326,7 +1326,7 @@ describe("Cursor blob ID key channel bounds", () => {
     expect(result.error?.message).toBeDefined();
     expect(cursorBlobMetrics().count).toBe(4096);
     expect(cursorBlobMetrics().keyBytes).toBe(4096 * 66);
-  });
+  }, { timeout: 30_000 });
 
   test("a zero-payload blob stays evictable through its key bytes", () => {
     storeCursorBlob(new Uint8Array());

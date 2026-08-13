@@ -26,7 +26,7 @@ import {
 } from "../../combos";
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
-import { modelInList, namespacedToolName } from "../../types";
+import { modelInList, namespacedToolName, toolChoiceToolPredicate } from "../../types";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig, OcxProviderContinuationState, OcxUsage } from "../../types";
 import {
   forceRefreshOAuthAccessSnapshot,
@@ -108,7 +108,10 @@ export function buildToolBridgeMaps(parsed: OcxParsedRequest, budget?: Translato
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeformToolNames = new Set<string>();
   const toolSearchToolNames = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    // Upstream output is untrusted: only restore calls for tools the caller authorized.
+    if (!toolAllowed(t)) continue;
     if (t.namespace) {
       const wireName = namespacedToolName(t.namespace, t.name);
       budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([wireName, t.namespace, t.name])).byteLength, { kind: "retained_collectors" });
@@ -246,9 +249,24 @@ export async function multiAgentGuidanceText(
     // Codex cannot actually spawn makes spawn_agent reject the override, so
     // suppress positive model claims while the state is stale or unknown.
     const catalogState = await (deps.collectCatalogState ?? defaultCollectCatalogState)();
+    // #1354 / #1395: `collectCodexAppServerCatalogState()` folds every app-server
+    // owned by the current user into ONE global observation, and the inbound
+    // request carries no sender PID or catalog fingerprint. So a stale process A
+    // makes the global state `stale` even when this request came from a fresh
+    // process B, and `unknown` can be reached by a process-enumeration failure
+    // that says nothing about any particular server.
+    //
+    // Emitting "do not set model or reasoning_effort overrides" off that global
+    // observation prohibits options the active `spawn_agent` tool legitimately
+    // advertises, for a request we cannot attribute to the stale process. The
+    // safe behaviour is to withhold OpenCodex's own disk-derived claims —
+    // preferred model, roster, fallback, custom guidance — and stay silent about
+    // overrides, leaving the active tool schema authoritative.
+    //
+    // `fresh` and `not_running` are unchanged: there we can positively describe
+    // the catalog, so the guidance below still applies.
     if (catalogState.state === "stale" || catalogState.state === "unknown") {
-      return "<multi_agent_mode>The model catalog changed after Codex started; do not set "
-        + "model or reasoning_effort overrides until Codex restarts.</multi_agent_mode>";
+      return null;
     }
     // codex-rs supplies the Proactive text on v2; the proxy only adds model-designation
     // guidance, and only when there is something concrete to designate: a configured
@@ -378,32 +396,93 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
-  if (!isRecord(item) || item.type !== "message" || item.role !== "developer") return false;
-  if (!Array.isArray(item.content) || item.content.length !== 1) return false;
+function generatedDeveloperText(item: unknown): string | undefined {
+  if (!isRecord(item) || item.type !== "message" || item.role !== "developer") return undefined;
+  if (!Array.isArray(item.content) || item.content.length !== 1) return undefined;
   const [part] = item.content;
-  return isRecord(part) && part.type === "input_text" && part.text === text;
+  return isRecord(part) && part.type === "input_text" && typeof part.text === "string"
+    ? part.text
+    : undefined;
+}
+
+function isGeneratedDeveloperItem(item: unknown, text: string): boolean {
+  return generatedDeveloperText(item) === text;
+}
+
+function isDeveloperPrefixItem(item: unknown): boolean {
+  if (!isRecord(item)) return false;
+  if (item.type === "additional_tools") return item.role === "developer";
+  const type = item.type ?? (typeof item.role === "string" ? "message" : undefined);
+  return type === "message" && (item.role === "system" || item.role === "developer");
+}
+
+function leadingDeveloperPrefixLength(items: readonly unknown[]): number {
+  let index = 0;
+  while (index < items.length && isDeveloperPrefixItem(items[index])) index += 1;
+  return index;
+}
+
+function isConversationalItem(item: unknown): boolean {
+  if (!isRecord(item)) return false;
+  if (item.type === "agent_message") return true;
+  const type = item.type ?? (typeof item.role === "string" ? "message" : undefined);
+  return type === "message" && (item.role === "user" || item.role === "assistant");
+}
+
+function statefulRawInsertionIndex(items: readonly unknown[], replayPrefixLen: number): number {
+  for (let index = replayPrefixLen; index < items.length; index += 1) {
+    if (isConversationalItem(items[index])) return index;
+  }
+  const last = items[items.length - 1];
+  return isRecord(last) && last.type === "compaction_trigger"
+    ? items.length - 1
+    : items.length;
 }
 
 export function injectDeveloperMessage(parsed: OcxParsedRequest, text: string): void {
   const raw = parsed._rawBody as { input?: unknown } | undefined;
+  const rawInput = raw && Array.isArray(raw.input) ? raw.input : undefined;
+  const replayPrefixLen = rawInput
+    ? Math.min(parsed._replayPrefixLen ?? 0, rawInput.length)
+    : 0;
   const devItem = { type: "message", role: "developer", content: [{ type: "input_text", text }] };
-  if (raw && Array.isArray(raw.input)) {
-    const replayPrefixLen = Math.min(parsed._replayPrefixLen ?? 0, raw.input.length);
-    if (raw.input.slice(0, replayPrefixLen).some(item => isGeneratedDeveloperItem(item, text))) {
+  if (rawInput) {
+    const replayPrefix = rawInput.slice(0, replayPrefixLen);
+    const taggedGuidance = text.startsWith("<multi_agent_mode>") && text.endsWith("</multi_agent_mode>");
+    const lastTaggedGuidance = taggedGuidance
+      ? replayPrefix.map(generatedDeveloperText)
+        .filter(item => item?.startsWith("<multi_agent_mode>") && item.endsWith("</multi_agent_mode>"))
+        .at(-1)
+      : undefined;
+    if (taggedGuidance ? lastTaggedGuidance === text : replayPrefix.some(item => isGeneratedDeveloperItem(item, text))) {
       return;
     }
   }
 
-  parsed.context.messages.push({ role: "developer", content: text, timestamp: Date.now() });
-  if (raw && Array.isArray(raw.input)) {
-    // compaction_trigger must remain the final input item (codex-rs + ChatGPT backend both
-    // validate this). Insert the developer message BEFORE the trigger when present.
-    const last = raw.input[raw.input.length - 1];
-    if (last && typeof last === "object" && (last as { type?: string }).type === "compaction_trigger") {
-      raw.input.splice(raw.input.length - 1, 0, devItem);
+  const statefulContinuation = parsed.previousResponseId !== undefined;
+  const message = { role: "developer" as const, content: text, timestamp: Date.now() };
+  const statefulRawIndex = statefulContinuation && rawInput
+    ? statefulRawInsertionIndex(rawInput, replayPrefixLen)
+    : undefined;
+
+  // A previous_response_id delta can begin with tool/protocol items. Keep those first, then place
+  // changed guidance before the current conversation. Stateless requests keep guidance in the prefix.
+  if (statefulContinuation) {
+    const index = Math.min(
+      parsed._continuationConversationMessageIndex ?? parsed.context.messages.length,
+      parsed.context.messages.length,
+    );
+    parsed.context.messages.splice(index, 0, message);
+  } else {
+    const prefixLen = parsed.context.messages.findIndex(item => item.role !== "developer");
+    parsed.context.messages.splice(prefixLen < 0 ? parsed.context.messages.length : prefixLen, 0, message);
+  }
+
+  if (rawInput) {
+    if (statefulContinuation) {
+      rawInput.splice(statefulRawIndex!, 0, devItem);
     } else {
-      raw.input.push(devItem);
+      rawInput.splice(leadingDeveloperPrefixLength(rawInput), 0, devItem);
     }
   }
 }

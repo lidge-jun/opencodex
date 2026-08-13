@@ -25,7 +25,7 @@ then turns the events into Responses SSE.
 
 ## `openai-chat`
 
-**Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`) and every compatible
+**Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
 provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud), and more.
 **Auth:** `key` (Bearer).
 
@@ -58,6 +58,11 @@ waits and replays the identical request on the same key before any other handlin
 the translated `openai-chat` / Anthropic request path. Custom `runTurn` transports are not part
 of the HTTP retry loop.
 
+- DeepSeek's stateless Responses parser receives provider-scoped history normalization: hook-injected
+  context moves after an unambiguous tool-call/result batch. Parallel calls remain grouped before
+  their matching outputs so every call stays in the reasoning-bearing assistant turn. Tolerant
+  providers and ambiguous duplicate, missing, or out-of-order call IDs keep their original input order.
+
 - `forward` URL → `{baseUrl}/responses`. A `key` provider defaults to the legacy `{baseUrl}/v1/responses` construction.
 - A `key` provider may set a validated relative `responsesPath`; the adapter removes one trailing slash from `baseUrl` and sends `{trimmedBaseUrl}{responsesPath}`. For Ark Agent Plan, use `baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3"` with `responsesPath: "/responses"`.
 - In `forward` mode only a safe header allowlist is relayed (`FORWARD_HEADERS`): authorization,
@@ -74,6 +79,16 @@ of the HTTP retry loop.
   maps reasoning effort to a budget (minimal 1024 … max 32000), then computes a safe `max_tokens` with
   output headroom, and **drops `temperature`/`top_p`** when thinking is enabled (Anthropic forbids
   them there).
+- **Structured output:** Responses `text.format` and Chat Completions `response_format` requests
+  with `type: "json_schema"` become Anthropic `output_config.format`. The format merges into an
+  existing adaptive-thinking output configuration, preserving a compatible `output_config.effort`.
+  Routed Anthropic Messages requests preserve the same format through stored-OAuth translation.
+  The adapter mirrors the Anthropic TypeScript SDK's supported JSON Schema subset: unsupported
+  constraints are moved into `description` as model guidance, `oneOf` becomes `anyOf`, and object
+  schemas receive `additionalProperties: false`. A root `$ref` retains its adjacent `$defs` so the
+  local reference remains resolvable. OpenAI envelope fields such as schema `name`, envelope
+  `description`, and `strict` are not part of the Anthropic wire format. JSON object mode without a
+  schema has no Anthropic equivalent and is not translated.
 - Always sends `anthropic-version: 2023-06-01`. Streams `content_block_delta` (`text_delta`,
   `thinking_delta`, compatible `reasoning_delta`, `input_json_delta`). The SSE decoder preserves
   event state across fetch chunks and accepts a terminal `message_stop` without a trailing newline.
@@ -90,8 +105,10 @@ of the HTTP retry loop.
 
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
-- Tool-call ids are synthesized when Gemini omits them. Antigravity preserves and replays real
-  `thoughtSignature` values so reasoning continuity survives later turns.
+- Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
+  opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
+  The signature cache is snapshotted to the config directory, so continuations also survive proxy
+  restarts.
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.
@@ -181,8 +198,9 @@ advertised effort control on those models as proof of upstream-native reasoning 
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
   `cursor/auto-balance`, and `cursor/auto-intelligence` entries. Explicit levels are encoded in
   `requested_model.parameters` while the legacy `cursor/auto` entry retains the account/team default.
-- Keeps `cursor/grok-4.5-fast` as a selectable model while sending Cursor's canonical `grok-4.5`
-  model with separate `effort` and `fast=true` parameters.
+- Sends regular `cursor/grok-4.5` tiers with Cursor's exact live-discovery wire ids
+  (`cursor-grok-4.5-low`, `-medium`, or `-high`). Keeps `cursor/grok-4.5-fast` selectable while
+  sending the canonical `grok-4.5` model with separate `effort` and `fast=true` parameters.
 - Cursor-native local filesystem/shell/network execution is denied by default. Explicit `mcpServers`
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy

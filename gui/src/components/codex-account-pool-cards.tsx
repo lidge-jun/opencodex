@@ -1,6 +1,7 @@
-import { useT } from "../i18n/shared";
+import { useI18n, useT } from "../i18n/shared";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
 import { displayAccountId } from "../lib/privacy";
+import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import QuotaBars from "./QuotaBars";
@@ -14,6 +15,7 @@ import {
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../oauth-health-display";
+import { formatCostUsd, formatTokenCount } from "../provider-workspace/usage";
 
 export function CodexAccountPoolCards({
   pool,
@@ -26,6 +28,10 @@ export function CodexAccountPoolCards({
   onTogglePause,
   pauseUpdatingId,
   pauseBusy,
+  onPriorityChange,
+  priorityUpdatingId,
+  switchingId,
+  pinnedId = null,
   onReauth,
   onEditAlias,
   onRemove,
@@ -42,6 +48,17 @@ export function CodexAccountPoolCards({
   onTogglePause: (account: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
   pauseBusy: boolean;
+  onPriorityChange: (account: CodexAccountEntry, priority: number) => void;
+  priorityUpdatingId: string | null;
+  /** In-flight manual switch, which writes the same pin an order write clears. */
+  switchingId: string | null;
+  /**
+   * The account an operator pinned by hand, which is not always the selected one: under
+   * round-robin and fill-first the pin caps selection at its own tier while the cursor
+   * moves inside that tier. Marking the pinned card rather than the selected one keeps the
+   * badge on the account the operator actually chose.
+   */
+  pinnedId?: string | null;
   onReauth: (id: string) => void;
   onEditAlias: (account: CodexAccountEntry) => void;
   onRemove: (id: string) => void;
@@ -49,6 +66,7 @@ export function CodexAccountPoolCards({
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
   const t = useT();
+  const { locale } = useI18n();
   const isNext = (account: CodexAccountEntry) => !account.paused && activeId === account.id;
 
   return (
@@ -71,6 +89,8 @@ export function CodexAccountPoolCards({
                   {t("codexAuth.paused")}
                 </span>
               )}
+              <AccountPriorityBadge value={a.priority} />
+              {a.id === pinnedId && !a.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
               <CodexTicketBadge t={t} account={a} onClick={() => onOpenReset(a)} />
               {healthLabel && (
                 <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
@@ -126,12 +146,32 @@ export function CodexAccountPoolCards({
             </button>
           </div>
           <div className="card-sub">{a.email}{a.plan ? ` · ${a.plan}` : ""} · {t("prov.accountId")}: {displayAccountId(a.id)}</div>
+          {a.logLabel && (
+            <div className="card-sub faint">{t("codexAuth.logLabel")}: <code>{a.logLabel}</code></div>
+          )}
+          {a.usage30d && (
+            <div className="card-sub faint" title={t("logs.metric.estimatedCostTitle")}>
+              {t("usage.card.totalTokens")}: {formatTokenCount(a.usage30d.totalTokens, locale)} · {t("pws.estimatedCost")}: {formatCostUsd(a.usage30d.estimatedCostUsd, locale)} · {t("usage.coverage.measured")}: {Math.round(a.usage30d.usageCoverageRatio * 100)}%
+            </div>
+          )}
           {healthSummary && (
             <div className="card-sub faint">{healthSummary}</div>
           )}
           {inCooldown && (
             <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
           )}
+          {a.id === pinnedId && !a.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
+          <AccountPriorityControl
+            value={a.priority}
+            selectId={`codex-account-priority-${a.id}`}
+            // Every row, not just the one being written: the controller serializes order
+            // writes behind one mutation ref, so a second row's pick would come back "busy"
+            // and be dropped with no toast. Same global lock the pause button uses.
+            // A pending switch counts too — it writes the same pin this clears, so the
+            // controller refuses to overlap them, and that refusal is equally silent.
+            disabled={priorityUpdatingId !== null || switchingId !== null}
+            onChange={(priority) => onPriorityChange(a, priority)}
+          />
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
             : !inCooldown && (

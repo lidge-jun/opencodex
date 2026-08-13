@@ -68,6 +68,10 @@ function describeNativeRefusal(
   }
   if (refusal.reason === "not_installed") return t("integrations.native.error.notInstalled");
   if (refusal.reason === "config_busy") return t("integrations.native.error.configBusy");
+  if (refusal.reason === "metadata_unreadable") return t("integrations.native.error.desktopUnsafeMetadata", { path: configPath ?? "" });
+  if (refusal.reason === "cleanup_incomplete") {
+    return t("integrations.native.error.desktopCleanupIncomplete", { paths: (refusal.residualPaths ?? []).join(", ") });
+  }
   return refusal.message || t("integrations.error.generic");
 }
 

@@ -364,6 +364,9 @@ describe("Codex cooldown recovery worker", () => {
     }
     expect(codexQuotaWindowForPlan(undefined)).toBe("weekly");
     expect(codexQuotaWindowForPlan("")).toBe("weekly");
+    for (const malformed of [{ tier: "go" }, 1, true]) {
+      expect(codexQuotaWindowForPlan(malformed)).toBe("weekly");
+    }
     // "free_workspace" is not "free": only the exact names take the monthly window.
     expect(codexQuotaWindowForPlan("free_workspace")).toBe("weekly");
 

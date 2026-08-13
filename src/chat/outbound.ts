@@ -7,7 +7,7 @@
  */
 type Rec = Record<string, unknown>;
 
-import { decodeServerSentEvents } from "../lib/sse-decoder";
+import { decodeServerSentEvents, sseFieldValue } from "../lib/sse-decoder";
 import { isTranslatorBudgetExceededError, type TranslatorBudget } from "../lib/translator-budget";
 import { classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, isCyberPolicyMessage } from "../lib/errors";
 
@@ -671,8 +671,9 @@ export async function collectChatCompletion(
         const rawFrame = buffer.slice(0, sep);
         buffer = replaceRetained(buffer, buffer.slice(sep + 2), "live_transient");
         for (const line of rawFrame.split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
+          const rawData = sseFieldValue(line, "data");
+          if (rawData === null) continue;
+          const data = rawData.trim();
           if (!data || data === "[DONE]") continue;
           let parsed: unknown;
           try { parsed = JSON.parse(data); } catch { continue; }

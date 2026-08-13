@@ -144,6 +144,7 @@ export default function Debug({ apiBase, embedded, active = true }: { apiBase: s
       controller.abort();
     };
     // Intentionally omit fetchLogs/entries — identity gate prevents switch storms.
+    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stream identity only
   }, [active, apiBase, stream, streamEnabled]);
 

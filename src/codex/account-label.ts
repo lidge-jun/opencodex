@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { CodexAccount } from "../types";
+import type { CodexAccount, OcxConfig } from "../types";
+import type { CodexAuthContext } from "./auth-context";
+import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 
 export const CODEX_ACCOUNT_LOG_LABEL_RE = /^p[a-f0-9]{6}$/;
 
@@ -20,6 +22,17 @@ export function codexAccountLogLabel(account: CodexAccount): string {
   return CODEX_ACCOUNT_LOG_LABEL_RE.test(account.logLabel ?? "")
     ? account.logLabel!
     : fallbackCodexAccountLogLabel(account.id);
+}
+
+/** Effective durable label for a resolved Codex Pool account. */
+export function codexAuthContextLogLabel(
+  authCtx: CodexAuthContext,
+  config: Pick<OcxConfig, "codexAccounts">,
+): "main" | `p${string}` | undefined {
+  if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return undefined;
+  if (authCtx.accountId === MAIN_CODEX_ACCOUNT_ID) return "main";
+  const account = (config.codexAccounts ?? []).find(candidate => candidate.id === authCtx.accountId);
+  return account ? codexAccountLogLabel(account) as `p${string}` : undefined;
 }
 
 export function withCodexAccountLogLabel(

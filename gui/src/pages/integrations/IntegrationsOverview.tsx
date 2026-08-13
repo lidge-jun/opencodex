@@ -41,6 +41,15 @@ const GROK_DISABLE_COPY: ConsequenceCopy = {
   confirmKey: "integrations.dialog.grok.confirm",
 };
 
+const DESKTOP_DISABLE_COPY: ConsequenceCopy = {
+  titleKey: "integrations.dialog.desktop.title",
+  changesKey: "integrations.dialog.desktop.changes",
+  breakageKey: "integrations.dialog.desktop.breakage",
+  undoKey: "integrations.dialog.desktop.undo",
+  sideEffectKey: "integrations.dialog.desktop.restart",
+  confirmKey: "integrations.dialog.desktop.confirm",
+};
+
 const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {
   apply: "integrations.kind.apply",
   disable: "integrations.kind.disable",
@@ -115,7 +124,7 @@ function OverviewCard({
         {row.toggle && onToggle && (
           <div className="integration-toggle-control">
             <Switch
-              on={row.applied}
+              on={row.toggleOn ?? row.applied}
               onClick={onToggle}
               // Unknown is an unsettled native read; conflict/unsafe and an
               // advisory refusal must all be resolved before mutation.
@@ -410,7 +419,7 @@ export default function IntegrationsOverview({
       if (row.status) {
         await toggleIntegration(apiBase, row.status.clientId, next);
         refresh();
-      } else if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex") {
+      } else if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex" || row.toggle === "claude-desktop") {
         const result = await toggleNativeIntegration(apiBase, row.toggle, next);
         if (result.reason === "non_loopback_removed") {
           setCardResult(row.id, {
@@ -429,7 +438,7 @@ export default function IntegrationsOverview({
         tone: "err",
         text: describeRefusal(t, error, undefined, row.togglePath ?? undefined),
       });
-      if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex") refreshNativeDetails();
+      if (row.toggle === "claude" || row.toggle === "grok" || row.toggle === "codex" || row.toggle === "claude-desktop") refreshNativeDetails();
     } finally {
       setCardPending(null);
     }
@@ -440,7 +449,7 @@ export default function IntegrationsOverview({
       void toggleCard(row, next);
       return;
     }
-    // Grok disable is the only native action that edits another program's file.
+    // Grok and Desktop disables edit another program's file.
     const activeElement = document.activeElement;
     restoreFocusRef.current = activeElement?.tagName === "BUTTON"
       ? activeElement as HTMLButtonElement
@@ -530,7 +539,7 @@ export default function IntegrationsOverview({
               pending={cardPending !== null}
               result={cardResults[row.id] ?? null}
               onOpen={() => navigateHash(row.hash)}
-              onToggle={row.toggle ? () => requestToggle(row, !row.applied) : null}
+              onToggle={row.toggle ? () => requestToggle(row, !(row.toggleOn ?? row.applied)) : null}
             />
           ))}
         </ul>
@@ -584,7 +593,7 @@ export default function IntegrationsOverview({
       )}
       {pendingToggle && (
         <ConsequenceDialog
-          copy={{ ...GROK_DISABLE_COPY, vars: { path: pendingToggle.togglePath ?? "" } }}
+          copy={{ ...(pendingToggle.toggle === "claude-desktop" ? DESKTOP_DISABLE_COPY : GROK_DISABLE_COPY), vars: { path: pendingToggle.togglePath ?? "" } }}
           onClose={() => setPendingToggle(null)}
           onConfirm={async () => {
             await toggleCard(pendingToggle, false);

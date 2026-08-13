@@ -44,6 +44,26 @@ export interface BoundedBodyResult {
 	displaySafe: boolean;
 }
 
+export interface BoundedBytesOptions {
+	/** Abort the read with this signal. Its reason is rethrown by identity. */
+	signal?: AbortSignal;
+	/** Maximum number of raw bytes retained from the response body. */
+	maxBytes: number;
+}
+
+export interface BoundedBytesResult {
+	/**
+	 * Exact raw bytes retained from the response. Empty when the cap was exceeded.
+	 *
+	 * This is a view over internal storage, so `bytes.buffer.byteLength` can exceed
+	 * `bytes.byteLength`. Consumers must honor the view's byteOffset and byteLength
+	 * instead of reading or transferring the backing buffer directly.
+	 */
+	bytes: Uint8Array<ArrayBuffer>;
+	/** True when the body was observed to exceed the byte cap. */
+	oversized: boolean;
+}
+
 const TOTAL_TIMEOUT = Symbol("bounded body total timeout");
 const INACTIVITY_TIMEOUT = Symbol("bounded body inactivity timeout");
 
@@ -80,6 +100,90 @@ function cancelWithoutWaiting(reader: ReadableStreamDefaultReader<Uint8Array>, r
 		void reader.cancel(reason).catch(() => undefined);
 	} catch {
 		// Some stream implementations throw synchronously from cancel().
+	}
+}
+
+/**
+ * Consume the original response body as raw bytes under a strict memory ceiling.
+ *
+ * The caller owns any wall-clock deadline through `signal`, which lets one budget
+ * cover both response headers and body consumption. No decoding, cloning, or teeing
+ * occurs, so arbitrary upstream bytes remain unchanged.
+ */
+export async function readBoundedResponseBytes(
+	response: Response,
+	options: BoundedBytesOptions,
+): Promise<BoundedBytesResult> {
+	const signal = options.signal;
+	if (signal?.aborted) throw signal.reason;
+
+	const body = response.body;
+	if (!body) return { bytes: new Uint8Array(0), oversized: false };
+
+	const reader = body.getReader();
+	const maxBytes = options.maxBytes;
+	let retained = new Uint8Array(Math.min(maxBytes, 64 * 1024));
+	let retainedBytes = 0;
+	let mustCancel = false;
+	let cancelReason: unknown;
+
+	let rejectForAbort: ((reason: unknown) => void) | undefined;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		rejectForAbort = reject;
+	});
+	const onAbort = () => rejectForAbort?.(signal?.reason);
+	signal?.addEventListener("abort", onAbort, { once: true });
+	// Close the narrow race between the preflight check and listener install.
+	if (signal?.aborted) onAbort();
+
+	try {
+		while (true) {
+			const read = reader.read();
+			// Observe a late read rejection when abort/cancellation wins the race.
+			void read.catch(() => undefined);
+			const outcome = await Promise.race([read, aborted]);
+			if (signal?.aborted) {
+				mustCancel = true;
+				cancelReason = signal.reason;
+				throw signal.reason;
+			}
+
+			const { value, done } = outcome;
+			if (done) {
+				return { bytes: retained.subarray(0, retainedBytes), oversized: false };
+			}
+			if (!value || value.byteLength === 0) continue;
+
+			if (value.byteLength > maxBytes - retainedBytes) {
+				mustCancel = true;
+				cancelReason = new DOMException("Response body size limit reached", "QuotaExceededError");
+				retained = new Uint8Array(0);
+				retainedBytes = 0;
+				return { bytes: retained, oversized: true };
+			}
+
+			if (retainedBytes + value.byteLength > retained.length) {
+				const grown = new Uint8Array(
+					Math.min(maxBytes, Math.max(retained.length * 2, retainedBytes + value.byteLength)),
+				);
+				grown.set(retained.subarray(0, retainedBytes));
+				retained = grown;
+			}
+			retained.set(value, retainedBytes);
+			retainedBytes += value.byteLength;
+		}
+	} catch (error) {
+		mustCancel = true;
+		cancelReason = error;
+		throw error;
+	} finally {
+		signal?.removeEventListener("abort", onAbort);
+		if (mustCancel) cancelWithoutWaiting(reader, cancelReason);
+		try {
+			reader.releaseLock();
+		} catch {
+			// A pending read can keep the lock briefly while cancel settles.
+		}
 	}
 }
 

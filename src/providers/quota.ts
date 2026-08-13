@@ -6,11 +6,13 @@ import {
 } from "../codex/auth-api";
 import { isMainAccountIdentityGenerationLive } from "../codex/main-account-cache";
 import { MAIN_CODEX_ACCOUNT_ID } from "../codex/main-account";
+import { codexPlanKey } from "../codex/plan";
 import { resolveEnvValue } from "../config";
 import { getValidAccessToken, getValidAccessTokenForAccount } from "../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../oauth/store";
 import { antigravityUserAgent } from "../adapters/client-fingerprint";
 import { apiKeyPoolEntryId } from "./api-keys";
+import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "./xai-transport";
 import { getProviderRegistryEntry, providerCodexAccountMode } from "./registry";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "./openai-tiers";
@@ -19,6 +21,7 @@ import {
   sweepExpiredOnWrite,
   type GenerationContext,
 } from "../lib/state-store-sweeper";
+import { readBoundedResponseBody } from "../lib/bounded-body";
 import {
   aggregateCodexPoolCapacity,
   CODEX_CAPACITY_MAX_QUOTA_AGE_MS,
@@ -31,9 +34,25 @@ const ACCOUNT_TOKEN_SKEW_MS = 60_000;
 
 const CACHE_TTL_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 8_000;
+/** Successful provider quota payloads are small; reject oversized or stalled JSON before parsing. */
+export const QUOTA_RESPONSE_MAX_BYTES = 512 * 1024;
 const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODE_USAGE_URL = `${KIMI_CODE_BASE_URL}/usages`;
 const A6API_BASE_URL = "https://api.a6api.com";
+const OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1";
+const OPENCODE_GO_USAGE_URL = `${OPENCODE_GO_BASE_URL}/usage`;
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const CLINE_BASE_URL = "https://api.cline.bot";
+const ZAI_BASE_URL = "https://api.z.ai";
+const MINIMAX_REMAINS_URL = "https://www.minimax.io/v1/token_plan/remains";
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
+const SYNTHETIC_BASE_URL = "https://api.synthetic.new/v2";
+const DEEPINFRA_BASE_URL = "https://api.deepinfra.com";
+const NEURALWATT_BASE_URL = "https://api.neuralwatt.com/v1";
+const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
+const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
 /** Keep a failed probe's previous row at most this long before dropping it. */
 const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
@@ -54,6 +73,15 @@ export interface ProviderQuotaWindow {
   resetAt?: number;
 }
 
+export interface ProviderQuotaCreditsUsd {
+  used: number;
+  limit: number;
+  remaining: number;
+  percent: number;
+  expiresAt?: number;
+  unlimited?: boolean;
+}
+
 export interface ProviderQuota {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
@@ -62,6 +90,7 @@ export interface ProviderQuota {
   monthlyPercent?: number;
   monthlyResetAt?: number;
   customWindows?: ProviderQuotaWindow[];
+  creditsUsd?: ProviderQuotaCreditsUsd;
   updatedAt: number;
 }
 
@@ -145,7 +174,7 @@ function cacheKeyWithAggregationState(
       const rows = snapshot.accounts.map(account => ({
         isMain: account.isMain,
         active: account.id === activeId,
-        plan: account.plan?.trim().toLowerCase() ?? null,
+        plan: codexPlanKey(account.plan) ?? null,
         paused: account.paused,
         needsReauth: account.needsReauth === true,
         quota: quotaSignatureValue(account.quota as CodexCapacityQuota | null),
@@ -193,6 +222,8 @@ function hasQuotaRows(quota: ProviderQuota | null | undefined): quota is Provide
   return typeof quota.fiveHourPercent === "number"
     || typeof quota.weeklyPercent === "number"
     || typeof quota.monthlyPercent === "number"
+    || quota.creditsUsd?.unlimited === true
+    || typeof quota.creditsUsd?.percent === "number"
     || !!quota.customWindows?.some(window => typeof window.percent === "number");
 }
 
@@ -234,6 +265,43 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
+const QUOTA_JSON_READ_FAILURE = Symbol("quota-json-read-failure");
+
+async function readQuotaJson(
+  response: Response,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<unknown | typeof QUOTA_JSON_READ_FAILURE> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > QUOTA_RESPONSE_MAX_BYTES) {
+    try {
+      void response.body?.cancel(
+        new DOMException("Provider quota response is too large", "QuotaExceededError"),
+      ).catch(() => undefined);
+    } catch {
+      // Best-effort cancellation only.
+    }
+    return QUOTA_JSON_READ_FAILURE;
+  }
+
+  try {
+    const bounded = await readBoundedResponseBody(response, {
+      maxBytes: QUOTA_RESPONSE_MAX_BYTES,
+      totalTimeoutMs: timeoutMs,
+      inactivityTimeoutMs: timeoutMs,
+    });
+    if (bounded.oversized || bounded.truncated || !bounded.displaySafe) return QUOTA_JSON_READ_FAILURE;
+    return JSON.parse(bounded.text) as unknown;
+  } catch {
+    return QUOTA_JSON_READ_FAILURE;
+  }
+}
+
+/** Test-only access to the quota reader's deadline and cancellation contract. */
+export async function readProviderQuotaJsonForTests(response: Response, timeoutMs: number): Promise<unknown> {
+  const result = await readQuotaJson(response, timeoutMs);
+  return result === QUOTA_JSON_READ_FAILURE ? null : result;
+}
+
 function isBuiltInChatGptForwardProvider(name: string, provider: OcxProviderConfig): boolean {
   return name === OPENAI_CODEX_PROVIDER_ID && isCanonicalOpenAiForwardProvider(provider);
 }
@@ -241,6 +309,58 @@ function isBuiltInChatGptForwardProvider(name: string, provider: OcxProviderConf
 function isCanonicalA6apiBaseUrl(baseUrl: string): boolean {
   const normalized = normalizedBaseUrl(baseUrl);
   return normalized === A6API_BASE_URL || normalized === `${A6API_BASE_URL}/v1`;
+}
+
+function isCanonicalOpenCodeGoBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === OPENCODE_GO_BASE_URL;
+}
+
+function isCanonicalOpenRouterBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === OPENROUTER_BASE_URL;
+}
+
+function isCanonicalDeepSeekBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === DEEPSEEK_BASE_URL || normalized === `${DEEPSEEK_BASE_URL}/v1`;
+}
+
+function isCanonicalClineBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === CLINE_BASE_URL || normalized === `${CLINE_BASE_URL}/api/v1`;
+}
+
+function isCanonicalZaiBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === ZAI_BASE_URL || normalized === `${ZAI_BASE_URL}/api/coding/paas/v4`;
+}
+
+function isCanonicalMinimaxBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === "https://api.minimax.io/v1" || normalized === "https://api.minimaxi.com/v1";
+}
+
+function isCanonicalMoonshotBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === MOONSHOT_BASE_URL || normalized === "https://api.moonshot.cn/v1";
+}
+
+function isCanonicalVeniceBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === VENICE_BASE_URL;
+}
+
+function isCanonicalSyntheticBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === SYNTHETIC_BASE_URL || normalized === "https://api.synthetic.new/openai/v1";
+}
+
+function isCanonicalDeepInfraBaseUrl(baseUrl: string): boolean {
+  const normalized = normalizedBaseUrl(baseUrl);
+  return normalized === DEEPINFRA_BASE_URL || normalized === `${DEEPINFRA_BASE_URL}/v1/openai`;
+}
+
+function isCanonicalNeuralwattBaseUrl(baseUrl: string): boolean {
+  return normalizedBaseUrl(baseUrl) === NEURALWATT_BASE_URL;
 }
 
 function a6apiPayload(value: unknown): Record<string, unknown> | null {
@@ -280,8 +400,34 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
       ? TERMINAL_QUOTA_FAILURE
       : null;
   }
-  const subscription = a6apiPayload(await subscriptionResponse.json().catch(() => null));
-  const token = a6apiPayload(await tokenResponse.json().catch(() => null));
+  const [subscriptionBody, tokenBody] = await Promise.all([
+    readQuotaJson(subscriptionResponse),
+    readQuotaJson(tokenResponse),
+  ]);
+  if (subscriptionBody === QUOTA_JSON_READ_FAILURE || tokenBody === QUOTA_JSON_READ_FAILURE) return null;
+  const subscription = a6apiPayload(subscriptionBody);
+  const token = a6apiPayload(tokenBody);
+  const unlimited = token?.unlimited_quota === true
+    || token?.unlimited_quota === 1
+    || token?.unlimited_quota === "true";
+  const normalizedExpiry = normalizeResetAt(token?.expires_at);
+  const expiry = normalizedExpiry && normalizedExpiry > 0
+    ? { expiresAt: normalizedExpiry }
+    : {};
+  if (unlimited) {
+    return report(provider, "a6api:billing", {
+      creditsUsd: {
+        used: 0,
+        limit: 0,
+        remaining: 0,
+        percent: 0,
+        unlimited: true,
+        ...expiry,
+      },
+      customWindows: [{ label: "Unlimited API credits", percent: 0 }],
+      updatedAt: Date.now(),
+    });
+  }
   const limitUsd = firstFinite(subscription, ["hard_limit_usd"]);
   const grantedUnits = firstFinite(token, ["total_granted"]);
   const usedUnits = firstFinite(token, ["total_used"]);
@@ -304,9 +450,535 @@ async function fetchA6apiQuota(provider: string, config: OcxProviderConfig): Pro
   if (percent === undefined) return TERMINAL_QUOTA_FAILURE;
   const label = `API credits ($${remainingUsd.toFixed(2)} of $${limitUsd.toFixed(2)} remaining)`;
   return report(provider, "a6api:billing", {
+    creditsUsd: {
+      used: usedUsd,
+      limit: limitUsd,
+      remaining: remainingUsd,
+      percent,
+      ...expiry,
+    },
     customWindows: [{ label, percent }],
     updatedAt: Date.now(),
   });
+}
+
+function parseOpenCodeGoUsageWindow(value: unknown): { percent: number; resetAt?: number } | null {
+  const row = asRecord(value);
+  if (!row) return null;
+  const percent = normalizePercent(row.percent);
+  if (percent === undefined) return null;
+  const resetAt = normalizeResetAt(row.resetsAt);
+  return { percent, ...(resetAt !== undefined ? { resetAt } : {}) };
+}
+
+async function fetchOpenCodeGoQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never send a configured API key when the provider destination is not the built-in Go endpoint.
+  if (!isCanonicalOpenCodeGoBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(OPENCODE_GO_USAGE_URL, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const usage = asRecord(body?.usage);
+  if (!usage) return null;
+  const rolling = parseOpenCodeGoUsageWindow(usage.rolling);
+  const weekly = parseOpenCodeGoUsageWindow(usage.weekly);
+  const monthly = parseOpenCodeGoUsageWindow(usage.monthly);
+  const quota: ProviderQuota = {
+    ...(rolling ? {
+      fiveHourPercent: rolling.percent,
+      ...(rolling.resetAt !== undefined ? { fiveHourResetAt: rolling.resetAt } : {}),
+    } : {}),
+    ...(weekly ? {
+      weeklyPercent: weekly.percent,
+      ...(weekly.resetAt !== undefined ? { weeklyResetAt: weekly.resetAt } : {}),
+    } : {}),
+    ...(monthly ? {
+      monthlyPercent: monthly.percent,
+      ...(monthly.resetAt !== undefined ? { monthlyResetAt: monthly.resetAt } : {}),
+    } : {}),
+    updatedAt: Date.now(),
+  };
+  return report(provider, "opencode-go:usage", quota);
+}
+
+/**
+ * OpenRouter `GET /api/v1/key` — the key's own credit balance and optional
+ * per-key spending cap. `limit` is the configured cap (absent = uncapped);
+ * `usage` is lifetime spend; `limit_remaining` is what is left of the cap.
+ * When no cap is set there is no hard limit to meter against, so no bar is
+ * produced — the provider falls back to its documented reference.
+ */
+async function fetchOpenRouterQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  // Never send a configured API key to a lookalike host or through a redirect.
+  if (!isCanonicalOpenRouterBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${OPENROUTER_BASE_URL}/key`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  if (!data) return null;
+  const limit = toFiniteNumber(data.limit);
+  const limitRemaining = toFiniteNumber(data.limit_remaining);
+  const usage = toFiniteNumber(data.usage);
+  // A successful no-cap response is a DELIBERATE change, not a transient
+  // failure: the old capped row must be dropped, not preserved as last-good.
+  if (limit === undefined || limit <= 0) return TERMINAL_QUOTA_FAILURE;
+  // Prefer the authoritative remaining-cap value when present: `usage` is
+  // lifetime accumulated spend and overstates a reset or re-capped key.
+  const used = limitRemaining !== undefined
+    ? Math.max(0, limit - limitRemaining)
+    : usage !== undefined && usage >= 0 ? usage : undefined;
+  if (used === undefined) return null;
+  const percent = normalizePercent((used / limit) * 100);
+  if (percent === undefined) return null;
+  const remaining = Math.max(0, limit - used);
+  const label = `API credits ($${remaining.toFixed(2)} of $${limit.toFixed(2)} remaining)`;
+  return report(provider, "openrouter:key-info", {
+    customWindows: [{ label, percent }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * DeepSeek `GET /user/balance` — the account's granted + topped-up credit
+ * balance. The payload places `total_balance` / `granted_balance` inside
+ * entries of `balance_infos` (one row per currency); the row for the account's
+ * currency is selected by preference. `granted_balance` is a CURRENT balance
+ * component, not the original grant ceiling, so no consumed percentage is
+ * fabricated — the balance is reported as a balance-only window.
+ */
+async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalDeepSeekBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${DEEPSEEK_BASE_URL}/user/balance`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  // The payload nests balances under `balance_infos` rows keyed by currency;
+  // prefer a USD row, then CNY, then the first row that parses.
+  const infos = Array.isArray(body?.balance_infos) ? body.balance_infos as unknown[] : null;
+  const rows = infos
+    ? infos.map((raw): Record<string, unknown> | null => asRecord(raw)).filter((r): r is Record<string, unknown> => r !== null)
+    : [];
+  const pick = (currency: string): Record<string, unknown> | null =>
+    rows.find(row => String(row.currency ?? "").toUpperCase() === currency) ?? null;
+  const preferred = pick("USD") ?? pick("CNY") ?? rows[0] ?? null;
+  if (!preferred) return null;
+  const totalBalance = toFiniteNumber(preferred.total_balance);
+  const grantedBalance = toFiniteNumber(preferred.granted_balance);
+  const toppedUp = toFiniteNumber(preferred.topped_up_balance);
+  const balance = totalBalance ?? grantedBalance ?? toppedUp;
+  if (balance === undefined || balance < 0) return null;
+  const label = grantedBalance !== undefined && grantedBalance > 0
+    ? `API balance ($${balance.toFixed(2)} total, $${grantedBalance.toFixed(2)} granted)`
+    : `API balance ($${balance.toFixed(2)})`;
+  return report(provider, "deepseek:balance", {
+    customWindows: [{ label, percent: 0 }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * ClinePass `GET /api/v1/users/me/plan/usage-limits` — the subscription's
+ * rolling five-hour, weekly, and monthly utilization, matching the existing
+ * ProviderQuota windows directly. The endpoint 404s (or returns a null plan)
+ * for accounts without an active ClinePass, which is a no-report, not an error.
+ */
+async function fetchClineQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalClineBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${CLINE_BASE_URL}/api/v1/users/me/plan/usage-limits`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    // 404 = no active plan; a plain "no plan" is a no-report, everything else
+    // 4xx (except 408/429) is a credential/contract problem.
+    if (response.status === 404) return null;
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  const limits = Array.isArray(data?.limits) ? data.limits : null;
+  if (!limits) return null;
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+  for (const raw of limits) {
+    const row = asRecord(raw);
+    if (!row) continue;
+    const percent = normalizePercent(row.percentUsed);
+    if (percent === undefined) continue;
+    const resetAt = normalizeResetAt(row.resetsAt);
+    if (row.type === "five_hour") {
+      quota.fiveHourPercent = percent;
+      if (resetAt !== undefined) quota.fiveHourResetAt = resetAt;
+      windows += 1;
+    } else if (row.type === "weekly") {
+      quota.weeklyPercent = percent;
+      if (resetAt !== undefined) quota.weeklyResetAt = resetAt;
+      windows += 1;
+    } else if (row.type === "monthly") {
+      quota.monthlyPercent = percent;
+      if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
+      windows += 1;
+    }
+  }
+  return windows > 0 ? report(provider, "cline:plan-usage-limits", quota) : null;
+}
+
+/**
+ * Z.AI GLM Coding Plan `GET /api/monitor/usage/quota/limit` — the coding-plan
+ * subscription's 5-hour token cycle, weekly quota, and monthly MCP usage.
+ * Authenticates with the API key as a Bearer token per Z.AI's API reference.
+ */
+async function fetchZaiQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalZaiBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${ZAI_BASE_URL}/api/monitor/usage/quota/limit`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  if (!body || body.success === false) return null;
+  const data = asRecord(body.data) ?? body;
+  // The plugin renders a 5h token window, a weekly window, and a monthly MCP
+  // window. Look for percent fields with window identifiers.
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+  const percentAt = (key: string): number | undefined => {
+    const value = normalizePercent(data?.[key]);
+    if (value !== undefined) return value;
+    const nested = asRecord(data?.quota);
+    return nested ? normalizePercent(nested[key]) : undefined;
+  };
+  const fiveHour = percentAt("fiveHourPercent") ?? percentAt("fiveHourUsage") ?? percentAt("fiveHourUsed");
+  const weekly = percentAt("weeklyPercent") ?? percentAt("weeklyUsage") ?? percentAt("weeklyUsed");
+  const monthly = percentAt("monthlyPercent") ?? percentAt("mcpPercent") ?? percentAt("monthlyMCPUsage");
+  if (fiveHour !== undefined) {
+    quota.fiveHourPercent = fiveHour;
+    windows += 1;
+  }
+  if (weekly !== undefined) {
+    quota.weeklyPercent = weekly;
+    windows += 1;
+  }
+  if (monthly !== undefined) {
+    quota.monthlyPercent = monthly;
+    windows += 1;
+  }
+  return windows > 0 ? report(provider, "zai:quota-limit", quota) : null;
+}
+
+/**
+ * MiniMax Token Plan `GET /v1/token_plan/remains` — the subscription's
+ * remaining quota as a countdown-time value (ms). The endpoint does not expose
+ * the plan's total duration, so no percentage is fabricated from a presumed
+ * window: the remaining time is reported as a duration-only window. When the
+ * API supplies a total (`total_time` / `plan_duration_ms`), a consumed share
+ * is derived from it. Region selects the host: `minimax` → www.minimax.io,
+ * `minimax-cn` → api.minimaxi.com.
+ */
+async function fetchMinimaxQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalMinimaxBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const cnHost = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.minimaxi.com");
+  const remainsUrl = cnHost ? "https://api.minimaxi.com/v1/token_plan/remains" : MINIMAX_REMAINS_URL;
+  const response = await fetch(remainsUrl, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  if (!body || body.success === false) return null;
+  const data = asRecord(body.data) ?? body;
+  const remainsMs = toFiniteNumber(data.remains_time ?? data.remainsTime);
+  if (remainsMs === undefined || remainsMs < 0) return null;
+  const hours = Math.floor(remainsMs / 3_600_000);
+  const label = `Token Plan remaining (${hours}h)`;
+  // Only derive a consumed share when the API actually reports the plan total;
+  // a presumed window (e.g. 30 days) would fabricate utilization. A valid
+  // response that omits the total after a prior refresh had it is a DELIBERATE
+  // contract change — the old row must be dropped (terminal), not preserved as
+  // a transient last-good.
+  const totalMs = toFiniteNumber(data.total_time ?? data.plan_duration_ms ?? data.total_duration_ms);
+  if (totalMs === undefined || totalMs <= 0) return TERMINAL_QUOTA_FAILURE;
+  const consumed = Math.max(0, totalMs - remainsMs);
+  const percent = normalizePercent((consumed / totalMs) * 100);
+  if (percent === undefined) return null;
+  return report(provider, "minimax:token-plan-remains", {
+    customWindows: [{ label, percent }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Moonshot/Kimi `GET /v1/users/me/balance` — the account's available balance
+ * (voucher + cash). Renders a single balance window against the sum of
+ * voucher + cash when positive (there is no per-window rate limit to meter).
+ */
+async function fetchMoonshotQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalMoonshotBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const host = normalizedBaseUrl(config.baseUrl)?.startsWith("https://api.moonshot.cn") ? "https://api.moonshot.cn/v1" : MOONSHOT_BASE_URL;
+  const response = await fetch(`${host}/users/me/balance`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  if (!data) return null;
+  const available = toFiniteNumber(data.available_balance);
+  const voucher = toFiniteNumber(data.voucher_balance);
+  const cash = toFiniteNumber(data.cash_balance);
+  if (available === undefined || available < 0) return null;
+  // Moonshot exposes no per-window quota ceiling, only a balance — report it
+  // as a balance-only window (percent 0) rather than a fabricated utilization.
+  // Currency is host-scoped: China platform (api.moonshot.cn) bills in CNY;
+  // the international platform (api.moonshot.ai) bills in USD. Do not force
+  // either side into the other unit — the number is correct, only the unit
+  // must match the host.
+  const isChinaHost = host.startsWith("https://api.moonshot.cn");
+  const money = (n: number) => isChinaHost ? `¥${n.toFixed(2)}` : `$${n.toFixed(2)}`;
+  const unit = isChinaHost ? "CNY" : "USD";
+  const label = voucher !== undefined && cash !== undefined
+    ? `Balance (${money(available)} ${unit} available, ${money(voucher)} voucher)`
+    : `Balance (${money(available)} ${unit} available)`;
+  return report(provider, "moonshot:balance", {
+    customWindows: [{ label, percent: 0 }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Venice `GET /api/v1/billing/balance` — DIEM (native credits) or USD balance.
+ * Shows the remaining balance; epoch allocation progress when present.
+ */
+async function fetchVeniceQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalVeniceBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${VENICE_BASE_URL}/billing/balance`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  if (!data) return null;
+  const diemBalance = toFiniteNumber(data.balance);
+  const usdBalance = toFiniteNumber(data.balance_usd);
+  const epochUsed = toFiniteNumber(data.diem_epoch_used);
+  const epochAllocated = toFiniteNumber(data.diem_epoch_allocated);
+  if (diemBalance === undefined && usdBalance === undefined) return null;
+  const label = diemBalance !== undefined
+    ? `DIEM balance (${Math.round(diemBalance)})`
+    : `USD balance ($${usdBalance?.toFixed(2) ?? "?"})`;
+  if (epochAllocated !== undefined && epochAllocated > 0 && epochUsed !== undefined) {
+    const percent = normalizePercent((epochUsed / epochAllocated) * 100);
+    if (percent === undefined) return null;
+    return report(provider, "venice:billing-balance", {
+      customWindows: [{ label, percent }],
+      updatedAt: Date.now(),
+    });
+  }
+  return report(provider, "venice:billing-balance", {
+    customWindows: [{ label, percent: 0 }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Synthetic `GET /v2/quotas` — the known quota lanes (rolling 5-hour,
+ * weekly token, search-hourly) mapped onto the quota windows.
+ */
+async function fetchSyntheticQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalSyntheticBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${SYNTHETIC_BASE_URL}/quotas`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+  const percentAt = (key: string): number | undefined => {
+    const value = normalizePercent(data?.[key]);
+    if (value !== undefined) return value;
+    const nested = asRecord(data?.quota) ?? asRecord(data?.quotas);
+    return nested ? normalizePercent(nested[key]) : undefined;
+  };
+  const fiveHour = percentAt("rollingFiveHourLimit");
+  const weekly = percentAt("weeklyTokenLimit");
+  if (fiveHour !== undefined) {
+    quota.fiveHourPercent = fiveHour;
+    windows += 1;
+  }
+  if (weekly !== undefined) {
+    quota.weeklyPercent = weekly;
+    windows += 1;
+  }
+  const search = asRecord(data?.search);
+  const searchHourly = search ? normalizePercent(search.hourly) : undefined;
+  if (searchHourly !== undefined) {
+    quota.customWindows = [...(quota.customWindows ?? []), { label: "Search hourly", percent: searchHourly }];
+    windows += 1;
+  }
+  return windows > 0 ? report(provider, "synthetic:quotas", quota) : null;
+}
+
+/**
+ * DeepInfra `GET /payment/checklist?compute_owed=true` — prepaid balance,
+ * recent spend, spending limit, and suspension state. Renders a balance
+ * window (prepaid funds are a negative `stripe_balance` → positive available).
+ */
+async function fetchDeepInfraQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalDeepInfraBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${DEEPINFRA_BASE_URL}/payment/checklist?compute_owed=true`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  if (!data) return null;
+  const stripeBalance = toFiniteNumber(data.stripe_balance);
+  const spendLimit = toFiniteNumber(data.spending_limit);
+  const total = toFiniteNumber(data.total_amount_due);
+  if (stripeBalance === undefined) return null;
+  // Prepaid funds are negative; a positive value is money owed.
+  const available = stripeBalance < 0 ? -stripeBalance : 0;
+  if (spendLimit !== undefined && spendLimit > 0) {
+    const spent = total !== undefined && total > 0 ? total : Math.max(0, spendLimit - available);
+    const percent = normalizePercent((spent / spendLimit) * 100);
+    if (percent === undefined) return null;
+    return report(provider, "deepinfra:billing-checklist", {
+      customWindows: [{ label: `Billing cycle spend ($${spent.toFixed(2)} of $${spendLimit.toFixed(2)})`, percent }],
+      updatedAt: Date.now(),
+    });
+  }
+  return report(provider, "deepinfra:billing-checklist", {
+    customWindows: [{ label: `Prepaid balance ($${available.toFixed(2)})`, percent: 0 }],
+    updatedAt: Date.now(),
+  });
+}
+
+/**
+ * Neuralwatt `GET /v1/quota` — subscription kWh usage (primary window) and
+ * prepaid USD credit balance (secondary).
+ */
+async function fetchNeuralwattQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaProbeResult> {
+  if (!isCanonicalNeuralwattBaseUrl(config.baseUrl)) return null;
+  const apiKey = resolveEnvValue(config.apiKey)?.trim();
+  if (!apiKey) return null;
+  const response = await fetch(`${NEURALWATT_BASE_URL}/quota`, {
+    headers: { Accept: "application/json", Authorization: `Bearer ${apiKey}` },
+    redirect: "error",
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    return response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+      ? TERMINAL_QUOTA_FAILURE
+      : null;
+  }
+  const body = asRecord(await readQuotaJson(response));
+  const data = asRecord(body?.data) ?? body;
+  const quota: ProviderQuota = { updatedAt: Date.now() };
+  let windows = 0;
+  const subscription = asRecord(data?.subscription);
+  const kwhUsed = subscription ? toFiniteNumber(subscription.kwh_used) : undefined;
+  const kwhIncluded = subscription ? toFiniteNumber(subscription.kwh_included) : undefined;
+  if (kwhUsed !== undefined && kwhIncluded !== undefined && kwhIncluded > 0) {
+    const percent = normalizePercent((kwhUsed / kwhIncluded) * 100);
+    if (percent !== undefined) {
+      quota.fiveHourPercent = percent;
+      const periodEnd = subscription ? normalizeResetAt(subscription.current_period_end) : undefined;
+      if (periodEnd !== undefined) quota.fiveHourResetAt = periodEnd;
+      windows += 1;
+    }
+  }
+  const balance = asRecord(data?.balance);
+  const totalCredits = balance ? toFiniteNumber(balance.total_credits_usd) : undefined;
+  const remainingCredits = balance ? toFiniteNumber(balance.credits_remaining_usd) : undefined;
+  if (totalCredits !== undefined && totalCredits > 0 && remainingCredits !== undefined) {
+    // Utilization is CONSUMED credits, not the remaining share.
+    const used = Math.max(0, totalCredits - remainingCredits);
+    const percent = normalizePercent((used / totalCredits) * 100);
+    if (percent !== undefined) {
+      quota.customWindows = [...(quota.customWindows ?? []), { label: "Prepaid credits", percent }];
+      windows += 1;
+    }
+  }
+  return windows > 0 ? report(provider, "neuralwatt:quota", quota) : null;
 }
 
 function report(
@@ -415,6 +1087,65 @@ function centsValue(value: unknown): number | undefined {
   return rec ? toFiniteNumber(rec.val) : undefined;
 }
 
+/** Decode JWT payload `sub` for xAI weekly credits when the stored credential lacks accountId. */
+function xaiUserIdFromAccessToken(accessToken: string): string | undefined {
+  const parts = accessToken.split(".");
+  if (parts.length < 2 || !parts[1]) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as { sub?: unknown };
+    return typeof payload.sub === "string" && payload.sub.trim() ? payload.sub.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Grok Build weekly credits envelope:
+ * `{ config: { creditUsagePercent?, currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end } } }`.
+ * Omitted percent is treated as 0 (proto3 default).
+ */
+export function parseXaiCreditsResponse(value: unknown): { percent: number; resetAt?: number } | null {
+  const body = asRecord(value);
+  const config = asRecord(body?.config);
+  if (!config) return null;
+  const period = asRecord(config.currentPeriod);
+  if (!period || period.type !== "USAGE_PERIOD_TYPE_WEEKLY") return null;
+  const resetAt = normalizeResetAt(period.end);
+  if (resetAt === undefined) return null;
+  if (config.creditUsagePercent !== undefined) {
+    const percent = normalizePercent(config.creditUsagePercent);
+    if (percent === undefined) return null;
+    return { percent, resetAt };
+  }
+  return { percent: 0, resetAt };
+}
+
+async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
+  try {
+    const response = await fetch(XAI_CREDITS_URL, {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${accessToken}`,
+        [XAI_GROK_COMPATIBILITY.headers.tokenAuth]: "xai-grok-cli",
+        [XAI_GROK_COMPATIBILITY.headers.authenticateResponse]: "authenticate-response",
+        "x-userid": userId,
+        [XAI_GROK_COMPATIBILITY.headers.clientVersion]: XAI_GROK_CLIENT_VERSION,
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const parsed = parseXaiCreditsResponse(await readQuotaJson(response));
+    if (!parsed) return null;
+    return {
+      weeklyPercent: parsed.percent,
+      ...(parsed.resetAt !== undefined ? { weeklyResetAt: parsed.resetAt } : {}),
+      updatedAt: Date.now(),
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | null> {
   let accessToken: string;
   try {
@@ -422,25 +1153,37 @@ async function fetchXaiQuota(provider: string): Promise<ProviderQuotaReport | nu
   } catch {
     return null;
   }
-  const response = await fetch("https://cli-chat-proxy.grok.com/v1/billing", {
-    headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
-  const config = asRecord(body?.config);
-  if (!config) return null;
-  const limitCents = centsValue(config.monthlyLimit);
-  const usedCents = centsValue(config.used);
-  if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
-  const percent = normalizePercent((usedCents / limitCents) * 100);
-  if (percent === undefined) return null;
-  const quota: ProviderQuota = {
-    monthlyPercent: percent,
-    monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
-    updatedAt: Date.now(),
-  };
-  return report(provider, "xai:grok-billing", quota);
+
+  // Prefer the SuperGrok weekly credits window that actually gates prompting (#1283).
+  const userId = getCredential("xai")?.accountId?.trim() || xaiUserIdFromAccessToken(accessToken);
+  if (userId) {
+    const weekly = await fetchXaiWeeklyCredits(accessToken, userId);
+    if (weekly) return report(provider, "xai:grok-billing-credits", weekly);
+  }
+
+  // Legacy monthly dollar pool — retained when weekly is unavailable.
+  try {
+    const response = await fetch(XAI_BILLING_URL, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) return null;
+    const body = asRecord(await readQuotaJson(response));
+    const config = asRecord(body?.config);
+    if (!config) return null;
+    const limitCents = centsValue(config.monthlyLimit);
+    const usedCents = centsValue(config.used);
+    if (limitCents === undefined || usedCents === undefined || limitCents <= 0) return null;
+    const percent = normalizePercent((usedCents / limitCents) * 100);
+    if (percent === undefined) return null;
+    return report(provider, "xai:grok-billing", {
+      monthlyPercent: percent,
+      monthlyResetAt: normalizeResetAt(config.billingPeriodEnd),
+      updatedAt: Date.now(),
+    });
+  } catch {
+    return null;
+  }
 }
 
 function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number } | null {
@@ -471,7 +1214,7 @@ async function fetchAnthropicUsageQuota(accessToken: string): Promise<ProviderQu
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) return null;
-    const body = asRecord(await response.json().catch(() => null));
+    const body = asRecord(await readQuotaJson(response));
     if (!body) return null;
     const fiveHour = parseClaudeBucket(body.five_hour);
     const sevenDay = parseClaudeBucket(body.seven_day);
@@ -884,7 +1627,7 @@ async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Prom
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
-  const quota = parseKimiQuotaPayload(await response.json().catch(() => null));
+  const quota = parseKimiQuotaPayload(await readQuotaJson(response));
   return quota ? report(provider, "kimi:usages", quota) : null;
 }
 
@@ -917,7 +1660,7 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (periodRes.ok) {
-      const body = asRecord(await periodRes.json().catch(() => null));
+      const body = asRecord(await readQuotaJson(periodRes));
       const planUsage = asRecord(body?.planUsage);
       if (planUsage) {
         const resetAt = normalizeResetAt(body?.billingCycleEnd ?? planUsage.billingCycleEnd ?? body?.periodEnd);
@@ -979,7 +1722,7 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (summaryRes.ok) {
-      const body = asRecord(await summaryRes.json().catch(() => null));
+      const body = asRecord(await readQuotaJson(summaryRes));
       const individual = asRecord(body?.individualUsage);
       const plan = asRecord(individual?.plan);
       if (plan) {
@@ -1008,7 +1751,7 @@ async function fetchCursorQuota(provider: string): Promise<ProviderQuotaReport |
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
+  const body = asRecord(await readQuotaJson(response));
   if (!body) return null;
 
   // Prefer the gpt-4 bucket (historical "fast requests"); else first model with used+limit.
@@ -1122,7 +1865,7 @@ async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
-  const body = asRecord(await response.json().catch(() => null));
+  const body = asRecord(await readQuotaJson(response));
   const models = asRecord(body?.models);
   if (!models) return null;
 
@@ -1176,8 +1919,41 @@ async function maybeFetchProviderQuota(
     if (provider.authMode === "key" && isCanonicalKimiCodeBaseUrl(provider.baseUrl)) {
       return fetchKimiQuota(name, provider);
     }
+    if ((provider.authMode ?? "key") === "key" && name === "opencode-go") {
+      return fetchOpenCodeGoQuota(name, provider);
+    }
     if ((provider.authMode ?? "key") === "key" && isCanonicalA6apiBaseUrl(provider.baseUrl)) {
       return fetchA6apiQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "openrouter") {
+      return fetchOpenRouterQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "deepseek") {
+      return fetchDeepSeekQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "cline-pass") {
+      return fetchClineQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "zai") {
+      return fetchZaiQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && (name === "minimax" || name === "minimax-cn")) {
+      return fetchMinimaxQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "moonshot") {
+      return fetchMoonshotQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "venice") {
+      return fetchVeniceQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "synthetic") {
+      return fetchSyntheticQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "deepinfra") {
+      return fetchDeepInfraQuota(name, provider);
+    }
+    if ((provider.authMode ?? "key") === "key" && name === "neuralwatt") {
+      return fetchNeuralwattQuota(name, provider);
     }
     return null;
   } catch {

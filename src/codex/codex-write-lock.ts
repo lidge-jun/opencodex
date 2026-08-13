@@ -66,7 +66,8 @@ export type CodexWriteLockRefusalReason =
 
 export type CodexWriteLockResult<T> =
   | { status: "acquired"; value: T; waitedMs: number; lockId: string }
-  | { status: "busy"; reason: "deadline" | "cancelled"; retryable: true; waitedMs: number }
+  | { status: "skipped"; reason: "desired_disabled" | "desired_enabled"; waitedMs: number }
+  | { status: "busy"; reason: "deadline" | "cancelled"; retryable: true; waitedMs: number; lockId: string }
   | {
       status: "refused";
       reason: CodexWriteLockRefusalReason;
@@ -122,6 +123,14 @@ export interface CodexWriteCommitContext {
   readonly currentTxId: string | null;
   /** Opaque authority over the ALREADY-OPEN transaction. Not SQLite. */
   readonly coordinator: CodexCoordinatorTransaction;
+}
+
+/** A synchronous under-lock policy re-read proved the requested apply stale. */
+export class CodexWriteLockSkipped extends Error {
+  constructor(readonly reason: "desired_disabled" | "desired_enabled") {
+    super(reason);
+    this.name = "CodexWriteLockSkipped";
+  }
 }
 
 /** Rejects an `async` callback at typecheck; a cast thenable is caught at runtime. */
@@ -291,7 +300,7 @@ export async function withCodexWriteLock<T>(
   const waited = (): number => Math.round(performance.now() - started);
 
   for (;;) {
-    if (signal?.aborted) return { status: "busy", reason: "cancelled", retryable: true, waitedMs: waited() };
+    if (signal?.aborted) return { status: "busy", reason: "cancelled", retryable: true, waitedMs: waited(), lockId: target.lockId };
 
     let transaction: ReturnType<typeof openCodexCoordinatorTransaction> | undefined;
     try {
@@ -306,7 +315,7 @@ export async function withCodexWriteLock<T>(
           error instanceof Error ? error.message : "The Codex write lock could not be opened.");
       }
       if (performance.now() >= deadline) {
-        return { status: "busy", reason: "deadline", retryable: true, waitedMs: waited() };
+        return { status: "busy", reason: "deadline", retryable: true, waitedMs: waited(), lockId: target.lockId };
       }
       await sleepJittered(deadline - performance.now(), signal);
       continue;
@@ -345,13 +354,16 @@ export async function withCodexWriteLock<T>(
       return { status: "acquired", value: value as T, waitedMs: waited(), lockId: target.lockId };
     } catch (error) {
       transaction.rollback();
+      if (error instanceof CodexWriteLockSkipped) {
+        return { status: "skipped", reason: error.reason, waitedMs: waited() };
+      }
       if (error instanceof CodexWriteLockStaleAdmission) {
         return refuse("authority_not_proven",
           "The admitted state changed before the commit could be made under the lock.");
       }
       if (isBusyError(error)) {
         if (performance.now() >= deadline) {
-          return { status: "busy", reason: "deadline", retryable: true, waitedMs: waited() };
+          return { status: "busy", reason: "deadline", retryable: true, waitedMs: waited(), lockId: target.lockId };
         }
         await sleepJittered(deadline - performance.now(), signal);
         continue;

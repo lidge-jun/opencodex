@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { atomicWriteFileAsync, getConfigDir, type AtomicWriteAsyncTestSeam } from "../config";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 
 /**
- * Antigravity (Cloud Code Assist) thoughtSignature reasoning-replay cache.
+ * Google-family thoughtSignature reasoning-replay cache.
  *
  * Gemini-3 interleaved thinking is stateless upstream: each model content part carries a
  * `thoughtSignature` that MUST be echoed back on the matching part in the next request, or the
  * upstream rejects the turn (HTTP 400). We observe signatures on the response stream, cache them
  * per `model + session`, and re-inject them into the outgoing `request.contents` on the next turn.
  *
- * Mirrors CLIProxyAPI `internal/runtime/executor/antigravity_reasoning_replay.go`. Gemini-only;
+ * Mirrors CLIProxyAPI `internal/runtime/executor/antigravity_reasoning_replay.go` and is also used
+ * by Vertex with a transport/project/location-prefixed model identity. Gemini-only;
  * Claude-on-Antigravity uses inline signature sanitization instead (see google-antigravity-wire).
  */
 
@@ -25,6 +29,8 @@ interface ReplayEntry {
   bytes: number;
   expiresAtMs: number;
   oldestAtMs: number | null;
+  /** Most recent observe/apply activity; orders sessions under the snapshot cap. */
+  lastActiveAtMs: number;
 }
 
 const MIN_SIGNATURE_LEN = 16;
@@ -37,6 +43,16 @@ export const ANTIGRAVITY_REPLAY_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 const REPLAY_MAX_SIGNATURE_BYTES = 64 * 1024;
 /** Fixed 64-hex outer key length, counted once per session entry. */
 const REPLAY_SESSION_KEY_BYTES = 64;
+const REPLAY_SNAPSHOT_FILE = "antigravity-replay.json";
+const REPLAY_SNAPSHOT_VERSION = 1;
+const REPLAY_SNAPSHOT_DEBOUNCE_MS = 2_000;
+/** Upper bound on flush retries: mutations arriving faster than writes complete
+ * must not let shutdown hang; the last completed write is already on disk. */
+const REPLAY_FLUSH_MAX_ATTEMPTS = 8;
+/** Write bound for the durable snapshot (mirrors the responses-state cap). */
+const REPLAY_SNAPSHOT_MAX_BYTES = 24 * 1024 * 1024;
+/** Refuse-to-parse ceiling for an existing snapshot file. */
+const REPLAY_SNAPSHOT_REFUSE_BYTES = 32 * 1024 * 1024;
 
 interface ReplayLimits {
   maxCallsPerSession: number;
@@ -56,6 +72,216 @@ let replayLimits = { ...DEFAULT_REPLAY_LIMITS };
 let replayBytes = 0;
 let replayOldestSessionKey: string | undefined;
 let replayOldestAt: number | null = null;
+let replaySnapshotLoaded = false;
+let replaySnapshotPersistTimer: ReturnType<typeof setTimeout> | null = null;
+let replaySnapshotPersistGate: Promise<void> = Promise.resolve();
+/** Mutation generation: bumped on every cache change that needs persisting. */
+let replayMutationGeneration = 0;
+/** Generation of the data the last successful snapshot write actually captured. */
+let replayWrittenGeneration = 0;
+let replaySnapshotWriteSeam: AtomicWriteAsyncTestSeam | undefined;
+let replaySnapshotLoadDiscarded = false;
+let replaySnapshotMaxBytes = REPLAY_SNAPSHOT_MAX_BYTES;
+
+function replaySnapshotPath(): string {
+  return join(getConfigDir(), REPLAY_SNAPSHOT_FILE);
+}
+
+function loadReplaySnapshotEntry(key: string, value: unknown): void {
+  if (!/^[0-9a-f]{64}$/.test(key)) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const rec = value as { byCall?: unknown; expiresAtMs?: unknown; lastActiveAtMs?: unknown };
+  if (typeof rec.expiresAtMs !== "number" || !Number.isFinite(rec.expiresAtMs)) return;
+  // Expired sessions are dropped at load; a stale snapshot is self-healing.
+  if (rec.expiresAtMs <= Date.now()) {
+    replaySnapshotLoadDiscarded = true;
+    return;
+  }
+  if (!Array.isArray(rec.byCall)) return;
+  const byCall = new Map<string, ReplayCall>();
+  let bytes = REPLAY_SESSION_KEY_BYTES;
+  for (const pair of rec.byCall) {
+    if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") continue;
+    if (!/^[0-9a-f]{64}$/.test(pair[0])) continue;
+    const call = pair[1] as { signature?: unknown; touchedAtMs?: unknown } | null;
+    if (!call || typeof call !== "object" || Array.isArray(call)) continue;
+    if (typeof call.signature !== "string" || call.signature.length < MIN_SIGNATURE_LEN) continue;
+    if (typeof call.touchedAtMs !== "number" || !Number.isFinite(call.touchedAtMs)) continue;
+    // Never trust a serialized sizeBytes: a forged snapshot could claim a tiny
+    // size for a huge signature and bypass every byte cap. Recompute from the
+    // signature itself, exactly like the live write path.
+    const signatureBytes = utf8.encode(call.signature).byteLength;
+    if (signatureBytes > replayLimits.maxSignatureBytes) continue;
+    const callBytes = utf8.encode(pair[0]).byteLength + signatureBytes;
+    if (callBytes > replayLimits.maxBytesPerSession) continue;
+    // A duplicated call key would overstate entry.bytes (the map keeps only the
+    // last value) and could evict valid sessions; keep the first occurrence.
+    if (byCall.has(pair[0])) {
+      replaySnapshotLoadDiscarded = true;
+      continue;
+    }
+    byCall.set(pair[0], {
+      signature: call.signature,
+      sizeBytes: callBytes,
+      touchedAtMs: call.touchedAtMs,
+    });
+    bytes += callBytes;
+  }
+  if (byCall.size === 0) {
+    replaySnapshotLoadDiscarded = true;
+    return;
+  }
+  const lastActiveAtMs = typeof rec.lastActiveAtMs === "number" && Number.isFinite(rec.lastActiveAtMs)
+    ? rec.lastActiveAtMs
+    : rec.expiresAtMs;
+  const entry: ReplayEntry = { byCall, bytes, expiresAtMs: rec.expiresAtMs, oldestAtMs: null, lastActiveAtMs };
+  const loadedCallCount = entry.byCall.size;
+  // Account BEFORE trimming: evictInnerCalls decrements the global byte count
+  // through deleteReplayCall, so the entry must already be on the books.
+  replayCache.set(key, entry);
+  replayBytes += entry.bytes;
+  // Same per-session caps as live writes, in case limits changed across versions.
+  evictInnerCalls(entry);
+  if (entry.byCall.size < loadedCallCount) replaySnapshotLoadDiscarded = true;
+  if (entry.byCall.size === 0) {
+    deleteReplaySession(key);
+    return;
+  }
+  refreshReplaySessionCandidate(key, entry);
+}
+
+/**
+ * Lazy load of the durable snapshot on first cache access, so signatures observed
+ * before a proxy restart are available again once the session id re-derives to the
+ * same key (the session id is anchored on the first user message text). Load is
+ * best-effort: missing, corrupt, or oversized files start the cache empty.
+ */
+function ensureReplaySnapshotLoaded(): void {
+  if (replaySnapshotLoaded) return;
+  replaySnapshotLoaded = true;
+  replaySnapshotLoadDiscarded = false;
+  try {
+    const path = replaySnapshotPath();
+    if (!existsSync(path)) return;
+    const stat = statSync(path);
+    // Bound the read BEFORE parse: the 24 MiB write cap constrains snapshots this
+    // process wrote, not a pre-existing oversized file.
+    if (!stat.isFile() || stat.size > REPLAY_SNAPSHOT_REFUSE_BYTES) return;
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { version?: unknown; sessions?: unknown };
+    if (raw.version !== REPLAY_SNAPSHOT_VERSION || !Array.isArray(raw.sessions)) return;
+    for (const entry of raw.sessions) {
+      if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
+      loadReplaySnapshotEntry(entry[0], entry[1]);
+    }
+  } catch {
+    // Missing/corrupt snapshot: start empty.
+  }
+  const sessionsAfterLoad = replayCache.size;
+  // Load-time admission must respect the same global caps as live writes.
+  evictIfNeeded();
+  if (replayCache.size < sessionsAfterLoad) replaySnapshotLoadDiscarded = true;
+  // Persist the cleaned state once: expired/over-limit sessions must not stay
+  // on disk and be re-parsed (and re-dropped) after every restart.
+  if (replaySnapshotLoadDiscarded) markReplayDirty();
+  enforceAppOwnedMemoryBudget();
+}
+
+function markReplayDirty(): void {
+  replayMutationGeneration += 1;
+  if (replaySnapshotPersistTimer) return;
+  replaySnapshotPersistTimer = setTimeout(() => {
+    void persistReplaySnapshotNow().catch(() => {
+      // Redacted static message only: never echo the underlying error, which
+      // can carry paths or other environment details.
+      console.warn("[antigravity] replay snapshot persist failed; cached signatures will not survive a restart");
+    });
+  }, REPLAY_SNAPSHOT_DEBOUNCE_MS);
+  (replaySnapshotPersistTimer as { unref?: () => void }).unref?.();
+}
+
+async function persistReplaySnapshotNow(): Promise<void> {
+  if (replaySnapshotPersistTimer) {
+    clearTimeout(replaySnapshotPersistTimer);
+    replaySnapshotPersistTimer = null;
+  }
+  // Serialize writers so a flush and a debounced write cannot race on temps/ACL.
+  const previous = replaySnapshotPersistGate;
+  let release!: () => void;
+  replaySnapshotPersistGate = new Promise<void>(resolve => { release = resolve; });
+  await previous;
+  const writeGeneration = replayMutationGeneration;
+  try {
+    const sessions: Array<[string, unknown]> = [];
+    // Account for the bytes actually written, not just the entries: the document
+    // is `{"version":N,"sessions":[...]}`, so the framing and the comma between
+    // entries count against the cap too. Summing per-entry sizes alone let the
+    // written file exceed replaySnapshotMaxBytes by a margin that grew with every
+    // additional session.
+    const prefix = `{"version":${JSON.stringify(REPLAY_SNAPSHOT_VERSION)},"sessions":[`;
+    const suffix = "]}";
+    const serialized: string[] = [];
+    let total = Buffer.byteLength(prefix, "utf8") + Buffer.byteLength(suffix, "utf8");
+    // Most-recently-active first so the sessions that survive the snapshot
+    // byte cap are the ones actually in use (Map order is insertion order).
+    for (const [key, entry] of [...replayCache].sort((a, b) => b[1].lastActiveAtMs - a[1].lastActiveAtMs)) {
+      const byCall = [...entry.byCall].map(([callKey, call]) => [
+        callKey,
+        { signature: call.signature, touchedAtMs: call.touchedAtMs },
+      ]);
+      const persistEntry: [string, unknown] = [key, {
+        byCall,
+        expiresAtMs: entry.expiresAtMs,
+        lastActiveAtMs: entry.lastActiveAtMs,
+      }];
+      const encoded = JSON.stringify(persistEntry);
+      const size = Buffer.byteLength(encoded, "utf8") + (serialized.length > 0 ? 1 : 0);
+      if (total + size > replaySnapshotMaxBytes) break;
+      total += size;
+      serialized.push(encoded);
+      sessions.push(persistEntry);
+    }
+    serialized.reverse();
+    const document = `${prefix}${serialized.join(",")}${suffix}`;
+    // Defensive: the admitted entries are what we serialize, so this can only
+    // trip if the accounting above and the payload below ever drift apart.
+    if (Buffer.byteLength(document, "utf8") > replaySnapshotMaxBytes) {
+      throw new Error("Antigravity replay snapshot exceeded its configured byte cap.");
+    }
+    mkdirSync(dirname(replaySnapshotPath()), { recursive: true, mode: 0o700 });
+    try { chmodSync(dirname(replaySnapshotPath()), 0o700); } catch { /* best-effort (e.g. Windows) */ }
+    await atomicWriteFileAsync(
+      replaySnapshotPath(),
+      document,
+      undefined,
+      replaySnapshotWriteSeam,
+    );
+    replayWrittenGeneration = writeGeneration;
+  } finally {
+    release();
+  }
+}
+
+/** Flush any pending debounced snapshot write (graceful shutdown / deterministic tests). */
+export async function flushAntigravityReplay(): Promise<void> {
+  // Persist until the durable generation catches up with the latest mutation:
+  // a change that lands while a writer is in flight must not be lost when
+  // shutdown exits right after the first write completes.
+  for (let attempt = 0; attempt < REPLAY_FLUSH_MAX_ATTEMPTS; attempt += 1) {
+    if (replaySnapshotPersistTimer || replayMutationGeneration > replayWrittenGeneration) {
+      await persistReplaySnapshotNow();
+    }
+    // No pending timer: still await any in-flight write so shutdown does not race it.
+    await replaySnapshotPersistGate;
+    if (replayMutationGeneration === replayWrittenGeneration && replaySnapshotPersistTimer === null) return;
+  }
+  // Budget exhausted without convergence. Resolving here would tell
+  // drainAndShutdown() the snapshot is durable while the latest thought
+  // signature may never have reached disk, so shutdown diagnostics would claim
+  // a durability we cannot demonstrate. Reject instead, with fixed text: the
+  // shutdown path logs this message, so it must not carry session, model, or
+  // signature detail.
+  throw new Error("Antigravity replay snapshot flush did not converge.");
+}
 
 /**
  * Fixed-size identity for a (model, sessionId) pair: SHA-256 over
@@ -371,6 +597,7 @@ export function antigravityUsesReplayCache(model: string): boolean {
  */
 export function observeAntigravityReplay(model: string, sessionId: string, parts: unknown[]): void {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(parts) || parts.length === 0) return;
+  ensureReplaySnapshotLoaded();
   const now = Date.now();
   deleteExpiredReplaySessionsThrottled(now);
   const key = replayKey(model, sessionId);
@@ -380,6 +607,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     bytes: REPLAY_SESSION_KEY_BYTES,
     expiresAtMs: 0,
     oldestAtMs: null,
+    lastActiveAtMs: 0,
   };
   let inserted = false;
   let pendingThoughtSig: string | undefined;
@@ -417,15 +645,21 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
     // The fixed session overhead can exceed the per-session cap on its own
     // (test-sized limits): an entry holding zero calls is unusable — drop it
     // instead of retaining an unevictable shell.
-    if (existing) deleteReplaySession(key);
-    else replayBytes -= REPLAY_SESSION_KEY_BYTES;
+    if (existing) {
+      deleteReplaySession(key);
+      markReplayDirty();
+    } else {
+      replayBytes -= REPLAY_SESSION_KEY_BYTES;
+    }
     return;
   }
   entry.expiresAtMs = now + REPLAY_TTL_MS;
+  entry.lastActiveAtMs = now;
   replayCache.set(key, entry);
   refreshReplaySessionCandidate(key, entry);
   evictIfNeeded();
   enforceAppOwnedMemoryBudget();
+  markReplayDirty();
 }
 
 /**
@@ -435,6 +669,7 @@ export function observeAntigravityReplay(model: string, sessionId: string, parts
  */
 export function applyAntigravityReplay(model: string, sessionId: string, contents: unknown[]): unknown[] {
   if (!antigravityUsesReplayCache(model) || !Array.isArray(contents)) return contents;
+  ensureReplaySnapshotLoaded();
   const now = Date.now();
   deleteExpiredReplaySessionsThrottled(now);
   const entry = replayCache.get(replayKey(model, sessionId));
@@ -460,13 +695,18 @@ export function applyAntigravityReplay(model: string, sessionId: string, content
       }
     }
   }
-  if (touched) refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
+  if (touched) {
+    entry.lastActiveAtMs = now;
+    refreshReplaySessionCandidate(replayKey(model, sessionId), entry);
+    markReplayDirty();
+  }
   return contents;
 }
 
 /** Drop the cache entry when upstream rejects a signature (clear-on-invalid). */
 export function clearAntigravityReplay(model: string, sessionId: string): void {
-  deleteReplaySession(replayKey(model, sessionId));
+  ensureReplaySnapshotLoaded();
+  if (deleteReplaySession(replayKey(model, sessionId)) > 0) markReplayDirty();
 }
 
 export function antigravityReplayMetrics(): {
@@ -475,6 +715,7 @@ export function antigravityReplayMetrics(): {
   totalBytes: number;
   largestSessionBytes: number;
 } {
+  ensureReplaySnapshotLoaded();
   let calls = 0;
   let largestSessionBytes = 0;
   for (const entry of replayCache.values()) {
@@ -491,6 +732,7 @@ export function antigravityReplayRetainedStoreSnapshot(): {
   pinnedBytes: number;
   oldestAt: number | null;
 } {
+  ensureReplaySnapshotLoaded();
   return {
     count: replayCache.size,
     bytes: replayBytes,
@@ -501,7 +743,10 @@ export function antigravityReplayRetainedStoreSnapshot(): {
 }
 
 export function evictOldestAntigravityReplayForBudget(): number {
-  return replayOldestSessionKey === undefined ? 0 : deleteReplaySession(replayOldestSessionKey);
+  ensureReplaySnapshotLoaded();
+  const removed = replayOldestSessionKey === undefined ? 0 : deleteReplaySession(replayOldestSessionKey);
+  if (removed > 0) markReplayDirty();
+  return removed;
 }
 
 export function setAntigravityReplayLimitsForTests(limits?: Partial<ReplayLimits>): void {
@@ -509,11 +754,31 @@ export function setAntigravityReplayLimitsForTests(limits?: Partial<ReplayLimits
   replayLimits = limits ? { ...DEFAULT_REPLAY_LIMITS, ...limits } : { ...DEFAULT_REPLAY_LIMITS };
 }
 
+/** Test-only write seam (mirrors AtomicWriteAsyncTestSeam usage elsewhere). */
+export function setAntigravityReplayWriteSeamForTests(seam: AtomicWriteAsyncTestSeam | undefined): void {
+  replaySnapshotWriteSeam = seam;
+}
+
+/** Test-only snapshot byte cap (mirrors the limits seam). */
+export function setAntigravityReplaySnapshotMaxBytesForTests(maxBytes: number): void {
+  replaySnapshotMaxBytes = maxBytes;
+}
+
 /** Test seam. */
 export function __resetAntigravityReplayCache(): void {
+  if (replaySnapshotPersistTimer) {
+    clearTimeout(replaySnapshotPersistTimer);
+    replaySnapshotPersistTimer = null;
+  }
+  replaySnapshotLoaded = false;
   lastLazySweepAt = Number.NEGATIVE_INFINITY;
   replayCache.clear();
   replayBytes = 0;
   replayOldestSessionKey = undefined;
   replayOldestAt = null;
+  replayMutationGeneration = 0;
+  replayWrittenGeneration = 0;
+  replaySnapshotWriteSeam = undefined;
+  replaySnapshotLoadDiscarded = false;
+  replaySnapshotMaxBytes = REPLAY_SNAPSHOT_MAX_BYTES;
 }

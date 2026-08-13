@@ -10,16 +10,28 @@ import {
 
 const guiRoot = join(import.meta.dir, "..", "gui", "src");
 
-test("routing is a first-class dashboard page with a registered hash", () => {
-  expect(VALID_PAGES.has("routing")).toBe(true);
-  expect(readPageFromHash("routing")).toBe("routing");
-  expect(hashBelongsToPage("routing", "routing")).toBe(true);
-  expect(resolveAppHashChange("routing").replaceTo).toBeNull();
+test("routing is a Models tab with a registered nested hash", () => {
+  // It used to be a first-class page. Both ids are gone from the union now, and the
+  // old top-level hashes keep working through a passive redirect.
+  expect(VALID_PAGES.has("routing" as never)).toBe(false);
+  expect(VALID_PAGES.has("combos" as never)).toBe(false);
+
+  expect(readPageFromHash("models/routing")).toBe("models");
+  expect(hashBelongsToPage("models/routing", "models")).toBe(true);
+  expect(resolveAppHashChange("models/routing").replaceTo).toBeNull();
+
+  expect(resolveAppHashChange("routing")).toEqual({ page: "models", replaceTo: "models/routing" });
+  expect(resolveAppHashChange("routing/anything")).toEqual({ page: "models", replaceTo: "models/routing" });
+  expect(resolveAppHashChange("combos")).toEqual({ page: "models", replaceTo: "models/combos" });
 });
 
-test("Routing page wires profiles, dry-run, and analytics against management APIs", () => {
+test("Routing page wires profile CRUD, dry-run, and analytics against management APIs", () => {
   const page = readFileSync(join(guiRoot, "pages", "RoutingProfiles.tsx"), "utf8");
   expect(page).toContain("/api/routing-profiles");
+  expect(page).toContain('method: "PUT"');
+  expect(page).toContain('method: "DELETE"');
+  expect(page).toContain("routingProfilePutBody");
+  expect(page).toContain("<form");
   expect(page).toContain("/api/routing-analytics");
   expect(page).toContain("/api/routing-profiles/dry-run");
   expect(page).toContain("if (!response.ok)");
@@ -80,10 +92,13 @@ test("sanitizeLogEntryRouteDecision drops invalid routeDecision and keeps valid 
   expect(sanitizeLogEntryRouteDecision(baseLog).routeDecision).toBeUndefined();
 });
 
-test("App mounts RoutingProfiles from the sidebar NAV entry", () => {
+test("Models mounts RoutingProfiles as a tab, and App no longer owns a Routing row", () => {
+  const models = readFileSync(join(guiRoot, "pages", "Models.tsx"), "utf8");
+  expect(models).toContain("RoutingProfiles");
+  expect(models).toContain('modelsPanelDomId("routing")');
+
   const app = readFileSync(join(guiRoot, "App.tsx"), "utf8");
-  expect(app).toContain('id: "routing"');
-  expect(app).toContain("RoutingProfiles");
-  expect(app).toContain('page === "routing"');
-  expect(app).toContain("IconRoute");
+  expect(app).not.toContain('id: "routing"');
+  expect(app).not.toContain('page === "routing"');
+  expect(app).not.toContain("IconRoute");
 });

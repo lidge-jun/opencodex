@@ -1,6 +1,6 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
-import { namespacedToolName } from "../types";
+import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -267,6 +267,12 @@ export interface WebSearchLoopDeps {
    * sidecar search, so a legitimately slow-but-progressing unit never trips the bridge watchdog.
    */
   stallTimeoutSec?: number;
+  /**
+   * Opt-in: stream the routed model's leading text/thinking deltas live instead of holding the whole
+   * iteration back. The live window closes at the first buffer-only event (tool calls above all) so
+   * the web_search interception decision stays atomic; everything after replays in order at the end.
+   */
+  streamRoutedModelOutput?: boolean;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
   onFirstOutput?: () => void;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
@@ -336,7 +342,14 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     response: Response;
     responseAdapter: ProviderAdapter;
   }
-  type IterationSplit = ReturnType<typeof scanEventsForWebSearch>;
+  type IterationSplit = ReturnType<typeof scanEventsForWebSearch> & {
+    /**
+     * How many leading passthrough events were already delivered live this iteration. They are
+     * exactly the first N passthrough entries (live delivery stops before the first event that
+     * scanEventsForWebSearch could group or reorder), so the terminal replay skips them by count.
+     */
+    streamedPassthroughCount: number;
+  };
 
   // Same-target 429 budget is per REQUEST, not per model iteration: later search rounds inherit
   // what earlier rounds left of `attempts`, so a bounded multi-round turn can never exceed the
@@ -531,10 +544,23 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     return r.value;
   };
 
+  // Event types that may leave the live window before the first tool-call boundary: pure
+  // text/thinking output the native (sidecar-less) path would deliver identically. Everything
+  // else — tool calls above all, and any type scanEventsForWebSearch could group or a future
+  // adapter could add — closes the window so live delivery can never reorder against the replay.
+  const LIVE_STREAMABLE = new Set<AdapterEvent["type"]>([
+    "text_delta", "thinking_delta", "reasoning_raw_delta",
+    "thinking_signature", "redacted_thinking", "kiro_redacted_reasoning",
+  ]);
+
   // Consume and validate one successful response body under a resettable raw-byte inactivity guard.
-  // Only invisible heartbeat events escape while semantic output remains buffered for safe scanning.
+  // By default only invisible heartbeat events escape while semantic output remains buffered for
+  // safe scanning; with `streamRoutedModelOutput` the leading text/thinking deltas stream live and
+  // the live window closes permanently at the first buffer-only event (see LIVE_STREAMABLE).
   const consumeIterationEvents = async function* (prepared: IterationResponse): AsyncGenerator<AdapterEvent, IterationSplit> {
     const events: AdapterEvent[] = [];
+    let liveWindowOpen = deps.streamRoutedModelOutput === true;
+    let streamedPassthroughCount = 0;
     try {
       const parse = prepared.responseAdapter.parseStream.bind(prepared.responseAdapter);
       for await (const event of parseStreamWithProgress(prepared.response, parse, {
@@ -550,7 +576,16 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Tool events remain buffered below, so the decision to invoke the hosted sidecar is still
         // atomic and no search call can escape before its stream has validated successfully.
         else if (event.type === "text_delta" && event.phase === "commentary") yield event;
-        else events.push(event);
+        else if (liveWindowOpen && LIVE_STREAMABLE.has(event.type)) {
+          // Live events are ALSO buffered: the scanner still needs them for thinking extraction
+          // and the forced-answer output check; only the terminal replay skips them (by count).
+          yield event;
+          streamedPassthroughCount++;
+          events.push(event);
+        } else {
+          liveWindowOpen = false;
+          events.push(event);
+        }
       }
     } catch (error) {
       if (isTranslatorBudgetExceededError(error)) throw error;
@@ -572,7 +607,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       }
       throw new LoopError(502, terminal.message);
     }
-    return scanEventsForWebSearch(events);
+    return { ...scanEventsForWebSearch(events), streamedPassthroughCount };
   };
 
   // Execute one model-requested web_search call. The call may batch several queries (native
@@ -693,7 +728,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    if (!toolAllowed(t)) continue;
     if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
@@ -741,7 +778,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 + `, ${i + 1} iteration${i > 0 ? "s" : ""}, ${Date.now() - loopT0}ms`,
               );
             }
-            yield* replay(split.passthrough);
+            // Live-streamed leading events are exactly the first N passthrough entries — replay
+            // only the buffered tail so nothing reaches the client twice.
+            yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
           // The thinking that led to the search belongs to the FIRST call's assistant replay turn.
@@ -770,7 +809,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       const elapsed = Date.now() - loopT0;
       if (executedSearchCount > 0 || searchesExecuted > 0) {
         console.warn(`[web-search-loop] cancelled — ${executedSearchCount} real searches, ${searchesExecuted - executedSearchCount} placeholders, ${elapsed}ms`);
@@ -779,7 +818,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     }, undefined,
     {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId ?? "global",
+      replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),

@@ -41,6 +41,8 @@ export default function ProviderDetails({
   oauth,
   accounts,
   accountLoadState,
+  accountsFocusToken = 0,
+  accountsFocusProvider = null,
   switchingAccountId,
   keys,
   busyProvider,
@@ -71,6 +73,10 @@ export default function ProviderDetails({
   oauth?: { loggedIn: boolean; email?: string; error?: string; needsReauth?: boolean };
   accounts?: OAuthAccountRow[];
   accountLoadState?: AccountLoadState;
+  /** When this token increases for accountsFocusProvider, switch to the Accounts tab. */
+  accountsFocusToken?: number;
+  /** Provider that owns the current accountsFocusToken; other providers ignore it. */
+  accountsFocusProvider?: string | null;
   switchingAccountId?: string | null;
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
@@ -91,6 +97,9 @@ export default function ProviderDetails({
   const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
   const settingsSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  // Seed 0 so a mount-time token from revealProviderAccounts stays pending until
+  // authSurface exists; seeding with the prop would treat it as already seen.
+  const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
   }, []);
@@ -98,6 +107,8 @@ export default function ProviderDetails({
   const free = useMemo(() => isFreeProvider(item), [item]);
   const local = useMemo(() => isLocalProvider(item), [item]);
   const authSurface = useMemo(() => providerAuthSurface(item), [item]);
+  // Global counter from Providers — only honor it for the reveal target.
+  const scopedAccountsFocusToken = accountsFocusProvider === item.name ? accountsFocusToken : 0;
   const connectionIdentity = JSON.stringify([
     codexController?.activeId ?? "",
     accounts?.find(account => account.active)?.id ?? "",
@@ -121,6 +132,22 @@ export default function ProviderDetails({
     }
     setTab(next);
   }, [tab, settingsDirty]);
+
+  // Adjust related state when accountsFocusToken changes during render (not in an
+  // effect) so the Accounts tab is selected without a one-frame stale paint.
+  // https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  // Hold a non-zero token until authSurface exists so mount-time focus from
+  // revealProviderAccounts is not marked seen before Accounts can open.
+  if (scopedAccountsFocusToken !== seenAccountsFocusToken && !(scopedAccountsFocusToken && !authSurface)) {
+    setSeenAccountsFocusToken(scopedAccountsFocusToken);
+    if (scopedAccountsFocusToken && authSurface) {
+      if (settingsDirty && tab === "settings") {
+        setPendingLeave("accounts");
+      } else {
+        setTab("accounts");
+      }
+    }
+  }
 
   const requestDeselect = useCallback(() => {
     if (settingsDirty && tab === "settings") {

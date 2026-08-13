@@ -119,7 +119,8 @@ type ProviderIconHints = {
 };
 
 function providerIconAlias(provider: string): string | undefined {
-  return PROVIDER_ICON_ALIASES[provider.toLowerCase()];
+  const key = provider.toLowerCase();
+  return Object.hasOwn(PROVIDER_ICON_ALIASES, key) ? PROVIDER_ICON_ALIASES[key] : undefined;
 }
 
 /** Optional hints kept for call-site compatibility; resolution is name-based for now. */
@@ -132,9 +133,14 @@ export function providerIconSrc(provider: string, _hints?: ProviderIconHints): s
 /** Display label with proper brand casing when known; otherwise original name. */
 export function formatProviderDisplayName(provider: string, t: TFn): string {
   const key = provider.toLowerCase();
-  const displayNameKey = PROVIDER_DISPLAY_NAME_KEYS[key];
+  const displayNameKey = Object.hasOwn(PROVIDER_DISPLAY_NAME_KEYS, key)
+    ? PROVIDER_DISPLAY_NAME_KEYS[key]
+    : undefined;
   if (displayNameKey) return t(displayNameKey);
-  if (PROVIDER_DISPLAY_NAMES[key]) return PROVIDER_DISPLAY_NAMES[key]!;
+  const displayName = Object.hasOwn(PROVIDER_DISPLAY_NAMES, key)
+    ? PROVIDER_DISPLAY_NAMES[key]
+    : undefined;
+  if (displayName) return displayName;
   // Title-case simple ids like "my-provider" without mangling mixedCase custom names.
   if (provider === key && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(provider)) {
     return provider

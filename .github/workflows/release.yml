@@ -26,23 +26,58 @@ on:
         default: true
       expected-sha:
         description: "Immutable release commit this dispatch must publish (fail if the branch moved)"
-        required: false
+        required: true
         type: string
 
-permissions:
-  contents: write # create the matching GitHub Release + version tag after npm publish
-  actions: read # verify the release commit already passed Cross-platform CI
-  pull-requests: read # credit-takeovers looks up landing/source PR authors via gh api
-  id-token: write # OIDC auth for Trusted Publishing + automatic provenance attestation
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  validate-dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted dispatch guard
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          path: trusted-dispatch
+
+      - name: Validate release dispatch
+        env:
+          EXPECTED_SHA: ${{ inputs.expected-sha }}
+        run: |
+          node - <<'NODE'
+          const { validateReleaseDispatch } = require(
+            "./trusted-dispatch/.github/scripts/release-dispatch-guard.cjs",
+          );
+
+          const failure = validateReleaseDispatch({
+            eventName: process.env.GITHUB_EVENT_NAME,
+            ref: process.env.GITHUB_REF,
+            expectedSha: process.env.EXPECTED_SHA,
+            actualSha: process.env.GITHUB_SHA,
+          });
+
+          if (failure) {
+            console.error(`::error::${failure}`);
+            process.exit(1);
+          }
+          NODE
   publish:
+    needs: validate-dispatch
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+      pull-requests: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -54,7 +89,8 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected-sha }}
         run: |
           if [ -z "$EXPECTED_SHA" ]; then
-            echo "::warning::no expected-sha supplied; publishing whatever the branch currently points at"
+            echo "::error::expected-sha is required; refusing to publish without an audited commit"
+            exit 1
           elif [ "$GITHUB_SHA" != "$EXPECTED_SHA" ]; then
             echo "::error::branch moved after the release audit (expected ${EXPECTED_SHA}, got ${GITHUB_SHA}) — refusing to publish an unaudited commit"
             exit 1
@@ -148,10 +184,9 @@ jobs:
               --branch "${GITHUB_REF#refs/heads/}" \
               --commit "$GITHUB_SHA" \
               --event push \
-              --status success \
               --limit 10 \
-              --json url \
-              --jq '.[0].url // ""'
+              --json conclusion,url \
+              --jq '[.[] | select(.conclusion == "success")][0].url // ""'
           )"
 
           if [ -z "$ci_url" ]; then
@@ -194,10 +229,9 @@ jobs:
               gh run list \
                 --workflow service-lifecycle.yml \
                 --commit "$GITHUB_SHA" \
-                --status success \
                 --limit 10 \
                 --json conclusion,headSha,url,workflowName \
-                --jq '.[0].url // ""'
+                --jq '[.[] | select(.conclusion == "success")][0].url // ""'
             )"
             if [ -z "$service_url" ]; then
               echo "::error::Service-related files changed since ${previous_tag:-initial commit}, but no successful Service lifecycle run was found for ${GITHUB_SHA}."

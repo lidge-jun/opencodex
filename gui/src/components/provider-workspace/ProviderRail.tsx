@@ -66,7 +66,7 @@ export function ProviderIcon({ name, adapter, baseUrl, cls }: {
  * presets and custom providers). Hue is derived deterministically from the
  * provider id so the same provider always gets the same color.
  */
-export function ProviderFallbackMark({ name, label }: { name: string; label: string }) {
+function ProviderFallbackMark({ name, label }: { name: string; label: string }) {
   const hue = [...name].reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
   const initial = (label.trim()[0] ?? name[0] ?? "?").toUpperCase();
   return (

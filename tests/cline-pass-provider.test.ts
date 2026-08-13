@@ -64,7 +64,8 @@ describe("ClinePass provider", () => {
     expect(entry?.models).toEqual(OFFICIAL_CLINE_PASS_MODELS);
     expect(entry?.models).toContain(entry?.defaultModel);
     expect(entry?.liveModels).toBeUndefined();
-    expect(entry?.reasoningEfforts).toEqual(["low"]);
+    expect(entry?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(entry?.modelReasoningEfforts).toBeUndefined();
     expect(entry?.modelMaxInputTokens).toBeUndefined();
     expect(entry?.noVisionModels).toEqual([
       "cline-pass/glm-5.2",
@@ -102,12 +103,12 @@ describe("ClinePass provider", () => {
     expect(route.modelId).toBe("cline-pass/kimi-k3");
     expect(route.provider).toMatchObject({ reasoningWireFormat: "gateway-object" });
     expect(body.model).toBe("cline-pass/kimi-k3");
-    expect(body.reasoning).toEqual({ enabled: true, effort: "low" });
+    expect(body.reasoning).toEqual({ enabled: true, effort: "high" });
     expect(body).not.toHaveProperty("reasoning_effort");
     expect(request.reasoningLog).toEqual({
-      effectiveEffort: "low",
+      effectiveEffort: "high",
       wireField: "reasoning.effort",
-      wireValue: "low",
+      wireValue: "high",
     });
   });
 

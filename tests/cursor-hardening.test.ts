@@ -109,6 +109,44 @@ describe("Cursor live-model discovery hardening", () => {
     }
   });
 
+  test("does not warn when a failed Cursor discovery belongs to a cleared generation", async () => {
+    const provider = "cursor-discovery-stale-warning";
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { release = resolve; });
+    let stream!: http2.ServerHttp2Stream;
+    try {
+      await withDiscoveryServer(candidate => {
+        stream = candidate;
+        release();
+      }, async baseUrl => {
+        const pending = gatherRoutedModels({
+          providers: {
+            [provider]: {
+              adapter: "cursor",
+              baseUrl,
+              apiKey: "test-token",
+              models: ["auto"],
+            },
+          },
+        });
+        await started;
+        clearModelCache(provider);
+        stream.respond({ ":status": 401, "content-type": "application/proto" });
+        stream.end();
+        await pending;
+      });
+
+      expect(warning.mock.calls.some(args => String(args[0]).includes(
+        `Cursor model discovery for "${provider}" failed`,
+      ))).toBe(false);
+      expect(getProviderDiscoveryStatus(provider)).toBeUndefined();
+    } finally {
+      warning.mockRestore();
+      clearModelCache(provider);
+    }
+  });
+
   test("classifies non-auth HTTP failures", async () => {
     const result = await withDiscoveryServer(respond(503), baseUrl =>
       fetchCursorUsableModels({ apiKey: "test-token", baseUrl }));

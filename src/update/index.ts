@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { getConfigDir, loadConfig, readPid, readRuntimePort } from "../config";
 import { npmInvocation } from "./npm-invocation.mjs";
+import {
+  npmCachePreflightFailureMessage,
+  runNpmCachePreflight,
+} from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 
@@ -176,6 +180,14 @@ export async function runUpdate(): Promise<void> {
     console.warn(`⚠️  Integrity pre-flight skipped: ${integrity.reason}. Proceeding best-effort.`);
   } else {
     console.log(`Verified ${PKG}@${latest} integrity metadata ${integrity.integrity.slice(0, 24)}…`);
+  }
+
+  if (installer === "npm") {
+    const cachePreflight = runNpmCachePreflight();
+    if (!cachePreflight.ok) {
+      console.error(`⚠️  ${npmCachePreflightFailureMessage(cachePreflight.reason)}. Aborting before stopping the proxy.`);
+      process.exit(1);
+    }
   }
 
   const { bin, args: cmdArgs } = updateCommand(installer, tag, latest);

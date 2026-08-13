@@ -16,14 +16,15 @@ description: 기본 provider 선택, model 해석 순서, combo 별칭, 대상 �
 
 opencodex는 요청된 model을 다음 순서로 해석합니다:
 
-1. 설정된 `<account-selector>/<native-openai-model>` 네임스페이스입니다. 매핑된 저장 Codex 계정으로만 routing하며, exact target이 잘못되었거나 사용할 수 없으면 fail closed합니다.
-2. 정규화된 `combo/<id>` 또는 설정된 combo 별칭입니다. 정규화된 id가 별칭보다 먼저 적용됩니다.
-3. 접두사가 설정된 provider를 가리키는 명시적 `<provider>/<model>` 네임스페이스입니다.
-4. `gpt-*`, `o1-*`, `o3-*`, `o4-*` 같은 bare native OpenAI 계열 id입니다. 이 경우 정규화된 활성 `openai` provider를 통해 라우팅합니다.
-5. provider의 `defaultModel`과 정확히 일치합니다.
-6. 알려진 provider-family model prefix입니다.
-7. provider의 설정된 `models` 목록 안의 정확한 model입니다.
-8. `defaultProvider`이며, 요청한 model id를 그대로 유지합니다.
+1. 설정된 `policy/<id>` 또는 routing-profile 별칭입니다. policy evaluator를 실행해 선택된 후보로 routing합니다. 해석되지 않은 `policy/<id>`는 후속 규칙으로 넘어갑니다.
+2. 설정된 `<account-selector>/<native-openai-model>` 네임스페이스입니다. 매핑된 저장 Codex 계정으로만 routing하며, exact target이 잘못되었거나 사용할 수 없으면 fail closed합니다.
+3. 정규화된 `combo/<id>` 또는 설정된 combo 별칭입니다. 정규화된 id가 별칭보다 먼저 적용됩니다.
+4. 접두사가 설정된 provider를 가리키는 명시적 `<provider>/<model>` 네임스페이스입니다.
+5. `gpt-*`, `o1-*`, `o3-*`, `o4-*` 같은 bare native OpenAI 계열 id입니다. 이 경우 정규화된 활성 `openai` provider를 통해 라우팅합니다.
+6. provider의 `defaultModel`과 정확히 일치합니다.
+7. 알려진 provider-family model prefix입니다.
+8. provider의 설정된 `models` 목록 안의 정확한 model입니다.
+9. `defaultProvider`이며, 요청한 model id를 그대로 유지합니다.
 
 비활성화된 provider는 제외합니다. 비활성화된 provider의 명시적 네임스페이스는 다음 규칙으로 넘어가지 않고 실패합니다. 여러 provider에 걸쳐 일치할 수 있는 규칙은 JSON에 적힌 삽입 순서대로 provider 항목을 검사하므로, bare model이 애매할 수 있으면 명시적 네임스페이스를 사용하십시오.
 
@@ -43,9 +44,14 @@ Codex catalog는 bare native picker row를 숨기고 각 selector마다 별도�
 selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy guidance는
 [공급자 설정](/reference/configuration/providers/)을 참고하십시오.
 
+Codex Auth 페이지에서 이 picker 동작을 opt-in할 수 있습니다. 비활성화하면 selector-qualified row를
+숨기고 일반 GPT row를 복원하지만 mapping과 exact `<selector>/<model>` routing은 유지되므로 다시
+활성화할 때 같은 공개 label이 돌아옵니다. mutation은 bounded catalog refresh보다 먼저 저장되며,
+`ocx sync` warning은 picker catalog convergence만 보류 중이고 routing 변경은 손실되지 않았음을 뜻합니다.
+
 ## Combos (`config.combos`)
 
-각 combo 키는 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`에 맞는 id입니다. 항상 `combo/<id>`로 직접 접근할 수 있고, 추가로 하나의 `alias`를 노출할 수 있습니다. alias는 유일해야 하고 `combo/` 네임스페이스를 차지할 수 없으며, `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*` 같은 예약된 bare native family도 사용할 수 없습니다.
+각 combo 키는 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`에 맞는 id입니다. 항상 `combo/<id>`로 직접 접근할 수 있고, 추가로 하나의 `alias`를 노출할 수 있습니다. alias는 유일해야 하고 `combo/` 네임스페이스를 차지할 수 없으며, 일반적으로 `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `codex-*` 같은 예약된 bare native family를 사용할 수 없습니다. 명시적 `nativeAlias: true` Desktop 호환 계약만 예외입니다.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -54,6 +60,8 @@ selector는 표시되지 않습니다. selector 검증, 충돌 규칙, privacy g
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 호출자가 effort를 생략했고 선택된 대상이 요청한 rung를 광고할 때만 적용됩니다. |
 | `alias?` | `string` | — | 정규화된 picker slug 대신 쓰는 선택적 공개 model id입니다. |
+| `nativeAlias?` | `boolean` | `false` | 현재 지원되는 bare native id가 해당 비수식 id에만 우선하도록 합니다. 계정 또는 프로바이더로 수식된 OpenAI route는 별도로 유지됩니다. |
+| `displayName?` | `string` | — | catalog 표시 전용 label이며 native alias에서는 비어 있지 않아야 합니다. |
 
 ```json
 {

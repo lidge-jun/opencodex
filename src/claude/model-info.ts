@@ -134,7 +134,7 @@ export function buildAnthropicModelInfos(
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
     if (seen.has(id)) continue;
     seen.add(id);
-    const info = modelInfo(id, `${slug} (native)`, nativeEffectiveLadder(slug), true);
+    const info = modelInfo(id, `${slug} (native)`, nativeEffectiveLadder(slug), true, nativeOpenAiContextWindow(slug));
     out.push(info);
     push1mVariant(info, nativeOpenAiContextWindow(slug));
   }

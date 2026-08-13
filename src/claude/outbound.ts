@@ -9,6 +9,7 @@
  *  - message_delta.usage is cumulative; message_start embeds a full message snapshot.
  *  - errors: {type:"error", error:{type,message}}; may arrive mid-stream after HTTP 200.
  */
+import { createHash } from "node:crypto";
 import { isTransientUpstreamStatus } from "../lib/upstream-retry";
 import {
   isTranslatorBudgetExceededError,
@@ -16,11 +17,33 @@ import {
   TranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
+import { sseFieldOffset, sseFieldValue } from "../lib/sse-decoder";
 
 type Rec = Record<string, unknown>;
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function reasoningIdentityDigest(value: string): string {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
+/** Fixed-size identity that preserves protocol boundaries without retaining upstream strings. */
+function boundedReasoningIdentity(value: unknown): string {
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && value >= 0) return `n${value}`;
+    if (Number.isFinite(value)) return `d${value}`;
+    return Number.isNaN(value) ? "dnan" : value > 0 ? "dinf" : "d-inf";
+  }
+  if (typeof value === "string") {
+    return `s${reasoningIdentityDigest(value)}`;
+  }
+  if (value === null) return "z";
+  if (typeof value === "boolean") return value ? "b1" : "b0";
+  if (Array.isArray(value)) return `a${reasoningIdentityDigest(JSON.stringify(value) ?? "[]")}`;
+  // Preserve the prior String(record) category semantics without serializing untrusted trees.
+  return typeof value === "object" ? "o" : "u";
 }
 
 function uuid(): string {
@@ -187,7 +210,7 @@ interface OpenBlock {
   argsBufBytes?: number;
   webSearchArgsEmitted?: boolean;
   callId?: string;
-  /** Last reasoning part identity (item + summary/content index) seen by this thinking block. */
+  /** Last fixed-size reasoning identity (item + summary/content index) seen by this block. */
   reasoningPartKey?: string;
 }
 
@@ -244,14 +267,13 @@ export function responsesSseToAnthropicSse(
         emit("message_start", { type: "message_start", message: messageSnapshot(model) });
         emit("ping", { type: "ping" });
       };
-      // Idle keepalive (devlog 100): real Anthropic streams may interleave pings anywhere;
-      // synthesizing one during upstream silence protects remote deployments behind
-      // LB/NAT idle timeouts and covers slow first tokens. Cheap and spec-legal.
+      // Once a semantic Anthropic message has started, keepalive pings protect remote
+      // deployments behind LB/NAT idle timeouts. Transport-only Responses prelude frames
+      // must not manufacture a message before a possible initial error.
       if (pingIntervalMs > 0) {
         pingTimer = setInterval(() => {
-          if (terminated) return;
+          if (terminated || !started) return;
           try {
-            ensureStarted();
             emit("ping", { type: "ping" });
           } catch { /* controller torn down; the read loop is ending anyway */ }
         }, pingIntervalMs);
@@ -327,20 +349,24 @@ export function responsesSseToAnthropicSse(
           ))));
           return;
         }
-        ensureStarted();
-        closeOpenBlock();
         const type = upstreamDerived && isTransientUpstreamStatus(status) ? "overloaded_error" : undefined;
+        if (!started) {
+          // An initial upstream failure is an Anthropic error stream, not a partial message.
+          // Do not manufacture message_start/ping before the terminal error.
+          emit("error", anthropicErrorBody(status, message, type, code));
+          return;
+        }
+        closeOpenBlock();
         emit("error", anthropicErrorBody(status, message, type, code));
       };
 
       const handleFrame = (eventName: string, data: Rec) => {
         switch (eventName) {
           case "response.created":
-            ensureStarted();
+            // Transport prelude only. Start Anthropic framing on semantic output or completion.
             break;
           case "response.heartbeat":
-            ensureStarted();
-            emit("ping", { type: "ping" });
+            if (started) emit("ping", { type: "ping" });
             break;
           case "response.output_text.delta": {
             if (typeof data.delta !== "string" || data.delta.length === 0) break;
@@ -360,9 +386,12 @@ export function responsesSseToAnthropicSse(
             // so multi-part summaries do not glue into one run-on paragraph. Frames
             // without part indices produce a constant key and never get a separator.
             const slot = eventName === "response.reasoning_summary_text.delta"
-              ? `s${String(data.summary_index)}`
-              : `c${String(data.content_index)}`;
-            const partKey = `${String(data.item_id)}:${slot}`;
+              ? `s${boundedReasoningIdentity(data.summary_index)}`
+              : `c${boundedReasoningIdentity(data.content_index)}`;
+            // Upstream string metadata can be arbitrarily large. Hash strings into fixed-size
+            // components while retaining item and part equality, rather than dropping item_id and
+            // accidentally joining distinct malformed reasoning items.
+            const partKey = `${boundedReasoningIdentity(data.item_id)}:${slot}`;
             if (open!.reasoningPartKey !== undefined && open!.reasoningPartKey !== partKey) {
               emit("content_block_delta", {
                 type: "content_block_delta", index: open!.index,
@@ -588,10 +617,16 @@ export function responsesSseToAnthropicSse(
                       while (lineStart <= rawFrame.length) {
                         const newline = rawFrame.indexOf("\n", lineStart);
                         const lineEnd = newline === -1 ? rawFrame.length : newline;
-                        if (rawFrame.startsWith("event: ", lineStart)) {
-                          eventName = rawFrame.slice(lineStart + 7, lineEnd).trim();
-                        } else if (rawFrame.startsWith("data: ", lineStart)) {
-                          const fragmentStart = lineStart + 6;
+                        // The space after the colon is optional in text/event-stream (#1170);
+                        // compute the value offset the same way sseFieldValue does, without
+                        // slicing the line first — the byte accounting below is keyed to
+                        // offsets into rawFrame.
+                        const eventOffset = sseFieldOffset(rawFrame, lineStart, lineEnd, "event");
+                        const dataOffset = sseFieldOffset(rawFrame, lineStart, lineEnd, "data");
+                        if (eventOffset !== -1) {
+                          eventName = rawFrame.slice(eventOffset, lineEnd).trim();
+                        } else if (dataOffset !== -1) {
+                          const fragmentStart = dataOffset;
                           const fragmentBytes = utf8SliceBytes(rawFrame, fragmentStart, lineEnd);
                           const fragmentReservation = translatorBudget.reserveTransient(fragmentBytes, { kind: "live_transient" });
                           let fragmentCommitted = false;
@@ -861,8 +896,10 @@ export async function collectAnthropicMessage(
         let eventName = "";
         let dataLine = "";
         for (const line of rawFrame.split("\n")) {
-          if (line.startsWith("event: ")) eventName = line.slice(7).trim();
-          else if (line.startsWith("data: ")) dataLine += line.slice(6);
+          const eventValue = sseFieldValue(line, "event");
+          if (eventValue !== null) { eventName = eventValue.trim(); continue; }
+          const dataValue = sseFieldValue(line, "data");
+          if (dataValue !== null) dataLine += dataValue;
         }
         if (!eventName || !dataLine) continue;
         let data: unknown;

@@ -74,9 +74,10 @@ transport；这些凭证路径互不 fallback。
   目录和 `/v1/models` 输出的模型范围。
 - `provider.disabled: true` 会把该提供商排除在目录发现之外。显式 `provider/model` 请求会失败，
   `defaultModel` / `models[]` 扫描也会跳过它。
-- `providerContextCaps` 为各提供商设置 Codex 可见的上下文上限。`contextCapValue` 是仪表盘共用的值，
-  默认为 350,000；但只有 `providerContextCaps` 中列出了提供商时才会生效。上限只能降低已知上下文，
-  不会把它调高，也不会改变上游模型的实际限制。
+- `providerContextCaps` 为各提供商设置 Codex 可见的上下文上限。`contextCapValue` 是仪表盘的默认值，
+  默认为 350,000；但只有 `providerContextCaps` 中列出了提供商时才会生效。仅当勾选“应用到所有已路由的
+  提供方”时，修改仪表盘值才会重新指向所有已启用提供商；否则每个提供商保留自己的上限。上限只能降低
+  已知上下文，不会把它调高，也不会改变上游模型的实际限制。
 
 ```json
 {

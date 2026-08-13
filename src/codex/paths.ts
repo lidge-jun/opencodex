@@ -1,4 +1,4 @@
-import { realpathSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
@@ -32,6 +32,80 @@ export const CODEX_MODELS_CACHE_PATH = join(CODEX_HOME, "models_cache.json");
 /** Runtime CODEX_HOME lookup (honors CODEX_HOME env changes after import). */
 export function getCodexHome(): string {
   return resolveCodexHome();
+}
+
+export interface CodexSqliteHomeDeps {
+  env?: NodeJS.ProcessEnv;
+  cwd?: () => string;
+  codexHome?: string;
+  readConfig?: (path: string) => string;
+}
+
+type RootTomlStringState =
+  | { kind: "absent" }
+  | { kind: "value"; value: string }
+  | { kind: "invalid" };
+
+/**
+ * Parse the authoritative SQLite setting without changing the tolerant helper
+ * used by injection/catalog readers. History ownership must distinguish a
+ * missing key from a present value that Codex cannot interpret as a path.
+ */
+function readAuthoritativeRootTomlString(content: string, key: string): RootTomlStringState {
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(content);
+  } catch {
+    return { kind: "invalid" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "invalid" };
+  const root = parsed as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(root, key)) return { kind: "absent" };
+  const value = root[key];
+  if (typeof value !== "string" || value.trim() === "") return { kind: "invalid" };
+  return { kind: "value", value: value.trim() };
+}
+
+/**
+ * Resolve Codex's SQLite state root at call time.
+ *
+ * Codex permits SQLite-backed state to live outside CODEX_HOME, especially for
+ * Windows Desktop sessions whose app-server runs in WSL. Keep the precedence
+ * identical to Codex: root config, then environment, then the effective home.
+ */
+export function resolveCodexSqliteHome(deps: CodexSqliteHomeDeps = {}): string {
+  const codexHome = deps.codexHome ?? getCodexHome();
+  const readConfig = deps.readConfig ?? (path => readFileSync(path, "utf8"));
+  const configPath = join(codexHome, "config.toml");
+  let configured: RootTomlStringState = { kind: "absent" };
+  try {
+    configured = readAuthoritativeRootTomlString(readConfig(configPath), "sqlite_home");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+      throw new Error(
+        `Codex config could not be read while resolving sqlite_home: ${configPath}`,
+        { cause },
+      );
+    }
+    // A genuinely absent config cannot contain the authoritative root override,
+    // so only ENOENT may continue to the documented environment/home fallback.
+  }
+  if (configured.kind === "invalid") {
+    throw new Error(`Codex config has an invalid sqlite_home setting: ${configPath}`);
+  }
+  const raw = configured.kind === "value"
+    ? configured.value
+    : (deps.env ?? process.env).CODEX_SQLITE_HOME?.trim() || "";
+  if (!raw) return codexHome;
+  const expanded = expandUserPath(raw);
+  return isAbsolute(expanded)
+    ? resolve(expanded)
+    : resolve((deps.cwd ?? process.cwd)(), expanded);
+}
+
+/** Active Codex thread-state database, derived from the call-time SQLite root. */
+export function resolveCodexStateDbPath(deps: CodexSqliteHomeDeps = {}): string {
+  return join(resolveCodexSqliteHome(deps), "state_5.sqlite");
 }
 
 export function tomlString(value: string): string {

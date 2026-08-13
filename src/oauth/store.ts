@@ -286,15 +286,18 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
 }
 
 /**
- * Stable short account id. MUST be deterministic for a given credential: legacy
- * single-credential stores are re-normalized on EVERY load without being persisted,
+ * Stable collision-resistant account id. MUST be deterministic for a given credential:
+ * legacy single-credential stores are re-normalized on EVERY load without being persisted,
  * so a time-salted id would differ between two loads (getAccountSet vs
  * getAccountCredential), surfacing as a spurious OAuthLoginRequiredError and making
  * refresh persists silently miss the account (rotated refresh token lost).
+ *
+ * Keep 128 bits of SHA-256 rather than the historical 32-bit prefix. Existing persisted
+ * account ids are read as-is; only newly-derived ids and legacy normalization use this width.
  */
 function newAccountId(cred: OAuthCredentials): string {
   const identity = cred.accountId ?? cred.email ?? cred.refresh;
-  return createHash("sha256").update(identity).digest("hex").slice(0, 8);
+  return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
 function normalizeAccount(value: unknown): ProviderAccount | null {
@@ -520,6 +523,56 @@ export async function saveCredential(
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
     }
+  }, [provider, safe]);
+}
+
+/**
+ * Atomically insert or replace an identity-bearing credential and report the disposition.
+ * Importers use this instead of a read-then-save pair so duplicate detection and persistence
+ * happen inside the existing serialized temp-then-rename store mutation.
+ */
+export async function upsertCredentialByIdentity(
+  provider: string,
+  cred: OAuthCredentials,
+): Promise<"inserted" | "updated"> {
+  const safe = normalizeCredential(cred);
+  if (!safe || (!safe.accountId && !safe.email)) {
+    throw new Error("Refusing to persist OAuth credential without verified identity");
+  }
+  return await mutateStore(store => {
+    const set = store[provider];
+    const matches = (account: ProviderAccount): boolean => {
+      if (safe.accountId) {
+        if (account.credential.accountId) return account.credential.accountId === safe.accountId;
+        return Boolean(
+          safe.email
+          && account.credential.email
+          && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+        );
+      }
+      if (account.credential.accountId) return false;
+      return Boolean(
+        safe.email
+        && account.credential.email
+        && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
+      );
+    };
+    const existing = set?.accounts.find(matches);
+    if (existing && set) {
+      existing.credential = safe;
+      delete existing.needsReauth;
+      set.activeAccountId ??= existing.id;
+      return "updated";
+    }
+    const id = newAccountId(safe);
+    const account: ProviderAccount = { id, credential: safe, addedAt: Date.now() };
+    if (set) {
+      set.accounts.push(account);
+      set.activeAccountId ??= id;
+    } else {
+      store[provider] = { activeAccountId: id, accounts: [account] };
+    }
+    return "inserted";
   }, [provider, safe]);
 }
 

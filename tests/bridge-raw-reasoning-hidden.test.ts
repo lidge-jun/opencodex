@@ -7,7 +7,7 @@ import {
 } from "../src/responses/reasoning-replay-cache";
 import { parseRequest } from "../src/responses/parser";
 import { createOpenAIChatAdapter } from "../src/adapters/openai-chat";
-import type { AdapterEvent } from "../src/types";
+import type { AdapterEvent, OcxReasoningReplayScopeRef } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
@@ -33,7 +33,18 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
     });
 }
 
-const sseOpts = (hide: boolean) => ({ hideThinkingSummary: hide });
+const REPLAY_SCOPE: OcxReasoningReplayScopeRef = {
+  clientThreadId: "hidden-replay-thread",
+  current: {
+    providerName: "routed",
+    providerDestinationIdentity: "destination:provider",
+    adapterName: "openai-chat",
+    modelId: "model",
+    credentialIdentity: "key:test",
+  },
+};
+const GLOBAL_SCOPE: OcxReasoningReplayScopeRef = { ...REPLAY_SCOPE, clientThreadId: "global" };
+const sseOpts = (hide: boolean) => ({ hideThinkingSummary: hide, replayCacheScope: REPLAY_SCOPE });
 
 describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_delta)", () => {
   beforeEach(() => {
@@ -151,8 +162,19 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
       { type: "tool_call_end" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, sseOpts(true)));
-    expect(peekReasoningForCall("call_1")).toBe("chain of thought");
-    expect(peekReasoningForCall("call_other")).toBeUndefined();
+    expect(peekReasoningForCall("call_1", REPLAY_SCOPE)).toBe("chain of thought");
+    expect(peekReasoningForCall("call_other", REPLAY_SCOPE)).toBeUndefined();
+  });
+
+  test("streamed hidden: an unscoped bridge never writes a global replay entry", async () => {
+    await collectSse(bridgeToResponsesSSE(replay([
+      { type: "reasoning_raw_delta", text: "private reasoning" },
+      { type: "tool_call_start", id: "call_unscoped_stream", name: "read_file" },
+      { type: "tool_call_delta", arguments: "{}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "routed/model", undefined, undefined, undefined, undefined, undefined, { hideThinkingSummary: true }));
+    expect(peekReasoningForCall("call_unscoped_stream", GLOBAL_SCOPE)).toBeUndefined();
   });
 
   test("non-streaming hidden: raw reasoning is recorded for the following tool call", () => {
@@ -162,8 +184,8 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
       { type: "tool_call_delta", arguments: "{}" },
       { type: "tool_call_end" },
       { type: "done" },
-    ], "routed/model", { hideThinkingSummary: true });
-    expect(peekReasoningForCall("call_2")).toBe("quiet");
+    ], "routed/model", { hideThinkingSummary: true, replayCacheScope: REPLAY_SCOPE });
+    expect(peekReasoningForCall("call_2", REPLAY_SCOPE)).toBe("quiet");
   });
 
   test("raw reasoning consumed by a text turn is NOT cached for a later tool call", async () => {
@@ -175,7 +197,7 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
       { type: "tool_call_end" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, sseOpts(true)));
-    expect(peekReasoningForCall("call_later")).toBeUndefined();
+    expect(peekReasoningForCall("call_later", REPLAY_SCOPE)).toBeUndefined();
   });
 
   test("hidden thinking_delta clears raw reasoning pending for a later tool call", async () => {
@@ -187,6 +209,6 @@ describe("hidden raw reasoning (hideThinkingSummary parity for reasoning_raw_del
       { type: "tool_call_end" },
       { type: "done" },
     ]), "routed/model", undefined, undefined, undefined, undefined, undefined, sseOpts(true)));
-    expect(peekReasoningForCall("call_after_thinking")).toBeUndefined();
+    expect(peekReasoningForCall("call_after_thinking", REPLAY_SCOPE)).toBeUndefined();
   });
 });

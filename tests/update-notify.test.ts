@@ -124,7 +124,10 @@ describe("cli wiring", () => {
     const cli = await readText("src/cli/index.ts");
     const promptIndex = cli.indexOf("await maybeShowUpdatePrompt()");
     const portIndex = cli.indexOf("let port = await chooseListenPort");
-    const serverIndex = cli.indexOf("startServer(port, { localAttestationSecret })");
+    const serverIndex = cli.search(/\bstartServer\s*\(\s*port\b/);
+    // A -1 from `search` would compare "before" every real index and turn the
+    // ordering assertion below into a silent pass.
+    expect(serverIndex).toBeGreaterThanOrEqual(0);
     expect(promptIndex).toBeGreaterThan(-1);
     expect(portIndex).toBeGreaterThan(-1);
     expect(promptIndex).toBeLessThan(portIndex);
@@ -132,9 +135,9 @@ describe("cli wiring", () => {
   });
 
   test("hidden __refresh-version subcommand is wired", async () => {
-    const cli = await readText("src/cli/index.ts");
-    expect(cli).toContain("case \"__refresh-version\"");
-    expect(cli).toContain("refreshVersionCache");
+    const dispatch = await readText("src/cli/dispatch.ts");
+    expect(dispatch).toContain("\"__refresh-version\": async");
+    expect(dispatch).toContain("refreshVersionCache");
   });
 
   test("update eligibility does not depend on a GitHub-star marker", async () => {

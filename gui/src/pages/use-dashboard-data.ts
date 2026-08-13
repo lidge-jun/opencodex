@@ -46,6 +46,7 @@ import {
   readDashboardSectionFromHash,
   requireJson,
   sidecarModelOptions,
+  visionModelOptions,
   useModalDialog,
 } from "./dashboard-shared";
 
@@ -67,6 +68,16 @@ type CachedOverview = {
 };
 
 type MaMode = "v1" | "default" | "v2";
+
+export function groupDashboardModels(models: ModelInfo[]): Array<[string, ModelInfo[]]> {
+  const groups = new Map<string, ModelInfo[]>();
+  for (const model of models) {
+    const rows = groups.get(model.provider);
+    if (rows) rows.push(model);
+    else groups.set(model.provider, [model]);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
 
 function controlsCacheKey(apiBase: string): string {
   return `${CONTROLS_CACHE_PREFIX}${apiBase}`;
@@ -272,6 +283,7 @@ export function useDashboardData(apiBase: string) {
     { enabled: overviewReady && !error },
   );
 
+  /* oxlint-disable react/react-compiler -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   /* eslint-disable react-hooks/set-state-in-effect -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   useEffect(() => {
     if (startupHealthPoll.data !== undefined) {
@@ -382,6 +394,7 @@ export function useDashboardData(apiBase: string) {
     setModelsLoading(modelsPoll.loading);
   }, [modelsPoll.data, modelsPoll.loading]);
   /* eslint-enable react-hooks/set-state-in-effect */
+  /* oxlint-enable react/react-compiler */
 
   useEffect(() => () => {
     settingsRequestEpochRef.current += 1;
@@ -426,7 +439,7 @@ export function useDashboardData(apiBase: string) {
     },
   );
 
-  /* eslint-disable react-hooks/set-state-in-effect -- mirror update-job client-resource snapshot into local job UI state */
+  /* oxlint-disable react/react-compiler -- mirror update poll snapshot into mutable dashboard UI state */
   useEffect(() => {
     const data = updatePoll.data;
     if (!data) return;
@@ -434,13 +447,9 @@ export function useDashboardData(apiBase: string) {
     setReconnecting(data.reconnecting);
     if ("reload" in data && data.reload) window.location.reload();
   }, [updatePoll.data]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  /* oxlint-enable react/react-compiler */
 
-  const grouped = useMemo(() => {
-    const g: Record<string, ModelInfo[]> = {};
-    for (const m of models) (g[m.provider] ??= []).push(m);
-    return Object.entries(g).sort(([a], [b]) => a.localeCompare(b));
-  }, [models]);
+  const grouped = useMemo(() => groupDashboardModels(models), [models]);
   const filteredGroups = useMemo(() => {
     const q = modelQuery.trim().toLowerCase();
     if (!q) return grouped;
@@ -460,6 +469,10 @@ export function useDashboardData(apiBase: string) {
     }
     return opts;
   }, [models, sidecar]);
+  const visionModels = useMemo(
+    () => visionModelOptions(sidecar?.visionModels, models, sidecar?.vision?.model, sidecar?.vision?.backend),
+    [sidecar?.visionModels, models, sidecar?.vision],
+  );
 
   const saveSidecar = async (patch: SidecarPatch) => {
     if (!sidecar || sidecarSaving) return;
@@ -467,6 +480,7 @@ export function useDashboardData(apiBase: string) {
     const next = {
       webSearch: mergeSidecarSetting(sidecar.webSearch, patch.webSearch),
       vision: mergeSidecarSetting(sidecar.vision, patch.vision),
+      ...(sidecar.visionModels ? { visionModels: sidecar.visionModels } : {}),
     };
     setSidecarSaving(true);
     setSidecar(next);
@@ -477,11 +491,19 @@ export function useDashboardData(apiBase: string) {
         body: JSON.stringify(patch),
       });
       const data = await requireJson<SidecarData>(res, "save failed");
-      setSidecar({ webSearch: data.webSearch, vision: data.vision });
+      setSidecar({
+        webSearch: data.webSearch,
+        vision: data.vision,
+        ...(data.visionModels ? { visionModels: data.visionModels } : {}),
+      });
       const prev = readSessionListCache<CachedControls>(controlsCacheKey(apiBase)) ?? {};
       writeSessionListCache(controlsCacheKey(apiBase), {
         ...prev,
-        sidecar: { webSearch: data.webSearch, vision: data.vision },
+        sidecar: {
+          webSearch: data.webSearch,
+          vision: data.vision,
+          ...(data.visionModels ? { visionModels: data.visionModels } : {}),
+        },
       });
     } catch {
       setSidecar(previous);
@@ -745,7 +767,7 @@ export function useDashboardData(apiBase: string) {
     updateCheck, updateError, updateJob, reconnecting, error,
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
-    filteredGroups, sidecarModels,
+    filteredGroups, sidecarModels, visionModels,
     saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,
   };

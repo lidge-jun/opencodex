@@ -1,4 +1,10 @@
-import type { AdapterEvent, OcxMessagePhase, OcxProviderContinuationState, OcxUsage } from "./types";
+import type {
+  AdapterEvent,
+  OcxMessagePhase,
+  OcxProviderContinuationState,
+  OcxReasoningReplayScopeRef,
+  OcxUsage,
+} from "./types";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -186,7 +192,7 @@ export function bridgeToResponsesSSE(
      * Provider call ids are not globally unique; scoping by thread keeps one
      * conversation's reasoning out of another's continuations.
      */
-    replayCacheScope?: string;
+    replayCacheScope?: OcxReasoningReplayScopeRef;
     /**
      * Test seam for the wire/stall beat loop. Production omits this and uses the
      * global timers; injecting here must not change scheduling semantics.
@@ -197,7 +203,7 @@ export function bridgeToResponsesSSE(
     };
   },
 ): ReadableStream<Uint8Array> {
-  const replayCacheScope = options?.replayCacheScope ?? "global";
+  const replayCacheScope = options?.replayCacheScope;
   const setBeatInterval = options?.timers?.setInterval ?? ((handler: () => void, ms: number) => setInterval(handler, ms));
   const clearBeatInterval = options?.timers?.clearInterval ?? ((id: unknown) => clearInterval(id as ReturnType<typeof setInterval>));
   // Freeform/custom tools (apply_patch) carry their body in `input`; the model is given a
@@ -827,8 +833,10 @@ export function bridgeToResponsesSSE(
               if (currentReasoning) closeCurrentReasoning();
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              // Reasoning consumed by a text turn, not a tool call: no cache target.
-              rawReasoningForNextToolCall = "";
+              // Reasoning consumed by a REAL text turn, not a tool call: no cache target.
+              // Empty text deltas must not wipe reasoning that precedes a tool call
+              // (chat-completions providers emit empty content deltas mid-tool-turn).
+              if (event.text.length > 0) rawReasoningForNextToolCall = "";
               if (currentToolCall) closeCurrentToolCall();
               // Only flush on an explicit phase change. A later delta that omits `phase` must
               // keep appending to the current message rather than wiping the earlier phase.
@@ -880,7 +888,7 @@ export function bridgeToResponsesSSE(
               if (currentMsg) closeCurrentMessage("commentary");
               if (currentRawReasoning) closeCurrentRawReasoning();
               flushHiddenRawReasoning();
-              rawReasoningForNextToolCall = "";
+              if (event.thinking.length > 0) rawReasoningForNextToolCall = "";
               if (currentToolCall) closeCurrentToolCall();
               if (!currentReasoning) {
                 const itemId = `rs_${uuid()}`;
@@ -1360,11 +1368,11 @@ function buildResponseJSONWithBudget(
     onUsage?: (usage: OcxUsage | undefined) => void;
     translatorBudget?: TranslatorBudget;
     /** Conversation identity for the reasoning replay cache (issue #950). */
-    replayCacheScope?: string;
+    replayCacheScope?: OcxReasoningReplayScopeRef;
   },
 ): Record<string, unknown> {
   const responseId = `resp_${uuid()}`;
-  const replayCacheScope = options?.replayCacheScope ?? "global";
+  const replayCacheScope = options?.replayCacheScope;
   const output: OutputItem[] = [];
   const budget = options?.translatorBudget;
   const encoder = new TextEncoder();
@@ -1561,7 +1569,9 @@ function buildResponseJSONWithBudget(
         if (currentText && e.phase !== undefined && currentTextPhase !== e.phase) flushText("commentary");
         if (currentSummaryReasoning) flushSummaryReasoning();
         if (currentRawReasoning) flushRawReasoning();
-        rawReasoningForNextToolCall = "";
+        // Empty text deltas (batch chat responses always carry content, often "") must
+        // not wipe reasoning that precedes a tool call (#950 non-streaming path).
+        if (e.text.length > 0) rawReasoningForNextToolCall = "";
         if (currentToolCallId) flushToolCall();
         // Compaction turns keep the summary out of normal message output (replay dedup — see
         // bridgeToResponsesSSE); it ships only inside the synthetic compaction item below.
@@ -1580,7 +1590,7 @@ function buildResponseJSONWithBudget(
       case "thinking_delta":
         if (currentText) flushText("commentary");
         if (currentRawReasoning) flushRawReasoning();
-        rawReasoningForNextToolCall = "";
+        if (e.thinking.length > 0) rawReasoningForNextToolCall = "";
         if (currentToolCallId) flushToolCall();
         {
           ({ value: currentSummaryReasoning, bytes: currentSummaryReasoningBytes } = appendBatchString(

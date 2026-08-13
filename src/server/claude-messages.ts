@@ -7,7 +7,8 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
-import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
+import { sseFieldValue } from "../lib/sse-decoder";
+import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
 import { AnthropicRequestError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { resolveDesktop3pAlias } from "../claude/desktop-3p";
@@ -30,12 +31,19 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
-import { addFinalRequestLog, httpStatusForTerminalStatus, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
 import { conversationIdFromClaudeMetadata } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import {
+  isApiAuthRequired,
+  isDataPlaneAdmissionSecret,
+  isProxyAdmissionSecret,
+  type RequestPolicyView,
+} from "./auth-cors";
 import type { AdmissionLease } from "../lib/admission";
 import { tryClaimNativeMainProfileForTurn } from "../codex/native-main-admission";
+import { CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE } from "../codex/auth-context";
 import {
   createTranslatorBudget,
   finalizeTranslatorBudgetResponse,
@@ -94,18 +102,52 @@ const PASSTHROUGH_STRIP_HEADERS = new Set([
   "accept-encoding", "x-opencodex-api-key", "origin",
 ]);
 
-function hasAnthropicNativeCredential(req: Request): boolean {
-  const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
-  const apiKey = req.headers.get("x-api-key")?.trim() ?? "";
-  return bearer.startsWith("sk-ant-") || apiKey.startsWith("sk-ant-");
+function singleCredentialToken(name: "authorization" | "x-api-key", value: string | null): string | null {
+  const raw = value?.trim() ?? "";
+  // Fetch Headers comma-joins duplicate fields. Neither Anthropic credential format permits a
+  // comma, so treating a joined value as one token could hide an admission secret behind a real
+  // provider credential. Ambiguous credential headers fail closed.
+  if (!raw || raw.includes(",")) return null;
+  if (name === "authorization") {
+    const match = /^Bearer\s+(.+)$/i.exec(raw);
+    return match?.[1]?.trim() || null;
+  }
+  return raw;
 }
 
-function wantsNativePassthrough(req: Request, config: OcxConfig, model: unknown): model is string {
+function hasAnthropicNativeCredential(req: Request, config: OcxConfig): boolean {
+  const bearer = singleCredentialToken("authorization", req.headers.get("authorization"));
+  const apiKey = singleCredentialToken("x-api-key", req.headers.get("x-api-key"));
+  return (!!bearer && bearer.startsWith("sk-ant-") && !isProxyAdmissionSecret(bearer, config))
+    || (!!apiKey && apiKey.startsWith("sk-ant-") && !isProxyAdmissionSecret(apiKey, config));
+}
+
+function wantsNativePassthrough(
+  req: Request,
+  config: OcxConfig,
+  requestPolicy: RequestPolicyView,
+  model: unknown,
+): model is string {
   if (config.claudeCode?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
-  if (!hasAnthropicNativeCredential(req)) return false;
+  // Authorization and x-api-key both belong to the upstream on this branch. An exposed listener
+  // therefore requires the dedicated admission header even though the routed Messages surface
+  // keeps accepting all three legacy admission forms.
+  if (isApiAuthRequired(requestPolicy)) {
+    const dedicated = req.headers.get("x-opencodex-api-key")?.trim() ?? "";
+    if (!isDataPlaneAdmissionSecret(dedicated, config)) return false;
+  }
+  if (!hasAnthropicNativeCredential(req, config)) return false;
   // An alias or modelMap hit means the user asked for a ROUTED model: translate instead.
   return resolveInboundModel(model, config.claudeCode) === model;
+}
+
+function shouldForwardNativeHeader(name: string, value: string, config: OcxConfig): boolean {
+  const lowerName = name.toLowerCase();
+  if (PASSTHROUGH_STRIP_HEADERS.has(lowerName)) return false;
+  if (lowerName !== "authorization" && lowerName !== "x-api-key") return true;
+  const token = singleCredentialToken(lowerName, value);
+  return !!token && !isProxyAdmissionSecret(token, config);
 }
 
 /** Format a 32-hex cache key as a uuid-shaped session id (version/variant nibbles forced). */
@@ -170,7 +212,11 @@ export function tapAnthropicSseForLog(
     while ((sep = buffer.indexOf("\n\n")) !== -1) {
       const frame = buffer.slice(0, sep);
       buffer = buffer.slice(sep + 2);
-      const dataLine = frame.split("\n").filter(l => l.startsWith("data: ")).map(l => l.slice(6)).join("");
+      const dataLine = frame
+        .split("\n")
+        .map(l => sseFieldValue(l, "data"))
+        .filter((v): v is string => v !== null)
+        .join("");
       if (!dataLine) continue;
       let data: unknown;
       try { data = JSON.parse(dataLine); } catch { continue; }
@@ -324,7 +370,7 @@ async function anthropicNativePassthrough(
   }
   const headers = new Headers();
   req.headers.forEach((value, name) => {
-    if (!PASSTHROUGH_STRIP_HEADERS.has(name.toLowerCase())) headers.set(name, value);
+    if (shouldForwardNativeHeader(name, value, config)) headers.set(name, value);
   });
   headers.set("content-type", "application/json");
 
@@ -522,11 +568,12 @@ export async function handleClaudeMessages(
   config: OcxConfig,
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  requestPolicy: RequestPolicyView = config,
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
     return finalizeTranslatorBudgetResponse(
-      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds),
+      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy),
       translatorBudget,
     );
   } catch (error) {
@@ -541,6 +588,7 @@ async function handleClaudeMessagesWithBudget(
   logCtx: RequestLogContext,
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease },
+  requestPolicy: RequestPolicyView = config,
 ): Promise<Response> {
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
@@ -595,11 +643,14 @@ async function handleClaudeMessagesWithBudget(
       );
       if (claudeConversationId) logCtx.conversationId = claudeConversationId;
     }
-    if (isRec(anthropicBody) && wantsNativePassthrough(req, config, anthropicBody.model)) {
+    if (isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     if (isRec(anthropicBody) && effortOverride) {
-      anthropicBody.output_config = { effort: effortOverride };
+      anthropicBody.output_config = {
+        ...(isRec(anthropicBody.output_config) ? anthropicBody.output_config : {}),
+        effort: effortOverride,
+      };
       delete anthropicBody.thinking;
     }
     const translation = anthropicToResponsesTranslation(anthropicBody, config.claudeCode);
@@ -647,12 +698,7 @@ async function handleClaudeMessagesWithBudget(
     // accurate-usage adapters — the request-log merge is max(reported, estimate) and
     // would overwrite real usage (audit 133 R1#7).
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
-      const raw = anthropicBody as Rec;
-      const parts: string[] = [];
-      if (raw.system !== undefined) parts.push(typeof raw.system === "string" ? raw.system : JSON.stringify(raw.system));
-      if (raw.messages !== undefined) parts.push(JSON.stringify(raw.messages));
-      if (raw.tools !== undefined) parts.push(JSON.stringify(raw.tools));
-      logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
+      logCtx.usageLogInputTokens = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel);
     }
     // Effort safety valve (devlog 136 B6, audit 139 R2#2): opus-shaped aliases make
     // every routed model look like a reasoning model to Claude clients, so a forced
@@ -731,9 +777,10 @@ async function handleClaudeMessagesWithBudget(
     // Without this the replay would look native and a Responses-scoped wire default
     // would fire, disagreeing with the pre-flight decision above.
     inboundWire: "anthropic",
+    stripClaudeMainAuthForNoncanonicalForward: true,
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
-    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
+    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
@@ -770,7 +817,7 @@ async function handleClaudeMessagesWithBudget(
     // share a backoff hint when the upstream omitted the header.
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
-      && message === "Native Codex main profile is switching; retry this request";
+      && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
     const transient = !nativeMainFence && isTransientUpstreamStatus(response.status);
     const outStatus = nativeMainFence ? 503 : transient ? 529 : response.status;
     const out = new Response(JSON.stringify(anthropicErrorBody(outStatus, message)), {
@@ -873,8 +920,73 @@ async function handleClaudeMessagesWithBudget(
   });
 }
 
-/** Documented approximation: serialize system+messages+tools, run the char estimator. */
-export async function handleClaudeCountTokens(req: Request, config: OcxConfig): Promise<Response> {
+/** Per-attachment token estimate for a base64 payload: real image dimensions when the
+ * header is sniffable (Anthropic prices images at ~pixels/750), else decoded bytes/512,
+ * min 256 — the same shape as the Kiro usage estimator (estimateKiroImageTokens). */
+function estimateBase64AttachmentTokens(data: string): number {
+  const dims = sniffImageDimensions(data);
+  if (dims) return Math.max(256, Math.ceil((dims.width * dims.height) / 750));
+  const unpadded = data.endsWith("==") ? data.length - 2 : data.endsWith("=") ? data.length - 1 : data.length;
+  return Math.max(256, Math.ceil(Math.floor((unpadded * 3) / 4) / 512));
+}
+
+/**
+ * Char-based token estimate for an Anthropic-shaped request body. Base64 attachment
+ * payloads (image/document blocks in message content, including blocks nested in
+ * tool_result.content) are counted as a bounded per-attachment estimate instead of raw
+ * characters: one 2MB screenshot is ~2.7M base64 chars, which the plain chars/token
+ * divide reports as hundreds of thousands of tokens versus a real cost around 1.6k.
+ * That breaks the >2x drift bound the estimator is held to (devlog 260711_claude_inbound
+ * 040 §3). Text and url sources are left in place and counted as characters, as is
+ * anything outside protocol content positions (tool_use.input, tool schemas).
+ */
+export function estimateClaudeRequestTokens(
+  raw: { system?: unknown; messages?: unknown; tools?: unknown },
+  modelId: string | undefined,
+): number {
+  let attachmentTokens = 0;
+  // Blank base64 payloads ONLY in protocol content positions: message content blocks and
+  // blocks nested in tool_result.content. tool_use.input and tool schemas can legitimately
+  // contain attachment-shaped JSON, and those bytes ARE serialized into function_call
+  // arguments / tool definitions for routed providers, so they must keep counting as text.
+  // system is text-only per the Anthropic protocol (no attachment sources), so it is
+  // stringified as-is.
+  const sanitizeBlock = (block: unknown): unknown => {
+    if (!block || typeof block !== "object") return block;
+    const b = block as Record<string, unknown>;
+    if (b.type === "image" || b.type === "document") {
+      const source = b.source as { type?: unknown; data?: unknown } | undefined;
+      if (source && typeof source === "object" && source.type === "base64" && typeof source.data === "string") {
+        attachmentTokens += estimateBase64AttachmentTokens(source.data);
+        return { ...b, source: { ...(source as Record<string, unknown>), data: "" } };
+      }
+      return block;
+    }
+    if (b.type === "tool_result" && Array.isArray(b.content)) {
+      return { ...b, content: (b.content as unknown[]).map(sanitizeBlock) };
+    }
+    return block;
+  };
+  const sanitizedMessages = (messages: unknown): unknown =>
+    Array.isArray(messages)
+      ? messages.map(message => {
+          if (!message || typeof message !== "object") return message;
+          const m = message as Record<string, unknown>;
+          return Array.isArray(m.content) ? { ...m, content: (m.content as unknown[]).map(sanitizeBlock) } : message;
+        })
+      : messages;
+  const parts: string[] = [];
+  if (raw.system !== undefined) parts.push(typeof raw.system === "string" ? raw.system : JSON.stringify(raw.system));
+  if (raw.messages !== undefined) parts.push(JSON.stringify(sanitizedMessages(raw.messages)));
+  if (raw.tools !== undefined) parts.push(JSON.stringify(raw.tools));
+  return Math.max(1, estimateTokens(parts.join("\n"), modelId) + attachmentTokens);
+}
+
+export async function handleClaudeCountTokens(
+  req: Request,
+  config: OcxConfig,
+  requestPolicy: RequestPolicyView = config,
+): Promise<Response> {
   const disabled = claudeInboundDisabled(config);
   if (disabled) return disabled;
 
@@ -907,14 +1019,10 @@ export async function handleClaudeCountTokens(req: Request, config: OcxConfig): 
     raw.model = model;
   }
   captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, config.claudeCode), req.headers.get("anthropic-beta") ?? undefined);
-  if (wantsNativePassthrough(req, config, model)) {
+  if (wantsNativePassthrough(req, config, requestPolicy, model)) {
     return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
   }
-  const parts: string[] = [];
-  if (raw.system !== undefined) parts.push(typeof raw.system === "string" ? raw.system : JSON.stringify(raw.system));
-  if (raw.messages !== undefined) parts.push(JSON.stringify(raw.messages));
-  if (raw.tools !== undefined) parts.push(JSON.stringify(raw.tools));
-  const inputTokens = Math.max(1, estimateTokens(parts.join("\n"), model));
+  const inputTokens = estimateClaudeRequestTokens(raw, model);
   return new Response(JSON.stringify({ input_tokens: inputTokens }), {
     status: 200,
     headers: { "Content-Type": "application/json" },

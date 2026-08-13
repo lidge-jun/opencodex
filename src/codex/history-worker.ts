@@ -24,11 +24,18 @@
  * Design record: devlog/_fin/260804_codex_write_substrate/020_history_isolation.md.
  */
 import { withHistoryWriteSerialization } from "./history-lock";
+import { loadConfig } from "../config";
+import { shouldSyncCodexOnStart } from "./desired-state";
 import {
   writeHistoryProviderTransition,
   writeLegacyOpenaiHistoryRecovery,
   type HistoryWriteTarget,
 } from "./internal/history-writer";
+import {
+  snapshotCodexHistoryNoop,
+  type CodexHistoryFailureReason,
+  type CodexHistoryVerifiedNoopProof,
+} from "./history-provider";
 
 /**
  * The durable operation, mirrored into the request for diagnostics only.
@@ -53,6 +60,8 @@ export interface HistoryWorkerRunMessage {
   readonly canonicalCodexHome: string;
   readonly canonicalStateDbPath: string;
   readonly canonicalBackupPath: string;
+  /** When set, prove this transition's desired direction while H is held. */
+  readonly expectedDesiredEnabled?: boolean;
   /** Env snapshot: a Worker may not observe parent mutations on every platform. */
   readonly env?: { readonly CODEX_HOME?: string; readonly OPENCODEX_HOME?: string };
 }
@@ -60,11 +69,12 @@ export interface HistoryWorkerRunMessage {
 export type HistoryWorkerResult =
   | { readonly type: "done"; readonly requestId: string; readonly jobId: string;
       readonly outcome: "converged" | "skipped";
-      readonly rows: number; readonly files: number }
+      readonly rows: number; readonly files: number;
+      readonly proof?: CodexHistoryVerifiedNoopProof }
   | { readonly type: "blocked"; readonly requestId: string; readonly jobId: string;
-      readonly reason: "busy" | "database" | "unsafe-path" }
+      readonly reason: "busy" | "database" | "unsafe-path" | "desired_disabled" | "desired_enabled" }
   | { readonly type: "error"; readonly requestId: string; readonly jobId: string;
-      readonly message: string };
+      readonly message: string; readonly reason?: CodexHistoryFailureReason };
 
 const OPERATIONS: ReadonlySet<string> = new Set<CodexHistoryWorkerOperation>([
   "skip",
@@ -93,7 +103,8 @@ export function isHistoryWorkerRunMessage(data: unknown): data is HistoryWorkerR
     && OPERATIONS.has(message.operation)
     && nonEmpty(message.canonicalCodexHome)
     && nonEmpty(message.canonicalStateDbPath)
-    && nonEmpty(message.canonicalBackupPath);
+    && nonEmpty(message.canonicalBackupPath)
+    && (message.expectedDesiredEnabled === undefined || typeof message.expectedDesiredEnabled === "boolean");
 }
 
 /**
@@ -120,8 +131,16 @@ export function runHistoryUnitUnderLock(
     message.canonicalCodexHome,
     message.canonicalStateDbPath,
     permit => {
+      if (message.expectedDesiredEnabled !== undefined
+        && shouldSyncCodexOnStart(loadConfig()) !== message.expectedDesiredEnabled) {
+        return { desiredStateChanged: true as const };
+      }
       if (operation === "recover-legacy-openai") {
         return writeLegacyOpenaiHistoryRecovery(permit, target);
+      }
+      if (operation === "migrate-openai") {
+        const proof = snapshotCodexHistoryNoop(message.canonicalStateDbPath, message.canonicalBackupPath);
+        if (proof.kind === "verified-noop") return { verifiedNoop: proof } as const;
       }
       // apply-opencodex routes history to opencodex; migrate/restore return it to
       // native. The provider is derived from the operation, never from a caller.
@@ -134,8 +153,33 @@ export function runHistoryUnitUnderLock(
     return { type: "blocked", requestId, jobId, reason: acquired.reason };
   }
   const result = acquired.value;
+  if ("desiredStateChanged" in result) {
+    return {
+      type: "blocked",
+      requestId,
+      jobId,
+      reason: message.expectedDesiredEnabled ? "desired_disabled" : "desired_enabled",
+    };
+  }
+  if ("verifiedNoop" in result) {
+    return {
+      type: "done",
+      requestId,
+      jobId,
+      outcome: "converged",
+      rows: 0,
+      files: 0,
+      proof: result.verifiedNoop,
+    };
+  }
   if (result.failed === true) {
-    return { type: "error", requestId, jobId, message: "history_transition_failed" };
+    return {
+      type: "error",
+      requestId,
+      jobId,
+      message: "history_transition_failed",
+      ...(result.failureReason ? { reason: result.failureReason } : {}),
+    };
   }
   return {
     type: "done",

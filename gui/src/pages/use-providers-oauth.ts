@@ -4,11 +4,14 @@ import { readJsonIfOk } from "../fetch-json";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 
+type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
+
 export function useProvidersOAuth({
   apiBase,
   t,
   aliveRef,
   accountSets,
+  setAccountSets,
   setBusy,
   setStatus,
   setLoginInfo,
@@ -19,11 +22,13 @@ export function useProvidersOAuth({
   fetchAccountSets,
   fetchProviderQuotas,
   bumpModelsRefresh,
+  onLoginSettled,
 }: {
   apiBase: string;
   t: TFn;
   aliveRef: React.MutableRefObject<boolean>;
-  accountSets: Record<string, { accounts: OAuthAccount[] }>;
+  accountSets: Record<string, AccountSet>;
+  setAccountSets: React.Dispatch<React.SetStateAction<Record<string, AccountSet>>>;
   setBusy: React.Dispatch<React.SetStateAction<string | null>>;
   setStatus: React.Dispatch<React.SetStateAction<string>>;
   setLoginInfo: React.Dispatch<React.SetStateAction<{ provider: string; url?: string; instructions?: string; deviceCode?: string } | null>>;
@@ -34,13 +39,20 @@ export function useProvidersOAuth({
   fetchAccountSets: (providers: string[]) => Promise<unknown>;
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   bumpModelsRefresh: () => void;
+  /** Select the provider and open Accounts after a successful login. */
+  onLoginSettled?: (provider: string) => void;
 }) {
   const oauthLoginGenerationRef = useRef<Map<string, number> | null>(null);
   if (oauthLoginGenerationRef.current === null) oauthLoginGenerationRef.current = new Map();
 
-  const cancelLoginOAuth = useCallback(async (provider: string) => {
+  const bumpLoginGeneration = useCallback((provider: string) => {
     const gen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
     oauthLoginGenerationRef.current!.set(provider, gen);
+    return gen;
+  }, []);
+
+  const cancelLoginOAuth = useCallback(async (provider: string) => {
+    const gen = bumpLoginGeneration(provider);
     try {
       await fetch(`${apiBase}/api/oauth/login/cancel`, {
         method: "POST",
@@ -54,12 +66,10 @@ export function useProvidersOAuth({
       setLoginInfo(current => current?.provider === provider ? null : current);
     }
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
-  }, [aliveRef, apiBase, notify, setBusy, setLoginInfo, t]);
+  }, [aliveRef, apiBase, bumpLoginGeneration, notify, setBusy, setLoginInfo, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
-    const nextGen = (oauthLoginGenerationRef.current!.get(provider) ?? 0) + 1;
-    oauthLoginGenerationRef.current!.set(provider, nextGen);
-    const generation = nextGen;
+    const generation = bumpLoginGeneration(provider);
     const reauthTargetId = accountId?.trim() || undefined;
     setBusy(provider);
     setStatus("");
@@ -90,8 +100,8 @@ export function useProvidersOAuth({
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !aliveRef.current) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
-        const s: (OAuthStatus & { accounts?: OAuthAccount[] }) | null = sRes
-          ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[] }>(sRes)) ?? null)
+        const s: (OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }) | null = sRes
+          ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }>(sRes)) ?? null)
           : null;
         if (!s) continue;
         if (s.error) {
@@ -107,8 +117,9 @@ export function useProvidersOAuth({
           finished = true;
           break;
         }
+        const statusCount = s.accounts?.length ?? 0;
         const completed = addAccount || reauthTargetId
-          ? ((s.accounts?.length ?? 0) > baselineCount || s.done === true)
+          ? (statusCount > baselineCount || s.done === true)
           : (s.loggedIn || s.done === true);
         if (completed) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
@@ -127,13 +138,32 @@ export function useProvidersOAuth({
             finished = true;
             break;
           }
-          notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          // Seed the account list from the status poll immediately so Accounts does not
+          // briefly render empty while the follow-up /api/oauth/accounts round-trip runs.
+          if (s.accounts) {
+            const activeFromRow = s.accounts.find(a => a.active)?.id ?? null;
+            setAccountSets(current => ({
+              ...current,
+              [provider]: {
+                activeAccountId: s.activeAccountId ?? activeFromRow,
+                accounts: s.accounts!,
+              },
+            }));
+          }
           setLoginInfo(null);
-          fetchConfig();
+          onLoginSettled?.(provider);
           const knownProviders = Object.keys(accountSets);
           const knownSet = new Set(knownProviders);
-          fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
-          fetchProviderQuotas(true);
+          await fetchAccountSets(knownSet.has(provider) ? knownProviders : [...knownProviders, provider]);
+          if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
+          const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
+          if (sameIdentityAdd) {
+            notify(t("prov.loginSameAccount", { provider: oauthLabel(provider) }), false);
+          } else {
+            notify(t("prov.loginOk", { provider: oauthLabel(provider), cmd: "ocx sync" }), true);
+          }
+          void fetchConfig();
+          void fetchProviderQuotas(true);
           bumpModelsRefresh();
           finished = true;
           break;
@@ -158,6 +188,10 @@ export function useProvidersOAuth({
   };
 
   const logoutOAuth = async (provider: string) => {
+    // Invalidate any in-flight login poll so a late completion cannot reseed accounts.
+    bumpLoginGeneration(provider);
+    setBusy(current => current === provider ? null : current);
+    setLoginInfo(current => current?.provider === provider ? null : current);
     try {
       const res = await fetch(`${apiBase}/api/oauth/logout?provider=${encodeURIComponent(provider)}`, { method: "POST" });
       if (!res.ok) {

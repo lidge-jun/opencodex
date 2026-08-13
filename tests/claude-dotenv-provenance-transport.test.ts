@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+const PROBE_TIMEOUT_MS = 3_000;
+
 /**
  * Project dotenv can write environment variables before OpenCodex evaluates,
  * but it cannot add the random proof argument emitted by the plain-Node npm
@@ -35,7 +37,13 @@ describe("Node launcher context transport", () => {
     delete env.OCX_PRE_BUN_ANTHROPIC_ENV;
     if (contextEnv === undefined) delete env.OCX_NODE_LAUNCH_CONTEXT;
     else env.OCX_NODE_LAUNCH_CONTEXT = contextEnv;
-    const result = spawnSync(process.execPath, [probe, ...args], { encoding: "utf8", env });
+    const result = spawnSync(process.execPath, [probe, ...args], {
+      encoding: "utf8",
+      env,
+      timeout: PROBE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    if (result.error) throw result.error;
     expect(result.status).toBe(0);
     return JSON.parse(result.stdout) as {
       context: { anthropicEnvSlots: string[] } | null;

@@ -2,10 +2,10 @@
  * What opencodex remembers about a client between operations.
  *
  * Two hashes, because the two questions are genuinely independent: the FILE
- * hash answers "did anyone touch this after us", and the BLOCK hash answers "is
- * our content still what we would write today". One hash cannot do both, and
- * conflating them is what lets a foreign edit read as ordinary drift — which
- * would then be silently overwritten.
+ * hash identifies the exact result for restore and for clients whose writer
+ * re-serializes the whole document. The BLOCK hash identifies OMP's surgically
+ * patched fragment and detects catalog drift. One hash cannot safely answer
+ * both questions in a shared client config.
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/021 §2.
  */
@@ -37,7 +37,7 @@ export function canonicalContribution(contribution: ManagedContribution): string
 export interface OwnershipRecord {
   clientId: IntegrationClientId;
   configPath: string;
-  /** Hash of the WHOLE file as we left it — detects foreign edits after us. */
+  /** Hash of the WHOLE file as we left it — protects whole-file restore. */
   fileFingerprint: string;
   /** Hash of our contribution — detects catalog/port drift. */
   blockFingerprint: string;

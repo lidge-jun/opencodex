@@ -98,44 +98,40 @@ describe("decideEagerRelay (activation scenarios)", () => {
 });
 
 describe("selectEagerPath (platform policy matrix)", () => {
-  test("win32 + no rewrite + config-eager → eager", () => {
-    expect(selectEagerPath("win32", false, "eager-relay", "1.3.14", null))
-      .toEqual({ useEagerRelay: true, reason: "config-eager" });
-  });
+  const configLegacy = { useEagerRelay: false, reason: "config-legacy" } as const;
+  const configEager = { useEagerRelay: true, reason: "config-eager" } as const;
+  const autoFixed = { useEagerRelay: true, reason: "auto-fixed-runtime" } as const;
+  const cases: Array<{
+    platform: NodeJS.Platform;
+    mode: "auto" | "legacy-tee" | "eager-relay";
+    rewrite: boolean;
+    expected: typeof configLegacy | typeof configEager | typeof autoFixed | null;
+  }> = [
+    { platform: "win32", mode: "legacy-tee", rewrite: false, expected: configLegacy },
+    { platform: "win32", mode: "eager-relay", rewrite: false, expected: configEager },
+    { platform: "win32", mode: "auto", rewrite: false, expected: autoFixed },
+    { platform: "win32", mode: "legacy-tee", rewrite: true, expected: null },
+    { platform: "win32", mode: "eager-relay", rewrite: true, expected: null },
+    { platform: "win32", mode: "auto", rewrite: true, expected: null },
+    { platform: "darwin", mode: "legacy-tee", rewrite: false, expected: null },
+    { platform: "darwin", mode: "eager-relay", rewrite: false, expected: configEager },
+    { platform: "darwin", mode: "auto", rewrite: false, expected: null },
+    { platform: "darwin", mode: "legacy-tee", rewrite: true, expected: null },
+    { platform: "darwin", mode: "eager-relay", rewrite: true, expected: configEager },
+    { platform: "darwin", mode: "auto", rewrite: true, expected: null },
+    { platform: "linux", mode: "legacy-tee", rewrite: false, expected: null },
+    { platform: "linux", mode: "eager-relay", rewrite: false, expected: null },
+    { platform: "linux", mode: "auto", rewrite: false, expected: null },
+    { platform: "linux", mode: "legacy-tee", rewrite: true, expected: null },
+    { platform: "linux", mode: "eager-relay", rewrite: true, expected: null },
+    { platform: "linux", mode: "auto", rewrite: true, expected: null },
+  ];
 
-  test("win32 + no rewrite + auto known-bad → tee", () => {
-    expect(selectEagerPath("win32", false, "auto", "1.3.14", null))
-      .toEqual({ useEagerRelay: false, reason: "auto-known-bad" });
-  });
-
-  test("win32 + no rewrite + auto fixed runtime → eager", () => {
-    expect(selectEagerPath("win32", false, "auto", "1.4.0", "1.4.0"))
-      .toEqual({ useEagerRelay: true, reason: "auto-fixed-runtime" });
-  });
-
-  test("darwin + no rewrite + config-eager → eager", () => {
-    expect(selectEagerPath("darwin", false, "eager-relay", "1.3.14", null))
-      .toEqual({ useEagerRelay: true, reason: "config-eager" });
-  });
-
-  test("darwin + no rewrite + auto fixed runtime → tee with no eager decision", () => {
-    expect(selectEagerPath("darwin", false, "auto", "1.4.0", "1.4.0")).toBeNull();
-  });
-
-  test("darwin + rewrite + config-eager → tee", () => {
-    expect(selectEagerPath("darwin", true, "eager-relay", "1.3.14", null)).toBeNull();
-  });
-
-  test("linux + config-eager → tee", () => {
-    expect(selectEagerPath("linux", false, "eager-relay", "1.3.14", null)).toBeNull();
-  });
-
-  test("legacy-tee is a Windows decision and null on ineligible platforms", () => {
-    expect(selectEagerPath("win32", false, "legacy-tee", "9.9.9", "1.4.0"))
-      .toEqual({ useEagerRelay: false, reason: "config-legacy" });
-    expect(selectEagerPath("darwin", false, "legacy-tee", "9.9.9", "1.4.0")).toBeNull();
-    expect(selectEagerPath("linux", false, "legacy-tee", "9.9.9", "1.4.0")).toBeNull();
-  });
+  for (const { platform, mode, rewrite, expected } of cases) {
+    test(`${platform} + ${mode} + rewrite=${rewrite}`, () => {
+      expect(selectEagerPath(platform, rewrite, mode, "1.4.0", "1.4.0")).toEqual(expected);
+    });
+  }
 });
 
 describe("isStreamMode", () => {

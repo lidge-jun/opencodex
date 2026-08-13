@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isProcessAlive, waitForExit } from "../lib/process-control";
+import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
 import { readCodexCatalogPath } from "./catalog/parsing";
 
 export const STALE_CODEX_APP_SERVER_HINT =
@@ -271,12 +272,12 @@ function listDarwinSnapshots(uid: number | undefined): ProcessSnapshot[] {
   // Top-level exec failure propagates: callers decide their own safe default
   // (restart flow → treat as none; staleness check → unknown, never "fresh").
   const output = uid !== undefined
-    ? execFileSync("ps", ["-u", String(uid), "-o", "pid=,command="], {
+    ? execFileSync("/bin/ps", ["-u", String(uid), "-o", "pid=,command="], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
     })
-    : execFileSync("ps", ["-axo", "pid=,uid=,command="], {
+    : execFileSync("/bin/ps", ["-axo", "pid=,uid=,command="], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 5_000,
@@ -345,8 +346,10 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
     "  } catch { \"__OCX_ENUM_INCOMPLETE__\" }",
     "}",
   ].join("\n");
-  // Top-level exec failure propagates (see listDarwinSnapshots note).
-  const output = execFileSync("powershell.exe", [
+  // Top-level exec failure propagates (see listDarwinSnapshots note). The
+  // executable resolves from the trusted System32 directory (never PATH), and
+  // windowsHide keeps the enumeration console-less on desktop sessions (#1278).
+  const output = execFileSync(resolveTrustedWindowsPowerShellExe(), [
     "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
     "-Command",
     psCommand,
@@ -441,7 +444,7 @@ function readLinuxProcStartMs(pid: number): number | null {
 /** `ps` lstart → epoch ms, or null (macOS). */
 function readDarwinProcStartMs(pid: number): number | null {
   try {
-    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    const out = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 4_000,
@@ -457,7 +460,7 @@ function readDarwinProcStartMs(pid: number): number | null {
 /** Win32_Process.CreationDate → epoch ms, or null (Windows). */
 function readWindowsProcStartMs(pid: number): number | null {
   try {
-    const out = execFileSync("powershell.exe", [
+    const out = execFileSync(resolveTrustedWindowsPowerShellExe(), [
       "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
       "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString("o")`,
@@ -490,7 +493,7 @@ export function readProcessStartMsBatch(
   if (pids.length === 0) return out;
   if (platform === "darwin") {
     try {
-      const stdout = execFileSync("ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
+      const stdout = execFileSync("/bin/ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 3_000,
@@ -513,7 +516,7 @@ export function readProcessStartMsBatch(
   if (platform === "win32") {
     try {
       const filter = pids.map(pid => `ProcessId=${pid}`).join(" OR ");
-      const stdout = execFileSync("powershell.exe", [
+      const stdout = execFileSync(resolveTrustedWindowsPowerShellExe(), [
         "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
         "-Command",
         `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`,

@@ -9,7 +9,7 @@ import { buildModelsRequest, resolveModelsAuthToken } from "../../oauth";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
-import { getJawcodeModelMetadata, getJawcodeModelMetadataCaseInsensitive, listJawcodeModelMetadata, resolveJawcodeProvider } from "../../generated/jawcode-model-metadata";
+import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
@@ -328,6 +328,9 @@ export type CatalogSourceForGather =
         | "legacy-backup-fallback"
         | "models-cache-fallback";
       catalog: ReadonlyRawCatalog;
+      runtimeSupport:
+        | Readonly<{ kind: "available"; catalog: ReadonlyRawCatalog }>
+        | Readonly<{ kind: "unavailable" }>;
       processLocal: Readonly<{
         runtime: CatalogGatherProcessLocalObservation;
         bundledCatalog: CatalogGatherProcessLocalObservation;
@@ -340,6 +343,8 @@ export type CatalogSourceForGather =
         bundledCatalog: Readonly<{ state: "unused" }>;
       }>;
     }>;
+
+export type CatalogGatherPathKind = "default" | "custom";
 
 const UNUSED_PROCESS_LOCAL = Object.freeze({ state: "unused" as const });
 
@@ -407,46 +412,73 @@ export function peekCodexRuntimeForCatalogGather(
  */
 export function resolveCatalogSourceForGather(
   evidenceSession: CatalogGatherEvidenceSession,
+  pathKind: CatalogGatherPathKind,
 ): CatalogSourceForGather {
   const bundledMemo = bundledCatalogCache;
+  let runtimeSupport:
+    | Readonly<{ kind: "available"; catalog: ReadonlyRawCatalog }>
+    | Readonly<{ kind: "unavailable" }> = Object.freeze({ kind: "unavailable" });
+  let processLocal: Readonly<{
+    runtime: CatalogGatherProcessLocalObservation;
+    bundledCatalog: CatalogGatherProcessLocalObservation;
+  }> = {
+    runtime: UNUSED_PROCESS_LOCAL,
+    bundledCatalog: UNUSED_PROCESS_LOCAL,
+  };
   if (bundledMemo?.value && bundledMemo.expiresAt > Date.now()) {
     const runtime = peekCodexRuntimeForCatalogGather(evidenceSession);
     if (runtime.kind === "available" && bundledMemo.key === bundledRuntimeKey(runtime.runtime)) {
-      return cloneAndDeepFreeze({
+      runtimeSupport = Object.freeze({
         kind: "available" as const,
-        source: "bundled-catalog-template" as const,
         catalog: bundledMemo.value,
-        processLocal: {
-          runtime: runtime.processLocal,
-          bundledCatalog: {
-            state: "used" as const,
-            epoch: bundledMemo.epoch,
-            valueIdentity: bundledMemo.valueIdentity,
-          },
-        },
       });
+      processLocal = {
+        runtime: runtime.processLocal,
+        bundledCatalog: {
+          state: "used" as const,
+          epoch: bundledMemo.epoch,
+          valueIdentity: bundledMemo.valueIdentity,
+        },
+      };
+      if (pathKind === "default") {
+        return cloneAndDeepFreeze({
+          kind: "available" as const,
+          source: "bundled-catalog-template" as const,
+          catalog: bundledMemo.value,
+          runtimeSupport,
+          processLocal,
+        });
+      }
     }
   }
 
-  const roles = [
-    "active-catalog-merge",
-    "hashed-backup-fallback",
-    "legacy-backup-fallback",
-    "models-cache-fallback",
-  ] as const;
+  const roles = pathKind === "default"
+    ? [
+        "active-catalog-merge",
+        "hashed-backup-fallback",
+        "legacy-backup-fallback",
+        "models-cache-fallback",
+      ] as const
+    : [
+        "active-catalog-merge",
+        "hashed-backup-fallback",
+        "models-cache-fallback",
+      ] as const;
   for (const role of roles) {
     const bytes = evidenceSession.readSource(role);
     if (bytes === null) continue;
     const catalog = parseCatalogJson(Buffer.from(bytes).toString("utf8"));
-    if (!catalog || !findNativeTemplate(catalog)) continue;
+    if (!catalog) continue;
+    // Custom catalogs may intentionally contain only routed rows. Keep their existing source
+    // priority (active, then backup/cache) without imposing the default catalog's native-template
+    // requirement; a valid active custom file therefore remains authoritative over stale fallbacks.
+    if (pathKind === "default" && !findNativeTemplate(catalog)) continue;
     return cloneAndDeepFreeze({
       kind: "available" as const,
       source: role,
       catalog,
-      processLocal: {
-        runtime: UNUSED_PROCESS_LOCAL,
-        bundledCatalog: UNUSED_PROCESS_LOCAL,
-      },
+      runtimeSupport,
+      processLocal,
     });
   }
 
@@ -488,6 +520,22 @@ export function readCurrentCatalogOrCache(): RawCatalog | null {
   const bundled = isDefaultCatalogPath(path) ? loadBundledCodexCatalog() : null;
   if (bundled) return JSON.parse(JSON.stringify(bundled)) as RawCatalog;
   return readCatalog(path) ?? readCatalog(activeCodexModelsCachePath());
+}
+
+/**
+ * Read the user-owned Codex catalog surfaces without substituting the bundled catalog.
+ *
+ * The bundled catalog is intentionally the authority for static native metadata on the default
+ * path. Account-qualified discovery needs the opposite view: an exact model id that Codex has
+ * observed in the user's catalog/cache may be account-scoped even when this release does not know
+ * it statically yet.
+ */
+export function readCurrentCodexCatalog(): RawCatalog | null {
+  return readCatalog(readCodexCatalogPath());
+}
+
+export function readCurrentCodexModelsCache(): RawCatalog | null {
+  return readCatalog(activeCodexModelsCachePath());
 }
 
 export function loadCatalogTemplate(): RawEntry | null {

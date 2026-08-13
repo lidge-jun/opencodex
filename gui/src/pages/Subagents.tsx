@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
@@ -6,7 +6,7 @@ import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-worksp
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
-import { useSubagentDelegation } from "./use-subagent-delegation";
+import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
 
 type CachedSubagents = { available: string[]; chosen: string[] };
 
@@ -25,6 +25,93 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
+  const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
+  const [ultraSaving, setUltraSaving] = useState(false);
+  const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
+  const ultraLoadGeneration = useRef(0);
+  const currentUltraApiBase = useRef(apiBase);
+  useEffect(() => {
+    currentUltraApiBase.current = apiBase;
+    ultraLoadGeneration.current++;
+  }, [apiBase]);
+
+  // Shared loader for /api/v2 state (multi-agent v2 flag + mode hint). Initial-load
+  // failures surface sub.ultraModeLoadFail; refresh failures are rethrown so
+  // saveUltraMode can report them against the save action.
+  const loadUltraMode = useCallback(async (signal?: AbortSignal) => {
+    if (currentUltraApiBase.current !== apiBase) return false;
+    const generation = ++ultraLoadGeneration.current;
+    const res = await fetch(`${apiBase}/api/v2`, { signal });
+    const data = await readJsonOrThrow<{
+      enabled?: boolean;
+      multiAgentMode?: "v1" | "default" | "v2";
+      multiAgentModeHintText?: string | null;
+    }>(res, t("sub.ultraModeLoadFail"));
+    if (!data) return false;
+    if (signal?.aborted || generation !== ultraLoadGeneration.current || currentUltraApiBase.current !== apiBase) return false;
+    setUltraLoadFailed(false);
+    setUltraMode({
+      enabled: data.enabled ?? false,
+      hintText: data.multiAgentModeHintText ?? null,
+      // Ultra mode replaces Codex's effort-derived policy for every model. The
+      // `default` surface still preserves upstream V1 pins (for example luna),
+      // so only an explicitly forced V2 catalog is an effective surface here.
+      multiAgentV2Enabled: data.enabled === true && data.multiAgentMode === "v2",
+    });
+    return true;
+  }, [apiBase, t]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      await loadUltraMode(controller.signal);
+    })().catch(() => {
+      if (!controller.signal.aborted) {
+        setOk(false);
+        setUltraLoadFailed(true);
+        setStatus(t("sub.ultraModeLoadFail"));
+      }
+    });
+    return () => { controller.abort(); };
+  }, [loadUltraMode, t]);
+
+  const saveUltraMode = async (patch: UltraModePatch) => {
+    if (ultraSaving) return;
+    const requestApiBase = apiBase;
+    setUltraSaving(true);
+    setStatus("");
+    try {
+      const res = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      await readJsonOrThrow(res, t("sub.ultraModeSaveFail"));
+      if (currentUltraApiBase.current !== requestApiBase || !await loadUltraMode()) return;
+      setOk(true);
+      setStatus(t("sub.ultraModeSaved"));
+    } catch (error) {
+      if (currentUltraApiBase.current !== requestApiBase) return;
+      setOk(false);
+      setStatus(error instanceof Error && error.message ? error.message : t("sub.networkError"));
+    } finally {
+      setUltraSaving(false);
+    }
+  };
+
+  const retryUltraMode = useCallback(async () => {
+    try {
+      if (!await loadUltraMode()) return;
+      // A successful retry replaces the failed initial load; do not leave the
+      // page-level load error visible after the controls have recovered.
+      setOk(false);
+      setStatus(current => current === t("sub.ultraModeLoadFail") ? "" : current);
+    } catch {
+      setOk(false);
+      setUltraLoadFailed(true);
+      setStatus(t("sub.ultraModeLoadFail"));
+    }
+  }, [loadUltraMode, t]);
 
   const loadSubagents = useCallback(async (): Promise<CachedSubagents> => {
     const res = await fetch(`${apiBase}/api/subagent-models`);
@@ -134,6 +221,11 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           syncCodexDefaults: delegation.syncCodexDefaults,
           saving: delegation.saving,
           onSave: patch => { void delegation.save(patch); },
+          ultraMode,
+          ultraSaving,
+          onUltraModeSave: patch => { void saveUltraMode(patch); },
+          ultraLoadFailed,
+          onUltraModeRetry: () => { void retryUltraMode(); },
         }}
       />
     </>

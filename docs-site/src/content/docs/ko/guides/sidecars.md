@@ -70,14 +70,20 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 ## 비전 사이드카
 
 라우팅 모델이 해당 프로바이더의 `noVisionModels`에 있고 요청에 이미지가 들어오면, opencodex는
-메인 호출 **전에** 각 이미지를 설명한 텍스트로 바꿉니다. Dashboard와 관리 API의 현재 기본 선택값은
-`gpt-5.6-luna`이며, 시작할 때 명시적으로 저장된 기존 `gpt-5.4-mini` 값도 Luna로 마이그레이션합니다.
-다만 `visionSidecar.model` 필드 자체가 없으면 비전 실행 경로는 코드 폴백인 `gpt-5.4-mini`를 씁니다.
+메인 호출 **전에** 각 이미지를 설명한 텍스트로 바꿉니다. `visionSidecar.model`이 없거나 빈 값이면
+OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.4-mini`를 폴백으로 사용합니다. 시작 시 명시적으로
+저장된 기존 `gpt-5.4-mini` 값은 계속 `gpt-5.6-luna`로 마이그레이션되지만, 이 마이그레이션은 저장된
+값에만 적용되고 모델 필드가 없는 경우에는 적용되지 않습니다.
 
 - 이미지는 사용자, developer, 도구 결과 메시지에서 올 수 있습니다. Codex의 `view_image` 결과도
   포함됩니다.
-- 각 이미지는 설정된 네이티브 비전 모델에 `reasoning.effort: "low"`로 전달되고, 설명이 이미지
-  부분을 인라인으로 대체합니다.
+- OpenAI 경로(ChatGPT 로그인 패스스루)에서는 각 이미지가 선택한 `reasoning.effort`(기본값
+  `low`)와 함께 Responses 엔드포인트로 설정된 비전 모델에 전송되고, 설명이 이미지 부분을 인라인으로
+  대체합니다. Anthropic 경로는 Messages 엔드포인트와 자체 thinking 예산 매핑을 사용하며 이
+  OpenAI 전용 설정을 무시합니다.
+- 신뢰할 수 있는 기능 메타데이터가 있는 네이티브 모델에서는 지원되지 않는 추론 수준을 요청값 이하에서
+  가장 높은 지원 단계로 정규화합니다. 해당 단계가 없으면 가장 낮은 지원 단계를 사용합니다. 신뢰할 수
+  있는 기능 메타데이터가 없는 알 수 없는 모델이나 커스텀 모델은 제한하지 않습니다.
 - 설명은 한 번에 3개씩 병렬 처리하며 입력 순서를 유지합니다. 설명 모델에 전달하는 사용자 문맥은
   800자, 주입하는 이미지 설명은 장당 2,000자로 제한합니다. ChatGPT 백엔드가 거부하는
   `max_output_tokens`는 보내지 않습니다.
@@ -90,15 +96,17 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
   없으면 텍스트 전용 백엔드에 원본 이미지를 보내지 않고 제거합니다.
 - `maxDescriptionsPerTurn`(기본값 8)은 메인 모델 한 턴에서 새로 실행할 설명 수를 제한합니다. 캐시
   적중과 같은 턴의 중복 요청은 한도를 쓰지 않습니다. 성공한 `data:` 이미지 설명은 백엔드, 모델,
-  detail, 이미지 바이트, 메시지 문맥을 기준으로 캐시하며, 바뀔 수 있는 `https:` 이미지는 캐시하지
-  않습니다.
+  detail, 이미지 바이트, 메시지 문맥을 기준으로 캐시하며, OpenAI 키에는 추론 강도도 포함됩니다
+  (Anthropic 키에는 포함되지 않습니다. 해당 필드는 거기서 무시되기 때문입니다). 바뀔 수 있는
+  `https:` 이미지는 캐시하지 않습니다.
 
 ```json
 {
   "visionSidecar": {
     "enabled": true,
-    "backend": "anthropic",
-    "model": "claude-sonnet-5",
+    "backend": "openai",
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
     "maxDescriptionsPerTurn": 8,
     "timeoutMs": 45000
   }
@@ -121,9 +129,10 @@ stall은 전체 생성 timeout이 아닙니다. SSE가 시작되기 전 실패�
 
 ## 대시보드 설정과 끄기
 
-<!-- TODO(WP5 GUI): GUI 컨트롤이 완성되면 사이드카 설정 화면 안내를 추가하세요. -->
+대시보드 비전 사이드카 카드에서는 기존 모델·백엔드·추론 컨트롤과 함께 사이드카를 켜거나 끄고, `maxDescriptionsPerTurn`과 `timeoutMs`를 설정할 수 있습니다. 꺼도 다른 설정은 삭제되지 않으며, 다시 켜면 이전 모델, 백엔드, 추론, 제한 시간, 한도가 그대로 남습니다.
 
-설정 파일 키는 지금 바로 사용할 수 있습니다. 기능을 끄려면 `config.json`에서 해당 사이드카의
-`enabled`를 `false`로 설정하세요. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
+`PUT /api/sidecar-settings`는 같은 필드를 받습니다. 부분 업데이트는 보내지 않은 키를 유지합니다. `timeoutMs`는 런타임 정수 범위(1–2147483647 ms)를 사용합니다.
+
+파일을 직접 고치고 싶다면 이전처럼 `config.json`에서 `enabled`를 `false`로 두면 됩니다. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
 fingerprint 선례를 따르지만, 실제 계정과 작업량으로 충분히 soak test하는 편이 좋습니다. 전체
 필드는 [설정 레퍼런스](/ko/reference/configuration/#sidecars)를 참고하세요.

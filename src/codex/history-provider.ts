@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { Database } from "bun:sqlite";
-import { CODEX_HOME } from "./paths";
+import { resolveCodexStateDbPath } from "./paths";
 import { atomicWriteFile, getConfigDir } from "../config";
 
 /**
@@ -13,7 +13,6 @@ import { atomicWriteFile, getConfigDir } from "../config";
  */
 export const MAX_ROLLOUT_ZST_DECOMPRESSED_BYTES = 64 * 1024 * 1024;
 
-const STATE_DB_PATH = join(CODEX_HOME, "state_5.sqlite");
 /**
  * The manifest that shadows one state database.
  *
@@ -26,7 +25,6 @@ export function historyBackupPathFor(stateDbPath: string): string {
   const id = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
   return join(getConfigDir(), `codex-history-backup-${id}.json`);
 }
-const HISTORY_BACKUP_PATH = historyBackupPathFor(STATE_DB_PATH);
 const RESUMABLE_SOURCES = ["cli", "vscode"] as const;
 
 /**
@@ -166,12 +164,16 @@ function patchFirstLineProviderInPlace(path: string, expectedId: string, provide
 
 export type CodexHistoryProvider = "openai" | "opencodex";
 
+export type CodexHistoryFailureReason = "busy" | "permission";
+
 export interface CodexHistorySyncResult {
   rows: number;
   files: number;
   ejectedRows?: number;
   /** Set when a lock/busy error survived retries and the sync was SKIPPED, not empty. */
   failed?: true;
+  /** Why the retry budget was exhausted when `failed` is set. */
+  failureReason?: CodexHistoryFailureReason;
 }
 
 interface ThreadRow {
@@ -196,6 +198,49 @@ interface BackupManifest {
   entries: Record<string, BackupEntry>;
 }
 
+export interface CodexHistoryVerifiedNoopProof {
+  readonly kind: "verified-noop";
+  readonly pendingRows: 0;
+  readonly backupEntries: 0;
+  readonly canonicalStateDbPath: string;
+  readonly stateDbPresent: true;
+  readonly canonicalBackupPath: string;
+  readonly backupPresent: boolean;
+}
+
+export type CodexHistoryNoopSnapshot =
+  | CodexHistoryVerifiedNoopProof
+  | {
+      readonly kind: "work-pending";
+      readonly pendingRows: number;
+      readonly backupEntries: number;
+      readonly canonicalStateDbPath: string;
+      readonly stateDbPresent: boolean;
+      readonly canonicalBackupPath: string;
+      readonly backupPresent: boolean;
+    }
+  | {
+      readonly kind: "unknown";
+      readonly pendingRows: null;
+      readonly backupEntries: null;
+      readonly canonicalStateDbPath: string;
+      readonly stateDbPresent: boolean;
+      readonly canonicalBackupPath: string;
+      readonly backupPresent: boolean;
+      readonly reason: "backup-path" | "database-absent" | "manifest-read" | "manifest-schema" | "manifest-foreign" | "database-query" | "snapshot-race";
+    };
+
+type StrictBackupInspection =
+  | { readonly kind: "known"; readonly present: boolean; readonly entries: number; readonly fingerprint: string }
+  | { readonly kind: "unknown"; readonly present: boolean; readonly reason: "manifest-read" | "manifest-schema" | "manifest-foreign" };
+
+let afterNoopPendingCountForTests: (() => void) | undefined;
+
+/** Test seam: runs after the pending count and before stability validation. */
+export function setAfterNoopPendingCountForTests(hook: (() => void) | undefined): void {
+  afterNoopPendingCountForTests = hook;
+}
+
 interface NativeRestoreTarget {
   modelProvider: string;
   source: string;
@@ -206,6 +251,65 @@ function samePath(a: string, b: string): boolean {
   const left = resolve(a);
   const right = resolve(b);
   return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+}
+
+function inspectBackupForNoop(path: string, stateDbPath: string): StrictBackupInspection {
+  if (!existsSync(path)) return { kind: "known", present: false, entries: 0, fingerprint: "absent" };
+  let parsed: unknown;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+    parsed = JSON.parse(raw);
+  } catch {
+    return { kind: "unknown", present: true, reason: "manifest-read" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  const manifest = parsed as Partial<BackupManifest>;
+  if (manifest.version !== 1 || typeof manifest.stateDbPath !== "string") {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  if (!samePath(manifest.stateDbPath, stateDbPath)) {
+    return { kind: "unknown", present: true, reason: "manifest-foreign" };
+  }
+  if (!manifest.entries || typeof manifest.entries !== "object" || Array.isArray(manifest.entries)) {
+    return { kind: "unknown", present: true, reason: "manifest-schema" };
+  }
+  for (const [id, value] of Object.entries(manifest.entries)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { kind: "unknown", present: true, reason: "manifest-schema" };
+    }
+    const entry = value as Partial<BackupEntry>;
+    if (entry.id !== id
+      || typeof entry.rolloutPath !== "string"
+      || typeof entry.modelProvider !== "string"
+      || typeof entry.source !== "string"
+      || typeof entry.hasUserEvent !== "number") {
+      return { kind: "unknown", present: true, reason: "manifest-schema" };
+    }
+  }
+  return {
+    kind: "known",
+    present: true,
+    entries: Object.keys(manifest.entries).length,
+    fingerprint: createHash("sha256").update(raw).digest("hex"),
+  };
+}
+
+function historyFileIdentity(path: string): string | null {
+  try {
+    const stat = statSync(path);
+    return [stat.dev, stat.ino, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+  } catch {
+    return null;
+  }
+}
+
+function readHistoryDataVersion(db: Database): number | null {
+  const row = db.query<{ data_version: number }, []>("PRAGMA data_version").get();
+  const value = row?.data_version;
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : null;
 }
 
 function readBackup(path: string, stateDbPath?: string): BackupManifest {
@@ -515,19 +619,24 @@ function ejectRemainingOpencodexHistory(db: Database): { rows: number; files: nu
   return { rows: rows.length, files };
 }
 
-export function isRecoverableHistoryError(error: unknown): boolean {
+export function classifyRecoverableHistoryError(error: unknown): CodexHistoryFailureReason | null {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : "";
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return code === "SQLITE_BUSY"
+  if (code === "SQLITE_BUSY"
     || code === "SQLITE_LOCKED"
     || code === "EBUSY"
-    || code === "EPERM"
-    || code === "EACCES"
     || message.includes("database is locked")
     || message.includes("database is busy")
-    || message.includes("resource busy")
+    || message.includes("resource busy")) return "busy";
+  if (code === "EPERM"
+    || code === "EACCES"
     || message.includes("operation not permitted")
-    || message.includes("permission denied");
+    || message.includes("permission denied")) return "permission";
+  return null;
+}
+
+export function isRecoverableHistoryError(error: unknown): boolean {
+  return classifyRecoverableHistoryError(error) !== null;
 }
 
 const HISTORY_RETRY_DELAY_MS = 500;
@@ -540,19 +649,27 @@ const HISTORY_RETRY_ATTEMPTS = 2;
  * error — callers surface that as `failed: true` instead of a silent no-op. Hard errors
  * (corruption, programming bugs) still throw.
  */
-export function withHistoryRetry<T>(fn: () => T, io: { sleepFn?: (ms: number) => void; attempts?: number; delayMs?: number } = {}): T | null {
+function withHistoryRetryResult<T>(fn: () => T, io: { sleepFn?: (ms: number) => void; attempts?: number; delayMs?: number } = {}):
+  | { ok: true; value: T }
+  | { ok: false; reason: CodexHistoryFailureReason } {
   const sleepFn = io.sleepFn ?? Bun.sleepSync;
   const attempts = Math.max(1, io.attempts ?? HISTORY_RETRY_ATTEMPTS);
   const delayMs = io.delayMs ?? HISTORY_RETRY_DELAY_MS;
   for (let attempt = 0; ; attempt++) {
     try {
-      return fn();
+      return { ok: true, value: fn() };
     } catch (error) {
-      if (!isRecoverableHistoryError(error)) throw error;
-      if (attempt >= attempts - 1) return null;
+      const reason = classifyRecoverableHistoryError(error);
+      if (!reason) throw error;
+      if (attempt >= attempts - 1) return { ok: false, reason };
       try { sleepFn(delayMs); } catch { /* sleep is best-effort */ }
     }
   }
+}
+
+export function withHistoryRetry<T>(fn: () => T, io: { sleepFn?: (ms: number) => void; attempts?: number; delayMs?: number } = {}): T | null {
+  const result = withHistoryRetryResult(fn, io);
+  return result.ok ? result.value : null;
 }
 
 /**
@@ -571,8 +688,8 @@ function openaiRestoreIsNoop(stateDbPath: string, backupPath: string): boolean {
 
 export function syncCodexHistoryProvider(
   provider: CodexHistoryProvider,
-  stateDbPath = STATE_DB_PATH,
-  backupPath = HISTORY_BACKUP_PATH,
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
   opts: { skipWhenProvablyNoop?: boolean } = {},
 ): CodexHistorySyncResult {
   // Opt-in steady-state gate (Design B loopback callers only): default semantics of
@@ -581,8 +698,8 @@ export function syncCodexHistoryProvider(
     && openaiRestoreIsNoop(stateDbPath, backupPath)) {
     return { rows: 0, files: 0 };
   }
-  return withHistoryRetry(() => syncCodexHistoryProviderUnsafe(provider, stateDbPath, backupPath))
-    ?? { rows: 0, files: 0, failed: true };
+  const retried = withHistoryRetryResult(() => syncCodexHistoryProviderUnsafe(provider, stateDbPath, backupPath));
+  return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
 }
 
 function syncCodexHistoryProviderUnsafe(provider: CodexHistoryProvider, stateDbPath: string, backupPath: string): CodexHistorySyncResult {
@@ -705,16 +822,17 @@ function restoreCodexHistoryProvider(stateDbPath: string, backupPath: string): C
   }
 }
 
-export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): { rows: number; files: number; failed?: true } {
+export function restoreLegacyOpenaiHistory(stateDbPath = resolveCodexStateDbPath()): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
-  return withHistoryRetry(() => {
+  const retried = withHistoryRetryResult(() => {
     const db = openStateDb(stateDbPath);
     try {
       return ejectRemainingOpencodexHistory(db);
     } finally {
       db.close();
     }
-  }) ?? { rows: 0, files: 0, failed: true };
+  });
+  return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
 }
 
 /**
@@ -724,8 +842,8 @@ export function restoreLegacyOpenaiHistory(stateDbPath = STATE_DB_PATH): { rows:
  * per tick so a locked DB never stalls the event loop beyond one sqlite busy wait.
  */
 export function migrateHistoryToOpenai(
-  stateDbPath = STATE_DB_PATH,
-  backupPath = HISTORY_BACKUP_PATH,
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
   opts: { attempts?: number; delayMs?: number; sleepFn?: (ms: number) => void } = {},
 ): CodexHistorySyncResult {
   if (!existsSync(stateDbPath)) return { rows: 0, files: 0 };
@@ -734,8 +852,83 @@ export function migrateHistoryToOpenai(
   // nothing. A missing DB with a leftover backup manifest does NOT satisfy the gate
   // (backupEntries > 0), so the guardian's fresh-reinstall re-count protection holds.
   if (openaiRestoreIsNoop(stateDbPath, backupPath)) return { rows: 0, files: 0 };
-  return withHistoryRetry(() => syncCodexHistoryProviderUnsafe("openai", stateDbPath, backupPath), opts)
-    ?? { rows: 0, files: 0, failed: true };
+  const retried = withHistoryRetryResult(() => syncCodexHistoryProviderUnsafe("openai", stateDbPath, backupPath), opts);
+  return retried.ok ? retried.value : { rows: 0, files: 0, failed: true, failureReason: retried.reason };
+}
+
+/**
+ * Captures no-op evidence while the caller holds the history serialization
+ * lock H. This function does not acquire H itself. Unknown or foreign backup
+ * state is never collapsed into an empty manifest.
+ */
+export function snapshotCodexHistoryNoop(
+  stateDbPath: string,
+  backupPath: string,
+): CodexHistoryNoopSnapshot {
+  const canonicalStateDbPath = resolve(stateDbPath);
+  const canonicalBackupPath = resolve(backupPath);
+  const stateDbPresent = existsSync(stateDbPath);
+  const backupPresent = existsSync(backupPath);
+  const base = { canonicalStateDbPath, stateDbPresent, canonicalBackupPath, backupPresent };
+  if (!samePath(backupPath, historyBackupPathFor(stateDbPath))) {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "backup-path" };
+  }
+  const backup = inspectBackupForNoop(backupPath, stateDbPath);
+  if (backup.kind === "unknown") {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: backup.reason };
+  }
+  if (!stateDbPresent) {
+    return backup.entries > 0
+      ? { kind: "work-pending", pendingRows: 0, backupEntries: backup.entries, ...base }
+      : { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-absent" };
+  }
+  const stateDbIdentity = historyFileIdentity(stateDbPath);
+  if (stateDbIdentity === null) {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "snapshot-race" };
+  }
+  let monitor: Database | undefined;
+  try {
+    monitor = new Database(stateDbPath, { readonly: true });
+    monitor.exec("PRAGMA busy_timeout = 100");
+    const dataVersionBefore = readHistoryDataVersion(monitor);
+    if (dataVersionBefore === null) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    const pending = countPendingOpencodexHistory(stateDbPath, backupPath);
+    if (pending.failed) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    afterNoopPendingCountForTests?.();
+    const backupAfter = inspectBackupForNoop(backupPath, stateDbPath);
+    if (backupAfter.kind === "unknown") {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: backupAfter.reason };
+    }
+    const dataVersionAfter = readHistoryDataVersion(monitor);
+    if (dataVersionAfter === null) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+    }
+    if (dataVersionAfter !== dataVersionBefore
+      || pending.backupEntries !== backup.entries
+      || backupAfter.entries !== backup.entries
+      || backupAfter.present !== backup.present
+      || backupAfter.fingerprint !== backup.fingerprint
+      || historyFileIdentity(stateDbPath) !== stateDbIdentity
+      || existsSync(stateDbPath) !== stateDbPresent
+      || existsSync(backupPath) !== backupPresent) {
+      return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "snapshot-race" };
+    }
+    return pending.pendingRows === 0 && backup.entries === 0
+      ? { kind: "verified-noop", pendingRows: 0, backupEntries: 0, ...base, stateDbPresent: true }
+      : { kind: "work-pending", pendingRows: pending.pendingRows, backupEntries: backup.entries, ...base };
+  } catch {
+    return { kind: "unknown", pendingRows: null, backupEntries: null, ...base, reason: "database-query" };
+  } finally {
+    try {
+      monitor?.close();
+    } catch {
+      // Read-only monitor cleanup cannot make an uncertain snapshot authoritative.
+    }
+  }
 }
 
 export interface PendingHistoryCount {
@@ -753,7 +946,10 @@ export interface PendingHistoryCount {
  * pending predicate mirrors ejectRemainingOpencodexHistory exactly — rows eject ignores
  * (empty first_user_message) are not counted, so 0 really means "migration done".
  */
-export function countPendingOpencodexHistory(stateDbPath = STATE_DB_PATH, backupPath = HISTORY_BACKUP_PATH): PendingHistoryCount {
+export function countPendingOpencodexHistory(
+  stateDbPath = resolveCodexStateDbPath(),
+  backupPath = historyBackupPathFor(stateDbPath),
+): PendingHistoryCount {
   let backupEntries = 0;
   try {
     const manifest = readBackup(backupPath, stateDbPath);

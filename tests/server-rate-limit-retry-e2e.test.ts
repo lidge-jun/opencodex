@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
@@ -7,6 +7,7 @@ import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { removeTreeWithRetry } from "./helpers/remove-tree";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -25,7 +26,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  if (testDir) rmSync(testDir, { recursive: true, force: true });
+  if (testDir) removeTreeWithRetry(testDir);
   clearKeyCooldowns();
 });
 
@@ -100,8 +101,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
       expect(seenHeaders[0]).toEqual(seenHeaders[1]);
       expect(seenHeaders[1]).toEqual(seenHeaders[2]);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 
@@ -144,8 +148,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
       expect(json.error?.type).toBe("rate_limit_error");
       expect(sends).toBe(1);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 
@@ -186,8 +193,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
       expect(res.status).toBe(429);
       expect(sends).toBe(2);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 
@@ -240,8 +250,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
         "Bearer key-beta-444555666777",
       ]);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 
@@ -303,8 +316,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
       expect(seenBodies).toHaveLength(2);
       expect(seenBodies[0]).toBe(seenBodies[1]);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 
@@ -351,8 +367,11 @@ describe("server same-target 429 retry (end-to-end)", () => {
       // have replayed on the second key too (4+ sends).
       expect(sends).toBe(3);
     } finally {
-      server?.stop(true);
-      globalThis.fetch = originalFetch;
+      try {
+        await server?.stop(true);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   });
 });

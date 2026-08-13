@@ -13,6 +13,32 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { adminApiTokenFilePath } from "../lib/admin-secrets";
+import {
+  LOCAL_MANAGEMENT_CAPABILITY_HEADER,
+  LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER,
+  LOCAL_MANAGEMENT_EXPECTED_PID_HEADER,
+  LOCAL_MANAGEMENT_NONCE_HEADER,
+  parseExpectedLocalManagementPid,
+  verifyLocalManagementReadCapability,
+} from "../lib/local-management-capability";
+import {
+  SYSTEM_RESTART_CAPABILITY_HEADER,
+  SYSTEM_RESTART_EXPECTED_PID_HEADER,
+  SYSTEM_RESTART_NONCE_HEADER,
+  SYSTEM_RESTART_PATH,
+  parseExpectedSystemRestartPid,
+  verifySystemRestartCapability,
+} from "../lib/system-restart-contract";
+import {
+  LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER,
+  LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER,
+  LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER,
+  LOCAL_PROVIDER_RELOAD_NAME_HEADER,
+  LOCAL_PROVIDER_RELOAD_NONCE_HEADER,
+  LOCAL_PROVIDER_RELOAD_PATH,
+  parseExpectedLocalProviderReloadPid,
+  verifyLocalProviderReloadCapability,
+} from "../lib/local-provider-reload-contract";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
@@ -26,6 +52,12 @@ import {
 
 const GUI_SESSION_TTL_MS = 5 * 60_000;
 const GUI_SESSION_LIMIT = 128;
+const LOCAL_READ_REPLAY_LIMIT = 256;
+const consumedLocalReadCapabilities = new Map<string, number>();
+const admittedLocalReadRequests = new WeakSet<Request>();
+const LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT = 256;
+const consumedLocalProviderReloadCapabilities = new Map<string, number>();
+const admittedLocalProviderReloadRequests = new WeakSet<Request>();
 
 interface GuiSessionRecord {
   csrfToken: string;
@@ -245,20 +277,161 @@ export function issueGuiSession(
  * minted for a browser, and it only authorizes a mutation after the origin and the
  * per-session CSRF token match. Consent-bearing routes must key off this value
  * rather than off request headers, which the token holder can forge freely.
+ * The capability principals are process-scoped HMACs bound to the current process
+ * PID and listening port. Local reads are accepted only for two exact GET paths;
+ * restart and provider reload remain separate wire contracts for their exact POSTs.
  */
-export type ManagementPrincipal = "admin-token" | "gui-session";
+export type ManagementPrincipal =
+  | "admin-token"
+  | "gui-session"
+  | "local-read-capability"
+  | "local-provider-reload-capability"
+  | "system-restart-capability";
+
+export interface LocalManagementAuthContext {
+  attestationSecret: string;
+  pid: number;
+  port: number;
+}
+
+function hasSystemRestartCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (!local || req.method !== "POST") return false;
+  let path: string;
+  try {
+    path = new URL(req.url).pathname;
+  } catch {
+    return false;
+  }
+  if (path !== SYSTEM_RESTART_PATH) return false;
+  const expectedPid = parseExpectedSystemRestartPid(
+    req.headers.get(SYSTEM_RESTART_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  return verifySystemRestartCapability(
+    local.attestationSecret,
+    req.headers.get(SYSTEM_RESTART_NONCE_HEADER),
+    req.method,
+    path,
+    local.pid,
+    local.port,
+    req.headers.get(SYSTEM_RESTART_CAPABILITY_HEADER),
+  );
+}
+
+function hasLocalReadCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  // requireManagementAuth and managementPrincipal inspect the same Request in
+  // sequence. Preserve that one admission without accepting a replayed request.
+  if (admittedLocalReadRequests.has(req)) return true;
+  if (!local || req.method !== "GET") return false;
+  let url: URL;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return false;
+  }
+  // Do not let a future query-bearing variant silently inherit this narrow grant.
+  if (url.search !== "") return false;
+  const expectedPid = parseExpectedLocalManagementPid(
+    req.headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  const expiresAtRaw = req.headers.get(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER);
+  if (!expiresAtRaw || !/^[1-9]\d*$/.test(expiresAtRaw)) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const capability = req.headers.get(LOCAL_MANAGEMENT_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyLocalManagementReadCapability(
+    local.attestationSecret,
+    req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
+    req.method,
+    url.pathname,
+    local.pid,
+    local.port,
+    expiresAt,
+    capability,
+    now,
+  )) return false;
+  for (const [consumed, retainedUntil] of consumedLocalReadCapabilities) {
+    if (retainedUntil <= now) consumedLocalReadCapabilities.delete(consumed);
+  }
+  if (!capability || consumedLocalReadCapabilities.has(capability)) return false;
+  if (consumedLocalReadCapabilities.size >= LOCAL_READ_REPLAY_LIMIT) return false;
+  consumedLocalReadCapabilities.set(capability, expiresAt);
+  admittedLocalReadRequests.add(req);
+  return true;
+}
+
+function hasLocalProviderReloadCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (admittedLocalProviderReloadRequests.has(req)) return true;
+  if (!local || req.method !== "POST") return false;
+  let url: URL;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return false;
+  }
+  if (url.pathname !== LOCAL_PROVIDER_RELOAD_PATH || url.search !== "") return false;
+  const contentLength = req.headers.get("content-length");
+  if (contentLength !== "0" || req.headers.has("transfer-encoding")) return false;
+  const expectedPid = parseExpectedLocalProviderReloadPid(
+    req.headers.get(LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  const expiresAtRaw = req.headers.get(LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER);
+  if (!expiresAtRaw || !/^[1-9]\d*$/.test(expiresAtRaw)) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const name = req.headers.get(LOCAL_PROVIDER_RELOAD_NAME_HEADER);
+  const capability = req.headers.get(LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyLocalProviderReloadCapability(
+    local.attestationSecret,
+    req.headers.get(LOCAL_PROVIDER_RELOAD_NONCE_HEADER),
+    req.method,
+    url.pathname,
+    name,
+    local.pid,
+    local.port,
+    expiresAt,
+    capability,
+    now,
+  )) return false;
+  for (const [consumed, retainedUntil] of consumedLocalProviderReloadCapabilities) {
+    if (retainedUntil <= now) consumedLocalProviderReloadCapabilities.delete(consumed);
+  }
+  if (!capability || consumedLocalProviderReloadCapabilities.has(capability)) return false;
+  if (consumedLocalProviderReloadCapabilities.size >= LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT) return false;
+  consumedLocalProviderReloadCapabilities.set(capability, expiresAt);
+  admittedLocalProviderReloadRequests.add(req);
+  return true;
+}
 
 /**
  * The principal for a request that already passed `requireManagementAuth`. Kept as a
  * separate resolution (rather than a changed return type) so every existing caller
- * keeps its `Response | null` contract; the value is derived from the same session
- * table and the same CSRF comparison the gate uses, so the two cannot disagree.
+ * keeps its `Response | null` contract. Browser and admin principals are derived
+ * from the same session table and CSRF comparison the gate uses; the restart
+ * principal is derived from the same process-scoped capability check.
  */
 export function managementPrincipal(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
+  if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
+  if (hasLocalProviderReloadCapability(req, local)) return "local-provider-reload-capability";
+  if (hasLocalReadCapability(req, local)) return "local-read-capability";
   if (!state.available) return null;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
     || req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
@@ -273,7 +446,11 @@ export function requireManagementAuth(
   req: Request,
   state: ManagementAuthState,
   config?: OcxConfig,
+  local?: LocalManagementAuthContext,
 ): Response | null {
+  if (hasSystemRestartCapability(req, local)) return null;
+  if (hasLocalProviderReloadCapability(req, local)) return null;
+  if (hasLocalReadCapability(req, local)) return null;
   if (!state.available) {
     return Response.json({
       error: "management API unavailable",

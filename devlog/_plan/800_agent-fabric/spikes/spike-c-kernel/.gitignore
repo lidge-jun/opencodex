@@ -1,0 +1,5 @@
+# Spike C is a disposable/retained-evidence Go program; never commit build artifacts.
+*.exe
+*.test
+*.out
+go.sum

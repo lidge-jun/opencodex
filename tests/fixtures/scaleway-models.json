@@ -1,0 +1,53 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "glm-5.2",
+      "object": "model",
+      "created": 1782864000,
+      "owned_by": "zai-org"
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "object": "model",
+      "created": 1780272000,
+      "owned_by": "qwen"
+    },
+    {
+      "id": "gpt-oss-120b",
+      "object": "model",
+      "created": 1754265600,
+      "owned_by": "openai"
+    },
+    {
+      "id": "pixtral-12b-2409",
+      "object": "model",
+      "created": 1727136000,
+      "owned_by": "mistral"
+    },
+    {
+      "id": "gpt-oss-20b",
+      "object": "model",
+      "created": 1754265600,
+      "owned_by": "openai"
+    },
+    {
+      "id": "whisper-large-v3",
+      "object": "model",
+      "created": 1700784000,
+      "owned_by": "openai"
+    },
+    {
+      "id": "qwen3-embedding-8b",
+      "object": "model",
+      "created": 1748736000,
+      "owned_by": "qwen"
+    },
+    {
+      "id": "future-chat-unverified",
+      "object": "model",
+      "created": 1785110400,
+      "owned_by": "scaleway"
+    }
+  ]
+}

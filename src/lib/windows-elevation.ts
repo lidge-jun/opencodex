@@ -21,6 +21,13 @@ type TrustedSystemDirectoryResolver = () => string;
 type IsUserAnAdmin = () => number;
 type WindowsElevationProbe = () => boolean | null;
 
+export class WindowsSystemDirectoryFfiUnavailableError extends Error {
+  constructor() {
+    super("Failed to load GetSystemDirectoryW from kernel32.dll.");
+    this.name = "WindowsSystemDirectoryFfiUnavailableError";
+  }
+}
+
 let getSystemDirectoryWFn: GetSystemDirectoryW | null | undefined;
 let trustedSystemDirectoryResolverForTests: TrustedSystemDirectoryResolver | null = null;
 let isUserAnAdminFn: (() => boolean) | null | undefined;
@@ -114,7 +121,7 @@ export function resolveTrustedWindowsSystemDirectory(): string {
   }
   const getSystemDirectoryW = loadGetSystemDirectoryW();
   if (!getSystemDirectoryW) {
-    throw new Error("Failed to load GetSystemDirectoryW from kernel32.dll.");
+    throw new WindowsSystemDirectoryFfiUnavailableError();
   }
 
   let size = 260;

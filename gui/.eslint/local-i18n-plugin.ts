@@ -1,10 +1,41 @@
-import type { Rule } from "eslint";
-import type { JSXAttribute, JSXElement, JSXText, Node, Property, TemplateElement } from "estree";
+import type { Literal, Node, Property, TemplateElement } from "estree";
+import type { JSXAttribute, JSXElement, JSXText } from "estree-jsx";
 import { isBrandOrModelLiteral, isTechnicalLiteral } from "./i18n-allowlist.ts";
 import { formatHardcodedSnippet, i18nLocaleFileHint } from "./i18n-locales.ts";
 
+type LocalRuleContext = {
+  report(descriptor: {
+    node: Node;
+    messageId: "uiString" | "dataCopy";
+    data?: Record<string, string>;
+  }): void;
+};
+
+type LocalRuleListener = {
+  JSXText?(node: JSXText): void;
+  JSXAttribute?(node: JSXAttribute): void;
+  Literal?(node: Literal): void;
+  TemplateElement?(node: TemplateElement): void;
+  Property?(node: Property): void;
+};
+
+type LocalRuleModule = {
+  meta: {
+    type: "problem";
+    docs: {
+      description: string;
+    };
+    schema: readonly unknown[];
+    messages: Record<string, string>;
+  };
+  create(context: LocalRuleContext): LocalRuleListener;
+};
+
 const LITERAL_PATTERN =
   /[A-Za-zÀ-ÖØ-öø-ÿ\u0100-\u024F\u1E00-\u1EFF\u0400-\u04FF\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/u;
+
+const HTML_CHARACTER_REFERENCE_PATTERN =
+  /&(?:#\d+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]+);/g;
 
 const UI_ATTRS = new Set([
   "title",
@@ -40,12 +71,13 @@ function isAllowedLiteral(value: string): boolean {
 }
 
 function reportLiteral(
-  context: Rule.RuleContext,
+  context: LocalRuleContext,
   node: Node,
   value: string,
   messageId: "uiString" | "dataCopy",
+  comparisonValue = value,
 ) {
-  if (isAllowedLiteral(value)) return;
+  if (isAllowedLiteral(comparisonValue)) return;
   context.report({
     node,
     messageId,
@@ -181,7 +213,7 @@ function isInsideNonUiContext(node: Node): boolean {
       }
     }
     if (current.type === "Property") {
-      const key = propertyKeyName(current as Property);
+      const key = propertyKeyName((current as Property).key);
       if (key && NON_UI_OBJECT_KEYS.has(key)) return true;
     }
     if (current.type === "CallExpression") {
@@ -201,7 +233,7 @@ function propertyKeyName(key: Property["key"]): string | null {
   return null;
 }
 
-const noHardcodedUiStrings: Rule.RuleModule = {
+const noHardcodedUiStrings: LocalRuleModule = {
   meta: {
     type: "problem",
     docs: {
@@ -219,7 +251,9 @@ const noHardcodedUiStrings: Rule.RuleModule = {
         if (isInsideNonUiContext(node)) return;
         const value = node.value.replace(/\s+/g, " ").trim();
         if (!value) return;
-        reportLiteral(context, node, value, "uiString");
+
+        const comparisonValue = value.replace(HTML_CHARACTER_REFERENCE_PATTERN, "");
+        reportLiteral(context, node, value, "uiString", comparisonValue);
       },
       JSXAttribute(node: JSXAttribute) {
         if (node.name.type !== "JSXIdentifier") return;
@@ -262,7 +296,7 @@ const noHardcodedUiStrings: Rule.RuleModule = {
   },
 };
 
-const noHardcodedDataCopy: Rule.RuleModule = {
+const noHardcodedDataCopy: LocalRuleModule = {
   meta: {
     type: "problem",
     docs: {

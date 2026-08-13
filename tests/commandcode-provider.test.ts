@@ -148,8 +148,8 @@ describe("Command Code provider", () => {
       commandcodeConfig(),
       "commandcode/deepseek/deepseek-v4-flash",
     );
-    // No explicit parallel-tool-calls claim is persisted for Command Code; the openai-chat
-    // adapter applies its default-on wire behavior (see below) unless a provider opts out.
+    // Command Code does not opt into parallel_tool_calls at the provider level, so the
+    // openai-chat adapter omits the field unless parallelToolCalls is explicitly true.
     expect(route.provider.parallelToolCalls).toBeUndefined();
     expect(route.modelId).toBe("deepseek/deepseek-v4-flash");
 
@@ -167,7 +167,7 @@ describe("Command Code provider", () => {
     expect(request.url).toBe("https://api.commandcode.ai/provider/v1/chat/completions");
     expect(request.headers.Authorization).toBe("Bearer cmd-test-key");
     expect(body.model).toBe("deepseek/deepseek-v4-flash");
-    expect(body.parallel_tool_calls).toBe(true);
+    expect(body).not.toHaveProperty("parallel_tool_calls");
   });
 
   test("discovers the live catalog with context windows and preserves slash ids", async () => {

@@ -17,6 +17,8 @@ import {
 } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
+import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
+
 import type {
   ResolveCodexCoordinatorDatabasePath,
   ResolveCodexCatalogSerializationDatabasePath,
@@ -29,6 +31,13 @@ const POSIX_PRIVATE_MODE = 0o700;
 const POSIX_TMP_REQUIRED_MODE = 0o1003;
 const POSIX_TMP_PATH = "/tmp";
 const SID_PATTERN = /^S-1-(?:\d+-)+\d+$/i;
+
+/**
+ * Hard budget for the Windows identity-lookup PowerShell child. These lookups
+ * run at startup and on config writes; a hung child must fail the lookup
+ * (recoverable — the caller refuses) rather than wedge the proxy indefinitely.
+ */
+const WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS = 8_000;
 
 export class CodexUserIdentityRefusal extends Error {
   readonly code = "CODEX_USER_IDENTITY_REFUSED";
@@ -43,24 +52,66 @@ function refuse(message: string, cause?: unknown): never {
   throw new CodexUserIdentityRefusal(message, cause === undefined ? undefined : { cause });
 }
 
+function windowsIdentityPowerShellCommand(expression: string): string[] {
+  return [
+    resolveTrustedWindowsPowerShellExe(),
+    "-NoLogo",
+    "-NoProfile",
+    "-NonInteractive",
+    "-WindowStyle",
+    "Hidden",
+    "-Command",
+    expression,
+  ];
+}
+
+function windowsIdentityPowerShellSpawnOptions(): {
+  stdin: "ignore";
+  stdout: "pipe";
+  stderr: "pipe";
+  timeout: number;
+  windowsHide: boolean;
+} {
+  return {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: WINDOWS_POWERSHELL_LOOKUP_TIMEOUT_MS,
+    windowsHide: true,
+  };
+}
+
+/** Test-only readback of the trusted executable and static arguments (#1278). */
+export function windowsIdentityPowerShellCommandForTests(expression: string): string[] {
+  return windowsIdentityPowerShellCommand(expression);
+}
+
+/** Test-only readback of the spawn options shared by the identity lookups (#1278). */
+export function windowsIdentityPowerShellSpawnOptionsForTests(): ReturnType<
+  typeof windowsIdentityPowerShellSpawnOptions
+> {
+  return windowsIdentityPowerShellSpawnOptions();
+}
+
 function powershellValue(expression: string): string {
-  let result: ReturnType<typeof Bun.spawnSync>;
+  let command: string[];
   try {
-    result = Bun.spawnSync([
-      "powershell.exe",
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      expression,
-    ], {
-      stdin: "ignore",
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    command = windowsIdentityPowerShellCommand(expression);
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
   }
+  let result: ReturnType<typeof Bun.spawnSync>;
+  try {
+    // `windowsHide` is the popup fix (#1278): the desktop proxy parent runs
+    // without a console, so a console-subsystem child spawned without
+    // CREATE_NO_WINDOW gets a fresh visible console window at startup and on
+    // every config write. `-WindowStyle Hidden` alone does not stop the
+    // allocation; the flag behind `windowsHide` does.
+    result = Bun.spawnSync(command, windowsIdentityPowerShellSpawnOptions());
+  } catch (cause) {
+    refuse("Windows effective-account lookup could not start.", cause);
+  }
+  if (result.exitedDueToTimeout) refuse("Windows effective-account lookup timed out.");
   if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
   const value = new TextDecoder().decode(result.stdout).trim();
   if (!value) refuse("Windows effective-account lookup returned an empty value.");
@@ -123,7 +174,7 @@ function ensurePrivatePosixDirectory(path: string, uid: number): void {
   assertPrivatePosixDirectory(path, uid);
 }
 
-function resolvePosixRuntimeRoot(uid: number): string {
+function resolveTrustedPosixTmp(): string {
   let realTmp: string;
   try {
     realTmp = realpathSync.native(POSIX_TMP_PATH);
@@ -138,10 +189,80 @@ function resolvePosixRuntimeRoot(uid: number): string {
     if (cause instanceof CodexUserIdentityRefusal) throw cause;
     refuse("The system temporary directory cannot be trusted.", cause);
   }
+  return realTmp;
+}
 
+function resolvePosixRuntimeRoot(uid: number): string {
+  const realTmp = resolveTrustedPosixTmp();
   const root = join(realTmp, `opencodex-runtime-v1-${uid}`);
   ensurePrivatePosixDirectory(root, uid);
   return root;
+}
+
+export type CoordinatorNamespaceProbe =
+  | { readonly status: "ok"; readonly root: string }
+  | { readonly status: "missing" };
+
+/**
+ * Read-only namespace probe for diagnostics (`ocx doctor`).
+ *
+ * Unlike the runtime resolvers, this never creates the root or the lock
+ * directories: a doctor run must observe the namespace, not initialize it.
+ * A missing namespace is reported as `missing` instead of refused, so a fresh
+ * machine does not read as a broken one; an existing but unsafe namespace is
+ * refused exactly like the creating path would refuse it.
+ */
+export function probeCodexCoordinatorNamespace(identity: UserIdentity): CoordinatorNamespaceProbe {
+  if (identity.platform === "posix") {
+    const root = join(resolveTrustedPosixTmp(), `opencodex-runtime-v1-${identity.uid}`);
+    let entry;
+    try {
+      entry = lstatSync(root);
+    } catch (cause) {
+      const code = cause && typeof cause === "object" && "code" in cause
+        ? String((cause as { code?: unknown }).code)
+        : "";
+      if (code === "ENOENT") return { status: "missing" };
+      refuse("The Codex coordinator namespace cannot be inspected.", cause);
+    }
+    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+      refuse("The Codex coordinator namespace is not a real directory.");
+    }
+    if (entry.uid !== identity.uid || (entry.mode & 0o777) !== POSIX_PRIVATE_MODE) {
+      refuse("The Codex coordinator namespace has unsafe ownership or permissions.");
+    }
+    return { status: "ok", root };
+  }
+
+  if (!SID_PATTERN.test(identity.sid)) refuse("The coordinator identity contains an invalid SID.");
+  const localAppData = powershellValue(
+    "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)",
+  );
+  if (!isAbsolute(localAppData)) refuse("Windows LocalAppData resolution returned a relative path.");
+  const root = resolve(localAppData, "OpenCodex", "Runtime", "v1", identity.sid.toUpperCase());
+  let entry;
+  try {
+    entry = lstatSync(root);
+  } catch (cause) {
+    const code = cause && typeof cause === "object" && "code" in cause
+      ? String((cause as { code?: unknown }).code)
+      : "";
+    if (code === "ENOENT") return { status: "missing" };
+    refuse("The Windows coordinator namespace cannot be inspected.", cause);
+  }
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    refuse("The Windows coordinator namespace is not a real directory.");
+  }
+  try {
+    const real = realpathSync.native(root);
+    if (!samePathIdentity(real, root, "win32")) {
+      refuse("The Windows coordinator namespace is redirected by a junction or reparse point.");
+    }
+    return { status: "ok", root: real };
+  } catch (cause) {
+    if (cause instanceof CodexUserIdentityRefusal) throw cause;
+    refuse("The Windows coordinator namespace cannot be resolved.", cause);
+  }
 }
 
 function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "win32" }>): string {
@@ -160,7 +281,45 @@ function resolveWindowsRuntimeRoot(identity: Extract<UserIdentity, { platform: "
   } catch (cause) {
     refuse("The Windows coordinator namespace cannot be created.", cause);
   }
-  return root;
+  // Canonicalize before anything is keyed on the path: a junctioned or
+  // differently-cased LocalAppData must land on ONE namespace, or two processes
+  // that share the real directory would build different lock paths and never
+  // contend. The lock modules also compare this path against realpath, so a
+  // non-canonical spelling here would read as "unsafe" on every acquisition.
+  //
+  // Canonicalizing must only ever fold spelling (case, separators). If the
+  // realpath lands somewhere else entirely, a component of the namespace is a
+  // junction/reparse redirect; accepting the target would convert the old
+  // refusal into silently opening the redirected location, so refuse instead.
+  try {
+    const real = realpathSync.native(root);
+    if (!samePathIdentity(real, root, "win32")) {
+      refuse("The Windows coordinator namespace is redirected by a junction or reparse point.");
+    }
+    return real;
+  } catch (cause) {
+    if (cause instanceof CodexUserIdentityRefusal) throw cause;
+    refuse("The Windows coordinator namespace cannot be resolved.", cause);
+  }
+}
+
+/**
+ * Windows path identity is case-insensitive; everywhere else it is exact.
+ *
+ * The lock modules compare a requested lock path against its own realpath, and
+ * byte equality refuses legitimate Windows spellings (drive-letter case, mixed
+ * component casing) as "unsafe". This is the same semantics
+ * `history-provider.ts` already applies to manifest paths; the platform
+ * argument exists so both branches are testable on any host.
+ */
+export function samePathIdentity(
+  a: string,
+  b: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const left = resolve(a);
+  const right = resolve(b);
+  return platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
 }
 
 export const resolveCodexCoordinatorDatabasePath: ResolveCodexCoordinatorDatabasePath = (

@@ -49,8 +49,8 @@ jobs:
       contents: read
       # Required to rewrite the issue title/body and upsert/delete the control comment.
       issues: write
-      # Required by actions/ai-inference; untrusted issue text reaches the model.
-      models: read
+      # Required to authenticate Copilot CLI requests with the short-lived GITHUB_TOKEN.
+      copilot-requests: write
     steps:
       - name: Checkout trusted workflow code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -155,13 +155,30 @@ jobs:
             const bodyDelim = "SOURCE_" + require("crypto").randomBytes(16).toString("hex");
             fs.appendFileSync(process.env.GITHUB_OUTPUT, "source_body<<" + bodyDelim + "\n" + sourceBody + "\n" + bodyDelim + "\n");
 
+      - name: Set up Node.js for Copilot CLI
+        id: node
+        if: steps.prepare.outputs.should_translate == 'true'
+        continue-on-error: true
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        id: copilot
+        if: steps.prepare.outputs.should_translate == 'true' && steps.node.outcome == 'success'
+        continue-on-error: true
+        run: npm install --global @github/copilot@1.0.74
+
       - name: Detect and translate
         id: ai
-        if: steps.prepare.outputs.should_translate == 'true'
-        uses: actions/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9 # v1
+        if: steps.prepare.outputs.should_translate == 'true' && steps.copilot.outcome == 'success'
+        continue-on-error: true
+        uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
-          model: openai/gpt-4o-mini
-          max-tokens: 4000
+          provider: copilot
+          model: ""
           system-prompt: >
             You are a GitHub issue translator. Detect the primary language and,
             when it is not English, produce a faithful English translation.
@@ -184,9 +201,16 @@ jobs:
             JSON shape:
             {"requires_translation":<bool>,"detected_language":"<lang>","translated_title":"<str>","translated_body":"<str>"}
 
+      - name: Report unavailable translation inference
+        if: >-
+          always() &&
+          steps.prepare.outputs.should_translate == 'true' &&
+          (steps.node.outcome == 'failure' || steps.copilot.outcome == 'failure' || steps.ai.outcome == 'failure')
+        run: echo "::warning::Copilot inference unavailable; leaving the issue unchanged and retryable."
+
       - name: Parse AI response
         id: parse
-        if: steps.prepare.outputs.should_translate == 'true'
+        if: steps.prepare.outputs.should_translate == 'true' && steps.ai.outcome == 'success'
         env:
           AI_RESPONSE: ${{ steps.ai.outputs.response }}
         run: node .github/scripts/parse-issue-translation-response.cjs
@@ -349,6 +373,8 @@ jobs:
           always() &&
           steps.prepare.outcome == 'success' &&
           steps.prepare.outputs.should_translate == 'true' &&
+          steps.ai.outcome == 'success' &&
+          steps.parse.outcome == 'success' &&
           steps.parse.outputs.requires_translation != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
@@ -417,7 +443,7 @@ jobs:
 
   translate-comment:
     name: Translate non-English issue comments
-    if: github.event_name == 'issue_comment'
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request == null && github.event.comment.user.type != 'Bot'
     runs-on: ubuntu-latest
     concurrency:
       # Shares the per-issue queue with the `translate` job: both jobs RMW the
@@ -429,8 +455,8 @@ jobs:
       contents: read
       # Required to rewrite the triggering issue comment in place.
       issues: write
-      # Required by actions/ai-inference; untrusted comment text reaches the model.
-      models: read
+      # Required to authenticate Copilot CLI requests with the short-lived GITHUB_TOKEN.
+      copilot-requests: write
     steps:
       - name: Checkout trusted workflow code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -492,13 +518,30 @@ jobs:
               "source_body<<" + bodyDelim + "\n" + decision.sourceBody + "\n" + bodyDelim + "\n",
             );
 
+      - name: Set up Node.js for Copilot CLI
+        id: node
+        if: steps.prepare.outputs.should_translate == 'true'
+        continue-on-error: true
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        id: copilot
+        if: steps.prepare.outputs.should_translate == 'true' && steps.node.outcome == 'success'
+        continue-on-error: true
+        run: npm install --global @github/copilot@1.0.74
+
       - name: Detect and translate comment
         id: ai
-        if: steps.prepare.outputs.should_translate == 'true'
-        uses: actions/ai-inference@b81b2afb8390ee6839b494a404766bef6493c7d9 # v1
+        if: steps.prepare.outputs.should_translate == 'true' && steps.copilot.outcome == 'success'
+        continue-on-error: true
+        uses: actions/ai-inference@2c43c91ae16266ca159d311430343c67a5ffa222 # v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         with:
-          model: openai/gpt-4o-mini
-          max-tokens: 4000
+          provider: copilot
+          model: ""
           system-prompt: >
             You are a GitHub issue-comment translator. Detect the primary language and,
             when it is not English, produce a faithful English translation.
@@ -520,9 +563,16 @@ jobs:
             JSON shape:
             {"requires_translation":<bool>,"detected_language":"<lang>","translated_title":"","translated_body":"<str>"}
 
+      - name: Report unavailable comment translation inference
+        if: >-
+          always() &&
+          steps.prepare.outputs.should_translate == 'true' &&
+          (steps.node.outcome == 'failure' || steps.copilot.outcome == 'failure' || steps.ai.outcome == 'failure')
+        run: echo "::warning::Copilot inference unavailable; leaving the comment unchanged and retryable."
+
       - name: Parse AI response
         id: parse
-        if: steps.prepare.outputs.should_translate == 'true'
+        if: steps.prepare.outputs.should_translate == 'true' && steps.ai.outcome == 'success'
         env:
           AI_RESPONSE: ${{ steps.ai.outputs.response }}
         run: node .github/scripts/parse-issue-translation-response.cjs
@@ -636,6 +686,8 @@ jobs:
           always() &&
           steps.prepare.outcome == 'success' &&
           steps.prepare.outputs.should_translate == 'true' &&
+          steps.ai.outcome == 'success' &&
+          steps.parse.outcome == 'success' &&
           steps.parse.outputs.requires_translation != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:

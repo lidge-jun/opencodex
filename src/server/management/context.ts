@@ -4,6 +4,7 @@ import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
 import type { injectGrokConfig } from "../../grok/inject";
+import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import type { RuntimePortState } from "../../config";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 
@@ -31,6 +32,9 @@ export interface ManagementApiDeps {
    * tests). Production leaves this unset and uses the real writer.
    */
   injectGrokConfig?: typeof injectGrokConfig;
+  /** Desktop mutation seams keep route tests inside temporary config libraries. */
+  removeDesktop3pStandardPivot?: typeof removeDesktop3pStandardPivot;
+  writeDesktop3pConfig?: typeof writeDesktop3pConfig;
   /**
    * Runtime-state seam: the fence must name the host/port the RUNNING process
    * bound (agent-settings-routes.ts:99-103 pattern), and a test must not depend

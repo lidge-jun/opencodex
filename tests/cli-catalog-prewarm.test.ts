@@ -53,7 +53,7 @@ describe("catalog prewarm on handleStart bind", () => {
 
   test("handleStart schedules catalog prewarm immediately after a successful bind", async () => {
     const cli = (await readText("src/cli/index.ts")).replace(/\r\n/g, "\n");
-    const bindIdx = cli.indexOf("server = startServer(port, { localAttestationSecret });");
+    const bindIdx = cli.indexOf("server = startServer(port");
     const prewarmIdx = cli.indexOf("scheduleCatalogPrewarm()");
     const breakIdx = cli.indexOf("\n      break;", bindIdx);
 

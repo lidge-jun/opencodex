@@ -86,6 +86,16 @@ describe("anthropic-flavor ModelInfo discovery entries (devlog 130 B4b)", () => 
     expect(variants).toHaveLength(1); // gpt-5.4 (1M) only; gpt-5.6-sol native is 372k
   });
 
+  test("native OpenAI rows carry max_input_tokens so Claude Code skips the 200k fallback (#1218)", () => {
+    const infos = buildAnthropicModelInfos(["gpt-5.6-sol", "gpt-5.5"], []);
+    const sol = infos.find(i => i.display_name === "gpt-5.6-sol (native)");
+    const gpt55 = infos.find(i => i.display_name === "gpt-5.5 (native)");
+    // 372k is the deliberate reported window for the gpt-5.6 family (the
+    // ChatGPT channel does not hard-block past 272k); gpt-5.5 stays at 272k.
+    expect(sol!.max_input_tokens).toBe(372_000);
+    expect(gpt55!.max_input_tokens).toBe(272_000);
+  });
+
   test("[1m] variant never double-suffixes or duplicates (audit R1#11)", () => {
     const infos = buildAnthropicModelInfos([], [
       // Anthropic passthrough keeps its id verbatim, so an id already carrying the

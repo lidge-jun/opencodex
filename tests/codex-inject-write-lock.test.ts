@@ -25,7 +25,7 @@ function seedNative(): void {
   writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5"\n');
 }
 
-function runInject(port: number, lockTimeoutMs = 0): { success: boolean; retryable: boolean; message: string } {
+function runInject(port: number, lockTimeoutMs = 0): { success: boolean; status?: "skipped"; retryable: boolean; message: string } {
   const result = spawnSync(process.execPath, [CHILD], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -37,7 +37,7 @@ function runInject(port: number, lockTimeoutMs = 0): { success: boolean; retryab
     },
   });
   const line = (result.stdout ?? "").trim().split("\n").filter(Boolean).pop() ?? "{}";
-  return JSON.parse(line) as { success: boolean; retryable: boolean; message: string };
+  return JSON.parse(line) as { success: boolean; status?: "skipped"; retryable: boolean; message: string };
 }
 
 beforeEach(() => {
@@ -54,6 +54,20 @@ afterEach(() => {
 });
 
 describe("the lock is on the production path", () => {
+  test("a persisted OFF observed under N skips the real injector without writing", () => {
+    seedNative();
+    const configPath = join(codexHome, "config.toml");
+    const before = readFileSync(configPath, "utf8");
+    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      providers: {}, defaultProvider: "openai", clientIntegrations: { codex: false },
+    }));
+
+    const result = runInject(20200);
+
+    expect(result).toMatchObject({ success: true, status: "skipped" });
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+  });
+
   test("a clean first apply coordinates and records a transition", () => {
     seedNative();
     const result = runInject(10100);

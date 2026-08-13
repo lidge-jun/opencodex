@@ -38,7 +38,7 @@ ocx start        # proxy + dashboard on localhost:10100
 </table>
 
 <p align="center">
-  <a href="README.md">English</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
+  <a href="README.md">English</a> · <a href="readme/README.ko.md">한국어</a> · <a href="readme/README.zh-CN.md">简体中文</a> · <a href="readme/README.zh-TW.md">繁體中文</a> · <a href="readme/README.ru.md">Русский</a> · <a href="readme/README.ja.md">日本語</a> · <a href="readme/README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/"><b>Full documentation →</b></a>
 </p>
 
 opencodex is a lightweight local proxy that translates Codex's Responses API into whatever your
@@ -57,9 +57,44 @@ npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled auto
 ocx start                            # or `ocx service` to run it in the background
 ```
 
+<details>
+<summary>Install from source (latest dev, Bun canary)</summary>
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun upgrade --canary
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run src/cli/index.ts start
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm bun.sh/install.ps1 | iex; bun upgrade --canary
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex; bun install
+bun run src/cli/index.ts start
+```
+
+Source install runs the latest `dev` branch with Bun canary. Memory ownership
+patches, runtime GC improvements, and unreleased fixes are available here before
+they reach the npm package.
+
+</details>
+
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
+It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
+the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
+threads normally retain affinity to the account that started them, so long SSH, tmux, or
+mobile-connected sessions do not jump accounts mid-conversation — but quota re-evaluation, failover,
+account exclusion, affinity expiry, or 401/403 and 429 recovery can rebind them. Give the accounts a
+selection order when one of them — usually your Codex Desktop login — should only be reached for
+once the others are drained.
 
 ### For agents
 
@@ -103,6 +138,34 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 - **See what's happening** — the dashboard shows providers, OAuth status, model selection, and a
   live request log with cache token counts.
 - **Clean exit, zero residue** — `ocx stop` restores Codex to its original configuration.
+- **Bounded memory ownership** — every long-lived cache, ring buffer, and protocol-translation
+  store has a finite cap, byte budget, or active reconciliation. No unbounded `Map` or `Set`
+  survives a config reload.
+
+<details>
+<summary>Memory ownership details</summary>
+
+OpenCodex tracks 36 categories of process-retained state. Each has a documented bound:
+
+- **12 retained stores** (request log, debug rings, image cache, model cache, vision
+  descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
+  evicted by the app-owned memory budget (default 256 MiB).
+- **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
+  monitored for in-flight byte pressure without eviction.
+- **24 state-store registrations** handle expiry sweeps (60 s interval) and
+  config-generation reconciliation so stale provider/account keys are removed.
+- **Path and fingerprint memos** (workspace metadata, hardened identities, installation
+  salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
+- **Model-cache generation tombstones** are deleted after reconciliation; a global
+  generation increment prevents stale in-flight discoveries from repopulating removed
+  providers.
+- **Lab event-id deduplication** runs under a ledger lock from disk, with no
+  process-level RAM index.
+
+Run `GET /api/system/memory` (with the admin token) to inspect live retained bytes,
+eviction counters, and watchdog samples.
+
+</details>
 
 ## Model routing
 
@@ -134,6 +197,8 @@ ocx start [--port 10100]       # start the proxy in the foreground
 ocx stop                       # stop + restore native Codex
 ocx service [install|start|stop|status|uninstall|remove]  # background service
 ocx codex-shim install         # start the proxy on demand whenever `codex` launches
+ocx health [--json]            # check immediate proxy liveness
+ocx ready [--json] [--wait [--timeout <seconds>]]  # check post-sync readiness
 ocx status                     # is the proxy running?
 ocx gui                        # open the web dashboard
 ocx provider <...>             # manage providers (list/add/edit/test/remove)
@@ -145,6 +210,27 @@ ocx update [--tag preview]     # update opencodex
 
 Unpinned starts may pick another free port if the preferred one is busy; an explicit `--port`
 never hops. Full reference: [CLI docs](https://opencodex.me/reference/cli/).
+
+### Health and readiness
+
+`GET /healthz` reports immediate proxy liveness. The unauthenticated `GET /readyz` endpoint reports
+post-sync readiness with the sanitized JSON identity `{service, version, uptime, pid, port, status}`.
+It returns `200` when `status` is `ready`; `pending` and terminal `failed` return `503` with
+`Retry-After: 1`.
+
+`ocx ready [--json] [--wait [--timeout <seconds>]]` performs one probe by default. `--wait` polls
+for up to 45 seconds by default, but exits immediately when it observes terminal `failed`;
+`--timeout <seconds>` sets a 1–300 second limit, requires `--wait`, and accepts only positive integers. CLI `--json` output is
+`{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or `unreachable`.
+
+| Exit | Result |
+| --- | --- |
+| `0` | Ready |
+| `1` | Not ready: pending, failed, timeout, or unreachable |
+| `64` | Invalid arguments |
+
+An older proxy without `/readyz` fails closed as `unreachable` with exit 1, while `ocx health`
+remains compatible.
 
 ### Autostart: service vs shim
 

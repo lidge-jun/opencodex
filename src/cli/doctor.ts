@@ -10,21 +10,26 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, readRuntimePort, resolveEnvValue } from "../config";
-import { findLiveProxy } from "../server/proxy-liveness";
-import { gracefulStopHost } from "../lib/process-control";
+import { getConfigDir, getConfigPath, readConfigDiagnostics, readPid, resolveEnvValue } from "../config";
+import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
 import { PROXY_ENV_KEYS, proxyEnvPresent } from "../lib/proxy-env";
-import { configuredAdminToken } from "../lib/admin-secrets";
+import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { readCodexTokens } from "../codex/auth-collision";
 import { withNativeMainSharedClaim } from "../codex/native-main-claim";
 import { probeNativeProfileRecoveryState, resolveNativeProfileContext } from "../codex/native-profile-store";
 import { NativeProfileError } from "../codex/native-profile-types";
 import { collectOrcaCodexHomeDiagnostic, resolveCodexHomeDir as resolveCodexHomeDirImpl, isWslRuntime, listWslWindowsCodexHomes, wslAutomountRoot, type CodexHomeDeps } from "../codex/home";
+import { scanCodexAgentRolesWithTomlModelFallback } from "../codex/subagent-model-fallback";
 import { findCodexOnPath, isWindowsInteropDir } from "../codex/shim";
 import { countPendingOpencodexHistory } from "../codex/history-provider";
+import {
+  CodexUserIdentityRefusal,
+  probeCodexCoordinatorNamespace,
+  resolveEffectiveUserIdentity,
+} from "../codex/user-identity";
 import { collectProjectCodexConfigWarnings, formatProjectCodexConfigWarningsForDoctor } from "../codex/project-config-warnings";
 import { collectStartupHealth, startupHealthSummary } from "../codex/autostart-health";
 import {
@@ -36,6 +41,10 @@ import {
 } from "../codex/runtime";
 import { CODEX_REAUTH_ACTION, collectOAuthHealthEntriesForCli, MASKED_ACCOUNT_FALLBACK, type OAuthHealthEntry } from "../oauth/health";
 import { getAuthRefreshIntentLockPath, getAuthStorePath } from "../oauth/store";
+import {
+  fetchBoundLocalManagementRead,
+  type LocalManagementReadDeps,
+} from "../server/local-management-read-client";
 export { resolveCodexHomeDir } from "../codex/home";
 
 export type OAuthDoctorCheck = { level: "OK" | "WARN"; message: string };
@@ -604,20 +613,28 @@ function observedMemory(data: { rss: number; external?: number; arrayBuffers?: n
 }
 
 export async function fetchServiceMemory(
-  host: string,
-  port: number,
-  token: string | null,
-  fetchImpl: typeof fetch = fetch,
+  target: LiveProxy,
+  deps: LocalManagementReadDeps = {},
 ): Promise<ServiceMemoryReport> {
   try {
-    const res = await fetchImpl(`http://${host}:${port}/api/system/memory`, {
-      headers: token ? { "x-opencodex-api-key": token } : {},
-      signal: AbortSignal.timeout(SERVICE_MEMORY_TIMEOUT_MS),
+    const read = await fetchBoundLocalManagementRead(target, LOCAL_MANAGEMENT_READ_PATHS.systemMemory, {
+      ...deps,
+      timeoutMs: SERVICE_MEMORY_TIMEOUT_MS,
     });
+    if (read.kind === "unavailable") {
+      return read.reason === "transport"
+        ? { status: "unreachable", error: "fetch failed" }
+        : { status: "unauthorized" };
+    }
+    const { response: res, targetPid } = read;
     if (res.status === 401 || res.status === 403) return { status: "unauthorized" };
     if (!res.ok) return { status: "unreachable", error: `http ${res.status}` };
     const body = await res.json() as Partial<ServiceMemoryData>;
-    if (typeof body.pid !== "number" || typeof body.bunVersion !== "string" || typeof body.rss !== "number") {
+    if (
+      body.pid !== targetPid
+      || typeof body.bunVersion !== "string"
+      || typeof body.rss !== "number"
+    ) {
       return { status: "unreachable", error: "malformed response" };
     }
     return {
@@ -666,7 +683,7 @@ export function formatServiceMemoryLines(report: ServiceMemoryReport): string[] 
   const lines: string[] = [];
   lines.push(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
   if (report.status === "unauthorized") {
-    lines.push("  --     proxy reachable but rejected the request — set OPENCODEX_ADMIN_AUTH_TOKEN to match the service");
+    lines.push("  --     local diagnostic capability unavailable — restart the running proxy with this OpenCodex version");
     return lines;
   }
   if (report.status === "unreachable") {
@@ -838,10 +855,6 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   const live = await findLiveProxy({
     configFn: () => ({ port: doctorConfig.port, hostname: doctorConfig.hostname }),
   });
-  const livePid = live ? live.pid : readPid();
-  const liveRuntime = live
-    ? { pid: live.pid ?? 0, port: live.port, hostname: live.hostname }
-    : (livePid ? readRuntimePort(livePid) : null);
 
   const currentProxyEnv = collectProxyEnv();
   const configuredProxy = collectConfiguredProxy();
@@ -881,13 +894,11 @@ export async function runDoctor(args: string[] = []): Promise<void> {
 
   console.log("\nMemory / runtime");
   {
-    const runtime = liveRuntime;
-    if (!runtime || !live) {
+    if (!live) {
       console.log(`  --     doctor process Bun ${Bun.version} (this is NOT the service process)`);
       console.log("  --     no running ocx proxy found (no live pid/runtime record)");
     } else {
-      const token = configuredAdminToken();
-      const report = await fetchServiceMemory(gracefulStopHost(runtime.hostname), runtime.port, token);
+      const report = await fetchServiceMemory(live);
       for (const line of formatServiceMemoryLines(report)) console.log(line);
     }
   }
@@ -902,6 +913,22 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // Codex app until the one-time migration lands. Read-only probe (readonly sqlite, 100ms
   // busy timeout) — reports state, never mutates.
   console.log("\nCodex history migration");
+  // The history failure messages point here; make the visit worthwhile by
+  // probing the coordinator namespace the locks live in. The probe exercises
+  // identity, runtime-root, and permission checks without taking any lock or
+  // creating anything (a doctor run must observe, not initialize).
+  try {
+    const identity = resolveEffectiveUserIdentity();
+    const probe = probeCodexCoordinatorNamespace(identity);
+    if (probe.status === "missing") {
+      console.log("  ok     history coordinator namespace not created yet (no history operation has run)");
+    } else {
+      console.log("  ok     history coordinator namespace resolves");
+    }
+  } catch (cause) {
+    const reason = cause instanceof CodexUserIdentityRefusal ? cause.message : String(cause);
+    console.log(`  --     history coordinator namespace refused: ${reason}`);
+  }
   const pending = countPendingOpencodexHistory();
   if (pending.failed) {
     console.log("  --     state DB locked or unreadable (Codex app open?) — migration state unknown");
@@ -919,6 +946,15 @@ export async function runDoctor(args: string[] = []): Promise<void> {
     for (const line of formatProjectCodexConfigWarningsForDoctor(projectWarnings)) {
       console.log(line);
     }
+  }
+
+  console.log("\nCodex agent role files");
+  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
+  if (tomlFallbackRoles.length === 0) {
+    console.log("  ok     no per-role model_fallback fields in $CODEX_HOME/agents/*.toml");
+  } else {
+    console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
+    console.log("        Codex >= 0.146 rejects that field as unknown and skips the whole role. Move the chains to opencodex config `subagentModelFallbackByModel` (keyed by primary model) and remove the field from the TOML files.");
   }
 
   const dual = collectWslDualInstall();

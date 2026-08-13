@@ -21,6 +21,8 @@ export interface AccountRow {
   masked?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** Codex pool selection order, higher used earlier. Absent where ordering does not apply. */
+  priority?: number;
   quota?: CodexQuotaDto | null;
 }
 
@@ -46,6 +48,8 @@ export interface AccountDeps {
   loadConfigImpl?: () => OcxConfig;
   stdinImpl?: AccountStdin;
   stdinTimeoutMs?: number;
+  /** Internal test seam for the account-import POST; production is capped at ten minutes. */
+  importTimeoutMs?: number;
   /** Test/platform injection for the official Codex login in a restricted staging home. */
   spawnCodexLoginImpl?: (codexHome: string) => NativeMainLoginChild;
   /** Legacy test seam. Production always uses the spawned child handle above. */
@@ -172,6 +176,7 @@ interface CodexAccountDto {
   plan?: string;
   isMain?: boolean;
   needsReauth?: boolean;
+  priority?: number;
   quota?: CodexQuotaDto | null;
 }
 
@@ -219,6 +224,7 @@ export async function fetchCodexRows(
     plan: a.plan,
     active: a.id === activeId,
     needsReauth: a.needsReauth,
+    priority: typeof a.priority === "number" ? a.priority : 0,
     ...(forceRefresh ? { quota: projectQuota(a.quota) } : {}),
   }));
   return { rows, activeId, autoSwitchThreshold, status: 200 };

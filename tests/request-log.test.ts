@@ -23,8 +23,9 @@ import {
   sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "../src/server/request-log";
+import { handleResponses } from "../src/server/responses";
 import { bridgeToResponsesSSE } from "../src/bridge";
-import type { AdapterEvent, OcxUsage } from "../src/types";
+import type { AdapterEvent, OcxConfig, OcxUsage } from "../src/types";
 import {
   appendUsageEntry,
   readUsageEntries,
@@ -53,6 +54,64 @@ function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
 }
 
 describe("request log metadata", () => {
+  test("creates one ordinary attempt after the final adapter is resolved", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      id: "resp_attempt",
+      object: "response",
+      status: "completed",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    })) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "unknown", provider: "unknown" };
+    const config = {
+      defaultProvider: "gateway",
+      providers: {
+        gateway: {
+          adapter: "openai-responses",
+          authMode: "key",
+          apiKey: "test-key",
+          baseUrl: "https://gateway.example/v1",
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gateway/test-model", input: "hello", stream: false }),
+      }), config, logCtx);
+
+      expect(response.status).toBe(200);
+      expect(logCtx.providerAdapter).toBe("openai-responses");
+      expect(logCtx.attempts).toEqual([expect.objectContaining({
+        ordinal: 1,
+        provider: "gateway",
+        model: "test-model",
+        adapter: "openai-responses",
+        sendCount: 1,
+      })]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("projects explicitly empty attempts from persisted usage", () => {
+    const projected = requestLogEntryFromPersistedUsage({
+      requestId: "ocx-empty-attempts",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 1,
+      usageStatus: "unreported",
+      attempts: [],
+    });
+
+    expect(projected.attempts).toEqual([]);
+  });
+
   test("records the adapter's exact outbound reasoning parameter", () => {
     const attempt = beginRequestAttempt(1, "xai", "grok-4.5", "openai-chat");
     const logCtx: RequestLogContext = {
@@ -204,7 +263,7 @@ describe("request log metadata", () => {
     noteAttemptSend(a, 100);
     noteAttemptSend(a, 120, "transient-5xx");
     noteAttemptSend(a, 120, "transient-5xx");
-    sealRequestAttemptIdentity(a, "chatgpt-pabcdef", "openai-responses");
+    sealRequestAttemptIdentity(a, "chatgpt-pabcdef", "openai-responses", "pabcdef");
     finishRequestAttempt(a, 503, 12);
 
     const b = beginRequestAttempt(2, "prov-b", "model-b", "openai-chat");
@@ -219,6 +278,7 @@ describe("request log metadata", () => {
     expect(a).toMatchObject({
       ordinal: 1,
       provider: "chatgpt-pabcdef",
+      accountLogLabel: "pabcdef",
       adapter: "openai-responses",
       status: 503,
       sendCount: 3,
@@ -491,6 +551,11 @@ describe("request log metadata", () => {
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");
+    expect(requestLogErrorCode(400, "blocked", "cyber_policy")).toBe("cyber_policy");
+    expect(requestLogErrorCode(
+      502,
+      "This content was flagged for possible cybersecurity risk. To get authorized for security work, join the Trusted Access for Cyber program.",
+    )).toBe("cyber_policy");
     expect(requestLogErrorCode(503)).toBe("server_is_overloaded");
     expect(requestLogErrorCode(502)).toBe("upstream_server_error");
     expect(requestLogErrorCode(404)).toBe("http_404");
@@ -617,6 +682,29 @@ describe("request log metadata", () => {
       resolvedModel: "gpt-5.5",
       usageStatus: "unreported",
     });
+  });
+
+  test("client-facing response selectors do not replace the physical routed model", async () => {
+    const entries: RequestLogEntry[] = [];
+    const logCtx: RequestLogContext = {
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      resolvedModel: "claude-sonnet-5",
+      preserveResolvedModelFromRoute: true,
+    };
+    const response = responseWithDeferredRequestLog(
+      new Response(JSON.stringify({
+        model: "anthropic/claude-sonnet-5",
+        status: "completed",
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+      "ocx-test-routed-model",
+      Date.now(),
+      logCtx,
+      entry => entries.push(entry),
+    );
+
+    expect(await response.json()).toMatchObject({ model: "anthropic/claude-sonnet-5" });
+    expect(entries[0]?.resolvedModel).toBe("claude-sonnet-5");
   });
 
   test("deferred JSON logging captures reported usage", async () => {
@@ -764,6 +852,39 @@ describe("request log metadata", () => {
       upstreamError: cursorMessage,
       status: 429,
       errorCode: "rate_limit_exceeded",
+    });
+  });
+
+  test("deferred SSE logging preserves structured cyber_policy status and code", async () => {
+    const entries: RequestLogEntry[] = [];
+    const failedPayload = JSON.stringify({
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+      },
+    });
+    const response = responseWithDeferredRequestLog(
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(`data: ${failedPayload}\n\n`));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } }),
+      "ocx-test-cyber-policy",
+      Date.now(),
+      { model: "gpt-5.6-sol", provider: "openai" },
+      entry => entries.push(entry),
+    );
+
+    await response.text();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      terminalStatus: "failed",
+      upstreamError: "blocked",
+      status: 400,
+      errorCode: "cyber_policy",
+      closeReason: "terminal",
     });
   });
 

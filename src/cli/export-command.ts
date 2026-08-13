@@ -1,8 +1,8 @@
 /**
  * `ocx export --client <id>` — print a client config for the live proxy.
  *
- * Six clients, four formats: opencode and Pi are JSON, Hermes and Gajae YAML,
- * OpenClaw JSON5, Kimi TOML.
+ * Seven clients, four formats: opencode and Pi are JSON, OMP, Hermes and Gajae
+ * are YAML, OpenClaw JSON5, Kimi TOML.
  *
  * Two consumers, one payload (devlog 260731_client_config_export/020):
  *
@@ -179,13 +179,13 @@ export async function handleExportCommand(argv: string[], deps: ExportCommandDep
 
     // Every serializer already ends with exactly one newline.
     if (out !== undefined) writeExport(out, text, force);
-    // stderr, so `--json` stdout stays byte-exact for a redirect.
+    // stderr, so `--json` stdout stays a standalone JSON document.
     if (out !== undefined && wantsJson) console.error(`Wrote ${out}`);
 
     const degraded = models.filter(model => !hasContextLimit(model)).length;
-    // `--json` keeps emitting the DOCUMENT at the top level: a script that
-    // pipes it into a config file must not have to unwrap an envelope we added
-    // for our own convenience. Format metadata rides in the human lines below.
+    // `--json` keeps emitting the DOCUMENT at the top level as JSON for scripts;
+    // `--out` is the path that writes the selected client's native format.
+    // Format metadata rides in the human lines below.
     printData(clientConfig, wantsJson, [
       text.trimEnd(),
       "",

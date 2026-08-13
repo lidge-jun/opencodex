@@ -25,7 +25,7 @@ import type { OcxConfig } from "../types";
 import { readJsonRequestBody } from "./request-decompress";
 import {
   addFinalRequestLog,
-  httpStatusForTerminalStatus,
+  httpStatusForRequestLogTerminal,
   recordFirstOutput,
   type RequestLogContext,
   type RequestLogEntry,
@@ -85,7 +85,6 @@ async function handleChatCompletionsWithBudget(
   try {
     chatBody = await readChatBody(req, translatorBudget);
     internalBody = chatCompletionsToResponsesBody(chatBody);
-    translatorBudget.chargeRetained(new TextEncoder().encode(JSON.stringify(internalBody)).byteLength, { kind: "request_copies" });
   } catch (err) {
     const overflow = isTranslatorBudgetExceededError(err);
     const status = overflow ? 413 : err instanceof ChatCompletionsRequestError ? 400 : 500;
@@ -132,10 +131,6 @@ async function handleChatCompletionsWithBudget(
       delete internalBody.user;
     } else if (internalBody.store === undefined) {
       internalBody.store = false;
-    }
-    if (route.provider.adapter === "openai-chat" && internalBody.text !== undefined) {
-      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
-      return chatCompletionsErrorResponse(400, "response_format is not supported for routed openai-chat models");
     }
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
       const raw = chatBody as Rec;
@@ -184,8 +179,24 @@ async function handleChatCompletionsWithBudget(
     }
   }
 
-  const internalBodyJson = JSON.stringify(internalBody);
-  translatorBudget.chargeRetained(new TextEncoder().encode(internalBodyJson).byteLength, { kind: "request_copies" });
+  let internalBodyJson: string;
+  try {
+    internalBodyJson = JSON.stringify(internalBody);
+    translatorBudget.chargeRetained(
+      new TextEncoder().encode(internalBodyJson).byteLength,
+      { kind: "request_copies" },
+    );
+  } catch (err) {
+    const overflow = isTranslatorBudgetExceededError(err);
+    const status = overflow ? 413 : 500;
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason: "non_stream" });
+    return chatCompletionsErrorResponse(
+      status,
+      overflow ? "request translation buffer exceeded the safe limit" : err instanceof Error ? err.message : String(err),
+      overflow ? "request_too_large" : undefined,
+      overflow ? "translation_buffer_limit" : undefined,
+    );
+  }
   const internalReq = new Request("http://localhost/v1/responses", {
     method: "POST",
     headers,
@@ -205,7 +216,7 @@ async function handleChatCompletionsWithBudget(
     inboundWire: "chat",
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
-    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForTerminalStatus(status), { terminalStatus: status, closeReason: "terminal" }),
+    onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
   });
 

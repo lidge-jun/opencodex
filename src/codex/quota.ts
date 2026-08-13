@@ -2,6 +2,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
+import { isThirtyDayOnlyCodexPlan } from "./plan";
 
 export type StoredAccountQuota = {
   weeklyPercent?: number;
@@ -36,7 +37,7 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
 export type WhamUsageResponse = {
   email?: string | null;
-  plan_type?: string | null;
+  plan_type?: unknown;
   rate_limit?: {
     // Live WHAM payloads send explicit nulls for absent windows (issue #315 repro).
     primary_window?: WhamUsageWindow | null;
@@ -72,7 +73,7 @@ export const CODEX_EXHAUSTED_USAGE_PERCENT = 100;
 
 export function isCodexQuotaExhausted(
   quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent"> | null,
-  plan?: string | null,
+  plan?: unknown,
 ): boolean {
   if (!quota) return false;
   const values = codexQuotaWindowForPlan(plan) === "monthly"
@@ -98,14 +99,13 @@ export function isCodexQuotaExhausted(
  * everything else (including an absent plan) reports weekly. Recovery reads the
  * window the parser actually wrote rather than second-guessing it.
  */
-export function codexQuotaWindowForPlan(plan?: string | null): "monthly" | "weekly" {
-  const normalized = plan?.trim().toLowerCase();
-  return normalized === "go" || normalized === "free" ? "monthly" : "weekly";
+export function codexQuotaWindowForPlan(plan?: unknown): "monthly" | "weekly" {
+  return isThirtyDayOnlyCodexPlan(plan) ? "monthly" : "weekly";
 }
 
 export function isCompleteCodexQuotaRecoverySnapshot(
   quota: Pick<StoredAccountQuota, "weeklyPercent" | "monthlyPercent" | "monthlyIsPrimaryWindow"> | null,
-  plan?: string | null,
+  plan?: unknown,
 ): boolean {
   if (!quota || isCodexQuotaExhausted(quota, plan)) return false;
   // Recovery still fails closed on MISSING EVIDENCE — a credits-only or windowless payload

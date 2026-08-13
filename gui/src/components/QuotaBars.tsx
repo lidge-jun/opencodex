@@ -120,10 +120,14 @@ function bcp47(locale: Locale): string {
       return "ko-KR";
     case "zh":
       return "zh-CN";
+    case "zh-TW":
+      return "zh-TW";
     case "ru":
       return "ru-RU";
     case "ja":
       return "ja-JP";
+    case "tr":
+      return "tr-TR";
     default: {
       const _exhaustive: never = locale;
       return _exhaustive;

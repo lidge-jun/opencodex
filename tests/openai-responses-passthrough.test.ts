@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
@@ -11,9 +12,106 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
 
 const provider = {
   adapter: "openai-responses",
-  baseUrl: "https://chatgpt.example/backend-api/codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("noncanonical forward providers cannot receive caller or runtime credentials", () => {
+  const userInfoUrl = new URL("https://chatgpt.com/backend-api/codex");
+  userInfoUrl.username = "user";
+  userInfoUrl.password = "secret";
+  for (const baseUrl of [
+    "https://provider.example/v1/",
+    "https://chatgpt.com/backend-api/not-codex",
+    "https://chatgpt.example/backend-api/codex",
+    "https://chatgpt.com/backend-api/codex?target=custom",
+    "https://chatgpt.com/backend-api/codex#custom",
+    userInfoUrl.toString(),
+  ]) {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl,
+      authMode: "forward",
+      headers: { "x-provider-option": "enabled" },
+      _codexAccountRequired: true,
+      _codexAccountOverride: {
+        accessToken: "runtime-secret",
+        chatgptAccountId: "runtime-account",
+      },
+    } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+    const request = adapter.buildRequest({
+      modelId: "test-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "test-model", input: "ping" },
+    }, {
+      headers: new Headers({
+        authorization: "Bearer caller-secret",
+        "chatgpt-account-id": "caller-account",
+        session_id: "caller-session",
+      }),
+    });
+
+    expect(request.url).toBe(`${baseUrl.replace(/\/+$/, "")}/responses`);
+    expect(request.headers["x-provider-option"]).toBe("enabled");
+    expect(request.headers.authorization).toBeUndefined();
+    expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+    expect(request.headers.session_id).toBeUndefined();
+  }
+});
+
+test("canonical forward providers normalize trailing slashes and let the pool override win", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    ...provider,
+    baseUrl: "https://chatgpt.com/backend-api/codex///",
+    _codexAccountRequired: true,
+    _codexAccountOverride: {
+      accessToken: "runtime-secret",
+      chatgptAccountId: "runtime-account",
+    },
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+
+  expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+  expect(request.headers.authorization).toBe("Bearer runtime-secret");
+  expect(request.headers["chatgpt-account-id"]).toBe("runtime-account");
+});
+
+test("noncanonical pool-required providers use only their configured static credentials", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl: "https://provider.example/v1/",
+    authMode: "forward",
+    headers: { authorization: "Bearer provider-static", "x-provider-option": "enabled" },
+    _codexAccountRequired: true,
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, {
+    headers: new Headers({
+      authorization: "Bearer caller-secret",
+      "chatgpt-account-id": "caller-account",
+      session_id: "caller-session",
+    }),
+  });
+
+  expect(request.url).toBe("https://provider.example/v1/responses");
+  expect(request.headers["x-provider-option"]).toBe("enabled");
+  expect(request.headers.authorization).toBe("Bearer provider-static");
+  expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+  expect(request.headers.session_id).toBeUndefined();
+});
 
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();
@@ -53,6 +151,8 @@ describe("OpenAI Responses key-auth URL construction", () => {
       ["https://api.openai.example", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1/", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1/responses", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1/responses/", "https://api.openai.example/v1/responses"],
     ] as const) {
       expect(buildKeyAuthUrl(baseUrl)).toBe(expectedUrl);
     }
@@ -91,6 +191,40 @@ describe("DeepSeek Responses endpoint contract", () => {
     expect(seed.responsesPath).toBeUndefined();
     expect(buildKeyAuthUrl("https://api.cerebras.ai/v1", seed.responsesPath))
       .toBe("https://api.cerebras.ai/v1/responses");
+  });
+
+  test("key-auth routed Responses converts exec custom tools while native forward preserves them", () => {
+    const rawBody = {
+      model: "deepseek-v4-flash",
+      input: "ping",
+      tools: [
+        { type: "custom", name: "exec", description: "Run JavaScript", format: { type: "grammar", syntax: "lark" } },
+        { type: "custom", name: "apply_patch", description: "Apply a patch", format: { type: "grammar", syntax: "lark" } },
+      ],
+    };
+    const parsed = {
+      modelId: "deepseek-v4-flash",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    };
+    const keyed = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://api.deepseek.com",
+      responsesPath: "/responses",
+      authMode: "key" as const,
+      apiKey: "sk-test",
+    });
+    const keyedBody = JSON.parse(keyed.buildRequest(parsed, { headers: new Headers() }).body) as typeof rawBody;
+    expect(keyedBody.tools[0]).toMatchObject({ type: "function", name: "exec" });
+    expect(keyedBody.tools[1]).toMatchObject({ type: "custom", name: "apply_patch" });
+
+    const nativeBody = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest(
+      { ...parsed, modelId: "gpt-5.6-sol" },
+      { headers: new Headers({ authorization: "Bearer token" }) },
+    ).body) as typeof rawBody;
+    expect(nativeBody.tools).toEqual(rawBody.tools);
   });
 
   test("a config saved before the fix is backfilled, and a hand-set path is preserved", () => {
@@ -1451,14 +1585,14 @@ describe("OpenAI Responses hosted-tool name conflicts", () => {
 
     expect(body.tools).toEqual([
       { type: "image_generation" },
-      { type: "custom", name: "exec_command" },
+      { type: "function", name: "exec_command", parameters: { type: "object" } },
     ]);
     expect(body.tool_choice).toEqual({
       type: "allowed_tools",
       mode: "required",
       tools: [
         { type: "image_generation" },
-        { type: "custom", name: "exec_command" },
+        { type: "function", name: "exec_command" },
       ],
     });
   });
@@ -1722,5 +1856,16 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
 
     expect(body.max_output_tokens).toBe(32000);
     expect(body.metadata).toEqual({ user_id: "u-1" });
+  });
+});
+
+describe("openaiResponsesUrl", () => {
+  test("does not strip mid-path /v1 or a non-endpoint responses suffix", () => {
+    expect(openaiResponsesUrl("https://proxy.example.com/v1/relay")).toBe(
+      "https://proxy.example.com/v1/relay/v1/responses",
+    );
+    expect(openaiResponsesUrl("https://api.example.com/somev1")).toBe(
+      "https://api.example.com/somev1/v1/responses",
+    );
   });
 });

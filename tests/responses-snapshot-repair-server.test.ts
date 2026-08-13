@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { handleResponses } from "../src/server/responses";
+import { isEagerRelaySseResponse } from "../src/server/relay";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -63,6 +65,48 @@ afterEach(async () => {
 });
 
 describe("responsesSnapshotRepair through /v1/responses", () => {
+  test.skipIf(process.platform !== "darwin")(
+    "Darwin eager-relay applies snapshot repair inline before bytes reach the client",
+    async () => {
+      const gateway = "https://sparse-darwin-eager.example.test";
+      stubSparseGateway(gateway);
+      const config = {
+        port: 0,
+        streamMode: "eager-relay",
+        defaultProvider: "sparse",
+        providers: {
+          sparse: {
+            adapter: "openai-responses",
+            baseUrl: `${gateway}/v1`,
+            authMode: "key",
+            apiKey: "test-key",
+            responsesSnapshotRepair: true,
+          },
+        },
+      } as OcxConfig;
+
+      const response = await handleResponses(
+        new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "sparse-model", input: "hi", stream: true }),
+        }),
+        config,
+        { model: "", provider: "" },
+      );
+
+      expect(isEagerRelaySseResponse(response)).toBe(true);
+      const text = await response.text();
+      expect(text).toContain("response.content_part.added");
+      expect(text).toContain("response.output_text.done");
+      expect(text).toContain("response.output_item.done");
+      const completedLine = text.split("\n").find(line => line.includes('"response.completed"'));
+      expect(completedLine).toBeDefined();
+      const completed = JSON.parse(completedLine!.replace(/^data: /, "")) as { response: { output: { id: string }[] } };
+      expect(completed.response.output[0]?.id).toBe("msg_sparse");
+    },
+  );
+
   test("an opt-in gateway's sparse stream reaches the client as the full canonical lifecycle", async () => {
     const gateway = "https://sparse.example.test";
     stubSparseGateway(gateway);

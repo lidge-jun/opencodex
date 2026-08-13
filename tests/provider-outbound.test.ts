@@ -21,9 +21,9 @@ function directDependencies(
   options?: { privateNetwork?: boolean; address?: string },
 ): {
   dependencies: ProviderOutboundDependencies;
-  captured: { address?: string; rejectUnauthorized?: boolean; authorization?: string };
+  captured: { address?: string; rejectUnauthorized?: boolean; authorization?: string; body?: string };
 } {
-  const captured: { address?: string; rejectUnauthorized?: boolean; authorization?: string } = {};
+  const captured: { address?: string; rejectUnauthorized?: boolean; authorization?: string; body?: string } = {};
   const address = options?.address ?? "93.184.216.34";
   return {
     captured,
@@ -37,6 +37,13 @@ function directDependencies(
         captured.address = pinned.address;
         captured.rejectUnauthorized = requestOptions?.rejectUnauthorized;
         captured.authorization = new Headers(requestOptions?.headers).get("authorization") ?? undefined;
+        return response;
+      }),
+      pinnedPost: mock(async (_url, pinned, body, _signal, requestOptions) => {
+        captured.address = pinned.address;
+        captured.rejectUnauthorized = requestOptions?.rejectUnauthorized;
+        captured.authorization = new Headers(requestOptions?.headers).get("authorization") ?? undefined;
+        captured.body = body;
         return response;
       }),
     },
@@ -237,4 +244,72 @@ describe("provider outbound GET transport", () => {
       rmSync(childHome, { recursive: true, force: true });
     }
   }, 15_000);
+});
+
+describe("provider outbound POST transport", () => {
+  test("direct HTTPS posts only to the validated address with its credential and body", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundPost } = await import("../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response('{"models":{}}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const body = JSON.stringify({ project: "test-project" });
+
+    const response = await providerOutboundPost(
+      "google-antigravity",
+      { baseUrl: "https://provider.example" },
+      "https://provider.example/v1internal:fetchAvailableModels",
+      { headers: { authorization: "Bearer test-token" }, body },
+      dependencies,
+    );
+
+    expect(await response.json()).toEqual({ models: {} });
+    expect(captured).toEqual({
+      address: "93.184.216.34",
+      rejectUnauthorized: true,
+      authorization: "Bearer test-token",
+      body,
+    });
+  });
+
+  test("blocks an unsafe POST destination before invoking a caller-owned executor", async () => {
+    const { providerOutboundPost, ProviderOutboundPolicyError } = await import("../src/lib/provider-outbound");
+    let calls = 0;
+    const provider = {
+      baseUrl: "https://provider.example",
+      fetch: (async () => {
+        calls += 1;
+        return new Response("{}");
+      }) as typeof fetch,
+    };
+
+    await expect(providerOutboundPost(
+      "google-antigravity",
+      provider,
+      "https://169.254.169.254/v1internal:fetchAvailableModels",
+      { headers: { authorization: "Bearer test-token" }, body: '{"project":"test-project"}' },
+    )).rejects.toThrow(ProviderOutboundPolicyError);
+    expect(calls).toBe(0);
+  });
+
+  test("requires HTTPS before invoking a caller-owned executor", async () => {
+    const { providerOutboundPost, ProviderOutboundPolicyError } = await import("../src/lib/provider-outbound");
+    let calls = 0;
+    const provider = {
+      baseUrl: "https://provider.example",
+      fetch: (async () => {
+        calls += 1;
+        return new Response("{}");
+      }) as typeof fetch,
+    };
+
+    await expect(providerOutboundPost(
+      "google-antigravity",
+      provider,
+      "http://93.184.216.34/v1internal:fetchAvailableModels",
+      { headers: { authorization: "Bearer test-token" }, body: '{"project":"test-project"}' },
+    )).rejects.toThrow(ProviderOutboundPolicyError);
+    expect(calls).toBe(0);
+  });
 });

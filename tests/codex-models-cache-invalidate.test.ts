@@ -54,6 +54,54 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     expect(cache.models).toEqual([{ slug: "gpt-5.5" }]);
   });
 
+  test("preserves an observed unknown native as a hidden sync observation", () => {
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "gpt-5.5" }],
+    }, null, 2) + "\n");
+    writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+      models: [{
+        slug: "gpt-daybreak-blue-latest",
+        visibility: "list",
+        supported_in_api: true,
+        shell_type: "shell_command",
+        comp_hash: "native-comp-hash",
+        model_messages: { instructions_template: "You are Codex." },
+        base_instructions: "You are Codex.",
+        supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+      }],
+    }, null, 2) + "\n");
+
+    expect(invalidateCodexModelsCache()).toBe(true);
+    const cache = JSON.parse(readFileSync(join(codexHome, "models_cache.json"), "utf8")) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(cache.models.find(model => model.slug === "gpt-daybreak-blue-latest")).toMatchObject({
+      visibility: "hide",
+      opencodex_account_observed_native: true,
+    });
+  });
+
+  test("refuses the cache rewrite when desired state flipped OFF between commit and reacquisition", () => {
+    // The commit-path desired-state check runs under the FIRST catalog permit;
+    // refreshCodexModelCatalog then releases K before invalidateCodexModelsCache
+    // reacquires it. An OFF landing in that gap must gate this second write too —
+    // otherwise a routed models_cache survives a completed disable while the
+    // injector honestly reports status:"skipped".
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "gpt-5.5" }],
+    }, null, 2) + "\n");
+    mkdirSync(join(opencodexHome, ".opencodex"), { recursive: true });
+    writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({
+      port: 10100,
+      defaultProvider: "openai",
+      providers: {},
+      clientIntegrations: { codex: false },
+    }, null, 2) + "\n");
+
+    expect(invalidateCodexModelsCache()).toBe(false);
+    expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+  });
+
   test("returns false for a missing catalog and does not warn/restart app-servers", () => {
     const errors: string[] = [];
     const logs: string[] = [];

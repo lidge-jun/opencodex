@@ -81,6 +81,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/injection", "ocx agent"],
       ["/api/keys", "ocx access"],
       ["/api/logs", "ocx observe"],
+      ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
       ["/api/settings", "ocx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
@@ -203,6 +204,37 @@ describe("headless GUI parity CLI", () => {
     expect(runtime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { setAll: true } });
   });
 
+  test("model context value maps with an explicit set-all flag", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleModelsRuntimeCommand("context", ["value", "128_000", "--set-all", "--json"], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { value: 128_000, setAll: true } });
+
+    // Without --set-all only the shared default changes.
+    const defaultRuntime = fakeRuntime();
+    const defaultCode = await handleModelsRuntimeCommand("context", ["value", "256_000", "--json"], defaultRuntime.deps);
+    expect(defaultCode).toBe(0);
+    expect(defaultRuntime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { value: 256_000 } });
+  });
+
+  test("model context provider maps to the atomic GUI endpoint with an optional value", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleModelsRuntimeCommand("context", ["provider", "openai", "on", "--value", "128_000", "--json"], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { provider: "openai", enabled: true, value: 128_000 } });
+
+    const offRuntime = fakeRuntime();
+    const offCode = await handleModelsRuntimeCommand("context", ["provider", "openai", "off", "--json"], offRuntime.deps);
+    expect(offCode).toBe(0);
+    expect(offRuntime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { provider: "openai", enabled: false } });
+
+    // --value is only valid with `on`; the rejected form must not send any request.
+    const rejectedRuntime = fakeRuntime();
+    const rejectedCode = await handleModelsRuntimeCommand("context", ["provider", "openai", "off", "--value", "128_000", "--json"], rejectedRuntime.deps);
+    expect(rejectedCode).toBe(2);
+    expect(rejectedRuntime.requests).toEqual([]);
+  });
+
   test("combo set parses ordered weighted targets", async () => {
     const runtime = fakeRuntime();
     const code = await handleComboCommand([
@@ -218,6 +250,28 @@ describe("headless GUI parity CLI", () => {
           { provider: "ark", model: "model-a", weight: 2 },
           { provider: "openai", model: "gpt-5.5" },
         ],
+      },
+    });
+  });
+
+  test("combo set forwards the explicit native-alias compatibility contract", async () => {
+    const runtime = fakeRuntime();
+    const code = await handleComboCommand([
+      "set", "nova-sol",
+      "--targets", "Nova1/codex/gpt-5.6-sol",
+      "--alias", "gpt-5.6-sol",
+      "--native-alias",
+      "--display-name", "Nova1 - codex-gpt-5.6-sol",
+      "--json",
+    ], runtime.deps);
+    expect(code).toBe(0);
+    expect(runtime.requests[0]?.body).toMatchObject({
+      id: "nova-sol",
+      combo: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - codex-gpt-5.6-sol",
+        targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
       },
     });
   });
@@ -330,6 +384,45 @@ describe("headless GUI parity CLI", () => {
       expect(readFileSync(configPath, "utf8")).toBe(original);
       expect(await handleConfigCommand(["import", importPath, "--yes", "--json"])).not.toBe(0);
       expect(readFileSync(configPath, "utf8")).toBe(original);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("config set releases the manual pin when it writes the selection order", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-cli-priority-pin-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    const configPath = join(home, "config.json");
+    const base = {
+      port: 10100,
+      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+      defaultProvider: "openai",
+      activeCodexAccountPinned: "work",
+    };
+    const readConfig = () => JSON.parse(readFileSync(configPath, "utf8"));
+    const readPin = () => readConfig().activeCodexAccountPinned;
+    try {
+      // The whole map, one entry, and a removal are all the operator restating the
+      // order, so each releases the pin -- otherwise it keeps capping the tier
+      // ceiling at "work" and the order just written has no visible effect.
+      for (const { argv, expected } of [
+        { argv: ["set", "codexAccountPriorities", '{"work":1}'], expected: { work: 1 } },
+        { argv: ["set", "codexAccountPriorities.work", "2"], expected: { work: 2 } },
+        { argv: ["unset", "codexAccountPriorities"], expected: undefined },
+      ]) {
+        writeFileSync(configPath, JSON.stringify({ ...base, codexAccountPriorities: { work: 0 } }));
+        expect(await handleConfigCommand([...argv, "--json"])).toBe(0);
+        expect(readPin()).toBeUndefined();
+        expect(readConfig().codexAccountPriorities).toEqual(expected);
+      }
+
+      // An unrelated field is not a statement about ordering, so the pin survives.
+      writeFileSync(configPath, JSON.stringify({ ...base, codexAccountPriorities: { work: 1 } }));
+      expect(await handleConfigCommand(["set", "autoSwitchThreshold", "50", "--json"])).toBe(0);
+      expect(readPin()).toBe("work");
     } finally {
       if (previous === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previous;

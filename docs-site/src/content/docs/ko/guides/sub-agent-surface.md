@@ -65,8 +65,10 @@ v1에서는 opencodex가 `max` 또는 `ultra` 추론 강도에서만 업스트�
 스폰된 작업자에 대해 opencodex는 다음 우선순위를 적용합니다.
 
 1. 요청한 기본 모델
-2. 역할의 `$CODEX_HOME/agents/*.toml` 정의에 있는 `model_fallback` 목록
+2. opencodex 설정의 `subagentModelFallbackByModel`에 있는 모델별 체인 (요청한 기본 모델이 키)
 3. opencodex 설정의 전역 `subagentModelFallback` 목록
+
+역할별 폴백 체인은 `$CODEX_HOME/agents/*.toml`이 아니라 opencodex 설정에 두어야 합니다. Codex 0.146+는 에이전트 역할 파일을 엄격하게 역직렬화하며 `model_fallback`을 알 수 없는 필드로 거부해 역할 정의 전체를 건너뜁니다 (#1190). opencodex는 하위 호환성을 위해 TOML의 기존 `model_fallback` 줄을 계속 읽을 수 있지만, `ocx doctor`가 경고하며 Codex 자체는 해당 역할을 무시합니다.
 
 중복 모델 id는 첫 번째 출현을 유지한 채 제거합니다. 선택 과정에서 opencodex는 비활성화된 후보, 라우팅 불가 후보, 비활성화된 프로바이더가 받쳐주는 후보, unhealthy로 표시된 후보, cooldown 중인 후보, 사용할 수 있는 pooled Codex 계정이 없는 후보, 또는 설정된 quota 임계치를 넘는 후보를 건너뜁니다. 가용성 프로브는 기본값 60초인 `subagentModelFallbackPollMs` 동안 캐시됩니다.
 
@@ -83,6 +85,8 @@ opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안�
 - 읽을 수 있는 평문 작업은 정상 라우트와 폴백 동작을 그대로 유지합니다.
 
 복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, 호출자를 제어할 수 있을 때 작업을 평문 v2 `agent_message` 콘텐츠로 다시 보내는 것입니다.
+
+실험적인 `agentTaskRecovery`는 기본적으로 꺼져 있습니다. 명시적으로 켜면 고정된 ChatGPT 엔드포인트로 인증된 요청을 하나 더 보내 이 형식을 복구할 수 있지만, 할당량과 지연 시간이 늘고 비공개 백엔드 동작에 의존합니다. 실패하면 기존 `unreadable_encrypted_agent_task` 오류를 그대로 유지합니다. 자세한 내용은 [영문 설정 참고 문서](/reference/configuration/agents/#encrypted-v2-task-recovery)를 보세요.
 
 ## 모드 변경
 

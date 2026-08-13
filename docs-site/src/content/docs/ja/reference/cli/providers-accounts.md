@@ -76,13 +76,14 @@ ocx login anthropic
 実行中のプロキシを介してプロバイダー アカウントと API キー プールを一覧表示し、切り替えます。出荷されたヘルプ画面は次のとおりです。
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|login|reauth|code|cancel|remove|add-key|reset-credits> ...
+Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 current <provider>  Show the active account or key.
 use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
+priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
@@ -102,6 +103,7 @@ Codex pool selection applies to the next request after clearing existing affinit
   "label": "plus",
   "email": "m***@example.com",
   "plan": "plus",
+  "priority": 0,
   "masked": "sk-ab****wxyz",
   "active": true,
   "needsReauth": false,
@@ -111,7 +113,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 ### `ocx account list [provider] [--json] [--all]`
 
-プロバイダーを使用しない場合、Codex プール、OAuth アカウント、および設定された API キー プールが一覧表示されます。 `--all` が存在しない限り、空のプロバイダーはスキップされます。プロバイダーを使用すると、その資格情報ファミリーのみがリストされます。人間の出力では `PROVIDER TYPE ID PLAN/LABEL STATUS` を使用します。手動で選択した Codex 行には `selected` というマークが付けられます。保存された Kiro アカウントが存在する場合、出力には、Kiro には 1 つのログイン スロットがあり、再度サインインすると現在のアカウントが置き換えられることが示されます。結果が空であっても成功です。 `--json` は次を返します:
+プロバイダーを使用しない場合、Codex プール、OAuth アカウント、および設定された API キー プールが一覧表示されます。 `--all` が存在しない限り、空のプロバイダーはスキップされます。プロバイダーを使用すると、その資格情報ファミリーのみがリストされます。人間の出力では `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` を使用します。手動で選択した Codex 行には `selected` というマークが付けられます。保存された Kiro アカウントが存在する場合、出力には、Kiro には 1 つのログイン スロットがあり、再度サインインすると現在のアカウントが置き換えられることが示されます。結果が空であっても成功です。 `--json` は次を返します:
 
 ```text
 { accounts: AccountRow[], notes: string[] }
@@ -119,7 +121,7 @@ Codex pool selection applies to the next request after clearing existing affinit
 
 ### `ocx account current <provider> [--json]`
 
-アクティブなアカウントまたはキーを表示します。手動ピンのない Codex プールは、自動的に最低使用量の選択を報告します。アクティブな認証情報を持たない別のファミリーは、その状態を報告し、依然として 0 を終了します。`--json` は次を返します。
+アクティブなアカウントまたはキーを表示します。手動ピンのない Codex プールは、優先度を考慮した自動選択を報告します。最も優先度の高い適格ティアが選ばれ、そのティア内でクォータルーティングのもと最低使用量のアカウントが選ばれます。アクティブな認証情報を持たない別のファミリーは、その状態を報告し、依然として 0 を終了します。`--json` は次を返します。
 
 ```text
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
@@ -153,18 +155,44 @@ OAuth プロバイダーと API キー プロバイダーの場合、これに�
 { provider, autoSwitchThreshold: number, enabled: boolean }
 ```
 
+### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+
+Codex pool のアカウント別選択順を読み書きします。**値が大きいほど先に使われ**、既定は `0`、範囲は
+`-100` から `100` です。順序を持つのは `openai` の Codex pool だけなので、他のプロバイダーは終了コード
+1 です。`main` は Codex Desktop ログインを指し、他の pool アカウントと同じように並べ替えられます。
+`ocx account priority openai main last` とすれば予備として最後に回せます。
+
+プリセット語は小さな整数の別名です。`first` が `+2`、`earlier` が `+1`、`normal` が `0`、`later` が
+`-1`、`last` が `-2` です。`reset` は既定に戻し、保存されたエントリを削除します。**値を省略すると
+読み取り**になり、現在の順序を書き換えません。
+
+順序が決めるのは「どのアカウントから見るか」であって「どれが使えるか」ではありません。選択は引き続き
+適格なアカウントの中で行われ、まだ quota に余裕がある最上位 tier を取り、その中は
+`accountPoolStrategy` が選びます。一時停止、cooldown、再認証には影響しません。変更は新しいセッションだけでなく **次の未バインドリクエスト** から適用されます。上位の順序に余裕が戻れば
+preemption が未バインドリクエストを直ちに引き上げます。既にアカウントに紐づいた thread は、通常はそのアカウントを
+使い切るまで維持します。ただし再認証エラー、quota cooldown、一時的な失敗の連続はそれより早く紐付けを解除します。受理された書き込みは、どのアカウントの手動の「今すぐこのアカウントを使う」固定も解除します。すでに設定済みの順序を書き込んだ場合も同様で、これは現在選択中のアカウントを保ったまま固定を解除する唯一の方法です（管理 API でアクティブアカウントを解除しても固定は解除されますが、その選択自体も失われます）。プロキシに接続できない場合、
+不明なアカウント id、受け付けない値はいずれも終了コード 1 です。`--json` は次を返します。
+
+```text
+{ ok: true, provider, id, priority: number, preset: string | null }
+```
+
+
 ### `ocx account login|reauth|code|cancel ...`
 
-ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。
+ヘッドレス シェルからブラウザベースまたは手動コードのアカウント認証を実行します。プロバイダー固有のコマンド形式には `ocx account --help` を使用します。Codex account login は保存済みでも catalog refresh が保留中なら成功終了し、human output の stderr に固定の `ocx sync` 案内を出します。`--json` は案内を混ぜず、完了 state に `catalogRefreshPending: true` を保持します。
 
 ### `ocx account remove <provider> <id|main> --yes [--json]`
 
 この保護された非対話型削除には `--yes` が必要です。削除する前に、ID が存在することが確認されます。 ID が欠落している場合は、DELETE を送信せずに 1 が終了します。メインの Codex App ログインは削除できないため、`remove openai main --yes` は拒否されます。削除後、ファミリーは再度読み取られます。固定された Codex アカウントを削除すると、ピンがクリアされ、自動選択に戻ります。 OAuth は最初に残ったアカウントを昇格させるか、何も報告しません。 API キー プールは、最初に残っているキーを昇格するか、何も報告しません。 `--json` の成功と失敗の形状は次のとおりです。
 
 ```text
-{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null }
+{ ok: true, provider, id, removedActive: boolean, promotedActiveId: string | null, catalogRefreshPending?: boolean }
 { error: string } // stderr, exit 1
 ```
+
+`catalogRefreshPending` は Codex 削除だけに含まれます。`true` でも削除は保存済みで、human output は
+stderr に `ocx sync` の案内を出して終了コード 0 のままです。OAuth account と API key の削除形状は変わりません。
 
 ### `ocx account add-key <provider> [--label <label>] [--json]`
 
@@ -228,7 +256,7 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | `disable <provider/model\|native-model>` | `--native`、`--json` | Codex から 1 つのモデルを非表示にします。 |
 | `provider <name> <on\|off>` | `--json` | 1 つのプロバイダーのすべてのモデルを 1 回の書き込みで有効または無効にします。 |
 | `selected <provider>` | `--set <id,id...>`、`--clear`、`--json` |プロバイダー モデルのホワイトリストを読み取るか置き換えます。 `--clear` はホワイトリストを削除し、すべてのモデルが提供されるようにします。 |
-| `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 |
+| `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 `value <tokens> --set-all` はすべてのルーティング済みプロバイダーにも値を再適用します（ダッシュボードのトグルと同様）。指定しない場合は既定値のみが変更されます。 `provider ... on --value <tokens>` はそのプロバイダーのみに個別のキャップを設定します（`--value` は `on` でのみ使用できます）。 |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 0.144.x 以前のクライアントが使用した `gpt-5.4-mini` は明示的な `sourceModels` オーバーライドで復元できます)。 |
 
 ```bash

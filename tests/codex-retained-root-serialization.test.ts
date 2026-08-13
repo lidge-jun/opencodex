@@ -16,6 +16,7 @@ import {
   resolveCodexCatalogSerializationDatabasePath,
   resolveEffectiveUserIdentity,
 } from "../src/codex/user-identity";
+import { claimOwnedServiceHome } from "./helpers/owned-service-home";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const sandboxes: Sandbox[] = [];
@@ -64,6 +65,7 @@ function makeSandbox(prefix: string): Sandbox {
     mkdirSync(path, { recursive: true });
     chmodSync(path, 0o700);
   }
+  const serviceManagerEnv = claimOwnedServiceHome(codexHome, opencodexHome, home).env;
   const sandbox = {
     root,
     codexHome,
@@ -79,6 +81,7 @@ function makeSandbox(prefix: string): Sandbox {
       TMP: runtime,
       XDG_RUNTIME_DIR: runtime,
       LOCALAPPDATA: join(home, "LocalAppData"),
+      ...serviceManagerEnv,
     },
   };
   sandboxes.push(sandbox);
@@ -182,9 +185,9 @@ test("startup and CLI sync-cache cannot write models_cache while another process
     });
     expect(cli.exitCode).toBe(0);
     expect(existsSync(cachePath)).toBe(false);
-    const cliSource = readFileSync(join(repoRoot, "src/cli/index.ts"), "utf8");
-    const cliStart = cliSource.indexOf('case "sync-cache"');
-    const cliRoot = cliSource.slice(cliStart, cliSource.indexOf('case "gui"', cliStart));
+    const cliSource = readFileSync(join(repoRoot, "src/cli/dispatch.ts"), "utf8");
+    const cliStart = cliSource.indexOf('"sync-cache": async');
+    const cliRoot = cliSource.slice(cliStart, cliSource.indexOf('gui: async', cliStart));
     expect(cliRoot).toContain("withCatalogWriteSerialization(owningCodexHome");
     expect(cliRoot).toContain("invalidateCodexModelsCacheWithPermit");
 
@@ -225,8 +228,8 @@ test("native restore cannot read-transform-write the catalog while another proce
 async function runPublisher(
   sandbox: Sandbox,
   kind: "convergence" | "retained",
+  config: Record<string, unknown>,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const config = { port: 10100, defaultProvider: "openai", providers: {}, disabledModels: ["gpt-5.5"] };
   if (kind === "retained") {
     return runChild(sandbox, `
       const { handleManagementAPI } = await import("./src/server/management-api.ts");
@@ -255,55 +258,69 @@ for (const publisher of ["convergence", "retained"] as const) {
     const initial = readFileSync(catalogPath, "utf8");
     const requested = join(sandbox.root, "provider-requested");
     const release = join(sandbox.root, "provider-release");
+    let requests = 0;
+    const provider = Bun.serve({
+      port: 0,
+      fetch: async request => {
+        if (!new URL(request.url).pathname.endsWith("/models")) return new Response("not found", { status: 404 });
+        if (requests++ === 0) {
+          writeFileSync(requested, "requested");
+          while (!existsSync(release)) await Bun.sleep(5);
+        }
+        return Response.json({ data: [{ id: "race-model" }] });
+      },
+    });
     const config = {
-      port: 10100,
-      defaultProvider: "together",
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "fixture",
       providers: {
-        together: {
+        fixture: {
           adapter: "openai-chat",
-          baseUrl: "https://api.together.xyz/v1",
-          apiKey: "race-key",
-          models: ["fallback-model"],
+          baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+          apiKey: "fixture-key",
+          allowPrivateNetwork: true,
+          liveModels: true,
         },
       },
+      disabledModels: ["gpt-5.5"],
     };
-    const sync = Bun.spawn([process.execPath, "--eval", `
-      import { existsSync, writeFileSync } from "node:fs";
-      const config = ${JSON.stringify(config)};
-      config.providers.together.fetch = async () => {
-        writeFileSync(${JSON.stringify(requested)}, "requested");
-        while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
-        return Response.json({ data: [{ id: "race-model" }] });
-      };
-      const { handleManagementAPI } = await import("./src/server/management-api.ts");
-      const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
-      const response = await handleManagementAPI(req, new URL(req.url), config);
-      console.log(JSON.stringify({ status: response.status, body: await response.json() }));
-    `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
+    writeFileSync(join(sandbox.opencodexHome, "config.json"), JSON.stringify(config));
+    try {
+      const sync = Bun.spawn([process.execPath, "--eval", `
+        const config = ${JSON.stringify(config)};
+        const { handleManagementAPI } = await import("./src/server/management-api.ts");
+        const req = new Request("http://localhost/api/sync", { method: "POST", headers: { Host: "localhost" } });
+        const response = await handleManagementAPI(req, new URL(req.url), config);
+        console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+      `], { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" });
 
-    await Promise.race([
-      waitForPath(requested),
-      sync.exited.then(async exitCode => {
-        const stdout = await new Response(sync.stdout).text();
-        const stderr = await new Response(sync.stderr).text();
-        throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
-      }),
-    ]);
-    const published = await runPublisher(sandbox, publisher);
-    if (published.exitCode !== 0) {
-      throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
+      await Promise.race([
+        waitForPath(requested),
+        sync.exited.then(async exitCode => {
+          const stdout = await new Response(sync.stdout).text();
+          const stderr = await new Response(sync.stderr).text();
+          throw new Error(`sync exited before provider barrier (${exitCode})\nstdout=${stdout}\nstderr=${stderr}`);
+        }),
+      ]);
+      const published = await runPublisher(sandbox, publisher, config);
+      if (published.exitCode !== 0) {
+        throw new Error(`${publisher} publisher failed\nstdout=${published.stdout}\nstderr=${published.stderr}`);
+      }
+      const newer = readFileSync(catalogPath, "utf8");
+      expect(newer).not.toBe(initial);
+
+      writeFileSync(release, "release");
+      const [exitCode, stdout, stderr] = await Promise.all([
+        sync.exited,
+        new Response(sync.stdout).text(),
+        new Response(sync.stderr).text(),
+      ]);
+      expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
+      expect(readFileSync(catalogPath, "utf8")).toBe(newer);
+    } finally {
+      provider.stop(true);
     }
-    const newer = readFileSync(catalogPath, "utf8");
-    expect(newer).not.toBe(initial);
-
-    writeFileSync(release, "release");
-    const [exitCode, stdout, stderr] = await Promise.all([
-      sync.exited,
-      new Response(sync.stdout).text(),
-      new Response(sync.stderr).text(),
-    ]);
-    expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
-    expect(readFileSync(catalogPath, "utf8")).toBe(newer);
   }, 20_000);
 }
 
@@ -462,30 +479,74 @@ test("two processes at the post-approval management seam serialize instead of in
     console.log(JSON.stringify({ status: response.status, catalogRefresh: body.catalogRefresh }));
   `;
 
-  const children = (["a", "b"] as const).map(marker => Bun.spawn(
-    [process.execPath, "--eval", routeScript(marker)],
-    { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" },
-  ));
+  const isPreApprovalLoss = (stderr: string): boolean =>
+    stderr.includes("CONFIG_MUTATION_LOCK_UNAVAILABLE")
+    || (stderr.includes("EEXIST") && stderr.includes("createOwnership"))
+    || /database (?:is|table is) locked/i.test(stderr)
+    || stderr.includes("SQLITE_BUSY");
 
-  const results = await Promise.all(children.map(async child => {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    return { exitCode, stdout, stderr };
-  }));
+  // On macOS CI both children can still lose the config lock before approval even
+  // after the warm-up — that proves nothing about catalog serialization. Retry
+  // vacuous runs until at least one process reaches the post-approval seam.
+  const attemptDeadline = Date.now() + 20_000;
+  let results: Array<{ exitCode: number; stdout: string; stderr: string }> | undefined;
+  while (Date.now() < attemptDeadline) {
+    for (const marker of ["a", "b"] as const) {
+      rmSync(`${barrier}-${marker}`, { force: true });
+    }
+    writeFileSync(catalogPath, seeded);
 
-  for (const result of results) {
+    const children = (["a", "b"] as const).map(marker => Bun.spawn(
+      [process.execPath, "--eval", routeScript(marker)],
+      { cwd: repoRoot, env: sandbox.env, stdout: "pipe", stderr: "pipe" },
+    ));
+
+    results = await Promise.all(children.map(async child => {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    }));
+
+    // A 2xx `skipped` result reached the total adapter but still proves no
+    // catalog serialization. Keep retrying until one attempt actually commits;
+    // the assertions below continue to fail closed if the deadline expires.
+    const committed = results.some(result => {
+      if (result.exitCode !== 0) return false;
+      const parsed = JSON.parse(result.stdout.trim()) as {
+        catalogRefresh?: { status?: string };
+      };
+      return parsed.catalogRefresh?.status === "committed";
+    });
+    if (committed) break;
+
+    for (const result of results) {
+      if (result.exitCode === 0) continue;
+      expect({ preApproval: isPreApprovalLoss(result.stderr), stderr: result.stderr })
+        .toMatchObject({ preApproval: true });
+    }
+  }
+
+  expect(results).toBeDefined();
+  for (const result of results!) {
     // A process can lose a race BEFORE approval and never reach the seam at all.
-    // Both known cases come from `saveConfigPreservingClaudeCode`: the config
-    // mutation lock is already held, or two cold processes create the ownership
-    // file at once. Neither says anything about catalog convergence, so they are
-    // excluded here — but only these two, so a genuine seam failure still fails.
+    // The known cases come from `saveConfigPreservingClaudeCode`: the config mutation
+    // lock is already held, two cold processes create the ownership file at once, or
+    // SQLite refuses the transaction outright while another process holds it. None of
+    // them say anything about catalog convergence, so they are excluded here — but only
+    // these, so a genuine seam failure still fails.
+    //
+    // The third case was found by a CI failure on macOS, not by this suite. The lock
+    // helper normally wraps busy errors in `ConfigMutationLockError`, but the raw
+    // `SQLiteError: database is locked` can still reach stderr from a path that has not
+    // wrapped it yet. `configGenerationFailureReason` already classifies that exact
+    // message as "busy" rather than a database fault, so treating it as a seam failure
+    // here contradicted the product code and turned ordinary contention into a red build.
     if (result.exitCode !== 0) {
-      const preApproval = result.stderr.includes("CONFIG_MUTATION_LOCK_UNAVAILABLE")
-        || (result.stderr.includes("EEXIST") && result.stderr.includes("createOwnership"));
-      expect({ preApproval, stderr: result.stderr }).toMatchObject({ preApproval: true });
+      expect({ preApproval: isPreApprovalLoss(result.stderr), stderr: result.stderr })
+        .toMatchObject({ preApproval: true });
       continue;
     }
     const parsed = JSON.parse(result.stdout.trim()) as {
@@ -503,12 +564,12 @@ test("two processes at the post-approval management seam serialize instead of in
 
   // At least one process must have gotten through to the seam, or this test would
   // be vacuous — two config-lock losers prove nothing about catalog serialization.
-  expect(results.some(r => r.exitCode === 0)).toBe(true);
+  expect(results!.some(r => r.exitCode === 0)).toBe(true);
 
   // At least one process must reach a real commit, or the race proves nothing:
   // the adapter is total, so a seam that only ever failed would still answer 2xx
   // with a typed disposition and satisfy every assertion above.
-  const dispositions = results
+  const dispositions = results!
     .filter(r => r.exitCode === 0)
     .map(r => (JSON.parse(r.stdout.trim()) as { catalogRefresh: { status: string } }).catalogRefresh.status);
   expect(dispositions).toContain("committed");

@@ -9,7 +9,12 @@
 
 # Repository automation and release security
 /.github/ @lidge-jun @Ingwannu
+/.coderabbit.yaml @lidge-jun @Ingwannu
+/.npmignore @lidge-jun @Ingwannu
+/bunfig.toml @lidge-jun @Ingwannu
 /scripts/release.ts @lidge-jun @Ingwannu
+/scripts/release-notes.ts @lidge-jun @Ingwannu
+/scripts/prepare-package.ts @lidge-jun @Ingwannu
 /package.json @lidge-jun @Ingwannu
 /bun.lock @lidge-jun @Ingwannu
 
@@ -18,6 +23,9 @@
 /src/codex/auth-context.ts @lidge-jun @Ingwannu
 /src/server/auth-cors.ts @lidge-jun @Ingwannu
 /src/server/management-api.ts @lidge-jun @Ingwannu
+/src/lib/admin-secrets.ts @lidge-jun @Ingwannu
+/src/lib/service-secrets.ts @lidge-jun @Ingwannu
+/src/server/management-auth.ts @lidge-jun @Ingwannu
 
 # Governance and security policy
 /AGENTS.md @lidge-jun @Ingwannu

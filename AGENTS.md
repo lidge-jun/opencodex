@@ -118,8 +118,17 @@ bun run privacy:scan   # credential/privacy scan used by CI
 bun run build:gui      # Vite GUI build
 ```
 
-Run `bun run typecheck` and `bun run test` before proposing or approving any
-non-trivial change. CI runs these on Linux, Windows, and macOS.
+During implementation, use the smallest focused checks that directly cover the
+changed subsystem. Do not run repository-wide `bun run typecheck` or
+`bun run test` for a scoped change unless the change affects shared runtime,
+routing, config, server behavior, a focused result is failed or ambiguous, or
+the user explicitly asks for full validation.
+
+Before creating or updating a non-trivial PR as review-ready, or before
+approving such a PR, run `bun run typecheck` and `bun run test`. CI runs these
+on Linux, Windows, and macOS.
+
+Do not rerun passing checks on unchanged code merely for additional confidence.
 
 ## Issues and pull requests (agents)
 
@@ -177,10 +186,13 @@ listed in `MAINTAINERS.md` (excluding the author). Completion is bound to the
 exact commit the PR head pointed at: if new commits are pushed afterwards, the
 gate moves the PR back to draft, resets the checklist and the notification,
 and asks the author to test and tick the boxes again against the latest code.
-Before a completion is accepted, the gate verifies the two checklist claims it
-can check itself: the head's `ci` check must be green, and the branch must be
-on the latest `dev` commit or at most 10 commits behind it. A disproved claim
-unticks the matching box and keeps the PR a draft.
+Before a completion is accepted, the gate verifies the checklist claims it
+can check itself: the branch must be on the latest `dev` commit or at most
+10 commits behind it, and Codex/CodeRabbit findings must be resolved. The
+local-CI box is an author attestation only — fork contributors cannot start
+repository CI; a maintainer has to — so the gate never disproves it; a new
+push still resets every box. A disproved claim unticks the matching box and
+keeps the PR a draft.
 Authors with repository push permission skip the ancestry heuristic only. As with approval requirements in
 [`MAINTAINERS.md`](./MAINTAINERS.md), this is enforced by convention until
 branch protection is configured.

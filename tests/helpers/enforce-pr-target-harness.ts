@@ -23,6 +23,13 @@ export type RecordedCall = { method: string; args: unknown };
 export type HarnessResult = {
   calls: RecordedCall[];
   /**
+   * Values the script wrote through `core.setOutput`, in write order. The
+   * write-capable gate consumes `RESOLVED_PULL_NUMBER` from the resolver, and
+   * the client sets it as a step output; exposing it lets a test assert the
+   * SHA-to-PR resolution directly instead of inferring it from later calls.
+   */
+  outputs: Array<{ name: string; value: unknown }>;
+  /**
    * Paths the script read through its `node:fs` stub. Kept separate from
    * `calls` so exact method-sequence assertions stay stable while the fs
    * capability stays recorded (round: the harness must not hand a write-capable
@@ -53,6 +60,8 @@ export type PullRequestState = {
   draft?: boolean;
   base?: { ref: string };
   user?: { login: string };
+  /** `pulls.get` changed_files; omit to default to listed file count in harness. */
+  changed_files?: number;
 };
 
 export type Comment = {
@@ -61,6 +70,14 @@ export type Comment = {
   body?: string;
   /** GitHub's per-comment association; used for the GUI-screenshot waiver. */
   author_association?: string;
+};
+
+export type IssueEvent = {
+  id?: number;
+  event: string;
+  created_at?: string;
+  actor?: { login?: string };
+  label?: { name?: string };
 };
 
 export type RunOptions = {
@@ -83,6 +100,39 @@ export type RunOptions = {
    */
   eventAction?: string;
   /**
+   * Webhook event name. Defaults to `"pull_request_target"`. `issue_comment`
+   * remains available for fail-closed compatibility tests; `status` models the
+   * default-branch CodeRabbit wake-up path.
+   */
+  eventName?: string;
+  /** SHA carried by a `status` event. Defaults to the live PR head SHA. */
+  statusSha?: string;
+  /** Legacy commit-status context. Defaults to `CodeRabbit`. */
+  statusContext?: string;
+  /** Legacy commit-status state. Defaults to `success`. */
+  statusState?: string;
+  /** Shorthand for a single associated-PR response page. */
+  associatedPullRequests?: unknown[];
+  /** Page-specific PRs returned by repos.listPullRequestsAssociatedWithCommit. */
+  associatedPullRequestPages?: unknown[][];
+  /**
+   * `author_association` of the commenter on an `issue_comment` event.
+   * Defaults to `"COLLABORATOR"`. The gate only re-runs for maintainer
+   * associations (OWNER / COLLABORATOR / MEMBER).
+   */
+  commentAuthorAssociation?: string;
+  /**
+   * Login of the commenter on an `issue_comment` event. Defaults to
+   * `"wibias"`. The gate requires the commenter to be in the trusted
+   * MAINTAINERS.md list, so tests can set a non-maintainer login here.
+   */
+  commentAuthorLogin?: string;
+  /**
+   * Whether the commented-on issue is a pull request. Defaults to `true`.
+   * An `issue_comment` on a plain issue must not start this PR-only gate.
+   */
+  issueIsPullRequest?: boolean;
+  /**
    * Comments as `listComments` returns them, PAGE BY PAGE. Pass more than one
    * page to prove the script paginates: an audit round replaced `paginate` with
    * a single `listComments` call, which loses a bot comment that has scrolled
@@ -92,6 +142,12 @@ export type RunOptions = {
   commentPages?: Comment[][];
   /** Shorthand for a single page. */
   comments?: Comment[];
+  /** Issue events used to resolve durable label-application provenance. */
+  issueEvents?: IssueEvent[];
+  /** Page-specific issue-event fixtures for pagination tests. */
+  issueEventPages?: IssueEvent[][];
+  /** Resolved PR number passed from the read-only resolver job. */
+  resolvedPullNumber?: number | string;
   /** Method names that should reject, to exercise partial-failure paths. */
   failOn?: string[];
   /**
@@ -122,11 +178,26 @@ export type RunOptions = {
   /** Page-keyed open PR fixtures for `pulls.list` (1-based via array index). */
   openPullPages?: unknown[][];
   /**
-   * Check-runs `checks.listForRef` reports for the head. Defaults to a green
-   * `ci` check so completed-checklist scenarios pass the claim check.
-   * Pass a red/pending/missing set to exercise the claim-check reset paths.
+   * Check-runs `checks.listForRef` used to report for readiness claim checks.
+   * Local CI is now an author attestation only, so the gate no longer lists
+   * checks; these fixtures remain so older scenarios that pass `checkRuns`
+   * still construct cleanly without affecting gate behavior.
    */
-  checkRuns?: Array<{ name: string; status: string; conclusion: string | null }>;
+  checkRuns?: Array<{
+    name: string;
+    status: string;
+    conclusion: string | null;
+    app?: { id: number } | null;
+  }>;
+  /** Page-keyed check-run fixtures for `checks.listForRef` pagination. */
+  checkRunPages?: Array<Array<{
+    name: string;
+    status: string;
+    conclusion: string | null;
+    app?: { id: number } | null;
+  }>>;
+  /** Optional filtered total; unused now that the gate skips check listing. */
+  checkRunTotalCount?: number;
   /**
    * Review threads `pullRequestReviewThreads` (via GraphQL) reports for the PR.
    * Each entry is `{ isResolved, author }`; the harness wraps it into the
@@ -152,12 +223,40 @@ export type RunOptions = {
    */
   labels?: string[];
   /**
+   * Changed files `pulls.listFiles` reports for the PR. Used by the embedded
+   * hygiene reassessment that blocks Ready while deterministic hygiene fails.
+   * Defaults to an empty list (no hygiene failures).
+   */
+  files?: Array<{
+    filename: string;
+    status?: string;
+    patch?: string;
+    previous_filename?: string;
+  }>;
+  /** Page-keyed file fixtures for `pulls.listFiles` pagination tests. */
+  filePages?: Array<
+    Array<{
+      filename: string;
+      status?: string;
+      patch?: string;
+      previous_filename?: string;
+    }>
+  >;
+  /**
    * GraphQL query fragments that should reject. Unlike `failOn: ["graphql"]`,
    * which fails the review-threads read, this lets a test fail a specific
    * mutation (e.g. `markPullRequestReadyForReview`) while the threads read
    * succeeds. Matched case-sensitively against the query text.
    */
   failGraphqlOn?: string[];
+  /**
+   * Login of the event sender (who triggered the webhook, e.g., the user who
+   * applied a label). Defaults to `"contributor"`. Used to test authorization
+   * checks that validate the sender against MAINTAINERS.md.
+   */
+  senderLogin?: string;
+  /** Numeric sender id; status events default to CodeRabbit's stable bot id. */
+  senderId?: number;
 };
 
 /**
@@ -181,7 +280,7 @@ const DEFAULT_BODY = [
 
 /** The repo's documented "CI passed" check, green by default. */
 const DEFAULT_GREEN_CHECKS = [
-  { name: "ci", status: "completed", conclusion: "success" },
+  { name: "ci", status: "completed", conclusion: "success", app: { id: 15368 } },
 ];
 
 const DEFAULT_PR = {
@@ -554,10 +653,38 @@ export async function runEnforcePrTarget(
     user: { ...DEFAULT_PR.user, ...(source.user ?? {}) },
   };
   const pages: Comment[][] = options.commentPages ?? [options.comments ?? []];
+  const issueEventPages: IssueEvent[][] =
+    options.issueEventPages ?? [options.issueEvents ?? []];
   const openPullPages: unknown[][] =
     options.openPullPages ??
     (options.openPulls && options.openPulls.length > 0 ? [options.openPulls] : []);
-  const paginatePageCount = Math.max(pages.length, openPullPages.length, 1);
+  const associatedPullRequestPages: unknown[][] =
+    options.associatedPullRequestPages ?? [options.associatedPullRequests ?? [pr]];
+  const filePages: unknown[][] =
+    options.filePages ??
+    (options.files && options.files.length > 0 ? [options.files] : [[]]);
+  const listedFileCount = filePages.flat().length;
+  const prInput = options.pr as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(prInput, "changed_files")) {
+    (pr as Record<string, unknown>).changed_files = prInput.changed_files;
+  } else {
+    (pr as { changed_files: number }).changed_files = listedFileCount;
+  }
+  const checkRunPages = (options.checkRunPages ?? [options.checkRuns ?? DEFAULT_GREEN_CHECKS])
+    .map(page => page.map(check => ({
+      ...check,
+      // Existing fixtures model trusted GitHub Actions checks unless a test
+      // explicitly supplies another app or null to exercise provenance.
+      app: check.app === undefined ? { id: 15368 } : check.app,
+    })));
+  const paginatePageCount = Math.max(
+    pages.length,
+    issueEventPages.length,
+    openPullPages.length,
+    associatedPullRequestPages.length,
+    filePages.length,
+    1,
+  );
 
   /**
    * Record the call, then either reject or return a plausible payload. Every
@@ -652,6 +779,10 @@ export async function runEnforcePrTarget(
         return respond("pulls.list", args, openPullPages[page - 1] ?? []);
       },
       listReviews: (args: unknown) => respond("pulls.listReviews", args, options.reviews ?? []),
+      listFiles: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("pulls.listFiles", args, filePages[page - 1] ?? []);
+      },
     },
     issues: {
       // Honours `page`, so a caller that skips `paginate` sees only page one —
@@ -660,6 +791,10 @@ export async function runEnforcePrTarget(
         const page = Number((args as { page?: number })?.page ?? 1);
         return respond("issues.listComments", args, pages[page - 1] ?? []);
       },
+      listEvents: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("issues.listEvents", args, issueEventPages[page - 1] ?? []);
+      },
       createComment: (args: unknown) => respond("issues.createComment", args, { id: 99 }),
       updateComment: (args: unknown) => respond("issues.updateComment", args, { id: 7 }),
       deleteComment: (args: unknown) => respond("issues.deleteComment", args, {}),
@@ -667,11 +802,15 @@ export async function runEnforcePrTarget(
       removeLabel: (args: unknown) => respond("issues.removeLabel", args, {}),
     },
     checks: {
-      listForRef: (args: unknown) =>
-        respond("checks.listForRef", args, {
-          total_count: (options.checkRuns ?? DEFAULT_GREEN_CHECKS).length,
-          check_runs: options.checkRuns ?? DEFAULT_GREEN_CHECKS,
-        }),
+      listForRef: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond("checks.listForRef", args, {
+          total_count:
+            options.checkRunTotalCount ??
+            checkRunPages.reduce((total, rows) => total + rows.length, 0),
+          check_runs: checkRunPages[page - 1] ?? [],
+        });
+      },
     },
     repos: {
       getCollaboratorPermissionLevel: (args: unknown) =>
@@ -681,6 +820,14 @@ export async function runEnforcePrTarget(
       compareCommitsWithBasehead: (args: unknown) => {
         const basehead = String((args as { basehead?: string })?.basehead ?? "");
         return respond("repos.compareCommitsWithBasehead", args, compareResult(basehead));
+      },
+      listPullRequestsAssociatedWithCommit: (args: unknown) => {
+        const page = Number((args as { page?: number })?.page ?? 1);
+        return respond(
+          "repos.listPullRequestsAssociatedWithCommit",
+          args,
+          associatedPullRequestPages[page - 1] ?? [],
+        );
       },
     },
   };
@@ -739,15 +886,19 @@ export async function runEnforcePrTarget(
       respond("request", { route, params });
     /**
      * `github.paginate(fn, params)` — walk every page and concatenate, the way
-     * Octokit does. Page count covers both comment and open-PR fixtures so a
-     * stacked parent on page two is still visible.
+     * Octokit does. Page count covers comment, open-PR, and associated-PR
+     * fixtures so a relevant record on page two is still visible.
      */
     paginate = Object.assign(
       async (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => {
         const collected: unknown[] = [];
-        for (let page = 1; page <= paginatePageCount; page += 1) {
+        const pageCount = fn === rest.checks.listForRef ? checkRunPages.length : paginatePageCount;
+        for (let page = 1; page <= pageCount; page += 1) {
           const response = await fn({ ...(params as object), page });
-          collected.push(...response.data);
+          const rows = fn === rest.checks.listForRef
+            ? ((response.data as unknown as { check_runs?: unknown[] }).check_runs ?? [])
+            : response.data;
+          collected.push(...rows);
         }
         return collected;
       },
@@ -760,8 +911,19 @@ export async function runEnforcePrTarget(
          */
         iterator: (fn: (args: unknown) => Promise<{ data: unknown[] }>, params: unknown) => ({
           async *[Symbol.asyncIterator]() {
-            for (let page = 1; page <= paginatePageCount; page += 1) {
-              yield await fn({ ...(params as object), page });
+            const pageCount = fn === rest.checks.listForRef ? checkRunPages.length : paginatePageCount;
+            for (let page = 1; page <= pageCount; page += 1) {
+              const response = await fn({ ...(params as object), page });
+              if (fn !== rest.checks.listForRef) {
+                yield response;
+                continue;
+              }
+              // Match @octokit/plugin-paginate-rest: list envelopes such as
+              // `{ total_count, check_runs }` become array-valued page data.
+              yield {
+                ...response,
+                data: (response.data as unknown as { check_runs?: unknown[] }).check_runs ?? [],
+              };
             }
           },
         }),
@@ -822,9 +984,37 @@ export async function runEnforcePrTarget(
      * runner and absent here is another `if (payload.x) return;`.
      */
     payload = {
-      action: options.eventAction ?? "opened",
+      action: options.eventAction ?? (options.eventName === "issue_comment" ? "created" : "opened"),
       number: eventPr.number,
-      pull_request: eventPr,
+      // An issue comment on a PR is delivered with `issue` + `comment`, never
+      // `pull_request`. The gate resolves the PR number from whichever object
+      // the event carried.
+      ...(options.eventName === "issue_comment"
+        ? {
+            issue: {
+              number: eventPr.number,
+              node_id: eventPr.node_id,
+              title: eventPr.title,
+              body: eventPr.body,
+              user: eventPr.user,
+              ...(options.issueIsPullRequest === false
+                ? {}
+                : { pull_request: { url: "https://api.github.com/repos/lidge-jun/opencodex/pulls/42" } }),
+            },
+            comment: {
+              id: 424242,
+              body: "not touching gui",
+              user: { login: options.commentAuthorLogin ?? "wibias" },
+              author_association: options.commentAuthorAssociation ?? "COLLABORATOR",
+            },
+          }
+        : options.eventName === "status"
+          ? {
+              sha: options.statusSha ?? pr.head.sha,
+              context: options.statusContext ?? "CodeRabbit",
+              state: options.statusState ?? "success",
+            }
+          : { pull_request: eventPr }),
       repository: {
         id: 987654321,
         name: "opencodex",
@@ -834,11 +1024,21 @@ export async function runEnforcePrTarget(
         owner: { login: "lidge-jun", id: 12345, type: "User" },
         html_url: "https://github.com/lidge-jun/opencodex",
       },
-      sender: { login: "contributor", id: 67890, type: "User" },
+      sender: options.eventName === "status"
+        ? {
+            login: options.senderLogin ?? "coderabbitai[bot]",
+            id: options.senderId ?? 136622811,
+            type: "Bot",
+          }
+        : {
+            login: options.senderLogin ?? "contributor",
+            id: options.senderId ?? 67890,
+            type: "User",
+          },
       organization: undefined,
       installation: undefined,
     };
-    eventName = "pull_request_target";
+    eventName = options.eventName ?? "pull_request_target";
     sha = "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b";
     ref = "refs/pull/42/merge";
     workflow = "Enforce PR target branch";
@@ -961,6 +1161,11 @@ export async function runEnforcePrTarget(
   );
 
   const deferred: (() => unknown)[] = [];
+  const runtime = nodeLikeRuntime(deferred);
+  const runtimeProcess = runtime.process as { env: Record<string, string> };
+  runtimeProcess.env.RESOLVED_PULL_NUMBER = String(
+    options.resolvedPullNumber ?? eventPr.number ?? "",
+  );
 
   const returnValue = await compileScript(script)({
     github,
@@ -987,7 +1192,7 @@ export async function runEnforcePrTarget(
     // `if (!process.versions.bun) return;` — a no-op in production, green here.
     // Shadow `process` with something that looks like the Node the workflow
     // actually gets, so a runtime probe cannot tell the two apart.
-    ...nodeLikeRuntime(deferred),
+    ...runtime,
   });
 
   // Run whatever the script deferred. Node would run these too, with the write
@@ -999,6 +1204,7 @@ export async function runEnforcePrTarget(
 
   return {
     calls,
+    outputs,
     fsReads,
     logs,
     warnings,

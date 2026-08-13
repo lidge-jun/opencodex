@@ -62,6 +62,6 @@ const result = await withCodexWriteLock(
 console.log(JSON.stringify({
   status: result.status,
   ...(result.status === "acquired" ? { value: result.value, lockId: result.lockId } : {}),
-  ...(result.status === "busy" ? { reason: result.reason } : {}),
+  ...(result.status === "busy" ? { reason: result.reason, lockId: result.lockId } : {}),
   ...(result.status === "refused" ? { reason: result.reason } : {}),
 }));

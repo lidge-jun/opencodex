@@ -46,6 +46,11 @@ function dataOnlySse(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
+/** Unspaced counterparts of `sse` / `dataOnlySse` — `data:{...}` is as valid as `data: {...}` (#1170). */
+function unspacedSse(name: string, data: Record<string, unknown>): string {
+  return `event:${name}\ndata:${JSON.stringify(data)}\n\n`;
+}
+
 const DONE_SSE = "data: [DONE]\n\n";
 
 function streamFrom(text: string): ReadableStream<Uint8Array> {
@@ -147,6 +152,48 @@ describe("claude outbound SSE", () => {
       },
     }]);
     expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("#1170: the budgeted raw-frame parser accepts unspaced event/data fields and still balances the budget", async () => {
+    // This drives the offset-based parser inside responsesSseToAnthropicSse, which reserves and
+    // releases translator budget by offset rather than by slicing each line. A spaced-only prefix
+    // check dropped every frame here, producing an empty translation.
+    const frames = [
+      { name: "response.created", data: { response: { id: "resp_1" } } },
+      { name: "response.output_item.added", data: { output_index: 0, item: { type: "message", id: "msg_1", role: "assistant" } } },
+      { name: "response.content_part.added", data: { item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "output_text" } } },
+      { name: "response.output_text.delta", data: { item_id: "msg_1", output_index: 0, content_index: 0, delta: "unspaced" } },
+      { name: "response.output_item.done", data: { output_index: 0, item: { type: "message", id: "msg_1" } } },
+      { name: "response.completed", data: { response: { status: "completed", usage: { input_tokens: 5, output_tokens: 2 } } } },
+    ];
+
+    const spacedBudget = createTestTranslatorBudget();
+    const spaced = await collectEvents(responsesSseToAnthropicSse(
+      streamFrom(frames.map(f => sse(f.name, f.data)).join("")),
+      "claude-ocx-test",
+      { translatorBudget: spacedBudget },
+    ));
+
+    const unspacedBudget = createTestTranslatorBudget();
+    const unspaced = await collectEvents(responsesSseToAnthropicSse(
+      streamFrom(frames.map(f => unspacedSse(f.name, f.data)).join("")),
+      "claude-ocx-test",
+      { translatorBudget: unspacedBudget },
+    ));
+
+    const textOf = (events: { name: string; data: Record<string, any> }[]) => events
+      .filter(e => e.name === "content_block_delta")
+      .map(e => e.data?.delta?.text ?? "")
+      .join("");
+
+    expect(textOf(spaced)).toBe("unspaced");
+    expect(unspaced.map(e => e.name)).toEqual(spaced.map(e => e.name));
+    expect(textOf(unspaced)).toBe(textOf(spaced));
+    // The offset arithmetic must not change accounting: the unspaced path retains exactly what
+    // the spaced path retains. (Both leave a small non-zero residue at stream end; that is
+    // pre-existing behavior of this translator, not something this fix introduces — asserting
+    // equality is the contract that matters here.)
+    expect(unspacedBudget.snapshot().currentBytes).toBe(spacedBudget.snapshot().currentBytes);
   });
 
   test("text + thinking + tool call + completed w/ usage -> exact Anthropic sequence", async () => {
@@ -257,6 +304,60 @@ describe("claude outbound SSE", () => {
     ].join("");
     const msg2 = await collectAnthropicMessage(responsesSseToAnthropicSse(streamFrom(indexFree), "m"), "m") as Record<string, any>;
     expect(msg2.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking).toBe("AB");
+  });
+
+  test("huge reasoning identities stay bounded without collapsing item or part boundaries", async () => {
+    const hugeItemA = "a".repeat(1024 * 1024);
+    const hugeItemB = `${"a".repeat(1024 * 1024 - 1)}b`;
+    const hugePartA = "p".repeat(1024 * 1024);
+    const hugePartB = `${"p".repeat(1024 * 1024 - 1)}q`;
+    const upstream = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: hugeItemA, summary_index: hugePartA, delta: "A",
+      }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: hugeItemA, summary_index: hugePartA, delta: "B",
+      }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: hugeItemB, summary_index: hugePartA, delta: "C",
+      }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: hugeItemB, summary_index: hugePartB, delta: "D",
+      }),
+      sse("response.completed", {
+        response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+    ].join("");
+
+    const msg = await collectAnthropicMessage(
+      responsesSseToAnthropicSse(streamFromChunks([upstream]), "m"),
+      "m",
+    ) as Record<string, any>;
+    expect(msg.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking)
+      .toBe("AB\n\nC\n\nD");
+  });
+
+  test("malformed array reasoning identities retain distinct boundaries", async () => {
+    const upstream = [
+      sse("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: [1], summary_index: [0], delta: "A",
+      }),
+      sse("response.reasoning_summary_text.delta", {
+        item_id: [2], summary_index: [0], delta: "B",
+      }),
+      sse("response.completed", {
+        response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } },
+      }),
+    ].join("");
+
+    const msg = await collectAnthropicMessage(
+      responsesSseToAnthropicSse(streamFromChunks([upstream]), "m"),
+      "m",
+    ) as Record<string, any>;
+    expect(msg.content.find((b: Record<string, unknown>) => b.type === "thinking").thinking)
+      .toBe("A\n\nB");
   });
 
   test("data-only Responses frames infer event names from payload types", async () => {
@@ -494,23 +595,17 @@ describe("claude outbound SSE", () => {
     expect(events.at(-1)).toMatchObject({ name: "error", data: { error: { type: "overloaded_error" } } });
   });
 
-  test("idle keepalive pings flow during upstream silence", async () => {
-    // Upstream: created frame, a stretch of silence, then a clean completion.
-    //
-    // The silence is deliberately many intervals long. At 90ms with a 25ms ping the
-    // margin was 3.6 intervals against a >=3 assertion, so a single coalesced timer on
-    // a loaded runner failed it — which is how this went red on macos-latest while
-    // passing everywhere else. Timer scheduling is best-effort, not exact.
-    //
-    // The assertion below is unchanged. What changed is the headroom: the test still
-    // proves idle pings flow during silence, it just no longer depends on the runner
-    // delivering timers on schedule.
+  test("idle keepalive pings flow after semantic output during upstream silence", async () => {
+    // response.created is transport-only and must not start Anthropic framing because the
+    // next semantic frame could still be an initial error. Once real output starts the
+    // Anthropic message, periodic pings keep an otherwise idle connection alive.
     const PING_INTERVAL_MS = 25;
     const SILENCE_MS = 300;
     const encoder = new TextEncoder();
     const upstream = new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(encoder.encode(sse("response.created", { response: {} })));
+        controller.enqueue(encoder.encode(sse("response.output_text.delta", { delta: "x" })));
         await new Promise(r => setTimeout(r, SILENCE_MS));
         controller.enqueue(encoder.encode(sse("response.completed", { response: { status: "completed", usage: { input_tokens: 1, output_tokens: 1 } } })));
         controller.close();
@@ -518,7 +613,7 @@ describe("claude outbound SSE", () => {
     });
     const events = await collectEvents(responsesSseToAnthropicSse(upstream, "m", { pingIntervalMs: PING_INTERVAL_MS }));
     const pings = events.filter(e => e.name === "ping").length;
-    expect(pings).toBeGreaterThanOrEqual(3); // startup ping + >=2 idle pings
+    expect(pings).toBeGreaterThanOrEqual(3); // startup ping + >=2 idle pings after semantic start
     expect(events.at(-1)!.name).toBe("message_stop");
   });
 

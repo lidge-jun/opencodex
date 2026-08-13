@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
 }
@@ -127,7 +128,7 @@ describe("bridge stream lifecycle (RC1 / RC2)", () => {
         // 500ms, and a slow runner spent it. The stream is proven to close well
         // inside 1500ms, so the guard sits at the point where something is
         // genuinely wrong, and the test timeout gives the drift room.
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stall stream did not close")), 4_000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stall stream did not close")), watchdogMs(4_000))),
       ]);
     } finally {
       await reader.cancel();

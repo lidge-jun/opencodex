@@ -36,6 +36,17 @@ describe("ocx.mjs npm launcher (source invariants)", () => {
     expect(runtimeSource).toContain('export const BUN_RUNTIME_SOURCE_ENV = "OCX_BUN_RUNTIME_SOURCE";');
   });
 
+  test("the long-running Bun child stays hidden under a headless Windows launcher (#1236)", () => {
+    const spawnStart = source.indexOf("const child = spawn(bun, [cliPath");
+    expect(spawnStart).toBeGreaterThanOrEqual(0);
+    const spawnCall = source.slice(spawnStart, source.indexOf("});", spawnStart));
+
+    // Scope this to the final Node-to-Bun launch. Other helper spawns already hide
+    // their windows, but they do not cover the child that owns the proxy lifetime.
+    expect(spawnCall).toContain('stdio: "inherit"');
+    expect(spawnCall).toContain("windowsHide: true");
+  });
+
   test("Windows npm spawns use the trusted absolute invocation without shell lookup", () => {
     expect(source).toContain("const latestInvocation = npmInvocation(");
     expect(source).toContain("const installInvocation = npmInvocation(");

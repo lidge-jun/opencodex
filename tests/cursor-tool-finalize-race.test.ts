@@ -10,6 +10,7 @@ import {
   McpArgsSchema,
   McpToolCallSchema,
   ToolCallSchema,
+  ToolCallCompletedUpdateSchema,
   ToolCallStartedUpdateSchema,
   InteractionUpdateSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
@@ -57,8 +58,46 @@ function execFrame(id: number, callId: string, toolName: string, argText: string
   });
 }
 
+function completedFrame(callId: string, toolName: string) {
+  const toolCall = create(ToolCallSchema, {
+    tool: {
+      case: "mcpToolCall",
+      value: create(McpToolCallSchema, {
+        args: create(McpArgsSchema, { name: toolName, toolName, toolCallId: callId, providerIdentifier: PROVIDER }),
+      }),
+    },
+  });
+  return create(AgentServerMessageSchema, {
+    message: {
+      case: "interactionUpdate",
+      value: create(InteractionUpdateSchema, {
+        message: {
+          case: "toolCallCompleted",
+          value: create(ToolCallCompletedUpdateSchema, { callId, modelCallId: callId, toolCall }),
+        },
+      }),
+    },
+  });
+}
+
+function completedByCallIdFrame(callId: string) {
+  return create(AgentServerMessageSchema, {
+    message: {
+      case: "interactionUpdate",
+      value: create(InteractionUpdateSchema, {
+        message: {
+          case: "toolCallCompleted",
+          value: create(ToolCallCompletedUpdateSchema, { callId, modelCallId: callId }),
+        },
+      }),
+    },
+  });
+}
+
 interface Harness {
-  feed(frame: ReturnType<typeof startedFrame>): Promise<void>;
+  feed(
+    frame: ReturnType<typeof startedFrame> | ReturnType<typeof completedFrame> | ReturnType<typeof completedByCallIdFrame>,
+  ): Promise<void>;
   events: CursorServerMessage[];
   closeCodes: number[];
   cancelled(): boolean;
@@ -161,5 +200,43 @@ describe("transport finalize race (hidden parallel sibling)", () => {
     expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
     const ends = h.events.filter(e => e.type === "tool_call_end").length;
     expect(ends).toBe(2);
+  });
+
+  test("completion-only sibling re-arms finalize after draining the call set", async () => {
+    const h = makeHarness(1_000, ["echo_a", "echo_b"]);
+    await h.feed(startedFrame("call_a", "echo_a"));
+    await h.feed(execFrame(1, "call_a", "echo_a", "A"));
+    await sleep(300);
+
+    // A completed sibling can arrive without a preceding started/mcpArgs frame. It revokes the
+    // pending finalize while mapping the terminal tool event, then must arm a fresh finalize.
+    await h.feed(completedFrame("call_b", "echo_b"));
+    expect(h.events.map(e => e.type)).not.toContain("done");
+
+    // Cross the original deadline while staying inside the re-armed grace window. If the first
+    // timer survived, this assertion observes a premature terminal event with 150 ms of margin
+    // on either side of the two deadlines.
+    await sleep(850);
+    expect(h.events.map(e => e.type)).not.toContain("done");
+    expect(h.cancelled()).toBe(false);
+
+    await sleep(250);
+    expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
+    expect(h.events.filter(e => e.type === "tool_call_end")).toHaveLength(2);
+    expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
+  });
+
+  test("call-id-only completion re-arms finalize for an open client tool", async () => {
+    const h = makeHarness(20, ["echo_a"]);
+    await h.feed(startedFrame("call_a", "echo_a"));
+
+    // Cursor may omit the embedded ToolCall and identify a previously opened call only by id.
+    await h.feed(completedByCallIdFrame("call_a"));
+    expect(h.events.map(e => e.type)).not.toContain("done");
+
+    await sleep(60);
+    expect(h.events.map(e => e.type).filter(t => t === "done")).toHaveLength(1);
+    expect(h.events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
+    expect(h.closeCodes).toEqual([NGHTTP2_CANCEL]);
   });
 });

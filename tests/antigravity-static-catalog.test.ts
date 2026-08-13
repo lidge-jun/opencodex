@@ -28,6 +28,7 @@ describe("Google Antigravity static catalog", () => {
           ...providerConfigSeed(entry),
           authMode: "key",
           apiKey: "test-token",
+          liveModels: false,
         },
       },
     }));

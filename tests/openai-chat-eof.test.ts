@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
 import { bridgeToResponsesSSE } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
-import { withTestTranslatorBudget } from "./helpers/translator-budget";
+import { createTestTranslatorBudget, withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
@@ -291,5 +291,169 @@ describe("openai-chat EOF mid tool call (#735)", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
     expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
     expect(events.at(-1)?.type).toBe("done");
+  });
+});
+
+describe("openai-chat unnamed tool calls fail closed (#1514)", () => {
+  // The reported OpenCode Zen / DeepSeek shape: argument deltas arrive, the function name
+  // never does, and the stream reaches a normal terminal boundary. Emitting that call hands
+  // the Codex tool-call contract something it cannot dispatch and the turn breaks downstream.
+  const unnamedDelta =
+    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"arguments":"{\\"a\\":1}"}}]}}]}\n\n';
+
+  function errorMessage(events: AdapterEvent[]): string {
+    const last = events.at(-1);
+    return last && last.type === "error" ? last.message : "";
+  }
+
+  test("terminated by [DONE]: error, no tool_call_start, no done", async () => {
+    const response = new Response([unnamedDelta, "data: [DONE]\n\n"].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(errorMessage(events)).toContain("without a function name");
+  });
+
+  test("terminated by finish_reason: error, no tool_call_start, no done", async () => {
+    const response = new Response([
+      unnamedDelta,
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(errorMessage(events)).toContain("without a function name");
+  });
+
+  test("a whitespace-only name is rejected like a missing one", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"   ","arguments":"{}"}}]}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(errorMessage(events)).toContain("without a function name");
+  });
+
+  test("a name arriving in a later chunk is still accepted", async () => {
+    // The guard must not reject a call whose name is simply late: that is the ordinary
+    // OpenAI streaming shape, where the first chunk may carry only id and arguments.
+    const response = new Response([
+      unnamedDelta,
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"shell"}}]}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
+    expect(events.at(-1)?.type).toBe("done");
+  });
+
+  test("an unnamed call without any terminal signal still reports truncation", async () => {
+    // Raw EOF keeps its own fail-closed error: the truncation branch runs before the
+    // post-loop flush, so the new guard must not steal that diagnosis.
+    const response = new Response(unnamedDelta);
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(events.some(e => e.type === "done")).toBe(false);
+    expect(errorMessage(events)).toContain("mid tool call");
+  });
+
+  test("a non-array tool_calls payload still reports the #1325 error", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"tool_calls":"nope"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(errorMessage(events)).toContain("invalid tool calls");
+  });
+
+  // The streamed tool-call shape is upstream JSON behind a TypeScript cast, so a truthy
+  // non-string name reaches the accumulator unvalidated. Before ingest validation it was
+  // stored and then thrown on at flush time as `call.name.trim is not a function` — an
+  // uncatchable-looking TypeError instead of the #1325 terminal error.
+  test("a non-string function name terminates instead of throwing", async () => {
+    const response = new Response([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":123,"arguments":"{}"}}]}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    const events = await collect(createOpenAIChatAdapter(provider).parseStream(response));
+    expect(errorMessage(events)).toContain("invalid tool calls");
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("non-string arguments and a non-record function both terminate", async () => {
+    const badArgs = new Response([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":{"name":"shell","arguments":42}}]}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    expect(errorMessage(await collect(createOpenAIChatAdapter(provider).parseStream(badArgs))))
+      .toContain("invalid tool calls");
+
+    const badFunction = new Response([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","function":"shell"}]}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+    expect(errorMessage(await collect(createOpenAIChatAdapter(provider).parseStream(badFunction))))
+      .toContain("invalid tool calls");
+  });
+
+  // Terminating mid-flush must not strand the reservations of the calls that were never
+  // emitted. `closeToolCalls()` snapshots and closes every pending key before iteration,
+  // so the call AFTER the offender is released too — assert that against the budget
+  // itself rather than inferring it from the emitted events.
+  test("terminating mid-flush releases every pending call's budget", async () => {
+    const budget = createTestTranslatorBudget();
+    const named = (index: number, id: string, name: string) =>
+      `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"id":"${id}","function":{"name":"${name}","arguments":"{\\"padding\\":\\"aaaaaaaaaaaaaaaaaaaa\\"}"}}]}}]}\n\n`;
+    const unnamed = (index: number, id: string) =>
+      `data: {"choices":[{"delta":{"tool_calls":[{"index":${index},"id":"${id}","function":{"arguments":"{\\"padding\\":\\"bbbbbbbbbbbbbbbbbbbb\\"}"}}]}}]}\n\n`;
+
+    const response = new Response([
+      named(0, "call_ok", "shell"),
+      unnamed(1, "call_bad"),
+      named(2, "call_after", "read"),
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(
+      createOpenAIChatAdapterProduction(provider).parseStream(response, budget),
+    );
+
+    const snapshot = budget.snapshot();
+    expect(snapshot.activeCalls).toBe(0);
+    expect(snapshot.currentBytes).toBe(0);
+    expect(snapshot.highWaterBytes).toBeGreaterThan(0);
+
+    // The call after the offender is never emitted, and the turn ends on the error.
+    const started = events.filter(e => e.type === "tool_call_start");
+    expect(started.some(e => e.type === "tool_call_start" && e.id === "call_after")).toBe(false);
+    expect(events.at(-1)?.type).toBe("error");
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("buffered response with a blank function name fails closed", async () => {
+    const response = new Response(
+      JSON.stringify({
+        choices: [{ message: { tool_calls: [{ id: "call_x", type: "function", function: { name: "", arguments: "{}" } }] } }],
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const events = await createOpenAIChatAdapter(provider).parseResponse!(response);
+    expect(events.some(e => e.type === "tool_call_start")).toBe(false);
+    expect(events.some(e => e.type === "error")).toBe(true);
+  });
+
+  test("buffered response with a valid function name is unchanged", async () => {
+    const response = new Response(
+      JSON.stringify({
+        choices: [{ message: { tool_calls: [{ id: "call_x", type: "function", function: { name: "shell", arguments: "{}" } }] } }],
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const events = await createOpenAIChatAdapter(provider).parseResponse!(response);
+    expect(events.some(e => e.type === "error")).toBe(false);
+    expect(events.filter(e => e.type === "tool_call_end")).toHaveLength(1);
   });
 });

@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n/shared";
 import CodexAccountPool from "../components/CodexAccountPool";
 import DefaultModeRequestUserInputSetting from "../components/DefaultModeRequestUserInputSetting";
+import CodexAccountPickerSetting from "../components/CodexAccountPickerSetting";
 import { codexAccountModeState, type CodexAccountModeState } from "../codex-multi-state";
+import { navigateHash } from "../hash-routing";
 import { ensureOpenAiProvider, openAiAccountProviderState, OpenAiEnableError } from "../provider-payload";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 
@@ -46,7 +48,10 @@ export function OpenAiAccountModeBanner({
       )}
       {state === "direct" && (
         <p className="card-sub openai-account-mode-banner__desc">
-          {t("codexAuth.accountModeDirectDesc")} <a href="#providers">{t("codexAuth.openProviders")}</a>
+          {t("codexAuth.accountModeDirectDesc")}{" "}
+          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+            {t("codexAuth.openProviders")}
+          </button>
         </p>
       )}
       {(state === "absent" || state === "disabled") && (
@@ -59,7 +64,10 @@ export function OpenAiAccountModeBanner({
       )}
       {state === "invalid" && (
         <p className="card-sub openai-account-mode-banner__desc">
-          {t("codexAuth.openaiMissing")} <a href="#providers">{t("codexAuth.openProviders")}</a>
+          {t("codexAuth.openaiMissing")}{" "}
+          <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
+            {t("codexAuth.openProviders")}
+          </button>
         </p>
       )}
     </div>
@@ -178,6 +186,7 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
   return (
     <>
       <CodexAccountPool apiBase={apiBase} accountModeState={accountModeState} banner={banner} />
+      <CodexAccountPickerSetting apiBase={apiBase} />
       <DefaultModeRequestUserInputSetting apiBase={apiBase} />
     </>
   );

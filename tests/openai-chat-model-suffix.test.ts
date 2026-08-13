@@ -57,7 +57,12 @@ describe("stripBracketedModelSuffix", () => {
   });
 
   test("strips trailing suffix with trailing whitespace", () => {
-    expect(stripBracketedModelSuffix("glm-5.2[1m] ")).toBe("glm-5.2");
+    expect(stripBracketedModelSuffix("glm-5.2[1m] \t\r\n")).toBe("glm-5.2");
+  });
+
+  test("preserves trailing whitespace when there is no suffix", () => {
+    const modelId = "glm-5.2 \t\r\n";
+    expect(stripBracketedModelSuffix(modelId)).toBe(modelId);
   });
 
   test("does not strip an interior bracket group", async () => {
@@ -66,6 +71,25 @@ describe("stripBracketedModelSuffix", () => {
 
   test("empty bracket group is still stripped", async () => {
     expect(stripBracketedModelSuffix("model[]")).toBe("model");
+  });
+
+  test("strips only the final bracket group", () => {
+    expect(stripBracketedModelSuffix("model[first][second]")).toBe("model[first]");
+  });
+
+  test("handles a long malformed suffix without regex backtracking", () => {
+    const modelId = `model${"[".repeat(100_000)}x`;
+    expect(stripBracketedModelSuffix(modelId)).toBe(modelId);
+  });
+
+  test("strips a long valid suffix", () => {
+    const modelId = `model[${"x".repeat(100_000)}]`;
+    expect(stripBracketedModelSuffix(modelId)).toBe("model");
+  });
+
+  test("preserves a long unmatched closing bracket", () => {
+    const modelId = `model${"x".repeat(100_000)}]`;
+    expect(stripBracketedModelSuffix(modelId)).toBe(modelId);
   });
 });
 

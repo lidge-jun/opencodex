@@ -36,8 +36,14 @@ The same action is available from the web dashboard's **Stop** button (`POST /ap
 
 ### `ocx restart`
 
-Run `stop` followed by `ensure`: stop the proxy/service, restore native Codex, start the proxy in the
-background, and sync the live port back into Codex.
+When a proxy is running, ask that exact attested PID and port to restart in place, wait for its
+normal drain, and verify a different runtime PID on the same port. Managed routing and service
+supervision stay installed throughout; an uncertain request is observed rather than replayed as a
+separate stop/start. If no proxy is running, the command falls back to the normal `ensure` start.
+If a live listener cannot be attested to a runtime PID (including a pre-update proxy), restart fails
+closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
+`ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by
+`ocx service start` so supervision is restored.
 
 ### `ocx ensure`
 
@@ -142,6 +148,18 @@ tokens, authorization headers, request content, emails, and account identities.
 Identity-check the live proxy. Human output reports PID/port; `--json` emits `{ok, pid, port}`. The
 command exits 0 only when healthy and 1 otherwise, making it suitable for service probes.
 
+### `ocx ready [--json] [--wait [--timeout <seconds>]]`
+
+Check post-sync readiness through the unauthenticated `GET /readyz` endpoint. It returns `200` when
+ready, or `503` with `Retry-After: 1` for `pending` and terminal `failed`. Its sanitized HTTP identity
+is `{service, version, uptime, pid, port, status}`. Old proxies without `/readyz` fail closed as
+`unreachable`; `/healthz` is separate liveness, not readiness. The command performs one probe by
+default; `--wait` polls until ready or timeout, but exits immediately when it observes the terminal `failed` state. The
+default timeout is 45 seconds; `--timeout <seconds>` requires `--wait` and accepts positive integer seconds from 1–300.
+CLI JSON emits `{ready, status, pid, port}`, where `status` is `ready`, `pending`, `failed`, or
+`unreachable`. Exit codes are 0 for ready; 1 for not-ready, pending, failed, timeout, or
+unreachable; and 64 for invalid arguments.
+
 ### `ocx doctor`
 
 Run read-only environment and connectivity diagnostics: state paths and filesystem type, WSL dual
@@ -161,6 +179,11 @@ not fabricate official-client metadata. Doctor never mutates credentials or appl
 
 Fetch the live model list from every configured provider and re-inject the merged catalog into Codex.
 Run it after adding a provider or to refresh available models.
+
+Before provider discovery or catalog/cache replacement, `ocx sync` validates that the managed
+Codex configuration can be injected. If that validation refuses the config, the command exits
+nonzero, prints the concrete reason on stderr, and leaves the existing catalog and cache unchanged.
+`ocx restore back` uses the same no-write preflight before it re-enables routing.
 
 If long-lived Codex `app-server` processes are still running, `ocx sync` warns that they may keep
 serving the previous in-memory model list even though `opencodex-catalog.json` / `models_cache.json`
@@ -264,10 +287,35 @@ automatically. If that fallback cannot determine the token state, it retains the
 error. Foreign tasks and operations can never emit the automatic-elevation marker. Approve the
 dashboard UAC prompt or rerun `ocx service install` in an elevated PowerShell window.
 
+For a fresh install where the OpenCodex scheduler task is confirmed absent, UAC approval now
+happens before the installer stops any existing proxy. The task is registered without being run;
+only after registration succeeds does OpenCodex stop the old listener, publish the service assets,
+and start the scheduled task. Cancelling or denying UAC therefore leaves the working proxy and its
+Codex routing in place. Existing or conflicting scheduler registrations continue to fail closed
+rather than being deleted as an unsafe best-effort rollback.
+
 ### `ocx codex-shim <install|status|uninstall|remove>`
 
 Wrap a script-based `codex` launcher on PATH with a lightweight autostart script. Real `codex.exe`
 targets are left untouched to avoid breaking exact executable invocations.
+
+Before an install or repair is committed, OpenCodex runs the saved launcher with `--version` while
+service startup is bypassed. It refuses the change and rolls back when the launcher resolves
+`codex` back to the shim, exits nonzero, exceeds five seconds, leaves descendants running, or
+cannot be validated and cleaned up safely. Therefore `codex-shim install` is not unconditional. If
+it is refused, reinstall Codex so the PATH entry is a concrete executable or launcher and retry;
+use `ocx service install` instead when a dynamic command-manager launcher cannot meet these checks.
+During upgrades, an installed Unix shim that lacks the current validation guard is regenerated and
+probed. If its saved launcher is unsafe, OpenCodex removes the obsolete shim and restores the
+original launcher instead of leaving the unsafe wrapper installed.
+
+Launcher installation alone does not prove that Codex requests will use OpenCodex. After a healthy
+install, the command checks the current Codex routing and reports a warning instead of a green result
+when routing is external, user-owned, or unverifiable. It also warns when outbound proxy variables
+exist only in the current process while `config.proxy` is unset or unresolved, because Codex
+launchers and background services may not inherit that environment. These checks are read-only and
+never print proxy values; resolve the reported handoff and run `ocx doctor` before relying on
+autostart.
 
 If a completed external Codex update overwrites an installed shim, the next ordinary `ocx` command
 backs up the stable new launcher and restores the shim before dispatch. A launcher that is still
@@ -313,8 +361,12 @@ if it is not running.
 Self-update opencodex from npm. Stable installs use `@latest`; preview installs stay on `@preview`
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to
 `git pull && bun install` instead, and is a no-op if you are already on the newest version for that
-tag. A running proxy is stopped before files are replaced; an installed service is rebuilt and
-started automatically, while a foreground installation prints `ocx start` as the next step.
+tag. Before stopping anything, npm installations run a bounded Unix cache ownership and access
+check. Nested symlinks are checked with `lstat` but not followed; Windows explicitly skips this
+Unix-only check. A failure aborts while the tray and proxy are still running. A running proxy is
+then stopped before files are replaced; an installed service is rebuilt and started automatically,
+while a foreground installation prints `ocx start` as the next step. Dashboard update records
+redact profile/cache paths and UID/GID values before they are persisted.
 
 ```bash
 ocx update

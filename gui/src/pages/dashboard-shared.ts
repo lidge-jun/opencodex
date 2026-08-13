@@ -1,5 +1,10 @@
 import type { RefObject } from "react";
 import { useEffect, useRef } from "react";
+import {
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+} from "../../../src/vision/timeout-bounds";
 import { readJsonOrThrow } from "../fetch-json";
 import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
@@ -39,7 +44,7 @@ export async function requireJson<T>(res: Response, fallbackMessage?: string): P
 
 export interface HealthData { status: string; version: string; uptime: number }
 export interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
-export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string }
+export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string; reasoningEfforts?: string[] }
 export interface SettingsData {
   codexAutoStart: boolean;
   port: number;
@@ -55,11 +60,35 @@ export interface SettingsData {
   };
 }
 export type SidecarBackend = "openai" | "anthropic";
-export interface SidecarSetting { backend?: SidecarBackend; model: string }
-export interface SidecarData { webSearch: SidecarSetting; vision: SidecarSetting }
+export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
+export interface SidecarSetting {
+  backend?: SidecarBackend;
+  model: string;
+  reasoning?: VisionReasoning;
+  streamRoutedModelOutput?: boolean;
+  enabled?: boolean;
+  maxDescriptionsPerTurn?: number;
+  timeoutMs?: number;
+}
+export interface VisionModelOption { value: string; label: string; backend: SidecarBackend; baseline?: boolean }
+export interface SidecarData {
+  webSearch: SidecarSetting;
+  vision: SidecarSetting;
+  /** Server-computed eligible describers. Optional: an older server omits it and
+   *  the client falls back to the legacy provider-name list rather than showing
+   *  an empty picker. */
+  visionModels?: VisionModelOption[];
+}
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string };
-  vision?: { backend?: SidecarBackend | null; model?: string };
+  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
+  vision?: {
+    backend?: SidecarBackend | null;
+    model?: string;
+    reasoning?: VisionReasoning;
+    enabled?: boolean;
+    maxDescriptionsPerTurn?: number;
+    timeoutMs?: number;
+  };
 }
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
@@ -142,13 +171,103 @@ export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string
 
 export function mergeSidecarSetting(
   current: SidecarSetting,
-  update?: { backend?: SidecarBackend | null; model?: string },
+  update?: {
+    backend?: SidecarBackend | null;
+    model?: string;
+    reasoning?: VisionReasoning;
+    streamRoutedModelOutput?: boolean;
+    enabled?: boolean;
+    maxDescriptionsPerTurn?: number;
+    timeoutMs?: number;
+  },
 ): SidecarSetting {
   const merged = { ...current };
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
   else if (update?.backend !== undefined) merged.backend = update.backend;
+  if (update?.reasoning !== undefined) merged.reasoning = update.reasoning;
+  if (update?.streamRoutedModelOutput !== undefined) merged.streamRoutedModelOutput = update.streamRoutedModelOutput;
+  if (update?.enabled !== undefined) merged.enabled = update.enabled;
+  if (update?.maxDescriptionsPerTurn !== undefined) merged.maxDescriptionsPerTurn = update.maxDescriptionsPerTurn;
+  if (update?.timeoutMs !== undefined) merged.timeoutMs = update.timeoutMs;
   return merged;
+}
+
+/** Effort-only edits must not rewrite a custom model or its explicitly selected backend. */
+export function visionReasoningPatch(reasoning: VisionReasoning): SidecarPatch {
+  return { vision: { reasoning } };
+}
+
+export function visionEnabledPatch(enabled: boolean): SidecarPatch {
+  return { vision: { enabled } };
+}
+
+export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {
+  return { vision: { maxDescriptionsPerTurn } };
+}
+
+export function visionTimeoutPatch(timeoutMs: number): SidecarPatch {
+  return { vision: { timeoutMs } };
+}
+
+/**
+ * Dashboard names for the runtime timeout contract in `src/vision/timeout-bounds.ts`.
+ * Pinned by `tests/vision-sidecar-timeout-bounds.test.ts`.
+ */
+export const VISION_TIMEOUT_MS_DEFAULT = DEFAULT_VISION_TIMEOUT_MS;
+export const VISION_TIMEOUT_MS_MAX = MAX_VISION_TIMEOUT_MS;
+export const VISION_TIMEOUT_MS_MIN = MIN_VISION_TIMEOUT_MS;
+/** Mirrors `DEFAULT_MAX_DESCRIPTIONS_PER_TURN` and is pinned by the timeout-bounds contract test. */
+export const VISION_MAX_DESCRIPTIONS_DEFAULT = 8;
+
+export function parsePositiveInteger(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0) return undefined;
+  return value;
+}
+
+export function parseVisionTimeoutMs(raw: string): number | undefined {
+  const value = parsePositiveInteger(raw);
+  if (value === undefined || value < VISION_TIMEOUT_MS_MIN || value > VISION_TIMEOUT_MS_MAX) return undefined;
+  return value;
+}
+
+export const VISION_REASONING_LEVELS: VisionReasoning[] = ["low", "medium", "high", "xhigh", "max"];
+
+export function visionReasoningLadder(models: ModelInfo[], modelId: string): VisionReasoning[] {
+  const model = models.find(m => m.id === modelId);
+  const ladder = model?.reasoningEfforts;
+  if (!ladder || ladder.length === 0) return [...VISION_REASONING_LEVELS];
+  const supported = VISION_REASONING_LEVELS.filter(effort => ladder.includes(effort));
+  return supported.length > 0 ? supported : [...VISION_REASONING_LEVELS];
+}
+
+/** Do not keep an unsupported persisted rung in the picker; runtime will not honor it. */
+export function visionReasoningOptionsFor(ladder: VisionReasoning[], persisted: VisionReasoning): VisionReasoning[] {
+  const effective = clampVisionReasoningToLadder(ladder, persisted);
+  return ladder.includes(effective) ? ladder : [effective, ...ladder];
+}
+
+/** Match server normalization: never escalate when a lower/equal supported rung exists. */
+export function clampVisionReasoningToLadder(
+  ladder: VisionReasoning[],
+  persisted: VisionReasoning,
+): VisionReasoning {
+  if (ladder.length === 0 || ladder.includes(persisted)) return persisted;
+  const requestedRank = VISION_REASONING_LEVELS.indexOf(persisted);
+  let best = ladder[0];
+  let bestRank = VISION_REASONING_LEVELS.indexOf(best);
+  for (const effort of ladder) {
+    const rank = VISION_REASONING_LEVELS.indexOf(effort);
+    if (rank <= requestedRank && rank >= bestRank) {
+      best = effort;
+      bestRank = rank;
+    }
+  }
+  // When every supported rung is above the request, use the lowest supported rung.
+  return best;
 }
 
 export function sidecarModelOptions(models: ModelInfo[]) {
@@ -161,6 +280,36 @@ export function sidecarModelOptions(models: ModelInfo[]) {
   return out;
 }
 
+/**
+ * Server list when present, else the legacy openai+anthropic list.
+ *
+ * `undefined` and `[]` mean different things and must not be collapsed. A server that
+ * predates this field sends no key at all, and falling back to the provider-name list is
+ * the documented degrade path for it. A current server that sends `[]` has computed that
+ * nothing is eligible, and repopulating the picker from `/api/models` would put back
+ * exactly the text-only rows this feature exists to remove.
+ *
+ * `currentBackend` is the backend already persisted for `current`. It travels with the
+ * grandfathered entry because the legacy fallback path has no server backend to read and
+ * would otherwise infer one from `/api/models`, where anything not literally provided by
+ * "anthropic" reads as OpenAI — silently rewriting a working Anthropic describer on the
+ * next save. What is already stored is better evidence than a guess.
+ */
+export function visionModelOptions(
+  serverOptions: VisionModelOption[] | undefined,
+  models: ModelInfo[],
+  current: string | undefined,
+  currentBackend?: SidecarBackend,
+): Array<{ value: string; label: string; backend?: SidecarBackend }> {
+  const options = serverOptions
+    ? serverOptions.map(option => ({ value: option.value, label: option.label, backend: option.backend }))
+    : sidecarModelOptions(models);
+  if (current && !options.some(option => option.value === current)) {
+    options.unshift({ value: current, label: current, ...(currentBackend ? { backend: currentBackend } : {}) });
+  }
+  return options;
+}
+
 /** Options for shadow-call replacement models use the proxy's canonical routing id. */
 export function shadowCallModelOptions(models: ModelInfo[], current: string | undefined) {
   const out = [{ value: "", label: "—" }, ...models.map(model => ({ value: model.namespaced, label: model.namespaced }))];
@@ -170,6 +319,15 @@ export function shadowCallModelOptions(models: ModelInfo[], current: string | un
 
 export function sidecarBackendForModel(models: ModelInfo[], modelId: string): SidecarBackend {
   return models.find(model => model.id === modelId)?.provider === "anthropic" ? "anthropic" : "openai";
+}
+
+/** Server eligibility is authoritative; catalog inference only supports legacy picker entries. */
+export function visionSidecarBackendForModel(
+  models: ModelInfo[],
+  options: Array<{ value: string; backend?: SidecarBackend }>,
+  modelId: string,
+): SidecarBackend {
+  return options.find(option => option.value === modelId)?.backend ?? sidecarBackendForModel(models, modelId);
 }
 
 let lastInputWasKeyboard = false;

@@ -261,6 +261,85 @@ describe("codex-account-store CRUD", () => {
     }
   });
 
+  test("refresh with a non-finite expires_in falls back to the 3600s default", async () => {
+    const {
+      getCodexAccountCredential,
+      getValidCodexToken,
+      saveCodexAccountCredential,
+    } = await import("../src/codex/account-store");
+    saveCodexAccountCredential("refresh-bad-expiry", { accessToken: "old", refreshToken: "old-r", expiresAt: 0, chatgptAccountId: "acc" });
+    const originalFetch = globalThis.fetch;
+    // JSON.stringify turns NaN into null; hand-write 1e999 so JSON.parse yields Infinity,
+    // the realistic corrupt shape that would previously produce expiresAt: NaN.
+    globalThis.fetch = (async () => new Response(
+      '{"access_token":"new","refresh_token":"new-r","expires_in":1e999}',
+      { status: 200 },
+    )) as typeof fetch;
+
+    try {
+      const before = Date.now();
+      await getValidCodexToken("refresh-bad-expiry");
+      const stored = getCodexAccountCredential("refresh-bad-expiry")!;
+      expect(Number.isFinite(stored.expiresAt)).toBe(true);
+      expect(stored.expiresAt).toBeGreaterThan(before);
+      expect(Math.abs(stored.expiresAt - (before + 3600 * 1000))).toBeLessThan(30_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("refresh with an overflowing expires_in falls back to the 3600s default", async () => {
+    const {
+      getCodexAccountCredential,
+      getValidCodexToken,
+      saveCodexAccountCredential,
+    } = await import("../src/codex/account-store");
+    saveCodexAccountCredential("refresh-overflow-expiry", { accessToken: "old", refreshToken: "old-r", expiresAt: 0, chatgptAccountId: "acc" });
+    const originalFetch = globalThis.fetch;
+    // Number.MAX_VALUE passes Number.isFinite but overflows to Infinity when
+    // multiplied by 1000 — the computed expiresAt must still be guarded.
+    globalThis.fetch = (async () => new Response(
+      '{"access_token":"new","refresh_token":"new-r","expires_in":1.7976931348623157e308}',
+      { status: 200 },
+    )) as typeof fetch;
+
+    try {
+      const before = Date.now();
+      await getValidCodexToken("refresh-overflow-expiry");
+      const stored = getCodexAccountCredential("refresh-overflow-expiry")!;
+      expect(Number.isFinite(stored.expiresAt)).toBe(true);
+      expect(stored.expiresAt).toBeGreaterThan(before);
+      expect(Math.abs(stored.expiresAt - (before + 3600 * 1000))).toBeLessThan(30_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("refresh with a negative expires_in falls back to the 3600s default", async () => {
+    const {
+      getCodexAccountCredential,
+      getValidCodexToken,
+      saveCodexAccountCredential,
+    } = await import("../src/codex/account-store");
+    saveCodexAccountCredential("refresh-negative-expiry", { accessToken: "old", refreshToken: "old-r", expiresAt: 0, chatgptAccountId: "acc" });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(
+      JSON.stringify({ access_token: "new", refresh_token: "new-r", expires_in: -1 }),
+      { status: 200 },
+    )) as typeof fetch;
+
+    try {
+      const before = Date.now();
+      await getValidCodexToken("refresh-negative-expiry");
+      const stored = getCodexAccountCredential("refresh-negative-expiry")!;
+      expect(Number.isFinite(stored.expiresAt)).toBe(true);
+      expect(stored.expiresAt).toBeGreaterThan(before);
+      expect(Math.abs(stored.expiresAt - (before + 3600 * 1000))).toBeLessThan(30_000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("refresh waits behind file lock and reuses credential refreshed by another process", async () => {
     const {
       getValidCodexToken,

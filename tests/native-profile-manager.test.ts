@@ -1038,6 +1038,9 @@ describe("native main profile transactions", () => {
     expect(readFileSync(f.manager.context.authPath, "utf8")).toBe(refreshed);
   });
 
+  // The manager can spend up to 5 s acquiring its SQLite transaction lock.
+  // Keep Bun's harness budget above that internal deadline so CI load cannot
+  // pre-empt the manager's own timeout handling.
   test("preserves exact auth bytes, encrypts inactive profiles, and leaves task/history files untouched", async () => {
     const f = await enrolledFixture();
     const taskPath = join(f.codexHome, "sessions", "task.jsonl");
@@ -1064,7 +1067,7 @@ describe("native main profile transactions", () => {
       "account-source->account-target",
       "account-target->account-source",
     ]);
-  });
+  }, 10_000);
 
   test("a read-back mismatch restores the exact source and removes the journal", async () => {
     const f = await enrolledFixture();

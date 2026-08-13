@@ -1,0 +1,47 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "object": "model",
+      "created": 1686935002,
+      "owned_by": "digitalocean"
+    },
+    {
+      "id": "openai-gpt-5.6-sol",
+      "object": "model",
+      "created": 1785542400,
+      "owned_by": "openai"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "object": "model",
+      "created": 1785456000,
+      "owned_by": "digitalocean"
+    },
+    {
+      "id": "openai-gpt-5.5",
+      "object": "model",
+      "created": 1785369600,
+      "owned_by": "openai"
+    },
+    {
+      "id": "qwen3-embedding-0.6b",
+      "object": "model",
+      "created": 1785283200,
+      "owned_by": "digitalocean"
+    },
+    {
+      "id": "openai-gpt-image-2",
+      "object": "model",
+      "created": 1785196800,
+      "owned_by": "openai"
+    },
+    {
+      "id": "future-chat-unverified",
+      "object": "model",
+      "created": 1785110400,
+      "owned_by": "digitalocean"
+    }
+  ]
+}

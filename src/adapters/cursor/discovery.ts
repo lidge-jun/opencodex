@@ -29,7 +29,7 @@ export function inferCursorContextWindow(modelId: string): number {
   if (id === "glm-5.2") return CONTEXT_1M;
   if (id.startsWith("gpt-5.6-")) return CONTEXT_1M;
   if (id.startsWith("gpt-5") || id === "gpt-5-codex") return CONTEXT_272K;
-  if (id.startsWith("grok-4.5")) return 500_000;
+  if (id.startsWith("grok-4.5") || id.startsWith("grok-4.6")) return 500_000;
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
@@ -240,6 +240,9 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
   { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
+  // 260813 preemptive: grok-4.6 seeded ahead of Cursor's lineup update (mirrors grok-4.5).
+  { id: "grok-4.6", contextWindow: 500_000, supportsReasoningEffort: true },
+  { id: "grok-4.6-fast", contextWindow: 500_000, supportsReasoningEffort: true },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {

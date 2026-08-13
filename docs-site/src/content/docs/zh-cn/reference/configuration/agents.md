@@ -17,6 +17,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | 只控制 opencodex 生成的 v1/v2 开发者引导；不会改变原生代理默认值、工具、路由、名单或 effort 上限。 |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | 允许在同步或重启时，将 `injectionModel` 以及可选的 `injectionEffort` 写入为 Codex 的原生默认值。需要 `injectionModel`。 |
 | `subagentModelFallback?` | `string[]` | `[]` | 按优先级排序的全局回退模型，用于派生的子轮次。 |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | 按请求的主模型 id 做键的 per-model 回退链。这是 per-role fallback 元数据的受支持存放位置；`model_fallback` 写在 Codex agent TOML 里会让 Codex 0.146+ 跳过该角色（#1190）。 |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 可用性探测缓存间隔。低于 1000 ms 的值会回退到默认值。 |
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
@@ -44,8 +45,12 @@ V1 引导只会在 `max` 或 `ultra` 时以主动文本形式出现。V2 只有�
 派生子轮次的回退顺序如下：
 
 1. 请求的主模型；
-2. 来自 `$CODEX_HOME/agents/*.toml` 的角色级 `model_fallback`；然后是
+2. `subagentModelFallbackByModel` 中的 per-model 链（按主模型做键）；然后是
 3. 全局 `subagentModelFallback` 条目。
+
+per-role fallback 链必须放在 opencodex 配置里。把 `model_fallback` 写进
+`$CODEX_HOME/agents/*.toml` 会让 Codex 0.146+ 把整个角色文件当作未知字段拒绝并跳过该角色
+（#1190）。TOML 中的旧版 `model_fallback` 仍会被读取以保持向后兼容，但 `ocx doctor` 会标记它。
 
 opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或已达到配额阈值的候选项。可用性快照会在 `subagentModelFallbackPollMs` 期间缓存。加密的子任务可以把链限制为规范的原生 ChatGPT 目标；如果没有任何目标能读取加密载荷，请求就会失败，而不是把不可读的密文路由到别处。
 
@@ -57,6 +62,9 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
   "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallbackByModel": {
+    "gpt-5.5": ["gpt-5.4-mini"]
+  },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }

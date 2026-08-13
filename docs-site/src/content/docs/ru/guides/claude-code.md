@@ -54,12 +54,17 @@ ocx claude
 работать в той же сессии через алиасы селектора.
 
 **Обработка заголовков:** hop-by-hop-заголовки, а также `host`, `content-length`,
-`accept-encoding`, `x-opencodex-api-key` и `origin` удаляются перед пересылкой. Все остальные
-заголовки (включая `anthropic-beta` и `anthropic-version`) проходят без изменений.
+`accept-encoding`, `x-opencodex-api-key` и `origin` всегда удаляются перед пересылкой. На
+non-loopback bind нативный passthrough также требует валидный proxy credential именно в
+`x-opencodex-api-key`; после этого `Authorization` и `x-api-key` принадлежат только Anthropic.
+Proxy admission secret в любом provider-заголовке удаляется, а настоящий provider credential в
+другом заголовке сохраняется. Неоднозначные credential-заголовки, объединённые запятыми, не
+пересылаются.
 
-Проброс срабатывает, когда выполнены **все четыре** условия: `nativePassthrough` не равен `false`;
-имя модели начинается с `claude` или `anthropic`; bearer или `x-api-key` начинается с `sk-ant-`;
-и разрешение алиасов и карты моделей возвращает ту же модель без изменений. Это также означает,
+Проброс срабатывает, когда выполнены **все** условия: `nativePassthrough` не равен `false`;
+имя модели начинается с `claude` или `anthropic`; bearer-токен или `x-api-key` начинается с `sk-ant-`;
+разрешение алиасов и карты моделей возвращает ту же модель без изменений; а на non-loopback bind
+валиден dedicated proxy admission-header. Это также означает,
 что предупреждение «claude.ai connectors are disabled» с `ocx claude` больше не появляется.
 
 Отключается параметром `claudeCode.nativePassthrough: false`; другой адрес задаётся через
@@ -266,7 +271,7 @@ Claude Code — это лишь учётные данные для доступ�
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Уровень передаётся напрямую (`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, выше→`high` |
-| `thinking.type: "disabled"` | Параметры рассуждений полностью опускаются |
+| `thinking.type: "disabled"` | Явно передаётся `reasoning: { effort: "none" }`, а `summary` опускается |
 
 Итоговое значение отображается в столбце **Reasoning effort** журнала запросов.
 
@@ -284,7 +289,7 @@ Claude Code — это лишь учётные данные для доступ�
 | `tool_result` пользователя | `function_call_output` (`is_error` → префикс `[tool error]`) |
 | Повтор `thinking` / `redacted_thinking` | Отбрасывается |
 | Function-инструменты | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованный→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, именованная функция→`{type:"function",name}`, размещённый WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

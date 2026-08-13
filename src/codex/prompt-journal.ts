@@ -20,7 +20,7 @@
  * recovery sees a mismatch and overwrites their work with a stale image.
  */
 import { existsSync, mkdirSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { forgetEphemeralSecretPath, hardenSecretPath, windowsSecretAclApplies } from "../lib/windows-secret-acl";
 
@@ -210,14 +210,40 @@ export type RecoveryOutcome =
   | { ok: true; action: "none" | "committed" | "rolled-back" }
   | { ok: false; error: "recovery_required"; detail: string };
 
+export interface RecoveryTargets {
+  configPath: string;
+  storePath: string;
+}
+
+/** Lexical path identity only: never resolve an untrusted journal path through the filesystem. */
+export function sameRecoveryPath(
+  recordedPath: string,
+  expectedPath: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const recorded = resolve(recordedPath);
+  const expected = resolve(expectedPath);
+  return platform === "win32"
+    ? recorded.toLowerCase() === expected.toLowerCase()
+    : recorded === expected;
+}
+
 /**
  * Run at service start and at every lock acquisition. Never from a read.
  *
  * A journal on disk means commit never happened, so the default is rollback.
  * The single exception is not a roll-forward: when BOTH targets already hold the
  * post-image the writes had finished and only the journal deletion was missing.
+ *
+ * The expected targets come from the active prompt-layer configuration, not
+ * from the journal. The envelope checksum detects accidental corruption, not a
+ * same-user forgery, so recovery binds the decoded record to those trusted
+ * paths before reading either target.
  */
-export function recoverIfNeeded(journalPath: string): RecoveryOutcome {
+export function recoverIfNeeded(
+  journalPath: string,
+  expectedTargets: RecoveryTargets,
+): RecoveryOutcome {
   const raw = readOrNull(journalPath);
   if (raw === null) return { ok: true, action: "none" };
 
@@ -230,11 +256,22 @@ export function recoverIfNeeded(journalPath: string): RecoveryOutcome {
     };
   }
 
-  const config = classify(readOrNull(record.configPath), record.preConfig, record.postConfig);
-  const store = classify(readOrNull(record.storePath), record.preStore, record.postStore);
+  if (
+    !sameRecoveryPath(record.configPath, expectedTargets.configPath)
+    || !sameRecoveryPath(record.storePath, expectedTargets.storePath)
+  ) {
+    return {
+      ok: false,
+      error: "recovery_required",
+      detail: `journal at ${journalPath} does not match the active prompt-layer paths; nothing was read from its targets`,
+    };
+  }
+
+  const config = classify(readOrNull(expectedTargets.configPath), record.preConfig, record.postConfig);
+  const store = classify(readOrNull(expectedTargets.storePath), record.preStore, record.postStore);
 
   if (config === "unknown" || store === "unknown") {
-    const which = config === "unknown" ? record.configPath : record.storePath;
+    const which = config === "unknown" ? expectedTargets.configPath : expectedTargets.storePath;
     return {
       ok: false,
       error: "recovery_required",
@@ -258,38 +295,38 @@ export function recoverIfNeeded(journalPath: string): RecoveryOutcome {
   // Revalidate each target immediately before its own restore: a target that
   // changed since the initial classification must not be overwritten.
   if (config === "post") {
-    if (classify(readOrNull(record.configPath), record.preConfig, record.postConfig) !== "post") {
+    if (classify(readOrNull(expectedTargets.configPath), record.preConfig, record.postConfig) !== "post") {
       return {
         ok: false,
         error: "recovery_required",
-        detail: `${record.configPath} changed after its first classification; refusing to overwrite it`,
+        detail: `${expectedTargets.configPath} changed after its first classification; refusing to overwrite it`,
       };
     }
     try {
-      restore(record.configPath, record.preConfigBytes);
+      restore(expectedTargets.configPath, record.preConfigBytes);
     } catch (error) {
       return {
         ok: false,
         error: "recovery_required",
-        detail: `rollback of ${record.configPath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
+        detail: `rollback of ${expectedTargets.configPath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }
   if (store === "post") {
-    if (classify(readOrNull(record.storePath), record.preStore, record.postStore) !== "post") {
+    if (classify(readOrNull(expectedTargets.storePath), record.preStore, record.postStore) !== "post") {
       return {
         ok: false,
         error: "recovery_required",
-        detail: `${record.storePath} changed after its first classification; refusing to overwrite it`,
+        detail: `${expectedTargets.storePath} changed after its first classification; refusing to overwrite it`,
       };
     }
     try {
-      restore(record.storePath, record.preStoreBytes);
+      restore(expectedTargets.storePath, record.preStoreBytes);
     } catch (error) {
       return {
         ok: false,
         error: "recovery_required",
-        detail: `rollback of ${record.storePath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
+        detail: `rollback of ${expectedTargets.storePath} failed mid-write: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
   }

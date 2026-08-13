@@ -419,6 +419,7 @@ test("a foreign-home install state refuses disable and writes nothing (audit r1 
   const { status, body } = await put(baseConfig(), false);
   expect(status).toBe(409);
   expect(body.reason).toBe("home_mismatch");
+  expect(body.desiredEnabled).toBe(false);
   expect(String(body.message)).toContain("/foreign/codex-home");
   // Nothing was written: the fence is still there.
   expect(readConfig()).toContain(BEGIN);

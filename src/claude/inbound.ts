@@ -10,9 +10,11 @@
  *  - top_k is accepted and silently dropped (no Responses equivalent, CCR parity).
  */
 import type { OcxClaudeCodeConfig } from "../types";
+import { isAnthropicOutputSchema } from "../adapters/anthropic-output-schema";
 import { resolveAlias } from "./alias";
 import { stripOneMillionMarker } from "./context-windows";
 import { resolveDesktop3pAlias } from "./desktop-3p";
+import { isClaudeWebSearchToolName } from "./outbound";
 import { createHash } from "node:crypto";
 
 export class AnthropicRequestError extends Error {}
@@ -66,6 +68,17 @@ export function effortFromOutputConfig(outputConfig: unknown): string | undefine
   if (!isRec(outputConfig)) return undefined;
   const effort = outputConfig.effort;
   return typeof effort === "string" && OUTPUT_CONFIG_EFFORTS.has(effort) ? effort : undefined;
+}
+
+function formatFromOutputConfig(outputConfig: unknown): Rec | undefined {
+  if (!isRec(outputConfig) || !isRec(outputConfig.format)) return undefined;
+  const format = outputConfig.format;
+  if (
+    format.type !== "json_schema"
+    || !isRec(format.schema)
+    || !isAnthropicOutputSchema(format.schema)
+  ) return undefined;
+  return { type: "json_schema", name: "response", schema: format.schema };
 }
 
 function systemToInstructions(system: unknown): string | undefined {
@@ -375,7 +388,12 @@ function toolChoiceToResponses(choice: unknown, body: Rec): void {
       if (typeof choice.name !== "string" || choice.name.length === 0) {
         throw new AnthropicRequestError("tool_choice.tool requires a name");
       }
-      body.tool_choice = { type: "function", name: choice.name };
+      // Anthropic represents hosted WebSearch as a named tool choice, while
+      // Responses requires the choice type to match the hosted declaration.
+      // Preserve forced-tool intent rather than weakening it to `auto`.
+      body.tool_choice = isClaudeWebSearchToolName(choice.name)
+        ? { type: "web_search" }
+        : { type: "function", name: choice.name };
       break;
     default: break;
   }
@@ -461,6 +479,8 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
   if (Array.isArray(raw.stop_sequences) && raw.stop_sequences.length > 0) {
     body.stop = raw.stop_sequences.filter((s): s is string => typeof s === "string");
   }
+  const outputConfigFormat = formatFromOutputConfig(raw.output_config);
+  if (outputConfigFormat) body.text = { format: outputConfigFormat };
   let cacheKeySource: ClaudeCacheKeySource = null;
   if (isRec(raw.metadata) && typeof raw.metadata.user_id === "string") {
     body.user = raw.metadata.user_id;
@@ -502,8 +522,9 @@ export function anthropicToResponsesTranslation(raw: unknown, cc?: OcxClaudeCode
     // An explicit "disabled" is an instruction, not an absence. Dropping it made this
     // indistinguishable from a request that never mentioned thinking — and for models that
     // think by default, omission means thinking is ON, sharing the caller's max_tokens (#545).
-    // "none" is the parser's disable sentinel (parser.ts REASONING_EFFORTS).
-    body.reasoning = { effort: "none", summary: "none" };
+    // `none` is the effort disable sentinel. It is not a valid OpenAI summary
+    // value, so do not attach the similarly named internal catalog sentinel.
+    body.reasoning = { effort: "none" };
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
     const reasoning: Rec = { summary: "auto" };
     if (outputConfigEffort !== undefined) {

@@ -68,6 +68,8 @@ import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
+import { handleLabRoutes } from "./management/lab-routes";
+import { handleLabAutomationRoutes } from "./management/lab-automation-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -77,6 +79,7 @@ export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
 import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-types";
+import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 
 // installed npm version instead of a stale hardcode.
@@ -87,28 +90,6 @@ export const VERSION = (() => {
     return "0.0.0";
   }
 })();
-
-function isCatalogDisposition(value: unknown): value is CatalogDisposition {
-  if (!value || typeof value !== "object" || !("status" in value)) return false;
-  const disposition = value as Record<string, unknown>;
-  if (disposition.status === "committed") {
-    return typeof disposition.changed === "boolean"
-      && typeof disposition.degraded === "boolean"
-      && Array.isArray(disposition.notices)
-      && disposition.notices.every(notice => notice === "provider-auth" || notice === "provider-network" || notice === "fallback");
-  }
-  if (disposition.status === "skipped") {
-    return ["not-requested", "catalog-unavailable", "busy", "stale", "refused"].includes(String(disposition.reason))
-      && typeof disposition.retryable === "boolean";
-  }
-  if (disposition.status === "failed") {
-    return ["provider-auth", "provider-network", "disk"].includes(String(disposition.reason))
-      && (disposition.phase === "gather" || disposition.phase === "commit")
-      && typeof disposition.retryable === "boolean"
-      && typeof disposition.partialWrite === "boolean";
-  }
-  return false;
-}
 
 const managementConvergenceBindings = new WeakMap<object, Readonly<{
   factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
@@ -153,10 +134,13 @@ export async function handleManagementAPI(
       const { createCatalogConvergeRequest } = await import("../codex/catalog-admission");
       convergenceInvoked = true;
       const outcome = await managementConvergeCodex(createCatalogConvergeRequest({ deadlineMs: 1_000 }));
-      if (!outcome || outcome.kind !== "catalog-only" || !isCatalogDisposition(outcome.catalogRefresh)) {
+      const catalogRefresh = outcome?.kind === "catalog-only"
+        ? normalizeCatalogDisposition(outcome.catalogRefresh)
+        : null;
+      if (!catalogRefresh) {
         throw new TypeError("Catalog convergence returned an invalid outcome.");
       }
-      return outcome.catalogRefresh;
+      return catalogRefresh;
     } catch {
       return {
         status: "failed",
@@ -205,6 +189,8 @@ export async function handleManagementAPI(
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
+    ??     (await handleLabAutomationRoutes(ctx))
+    ??     (await handleLabRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
@@ -263,7 +249,7 @@ export async function handleManagementAPI(
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {
-      return await handleCodexAuthAPI(req, url, config);
+      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog);
     } catch (error) {
       // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
       // treat both as the same retryable busy response.

@@ -49,3 +49,15 @@ and default-path equivalence for the 5s error-body callers.
 Nothing on origin/dev (last 30 commits) or in any open PR touches
 `bounded-body` or this stall path. #947 is the Darwin SSE relay, a
 different path. #1069 is unrelated ladder metadata.
+
+## Supersession note (2026-08-07)
+
+The "keep bounded JSON, do not restore streaming" disposition above is
+superseded by `devlog/_plan/260807_deepseek_responses_streaming/`: fresh
+upstream probes (2026-08-07, including the tool-result replay shape behind
+#875) show DeepSeek's `/responses` stream closing on the documented
+`response.completed` terminal, and the official guide states there is no
+`data: [DONE]` sentinel — which the relay's terminal boundary already
+synthesizes. The deepseek registry opt-in is removed; the
+`firstByteTimeoutMs` bounded-body fix this RCA shipped remains valid and
+still guards the mechanism's synthetic-fixture path.

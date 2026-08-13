@@ -1,22 +1,43 @@
 import { createHash } from "node:crypto";
 import type { OcxConfig, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent } from "../types";
 import { modelInList } from "../types";
+import type { VisionReasoningEffort } from "../reasoning-effort";
 import { describeImage, type DescribeOutcome, type VisionSettings } from "./describe";
 import { describeImageAnthropic } from "./anthropic-describe";
+import { normalizeVisionReasoningForModel } from "./reasoning";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { getAccountSet } from "../oauth/store";
 import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import type { SidecarOutcomeRecorder } from "../web-search/executor";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import {
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+} from "./timeout-bounds";
 
 export { describeImage } from "./describe";
 export { describeImageAnthropic, parseAnthropicVisionSSE } from "./anthropic-describe";
+export {
+  BASELINE_VISION_MODELS,
+  isVisionEligibleModel,
+  isVisionSidecarConsumer,
+  modelAcceptsImageInput,
+  visionBackendForCandidate,
+  visionEligibleModelOptions,
+} from "./eligibility";
+export type { VisionCandidateModel, VisionModelOption, VisionSidecarBackend } from "./eligibility";
+export {
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+};
 
 const DEFAULT_VISION_MODEL = "gpt-5.4-mini";
 const DEFAULT_ANTHROPIC_VISION_MODEL = "claude-sonnet-5";
-const DEFAULT_TIMEOUT_MS = 45_000;
-const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
+const DEFAULT_REASONING: VisionReasoningEffort = "low";
+export const DEFAULT_MAX_DESCRIPTIONS_PER_TURN = 8;
 const DESCRIPTION_CACHE_MAX_ENTRIES = 256;
 export const VISION_DESCRIPTION_CACHE_MAX_BYTES = 1024 * 1024;
 const descriptionEncoder = new TextEncoder();
@@ -142,6 +163,18 @@ export function resolveMaxDescriptionsPerTurn(value: unknown): number {
     : DEFAULT_MAX_DESCRIPTIONS_PER_TURN;
 }
 
+export function isValidVisionTimeoutMs(value: unknown): value is number {
+  return typeof value === "number"
+    && Number.isInteger(value)
+    && value >= MIN_VISION_TIMEOUT_MS
+    && value <= MAX_VISION_TIMEOUT_MS;
+}
+
+/** Runtime config is permissive: malformed or out-of-range values fall back to the default. */
+export function resolveVisionTimeoutMs(value: unknown): number {
+  return isValidVisionTimeoutMs(value) ? value : DEFAULT_VISION_TIMEOUT_MS;
+}
+
 /** Run `worker` over `items` with bounded concurrency, preserving input order in the result array. */
 async function runBounded<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -186,7 +219,17 @@ export function resolveVisionBackend(
 
 /** Native model used by the OpenAI vision helper, including its bounded default. */
 export function resolveOpenAiVisionModel(config: Pick<OcxConfig, "visionSidecar">): string {
-  return config.visionSidecar?.model ?? DEFAULT_VISION_MODEL;
+  return config.visionSidecar?.model || DEFAULT_VISION_MODEL;
+}
+
+/** Effective describer model for the backend `planVisionSidecar` selected. */
+export function resolveEffectiveVisionModel(
+  config: Pick<OcxConfig, "visionSidecar">,
+  backend: "openai" | "anthropic",
+): string {
+  return backend === "anthropic"
+    ? config.visionSidecar?.model || DEFAULT_ANTHROPIC_VISION_MODEL
+    : resolveOpenAiVisionModel(config);
 }
 
 /** A user/developer/toolResult message can carry images (toolResult: e.g. Codex view_image output). */
@@ -238,6 +281,7 @@ export function planVisionSidecar(
   if (cfg.enabled === false) return undefined;
   const anthropicSidecar = findAnthropicVisionProvider(config);
   const backend = resolveVisionBackend(cfg.backend, anthropicSidecar);
+  const model = resolveEffectiveVisionModel(config, backend);
   const maxDescriptionsPerTurn = resolveMaxDescriptionsPerTurn(cfg.maxDescriptionsPerTurn);
 
   if (backend === "anthropic") {
@@ -245,7 +289,11 @@ export function planVisionSidecar(
     return {
       backend,
       anthropicSidecar,
-      settings: { model: cfg.model ?? DEFAULT_ANTHROPIC_VISION_MODEL, timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+      settings: {
+        model,
+        reasoning: normalizeVisionReasoningForModel(model, cfg.reasoning) ?? DEFAULT_REASONING,
+        timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+      },
       maxDescriptionsPerTurn,
     };
   }
@@ -254,7 +302,11 @@ export function planVisionSidecar(
   return {
     backend,
     forwardSidecar: openAiSidecar,
-    settings: { model: resolveOpenAiVisionModel(config), timeoutMs: cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS },
+    settings: {
+      model,
+      reasoning: normalizeVisionReasoningForModel(model, cfg.reasoning) ?? DEFAULT_REASONING,
+        timeoutMs: resolveVisionTimeoutMs(cfg.timeoutMs),
+    },
     maxDescriptionsPerTurn,
   };
 }
@@ -273,6 +325,72 @@ function renderDescription(out: { text: string; error?: string }): OcxTextConten
       ? `[An image was attached but could not be processed: ${out.error}]`
       : `[Image content — described by a vision model because you cannot see images directly:\n${clamp(out.text.trim(), DESC_MAX_CHARS)}]`,
   };
+}
+
+const IMAGE_OMITTED_TEXT = "[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]";
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Keep the native Responses passthrough body aligned with image replacements made in the parsed
+ * message graph. The passthrough adapter serializes `_rawBody`, while translated adapters serialize
+ * `context.messages`; updating only the latter would send the original pixels to a text-only
+ * Responses upstream even after the vision sidecar produced a caption.
+ *
+ * Rewrites only image-bearing user/developer messages and tool outputs. All other native Responses
+ * items (reasoning, calls, ids, compaction, and provider-specific metadata) remain byte-structurally
+ * untouched.
+ */
+function syncRawBodyImageDescriptions(parsed: OcxParsedRequest, descriptions: readonly string[]): void {
+  const rawBody = parsed._rawBody;
+  if (!isPlainRecord(rawBody) || !Array.isArray(rawBody.input)) return;
+
+  let nextDescription = 0;
+  const rewriteImages = (value: unknown, nonEmptyImageUrlsOnly: boolean): unknown => {
+    if (Array.isArray(value)) {
+      let changed = false;
+      const rewritten = value.map(entry => {
+        const next = rewriteImages(entry, nonEmptyImageUrlsOnly);
+        if (next !== entry) changed = true;
+        return next;
+      });
+      return changed ? rewritten : value;
+    }
+    if (!isPlainRecord(value)) return value;
+    if (value.type === "input_image" && typeof value.image_url === "string") {
+      if (nonEmptyImageUrlsOnly && value.image_url.length === 0) {
+        return { type: "input_text", text: IMAGE_OMITTED_TEXT };
+      }
+      const description = descriptions[nextDescription++];
+      return { type: "input_text", text: description ?? IMAGE_OMITTED_TEXT };
+    }
+    return value;
+  };
+
+  let changed = false;
+  const input = rawBody.input.map(item => {
+    if (!isPlainRecord(item)) return item;
+    const type = typeof item.type === "string" ? item.type : (typeof item.role === "string" ? "message" : "");
+    const role = typeof item.role === "string" ? item.role : "";
+    const isMessageContent = (
+      (type === "message" && (role === "user" || role === "developer"))
+      || type === "agent_message"
+    );
+    const field = isMessageContent
+      ? "content"
+      : (type === "function_call_output" || type === "custom_tool_call_output")
+        ? "output"
+        : undefined;
+    if (!field) return item;
+    const rewritten = rewriteImages(item[field], isMessageContent);
+    if (rewritten === item[field]) return item;
+    changed = true;
+    return { ...item, [field]: rewritten };
+  });
+
+  if (changed) rawBody.input = input;
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -297,6 +415,7 @@ function descriptionIdentity(job: ImageJob, plan: VisionPlan): { key: string; pe
     key: JSON.stringify([
       plan.backend,
       plan.settings.model,
+      ...(plan.backend === "openai" ? [plan.settings.reasoning] : []),
       job.detail ?? "high",
       imageHash,
       sha256(normalizedContext(job.contextText)),
@@ -352,7 +471,6 @@ export async function describeImagesInPlace(
   recordSidecarOutcome?: SidecarOutcomeRecorder,
   translatorBudget?: TranslatorBudget,
 ): Promise<void> {
-  // 1. Gather every image part across messages, each with its own message's text as context.
   const jobs: ImageJob[] = [];
   const targets: { msg: OcxMessage; parts: OcxContentPart[] }[] = [];
   for (const msg of parsed.context.messages) {
@@ -369,9 +487,11 @@ export async function describeImagesInPlace(
     }
     targets.push({ msg, parts });
   }
-  if (jobs.length === 0) return;
+  if (jobs.length === 0) {
+    syncRawBodyImageDescriptions(parsed, []);
+    return;
+  }
 
-  // 2. Admit misses in source order. Cache hits and same-turn waiters do not consume the cap.
   const inFlight = new Map<string, Promise<DescribeOutcome>>();
   const executions: Array<() => Promise<void>> = [];
   const outcomePromises: Array<Promise<DescribeOutcome>> = [];
@@ -423,8 +543,8 @@ export async function describeImagesInPlace(
   await runBounded(executions, VISION_CONCURRENCY, execute => execute());
   const outcomes = await Promise.all(outcomePromises);
 
-  // 3. Rebuild each message, replacing image parts with their descriptions in order.
   let oi = 0;
+  const descriptions: string[] = [];
   for (const { msg, parts } of targets) {
     const newParts: OcxContentPart[] = [];
     for (const p of parts) {
@@ -433,6 +553,7 @@ export async function describeImagesInPlace(
         continue;
       }
       const replacement = renderDescription(outcomes[oi++]);
+      descriptions.push(replacement.text);
       const reservation = translatorBudget?.reserveTransient(
         descriptionEncoder.encode(replacement.text).byteLength,
         { kind: "request_copies" },
@@ -442,6 +563,7 @@ export async function describeImagesInPlace(
     }
     msg.content = newParts;
   }
+  syncRawBodyImageDescriptions(parsed, descriptions);
 }
 
 /**
@@ -452,13 +574,15 @@ export async function describeImagesInPlace(
  */
 export function stripImagesInPlace(parsed: OcxParsedRequest, translatorBudget?: TranslatorBudget): boolean {
   let stripped = false;
+  const descriptions: string[] = [];
   for (const msg of parsed.context.messages) {
     if (!carriesImages(msg.role) || !Array.isArray(msg.content)) continue;
     const parts = msg.content as OcxContentPart[];
     if (!parts.some(p => p.type === "image")) continue;
     msg.content = parts.map(p => {
       if (p.type !== "image") return p;
-      const replacement = { type: "text", text: "[image omitted: this model is text-only and the vision sidecar is unavailable (no ChatGPT login)]" } as OcxContentPart;
+      const replacement = { type: "text", text: IMAGE_OMITTED_TEXT } as OcxContentPart;
+      descriptions.push((replacement as OcxTextContent).text);
       const reservation = translatorBudget?.reserveTransient(
         descriptionEncoder.encode((replacement as OcxTextContent).text).byteLength,
         { kind: "request_copies" },
@@ -468,5 +592,6 @@ export function stripImagesInPlace(parsed: OcxParsedRequest, translatorBudget?: 
     });
     stripped = true;
   }
+  syncRawBodyImageDescriptions(parsed, descriptions);
   return stripped;
 }

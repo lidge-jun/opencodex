@@ -22,6 +22,7 @@
 @import "./styles-usage-workspace.css";
 @import "./styles-claudecode-workspace.css";
 @import "./styles-apikeys-workspace.css";
+@import "./styles-compatibility-matrix.css";
 
 :root {
   /* default: follow the OS; [data-theme] below pins color-scheme so light-dark() obeys it */
@@ -392,13 +393,40 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   display: flex;
   flex-direction: column;
 }
-.main-inner.main-inner--combos > .combos-workspace-shell {
+/*
+  The combos workspace is a full-bleed 100dvh shell, so whatever owns the remaining
+  height has to be a flexible, shrinkable column.
+
+  The shell now reaches this container inside its tabpanel, one level down. That extra
+  level is exactly what breaks a plain direct-child rule, so the panel becomes the flex
+  item and the shell fills it.
+*/
+/*
+  `:not([hidden])` on the panel: panel shells stay mounted so every tab's
+  `aria-controls` resolves, and author `display: flex` would otherwise beat the UA's
+  `[hidden] { display: none }` and paint a hidden panel anyway.
+*/
+.main-inner.main-inner--combos > .models-tab-panel--fill:not([hidden]),
+.main-inner.main-inner--combos > .models-tab-panel--fill:not([hidden]) > .combos-workspace-shell {
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
 }
+
+/*
+  `.main-inner--combos` zeroes the container padding, so the page chrome above the
+  workspace has to bring its own back. `flex-shrink: 0` keeps the header, tab strip,
+  and subtitle from being squeezed when the workspace wants the room.
+*/
+.main-inner.main-inner--combos > .page-head,
+.main-inner.main-inner--combos > .page-tabs,
+.main-inner.main-inner--combos > .page-sub {
+  flex-shrink: 0;
+  padding-inline: 36px;
+}
+.main-inner.main-inner--combos > .page-sub { margin-bottom: 10px; }
 
 /* ---- page header ---- */
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 6px; }
@@ -773,6 +801,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 .stat .value.mono { font-family: var(--font-code); font-size: var(--text-subtitle); }
 
 .startup-health-bar {
+  box-sizing: border-box;
+  width: 100%;
   min-height: var(--control-lg);
   margin: calc(-1 * var(--space-3)) 0 var(--space-6);
   padding: 0 var(--space-3);
@@ -782,10 +812,14 @@ a.btn, a.btn:hover { text-decoration: none; }
   min-width: 0;
   color: var(--muted);
   background: var(--hover);
+  border: none;
   border-block: 1px solid var(--border-soft);
   text-decoration: none;
+  font: inherit;
   font-size: var(--text-control);
   line-height: var(--leading-ui);
+  text-align: start;
+  cursor: pointer;
   transition: background var(--motion-fast), color var(--motion-fast);
 }
 .startup-health-bar:hover { background: var(--raised); color: var(--text); }
@@ -1133,6 +1167,45 @@ select.input { appearance: none; }
 
 .notice { font-size: var(--text-control); line-height: var(--leading-body); padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; max-width: var(--prose-measure); }
 .notice svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* Portaled status toast — out of document flow so Providers (etc.) do not reflow. */
+.toast-notice-host {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  pointer-events: none;
+}
+.toast-notice {
+  pointer-events: auto;
+  margin-bottom: 0;
+  max-width: min(var(--prose-measure), calc(100vw - 32px));
+  box-shadow: var(--shadow);
+  animation: toast-notice-in var(--motion-normal) ease-out;
+}
+.toast-notice-copy { flex: 1; min-width: 0; }
+.toast-notice-dismiss {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+.toast-notice-dismiss:hover { opacity: 1; }
+@keyframes toast-notice-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toast-notice { animation: none; }
+}
 /* Tone pairs: ink is a shade of the tint (not gray-on-color), AA on both themes. */
 .notice-ok {
   background: light-dark(#ecfdf5, color-mix(in oklab, var(--green) 18%, var(--surface)));
@@ -1404,6 +1477,20 @@ dialog.modal-overlay::backdrop {
 .codex-request-user-input-controls > .toggle { margin-left: auto; }
 .codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-request-user-input-feedback.is-error { color: var(--red); }
+.codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.codex-account-picker-copy { flex: 1 1 34rem; min-width: 0; }
+.codex-account-picker-copy .card-sub { padding: 4px 0 0; }
+.codex-account-picker-controls { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; margin-left: auto; }
+.codex-account-picker-feedback {
+  flex: 1 0 100%;
+  margin-top: -8px;
+  font-size: var(--text-label);
+  line-height: var(--leading-body);
+  text-align: right;
+}
+.codex-account-picker-feedback.is-ok { color: var(--green); }
+.codex-account-picker-feedback.is-warn { color: var(--amber); }
+.codex-account-picker-feedback.is-err { color: var(--red); }
 /* The toggle now lives in the slot below, which carries the auto margin itself. */
 /*
   Toggle slot: matches the height of the threshold compound so the 20px toggle centres against
@@ -1567,6 +1654,12 @@ dialog.modal-overlay::backdrop {
   white-space: nowrap;
 }
 .codex-auth-page-head__feedback.is-ok { color: var(--green); }
+.codex-auth-page-head__feedback.is-warn {
+  color: var(--amber);
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
 .codex-auth-page-head__feedback.is-err { color: var(--red); }
 .codex-auth-pause-label {
   display: inline-block;
@@ -1638,6 +1731,16 @@ dialog.modal-overlay::backdrop {
 .startup-runtime-notice__fix code {
   color: inherit;
 }
+/* `.card` carries no padding of its own — `.card-row` and `.card-sub` each inset themselves,
+   so a card built from plain children leaves the title and controls flush against the border
+   while the hints sit 16px in. Pad the card and flatten the hints, as the auto-switch card does. */
+.codex-pool-strategy-card { padding: 14px 16px; }
+.codex-pool-strategy-card .card-sub { padding: 0; }
+/* Inline selection-order row on an account card: label and trigger share one line, and the
+   trigger is scaled down to the card's hint text so it reads as part of the card, not a form. */
+.codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 16px 10px; min-width: 0; }
+.codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
+.codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 
 .startup-page-sub { margin-bottom: 0; }
 .startup-page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -2006,6 +2109,9 @@ button.prov-account-row.active { cursor: default; }
   .main-inner { padding: 22px 18px 48px; }
   /* The mobile app grid already reserves the top-bar row; fill only its remaining main row. */
   .main-inner.main-inner--combos { padding: 0; min-height: 0; height: 100%; overflow: hidden; }
+  .main-inner.main-inner--combos > .page-head,
+  .main-inner.main-inner--combos > .page-tabs,
+  .main-inner.main-inner--combos > .page-sub { padding-inline: 18px; }
   /* settings rows: copy takes the full width, controls drop underneath */
   .setting-row { flex-wrap: wrap; }
   .setting-row .setting-copy { flex: 1 1 100% !important; }
@@ -2039,10 +2145,12 @@ button.prov-account-row.active { cursor: default; }
 .usage-segmented-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: none; background: transparent; color: var(--muted); padding: 4px 12px; border-radius: var(--radius-pill); cursor: pointer; font: inherit; white-space: nowrap; }
 .usage-segmented-btn.active { background: var(--raised); color: var(--text); font-weight: var(--weight-semibold); }
 .usage-source-mark { width: var(--icon-sm); height: var(--icon-sm); flex: 0 0 auto; object-fit: contain; }
-:root[data-theme="dark"] .usage-source-mark { filter: invert(1); }
+/* Only monochrome source marks (Grok) are inverted for dark themes. Brand-colored
+   marks (Claude, Codex/OpenAI) must keep their brand color; inverting shifts the hue. */
+:root[data-theme="dark"] .usage-source-mark--mono { filter: invert(1); }
 
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .usage-source-mark { filter: invert(1); }
+  :root:not([data-theme="light"]) .usage-source-mark--mono { filter: invert(1); }
 }
 
 @media (max-width: 760px) {

@@ -7,28 +7,24 @@ export type Page =
   | "startup"
   | "providers"
   | "models"
-  | "combos"
   | "subagents"
   | "logs"
   | "usage"
   | "storage"
   | "codex-auth"
-  | "integrations"
-  | "routing";
+  | "integrations";
 
 export const VALID_PAGES = new Set<Page>([
   "dashboard",
   "startup",
   "providers",
   "models",
-  "combos",
   "subagents",
   "logs",
   "usage",
   "storage",
   "codex-auth",
   "integrations",
-  "routing",
 ]);
 
 export function readPageFromHash(hash?: string): Page {
@@ -39,6 +35,11 @@ export function readPageFromHash(hash?: string): Page {
   const pageId = raw.split("/")[0] as Page;
   // Legacy: Debug used to be a standalone page; it now lives as a tab on Logs.
   if (pageId === ("debug" as Page)) return "logs";
+  // Legacy: Combos, Routing, and Lab are Models tabs now. Resolve the destination page
+  // immediately so a cold legacy hash never flashes Dashboard before replacement.
+  if (pageId === ("combos" as Page)
+    || pageId === ("routing" as Page)
+    || pageId === ("lab" as Page)) return "models";
   // Legacy integration pages now live below one Integrations route. Returning
   // the destination page here keeps the initial hook state aligned until the
   // resolver replaces the hash with the exact nested destination.
@@ -54,6 +55,13 @@ export function readPageFromHash(hash?: string): Page {
  * so it has no suffix entry here.
  */
 export const DASHBOARD_TAB_HASHES = ["dashboard/providers", "dashboard/models"] as const;
+
+/**
+ * Models owns four tabs: the catalog, Combos, Routing, and Compatibility. The catalog
+ * is the bare `#models`, so it has no suffix entry here - same convention Dashboard
+ * uses for Overview and Logs uses for the log list.
+ */
+export const MODELS_TAB_HASHES = ["models/combos", "models/routing", "models/compatibility"] as const;
 
 /**
  * `#dashboard/update` is an action deep link, not a tab: the sidebar update button uses
@@ -76,6 +84,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/grok",
   "integrations/opencode",
   "integrations/pi",
+  "integrations/omp",
   "integrations/hermes",
   "integrations/openclaw",
   "integrations/kimi",
@@ -85,12 +94,12 @@ export const INTEGRATION_TAB_HASHES = [
 export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "logs" && rawHash === "logs/debug")
+    || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"
       && (INTEGRATION_TAB_HASHES as readonly string[]).includes(rawHash));
 }
-
 
 /** Result of resolving an incoming hash. */
 export type AppHashChangeAction = {
@@ -112,34 +121,26 @@ export function resolveAppHashChange(rawHash: string): AppHashChangeAction {
     return { page: "logs", replaceTo: "logs/debug" };
   }
 
-  /*
-   * Legacy top-level integration pages.
-   *
-   * `readPageFromHash("api")` already answers `integrations`, so without these
-   * branches the generic normalization below would rewrite the hash to the
-   * bare page and silently drop the nested destination — an old `#api`
-   * bookmark would land on Overview instead of API Keys. `replaceTo` is
-   * applied with replaceState, so the correction adds no history entry.
-   */
-  if (rawHash === "api") {
-    return { page: "integrations", replaceTo: "integrations/keys" };
+  /* Legacy Models pages. Delimiter-aware prefix arms preserve nested legacy bookmarks. */
+  if (rawHash === "combos" || rawHash.startsWith("combos/")) {
+    return { page: "models", replaceTo: "models/combos" };
   }
-  if (rawHash === "claude") {
-    return { page: "integrations", replaceTo: "integrations/claude" };
+  if (rawHash === "routing" || rawHash.startsWith("routing/")) {
+    return { page: "models", replaceTo: "models/routing" };
   }
-  if (rawHash === "grok") {
-    return { page: "integrations", replaceTo: "integrations/grok" };
+  if (rawHash === "lab" || rawHash.startsWith("lab/")) {
+    return { page: "models", replaceTo: "models/compatibility" };
   }
+
+  /* Legacy top-level integration pages. */
+  if (rawHash === "api") return { page: "integrations", replaceTo: "integrations/keys" };
+  if (rawHash === "claude") return { page: "integrations", replaceTo: "integrations/claude" };
+  if (rawHash === "grok") return { page: "integrations", replaceTo: "integrations/grok" };
 
   // Legacy deep link from the removed dual-layout era.
-  if (rawHash === "providers/workspace") {
-    return { page: "providers", replaceTo: "providers" };
-  }
+  if (rawHash === "providers/workspace") return { page: "providers", replaceTo: "providers" };
 
   // An unrecognised sub-hash is normalised away rather than left in the URL.
-  if (!hashBelongsToPage(rawHash, nextPage)) {
-    return { page: nextPage, replaceTo: nextPage };
-  }
-
+  if (!hashBelongsToPage(rawHash, nextPage)) return { page: nextPage, replaceTo: nextPage };
   return { page: nextPage, replaceTo: null };
 }

@@ -62,3 +62,13 @@ export function matchBaseUrlChoice(
   }
   return choices.some(c => c.id === "custom") ? "custom" : choices[0]!.id;
 }
+
+/** Moonshot/Kimi API endpoint presets (international default; China selectable). */
+export const MOONSHOT_INTL_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+
+export const MOONSHOT_BASE_URL_CHOICES: readonly ProviderBaseUrlChoice[] = [
+  { id: "international", label: "International (.ai)", baseUrl: MOONSHOT_INTL_BASE_URL },
+  { id: "china", label: "China (.cn)", baseUrl: MOONSHOT_CN_BASE_URL },
+  { id: "custom", label: "Custom" },
+];

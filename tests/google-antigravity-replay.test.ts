@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { getConfigDir } from "../src/config";
 import {
   antigravityCanonicalJsonBoundedForTests,
   antigravityFunctionCallKeyForTests,
@@ -12,27 +16,46 @@ import {
   applyAntigravityReplay,
   clearAntigravityReplay,
   evictOldestAntigravityReplayForBudget,
+  flushAntigravityReplay,
   observeAntigravityReplay,
   setAntigravityReplayLimitsForTests,
+  setAntigravityReplaySnapshotMaxBytesForTests,
+  setAntigravityReplayWriteSeamForTests,
   sweepExpiredAntigravityReplay,
 } from "../src/adapters/google-antigravity-replay";
 import { sanitizeAntigravityClaudeSignatures } from "../src/adapters/google-antigravity-wire";
 
 afterEach(() => setAntigravityReplayLimitsForTests());
 
+// Sandbox OPENCODEX_HOME: the replay cache now snapshots to disk, and these tests must
+// never touch the real ~/.opencodex.
+let replayTestHome: string;
+const priorOpenCodexHome = process.env["OPENCODEX_HOME"];
+
+beforeEach(() => {
+  replayTestHome = mkdtempSync(join(tmpdir(), "ocx-antigravity-replay-test-"));
+  process.env["OPENCODEX_HOME"] = replayTestHome;
+});
+
+afterEach(() => {
+  rmSync(replayTestHome, { recursive: true, force: true });
+  if (priorOpenCodexHome === undefined) delete process.env["OPENCODEX_HOME"];
+  else process.env["OPENCODEX_HOME"] = priorOpenCodexHome;
+});
+
 const SIG = "sig-1234567890abcdef"; // >= 16 chars
 const MODEL = "gemini-3-pro";
 const SESSION = "-12345";
 
-describe("antigravity reasoning-replay cache", () => {
-  // Signatures are keyed by functionCall identity (name + args), so observe/apply use functionCall parts.
-  const fcPart = (name: string, args: unknown, sig?: string, nested = false) => {
-    const part: Record<string, unknown> = { functionCall: { name, args } };
-    if (sig && nested) part.extra_content = { google: { thought_signature: sig } };
-    else if (sig) part.thoughtSignature = sig;
-    return part;
-  };
+// Signatures are keyed by functionCall identity (name + args), so observe/apply use functionCall parts.
+const fcPart = (name: string, args: unknown, sig?: string, nested = false) => {
+  const part: Record<string, unknown> = { functionCall: { name, args } };
+  if (sig && nested) part.extra_content = { google: { thought_signature: sig } };
+  else if (sig) part.thoughtSignature = sig;
+  return part;
+};
 
+describe("antigravity reasoning-replay cache", () => {
   test("observe then apply re-injects the signature onto the matching functionCall part", () => {
     observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
     const contents = [
@@ -519,5 +542,339 @@ describe("antigravity replay fixed-size key identities", () => {
       clearAntigravityReplay(MODEL, `session-${session}`);
     }
     expect(antigravityReplayMetrics().totalBytes).toBe(0);
+  });
+});
+
+describe("durable antigravity replay snapshot", () => {
+  const snapshotPath = () => join(getConfigDir(), "antigravity-replay.json");
+
+  test("observed signatures survive a cache reset via the disk snapshot", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    expect(existsSync(snapshotPath())).toBe(true);
+    // Proxy-restart simulation: wipe the in-process cache, then reload lazily.
+    setAntigravityReplayLimitsForTests();
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+  });
+
+  test("flush writes the pending snapshot without waiting for the debounce", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { version?: unknown; sessions?: unknown[] };
+    expect(raw.version).toBe(1);
+    expect(raw.sessions).toHaveLength(1);
+    expect((raw.sessions![0] as unknown[])[0]).toBe(antigravityReplayKeyForTests(MODEL, SESSION));
+  });
+
+  test("expired sessions are dropped when the snapshot is loaded", async () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const staleCallKey = antigravityFunctionCallKeyForTests("get_stale", {});
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, "-stale"), {
+          expiresAtMs: now - 1_000,
+          byCall: [[staleCallKey, { signature: SIG, sizeBytes: SIG.length, touchedAtMs: now }]],
+        }],
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          byCall: [[callKey, { signature: SIG, sizeBytes: SIG.length, touchedAtMs: now }]],
+        }],
+      ],
+    }));
+    const staleContents = [{ role: "model", parts: [{ functionCall: { name: "get_stale", args: {} } }] }];
+    // Load alone drops the expired session and persists the cleanup, before any
+    // replay-induced dirty state exists.
+    expect(antigravityReplayMetrics().sessions).toBe(1);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-stale"));
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    // The surviving session still replays.
+    applyAntigravityReplay(MODEL, "-stale", staleContents);
+    expect((staleContents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Persist the apply-time touch so no debounced write is left pending.
+    await flushAntigravityReplay();
+  });
+
+  test("snapshot cap keeps the most recently active sessions", async () => {
+    // A (two calls, ~899 serialized bytes) fits under the cap; A+B (~1,347)
+    // does not, so the cap must pick exactly one session by activity.
+    setAntigravityReplaySnapshotMaxBytesForTests(1_200);
+    const sigA = "a".repeat(200);
+    const sigB = "b".repeat(200);
+    // A is inserted first, B second, then A is re-observed: A is now the
+    // active session, so it must be the one retained under the byte cap.
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, sigA)]);
+    observeAntigravityReplay(MODEL, "-second", [fcPart("get_y", {}, sigB)]);
+    await Bun.sleep(2);
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_z", { c: 2 }, sigA)]);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    expect(keys).not.toContain(antigravityReplayKeyForTests(MODEL, "-second"));
+  });
+
+  test("loaded sessions are trimmed to the current per-session caps", () => {
+    setAntigravityReplayLimitsForTests({ maxBytesPerSession: 300 });
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const trimKey = antigravityFunctionCallKeyForTests("get_y", {});
+    // 100-byte signatures: one call (64+64+100 = 228) fits the 300-byte cap,
+    // two calls (392) do not, so the oldest is evicted on load.
+    const sigA = "a".repeat(100);
+    const sigB = "b".repeat(100);
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          // Oldest (get_y) is evicted first on load: only get_x survives the cap.
+          byCall: [
+            [trimKey, { signature: sigB, sizeBytes: 200, touchedAtMs: now }],
+            [callKey, { signature: sigA, sizeBytes: 200, touchedAtMs: now }],
+          ],
+        }],
+      ],
+    }));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(sigA);
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.sessions).toBe(1);
+    expect(metrics.calls).toBe(1);
+    // Recomputed from the signature: 64-byte session key + 64-byte call key + 100-byte signature.
+    expect(metrics.totalBytes).toBe(64 + 64 + 100);
+  });
+
+  test("load recomputes call sizes from the signature and ignores serialized sizeBytes", () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    const unicodeSig = "\u00e9".repeat(16);
+    const oversizedUnicodeSig = "\u{1f600}".repeat(16_500);
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          // Forged tiny sizeBytes must not shrink the accounted UTF-8 bytes.
+          byCall: [[callKey, { signature: unicodeSig, sizeBytes: 1, touchedAtMs: now }]],
+        }],
+        [antigravityReplayKeyForTests(MODEL, "-forged"), {
+          expiresAtMs: now + 60_000,
+          // The UTF-16 length is below 64 KiB, but the UTF-8 byte length is not.
+          byCall: [[antigravityFunctionCallKeyForTests("get_y", {}), {
+            signature: oversizedUnicodeSig,
+            sizeBytes: 1,
+            touchedAtMs: now,
+          }]],
+        }],
+      ],
+    }));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(unicodeSig);
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.sessions).toBe(1);
+    // 64-byte session key + 64-byte call key + 32-byte UTF-8 signature.
+    expect(metrics.totalBytes).toBe(64 + 64 + new TextEncoder().encode(unicodeSig).byteLength);
+  });
+
+  test("duplicate call keys in a snapshot are collapsed to one admitted call", async () => {
+    const now = Date.now();
+    const callKey = antigravityFunctionCallKeyForTests("get_x", { a: 1 });
+    writeFileSync(snapshotPath(), JSON.stringify({
+      version: 1,
+      sessions: [
+        [antigravityReplayKeyForTests(MODEL, SESSION), {
+          expiresAtMs: now + 60_000,
+          byCall: [
+            [callKey, { signature: SIG, touchedAtMs: now }],
+            [callKey, { signature: "sig-abcdef0123456789", touchedAtMs: now }],
+          ],
+        }],
+      ],
+    }));
+    // Metrics first: the load itself must collapse the duplicate and count once.
+    const metrics = antigravityReplayMetrics();
+    expect(metrics.calls).toBe(1);
+    // 64-byte session key + one 64-byte call key + 20-byte signature: no double count.
+    expect(metrics.totalBytes).toBe(64 + 64 + SIG.length);
+    // Load-time cleanup is persisted back to the snapshot.
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const session = raw.sessions![0] as [unknown, { byCall?: unknown[] }];
+    expect(session[1].byCall).toHaveLength(1);
+    // The surviving call still replays.
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBe(SIG);
+    // Persist the apply-time touch so no debounced write is left pending.
+    await flushAntigravityReplay();
+  });
+
+  test("snapshot never serializes sizeBytes", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    expect(readFileSync(snapshotPath(), "utf8")).not.toContain("sizeBytes");
+  });
+
+  test("corrupt or unknown-version snapshots start the cache empty", () => {
+    writeFileSync(snapshotPath(), "{not valid json");
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+    setAntigravityReplayLimitsForTests();
+    writeFileSync(snapshotPath(), JSON.stringify({ version: 99, sessions: [] }));
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("clear-on-invalid removes the session from the next snapshot", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    clearAntigravityReplay(MODEL, SESSION);
+    await flushAntigravityReplay();
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    expect(raw.sessions).toHaveLength(0);
+  });
+
+  test("oversized snapshot files are refused before parsing", () => {
+    writeFileSync(snapshotPath(), "x".repeat(33 * 1024 * 1024));
+    const contents = [{ role: "model", parts: [{ functionCall: { name: "get_x", args: { a: 1 } } }] }];
+    applyAntigravityReplay(MODEL, SESSION, contents);
+    expect((contents[0].parts[0] as { thoughtSignature?: string }).thoughtSignature).toBeUndefined();
+  });
+
+  test("flush waits out a blocked writer and persists mutations that land during it", async () => {
+    let firstWriteReached!: () => void;
+    const reached = new Promise<void>(resolve => { firstWriteReached = resolve; });
+    let firstWriteRelease!: () => void;
+    const release = new Promise<void>(resolve => { firstWriteRelease = resolve; });
+    let writes = 0;
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => {
+        writes += 1;
+        if (writes === 1) {
+          firstWriteReached();
+          await release;
+        }
+      },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    const flushing = flushAntigravityReplay();
+    await reached;
+    // A mutation lands while the first snapshot write is still blocked.
+    observeAntigravityReplay(MODEL, "-second", [fcPart("get_y", {}, SIG)]);
+    firstWriteRelease();
+    await flushing;
+    const raw = JSON.parse(readFileSync(snapshotPath(), "utf8")) as { sessions?: unknown[] };
+    const keys = raw.sessions!.map(session => (session as unknown[])[0]);
+    expect(keys).toHaveLength(2);
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, SESSION));
+    expect(keys).toContain(antigravityReplayKeyForTests(MODEL, "-second"));
+  });
+
+  test("flush surfaces snapshot write failures for shutdown diagnostics", async () => {
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => { throw new Error("simulated disk failure"); },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await expect(flushAntigravityReplay()).rejects.toThrow("simulated disk failure");
+  });
+
+  test("flush rejects when its retry budget cannot converge", async () => {
+    // A mutation that lands during every attempted write means the durable
+    // generation never catches up. Resolving here would tell drainAndShutdown()
+    // the snapshot is durable while the latest thought signature may never have
+    // reached disk, so shutdown would report a durability we cannot demonstrate.
+    let writes = 0;
+    setAntigravityReplayWriteSeamForTests({
+      afterTempWrite: async () => {
+        writes += 1;
+        // Dirty the cache again inside every write, so each attempt finishes
+        // behind the newest mutation.
+        observeAntigravityReplay(MODEL, `-racer-${writes}`, [fcPart("get_y", { n: writes }, SIG)]);
+      },
+    });
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await expect(flushAntigravityReplay()).rejects.toThrow(
+      "Antigravity replay snapshot flush did not converge.",
+    );
+    // The bound is still honored: it gives up rather than spinning forever.
+    expect(writes).toBe(8);
+  });
+
+  test("the written snapshot stays within the byte cap once framing is counted", async () => {
+    // The cap must bound the file, not the sum of its entries. Counting only
+    // per-entry sizes ignored the {"version":N,"sessions":[...]} framing and the
+    // comma between entries, so the written document exceeded the advertised cap
+    // by a margin that grew with every additional session.
+    const sig = "s".repeat(120);
+    observeAntigravityReplay(MODEL, "-one", [fcPart("get_a", { i: 1 }, sig)]);
+    await Bun.sleep(2);
+    observeAntigravityReplay(MODEL, "-two", [fcPart("get_b", { i: 2 }, sig)]);
+    await Bun.sleep(2);
+    observeAntigravityReplay(MODEL, "-three", [fcPart("get_c", { i: 3 }, sig)]);
+    await flushAntigravityReplay();
+
+    // Set the cap to exactly the sum of the entry sizes. Per-entry accounting
+    // admits all three and writes `framing` bytes too many; correct accounting
+    // sees that the document does not fit and drops one entry.
+    const full = readFileSync(snapshotPath(), "utf8");
+    const entries = (JSON.parse(full) as { sessions: unknown[] }).sessions;
+    expect(entries).toHaveLength(3);
+    const entrySum = entries.reduce(
+      (bytes, entry) => bytes + Buffer.byteLength(JSON.stringify(entry), "utf8"),
+      0,
+    );
+    // The framing is what this test is about, so assert it is actually there.
+    expect(Buffer.byteLength(full, "utf8")).toBeGreaterThan(entrySum);
+    setAntigravityReplaySnapshotMaxBytesForTests(entrySum);
+
+    // Re-observe the identical call: the cache dirties without any size changing.
+    observeAntigravityReplay(MODEL, "-three", [fcPart("get_c", { i: 3 }, sig)]);
+    await flushAntigravityReplay();
+
+    const written = readFileSync(snapshotPath(), "utf8");
+    // The whole file honors the cap, not merely the entries inside it.
+    expect(Buffer.byteLength(written, "utf8")).toBeLessThanOrEqual(entrySum);
+    // Not vacuous: it drops what does not fit instead of emptying the snapshot.
+    const kept = (JSON.parse(written) as { sessions: unknown[] }).sessions;
+    expect(kept.length).toBeGreaterThanOrEqual(2);
+    expect(kept.length).toBeLessThan(3);
+  });
+
+  test("background snapshot failures log a redacted warning and keep the service running", async () => {
+    const FAKE_SECRET = "FAKE_SECRET_antigravity_replay_12345";
+    let warned!: () => void;
+    const warningSeen = new Promise<void>(resolve => { warned = resolve; });
+    const warn = spyOn(console, "warn").mockImplementation((...args) => {
+      if (String(args[0]).includes("antigravity")) warned();
+    });
+    try {
+      setAntigravityReplayWriteSeamForTests({
+        afterTempWrite: async () => { throw new Error(`simulated disk failure ${FAKE_SECRET}`); },
+      });
+      observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+      // Deterministic: wait until the debounced write actually failed and
+      // warned (bounded), instead of racing a fixed sleep against the timer.
+      await Promise.race([warningSeen, Bun.sleep(5_000)]);
+      expect(warn.mock.calls.some(call => String(call[0]).includes("antigravity"))).toBe(true);
+      // The warning is redacted: error payload must never reach the log.
+      expect(warn.mock.calls.every(call => !call.some(arg => String(arg).includes(FAKE_SECRET)))).toBe(true);
+      // The failure must not wedge the cache: a later mutation still works.
+      observeAntigravityReplay(MODEL, SESSION, [fcPart("get_y", {}, SIG)]);
+      expect(antigravityReplayMetrics().calls).toBe(2);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

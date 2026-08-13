@@ -4,7 +4,7 @@ import {
   EXPORT_CLIENT_IDS,
   GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
-  KIMI_LOOPBACK_PLACEHOLDER,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
   OPENCODE_PROVIDER_ID,
   buildClientConfig,
@@ -56,7 +56,7 @@ describe("no client config ever carries a credential", () => {
 
   test("kimi uses the loopback placeholder because it cannot read env vars", () => {
     const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
-    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(KIMI_LOOPBACK_PLACEHOLDER);
+    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
   test("gajae uses apiKeyEnv, not the apiKey footgun", () => {

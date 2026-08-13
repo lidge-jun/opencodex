@@ -6,35 +6,33 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "oxlint .",
     "test": "bun test tests",
-    "lint:i18n": "eslint src/pages src/components src/App.tsx src/ui.tsx",
-    "doctor": "npx --yes react-doctor@0.9.3 --verbose --scope changed --base origin/main --no-telemetry",
-    "doctor:full": "npx --yes react-doctor@0.9.3 --verbose --scope full --no-telemetry",
+    "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
+    "doctor": "npx --yes react-doctor@0.9.11 --verbose --scope changed --base origin/main --no-telemetry",
+    "doctor:full": "npx --yes react-doctor@0.9.11 --verbose --scope full --no-telemetry",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.14.5",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "@tanstack/react-virtual": "^3.14.9",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^24.12.3",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "eslint": "^10.3.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.6.0",
-    "happy-dom": "20.11.1",
+    "@types/estree-jsx": "1.0.5",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "happy-dom": "20.11.2",
+    "oxlint": "1.76.0",
+    "react-refresh": "^0.18.0",
     "typescript": "~6.0.2",
-    "typescript-eslint": "^8.59.2",
-    "vite": "^8.1.0"
+    "vite": "^8.2.1"
   },
   "overrides": {
     "brace-expansion": "5.0.9",
-    "postcss": "8.5.18"
+    "nanoid": "3.3.18",
+    "postcss": "8.5.26"
   }
 }

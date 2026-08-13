@@ -111,6 +111,22 @@ const servers: Array<ReturnType<typeof startServer> | null> = [];
 function start(home = codexHome): ReturnType<typeof startServer> {
   const manager = home === codexHome ? primaryManager : managerFor(home);
   const server = startServer(0, {
+    // The fixture builds its own CODEX_HOME/OPENCODEX_HOME under a temp root, so
+    // real service-home evidence on the developer's machine is irrelevant to what
+    // this child proves. Without this seam `startServer` inspects the INSTALLED
+    // service instead: a machine running ocx as a launchd/systemd job reports
+    // `ownership: "unknown"` for the fixture's homes (the job is loaded, but its
+    // plist names other homes), native-main admission is fenced closed, and every
+    // gate assertion here times out on `reason: "ownership-unknown"`.
+    //
+    // That made the suite pass in CI — where no service is installed — and fail on
+    // exactly the maintainer machines that run the proxy they are developing,
+    // including through the local preflight in scripts/release.ts. Matches the
+    // seam tests/helpers/native-profile-startup-child.ts already uses.
+    inspectNativeCodexOwnership: () => ({
+      ownership: "owned",
+      reason: "native-main owner test fixture",
+    }),
     nativeMainStartup: {
       manager,
       owner: { retryMs: 25, hardenPath: async () => {} },

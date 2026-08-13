@@ -201,23 +201,21 @@ function migrateLegacyGateState(enforcerState, readinessState) {
  */
 
 /**
- * Bot-side verification of the two checklist claims the gate can check itself.
- * The CI box only holds when the head's `ci` check is green, and the
- * latest-dev box only holds while the head is at most
- * READINESS_LATEST_DEV_BEHIND_MAX commits behind the base. Unknown state
- * (compare or checks lookup failed) fails closed: an unverifiable claim is a
- * violation, because an attestation must not ride on missing evidence.
+ * Bot-side verification of the checklist claim the gate can check itself for
+ * ancestry. The local-CI box is an author attestation only (fork contributors
+ * cannot start repository CI; a maintainer has to), so it is never disproved
+ * here — head-drift still resets every box after a new push. The latest-dev
+ * box only holds while the head is at most READINESS_LATEST_DEV_BEHIND_MAX
+ * commits behind the base. Unknown state (compare lookup failed) fails closed:
+ * an unverifiable claim is a violation, because an attestation must not ride
+ * on missing evidence.
  */
 function readinessClaimViolations({
-  ciGreen,
   behindBase,
   behindUnknown = false,
   behindMax = READINESS_LATEST_DEV_BEHIND_MAX
 }) {
   const violations = [];
-  if (!ciGreen) {
-    violations.push("ci_green");
-  }
   if (behindUnknown || behindBase > behindMax) {
     violations.push("latest_dev");
   }
@@ -238,44 +236,73 @@ const REVIEW_FINDINGS_BOT_LOGINS = [
 const CODE_RABBIT_LOGIN = "coderabbitai[bot]";
 
 /**
- * CodeRabbit's review-body line that reports actionable inline findings. The
- * gate reads this to count findings that CodeRabbit posts only as review-body
- * text ("outside the diff range") rather than as inline review threads.
+ * CodeRabbit's review-body line that reports all actionable findings. This is
+ * kept as a compatibility fallback for older review bodies that predate the
+ * stable outside-diff markers below.
  */
 const CODE_RABBIT_ACTIONABLE_RE =
   /\*\*Actionable comments posted:\s*(\d+)\*\*/i;
 
-/**
- * Pull-request reviews (from `pulls.listReviews`) that carry CodeRabbit
- * findings. CodeRabbit posts some findings that cannot be attached inline
- * ("outside the diff range") in the review body with the line
- * `**Actionable comments posted: N**`; those never become review threads, so
- * the thread check alone would miss them. This supplements the thread check:
- * a CodeRabbit review of the live head whose body reports actionable comments
- * counts as an unresolved finding. Only CodeRabbit's own reviews are read —
- * a human review quoting the same line must not count.
- *
- * Only the most recent review for the live head is considered (the head a
- * findings-review covers is the head that must be clean), so an older review
- * of a superseded commit cannot keep the box unticked forever. Reviews with a
- * missing or unparsable `submitted_at` sort last deterministically so the
- * "most recent" pick is never arbitrary.
- */
-function coderabbitOutsideDiffFindings({ reviews = [], liveHeadSha }) {
+/** Stable identity CodeRabbit embeds with each finding it cannot attach inline. */
+const CODE_RABBIT_OUTSIDE_DIFF_MARKER_RE =
+  /<!--\s*(cr-comment:v1:[a-f0-9]+)\s*-->/gi;
+
+function submittedAt(review) {
+  const parsed = Date.parse(String(review?.submitted_at ?? ""));
+  return Number.isNaN(parsed) ? -Infinity : parsed;
+}
+
+/** Latest CodeRabbit review for the exact head the readiness claim covers. */
+function latestCodeRabbitReviewForHead({ reviews = [], liveHeadSha }) {
   if (!liveHeadSha || !Array.isArray(reviews) || reviews.length === 0) {
-    return { code: null, unresolved: 0, byBot: {} };
+    return null;
   }
-  const submittedAt = review => {
-    const parsed = Date.parse(String(review?.submitted_at ?? ""));
-    return Number.isNaN(parsed) ? -Infinity : parsed;
-  };
-  const latestForHead = reviews
+  return reviews
     .filter(
       review =>
         review?.commit_id === liveHeadSha &&
         review?.user?.login === CODE_RABBIT_LOGIN
     )
-    .sort((a, b) => submittedAt(b) - submittedAt(a))[0];
+    .sort((a, b) => {
+      const aTime = submittedAt(a);
+      const bTime = submittedAt(b);
+      if (aTime > bTime) return -1;
+      if (aTime < bTime) return 1;
+      return Number(b?.id ?? -1) - Number(a?.id ?? -1);
+    })[0] ?? null;
+}
+
+/**
+ * Stable identities for CodeRabbit findings outside the current diff. Real
+ * outside-diff findings in CodeRabbit review bodies carry a
+ * `cr-comment:v1:<id>` marker. Only the latest CodeRabbit review for the live
+ * head is authoritative: markers present there are active; a later same-head
+ * review that omits a marker is the bot-controlled resolution signal.
+ */
+function coderabbitOutsideDiffFindingIds({ reviews = [], liveHeadSha }) {
+  const latestForHead = latestCodeRabbitReviewForHead({ reviews, liveHeadSha });
+  const body = String(latestForHead?.body ?? "");
+  if (!/outside diff range comments/i.test(body)) return [];
+
+  const ids = [];
+  const seen = new Set();
+  for (const match of body.matchAll(CODE_RABBIT_OUTSIDE_DIFF_MARKER_RE)) {
+    const id = match[1].toLowerCase();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Compatibility parser for older CodeRabbit review bodies that expose only
+ * `Actionable comments posted: N`. New outside-diff accounting uses the stable
+ * `cr-comment` identities above, because the actionable total also includes
+ * normal inline findings and therefore is not itself an outside-diff count.
+ */
+function coderabbitOutsideDiffFindings({ reviews = [], liveHeadSha }) {
+  const latestForHead = latestCodeRabbitReviewForHead({ reviews, liveHeadSha });
   const body = String(latestForHead?.body ?? "");
   const match = CODE_RABBIT_ACTIONABLE_RE.exec(body);
   if (!match) return { code: null, unresolved: 0, byBot: {} };
@@ -289,18 +316,15 @@ function coderabbitOutsideDiffFindings({ reviews = [], liveHeadSha }) {
 }
 
 /**
- * Verify the Codex/CodeRabbit findings claim. The primary signal is the
- * pull-request review threads the GraphQL `pullRequestReviewThreads` query
- * returns: a thread authored by a review bot that is not explicitly resolved
- * is an unresolved finding. CodeRabbit additionally reports some findings
- * only in its review body (outside the diff range); those are added by the
- * `coderabbitOutsideDiffFindings` supplement so they cannot slip through.
- * The supplement is subordinate: it never subtracts, only adds unresolved
- * counts for the live head while a bot thread is still open. A review body is
- * immutable, so the count can never fall to zero on its own once posted; the
- * supplement therefore only counts while an unresolved bot thread exists — the
- * author resolves that thread to clear the box, matching the checklist wording
- * ("I resolved all correct ... findings") without requiring an empty commit.
+ * Verify the Codex/CodeRabbit findings claim. Inline findings come from the
+ * pull-request review threads GraphQL query. CodeRabbit findings that cannot
+ * attach inline are independent: the latest CodeRabbit review for the live
+ * head exposes stable `cr-comment:v1:<id>` markers for them, so a standalone
+ * outside-diff finding remains active even when every inline thread is already
+ * resolved. A later same-head CodeRabbit review that omits the marker clears
+ * it without an empty commit. Older CodeRabbit bodies without stable markers
+ * retain the previous actionable-count supplement while an inline bot thread
+ * is unresolved.
  */
 function unresolvedFindingsClaim({ threads = [], reviews = [], liveHeadSha }) {
   const byBot = {};
@@ -313,7 +337,16 @@ function unresolvedFindingsClaim({ threads = [], reviews = [], liveHeadSha }) {
       unresolved += 1;
     }
   }
-  if (unresolved > 0) {
+
+  const outsideIds = coderabbitOutsideDiffFindingIds({ reviews, liveHeadSha });
+  if (outsideIds.length > 0) {
+    byBot[CODE_RABBIT_LOGIN] =
+      (byBot[CODE_RABBIT_LOGIN] ?? 0) + outsideIds.length;
+    unresolved += outsideIds.length;
+  } else if (unresolved > 0) {
+    // Legacy fallback for older CodeRabbit review bodies that did not expose
+    // stable outside-diff identities. Keep the old bounded behavior so an
+    // immutable aggregate count cannot block a PR forever by itself.
     const outside = coderabbitOutsideDiffFindings({ reviews, liveHeadSha });
     if (outside.code) {
       for (const [login, count] of Object.entries(outside.byBot)) {
@@ -322,6 +355,7 @@ function unresolvedFindingsClaim({ threads = [], reviews = [], liveHeadSha }) {
       }
     }
   }
+
   return unresolved > 0
     ? { code: "review_findings", unresolved, byBot }
     : { code: null, unresolved: 0, byBot };
@@ -372,6 +406,9 @@ module.exports = {
   REVIEW_FINDINGS_BOT_LOGINS,
   CODE_RABBIT_LOGIN,
   CODE_RABBIT_ACTIONABLE_RE,
+  CODE_RABBIT_OUTSIDE_DIFF_MARKER_RE,
+  latestCodeRabbitReviewForHead,
+  coderabbitOutsideDiffFindingIds,
   coderabbitOutsideDiffFindings,
   parseState,
   stateMarker,

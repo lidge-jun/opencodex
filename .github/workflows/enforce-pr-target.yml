@@ -6,8 +6,15 @@ on:
       - opened
       - reopened
       - edited
+      - labeled
+      - unlabeled
       - ready_for_review
       - synchronize
+  # CodeRabbit publishes a legacy commit status named `CodeRabbit` on the
+  # reviewed head SHA. `status` workflows are loaded only from the default
+  # branch, so a PR cannot suppress or rewrite this signal path. The status is
+  # only a wake-up signal; the gate re-reads live reviews before any write.
+  status:
 
 # pull-requests:write covers title/comment/label updates.
 # contents:write is required for convertPullRequestToDraft /
@@ -18,23 +25,147 @@ permissions:
   contents: write
   pull-requests: write
 
-concurrency:
-  group: enforce-pr-target-${{ github.event.pull_request.number }}
-
 jobs:
-  enforce-target:
+  resolve-pr:
+    # This read-only job resolves every trusted wake-up event to a PR number
+    # before the write-capable job starts. The PR number is the stable identity
+    # used by both gate writers even when a contributor pushes a new head SHA.
+    if: >-
+      (github.event_name == 'status' &&
+       github.event.context == 'CodeRabbit' &&
+       github.event.state == 'success' &&
+       github.event.sender.login == 'coderabbitai[bot]' &&
+       github.event.sender.id == 136622811) ||
+      (github.event_name == 'pull_request_target' &&
+       ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+        github.event.label.name == 'gui-screenshot-waived' ||
+        github.event.label.name == 'intake: hygiene-blocked' ||
+        github.event.label.name == 'maintainer-sponsored' ||
+        github.event.label.name == 'test-exception-approved' ||
+        github.event.label.name == 'suppression-approved' ||
+        github.event.label.name == 'generated-change-approved' ||
+        github.event.label.name == 'dependency-change-approved'))
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pull-number: ${{ steps.resolve.outputs.pull-number }}
+    steps:
+      - name: Resolve trusted gate event to PR
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            let pullNumber = context.payload.pull_request?.number ?? null;
+
+            if (context.eventName === "status") {
+              const sender = context.payload.sender;
+              const trustedCodeRabbit =
+                context.payload.context === "CodeRabbit" &&
+                context.payload.state === "success" &&
+                sender?.login === "coderabbitai[bot]" &&
+                sender?.id === 136622811;
+              if (!trustedCodeRabbit) {
+                core.info("Status producer is not the CodeRabbit GitHub App; skipping.");
+                return;
+              }
+
+              const statusSha = context.payload.sha;
+              // Primary authority: GitHub's commit-to-PR index. This read can
+              // lag a fresh head push, so a non-match is not proof of absence.
+              let candidates = [];
+              try {
+                const associatedPrs = await github.paginate(
+                  github.rest.repos.listPullRequestsAssociatedWithCommit,
+                  { owner, repo, commit_sha: statusSha, per_page: 100 }
+                );
+                candidates = associatedPrs.filter(
+                  candidate =>
+                    candidate.state === "open" &&
+                    candidate.head?.sha === statusSha
+                );
+              } catch (error) {
+                core.warning(
+                  `Could not list PRs associated with commit ${statusSha}: ${error.message}`
+                );
+              }
+
+              if (candidates.length !== 1) {
+                // Fallback: reconcile directly against the live head SHA. The
+                // association index can be stale or empty for a very recent
+                // head (seen on PR #1441), so an empty/ambiguous index result
+                // must not silently drop the revalidation. Matching on the
+                // head SHA is the same authoritative identity the write gate
+                // uses, and `pulls.list` is a read — compatible with this
+                // job's `pull-requests: read` permission.
+                const priorCount = candidates.length;
+                try {
+                  const openPrs = await github.paginate(github.rest.pulls.list, {
+                    owner,
+                    repo,
+                    state: "open",
+                    per_page: 100
+                  });
+                  candidates = openPrs.filter(
+                    pr =>
+                      pr.state === "open" &&
+                      pr.head?.sha === statusSha
+                  );
+                  core.info(
+                    `Associated-index fallback: ${priorCount} index match(es), ${candidates.length} open PR(s) match head ${statusSha}.`
+                  );
+                } catch (error) {
+                  core.warning(
+                    `Could not list open PRs for head-${statusSha} fallback: ${error.message}`
+                  );
+                }
+              }
+
+              if (candidates.length !== 1) {
+                core.info(
+                  `CodeRabbit status ${statusSha} maps to ${candidates.length} open current-head PRs; skipping ambiguous/stale revalidation.`
+                );
+                return;
+              }
+              pullNumber = candidates[0].number;
+            }
+
+            if (Number.isInteger(pullNumber)) {
+              core.setOutput("pull-number", String(pullNumber));
+            }
+
+  enforce-target:
+    needs: resolve-pr
+    if: needs.resolve-pr.outputs.pull-number != ''
+    runs-on: ubuntu-latest
+    # Job-scoped permissions replace, rather than extend, the workflow default.
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      # Serialize every writer by PR identity, not head SHA. An older-head run
+      # therefore cannot race a newer-head run that rewrites the same comment.
+      group: pr-gate-comment-${{ needs.resolve-pr.outputs.pull-number }}
+      cancel-in-progress: false
 
     steps:
       - name: Checkout trusted PR-quality scripts
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          # The event's base commit, not the repository default: pull_request_target
-          # runs this workflow from the base revision, and the scripts must come
-          # from the same revision or a merged gate would run against the
-          # pre-promotion scripts on `main`. The immutable SHA pins the checkout
-          # to the exact base commit the event was built against.
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Source trusted scripts from an integration branch, never from the
+          # PR's own base commit. A stacked child PR's base is another open
+          # PR's head, so `base.sha` let an unpromoted commit choose which code
+          # runs with this job's contents/pull-requests write token.
+          #
+          # The branch is chosen, not fixed. `status` has no pull_request
+          # payload and runs the privileged workflow from the repository
+          # default branch, so it sources from that same promoted boundary. A
+          # `main`-targeting PR must take its scripts from `main`, or the gate
+          # runs a `main` workflow definition against `dev` scripts. Every
+          # other base, including a stacked child's, resolves to `dev`.
+          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts
@@ -42,6 +173,8 @@ jobs:
 
       - name: Enforce PR target, ancestry, and description
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          RESOLVED_PULL_NUMBER: ${{ needs.resolve-pr.outputs.pull-number }}
         with:
           script: |
             const path = require("path");
@@ -50,6 +183,7 @@ jobs:
               collectPrQualityFailures,
               authorHasPushPermission,
               hasGuiOverride,
+              isChangedFileListTruncated,
               extractReviewReadiness,
               appendReviewReadinessSection,
               stripReviewReadinessSection,
@@ -58,6 +192,12 @@ jobs:
               resetReviewReadinessSection
             } = require(
               path.join(process.cwd(), ".github", "scripts", "pr-quality.cjs"),
+            );
+            const {
+              collectDeterministicHygieneFailures,
+              HYGIENE_FAILURE_HINTS,
+            } = require(
+              path.join(process.cwd(), ".github", "scripts", "pr-hygiene.cjs"),
             );
             const {
               parseGateState,
@@ -81,8 +221,12 @@ jobs:
             const {
               GATE_MARKER,
               READINESS_MARKER,
+              HYGIENE_MARKER,
+              HYGIENE_BLOCK_START,
+              HYGIENE_BLOCK_END,
               inlineCode,
               buildGateCommentBody,
+              extractHygieneSection,
               buildFailureSections,
               failureSummary,
               buildStaleNotice,
@@ -112,10 +256,30 @@ jobs:
             const TITLE_PREFIX = "[WRONG BRANCH] ";
             const LEGACY_COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
             const REVIEW_READY_LABEL = "review-ready";
+            const GUI_SCREENSHOT_WAIVER_LABEL = "gui-screenshot-waived";
             const MAINTAINERS_FILE = "MAINTAINERS.md";
-
             const { owner, repo } = context.repo;
-            const pull_number = context.payload.pull_request.number;
+            const resolvedPullNumber = process.env.RESOLVED_PULL_NUMBER ?? "";
+            const pull_number = /^\d+$/.test(resolvedPullNumber)
+              ? Number.parseInt(resolvedPullNumber, 10)
+              : Number.NaN;
+
+            // `resolve-pr` is the single authority that maps a trusted event to
+            // exactly one live PR. The write-capable job consumes only that
+            // resolved identity so its concurrency key and mutation target
+            // cannot diverge.
+            if (!Number.isSafeInteger(pull_number) || pull_number < 1) {
+              core.info("No pull request could be resolved for this gate event; skipping.");
+              return;
+            }
+
+            // Defense in depth: the resolver job is the primary event gate, but
+            // the write-capable script also rejects event classes this workflow
+            // never intends to mutate from.
+            if (!["pull_request_target", "status"].includes(context.eventName)) {
+              core.info(`Unsupported gate event ${context.eventName}; skipping.`);
+              return;
+            }
 
             const { data: pr } = await github.rest.pulls.get({
               owner,
@@ -231,7 +395,16 @@ jobs:
              * readiness section or a stale intermediate checkpoint body.
              */
             async function upsertGateComment(state, opts) {
-              const body = buildGateCommentBody(state, opts).join("\n");
+              let body = buildGateCommentBody(state, opts).join("\n");
+              // The hygiene workflow writes its status into this same comment.
+              // Preserve whatever it left so a gate rebuild does not drop it.
+              const existingHygiene = extractHygieneSection(gateComment?.body);
+              if (existingHygiene && !body.includes("pr-hygiene-block")) {
+                body = body.replace(
+                  /\s+$/,
+                  `\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n${existingHygiene}\n\n${HYGIENE_BLOCK_END}`
+                );
+              }
               if (gateCommentId) {
                 await github.rest.issues.updateComment({
                   owner,
@@ -406,7 +579,52 @@ jobs:
               }
             }
 
-            const failures = collectPrQualityFailures({
+            const changedFiles = [];
+            const changedFilePaths = [];
+            let filesTruncated = true;
+            for (let attempt = 0; attempt < 2; attempt += 1) {
+              const { data: fileSnapshot } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number
+              });
+              const headShaForFiles = fileSnapshot.head?.sha ?? "";
+              const listedFiles = await github.paginate(
+                github.rest.pulls.listFiles,
+                { owner, repo, pull_number, per_page: 100 }
+              );
+              const { data: fileVerify } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number
+              });
+              const headMatches = fileVerify.head?.sha === headShaForFiles;
+              if (!headMatches && attempt === 0) {
+                core.info(
+                  "PR head moved while listing changed files; retrying once."
+                );
+                continue;
+              }
+              if (!headMatches) {
+                core.warning(
+                  "PR head moved during changed-file snapshot; treating file list as truncated."
+                );
+              }
+              changedFiles.length = 0;
+              changedFiles.push(...listedFiles);
+              changedFilePaths.length = 0;
+              changedFilePaths.push(
+                ...listedFiles.map(file => file.filename).filter(Boolean)
+              );
+              filesTruncated = isChangedFileListTruncated(
+                fileSnapshot.changed_files,
+                listedFiles.length,
+                headMatches
+              );
+              break;
+            }
+
+            let failures = collectPrQualityFailures({
               baseRef: pr.base.ref,
               allowedBases: ALLOWED_BASES,
               title: pr.title,
@@ -420,14 +638,93 @@ jobs:
               stackedBase,
               // A maintainer issue comment ("not touching gui") waives the
               // GUI-screenshot gate; the comments are already fetched above.
-              guiOverrideComments: comments
+              guiOverrideComments: comments,
+              changedFilePaths,
+              filesTruncated
             });
+
+            // Hygiene is a separate workflow that owns the blocked label and
+            // the Hygiene comment section, but Ready / review-ready must not
+            // clear while those checks fail. Re-assess here from the same
+            // trusted scripts so the gate cannot race ahead of hygiene.
+            const labelNames = (pr.labels ?? []).map(label => label.name);
+            failures = [
+              ...failures,
+              ...collectDeterministicHygieneFailures({
+                files: changedFiles,
+                labels: labelNames,
+                authorHasPushPermission:
+                  !permissionLookupFailed &&
+                  authorHasPushPermission(authorPermission),
+              }),
+            ];
 
             // A maintainer issue comment saying the change does not touch
             // the GUI waives the screenshot gate. The flag is what tells the
             // author the screenshot is not required, even though the failure
             // itself is gone from `failures`.
-            const screenshotWaived = hasGuiOverride({ comments });
+            const screenshotWaiverLabelPresent = (pr.labels ?? []).some(
+              label => label.name === GUI_SCREENSHOT_WAIVER_LABEL
+            );
+            const maintainerLogins = new Set(
+              readMaintainerLogins().map(login => login.toLowerCase())
+            );
+            let screenshotWaiverLabelActorLogin = null;
+            if (screenshotWaiverLabelPresent) {
+              try {
+                const issueEvents = await github.paginate(
+                  github.rest.issues.listEvents,
+                  {
+                    owner,
+                    repo,
+                    issue_number: pull_number,
+                    per_page: 100
+                  }
+                );
+                const waiverEvents = issueEvents
+                  .filter(
+                    event =>
+                      (event.event === "labeled" || event.event === "unlabeled") &&
+                      event.label?.name === GUI_SCREENSHOT_WAIVER_LABEL
+                  )
+                  .sort((left, right) => {
+                    const leftTime = Date.parse(left.created_at ?? "") || 0;
+                    const rightTime = Date.parse(right.created_at ?? "") || 0;
+                    if (leftTime !== rightTime) return leftTime - rightTime;
+                    return Number(left.id ?? 0) - Number(right.id ?? 0);
+                  });
+                const latestWaiverEvent = waiverEvents.at(-1);
+                if (latestWaiverEvent?.event === "labeled") {
+                  screenshotWaiverLabelActorLogin =
+                    latestWaiverEvent.actor?.login ?? null;
+                }
+              } catch (error) {
+                core.warning(
+                  `Could not resolve ${GUI_SCREENSHOT_WAIVER_LABEL} label provenance: ${error.message}`
+                );
+              }
+            }
+            const screenshotWaivedByLabel =
+              screenshotWaiverLabelPresent &&
+              typeof screenshotWaiverLabelActorLogin === "string" &&
+              maintainerLogins.has(screenshotWaiverLabelActorLogin.toLowerCase());
+            if (screenshotWaiverLabelPresent && !screenshotWaivedByLabel) {
+              core.info(
+                `${screenshotWaiverLabelActorLogin ?? "unknown label actor"} is not in MAINTAINERS.md; ignoring ${GUI_SCREENSHOT_WAIVER_LABEL}.`
+              );
+            }
+            if (screenshotWaivedByLabel) {
+              failures = failures.filter(
+                failure => failure.code !== "missing_ui_screenshot"
+              );
+            }
+            const screenshotWaived =
+              screenshotWaivedByLabel || hasGuiOverride({ comments });
+            const screenshotWaiverNotice = screenshotWaived
+              ? (screenshotWaivedByLabel
+                  ? `UI screenshot waived by the ${inlineCode(GUI_SCREENSHOT_WAIVER_LABEL)} label.`
+                  : "UI screenshot waived by a maintainer comment.")
+              : null;
 
             // The readiness gate applies to contributors (no push permission).
             // Maintainers keep the failure-only contract: draft while quality
@@ -474,8 +771,16 @@ jobs:
             // (see `completionIsStale`). When it is stale the gate resets the
             // boxes and the notification state, re-drafts, and tells the
             // author to re-test and re-tick against the latest code.
+            // `status` events carry no `pull_request.head.sha`, so the
+            // fallback to the live head would let a completed checklist with
+            // no recorded completion head pass as if it attested the current
+            // head. A status-triggered run must not promote readiness: pass
+            // the live head only when the event actually delivered it.
             const eventHeadSha =
-              context.payload.pull_request?.head?.sha ?? pr.head.sha;
+              context.payload.pull_request?.head?.sha ??
+              (context.eventName === "status"
+                ? ""
+                : pr.head.sha);
             const completionHeadSha =
               gateState.completedAtHeadSha ?? null;
             const headDrifted = completionIsStale({
@@ -536,14 +841,16 @@ jobs:
               checklistComplete = readiness.present && readiness.complete;
             }
 
-            // The bot verifies the three checklist claims it can check itself.
-            // The CI box only counts when the head's `ci` check (the repo's
-            // documented "CI passed" signal) is green; the latest-dev box only
-            // counts while the head is at most READINESS_LATEST_DEV_BEHIND_MAX
-            // commits behind the base; the findings box only counts while every
-            // Codex/CodeRabbit review thread on the PR is resolved. A disproved
-            // claim unchecks that box and keeps the PR a draft, exactly like a
-            // head-drift reset.
+            // The bot verifies the checklist claims it can check itself. The
+            // local-CI box is an author attestation only — fork contributors
+            // cannot start repository CI (a maintainer has to) — so the gate
+            // never disproves it; head-drift still resets every box after a
+            // new push. The latest-dev box only counts while the head is at
+            // most READINESS_LATEST_DEV_BEHIND_MAX commits behind the base;
+            // the findings box only counts while every Codex/CodeRabbit
+            // review thread on the PR is resolved. A disproved claim unchecks
+            // that box and keeps the PR a draft, exactly like a head-drift
+            // reset.
             let claimViolations = [];
             let claimNotice = [];
             if (
@@ -552,34 +859,7 @@ jobs:
               !headDrifted &&
               failures.length === 0
             ) {
-              let ciGreen = true;
-              try {
-                const { data: checksData } =
-                  await github.rest.checks.listForRef({
-                    owner,
-                    repo,
-                    ref: pr.head.sha,
-                    per_page: 100
-                  });
-                const ciCheck = (checksData.check_runs ?? []).find(
-                  check => check.name === "ci"
-                );
-                // No `ci` check means no CI run exists for this head (for
-                // example a docs-only change): there is nothing to contradict
-                // the author's claim. A real `ci` check must be completed
-                // successfully.
-                ciGreen =
-                  ciCheck === undefined ||
-                  (ciCheck.status === "completed" &&
-                    ciCheck.conclusion === "success");
-              } catch (error) {
-                core.warning(
-                  `Could not list checks for the readiness claim check: ${error.message}`
-                );
-                ciGreen = false;
-              }
               claimViolations = readinessClaimViolations({
-                ciGreen,
                 behindBase,
                 behindUnknown: ancestryLookupFailed
               });
@@ -761,6 +1041,14 @@ jobs:
                   "Add a screenshot of the UI change to the PR description."
                 );
               }
+              for (const failure of failures) {
+                const hint = HYGIENE_FAILURE_HINTS[failure.code];
+                if (!hint) continue;
+                const paths = failure.paths?.length
+                  ? ` Paths: ${failure.paths.map(p => inlineCode(p)).join(", ")}.`
+                  : "";
+                actions.push(`Fix **${failure.code}** — ${hint}${paths}`);
+              }
               if (checklistRequired && !checklistComplete) {
                 actions.push(
                   `Tick all four boxes in the PR description once you're done (currently ${readiness.checked}/${readiness.total}).`
@@ -846,6 +1134,9 @@ jobs:
                     if (failure.code === "missing_ui_screenshot") {
                       return "UI screenshot required.";
                     }
+                    if (HYGIENE_FAILURE_HINTS[failure.code]) {
+                      return `hygiene: ${failure.code}.`;
+                    }
                     return failure.code;
                   })
                   .join(" ");
@@ -854,9 +1145,7 @@ jobs:
                 // the waiver flag, and the prefix notice when the bot owns it.
                 const failureNotices = [
                   ...revalidationNotice,
-                  ...(screenshotWaived
-                    ? ["UI screenshot waived by a maintainer comment."]
-                    : []),
+                  ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
                   ...(hasWrongBase && state.titlePrefixedByBot
                     ? [`Its title has been prefixed with ${inlineCode(TITLE_PREFIX.trim())}.`]
                     : [])
@@ -946,6 +1235,7 @@ jobs:
                   checklistRequired,
                   notices: [
                     ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
                     "This PR stays in draft until every box above is ticked."
                   ]
                 });
@@ -965,6 +1255,7 @@ jobs:
                   checklistRequired,
                   notices: [
                     ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
                     "This PR stays in draft until every box above is ticked."
                   ]
                 });
@@ -997,6 +1288,7 @@ jobs:
                   checklistRequired,
                   notices: [
                     ...revalidationNotice,
+                    ...(screenshotWaiverNotice ? [screenshotWaiverNotice] : []),
                     "Automatic draft conversion failed. Please convert this pull request to a draft manually until every box above is ticked."
                   ]
                 });
@@ -1052,13 +1344,14 @@ jobs:
               readyState.version = 1;
 
               const notices = [
+                screenshotWaiverNotice,
                 readyConversionFailed
                   ? "Automatic ready-for-review conversion failed; please mark the pull request ready manually if it is still a draft."
                   : readyConverted
                     ? "This pull request has been marked Ready for Review."
                     : "This pull request is already Ready for Review.",
                 readyMoment
-                  ? `CodeRabbit/Codex review was requested via the ${inlineCode(REVIEW_READY_LABEL)} label. If no review appears, comment ${inlineCode("@coderabbitai review")} to request one.`
+                  ? `The ${inlineCode(REVIEW_READY_LABEL)} label marks this PR as ready; review automation runs independently. If no CodeRabbit review appears, comment ${inlineCode("@coderabbitai review")} to request one.`
                   : "",
                 notified && maintainers.length > 0
                   ? `Maintainers notified: ${maintainers
@@ -1122,7 +1415,7 @@ jobs:
                   actions: [],
                   readiness,
                   checklistRequired,
-                  notices: []
+                  notices: screenshotWaiverNotice ? [screenshotWaiverNotice] : []
                 });
                 return;
               }
@@ -1135,7 +1428,7 @@ jobs:
                     actions: [],
                     readiness,
                     checklistRequired,
-                    notices: []
+                    notices: screenshotWaiverNotice ? [screenshotWaiverNotice] : []
                   }
                 );
                 return;

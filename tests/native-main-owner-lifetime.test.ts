@@ -252,6 +252,84 @@ function isContended(event: Event): boolean {
 }
 
 describe("native-main process owner lease", () => {
+  test("one coded ACL timeout retries once before ownership becomes held", async () => {
+    const f = fixture("acl-timeout-recovery");
+    let attempts = 0;
+    const trace: string[] = [];
+    const owner = retainNativeMainOwner(f.manager.context, {
+      retryMs: 10,
+      hardenPath: async () => {
+        attempts += 1;
+        if (attempts === 1) throw Object.assign(new Error("transient"), { code: "ETIMEDOUT" });
+      },
+    });
+    const unsubscribe = owner.subscribe(snapshot => { trace.push(snapshot.status); });
+    try {
+      await waitUntil(() => owner.snapshot().status === "held" ? true : null);
+      expect(attempts).toBe(2);
+      expect(trace).toEqual(["acquiring", "held"]);
+    } finally {
+      unsubscribe();
+      await owner.release();
+    }
+  });
+
+  test("a second coded ACL timeout becomes terminal and a release cancels a pending retry", async () => {
+    const f = fixture("acl-timeout-terminal");
+    let attempts = 0;
+    const trace: string[] = [];
+    const owner = retainNativeMainOwner(f.manager.context, {
+      retryMs: 10,
+      hardenPath: async () => {
+        attempts += 1;
+        throw Object.assign(new Error("transient"), { code: "ETIMEDOUT" });
+      },
+    });
+    const unsubscribe = owner.subscribe(snapshot => { trace.push(snapshot.status); });
+    try {
+      await waitUntil(() => owner.snapshot().status === "unavailable" ? true : null);
+      await Bun.sleep(50);
+      expect(attempts).toBe(2);
+      expect(trace).toEqual(["acquiring", "unavailable"]);
+    } finally {
+      unsubscribe();
+      await owner.release();
+    }
+
+    const f2 = fixture("acl-timeout-release");
+    let releasedAttempts = 0;
+    const releasing = retainNativeMainOwner(f2.manager.context, {
+      retryMs: 100,
+      hardenPath: async () => {
+        releasedAttempts += 1;
+        throw Object.assign(new Error("transient"), { code: "ETIMEDOUT" });
+      },
+    });
+    await waitUntil(() => releasedAttempts === 1 ? true : null);
+    await releasing.release();
+    await Bun.sleep(150);
+    expect(releasedAttempts).toBe(1);
+  });
+
+  test("an ETIMEDOUT-looking message without the code remains a permanent failure", async () => {
+    const f = fixture("acl-timeout-message-only");
+    let attempts = 0;
+    const owner = retainNativeMainOwner(f.manager.context, {
+      retryMs: 10,
+      hardenPath: async () => {
+        attempts += 1;
+        throw new Error("ETIMEDOUT in untrusted prose");
+      },
+    });
+    try {
+      await waitUntil(() => owner.snapshot().status === "unavailable" ? true : null);
+      await Bun.sleep(50);
+      expect(attempts).toBe(1);
+    } finally {
+      await owner.release();
+    }
+  });
+
   test("same-process references retain one owner and do not deadlock the transaction lock", async () => {
     const f = fixture();
     const first = retainNativeMainOwner(f.manager.context, { retryMs: 10, hardenPath: async () => {} });

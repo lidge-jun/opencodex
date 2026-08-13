@@ -124,6 +124,25 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 프로바이더와 모델 메타데이터에 따라 Codex의 `low | medium | high | xhigh | max | ultra` 단계를 사용하며,
 업스트림이 지원하지 않는 값은 요청을 보내기 전에 매핑하거나 지원 범위로 낮춥니다.
 
+### 라우팅된 로컬 도구
+
+네이티브가 아닌 라우팅 catalog 항목은 `tool_mode: "code_mode_only"`를 사용합니다. 이를 통해 Codex는 공식
+`exec` 진입점과 Browser 및 Computer Use를 포함한 중첩 MCP 도구를 노출할 수 있으며, opencodex는 모델의 일반
+function call만 라우팅합니다. 도구 실행, 권한, 확인은 Codex에 그대로 남고 opencodex가 별도의 browser 또는
+desktop-control executor를 구현하지는 않습니다.
+
+Codex의 `exec` custom-tool grammar를 허용하지 않는 key-auth Responses provider의 경우, opencodex는 해당 선언과
+history를 업스트림 function tool로 인코딩한 다음 스트리밍된 function-call lifecycle을 Codex에 전달하기 전에
+`custom_tool_call`로 복원합니다. 네이티브 OpenAI forward routing과 지원되는 `apply_patch` custom tool은 변경되지
+않습니다.
+
+선택한 provider는 function/tool calling을 지원해야 합니다. tool call을 지원하지 않는 text-only provider에서는
+`exec`, Browser 또는 Computer Use를 사용할 수 없습니다. 네이티브 OpenAI 항목은 업스트림 tool mode를 그대로
+유지합니다.
+
+`ocx sync`가 이 metadata를 변경한 뒤에는 Codex App을 다시 시작하고 새 task를 여세요. 기존 app-server process와
+task는 시작할 때 불러온 catalog와 tool plan을 계속 유지할 수 있습니다.
+
 ### 사용자 지정 모델 표시 이름
 
 사용자 지정 모델은 사람이 읽을 수 있는 **표시 이름**을 가질 수 있습니다. 이 이름은 Codex의 model picker에 보이는 label만 바꾸고, 모델이 라우팅되는 방식은 바꾸지 않습니다. 표시 이름은 catalog entry의 `display_name` 필드에만 매핑되며, routing slug(`<provider>/<model>`), alias collision order, provider, native OpenAI marketing name은 모두 그대로 둡니다.

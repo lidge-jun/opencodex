@@ -3,32 +3,47 @@
  * The v2 toggle controls the multi-agent surface only, not ultra visibility.
  * config.toml reader + max_concurrent_threads_per_session writer fixtures.
  */
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { readFileSync } from "node:fs";
-import { buildCatalogEntries, mergeCatalogEntriesForSync, nativeEffortClamp, shouldApplyNativeEffortClamp, type MultiAgentMode } from "../src/codex/catalog";
+import {
+  buildCatalogEntries,
+  CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  mergeCatalogEntriesForSync,
+  nativeEffortClamp,
+  shouldApplyNativeEffortClamp,
+  type MultiAgentMode,
+} from "../src/codex/catalog";
+import {
+  buildCatalogEntriesFromObservedState,
+  mergeCatalogEntriesFromObservedState,
+} from "../src/codex/catalog/sync";
 import {
   getAgentsEnabled,
   getAgentsMaxDepth,
   getAgentsMaxThreads,
   getLogicalMaxThreads,
   getMaxConcurrentThreads,
+  getMultiAgentModeHintText,
   getSubagentDeveloperInstructions,
   hasAgentsMaxThreads,
   isDefaultModeRequestUserInputEnabled,
   isMultiAgentV2Enabled,
   isTranslatableV1ChildLimit,
   isTranslatableV2TotalLimit,
+  probeCodexSupportsModeHint,
   setAgentsEnabled,
   setAgentsMaxDepth,
   setMaxConcurrentThreads,
+  setMultiAgentModeHintText,
   setSubagentDeveloperInstructions,
   transitionMultiAgentV2,
   v1ChildLimitToV2TotalLimit,
   v2TotalLimitToV1ChildLimit,
 } from "../src/codex/features";
+import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../src/codex/runtime";
 import { cmdV2, codexFeaturesInvocation, v2StatusLine, multiAgentModeLine } from "../src/cli/v2";
 import { handleManagementAPI } from "../src/server/management-api";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
@@ -60,6 +75,26 @@ function fixtureConfig(content: string): string {
   const path = join(dir, "config.toml");
   writeFileSync(path, content);
   return path;
+}
+
+function native(supported: boolean, windows = false): Buffer {
+  return Buffer.concat([
+    windows ? Buffer.from("MZ00") : Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
+    Buffer.from(supported ? "multi_agent_mode_hint_text" : "older_codex_schema"),
+  ]);
+}
+
+function selectRuntime(command: string, version = "test"): void {
+  resetCodexRuntimeResolveCacheForTests();
+  setCodexRuntimeResolveCacheForTests({ runtime: { command, version, source: "fallback" }, failures: [] });
+}
+
+function installModeHintRuntime(supported = true): string {
+  const dir = mkdtempSync(join(tmpdir(), "ocx-mode-hint-runtime-"));
+  const command = join(dir, "codex");
+  writeFileSync(command, native(supported));
+  selectRuntime(command);
+  return command;
 }
 
 describe("catalog ultra (always-on)", () => {
@@ -113,6 +148,127 @@ describe("features.ts config reader", () => {
     expect(isMultiAgentV2Enabled(fixtureConfig("[features]\nmulti_agent_v2 = false\n"))).toBe(false);
     // sibling key must not leak (multi_agent vs multi_agent_v2)
     expect(isMultiAgentV2Enabled(fixtureConfig("[features]\nmulti_agent = true\n"))).toBe(false);
+  });
+
+  // #1295. Each hazard gets its own test: Bun stops a block at the first failing
+  // expectation, so bundling them would let a later assertion never run and
+  // still look covered by an ablation.
+
+  test("#1295: `enabled` after a multi-line basic string with a bracketed line", () => {
+    // The exact shape `codex features enable` produces — it appends `enabled` at
+    // the END of the table, so a body cut mid-literal drops precisely that key.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[some bracketed first line]\nmore prose\n"""\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: the same hazard with a literal ''' string", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      "[features.multi_agent_v2]\nhint = '''\n[literal bracketed]\n'''\nenabled = true\n",
+    ))).toBe(true);
+  });
+
+  test("#1295: key order does not decide the answer", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nenabled = true\nhint = """\n[bracketed]\n"""\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: prose inside a string is not an assignment", () => {
+    // The value contains the literal text `enabled = true`, and the table has no
+    // such key. Any reader that regex-matches raw body text answers `true` here.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[prose]\nenabled = true\n"""\n[other]\nvalue = 1\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: a delimiter inside a comment is not a delimiter", () => {
+    // Must not swallow [other] and read someone else's key.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\n# """\n[other]\nenabled = true\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: an escaped delimiter does not close a multi-line basic string", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n\\"""\n[bracketed prose]\n"""\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: a multi-line array's nested rows are not table headers", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = [\n  ["nested"],\n]\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: an array may open on the line after `=`", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint =\n[\n  ["nested"],\n]\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: `#` inside a string is content, not a comment", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = "# not a comment"\nenabled = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: a header-shaped line inside a string is not the table", () => {
+    // This document has no real [features.multi_agent_v2] table at all.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[other]\nhint = """\n[features.multi_agent_v2]\nenabled = true\n"""\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: a following table's key is never read as this feature's", () => {
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nhint = """\n[x]\n"""\n\n[other]\nenabled = true\n',
+    ))).toBe(false);
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.other]\nenabled = true\n\n[features.multi_agent_v2]\nhint = """\n[x]\n"""\n',
+    ))).toBe(false);
+  });
+
+  test("#1295: an unparseable document still falls back to the scanner", () => {
+    // A rejected parse must not read as "feature disabled"; the hand-written
+    // scanner is the fallback so a malformed file degrades rather than lying.
+    expect(isMultiAgentV2Enabled(fixtureConfig(
+      '[features.multi_agent_v2]\nenabled = true\nbroken = "unterminated\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: the sibling feature readers do not read prose as an assignment", () => {
+    // These predate #1295 and had the same defect on `dev`: a `"""` value whose
+    // text happens to contain the key was read as the key itself. Fixed with the
+    // same parser-first treatment rather than left inconsistent with the v2
+    // reader that shares the file.
+    expect(isDefaultModeRequestUserInputEnabled(fixtureConfig(
+      '[features]\nhint = """\ndefault_mode_request_user_input = true\n"""\n',
+    ))).toBe(false);
+    expect(isDefaultModeRequestUserInputEnabled(fixtureConfig(
+      '[features]\ndefault_mode_request_user_input = true\n',
+    ))).toBe(true);
+  });
+
+  test("#1295: [agents] max_threads is read from the parse, not from prose", () => {
+    expect(getAgentsMaxThreads(fixtureConfig(
+      '[agents]\nhint = """\nmax_threads = 7\n"""\n',
+    ))).toBe(null);
+    expect(hasAgentsMaxThreads(fixtureConfig(
+      '[agents]\nhint = """\nmax_threads = 7\n"""\n',
+    ))).toBe(false);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 7\n'))).toBe(7);
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 7\n'))).toBe(true);
+  });
+
+  test("#1295: presence and usability of [agents] max_threads are separate questions", () => {
+    // hasAgentsMaxThreads gates a codex-rs boot refusal — it must not miss a key
+    // that is present but unusable, while the getter correctly declines to return
+    // a value it cannot use. A false negative here is the dangerous direction.
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 0\n'))).toBe(true);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = 0\n'))).toBe(null);
+    expect(hasAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = "seven"\n'))).toBe(true);
+    expect(getAgentsMaxThreads(fixtureConfig('[agents]\nmax_threads = "seven"\n'))).toBe(null);
   });
 
   test("inline table form + absent file/key -> false", () => {
@@ -227,6 +383,388 @@ describe("max_concurrent_threads_per_session reader/writer", () => {
     // Two transitions × several atomic writes; on Windows each write runs icacls and
     // can exceed bun's 5s default under CI load.
   }, { timeout: 20_000 });
+});
+
+describe("multi_agent_mode_hint_text reader/writer", () => {
+  const PRESET = "Proactive multi-agent delegation is active.";
+  const TABLE = "# keep me\n[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 17 # tuned\n\n[notice]\nhide = true\n";
+
+  beforeEach(() => {
+    installModeHintRuntime(true);
+  });
+
+  afterEach(() => {
+    resetCodexRuntimeResolveCacheForTests();
+  });
+
+  test("reader: present, absent key, absent table, empty string", () => {
+    const present = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"Proactive delegation\"\n");
+    expect(getMultiAgentModeHintText(present)).toBe("Proactive delegation");
+    expect(getMultiAgentModeHintText(fixtureConfig(TABLE))).toBe(null);
+    expect(getMultiAgentModeHintText(fixtureConfig("[features]\nmulti_agent_v2 = true\n"))).toBe(null);
+    // A present empty string round-trips (upstream treats "" as a present override).
+    const empty = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\n");
+    expect(getMultiAgentModeHintText(empty)).toBe("");
+  });
+
+  test("writer sets in a dedicated table, preserving comments and neighbors", () => {
+    const path = fixtureConfig(TABLE);
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(out).toContain("# keep me");
+    expect(out).toContain("max_concurrent_threads_per_session = 17 # tuned");
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("writer is idempotent: equal value -> no write, changed:false", () => {
+    const path = fixtureConfig(`[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "${PRESET}"\n`);
+    const before = readFileSync(path, "utf8");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("writer clears with null: removes the key, keeps siblings", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\nmulti_agent_mode_hint_text = \"Proactive delegation\"\nmax_concurrent_threads_per_session = 17\n");
+    expect(setMultiAgentModeHintText(null, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).not.toContain("multi_agent_mode_hint_text");
+    expect(out).toContain("enabled = true");
+    expect(out).toContain("max_concurrent_threads_per_session = 17");
+    expect(getMultiAgentModeHintText(path)).toBe(null);
+    // Clearing when already absent is a no-op.
+    expect(setMultiAgentModeHintText(null, fixtureConfig(TABLE))).toEqual({ ok: true, changed: false });
+  });
+
+  test("writer upgrades the bare boolean form and preserves enabled", () => {
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = true\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("multi_agent_v2 = { enabled = true,");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+    expect(isMultiAgentV2Enabled(path)).toBe(true);
+  });
+
+  test("writer supports inline-table form and values containing braces/commas/quotes", () => {
+    const tricky = "Use sub-agents {parallel}, \"quoted\", when needed.";
+    const path = fixtureConfig("[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 8 } # keep\n");
+    expect(setMultiAgentModeHintText(tricky, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("# keep");
+    expect(out).toContain("max_concurrent_threads_per_session = 8");
+    expect(getMultiAgentModeHintText(path)).toBe(tricky);
+  });
+
+  test("writer creates the dedicated table when no v2 config exists", () => {
+    const path = fixtureConfig("[notice]\nhide = true\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain("[features.multi_agent_v2]");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"`);
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("writer preserves CRLF files", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\r\nenabled = true\r\n");
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const out = readFileSync(path, "utf8");
+    expect(out).toContain(`multi_agent_mode_hint_text = "${PRESET}"\r\n`);
+    expect(out).not.toMatch(/[^\r]\n/);
+  });
+
+  test("writer refuses to edit an existing multi-line TOML string (would corrupt the doc)", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\nProactive\nmulti-line\n\"\"\"\n");
+    const before = readFileSync(path, "utf8");
+    expect(setMultiAgentModeHintText(PRESET, path)).toMatchObject({ ok: false });
+    expect(setMultiAgentModeHintText(null, path)).toMatchObject({ ok: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("reader decodes multi-line basic and literal TOML strings", () => {
+    const basic = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\nProactive\nmulti-line\n\"\"\"\n");
+    expect(getMultiAgentModeHintText(basic)).toBe("Proactive\nmulti-line\n");
+    const literal = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = '''\nLiteral\\path\n'''\n");
+    expect(getMultiAgentModeHintText(literal)).toBe("Literal\\path\n");
+  });
+
+  test("reader applies full multi-line newline and continuation semantics", () => {
+    const basic = fixtureConfig("[features.multi_agent_v2]\r\nmulti_agent_mode_hint_text = \"\"\"\r\nPro\\\r\n  active\r\n\"\"\"\r\n");
+    expect(getMultiAgentModeHintText(basic)).toBe("Proactive\n");
+    const literal = fixtureConfig("[features.multi_agent_v2]\r\nmulti_agent_mode_hint_text = '''\r\nLiteral\\\r\n  text\r\n'''\r\n");
+    expect(getMultiAgentModeHintText(literal)).toBe("Literal\\\n  text\n");
+    const slashParity = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\na\\\\\nb\n\"\"\"\n");
+    expect(getMultiAgentModeHintText(slashParity)).toBe("a\\\nb\n");
+  });
+
+  test("reader keeps bracket-shaped prose inside a multi-line hint", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = \"\"\"\nhello\n[bracketed]\nworld\n\"\"\"\nenabled = true\n");
+    expect(getMultiAgentModeHintText(path)).toBe("hello\n[bracketed]\nworld\n");
+  });
+
+
+  test("reader consumes surplus quotes in multiline closing delimiters", () => {
+    // TOML permits up to two quotes immediately inside the closing delimiter
+    // of a multiline string. The scanner must include them in the value
+    // rather than stopping at the first triple-quote run.
+    const basic1 = fixtureConfig('[features.multi_agent_v2]\nmulti_agent_mode_hint_text = """hello""""\nenabled = true\n');
+    expect(getMultiAgentModeHintText(basic1)).toBe('hello"');
+    const basic2 = fixtureConfig('[features.multi_agent_v2]\nmulti_agent_mode_hint_text = """hello"""""\nenabled = true\n');
+    expect(getMultiAgentModeHintText(basic2)).toBe('hello""');
+    const lit1 = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = '''hello''''\nenabled = true\n");
+    expect(getMultiAgentModeHintText(lit1)).toBe("hello'");
+    const lit2 = fixtureConfig("[features.multi_agent_v2]\nmulti_agent_mode_hint_text = '''hello'''''\nenabled = true\n");
+    expect(getMultiAgentModeHintText(lit2)).toBe("hello''");
+    // Normal 3-quote closing still works.
+    const normal = fixtureConfig('[features.multi_agent_v2]\nmulti_agent_mode_hint_text = """hello"""\nenabled = true\n');
+    expect(getMultiAgentModeHintText(normal)).toBe("hello");
+  });
+
+  test("writer updates and clears quoted dedicated-table keys without duplicates", () => {
+    for (const quoted of ['"multi_agent_mode_hint_text"', "'multi_agent_mode_hint_text'"]) {
+      const path = fixtureConfig(`[features.multi_agent_v2]\n${quoted} = "old"\nenabled = true\n`);
+      expect(getMultiAgentModeHintText(path)).toBe("old");
+      expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+      expect((readFileSync(path, "utf8").match(/multi_agent_mode_hint_text/g) ?? [])).toHaveLength(1);
+      expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+      expect(setMultiAgentModeHintText(null, path)).toEqual({ ok: true, changed: true });
+      expect(readFileSync(path, "utf8")).not.toContain("multi_agent_mode_hint_text");
+    }
+  });
+
+  test("reader, update, and clear use semantic equality for escaped quoted hint keys", () => {
+    const path = fixtureConfig('[features.multi_agent_v2]\n"multi_agent_mode_hint_\\u0074ext" = "old"\nenabled = true\n');
+    expect(getMultiAgentModeHintText(path)).toBe("old");
+
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    const updated = readFileSync(path, "utf8");
+    const parsedUpdated = Bun.TOML.parse(updated) as { features: { multi_agent_v2: Record<string, unknown> } };
+    expect(parsedUpdated.features.multi_agent_v2.multi_agent_mode_hint_text).toBe(PRESET);
+    expect(Object.keys(parsedUpdated.features.multi_agent_v2).filter(key => key === "multi_agent_mode_hint_text")).toHaveLength(1);
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+
+    expect(setMultiAgentModeHintText(null, path)).toEqual({ ok: true, changed: true });
+    const cleared = readFileSync(path, "utf8");
+    const parsedCleared = Bun.TOML.parse(cleared) as { features: { multi_agent_v2: Record<string, unknown> } };
+    expect(parsedCleared.features.multi_agent_v2.multi_agent_mode_hint_text).toBeUndefined();
+    expect(getMultiAgentModeHintText(path)).toBe(null);
+  });
+
+  test("writer refuses dotted V2 definitions without changing config bytes", () => {
+    for (const original of [
+      "features.multi_agent_v2.enabled = true\n",
+      "[features]\nmulti_agent_v2.enabled = true\n",
+      '"features"."multi_agent_v2"."enabled" = true\n',
+    ]) {
+      const path = fixtureConfig(original);
+      expect(setMultiAgentModeHintText(PRESET, path)).toMatchObject({ ok: false });
+      expect(readFileSync(path, "utf8")).toBe(original);
+    }
+  });
+
+  test("dotted-looking prose inside a multi-line value does not block a supported table", () => {
+    const path = fixtureConfig('[features.multi_agent_v2]\nenabled = true\nother = """\nfeatures.multi_agent_v2.enabled = false\n"""\n');
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("same-named multi-line key in an unrelated table does not block the V2 writer", () => {
+    const path = fixtureConfig('[unrelated]\nmulti_agent_mode_hint_text = """\nleave me alone\n"""\n\n[features.multi_agent_v2]\nenabled = true\n');
+    expect(setMultiAgentModeHintText(PRESET, path)).toEqual({ ok: true, changed: true });
+    expect(readFileSync(path, "utf8")).toContain('multi_agent_mode_hint_text = """\nleave me alone\n"""');
+    expect(getMultiAgentModeHintText(path)).toBe(PRESET);
+  });
+
+  test("inline V2 after bracket-shaped multiline prose is read and fails closed on edit", () => {
+    const original = '[features]\nother = """\n[prose]\n"""\nmulti_agent_v2 = { enabled = true, multi_agent_mode_hint_text = "inline" }\n';
+    const path = fixtureConfig(original);
+    expect(getMultiAgentModeHintText(path)).toBe("inline");
+    expect(setMultiAgentModeHintText(PRESET, path)).toMatchObject({ ok: false });
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+
+  test("dedicated key after bracket-shaped multiline prose fails closed without duplication", () => {
+    const original = '[features.multi_agent_v2]\nother = """\n[prose]\n"""\nmulti_agent_mode_hint_text = "old"\n';
+    const path = fixtureConfig(original);
+    expect(getMultiAgentModeHintText(path)).toBe("old");
+    expect(setMultiAgentModeHintText(PRESET, path)).toMatchObject({ ok: false });
+    expect(setMultiAgentModeHintText(null, path)).toMatchObject({ ok: false });
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+});
+
+describe("multi_agent_mode_hint_text native capability probe", () => {
+  test("clear bypasses an unsupported runtime probe so invalid old config can recover", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-mode-hint-clear-"));
+    const command = join(dir, "codex-old");
+    writeFileSync(command, native(false));
+    selectRuntime(command);
+    const path = fixtureConfig('[features.multi_agent_v2]\nmulti_agent_mode_hint_text = "new-only"\n');
+    try {
+      expect(setMultiAgentModeHintText(null, path)).toEqual({ ok: true, changed: true });
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe cache tracks in-place replacement and selected command changes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-mode-hint-cache-"));
+    const supported = join(dir, "codex-supported");
+    const unsupported = join(dir, "codex-unsupported");
+    writeFileSync(supported, native(true));
+    writeFileSync(unsupported, native(false));
+    try {
+      selectRuntime(supported, "1");
+      expect(probeCodexSupportsModeHint()).toBe(true);
+      writeFileSync(supported, native(false));
+      expect(probeCodexSupportsModeHint()).toBe(false);
+      writeFileSync(supported, native(true));
+      expect(probeCodexSupportsModeHint()).toBe(true);
+      selectRuntime(unsupported, "1");
+      expect(probeCodexSupportsModeHint()).toBe(false);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe ignores unrelated PATH installations and script wrappers", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-mode-hint-selected-"));
+    const selected = join(dir, "selected-old");
+    const unrelated = join(dir, "unrelated-bin");
+    mkdirSync(unrelated);
+    writeFileSync(selected, native(false));
+    writeFileSync(join(unrelated, "codex.opencodex-real"), native(true));
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${unrelated}${delimiter}${oldPath ?? ""}`;
+    try {
+      selectRuntime(selected);
+      expect(probeCodexSupportsModeHint()).toBe(false);
+      const wrapperOnly = join(dir, "wrapper-only.cmd");
+      writeFileSync(wrapperOnly, "@echo off\r\nnode codex.js %*\r\n");
+      selectRuntime(wrapperOnly);
+      expect(probeCodexSupportsModeHint()).toBe(null);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe resolves the selected Windows npm wrapper's platform package", () => {
+    const prefix = mkdtempSync(join(tmpdir(), "ocx-mode-hint-win-"));
+    const command = join(prefix, "codex.cmd");
+    const pkg = join(prefix, "node_modules", "@openai", "codex-win32-x64");
+    const binary = join(pkg, "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe");
+    mkdirSync(dirname(binary), { recursive: true });
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "test" }));
+    writeFileSync(binary, native(true, true));
+    writeFileSync(command, "@echo off\r\nnode node_modules\\@openai\\codex\\bin\\codex.js %*\r\n");
+    try {
+      selectRuntime(command);
+      expect(probeCodexSupportsModeHint()).toBe(true);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe resolves an exact bare PATH command without scanning peer installs", () => {
+    const prefix = mkdtempSync(join(tmpdir(), "ocx-mode-hint-bare-"));
+    const binDir = join(prefix, "bin");
+    const js = join(prefix, "node_modules", "@openai", "codex", "bin", "codex.js");
+    const pkg = join(prefix, "node_modules", "@openai", "codex-darwin-arm64");
+    const binary = join(pkg, "vendor", "aarch64-apple-darwin", "bin", "codex");
+    mkdirSync(dirname(js), { recursive: true });
+    mkdirSync(dirname(binary), { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(js, "#!/usr/bin/env node\n");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "test" }));
+    writeFileSync(binary, native(true));
+    symlinkSync(js, join(binDir, "codex.opencodex-real"));
+    const oldPath = process.env.PATH;
+    process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+    try {
+      selectRuntime("codex.opencodex-real");
+      expect(probeCodexSupportsModeHint()).toBe(true);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe cache distinguishes different PATH targets for the same bare command", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-mode-hint-path-swap-"));
+    const supportedDir = join(root, "supported");
+    const oldDir = join(root, "old");
+    const command = "codex.opencodex-real";
+    mkdirSync(supportedDir);
+    mkdirSync(oldDir);
+    writeFileSync(join(supportedDir, command), native(true));
+    writeFileSync(join(oldDir, command), native(false));
+    const oldPath = process.env.PATH;
+    try {
+      process.env.PATH = `${supportedDir}${delimiter}${oldPath ?? ""}`;
+      selectRuntime(command, "same-version");
+      expect(probeCodexSupportsModeHint()).toBe(true);
+      process.env.PATH = `${oldDir}${delimiter}${oldPath ?? ""}`;
+      selectRuntime(command, "same-version");
+      expect(probeCodexSupportsModeHint()).toBe(false);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("a bare selected command is resolved from PATH, never a same-named cwd file", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-mode-hint-cwd-shadow-"));
+    const cwd = join(root, "cwd");
+    const bin = join(root, "bin");
+    const command = "codex-cwd-shadow";
+    mkdirSync(cwd);
+    mkdirSync(bin);
+    writeFileSync(join(cwd, command), native(true));
+    writeFileSync(join(bin, command), native(false));
+    const oldCwd = process.cwd();
+    const oldPath = process.env.PATH;
+    process.chdir(cwd);
+    process.env.PATH = `${bin}${delimiter}${oldPath ?? ""}`;
+    try {
+      selectRuntime(command);
+      expect(probeCodexSupportsModeHint()).toBe(false);
+    } finally {
+      process.chdir(oldCwd);
+      if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
+
+  test("probe follows only the selected OCX shim's recorded backing runtime", () => {
+    const prefix = mkdtempSync(join(tmpdir(), "ocx-mode-hint-shim-"));
+    const ocxHome = join(prefix, "ocx-home");
+    const shim = join(prefix, "bin", "codex");
+    const backing = join(prefix, "node_modules", "@openai", "codex", "bin", "codex.js");
+    const pkg = join(prefix, "node_modules", "@openai", "codex-darwin-arm64");
+    const binary = join(pkg, "vendor", "aarch64-apple-darwin", "bin", "codex");
+    mkdirSync(dirname(shim), { recursive: true });
+    mkdirSync(dirname(backing), { recursive: true });
+    mkdirSync(dirname(binary), { recursive: true });
+    mkdirSync(ocxHome, { recursive: true });
+    writeFileSync(shim, `#!/bin/sh\nexec '${backing}' "$@"\n`);
+    writeFileSync(backing, "#!/usr/bin/env node\n");
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@openai/codex", version: "test" }));
+    writeFileSync(binary, native(true));
+    writeFileSync(join(ocxHome, "codex-shim.json"), JSON.stringify({
+      wrappers: [{ wrapperPath: shim, originalPath: shim, backupPath: backing }],
+    }));
+    const oldHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = ocxHome;
+    try {
+      selectRuntime(shim);
+      expect(probeCodexSupportsModeHint()).toBe(true);
+    } finally {
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldHome;
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  });
 });
 
 describe("thread-limit-preserving v1/v2 transition", () => {
@@ -543,6 +1081,22 @@ describe("config-surface parity: agents.enabled, max_depth, subagent_developer_i
     expect(readFileSync(path, "utf8")).toContain("enabled = true");
   });
 
+  test("subagent instructions support escaped quoted dedicated-table keys", () => {
+    const path = fixtureConfig('[features.multi_agent_v2]\n"subagent_developer_instruc\\u0074ions" = "old"\nenabled = true\n');
+    expect(getSubagentDeveloperInstructions(path)).toBe("old");
+
+    expect(setSubagentDeveloperInstructions("new", path)).toEqual({ ok: true, changed: true });
+    const updated = readFileSync(path, "utf8");
+    const parsedUpdated = Bun.TOML.parse(updated) as { features: { multi_agent_v2: Record<string, unknown> } };
+    expect(parsedUpdated.features.multi_agent_v2.subagent_developer_instructions).toBe("new");
+    expect(Object.keys(parsedUpdated.features.multi_agent_v2).filter(key => key === "subagent_developer_instructions")).toHaveLength(1);
+
+    expect(setSubagentDeveloperInstructions(null, path)).toEqual({ ok: true, changed: true });
+    const parsedCleared = Bun.TOML.parse(readFileSync(path, "utf8")) as { features: { multi_agent_v2: Record<string, unknown> } };
+    expect(parsedCleared.features.multi_agent_v2.subagent_developer_instructions).toBeUndefined();
+    expect(getSubagentDeveloperInstructions(path)).toBe(null);
+  });
+
   test("key name is emitted character-for-character (upstream deny_unknown_fields)", () => {
     const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
     setSubagentDeveloperInstructions("x", path);
@@ -742,12 +1296,14 @@ describe("management API parity surface for the WP2 keys", () => {
     const oldOcxHome = process.env.OPENCODEX_HOME;
     process.env.CODEX_HOME = dirname(path);
     process.env.OPENCODEX_HOME = mkdtempSync(join(tmpdir(), "ocx-api-parity-"));
+    installModeHintRuntime(true);
     const toggle = (enabled: boolean) => {
       const current = readFileSync(path, "utf8");
       writeFileSync(path, current.replace(/^enabled\s*=\s*(?:true|false)$/m, `enabled = ${enabled}`));
     };
     return run(path, { toggleCodexMultiAgentV2: toggle, createManagementConvergeCodex: catalogConvergenceFactory() })
       .finally(() => {
+        resetCodexRuntimeResolveCacheForTests();
         if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
         if (oldOcxHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = oldOcxHome;
       });
@@ -765,6 +1321,7 @@ describe("management API parity surface for the WP2 keys", () => {
         agentsEnabled: null,
         agentsMaxDepth: 2,
         subagentDeveloperInstructions: null,
+        multiAgentModeHintText: null,
         agentsMaxDepthAppliesWhenV2Disabled: true,
       });
       const v2Path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
@@ -785,6 +1342,36 @@ describe("management API parity surface for the WP2 keys", () => {
       const instructions = await handleManagementAPI(put({ subagentDeveloperInstructions: "be thorough" }), new URL("http://localhost/api/v2"), config, deps);
       expect(instructions?.status).toBe(200);
       expect(getSubagentDeveloperInstructions(path)).toBe("be thorough");
+      const hint = await handleManagementAPI(put({ multiAgentModeHintText: "Proactive multi-agent delegation is active." }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hint?.status).toBe(200);
+      expect(await hint?.json()).toMatchObject({ multiAgentModeHintText: "Proactive multi-agent delegation is active." });
+      expect(getMultiAgentModeHintText(path)).toBe("Proactive multi-agent delegation is active.");
+      const cleared = await handleManagementAPI(put({ multiAgentModeHintText: null }), new URL("http://localhost/api/v2"), config, deps);
+      expect(cleared?.status).toBe(200);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    });
+  });
+
+  test("unsupported mode-hint preflight leaves a combined request entirely unchanged", async () => {
+    await withConfig("[features.multi_agent_v2]\nenabled = false\n", async (path, deps) => {
+      installModeHintRuntime(false);
+      const originalToml = readFileSync(path, "utf8");
+      const localConfig = { providers: [], multiAgentMode: "v1" as const };
+      let toggles = 0;
+      const response = await handleManagementAPI(
+        put({ enabled: true, multiAgentMode: "v2", multiAgentModeHintText: "custom" }),
+        new URL("http://localhost/api/v2"),
+        localConfig as never,
+        { ...deps, toggleCodexMultiAgentV2: () => { toggles++; } },
+      );
+      expect(response?.status).toBe(502);
+      expect(await response?.json()).toEqual({
+        error: "writing multiAgentModeHintText failed: installed Codex does not support multi_agent_mode_hint_text; update Codex first",
+      });
+      expect(toggles).toBe(0);
+      expect(readFileSync(path, "utf8")).toBe(originalToml);
+      expect(isMultiAgentV2Enabled(path)).toBe(false);
+      expect(localConfig.multiAgentMode).toBe("v1");
     });
   });
 
@@ -795,6 +1382,15 @@ describe("management API parity surface for the WP2 keys", () => {
       const cleared = await handleManagementAPI(put({ subagentDeveloperInstructions: null }), new URL("http://localhost/api/v2"), config, deps);
       expect(await cleared?.json()).toMatchObject({ subagentDeveloperInstructions: null });
       expect(getSubagentDeveloperInstructions(path)).toBe(null);
+      // multiAgentModeHintText rejects empty/whitespace strings (present empty string would
+      // suppress even the Ultra-derived Proactive message upstream).
+      const hintEmpty = await handleManagementAPI(put({ multiAgentModeHintText: "" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintEmpty?.status).toBe(400);
+      const hintSpace = await handleManagementAPI(put({ multiAgentModeHintText: "   " }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintSpace?.status).toBe(400);
+      const hintSet = await handleManagementAPI(put({ multiAgentModeHintText: "custom" }), new URL("http://localhost/api/v2"), config, deps);
+      expect(hintSet?.status).toBe(200);
+      expect(getMultiAgentModeHintText(path)).toBe("custom");
     });
   });
 
@@ -806,6 +1402,7 @@ describe("management API parity surface for the WP2 keys", () => {
         { agentsMaxDepth: 1.5 },
         { agentsMaxDepth: 2_147_483_648 },
         { subagentDeveloperInstructions: 42 },
+        { multiAgentModeHintText: 42 },
       ]) {
         const res = await handleManagementAPI(put(payload), new URL("http://localhost/api/v2"), config, deps);
         expect(res?.status).toBe(400);
@@ -997,6 +1594,55 @@ describe("cli surface", () => {
     expect(out).toContain("agents.enabled: false");
     expect(out).toContain("agents.max_depth: 2 (V1-only — ignored while multi_agent_v2 is enabled)");
     expect(out).toContain("subagent_developer_instructions: (unset — children inherit)");
+    expect(out).toContain("multi_agent_mode_hint_text: (unset — effort-derived policy: ultra=proactive, else explicit)");
+  });
+
+  test("mode-hint writes, echoes, and clears via --clear", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    installModeHintRuntime(true);
+    const logs: string[] = [];
+    const log = { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } };
+    try {
+      expect(await cmdV2(["mode-hint", "Proactive multi-agent delegation is active."], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe("Proactive multi-agent delegation is active.");
+      expect(await cmdV2(["status"], { log })).toBe(0);
+      expect(logs.join("\n")).toContain('multi_agent_mode_hint_text: "Proactive multi-agent delegation is active."');
+      expect(await cmdV2(["mode-hint", "--clear"], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
+  test("mode-hint preserves raw whitespace in nonblank hints and rejects blank/missing args", async () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = true\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    installModeHintRuntime(true);
+    const logs: string[] = [];
+    const log = { log: (m?: unknown) => { logs.push(String(m)); }, error: (m?: unknown) => { logs.push(String(m)); } };
+    try {
+      // Raw leading/trailing whitespace is preserved, matching the API contract.
+      expect(await cmdV2(["mode-hint", "  spaced hint  "], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe("  spaced hint  ");
+      expect(await cmdV2(["mode-hint", "- Delegate independent work early"], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe("- Delegate independent work early");
+      // A present whitespace-only value is rejected (API rejects it with 400).
+      expect(await cmdV2(["mode-hint", "   "], { log })).toBe(1);
+      expect(getMultiAgentModeHintText(path)).toBe("- Delegate independent work early");
+      // A missing argument is a usage error, never a destructive clear.
+      expect(await cmdV2(["mode-hint"], { log })).toBe(1);
+      expect(getMultiAgentModeHintText(path)).toBe("- Delegate independent work early");
+      // Explicit --clear still removes the hint.
+      expect(await cmdV2(["mode-hint", "--clear"], { log })).toBe(0);
+      expect(getMultiAgentModeHintText(path)).toBe(null);
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+    }
   });
 
   test("status renders empty-string instructions distinctly from unset", async () => {
@@ -1133,6 +1779,91 @@ describe("mock-max wire clamp (nativeEffortClamp)", () => {
 });
 
 describe("3-state multi-agent mode", () => {
+  test("observed catalog transforms ignore ambient V2 changes and leave evidence rows untouched", () => {
+    const path = fixtureConfig("[features.multi_agent_v2]\nenabled = false\n");
+    const oldCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(path);
+    try {
+      const buildObserved = () => buildCatalogEntriesFromObservedState({
+        template: template(),
+        gptSlugs: ["gpt-5.5"],
+        goModels: [],
+        featured: [],
+        wsEnabled: false,
+        multiAgentMode: "default",
+        exactComboSlugs: new Set(),
+        accountSelectors: [],
+        suppressedBareNativeSlugs: new Set(),
+        disabledNativeAccountSlugs: new Set(),
+        multiAgentV2Enabled: true,
+      });
+      const catalogModels = [{
+        ...template(),
+        display_name: "GPT-5.5 observed",
+        supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+      }];
+      const routedEntries = [{
+        ...template(),
+        slug: "external/model",
+        display_name: "External model",
+        description: "Routed via opencodex → external (external).",
+        supported_reasoning_levels: [{ effort: "medium", description: "medium" }],
+      }];
+      const accountBoundEntries = [{
+        ...template(),
+        slug: "team/gpt-5.4",
+        display_name: "team / GPT-5.4",
+        opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+        service_tier: "fast",
+      }];
+      const originalCatalogModels = structuredClone(catalogModels);
+      const originalRoutedEntries = structuredClone(routedEntries);
+      const originalAccountBoundEntries = structuredClone(accountBoundEntries);
+      const mergeObserved = () => mergeCatalogEntriesFromObservedState({
+        catalogModels,
+        baselineCatalogModels: [],
+        routedEntries,
+        baseline: new Map([["gpt-5.5", 1]]),
+        featured: [],
+        wsEnabled: false,
+        template: template(),
+        disabledModels: new Set(),
+        selectedModelsByProvider: new Map(),
+        gatheredProviderNames: new Set(),
+        degradedProviderNames: new Set(),
+        legacyCustomModelSlugs: new Set(),
+        multiAgentMode: "default",
+        multiAgentV2Enabled: true,
+        exactComboSlugs: new Set(),
+        hasPhysicalComboProvider: false,
+        includeNativeOpenAi: true,
+        accountBoundEntries,
+        policy: {
+          nativeBackfillSlugs: ["gpt-5.5"],
+          unsupportedNativeEntries: "preserve",
+          warningPolicy: "suppress",
+        },
+      });
+
+      const builtBefore = buildObserved();
+      const mergedBefore = mergeObserved();
+      writeFileSync(path, "[features.multi_agent_v2]\nenabled = true\n");
+      const builtAfter = buildObserved();
+      const mergedAfter = mergeObserved();
+
+      expect(builtAfter).toEqual(builtBefore);
+      expect(mergedAfter).toEqual(mergedBefore);
+      expect(builtBefore.find(entry => entry.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
+      expect(mergedBefore.find(entry => entry.slug === "gpt-5.5")?.multi_agent_version).toBe("v2");
+      expect(catalogModels).toEqual(originalCatalogModels);
+      expect(routedEntries).toEqual(originalRoutedEntries);
+      expect(accountBoundEntries).toEqual(originalAccountBoundEntries);
+    } finally {
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
+    }
+  });
+
   test("mode v1: ALL entries get multi_agent_version = v1 (overrides upstream pins)", () => {
     const entries = buildCatalogEntries(template(), ["gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5"], [], [], false, "v1");
     for (const e of entries) {

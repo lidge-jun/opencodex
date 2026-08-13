@@ -3,6 +3,7 @@ import { saveConfigPreservingClaudeCode } from "../config";
 import { isCodexAccountGenerationLive, readCodexAccountRecord } from "./account-store";
 import { codexAccountLogLabel } from "./account-label";
 import { isCodexAccountPaused } from "./account-pause";
+import { clearCodexAccountPin, codexAccountPriorityLookup, pinnedCodexAccountId } from "./account-priority";
 import { isCodexAccountUsable, type CodexAccountUsabilityOptions } from "./account-usability";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "./account-runtime-state";
 import {
@@ -14,8 +15,10 @@ import {
   peekRoundRobinAccount,
   pickRoundRobinAccount,
   seedPoolRotationAccount,
+  selectPriorityTier,
 } from "./pool-rotation";
 import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota } from "./quota";
+import { isThirtyDayOnlyCodexPlan } from "./plan";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "./main-account";
 import { isSelectableCodexPoolAccount } from "./account-id";
 import type { OcxConfig } from "../types";
@@ -312,10 +315,9 @@ function deleteScopedHealth(accountId: string, scope: CodexQuotaScope): void {
 export function computeCodexUsageScore(quota: {
   weeklyPercent?: number;
   monthlyPercent?: number;
-} | null, plan?: string | null): number {
+} | null, plan?: unknown): number {
   if (!quota) return CODEX_UNKNOWN_USAGE_SCORE;
-  const normalizedPlan = plan?.trim().toLowerCase();
-  if (normalizedPlan === "go" || normalizedPlan === "free") {
+  if (isThirtyDayOnlyCodexPlan(plan)) {
     return typeof quota.monthlyPercent === "number" && Number.isFinite(quota.monthlyPercent)
       ? quota.monthlyPercent
       : CODEX_UNKNOWN_USAGE_SCORE;
@@ -904,7 +906,7 @@ function getEligiblePoolAccounts(
   now = Date.now(),
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
-): string[] {
+): readonly string[] {
   const ids = (config.codexAccounts ?? [])
     .filter(account => isSelectableCodexPoolAccount(account)
       && account.id !== excludeId
@@ -926,7 +928,15 @@ function getEligiblePoolAccounts(
   ) {
     ids.unshift(MAIN_CODEX_ACCOUNT_ID);
   }
-  return ids;
+  // Single choke point for selection order: every strategy, failover, and preview
+  // reaches the pool through here, so tiering applies once rather than per picker.
+  // Eligibility above is unchanged — this only narrows an already-eligible list.
+  return selectPriorityTier(
+    ids,
+    codexAccountPriorityLookup(config),
+    id => hasCodexQuotaHeadroom(config, id),
+    pinnedCodexAccountId(config),
+  );
 }
 
 function listEligibleCodexAccountIds(
@@ -934,7 +944,7 @@ function listEligibleCodexAccountIds(
   now: number,
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
-): string[] {
+): readonly string[] {
   return getEligiblePoolAccounts(config, undefined, now, quotaScope, selectionOptions);
 }
 
@@ -942,11 +952,20 @@ function stickyLimitForConfig(config: OcxConfig): number {
   return normalizeAccountPoolStickyLimit(config.accountPoolStickyLimit);
 }
 
-function isActiveUnderFillFirstThreshold(config: OcxConfig, accountId: string): boolean {
+/**
+ * Whether an account still has quota to give under the auto-switch threshold.
+ *
+ * Fill-first and the priority tier filter share this predicate, and share both of
+ * its escape hatches. A disabled threshold means only health, pause, and reauth
+ * may drain an account; unknown usage is a guess, so it must neither force
+ * fill-first off the active account nor drain a tier that was simply never
+ * primed. A genuinely exhausted account 429s into cooldown and leaves
+ * eligibility on its own.
+ */
+function hasCodexQuotaHeadroom(config: OcxConfig, accountId: string): boolean {
   const threshold = config.autoSwitchThreshold ?? 80;
   if (threshold <= 0) return true;
   const usage = computeCodexUsageScore(getAccountQuota(accountId), getPoolAccountPlan(config, accountId));
-  // Unknown usage must not force fill-first to abandon the active account.
   if (isUnknownUsage(usage)) return true;
   return usage < threshold;
 }
@@ -965,7 +984,7 @@ function pickFillFirstCodexAccount(
   if (eligible.length === 0) return null;
 
   const active = getEffectiveActiveCodexAccountId(config);
-  if (active && eligible.includes(active) && isActiveUnderFillFirstThreshold(config, active)) {
+  if (active && eligible.includes(active) && hasCodexQuotaHeadroom(config, active)) {
     return active;
   }
 
@@ -976,7 +995,7 @@ function pickFillFirstCodexAccount(
 function pickNextFillFirstCodexAccount(
   config: OcxConfig,
   afterId: string | null,
-  eligible = listEligibleCodexAccountIds(config, Date.now()),
+  eligible: readonly string[] = listEligibleCodexAccountIds(config, Date.now()),
   _now = Date.now(),
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
@@ -985,7 +1004,7 @@ function pickNextFillFirstCodexAccount(
   if (!afterId) {
     // Prefer an under-threshold account when starting with no active cursor.
     for (const id of ordered) {
-      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+      if (hasCodexQuotaHeadroom(config, id)) return id;
     }
     return ordered[0] ?? null;
   }
@@ -1000,7 +1019,7 @@ function pickNextFillFirstCodexAccount(
   const startIdx = stableAll.indexOf(afterId);
   if (startIdx < 0) {
     for (const id of ordered) {
-      if (isActiveUnderFillFirstThreshold(config, id)) return id;
+      if (hasCodexQuotaHeadroom(config, id)) return id;
     }
     return ordered[0] ?? null;
   }
@@ -1011,7 +1030,7 @@ function pickNextFillFirstCodexAccount(
     const candidate = stableAll[(startIdx + step) % stableAll.length]!;
     if (!eligible.includes(candidate)) continue;
     if (!fallback) fallback = candidate;
-    if (isActiveUnderFillFirstThreshold(config, candidate)) return candidate;
+    if (hasCodexQuotaHeadroom(config, candidate)) return candidate;
   }
   return fallback ?? ordered[0] ?? null;
 }
@@ -1097,16 +1116,11 @@ function pickLowerUsageAccount(
   return best;
 }
 
-export function pickLowestUsageCodexAccount(
-  config: OcxConfig,
-  excludeId?: string,
-  now = Date.now(),
-  quotaScope?: CodexQuotaScope,
-  selectionOptions?: CodexAccountUsabilityOptions,
-): string | null {
+/** Coolest account in an already-selected candidate list; first index wins ties. */
+function pickLowestUsageAmong(config: OcxConfig, ids: readonly string[]): string | null {
   let best: string | null = null;
   let bestUsage = Number.POSITIVE_INFINITY;
-  for (const id of getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions)) {
+  for (const id of ids) {
     const usage = computeCodexUsageScore(getAccountQuota(id), getPoolAccountPlan(config, id));
     if (usage < bestUsage) {
       best = id;
@@ -1114,6 +1128,16 @@ export function pickLowestUsageCodexAccount(
     }
   }
   return best;
+}
+
+export function pickLowestUsageCodexAccount(
+  config: OcxConfig,
+  excludeId?: string,
+  now = Date.now(),
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  return pickLowestUsageAmong(config, getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions));
 }
 
 /**
@@ -1129,12 +1153,16 @@ export function pickAlternateCodexAccount(
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | null {
   const strategy = normalizeAccountPoolStrategy(config.accountPoolStrategy);
+  // The exclusion is passed into eligibility rather than post-filtered off its
+  // result: when the excluded account is the only healthy member of the top
+  // tier, the tier walk must be free to descend instead of selecting that tier
+  // and then handing back an empty list.
   if (strategy === "round-robin") {
-    const eligible = listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions).filter(id => id !== excludeId);
+    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
     return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config));
   }
   if (strategy === "fill-first") {
-    const eligible = listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions).filter(id => id !== excludeId);
+    const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
     return pickNextFillFirstCodexAccount(config, excludeId, eligible, now, selectionOptions);
   }
   return pickLowestUsageCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
@@ -1146,6 +1174,17 @@ export function getEffectiveActiveCodexAccountId(config: OcxConfig): string | un
 }
 
 /**
+ * Whether the account routing is currently on is there because an operator asked
+ * for it, rather than because a strategy landed on it. Surfaces read this instead
+ * of comparing the stored pin themselves, which would report a pin that a later
+ * automatic pick has already moved past.
+ */
+export function isEffectiveCodexAccountPinned(config: OcxConfig): boolean {
+  const pinned = pinnedCodexAccountId(config);
+  return pinned !== undefined && pinned === getEffectiveActiveCodexAccountId(config);
+}
+
+/**
  * Automatic strategy / failover cursor only — never mutates `config.activeCodexAccountId`
  * so an unrelated `saveConfig` cannot persist transient rotation as operator selection.
  */
@@ -1153,10 +1192,22 @@ function rememberActiveCodexAccount(_config: OcxConfig, accountId: string): void
   runtimeActiveCodexAccountId = accountId;
 }
 
+/**
+ * End the manual pin when routing moves to a different account. Returns whether
+ * the pin changed so the caller can fold it into a write it was already making.
+ */
+function releaseCodexAccountPinFor(config: OcxConfig, accountId: string): boolean {
+  const pinned = pinnedCodexAccountId(config);
+  if (pinned === undefined || pinned === accountId) return false;
+  clearCodexAccountPin(config);
+  return true;
+}
+
 /** Persist operator (or quota-strategy) active selection to config + disk. */
 function setActiveCodexAccount(config: OcxConfig, accountId: string): void {
   runtimeActiveCodexAccountId = undefined;
-  if (config.activeCodexAccountId === accountId) return;
+  const releasedPin = releaseCodexAccountPinFor(config, accountId);
+  if (config.activeCodexAccountId === accountId && !releasedPin) return;
   config.activeCodexAccountId = accountId;
   saveConfigPreservingClaudeCode(config);
 }
@@ -1167,6 +1218,10 @@ function promoteActiveCodexAccount(config: OcxConfig, accountId: string): void {
     setActiveCodexAccount(config, accountId);
     return;
   }
+  // Runtime-only, like the cursor itself: a caller that persists (pause, delete)
+  // saves this release with its own write; a transient failover does not, so the
+  // pin survives a restart that also clears the failure history behind it.
+  releaseCodexAccountPinFor(config, accountId);
   rememberActiveCodexAccount(config, accountId);
 }
 
@@ -1185,6 +1240,10 @@ export function reconcileCodexActiveAfterExclusion(
   if (config.activeCodexAccountId === excludedAccountId) {
     config.activeCodexAccountId = undefined;
   }
+  // Excluding an account revokes any manual pin on it even when it was not the
+  // effective active — otherwise a paused account keeps acting as a tier ceiling,
+  // suppressing every higher-ordered account while being unusable itself.
+  clearCodexAccountPin(config, excludedAccountId);
   if (!wasEffective) return getEffectiveActiveCodexAccountId(config) ?? null;
 
   runtimeActiveCodexAccountId = undefined;
@@ -1195,6 +1254,54 @@ export function reconcileCodexActiveAfterExclusion(
 
 function isUnknownUsage(usage: number): boolean {
   return usage >= CODEX_UNKNOWN_USAGE_SCORE;
+}
+
+/**
+ * Move an unbound request back up when a higher tier regains headroom — the
+ * weekly-reset case. Returns null when nothing should change.
+ *
+ * Downward moves are deliberately left to {@link applyQuotaAutoSwitch}: this only
+ * fires when the tier filter has already excluded `active`, and only toward a
+ * tier that strictly outranks it. Threads bound by affinity never reach here.
+ */
+function pickPriorityPreemption(
+  config: OcxConfig,
+  active: string,
+  now: number,
+  quotaScope?: CodexQuotaScope,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): string | null {
+  const eligible = getEligiblePoolAccounts(config, undefined, now, quotaScope, selectionOptions);
+  if (eligible.length === 0 || eligible.includes(active)) return null;
+  const pinned = pinnedCodexAccountId(config);
+  // A live pin already lowered the tier ceiling; never preempt past an explicit
+  // operator choice. Same liveness test the tier filter applies, so preview and
+  // resolve agree even before the pin is garbage-collected.
+  if (pinned !== undefined && eligible.includes(pinned) && hasCodexQuotaHeadroom(config, pinned)) return null;
+  const priorityOf = codexAccountPriorityLookup(config);
+  if (priorityOf(eligible[0]!) <= priorityOf(active)) return null;
+  // Members without headroom are in the tier only because a sibling has some;
+  // picking one would hand the request straight back to a drained account.
+  return pickLowestUsageAmong(config, eligible.filter(id => hasCodexQuotaHeadroom(config, id)));
+}
+
+/**
+ * Release a pin whose account is durably drained. "Use this account now" ends
+ * when the account crosses the auto-switch threshold or stops being selectable
+ * at all — never on a transient cooldown or soft-avoid, which it recovers from
+ * on its own. Clearing the pin also removes the condition, so this writes at
+ * most once per pin.
+ */
+function releaseDrainedCodexAccountPin(config: OcxConfig): void {
+  const pinned = pinnedCodexAccountId(config);
+  if (pinned === undefined) return;
+  const drained = !isCodexAccountUsable(config, pinned)
+    || isAccountNeedsReauth(pinned)
+    || isCodexAccountPaused(config, pinned)
+    || !hasCodexQuotaHeadroom(config, pinned);
+  if (!drained) return;
+  clearCodexAccountPin(config);
+  saveConfigPreservingClaudeCode(config);
 }
 
 function applyQuotaAutoSwitch(
@@ -1233,12 +1340,19 @@ function applyFailureFailover(
   config: OcxConfig,
   active: string,
   now: number,
+  quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string {
   if (!shouldFailover(config, active, now)) return active;
-  const best = pickAlternateCodexAccount(config, active, now, undefined, selectionOptions);
+  const best = pickAlternateCodexAccount(config, active, now, quotaScope, selectionOptions);
   if (best) {
-    promoteActiveCodexAccount(config, best);
+    // The scope still routes away from the failing account — that is this request's
+    // own decision — but an independent one must not persist a new shared active
+    // account. recordCodexUpstreamOutcome only suppresses the promotion it makes at
+    // the moment of the failure; the streak outlives the soft avoid, so a later
+    // scoped resolve reaches here with the streak still tripped and would otherwise
+    // move the shared cursor after all.
+    if (!isIndependentCodexQuotaScope(quotaScope)) promoteActiveCodexAccount(config, best);
     return best;
   }
   return active;
@@ -1328,6 +1442,7 @@ export function previewCodexAccountForRequest(
     ) return active;
     else return null;
   }
+  active = pickPriorityPreemption(config, active, now, quotaScope, selectionOptions) ?? active;
 
   const threshold = config.autoSwitchThreshold ?? 80;
   if (threshold > 0) {
@@ -1357,6 +1472,12 @@ export function resolveCodexAccountForThreadDetailed(
   quotaScope?: CodexQuotaScope,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): CodexThreadResolution {
+  // Retiring a spent manual pin is independent of affinity: an existing thread
+  // keeps its account below, but the operator's tier ceiling must not silently
+  // revive after quota resets. Independent model scopes must never persist a
+  // change to shared routing state.
+  if (!isIndependentCodexQuotaScope(quotaScope)) releaseDrainedCodexAccountPin(config);
+
   const entry = threadId ? getThreadAffinity(threadId, quotaScope) : undefined;
   if (threadId && entry) {
     if (isThreadAffinityExpired(entry, now)) {
@@ -1430,8 +1551,19 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "none" };
     }
   }
+  // Before applyQuotaAutoSwitch: its sync disk write would otherwise persist a
+  // move inside the drained tier that preemption immediately overrides.
+  const preempted = pickPriorityPreemption(config, active, now, quotaScope, selectionOptions);
+  if (preempted) {
+    // Runtime-only, like every other automatic pick: config.activeCodexAccountId
+    // stays the operator's selection and getEffectiveActiveCodexAccountId is what
+    // surfaces this to the API and dashboard. An independent quota group must not
+    // move the shared cursor at all — its ordering decision is its own.
+    if (!isIndependentCodexQuotaScope(quotaScope)) rememberActiveCodexAccount(config, preempted);
+    active = preempted;
+  }
   active = applyQuotaAutoSwitch(config, active, now, quotaScope, selectionOptions);
-  active = applyFailureFailover(config, active, now, selectionOptions);
+  active = applyFailureFailover(config, active, now, quotaScope, selectionOptions);
   if (!isCodexAccountUsable(config, active, selectionOptions)) {
     return hasConfiguredPoolAccount(config, active, selectionOptions)
       ? { status: "selected", accountId: active }
@@ -1634,16 +1766,21 @@ export function recordCodexUpstreamOutcome(
     });
     if (!meta.fixedAccount) {
       clearThreadAccountMapForAccount(accountId);
-      notePoolRotationFailure(POOL_KEY_CODEX, accountId);
-      const effectiveActive = getEffectiveActiveCodexAccountId(config);
-      if (effectiveActive === accountId) {
-        // Same-request 429 retry already picked via excludeAccountId — reuse it so
-        // round-robin does not advance the ring a second time.
-        const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
-          ? meta.promoteAccountId
-          : null;
-        const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now);
-        if (fallback) promoteActiveCodexAccount(config, fallback);
+      // An independent native quota request may discover an account-wide throttle,
+      // but it still must not advance the shared RR ring or active cursor. The next
+      // shared request observes the cooldown and chooses its own fallback.
+      if (!isIndependentCodexQuotaScope(quotaScope)) {
+        notePoolRotationFailure(POOL_KEY_CODEX, accountId);
+        const effectiveActive = getEffectiveActiveCodexAccountId(config);
+        if (effectiveActive === accountId) {
+          // Same-request 429 retry already picked via excludeAccountId — reuse it so
+          // round-robin does not advance the ring a second time.
+          const reused = meta.promoteAccountId && meta.promoteAccountId !== accountId
+            ? meta.promoteAccountId
+            : null;
+          const fallback = reused ?? pickAlternateCodexAccount(config, accountId, now, quotaScope);
+          if (fallback) promoteActiveCodexAccount(config, fallback);
+        }
       }
     }
     return;
@@ -1697,8 +1834,12 @@ export function recordCodexUpstreamOutcome(
   if (!meta.fixedAccount && shouldFailover(config, accountId, now)) {
     clearThreadAccountMapForAccount(accountId);
   }
-  if (!meta.fixedAccount && getEffectiveActiveCodexAccountId(config) === accountId) {
-    applyFailureFailover(config, accountId, now);
+  if (
+    !meta.fixedAccount
+    && !isIndependentCodexQuotaScope(quotaScope)
+    && getEffectiveActiveCodexAccountId(config) === accountId
+  ) {
+    applyFailureFailover(config, accountId, now, quotaScope);
   }
 }
 

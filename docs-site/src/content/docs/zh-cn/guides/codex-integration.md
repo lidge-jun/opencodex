@@ -181,6 +181,21 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 档位；上游不支持的值会在发送请求前完成
 映射或下调。
 
+### 路由模型的本地工具
+
+非原生的路由 catalog 条目使用 `tool_mode: "code_mode_only"`。这样 Codex 可以公开其官方 `exec` 入口以及
+嵌套的 MCP 工具，包括 Browser 和 Computer Use；opencodex 只负责路由模型发起的普通 function call。
+工具执行、权限和确认仍由 Codex 在本地处理；opencodex 不会实现另一套浏览器或桌面控制 executor。
+
+对于不接受 Codex `exec` custom-tool grammar 的 key-auth Responses provider，opencodex 会把该工具声明及其
+历史记录编码成上游 function tool，再在 Codex 收到结果前，把流式 function-call lifecycle 还原成
+`custom_tool_call`。原生 OpenAI forward routing 和已支持的 `apply_patch` custom tool 保持不变。
+
+所选 provider 必须支持 function/tool calling。不支持 tool call 的 text-only provider 无法使用 `exec`、
+Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不变。
+
+`ocx sync` 修改这些 metadata 后，请重启 Codex App 并打开一个新任务。现有 app-server process 和任务可能仍会
+保留它们在启动时加载的 catalog 和 tool plan。
 
 ### 自定义模型显示名
 

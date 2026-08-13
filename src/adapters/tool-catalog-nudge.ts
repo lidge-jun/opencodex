@@ -1,8 +1,6 @@
 import {
-  isAllowedToolChoice,
   namespacedToolName,
-  toolAllowedByChoice,
-  toolChoiceAliases,
+  toolChoiceToolPredicate,
   type OcxRequestOptions,
   type OcxTool,
   type OcxProviderConfig,
@@ -16,13 +14,6 @@ function quoteNames(names: readonly string[]): string {
 
 function uniqueNames(names: readonly string[]): string[] {
   return [...new Set(names.filter(name => name.trim().length > 0))];
-}
-
-function toolChoiceAllows(tool: Pick<OcxTool, "namespace" | "name">, toolChoice: OcxRequestOptions["toolChoice"] | undefined): boolean {
-  if (!toolChoice || toolChoice === "auto" || toolChoice === "required") return true;
-  if (toolChoice === "none") return false;
-  if (isAllowedToolChoice(toolChoice)) return toolAllowedByChoice(tool, new Set(toolChoice.allowedTools));
-  return toolChoiceAliases(tool).includes(toolChoice.name);
 }
 
 function isOpenAIOrChatGPTHost(hostname: string): boolean {
@@ -65,7 +56,7 @@ export function buildNonOpenAIToolCatalogNudgeForTools(
   toWireName: (tool: Pick<OcxTool, "namespace" | "name">) => string = tool => namespacedToolName(tool.namespace, tool.name),
 ): string | undefined {
   const visibleNames = tools
-    ?.filter(tool => toolChoiceAllows(tool, toolChoice))
+    ?.filter(toolChoiceToolPredicate(toolChoice))
     .map(toWireName);
   return buildNonOpenAIToolCatalogNudgeFromNames(visibleNames);
 }

@@ -40,6 +40,8 @@ export function concreteComboRequestBody(
     && !Object.prototype.hasOwnProperty.call(reasoning, "effort")
   );
   if (!needsDefault) return clone;
+  // Picker availability treats an unknown ladder as a wildcard, but runtime
+  // injection stays fail-closed until this concrete target advertises support.
   if (!targetReasoningEfforts?.includes(defaultEffort)) {
     const key = `${target.provider}/${target.model}:${defaultEffort}`;
     if (!warnedUnsupportedDefaults.has(key)) {

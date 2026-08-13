@@ -108,6 +108,11 @@ describe("turning Codex off", () => {
     const result = await put(baseConfig(), { enabled: false });
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ ok: true, clientId: "codex" });
+    expect(result.body.artifacts).toMatchObject({
+      config: { state: expect.any(String) },
+      catalog: { state: expect.any(String) },
+      history: { state: expect.any(String) },
+    });
     // The decision is on disk. Without this, an OFF lasts until the next
     // `ocx start` re-syncs over it, which is the defect this phase exists for.
     expect(persistedCodexIntent()).toBe(false);

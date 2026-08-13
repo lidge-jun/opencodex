@@ -1,0 +1,287 @@
+/* ============================================================================
+   compatibility-matrix — CL-05 read-only lab verdict matrix
+   Namespace: lab-matrix-
+   ============================================================================ */
+
+.main-inner:has(.lab-page) {
+  max-width: 1200px;
+  box-sizing: border-box;
+}
+
+.lab-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.lab-page .page-head { margin-bottom: 2px; }
+.lab-page .page-sub { margin: 0 0 0.5rem; }
+
+.lab-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-2);
+}
+
+.lab-status-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0.65rem 0.75rem;
+  min-width: 0;
+}
+
+.lab-status-card .label {
+  display: block;
+  font-size: var(--text-label);
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.lab-status-card .value {
+  font-variant-numeric: tabular-nums;
+  font-weight: var(--weight-semibold);
+}
+
+.lab-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+.lab-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 10rem;
+}
+
+.lab-filter-field label {
+  font-size: var(--text-label);
+  color: var(--muted);
+}
+
+.lab-filter-field input,
+.lab-filter-field select {
+  min-height: 2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+}
+
+.lab-matrix-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0.75rem;
+}
+
+.lab-matrix-title {
+  margin: 0 0 0.65rem;
+  font-size: var(--text-control);
+  font-weight: var(--weight-semibold);
+}
+
+.lab-matrix-scroll {
+  overflow: auto;
+  max-width: 100%;
+}
+
+.lab-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-control);
+}
+
+.lab-matrix th,
+.lab-matrix td {
+  border: 1px solid var(--border-soft);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.lab-matrix th {
+  background: var(--raised);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.lab-matrix td.subject {
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+  max-width: 14rem;
+  overflow-wrap: anywhere;
+}
+
+.lab-matrix td.kind {
+  color: var(--muted);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+.lab-verdict-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.lab-verdict-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.45rem;
+  font: inherit;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  color: inherit;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+button.lab-verdict-badge {
+  appearance: none;
+  cursor: pointer;
+}
+
+.lab-verdict-badge .suite {
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+  font-family: var(--font-code);
+}
+
+.lab-verdict-badge[data-verdict="VERIFIED"],
+.lab-verdict-badge[data-verdict="PROBED"] {
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  border-color: color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+.lab-verdict-badge[data-verdict="CLAIMED"],
+.lab-verdict-badge[data-verdict="UNKNOWN"] {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  border-color: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+
+.lab-verdict-badge[data-verdict="DEGRADED"] {
+  background: color-mix(in srgb, #c47a00 14%, transparent);
+  border-color: color-mix(in srgb, #c47a00 35%, transparent);
+}
+
+.lab-verdict-badge[data-verdict="BLOCKED"],
+.lab-verdict-badge[data-verdict="UNSUPPORTED"] {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border-color: color-mix(in srgb, var(--red) 35%, transparent);
+}
+
+.lab-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-control);
+}
+
+.lab-detail-table th,
+.lab-detail-table td {
+  border-bottom: 1px solid var(--border-soft);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.lab-detail-table th {
+  color: var(--muted);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-label);
+}
+
+.lab-detail-table td.mono {
+  font-family: var(--font-code);
+  font-size: var(--text-label);
+  overflow-wrap: anywhere;
+}
+
+.lab-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.lab-toolbar .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.lab-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.lab-main { min-width: 0; }
+
+.lab-detail-pane {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.lab-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.lab-detail-meta {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-3);
+}
+
+.lab-detail-meta dt {
+  font-size: var(--text-label);
+  color: var(--muted);
+}
+
+.lab-detail-section h4 { margin: 0 0 var(--space-1); }
+
+.lab-detail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.lab-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-2);
+}
+
+.lab-verdict-badge--selected { outline: 2px solid var(--accent); }
+.lab-detail-table tbody tr.selected { background: var(--raised); }
+
+@media (max-width: 960px) {
+  .lab-layout { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 720px) {
+  .lab-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lab-filter-field { width: 100%; }
+}

@@ -18,6 +18,7 @@ import { ANTHROPIC_OAUTH_BETA, CLAUDE_CODE_SYSTEM_INSTRUCTION, applyClaudeToolPr
 import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
+import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
@@ -898,6 +899,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
+      const textFormat = parsed.options.textFormat;
+      if (textFormat?.type === "json_schema" && textFormat.schema) {
+        const outputConfig = body.output_config;
+        body.output_config = {
+          ...(outputConfig && typeof outputConfig === "object" && !Array.isArray(outputConfig)
+            ? outputConfig
+            : {}),
+          format: {
+            type: "json_schema",
+            schema: normalizeAnthropicOutputSchema(textFormat.schema),
+          },
+        };
+      }
+
       if (parsed.options.toolChoice && (tools || parsed.options.toolChoice === "none")) {
         const tc = parsed.options.toolChoice;
         if (tc === "auto") body.tool_choice = { type: "auto" };
@@ -984,13 +999,21 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         const payload = record.data.trim();
         if (!payload) continue;
 
-        let data: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          data = JSON.parse(payload) as Record<string, unknown>;
+          parsed = JSON.parse(payload);
         } catch {
           debugDroppedFrame("anthropic", payload);
           continue;
         }
+        // `JSON.parse("null")` returns null instead of throwing, so the catch above cannot cover
+        // it and the `data.type` read below crashed the stream. Drop a non-record frame the same
+        // way an unparseable one is dropped, so the message_stop check still governs the outcome.
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          debugDroppedFrame("anthropic", payload);
+          continue;
+        }
+        const data = parsed as Record<string, unknown>;
 
         switch (record.event || data.type) {
               case "message_start": {

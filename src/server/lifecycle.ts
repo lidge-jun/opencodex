@@ -1,3 +1,4 @@
+import { flushAntigravityReplay } from "../adapters/google-antigravity-replay";
 import { flushResponseState } from "../responses/state";
 import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
 import {
@@ -6,6 +7,7 @@ import {
 } from "../storage/policy-job";
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
+import { stopLabAutomationScheduler, requestLabAutomationShutdown } from "../lab/automation/orchestrator";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -292,6 +294,42 @@ export function getServerListenPort(): number | undefined {
  * ordinary drain's finally block; both callers must observe the same stop result
  * before any replacement process is allowed to bind the port.
  */
+/**
+ * Run every shutdown step, then report whether any of them failed.
+ *
+ * Extracted from `startServer`'s composite `stop` because the two properties it has to hold
+ * pull in opposite directions and neither is testable in place:
+ *
+ * - Cleanup COMPLETES. A listener whose stop rejects cannot prevent the other listener, or the
+ *   native lifecycle release, from running.
+ * - Failure PROPAGATES. `stopServerListener` deliberately surfaces a stop rejection so every
+ *   caller sees the same result before a replacement binds the port. Swallowing it would let
+ *   `drainAndShutdown` report success while a socket is still held.
+ *
+ * `always` runs after the listeners regardless of their outcome, and its own failure joins the
+ * reported set rather than replacing it.
+ */
+export async function runListenerShutdown(
+  steps: Array<() => Promise<void>>,
+  always: () => Promise<void>,
+): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    await always();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "listener shutdown failed");
+}
+
 export function stopServerListener(
   server: ReturnType<typeof Bun.serve> | undefined = _serverRef,
 ): Promise<void> {
@@ -397,11 +435,15 @@ export async function drainAndShutdown(
       console.warn("[cursor] background shell drain incomplete", shellResult.value);
     }
 
-    // Debounced replay-state snapshot may still be pending; flush so the last completed turn's
-    // previous_response_id chain survives the restart this shutdown is usually part of.
-    const responseStateFlush = await Promise.allSettled([flushResponseState()]);
-    if (responseStateFlush[0]?.status === "rejected") {
+    // Debounced replay-state snapshots may still be pending; flush so the last completed turn's
+    // previous_response_id chain and antigravity thought signatures survive the restart this
+    // shutdown is usually part of.
+    const stateFlush = await Promise.allSettled([flushResponseState(), flushAntigravityReplay()]);
+    if (stateFlush[0]?.status === "rejected") {
       console.warn("[responses] state flush during shutdown failed");
+    }
+    if (stateFlush[1]?.status === "rejected") {
+      console.warn("[antigravity] replay flush during shutdown failed");
     }
 
     // Tear down opt-in storage policy timers / worker / live-config sink so they cannot fire after stop.
@@ -410,7 +452,15 @@ export async function drainAndShutdown(
     // Abort each job independently so one wedged join cannot skip the other,
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler();
     stopStateStoreSweeper();
+    // The overlay reconciler is owner-scoped: the startServer stop override
+    // releases THIS server's lease through runListenerShutdown →
+    // userCostOverlayReconciler.stop(), which also recomputes disk-only
+    // preservation for any remaining owners. A process-wide stop here would
+    // kill reconciliation for every other server in the process, so drain
+    // must not call stopUserCostOverlayReconciler().
     cancelQueuedStorageWorkerSpawns();
     const shutdownJoins = await Promise.allSettled([
       abortStorageCleanupPolicyJobAsync(),

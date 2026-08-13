@@ -16,16 +16,18 @@ description: 默认提供方选择、模型解析顺序、组合别名、目标�
 
 opencodex 按以下顺序解析请求的模型：
 
-1. 已配置的 `<account-selector>/<native-openai-model>` 命名空间，只会路由到映射的已存储 Codex
+1. 已配置的 `policy/<id>` 或路由策略配置文件别名，会执行策略评估器并路由到选定的候选。
+   未解析的 `policy/<id>` 会继续按后续规则进行常规解析。
+2. 已配置的 `<account-selector>/<native-openai-model>` 命名空间，只会路由到映射的已存储 Codex
    账户。无效或不可用的精确目标会以 fail closed 方式失败。
-2. 规范化的 `combo/<id>` 或已配置的 combo 别名。规范化 id 会优先于别名匹配。
-3. 显式的 `<provider>/<model>` 命名空间，其前缀名称对应一个已配置的提供方。
-4. 诸如 `gpt-*`、`o1-*`、`o3-*` 或 `o4-*` 之类未带前缀的原生 OpenAI 系列 id，会通过
+3. 规范化的 `combo/<id>` 或已配置的 combo 别名。规范化 id 会优先于别名匹配。
+4. 显式的 `<provider>/<model>` 命名空间，其前缀名称对应一个已配置的提供方。
+5. 诸如 `gpt-*`、`o1-*`、`o3-*` 或 `o4-*` 之类未带前缀的原生 OpenAI 系列 id，会通过
    规范化且已启用的 `openai` 提供方进行路由。
-5. 与某个提供方的 `defaultModel` 完全匹配。
-6. 已知的提供方系列模型前缀。
-7. 与某个提供方配置的 `models` 列表中的模型完全匹配。
-8. `defaultProvider`，同时保留请求的 model id。
+6. 与某个提供方的 `defaultModel` 完全匹配。
+7. 已知的提供方系列模型前缀。
+8. 与某个提供方配置的 `models` 列表中的模型完全匹配。
+9. `defaultProvider`，同时保留请求的 model id。
 
 已禁用的提供方会被排除在外。对已禁用提供方的显式命名空间会直接失败，而不会继续
 向后回退。对于可能匹配多个提供方的规则，提供方条目会按照其 JSON 插入顺序进行检查，
@@ -44,12 +46,17 @@ upstream 发送裸 `gpt-5.6-sol` model id。selector 后只能使用裸原生 Op
 Direct routing，并继续出现在 raw `/v1/models` 中。映射到缺失已保存账户的 selector 不会被展示。
 selector 校验、冲突规则和隐私说明见[提供方配置](/reference/configuration/providers/)。
 
+Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏生成的 selector-qualified picker
+行并恢复普通 GPT 行，但不会移除映射，也不会改变精确 `<selector>/<model>` 路由。因此再次
+启用时会恢复相同的公开标签。账号和设置变更会在有界 catalog refresh 前持久化；出现
+`ocx sync` 警告只表示 picker 目录仍需收敛，并不表示路由变更丢失。
+
 ## Combos (`config.combos`)
 
 每个 combo 键都是一个符合 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` 的 id。它始终可以直接通过
 `combo/<id>` 访问，也可以额外暴露一个 `alias`。别名必须唯一，不能占用 `combo/`
 命名空间，也不能使用保留的原生裸系列，例如 `gpt-*`、`o1-*`、`o3-*`、`o4-*` 或
-`codex-*`。
+`codex-*`，除非通过 `nativeAlias: true` 显式启用 Desktop 兼容契约。
 
 | 键 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
@@ -58,6 +65,8 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |
+| `nativeAlias?` | `boolean` | `false` | 仅让当前受支持的裸原生 id 对该不带限定前缀的 id 优先；带账号或提供方限定的 OpenAI 路由仍是独立路由。 |
+| `displayName?` | `string` | — | 仅用于 catalog 展示的标签；native alias 必须提供非空值。 |
 
 ```json
 {
@@ -82,11 +91,12 @@ selector 校验、冲突规则和隐私说明见[提供方配置](/reference/con
 
 即使某个 combo 不能被列出，它仍然可以直接路由。只有当所有目标都暴露出可以交集的能力时，`ocx sync`、`/v1/models` 和 Codex 选择器才会列出它：
 
-- 一个正的 `contextWindow`，来源可以是实时元数据、注册表提示，或提供方的
-  `modelContextWindows` / `contextWindow`；以及
+- 一个正的 `contextWindow`，来源可以是实时元数据、注册表提示、提供方的
+  `modelContextWindows` / `contextWindow`、成员行上已知的正 `maxInputTokens`，或者——当提供方已知且启用但所有来源仍未给出窗口时——
+  保守的 128,000 token 回退（若配置了 `providerContextCaps` 则会按上限夹紧）；以及
 - 非空的 `inputModalities` 交集，其中省略的成员值按 `["text"]` 处理。
 
-如果是一个没有上下文元数据的裸 relay id，或者目标之间的模态互不相交，combo 就会从
+目标位于已禁用提供方（即使有完整 discovery 行）、未知且无 discovery 行的提供方，或目标之间的模态互不相交时，combo 会从
 目录中移除。同步时会输出一条汇总警告，仪表板会将其标记为 **Needs attention**。
 补充上下文元数据、对齐模态，或者把目标模型切换为可发现且兼容的能力。
 

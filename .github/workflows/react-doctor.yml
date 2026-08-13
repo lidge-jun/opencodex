@@ -45,12 +45,12 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: millionco/react-doctor@938008119a288f2fb47c66a69cd9279a21f31784 # v2.2.7
+      - uses: millionco/react-doctor@01820bb4fd4d0a4aebcd8df2b2a143a098649cb2 # v2.2.8
         with:
           directory: gui
           # Pin the npm engine — the action wrapper would otherwise fetch
           # react-doctor@latest, silently skewing CI from the local pinned runs.
-          version: "0.9.3"
+          version: "0.9.11"
           # Fail the job on any finding (errors or warnings).
           blocking: warning
           comment: false

@@ -68,8 +68,6 @@ export const THREAD_OPTION_SET = new Set(THREAD_OPTIONS);
 export const PAGE = 60; // rows rendered per provider before a "show more"
 
 export const COLLAPSED_KEY_V2 = "ocx-models-collapsed:v2";
-export const COMBOS_OPEN_KEY_V1 = "ocx-models-combos-open:v1";
-export const COMBOS_OPEN_KEY_LEGACY = "ocx-models-combos-open";
 
 /** Compact token display (350k) — unit is technical, not prose. */
 export function fmtK(n: number): string {
@@ -125,19 +123,4 @@ export function writeCollapsedProviders(collapsed: Set<string>, storage: Storage
   }
 }
 
-export function readCombosOpen(storage: StorageLike = localStorage): boolean {
-  try {
-    const saved = storage.getItem(COMBOS_OPEN_KEY_V1) ?? storage.getItem(COMBOS_OPEN_KEY_LEGACY);
-    return saved === "1";
-  } catch {
-    return false;
-  }
-}
 
-export function writeCombosOpen(open: boolean, storage: StorageLike = localStorage): void {
-  try {
-    storage.setItem(COMBOS_OPEN_KEY_V1, open ? "1" : "0");
-  } catch {
-    /* quota / private-mode */
-  }
-}

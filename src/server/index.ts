@@ -16,19 +16,24 @@ import {
   armClaudeCodeBaseline,
   loadConfig,
   saveConfig,
+  getConfigDir,
   websocketsEnabled,
 } from "../config";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { getCodexHome } from "../codex/paths";
+import { shouldSyncCodexOnStart } from "../codex/desired-state";
+import {
+  inspectNativeCodexOwnership,
+  type OwnershipInspection,
+} from "../integrations/native/ownership-preflight";
 import { registerCodexCooldownRecoveryProbeWorker } from "../codex/auth-api";
-import { startMemoryWatchdog } from "./memory-watchdog";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
 } from "../lib/state-store-registrations";
-import { startStateStoreSweeper } from "../lib/state-store-sweeper";
+import { startUserCostOverlayReconciler } from "../usage/user-cost-overlay-reconciler";
 import {
   configureAppOwnedMemoryBudget,
   enforceAppOwnedMemoryBudget,
@@ -39,12 +44,17 @@ import {
   registerDefaultAppOwnedMemoryStores,
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
-import { setStorageCleanupPolicyLiveSink } from "../storage/policy";
-import { setStorageCleanupPolicyJobLiveApply } from "../storage/policy-job";
-import { scheduleStorageCleanupStartupRun, startStorageCleanupScheduler } from "../storage/policy-scheduler";
+import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
+import {
+  setLabAutomationDispatchDeps,
+  startLabAutomationScheduler,
+} from "../lab/automation/orchestrator";
+import { loadLabAutomationPolicy } from "../lab/automation/persistence";
+import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { providerContextCap } from "../providers/context-cap";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
 import {
@@ -69,6 +79,7 @@ import {
   getActiveTurnCount,
   isDraining,
   registerTurn,
+  runListenerShutdown,
   setServerRef,
   trackStreamLifetime,
   tryAdmitTurn,
@@ -89,7 +100,6 @@ import {
   addFinalRequestLog,
   hydrateRequestLogsFromDisk,
   httpStatusForRequestLogTerminal,
-  httpStatusForTerminalStatus,
   inspectResponseLogSsePayload,
   nextRequestLogId,
   recordFirstOutput,
@@ -136,6 +146,8 @@ import {
   admissionFields,
   resolveApiAuth,
   resolveResponsesApiAuth,
+  requestPolicyView,
+  type RequestPolicyView,
   safeConfigDTO,
   setCorsOrigin,
   withCors,
@@ -159,9 +171,11 @@ import { buildDesktop3pRegistry } from "../claude/desktop-3p";
 import { runClaudeAuthModeMigration } from "../claude/auth-mode-migration";
 import {
   bindNativeMainStartupLifecycle,
+  blockNativeMainStartupForUnownedServiceHome,
   releaseNativeMainStartupLifecycle,
   startNativeMainStartupLifecycle,
   type NativeMainStartupGateDeps,
+  type NativeMainStartupLifecycle,
 } from "../codex/native-profile-startup";
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
@@ -180,11 +194,45 @@ import {
   createLocalAttestationProof,
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
+import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../lib/system-restart-contract";
+import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../lib/local-provider-reload-contract";
+import { createReadinessGate, type ReadinessGate } from "./readiness";
 
-const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
+export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
 const WEBSOCKET_IDLE_TIMEOUT_SECONDS = 0;
 const LIVE_SIDEBAND_PENDING_MAX = 32;
+const LIVE_SIDEBAND_PENDING_BYTES_MAX = 1024 * 1024;
 const LIVE_SIDEBAND_CLOSE_FALLBACK_MS = 1_000;
+
+export function exceedsLiveSidebandFrameByteLimit(frameBytes: number): boolean {
+  return frameBytes > MAX_WS_FRAME_BYTES;
+}
+
+export function exceedsLiveSidebandPendingByteLimit(pendingBytes: number, incomingBytes: number): boolean {
+  return incomingBytes > LIVE_SIDEBAND_PENDING_BYTES_MAX - pendingBytes;
+}
+
+function webSocketFrameBytes(frame: string | ArrayBuffer | ArrayBufferView | Blob | Buffer): number {
+  if (typeof frame === "string") return Buffer.byteLength(frame);
+  if (frame instanceof ArrayBuffer || ArrayBuffer.isView(frame)) return frame.byteLength;
+  return frame.size;
+}
+
+export type LiveSidebandPendingEnqueueResult = "queued" | "too-many-frames" | "too-many-bytes";
+
+export function enqueueLiveSidebandPendingFrame(
+  data: Pick<WsData, "livePending" | "livePendingBytes">,
+  frame: string | Buffer,
+  frameBytes = webSocketFrameBytes(frame),
+): LiveSidebandPendingEnqueueResult {
+  const pending = data.livePending ?? (data.livePending = []);
+  if (pending.length >= LIVE_SIDEBAND_PENDING_MAX) return "too-many-frames";
+  const pendingBytes = data.livePendingBytes ?? 0;
+  if (exceedsLiveSidebandPendingByteLimit(pendingBytes, frameBytes)) return "too-many-bytes";
+  pending.push(frame);
+  data.livePendingBytes = pendingBytes + frameBytes;
+  return "queued";
+}
 
 type LiveSidebandWebSocketFactory = (
   url: string,
@@ -196,6 +244,22 @@ function releaseLiveSidebandAdmission(ws: ServerWebSocket<WsData>): void {
   ws.data.liveTurnAdmissionLease = undefined;
 }
 
+/**
+ * Send one live-sideband frame to the upstream socket.
+ *
+ * Bun's `WebSocket.send` accepts `string | Blob | BufferSource`, but the DOM-lib
+ * `Buffer` can be backed by a `SharedArrayBuffer`, which `BufferSource` rejects.
+ * `Uint8Array.from` copies into a fresh `ArrayBuffer`-backed view, so a frame
+ * arriving from `node:buffer` still round-trips byte-for-byte.
+ */
+function sendUpstreamFrame(upstream: WebSocket, frame: string | Buffer): void {
+  if (typeof frame === "string") {
+    upstream.send(frame);
+    return;
+  }
+  upstream.send(Uint8Array.from(frame));
+}
+
 function finalizeLiveSideband(ws: ServerWebSocket<WsData>, upstream?: WebSocket): void {
   if (upstream && ws.data.liveUpstream !== upstream) return;
   if (ws.data.liveCloseFallback !== undefined) {
@@ -204,6 +268,7 @@ function finalizeLiveSideband(ws: ServerWebSocket<WsData>, upstream?: WebSocket)
   }
   ws.data.liveUpstream = undefined;
   ws.data.livePending = undefined;
+  ws.data.livePendingBytes = undefined;
   ws.data.cancel = undefined;
   releaseLiveSidebandAdmission(ws);
 }
@@ -228,7 +293,10 @@ function armLiveSidebandCloseFallback(ws: ServerWebSocket<WsData>, upstream: Web
     // close event. That is still an observed CLOSED transport and is safe to
     // finalize. CONNECTING/CLOSING peers keep the lease so profile switching
     // fails at its own bounded drain deadline instead of racing live traffic.
-    if (upstream.readyState === WebSocket.CLOSED) finalizeLiveSideband(ws, upstream);
+    // The earlier CLOSED check narrowed `readyState` to 0|1|2 in the type
+    // system, but the socket can still transition to CLOSED (3) before this
+    // fallback fires; the cast keeps the runtime-identical check.
+    if ((upstream.readyState as number) === 3) finalizeLiveSideband(ws, upstream);
   }, LIVE_SIDEBAND_CLOSE_FALLBACK_MS);
 }
 
@@ -236,9 +304,12 @@ function closeLiveSideband(ws: ServerWebSocket<WsData>, code = 1000, reason = ""
   if (ws.data.liveClosing) return;
   ws.data.liveClosing = true;
   ws.data.livePending = undefined;
+  ws.data.livePendingBytes = undefined;
   ws.data.cancel = undefined;
   const upstream = ws.data.liveUpstream;
-  if (!upstream || upstream.readyState === WebSocket.CLOSED) {
+  // Bun's `WebSocket` type narrows `readyState` to 0|1|2 even though the DOM
+  // constant CLOSED is 3; the numeric literal is the runtime-identical check.
+  if (!upstream || upstream.readyState === 3) {
     finalizeLiveSideband(ws, upstream);
   } else {
     // The sideband holds a native-main admission lease. Do not release it just
@@ -289,9 +360,10 @@ function attachLiveSidebandUpstream(
     ws.data.liveOpened = true;
     const pending = ws.data.livePending ?? [];
     ws.data.livePending = undefined;
+    ws.data.livePendingBytes = undefined;
     for (const frame of pending) {
       try {
-        upstream.send(frame);
+        sendUpstreamFrame(upstream, frame);
       } catch {
         closeLiveSideband(ws, 1011, "upstream send failed");
         return;
@@ -301,6 +373,10 @@ function attachLiveSidebandUpstream(
   upstream.addEventListener("message", (event) => {
     if (ws.data.liveUpstream !== upstream || ws.data.liveClosing) return;
     try {
+      if (exceedsLiveSidebandFrameByteLimit(webSocketFrameBytes(event.data))) {
+        closeLiveSideband(ws, 1009, "message too large");
+        return;
+      }
       logLiveSidebandFrame("u2c", event.data);
       if (typeof event.data === "string") ws.send(event.data);
       else if (event.data instanceof ArrayBuffer) ws.send(event.data);
@@ -361,10 +437,25 @@ export interface StartServerDeps {
   managementApi?: ManagementApiDeps;
   /** Test-only native-main recovery dependencies; production constructs the normal manager. */
   nativeMainStartup?: NativeMainStartupGateDeps;
+  /** Test-only ownership evidence; production inspects the installed service state. */
+  inspectNativeCodexOwnership?: typeof inspectNativeCodexOwnership;
   /** Test-only seam for an upstream that cannot complete its WebSocket close handshake. */
   liveSidebandWebSocketFactory?: LiveSidebandWebSocketFactory;
   /** Test-only seam; production derives a fresh local-attestation secret per process. */
   localAttestationSecret?: string;
+  /** Optional readiness gate; a fresh pending gate is created when omitted. */
+  readinessGate?: ReadinessGate;
+}
+
+function inspectStartupOwnership(deps: StartServerDeps): OwnershipInspection {
+  try {
+    return (deps.inspectNativeCodexOwnership ?? inspectNativeCodexOwnership)();
+  } catch {
+    return {
+      ownership: "unknown",
+      reason: "service-home ownership inspection failed",
+    };
+  }
 }
 
 /*
@@ -388,13 +479,24 @@ export function consumeStartupCacheInvalidationWrite(): boolean {
   return wrote;
 }
 
-export function startServer(port?: number, deps: StartServerDeps = {}) {
+export function warnAgentTaskRecoveryStartup(config: {
+  agentTaskRecovery?: { enabled?: boolean };
+}): void {
+  if (config.agentTaskRecovery?.enabled !== true) return;
+  console.warn("⚠️  Experimental encrypted V2 task recovery is enabled.");
+  console.warn("   A scoped cache miss may send an additional authenticated request to ChatGPT and may consume quota or add latency; concurrent misses can share one request.");
+  console.warn("   Recovered plaintext assignment data is retained only in a bounded, process-local in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
+}
+
+export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
   const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
+  warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
   assertServerAuthConfig(config);
   const managementAuth = deps.managementAuthState ?? initializeManagementAuthState(config);
+  let userCostOverlayReconciler: { stop(): void } | null = null;
   // Arm synchronously before listen. A pending journal therefore makes __main__ unusable
   // before any request can resolve its physical credential, while health/management/Pool stay live.
   // Refresh OAuth provider presets (models/noReasoningModels) from the registry so a proxy update
@@ -430,21 +532,28 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       if (migrated) saveConfig(config);
     }
   }
+  // Resolve unattended service-home authority before any Codex lock, cache, owner,
+  // journal, or credential path. Both positive foreign evidence and an unprovable
+  // ownership state are non-authority.
+  startupCacheInvalidationWrote = false;
+  const startupCacheOwnership = inspectStartupOwnership(deps);
   // Startup cache invalidation is best-effort and must never block the server from
   // serving. It now takes K so it cannot race a convergence commit, but both the
   // home resolution and the acquisition can fail on a machine with no Codex home —
   // `getCodexHome()` THROWS when CODEX_HOME names a missing directory, which would
   // otherwise turn "no Codex installed" into "proxy will not start".
-  try {
-    const startupCodexHome = getCodexHome();
-    // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
-    // with the later startup sync and warns ONCE about stale app-servers; warning
-    // here instead would read a catalog mtime the sync is about to move.
-    const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
-    // A refused permit is not a write; only a completed run that returned true is.
-    startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
-  } catch { /* no readable Codex home: nothing to invalidate */ }
+  if (startupCacheOwnership.ownership === "owned") {
+    try {
+      const startupCodexHome = getCodexHome();
+      // #1046: record whether this actually rewrote the cache. `handleStart` ORs this
+      // with the later startup sync and warns ONCE about stale app-servers; warning
+      // here instead would read a catalog mtime the sync is about to move.
+      const outcome = withCatalogWriteSerialization(startupCodexHome, permit =>
+        invalidateCodexModelsCacheWithPermit(permit, startupCodexHome));
+      // A refused permit is not a write; only a completed run that returned true is.
+      startupCacheInvalidationWrote = outcome.kind === "completed" && outcome.value === true;
+    } catch { /* no readable Codex home: nothing to invalidate */ }
+  }
   // Arm the `claudeCode` hand-edit guard (devlog 260726_claude_auth_auto/040 H1) BEFORE
   // the server can serve a request, and AFTER the startup migrations above — those run
   // against a config nobody else holds and are the documented exception to the save
@@ -455,16 +564,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   // usage.jsonl already persists every request; rehydrate the in-memory Logs ring so
   // /api/logs (and the GUI) survive `ocx stop` / `ocx start` process restarts.
   hydrateRequestLogsFromDisk();
-  // #314: warn-only RSS observability (unref'd, idempotent — safe under repeated
-  // startServer(0) in tests). Snapshot surfaces via GET /api/system/memory.
-  startMemoryWatchdog();
   registerDefaultAppOwnedMemoryStores();
   registerDefaultAppOwnedObservedBuffers();
   registerAppOwnedMemorySweepFallback();
   configureAppOwnedMemoryBudget(resolveAppOwnedMemoryBudgetBytes(config.appOwnedMemoryBudgetMb));
   enforceAppOwnedMemoryBudget();
   registerCodexCooldownRecoveryProbeWorker(config);
-  startStateStoreSweeper();
   // Issue #42 Phase 3: opt-in archived auto-cleanup (default OFF). Unref'd hourly
   // tick for daily/weekly; startup evaluation is fire-and-forget after listen.
   // Heavy work runs in a Worker via the single-flight job controller.
@@ -472,9 +577,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   const applyPolicy = (policy: StorageCleanupPolicy) => {
     config.storageCleanupPolicy = policy;
   };
-  setStorageCleanupPolicyLiveSink(applyPolicy);
-  setStorageCleanupPolicyJobLiveApply(applyPolicy);
-  startStorageCleanupScheduler();
 
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
@@ -486,30 +588,89 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   const configuredHost = config.hostname?.trim();
   const bindHost = !configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
 
+  // Unauthenticated loopback listener (#1102). Off unless explicitly enabled.
+  const loopbackListener = config.unauthenticatedLoopbackListener;
+  const loopbackListenerPort = loopbackListener?.enabled ? loopbackListener.port : null;
+
+  /**
+   * Which listener a request arrived on, expressed as the only thing that differs: the bind
+   * address the auth and CORS decisions should see.
+   *
+   * The public listener passes the shared config through untouched, so its behaviour is
+   * byte-identical to before. The loopback listener substitutes 127.0.0.1, which is what makes
+   * `isApiAuthRequired` return false for it — the same code path a plain loopback bind has
+   * always taken, including the Host-header check inside `isAllowedRequestOrigin`.
+   *
+   * Built per request rather than once per listener so a management-API config change is
+   * picked up immediately instead of being frozen at listen time.
+   */
+  const publicPolicy = (): RequestPolicyView => config;
+  const loopbackPolicy = (): RequestPolicyView => requestPolicyView(config, "127.0.0.1");
+  void publicPolicy;
+
+  /**
+   * Routes the unauthenticated loopback listener will serve. Everything else 404s.
+   *
+   * This is an allowlist rather than a filter applied to the public handler, because a filter
+   * inverts the failure mode: a route added later would be reachable here by default. The four
+   * entries are exactly what a directly-spawned `codex app-server` needs.
+   *
+   * `GET /v1/models` is on the list for a reason that is easy to miss. When catalog
+   * materialization fails or finds no source, `syncCodex` warns and injects with
+   * `catalogPath: null`; Codex then builds an ONLINE model manager and `model/list` refreshes
+   * through `GET {base_url}/models`. Returning 404 there would leave the picker on its bundled
+   * fallback — fixing the direct-spawn host while breaking its model list.
+   */
+  function loopbackRouteAllowed(url: URL, req: Request): boolean {
+    const path = url.pathname;
+    if (path === "/v1/responses") {
+      return req.method === "POST" || req.headers.get("upgrade")?.toLowerCase() === "websocket";
+    }
+    if (path === "/v1/responses/compact") return req.method === "POST";
+    if (path === "/v1/models") return req.method === "GET";
+    // Standalone realtime voice sessions (codex-rs thread/realtime/start, WebSocket
+    // transport) — a directly-spawned `codex app-server` needs these for desktop
+    // voice the same way it needs /v1/responses. WebSocket upgrades only; plain
+    // HTTP on these paths stays rejected.
+    if (path === "/v1/realtime" || path === "/v1/live") {
+      return req.headers.get("upgrade")?.toLowerCase() === "websocket";
+    }
+    return false;
+  }
+
   // Codex treats empty / non-JSON 503 bodies as "Unknown error" (#452). Keep Retry-After and
   // the server_is_overloaded code so clients can back off, but always return a JSON envelope.
-  function drainingResponse(req: Request): Response {
+  // These two run BEFORE the auth/origin checks, so they need the receiving listener's policy
+  // explicitly (#1102). Reaching for the shared `config` here would attach public-policy CORS
+  // headers to a 503 on the loopback listener — no model runs and no credential is spent, but
+  // it is the one error path that would answer a rebinding origin with its own origin echoed
+  // back.
+  function drainingResponse(req: Request, policy: RequestPolicyView): Response {
     const response = formatErrorResponse(503, "server_error", "Service shutting down");
     const headers = new Headers(response.headers);
-    for (const [name, value] of Object.entries(corsHeaders(req, config))) {
+    for (const [name, value] of Object.entries(corsHeaders(req, policy))) {
       headers.set(name, value);
     }
     headers.set("Retry-After", "5");
     return new Response(response.body, { status: 503, headers });
   }
 
-  function serverBusyResponse(req: Request, resource: string): Response {
+  function serverBusyResponse(req: Request, resource: string, policy: RequestPolicyView): Response {
     return withCors(new Response(JSON.stringify({
       error: { type: "server_error", code: "server_busy", message: `${resource} capacity reached` },
     }), {
       status: 503,
       headers: { "Content-Type": "application/json", "Retry-After": "1" },
-    }), req, config);
+    }), req, policy);
   }
 
-  async function runAdmittedHttpTurn(req: Request, work: (lease: ActiveTurnLease) => Promise<Response>): Promise<Response> {
+  async function runAdmittedHttpTurn(
+    req: Request,
+    policy: RequestPolicyView,
+    work: (lease: ActiveTurnLease) => Promise<Response>,
+  ): Promise<Response> {
     const lease = tryAdmitTurn();
-    if (!lease) return serverBusyResponse(req, "active turns");
+    if (!lease) return serverBusyResponse(req, "active turns", policy);
     let response: Response;
     try {
       response = await work(lease);
@@ -523,28 +684,96 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
     return response;
   }
 
-  const nativeMainLifecycle = startNativeMainStartupLifecycle(deps.nativeMainStartup);
+  // Readiness gate: one PRIVATE controller per startServer invocation, captured
+  // by this listener's closure. Starting/failing a second server in the same
+  // process can never reset or mutate this gate. handleStart creates the gate,
+  // passes it in, and transitions it after the post-startup sync settles. When
+  // no gate is supplied (tests, ad-hoc starts) a fresh pending gate is created.
+  const readinessGate = deps.readinessGate ?? createReadinessGate();
+  // Actual bound port, filled in after Bun.serve binds so /readyz reports the
+  // real ephemeral port for startServer(0). /healthz keeps its existing port
+  // field (the requested listenPort) byte-for-byte.
+  let boundPort: number | null = null;
+
+  // Native-main startup ownership creates several SQLite coordination files in
+  // CODEX_HOME. When the user has disabled the Codex integration, starting the
+  // proxy must not manufacture those Codex artifacts merely to serve other
+  // clients; no Codex request can use this lifecycle in that state.
+  // Re-probe here instead of trusting the earlier cache decision: startup work
+  // between the two sites must not widen the service-install race.
+  const nativeOwnership = inspectStartupOwnership(deps);
+  const nativeMainLifecycle: NativeMainStartupLifecycle = shouldSyncCodexOnStart(config)
+    ? nativeOwnership.ownership === "owned"
+      ? startNativeMainStartupLifecycle(deps.nativeMainStartup)
+      : blockNativeMainStartupForUnownedServiceHome(
+        nativeOwnership.ownership === "foreign" ? "foreign-ownership" : "ownership-unknown",
+      )
+    : {
+      homeId: null,
+      settled: Promise.resolve({ status: "ready", homeId: null }),
+      release: async () => {},
+    };
   let server: Server<WsData>;
+  let loopbackServer: Server<WsData> | null = null;
+  let backgroundLifecycle: ReturnType<typeof acquireServerBackgroundLifecycle> | null = null;
   try {
-    server = Bun.serve<WsData>({
-    port: listenPort,
-    hostname: bindHost,
-    idleTimeout: 255,
-    async fetch(req, requestServer): Promise<Response> {
+    backgroundLifecycle = acquireServerBackgroundLifecycle(applyPolicy);
+    // External `ocx config set` / direct config.json edits run in other
+    // processes; poll the file so Logs/Usage display prices follow them live.
+    // Started inside the guarded startup transaction so the catch below can
+    // release the owner-scoped lease on any listener failure.
+    userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
+    const serveOptions = {
+      idleTimeout: 255,
+      async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
+      // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
+      // else. Rejecting here, before any handler runs, is what keeps the surface from growing
+      // silently when a route is added below.
+      if (requestServer === loopbackServer && !loopbackRouteAllowed(new URL(req.url), req)) {
+        return withCors(
+          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          req,
+          loopbackPolicy(),
+        );
+      }
+      // Auth and CORS decisions below read `policy`, not `config`. For the public listener the
+      // two are the same object, so its behaviour is unchanged; for the loopback listener the
+      // view substitutes 127.0.0.1 as the bind address, which is what routes it through the
+      // same code path a plain loopback bind has always taken — Host-header check included.
+      // Routing, provider selection and response bodies keep using `config`.
+      const policy: RequestPolicyView = requestServer === loopbackServer ? loopbackPolicy() : config;
       const url = new URL(req.url);
       markActivity(`${req.method} ${url.pathname}`);
 
+      // Readiness is exact-GET on the literal /readyz path. Compare the DECODED
+      // pathname so an encoded variant like /readyz%2F (which decodes to
+      // /readyz/) cannot bypass the exact-path rejection and reach the GUI
+      // fallback (serveGuiFile decodes the pathname and would serve index.html
+      // with 200). Malformed percent-sequences fall back to the raw pathname,
+      // which still cannot match the exact literal below.
+      let readyzPath: string | undefined;
+      try {
+        const decoded = decodeURIComponent(url.pathname);
+        if (decoded === "/readyz" || decoded === "/readyz/") readyzPath = decoded;
+      } catch { /* malformed encoding — not a readiness path */ }
+
       if (req.method === "OPTIONS") {
+        // /readyz is exact-GET only; OPTIONS (like POST and the trailing-slash
+        // path) must answer the deterministic JSON 404, never the generic 204
+        // preflight response that the SPA fallback would otherwise allow.
+        if (readyzPath !== undefined) {
+          return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+        }
         const managementPreflight = url.pathname.startsWith("/api/");
         const allowed = managementPreflight
           ? isAllowedManagementOrigin(req, config)
-          : isAllowedRequestOrigin(req, config);
+          : isAllowedRequestOrigin(req, policy);
         if (!allowed) {
           return new Response(null, { status: 403, headers: corsHeaders() });
         }
         return new Response(null, {
           status: 204,
-          headers: managementPreflight ? managementCorsHeaders(req, config) : corsHeaders(req, config),
+          headers: managementPreflight ? managementCorsHeaders(req, config) : corsHeaders(req, policy),
         });
       }
 
@@ -552,14 +781,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       // handshake-time only, so capture inbound headers and thread them into the pipeline.
       if (url.pathname === "/v1/responses" && req.headers.get("upgrade")?.toLowerCase() === "websocket") {
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveResponsesApiAuth(req, config);
+        const admission = resolveResponsesApiAuth(req, policy);
         if (!admission) {
-          return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
+          return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         }
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, config);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, policy);
         }
         // WS transport gate: Codex's built-in `openai` provider hardcodes supports_websockets=true,
         // so under Design B it always tries the WS transport first. When the feature is off, reject
@@ -567,21 +796,34 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         // session-scoped HTTP fallback (client.rs WebsocketStreamOutcome::FallbackToHttp) instead of
         // surfacing broken-pipe errors from sockets a "disabled" feature would otherwise accept.
         if (!websocketsEnabled(config)) {
-          return withCors(formatErrorResponse(426, "upgrade_required", "Responses WebSocket transport is disabled; use HTTP"), req, config);
+          return withCors(formatErrorResponse(426, "upgrade_required", "Responses WebSocket transport is disabled; use HTTP"), req, policy);
         }
         const websocketLease = tryReserveCodexWebSocket();
-        if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets");
-        if (server.upgrade(req, {
+        if (!websocketLease) return serverBusyResponse(req, "Codex WebSockets", policy);
+        // Upgrade on the server that RECEIVED this request, not the captured `server`
+        // binding. They are the same object for the public listener, but the
+        // unauthenticated loopback listener (#1102) is a second Bun.serve, and handing its
+        // request to the public server's upgrade would fail or cross sockets.
+        if (requestServer.upgrade(req, {
           data: buildResponsesWsData(selectForwardHeaders(req.headers), admission, websocketLease),
         })) return undefined as unknown as Response;
         websocketLease.release();
-        return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, config);
+        return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
       if (url.pathname === "/healthz" && req.method === "GET") {
         // service/pid/port let CLI liveness reject foreign 200s and verify pid identity.
         const healthPort = server.port ?? listenPort;
-        const response = jsonResponse({ status: "ok", service: "opencodex", version: VERSION, uptime: process.uptime(), pid: process.pid, port: healthPort }, 200, req, config);
+        const response = jsonResponse({
+          status: "ok",
+          service: "opencodex",
+          version: VERSION,
+          uptime: process.uptime(),
+          pid: process.pid,
+          port: healthPort,
+          restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
+          providerReloadCapability: LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION,
+        }, 200, req, policy);
         const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
         if (challenge) {
           const proof = createLocalAttestationProof(localAttestationSecret, challenge, process.pid, healthPort);
@@ -590,13 +832,54 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         return response;
       }
 
+      // Readiness: like /healthz this is exact GET and unauthenticated (so a client can
+      // back off BEFORE knowing the admission token), but stricter than liveness. The
+      // body carries only sanitized identity + the fixed status enum; the sync message,
+      // warning text, catalog path, provider output, and account data are never exposed.
+      // POST or "/readyz/" must NOT match (exact pathname + GET method): answer them
+      // with a JSON 404 here so they can never be silently accepted by the GUI SPA
+      // fallback (which would serve index.html with HTTP 200 once gui/dist exists).
+      if (readyzPath !== undefined) {
+        if (readyzPath !== "/readyz" || req.method !== "GET") {
+          return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
+        }
+        // A draining proxy must never advertise ready: every data-plane branch
+        // answers drainingResponse while isDraining() is set, but the one-shot
+        // readiness gate is not mutated on shutdown (it is owned by the startup
+        // sync). Report pending so `ocx ready --wait` and external supervisors
+        // keep polling instead of promoting a proxy that is draining.
+        const status = isDraining() ? "pending" : readinessGate.getStatus();
+        const body = {
+          service: "opencodex",
+          version: VERSION,
+          uptime: process.uptime(),
+          pid: process.pid,
+          port: boundPort ?? listenPort,
+          status,
+        };
+        if (status === "ready") {
+          return jsonResponse(body, 200, req, policy);
+        }
+        // Pending/failed: 503 with a conservative Retry-After so well-behaved clients
+        // (and `ocx ready --wait`) back off instead of hot-looping.
+        const resp = jsonResponse(body, 503, req, policy);
+        const headers = new Headers(resp.headers);
+        headers.set("Retry-After", "1");
+        return new Response(resp.body, { status: 503, headers });
+      }
+
       if (url.pathname.startsWith("/api/")) {
-        const apiAuthError = requireManagementAuth(req, managementAuth, config);
+        const localManagementAuth = {
+          attestationSecret: localAttestationSecret,
+          pid: process.pid,
+          port: boundPort ?? requestServer.port ?? listenPort,
+        };
+        const apiAuthError = requireManagementAuth(req, managementAuth, config, localManagementAuth);
         if (apiAuthError) return withManagementCors(apiAuthError, req, config);
         // Which credential passed the gate, resolved from the same session table the
         // gate used. Consent-bearing routes need this: request headers are forgeable
         // by anything holding the admin token, the credential is not.
-        const principal = managementPrincipal(req, managementAuth, config) ?? undefined;
+        const principal = managementPrincipal(req, managementAuth, config, localManagementAuth) ?? undefined;
         const mgmtResponse = await handleManagementAPI(req, url, config, deps.managementApi, principal);
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
@@ -606,10 +889,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         // Model discovery never forwards Authorization upstream, so the broader admission
         // set (Authorization / x-api-key / x-opencodex-api-key) is safe here and required by
         // remote OpenAI-style bearer clients and Claude gateway discovery (anthropic-version).
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         let goModels;
         try {
@@ -619,19 +902,29 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
             return withCors(new Response(JSON.stringify({ error: { type: "server_error", code: "catalog_busy", message: error.message } }), {
               status: 503,
               headers: { "content-type": "application/json", "Retry-After": "1" },
-            }), req, config);
+            }), req, policy);
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
-        const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
+        const nativeSlugs = includeNativeOpenAi
+          ? nativeOpenAiSlugs()
+          : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
+        const shadowedNativeSlugs = configuredNativeAliasSlugs(config);
+        const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
         const accountSelectors = includeAccountBoundNativeOpenAi
           ? visibleCodexAccountSelectors(config)
           : [];
+        const accountNativeSlugsBySelector = includeAccountBoundNativeOpenAi
+          ? accountBoundNativeOpenAiSlugsBySelector(config)
+          : new Map<string, readonly string[]>();
+        const accountNativeSlugs = [...new Set(
+          [...accountNativeSlugsBySelector.values()].flatMap(slugs => [...slugs]),
+        )];
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const goOrdered = orderForSubagents(goEnabled, config.subagentModels);
         // Claude Code / Claude Desktop gateway model discovery (GET /v1/models with
@@ -645,7 +938,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         const wantsAnthropicList = req.headers.get("anthropic-version") !== null
           || url.searchParams.get("flavor") === "anthropic";
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
-          if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, config);
+          if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
           // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
           buildDesktop3pRegistry(
             [...desktopVisibleNativeSlugs(config)],
@@ -666,7 +959,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
               ? "desktop3p" as const
               : (/^claude-code\//i.test(req.headers.get("user-agent") ?? "") ? "readable" as const : "desktop3p" as const);
           const data = buildAnthropicModelInfos([...desktopVisibleNativeSlugs(config)], goOrdered, resolveAutoContext(config.claudeCode), idStyle, activeDesktop3pAlias);
-          return jsonResponse({ data }, 200, req, config);
+          return jsonResponse({ data }, 200, req, policy);
         }
         if (url.searchParams.has("client_version")) {
           // Codex client → Codex catalog shape: native gpt + namespaced routed models,
@@ -679,16 +972,31 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
           const catalogNativeSlugs = accountSelectors.length > 0
-            ? NATIVE_OPENAI_MODELS
+            ? [...new Set([...NATIVE_OPENAI_MODELS, ...accountNativeSlugs])]
             : nativeSlugs;
-          const entries = buildCatalogEntries(loadCatalogTemplate(), catalogNativeSlugs, goOrdered, config.subagentModels, websocketsEnabled(config), maMode as "v1" | "default" | "v2", exactComboCatalogSlugs(config), accountSelectors);
+          const entries = buildCatalogEntries(
+            loadCatalogTemplate(),
+            catalogNativeSlugs,
+            goOrdered,
+            config.subagentModels,
+            websocketsEnabled(config),
+            maMode as "v1" | "default" | "v2",
+            exactComboCatalogSlugs(config),
+            accountSelectors,
+            suppressedBareNativeSlugs,
+            new Set(),
+            providerContextCap(config, OPENAI_CODEX_PROVIDER_ID),
+            accountNativeSlugs,
+            accountNativeSlugsBySelector,
+          );
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
               disabledModels,
               accountSelectors.length > 0,
+              new Set(accountNativeSlugs),
             ),
-          }, 200, req, config);
+          }, 200, req, policy);
         }
         // OpenAI list shape: native gpt bare + routed models namespaced "<provider>/<id>"
         // (pure availability list — disabled natives are omitted entirely).
@@ -732,11 +1040,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         const selectorNativeSlugs = accountSelectors.length > 0
           ? NATIVE_OPENAI_MODELS.filter(slug => !disabledNatives.has(slug))
           : [];
+        const bareSelectorNativeSlugs = accountSelectors.length > 0
+          ? selectorNativeSlugs
+          : [];
         const visibleNatives = includeNativeOpenAi
-          ? accountSelectors.length > 0 ? selectorNativeSlugs : visibleNativeSlugs(config)
+          ? accountSelectors.length > 0
+            ? bareSelectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
+            : visibleNativeSlugs(config)
           : [];
         const visibleAccountNatives = accountSelectors.flatMap(selector =>
-          selectorNativeSlugs.flatMap(metadataId => {
+          (accountNativeSlugsBySelector.get(selector) ?? []).filter(metadataId => !disabledNatives.has(metadataId)).flatMap(metadataId => {
             const id = `${selector}/${metadataId}`;
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })
@@ -752,7 +1065,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
             ...grokEffortFields(m.reasoningEfforts ?? [], m.defaultReasoningEffort),
           })),
         ];
-        return jsonResponse({ object: "list", data }, 200, req, config);
+        return jsonResponse({ object: "list", data }, 200, req, policy);
       }
 
       // Remote compaction v1 (codex-rs with Feature::RemoteCompactionV2 off — the default).
@@ -760,12 +1073,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       // before the /v1/* 404 guard below.
       if (url.pathname === "/v1/responses/compact" && req.method === "POST") {
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveResponsesApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -775,7 +1088,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           ...admissionFields(admission),
           inboundProtocol: "responses",
         };
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           let response: Response;
           try {
             response = await handleResponsesCompact(req, config, logCtx, turnAdmissionLease);
@@ -784,7 +1097,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           }
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
-          return withCors(response, req, config);
+          return withCors(response, req, policy);
         });
       }
 
@@ -794,12 +1107,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       ) {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -809,24 +1122,24 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           ...admissionFields(admission),
         };
         const endpoint = url.pathname.endsWith("/edits") ? "edits" as const : "generations" as const;
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleImages(req, config, endpoint, logCtx, turnAdmissionLease);
           addFinalRequestLog(requestId, start, logCtx, response.status, response.status === 499 ? { closeReason: "client_cancel" } : undefined);
-          return withCors(response, req, config);
+          return withCors(response, req, policy);
         });
       }
 
       if (req.method === "GET" && url.pathname.startsWith("/v1/opencodex/artifacts/")) {
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const id = decodeURIComponent(url.pathname.slice("/v1/opencodex/artifacts/".length));
         const { resolveArtifactPath } = await import("../images/artifacts");
         const artifactPath = resolveArtifactPath(id);
         if (!artifactPath) {
-          return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, config);
+          return withCors(formatErrorResponse(404, "not_found", "artifact not found"), req, policy);
         }
         const file = Bun.file(artifactPath);
         const ext = artifactPath.split(".").pop()?.toLowerCase();
@@ -843,18 +1156,18 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
             "cache-control": "private, max-age=3600",
             "x-content-type-options": "nosniff",
           },
-        }), req, config);
+        }), req, policy);
       }
 
       if (url.pathname === "/v1/alpha/search" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -863,23 +1176,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           provider: "unknown",
           ...admissionFields(admission),
         };
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleSearch(req, config, logCtx, turnAdmissionLease);
           addFinalRequestLog(requestId, start, logCtx, response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined);
-          return withCors(response, req, config);
+          return withCors(response, req, policy);
         });
       }
 
       if (url.pathname === "/v1/responses" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveResponsesApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -898,13 +1211,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           logged = true;
           addFinalRequestLog(requestId, start, logCtx, status, meta);
         };
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleResponses(req, config, logCtx, {
             turnAdmissionLease,
             abortSignal: req.signal,
             onFirstOutput: () => recordFirstOutput(logCtx, start),
             onNativePassthroughTerminal: status => {
-              finalizeNativePassthroughLog(httpStatusForTerminalStatus(status), {
+              finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
                 terminalStatus: status,
                 closeReason: "terminal",
               });
@@ -913,7 +1226,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
               finalizeNativePassthroughLog(499, { closeReason: "client_cancel" });
             },
           });
-          return withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, config);
+          return withCors(responseWithDeferredRequestLog(response, requestId, start, logCtx), req, policy);
         });
       }
 
@@ -921,29 +1234,33 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       // Claude Code posts `/v1/messages?beta=true` — pathname match ignores the query (003 G9).
       if (url.pathname === "/v1/messages/count_tokens" && req.method === "POST") {
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
+        const admission = resolveApiAuth(req, policy);
         if (!admission) {
-          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, config);
+          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, policy);
         }
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, config);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
-        return runAdmittedHttpTurn(req, async () => withCors(await handleClaudeCountTokens(req, config), req, config));
+        return runAdmittedHttpTurn(req, policy, async () => withCors(
+          await handleClaudeCountTokens(req, config, policy),
+          req,
+          policy,
+        ));
       }
 
       if (url.pathname === "/v1/messages" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
+        const admission = resolveApiAuth(req, policy);
         if (!admission) {
-          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, config);
+          return withCors(anthropicErrorResponse(401, "opencodex API key required", "authentication_error"), req, policy);
         }
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, config);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -956,10 +1273,10 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         // Logging is finalized inside handleClaudeMessages (Responses-vocab tap on the
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }),
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
           req,
-          config,
+          policy,
         ));
       }
 
@@ -968,12 +1285,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveResponsesApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveResponsesApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -983,7 +1300,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           ...admissionFields(admission),
           inboundProtocol: "chat",
         };
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => withCors(
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
           await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease }),
           req,
           config,
@@ -999,12 +1316,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       ) {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -1013,7 +1330,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           provider: "unknown",
           ...admissionFields(admission),
         };
-        return runAdmittedHttpTurn(req, async turnAdmissionLease => {
+        return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleLive(req, config, logCtx, turnAdmissionLease);
           addFinalRequestLog(
             requestId,
@@ -1022,23 +1339,26 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
             response.status,
             response.status === 499 ? { closeReason: "client_cancel" } : undefined,
           );
-          return withCors(response, req, config);
+          return withCors(response, req, policy);
         });
       }
 
-      // Voice / Realtime sideband WebSocket: Frameless joins /v1/live/{callId}; Realtime v1 joins
-      // /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Transparent bidirectional relay.
+      // Voice / Realtime WebSocket relay. Sideband joins: Frameless /v1/live/{callId};
+      // Realtime v1 /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Standalone
+      // sessions (codex-rs thread/realtime/start, WebSocket transport — the desktop voice
+      // path): /v1/realtime?intent=quicksilver&model= and /v1/live?model=.
+      // Transparent bidirectional relay.
       const liveSidebandTarget = req.headers.get("upgrade")?.toLowerCase() === "websocket"
-        ? parseLiveSidebandTarget(url.pathname, url.searchParams)
+        ? parseLiveSidebandTarget(url.pathname, url.searchParams, url.search.replace(/^\?/, ""))
         : null;
       if (liveSidebandTarget) {
         if (isDraining()) {
-          return drainingResponse(req);
+          return drainingResponse(req, policy);
         }
-        const admission = resolveApiAuth(req, config);
-        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, config);
-        if (!isAllowedRequestOrigin(req, config)) {
-          return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, config);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return withCors(formatErrorResponse(403, "origin_rejected", "WebSocket upgrade blocked: non-local Origin"), req, policy);
         }
         const start = Date.now();
         const requestId = nextRequestLogId(start);
@@ -1048,7 +1368,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
           ...admissionFields(admission),
         };
         const turnAdmissionLease = tryAdmitTurn();
-        if (!turnAdmissionLease) return serverBusyResponse(req, "active turns");
+        if (!turnAdmissionLease) return serverBusyResponse(req, "active turns", policy);
         let resolved;
         try {
           resolved = await resolveLiveSidebandUpgrade(req, config, logCtx, liveSidebandTarget, turnAdmissionLease);
@@ -1059,21 +1379,22 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         if (resolved instanceof Response) {
           turnAdmissionLease.release();
           addFinalRequestLog(requestId, start, logCtx, resolved.status);
-          return withCors(resolved, req, config);
+          return withCors(resolved, req, policy);
         }
         addFinalRequestLog(requestId, start, logCtx, 101);
-        if (server.upgrade(req, {
+        if (requestServer.upgrade(req, {
           data: {
             kind: "live-sideband",
             liveUpstreamUrl: resolved.upstreamWsUrl,
             liveUpstreamHeaders: resolved.headers,
             livePending: [],
+            livePendingBytes: 0,
             liveOpened: false,
             liveTurnAdmissionLease: turnAdmissionLease,
           } satisfies WsData,
         })) return undefined as unknown as Response;
         turnAdmissionLease.release();
-        return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, config);
+        return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
       // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
@@ -1081,7 +1402,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
       if (url.pathname.startsWith("/v1/")) {
-        return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
+        return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, policy);
       }
 
       const guiSessionCandidate = req.method === "GET" && (url.pathname === "/" || !url.pathname.includes("."))
@@ -1101,6 +1422,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       return withCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
     },
     websocket: {
+      maxPayloadLength: MAX_WS_FRAME_BYTES,
       idleTimeout: WEBSOCKET_IDLE_TIMEOUT_SECONDS,
       // Responses WebSocket data plane (phase 120.2). Re-frames the same SSE pipeline onto the
       // socket: parse response.create → run handleResponses unchanged → pump its SSE body as WS
@@ -1125,15 +1447,23 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
       message(ws: ServerWebSocket<WsData>, raw: string | Buffer) {
         if (ws.data.kind === "live-sideband") {
           if (ws.data.liveClosing) return;
+          const rawBytes = webSocketFrameBytes(raw);
+          if (exceedsLiveSidebandFrameByteLimit(rawBytes)) {
+            closeLiveSideband(ws, 1009, "message too large");
+            return;
+          }
           logLiveSidebandFrame("c2u", raw);
           const upstream = ws.data.liveUpstream;
           if (!upstream || upstream.readyState === WebSocket.CONNECTING || !ws.data.liveOpened) {
-            const pending = ws.data.livePending ?? (ws.data.livePending = []);
-            if (pending.length >= LIVE_SIDEBAND_PENDING_MAX) {
+            const enqueueResult = enqueueLiveSidebandPendingFrame(ws.data, raw, rawBytes);
+            if (enqueueResult === "too-many-frames") {
               closeLiveSideband(ws, 1009, "too many pending frames");
               return;
             }
-            pending.push(raw);
+            if (enqueueResult === "too-many-bytes") {
+              closeLiveSideband(ws, 1009, "too many pending bytes");
+              return;
+            }
             return;
           }
           if (upstream.readyState !== WebSocket.OPEN) {
@@ -1141,7 +1471,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
             return;
           }
           try {
-            upstream.send(raw);
+            sendUpstreamFrame(upstream, raw);
           } catch {
             closeLiveSideband(ws, 1011, "upstream send failed");
           }
@@ -1302,26 +1632,69 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
         ws.data.cancel?.(); // RC2: abort the upstream when the client disconnects
       },
     },
-    });
+    } as const;
+
+    server = Bun.serve<WsData>({ ...serveOptions, port: listenPort, hostname: bindHost });
+
+    // Both binds are one startup transaction (#1102). If the loopback bind fails after the
+    // public one succeeded, leaving the public listener up would strand it: the CLI's port
+    // retry would read the failure as a public-port conflict and pick a different port,
+    // accumulating listeners. Roll back and rethrow the original error instead.
+    if (loopbackListenerPort !== null) {
+      try {
+        loopbackServer = Bun.serve<WsData>({
+          ...serveOptions,
+          port: loopbackListenerPort,
+          hostname: "127.0.0.1",
+        });
+      } catch (error) {
+        try {
+          // startServer is synchronous, so this rollback cannot await. Bun begins closing the
+          // listen socket on the call itself; the caller sees the original bind error either
+          // way, and the alternative — leaving the public listener up — is the failure this
+          // rollback exists to prevent.
+          void server.stop(true);
+        } catch {
+          /* the original bind error is the one worth reporting */
+        }
+        throw error;
+      }
+    }
   } catch (error) {
+    userCostOverlayReconciler?.stop();
+    backgroundLifecycle?.releaseAfterFailedStart();
     void nativeMainLifecycle.release();
     throw error;
   }
 
   bindNativeMainStartupLifecycle(server, nativeMainLifecycle);
   const nativeStop = server.stop.bind(server);
+  const loopbackListenerRef = loopbackServer;
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
-      try {
-        await nativeStop(closeActiveConnections);
-      } finally {
-        await releaseNativeMainStartupLifecycle(server);
-      }
+      // The orchestration lives in `runListenerShutdown` so its two competing properties —
+      // cleanup completes, failure propagates — are testable without a live socket.
+      await runListenerShutdown(
+        [
+          () => nativeStop(closeActiveConnections),
+          ...(loopbackListenerRef
+            ? [() => loopbackListenerRef.stop(closeActiveConnections)]
+            : []),
+          async () => {
+            userCostOverlayReconciler?.stop();
+          },
+        ],
+        async () => {
+          await backgroundLifecycle.release();
+          await releaseNativeMainStartupLifecycle(server);
+        },
+      );
     },
   });
   setServerRef(server);
   const actualPort = server.port ?? listenPort;
+  boundPort = actualPort;
   setCorsOrigin(actualPort);
 
   console.log(`🚀 opencodex proxy running on http://localhost:${actualPort}`);
@@ -1330,6 +1703,17 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   console.log(`   GET  /healthz      → health check`);
   console.log(`   GET  /api/*        → management API`);
   console.log(`   GET  /             → GUI dashboard`);
+
+  if (loopbackServer) {
+    // Loud on every start, not once at enable time. An operator who inherits a config, or
+    // who forgot, has to be able to see that an unauthenticated surface is live without
+    // reading the file.
+    const loopbackPort = loopbackServer.port ?? loopbackListenerPort;
+    console.warn(`⚠️  Unauthenticated loopback listener active on http://127.0.0.1:${loopbackPort}`);
+    console.warn(`   Any local process can use it without a credential — it spends account`);
+    console.warn(`   quota and paid provider credentials, and can starve authenticated`);
+    console.warn(`   remote clients. Not for shared or multi-tenant hosts.`);
+  }
 
   // Prime pool-account quota in the background so the rotation engine has real
   // usage scores from the first routing decision, even when the dashboard is
@@ -1348,7 +1732,21 @@ export function startServer(port?: number, deps: StartServerDeps = {}) {
   }
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
-  scheduleStorageCleanupStartupRun();
+  backgroundLifecycle.scheduleStartupRun();
+
+  const labConfigDir = getConfigDir();
+  const productionLabRouteExecutor = createProductionLabRouteExecutor({
+    configDir: labConfigDir,
+    loadConfig: () => config,
+  });
+  setLabAutomationDispatchDeps({
+    configDir: labConfigDir,
+    loadConfig: () => config,
+    routeExecutor: productionLabRouteExecutor,
+  });
+  if (loadLabAutomationPolicy(labConfigDir).enabled) {
+    startLabAutomationScheduler(labConfigDir);
+  }
 
   return server;
 }

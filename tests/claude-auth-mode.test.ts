@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { buildClaudeEnv } from "../src/cli/claude";
 import { PROXY_MARKER, type AuthDetectDeps, type AuthPresence } from "../src/claude/auth-detect";
 import { authModeIntent, resolveClaudeAuthMode } from "../src/claude/auth-mode";
@@ -90,6 +90,22 @@ test("a stale marker is stripped when the mode resolves subscription", () => {
   expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
 });
 
+test("a whitespace-wrapped stale marker cannot follow an external destination", () => {
+  const env = buildClaudeEnv(
+    cfg(), 10100,
+    {
+      ANTHROPIC_BASE_URL: "https://trusted-gateway.example",
+      ANTHROPIC_AUTH_TOKEN: `  ${PROXY_MARKER}  `,
+    },
+    {},
+    {
+      authDetect: fileAuth("present"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+});
+
 test("a stale marker is re-established when the mode still resolves proxy", () => {
   const env = buildClaudeEnv(
     cfg(), 10100,
@@ -140,6 +156,18 @@ test("an exported ANTHROPIC_API_KEY keeps the token slot untouched", () => {
 test("manual proxy injects the marker even when auth is present", () => {
   const env = buildClaudeEnv(cfg({ authMode: "proxy" }), 10100, {}, {}, { authDetect: fileAuth("present") });
   expect(env.ANTHROPIC_AUTH_TOKEN).toBe(PROXY_MARKER);
+});
+
+test("manual proxy mode does not pair a marker with a user API key", () => {
+  const env = buildClaudeEnv(
+    cfg({ authMode: "proxy" }), 10100,
+    { ANTHROPIC_API_KEY: "user-api-key" },
+    {},
+    { authDetect: fileAuth("absent"), preBunAnthropicSlots: ["ANTHROPIC_API_KEY"] },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBe("user-api-key");
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
 });
 
 test("manual subscription withholds the marker even when auth is absent", () => {
@@ -233,6 +261,176 @@ test("a proof-bound parent base URL remains supported", () => {
     { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
   );
   expect(env.ANTHROPIC_BASE_URL).toBe("https://trusted-gateway.example");
+});
+
+test("a configured admission key is never injected into an external gateway", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_BASE_URL: "https://trusted-gateway.example" },
+    {},
+    { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+  );
+  expect(env.ANTHROPIC_BASE_URL).toBe("https://trusted-gateway.example");
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+});
+
+test("an HTTPS loopback URL is not treated as the local HTTP proxy", () => {
+  const env = buildClaudeEnv(
+    cfg({ authMode: "proxy" }, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_BASE_URL: "https://localhost:10100" },
+    {},
+    { authDetect: fileAuth("absent"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+});
+
+test("a same-port IPv6 loopback URL receives the configured admission key", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_BASE_URL: "http://[::1]:10100" },
+    {},
+    { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
+});
+
+test("a stale IPv6 loopback URL is moved to the running proxy port", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_BASE_URL: "http://[::1]:9999" },
+    {},
+    { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+  );
+  expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
+});
+
+test("a default-port loopback URL is moved to the running proxy port", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    { ANTHROPIC_BASE_URL: "http://localhost" },
+    {},
+    { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+  );
+  expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("admission-key");
+});
+
+test("a stale loopback warning omits URL credentials, paths, and queries", () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const env = buildClaudeEnv(
+      cfg(undefined, [{ key: "admission-key" }]), 10100,
+      { ANTHROPIC_BASE_URL: "http://user:oauth-token@localhost:9999/private?token=query-secret" },
+      {},
+      { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_BASE_URL"] },
+    );
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:10100");
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("http://localhost:9999"));
+    const warning = String(error.mock.calls[0]?.[0] ?? "");
+    expect(warning).not.toContain("oauth-token");
+    expect(warning).not.toContain("query-secret");
+    expect(warning).not.toContain("user:");
+  } finally {
+    error.mockRestore();
+  }
+});
+
+test("an inherited admission key is stripped when the destination is external", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    {
+      ANTHROPIC_BASE_URL: "https://trusted-gateway.example",
+      ANTHROPIC_AUTH_TOKEN: "admission-key",
+    },
+    {},
+    {
+      authDetect: fileAuth("present"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+});
+
+test("a stale generated admission key is still recognized after key rotation", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "ocx_data_current" }]), 10100,
+    {
+      ANTHROPIC_BASE_URL: "https://trusted-gateway.example",
+      ANTHROPIC_AUTH_TOKEN: "  ocx_data_rotated  ",
+    },
+    {},
+    {
+      authDetect: fileAuth("present"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+});
+
+test("a proxy admission secret is never preserved in the API-key slot", () => {
+  const external = buildClaudeEnv(
+    cfg(undefined, [{ key: "ocx_data_current" }]), 10100,
+    {
+      ANTHROPIC_BASE_URL: "https://trusted-gateway.example",
+      ANTHROPIC_API_KEY: "  ocx_data_rotated  ",
+    },
+    {},
+    {
+      authDetect: fileAuth("present"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
+    },
+  );
+  expect(external.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(external.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+
+  const local = buildClaudeEnv(
+    cfg(undefined, [{ key: "ocx_data_current" }]), 10100,
+    { ANTHROPIC_API_KEY: "ocx_data_rotated" },
+    {},
+    { authDetect: fileAuth("present"), preBunAnthropicSlots: ["ANTHROPIC_API_KEY"] },
+  );
+  expect(local.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(local.ANTHROPIC_AUTH_TOKEN).toBe("ocx_data_current");
+});
+
+test("an external gateway keeps a user-owned auth token", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    {
+      ANTHROPIC_BASE_URL: "https://trusted-gateway.example",
+      ANTHROPIC_AUTH_TOKEN: "user-gateway-token",
+    },
+    {},
+    {
+      authDetect: fileAuth("absent"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"],
+    },
+  );
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBe("user-gateway-token");
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
+});
+
+test("a user API key outranks an inherited local admission token", () => {
+  const env = buildClaudeEnv(
+    cfg(undefined, [{ key: "admission-key" }]), 10100,
+    {
+      ANTHROPIC_BASE_URL: "http://[::1]:10100",
+      ANTHROPIC_API_KEY: "user-api-key",
+      ANTHROPIC_AUTH_TOKEN: "admission-key",
+    },
+    {},
+    {
+      authDetect: fileAuth("absent"),
+      preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+    },
+  );
+  expect(env.ANTHROPIC_API_KEY).toBe("user-api-key");
+  expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBeUndefined();
 });
 
 test("the legacy dotenv marker cannot forge parent provenance", () => {

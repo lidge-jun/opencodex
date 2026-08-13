@@ -33,6 +33,7 @@ import {
   CODEX_PROFILE_PATH,
   DEFAULT_CATALOG_PATH,
   getCodexHome,
+  resolveCodexStateDbPath,
 } from "./paths";
 
 export type CodexAdmission =
@@ -162,7 +163,7 @@ export function admitCodexWrite(deps: AdmissionDeps = {}): CodexAdmission {
   const config = diagnostics.config;
   const opencodexHome = getConfigDir();
   const integrationRecord = join(opencodexHome, "integrations", "codex.json");
-  const historyDb = join(codexHome, "state_5.sqlite");
+  const historyDb = resolveCodexStateDbPath({ codexHome });
 
   const canonicalTargets = {
     codexHome,

@@ -79,7 +79,7 @@ test("transient upstream 502 -> client 529 overloaded_error; retry fired; log ke
     expect(entry?.status).toBe(502);
   } finally {
     await server.stop(true);
-    upstream.stop(true);
+    await upstream.stop(true);
   }
 }, 15_000);
 
@@ -102,7 +102,7 @@ test("transient 502 without Retry-After -> fallback Retry-After 2 on the 529 res
     expect(response.headers.get("retry-after")).toBe("2");
   } finally {
     await server.stop(true);
-    upstream.stop(true);
+    await upstream.stop(true);
   }
 }, 15_000);
 
@@ -129,6 +129,6 @@ test("non-transient upstream 400 stays 400 invalid_request_error; no retry", asy
     expect(json.error?.type).toBe("invalid_request_error");
   } finally {
     await server.stop(true);
-    upstream.stop(true);
+    await upstream.stop(true);
   }
 });

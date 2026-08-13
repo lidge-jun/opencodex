@@ -12,6 +12,7 @@ import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { applyDirectReasoningEffortContracts } from "./providers/derive";
 import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
@@ -22,8 +23,6 @@ import {
 import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
-import { getEffectiveActiveCodexAccountId } from "./codex/routing";
-import { getAccountSet } from "./oauth/store";
 import {
   buildRouteDecisionTrace,
   type RouteDecisionKind,
@@ -32,10 +31,7 @@ import {
 } from "./routing/trace";
 import { getRoutingProfile, resolvePolicyProfileId } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
-import { candidateCapabilityEvidence } from "./routing/capability";
-import { policyCandidateHealthEvidence } from "./routing/health";
-import { quotaEvidenceForCandidate } from "./routing/quota";
-import { costEvidenceForCandidate } from "./routing/cost";
+import { assemblePolicyCandidateEvidence } from "./routing/compatibility/assemble";
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -251,7 +247,7 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
   return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined;
 }
 
-function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
+export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
@@ -271,6 +267,14 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
   const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  // Key-login used to persist this exact low-only ClinePass capability seed. Once the gateway's
+  // wider input ladder was live-verified, leaving that generated row untouched would keep old
+  // installs clamped forever. This branch is reached only after canonical transport matching, so
+  // same-named custom destinations and every other explicit ladder still retain user precedence.
+  const repairLegacyClinePassReasoningEfforts = providerName === "cline-pass"
+    && provider.reasoningWireFormat === "gateway-object"
+    && provider.reasoningEfforts?.length === 1
+    && provider.reasoningEfforts[0] === "low";
   const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
@@ -286,6 +290,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
   const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
   const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
+  const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
   const reasoningSplitModels = mergeStringArray(registryEntry.reasoningSplitModels, provider.reasoningSplitModels);
   const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
   const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
@@ -302,12 +307,16 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
   if (userBaseUrlIsResolved) warnIfBaseUrlDiscarded(providerName, userBaseUrl, baseUrl);
   assertProviderDestinationAllowed(providerName, { baseUrl, allowPrivateNetwork: provider.allowPrivateNetwork });
 
-  return {
+  const resolved: OcxProviderConfig = {
     ...provider,
     adapter: registryEntry.adapter,
     baseUrl,
     ...(provider.responsesPath === undefined && registryEntry.responsesPath !== undefined
       ? { responsesPath: registryEntry.responsesPath }
+      : {}),
+    ...(provider.requiresAdjacentResponsesToolResults === undefined
+      && registryEntry.requiresAdjacentResponsesToolResults !== undefined
+      ? { requiresAdjacentResponsesToolResults: registryEntry.requiresAdjacentResponsesToolResults }
       : {}),
     ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
       ? { supportsServiceTier: registryEntry.supportsServiceTier }
@@ -341,7 +350,10 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
-    ...(provider.reasoningEfforts === undefined && registryEntry.reasoningEfforts !== undefined ? { reasoningEfforts: registryEntry.reasoningEfforts } : {}),
+    ...((provider.reasoningEfforts === undefined || repairLegacyClinePassReasoningEfforts)
+      && registryEntry.reasoningEfforts !== undefined
+      ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }
+      : {}),
     ...(provider.escapeBuiltinToolNames === undefined && registryEntry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: registryEntry.escapeBuiltinToolNames } : {}),
     ...(provider.keyOptional === undefined && registryEntry.keyOptional !== undefined ? { keyOptional: registryEntry.keyOptional } : {}),
     ...(provider.modelSuffixBracketStrip === undefined && registryEntry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: registryEntry.modelSuffixBracketStrip } : {}),
@@ -349,6 +361,7 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     // opt-in, while an explicit user `false` keeps overriding registry `true`.
     ...(provider.parallelToolCalls === undefined && registryEntry.parallelToolCalls !== undefined ? { parallelToolCalls: registryEntry.parallelToolCalls } : {}),
     ...(provider.promptCacheKey === undefined && registryEntry.promptCacheKey !== undefined ? { promptCacheKey: registryEntry.promptCacheKey } : {}),
+    ...(provider.chatServiceTier === undefined && registryEntry.chatServiceTier !== undefined ? { chatServiceTier: registryEntry.chatServiceTier } : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
       : {}),
@@ -370,10 +383,13 @@ function routedProviderConfig(providerName: string, provider: OcxProviderConfig)
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
+    ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),
   };
+  applyDirectReasoningEffortContracts(registryEntry, resolved, provider);
+  return resolved;
 }
 
 function activeProviderEntries(config: OcxConfig): [string, OcxProviderConfig][] {
@@ -505,39 +521,9 @@ function routeModelInternal(
     // One clock read per decision keeps candidate evidence, exclusions, and
     // scores mutually consistent and reproducible.
     const now = Date.now();
-    const candidateEvidence = profile.candidates.map(candidate => ({
-      provider: candidate.provider,
-      model: candidate.model,
-      capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
-      health: policyCandidateHealthEvidence(config, candidate, now),
-      quota: quotaEvidenceForCandidate({
-        provider: candidate.provider,
-        model: candidate.model,
-        ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
-          && providerCodexAccountMode(
-            OPENAI_CODEX_PROVIDER_ID,
-            config.providers[OPENAI_CODEX_PROVIDER_ID],
-          ) === "pool"
-          ? (() => {
-              const codexAccountId = getEffectiveActiveCodexAccountId(config);
-              return {
-                codexAccountId,
-                codexAccountPlan: codexAccountId
-                  ? config.codexAccounts?.find(account => account.id === codexAccountId)?.plan
-                  : undefined,
-              };
-            })()
-          : {}),
-        accountRef: candidate.provider === "anthropic"
-          ? getAccountSet("anthropic")?.activeAccountId
-          : undefined,
-      }),
-      cost: costEvidenceForCandidate({
-        provider: candidate.provider,
-        model: candidate.model,
-        limitUsd: profile.limits.maxEstimatedCostUsd,
-      }),
-    }));
+    const candidateEvidence = assemblePolicyCandidateEvidence(config, profile, now, {
+      routedProviderConfig,
+    });
     const evaluation = evaluatePolicyProfile(config, policyId, policyEvidence ?? {}, candidateEvidence, now);
     if (evaluation.selectedIndex === null) {
       throw new NoEligiblePolicyCandidateError(policyId, evaluation.trace);
@@ -693,6 +679,11 @@ export function routeModel(
       : undefined,
   });
   return route;
+}
+
+/** Resolve a combo-selected provider/model target without consulting public combo aliases again. */
+export function routeConcreteModel(config: OcxConfig, modelId: string): RouteResult {
+  return routeModelInternal(config, modelId, true, undefined);
 }
 
 function routeByKnownModelPattern(config: OcxConfig, modelId: string): RouteResult | undefined {

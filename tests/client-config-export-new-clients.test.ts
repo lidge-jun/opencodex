@@ -5,7 +5,7 @@ import {
   EXPORT_CLIENT_IDS,
   GAJAE_API_KEY_ENV,
   HERMES_API_KEY_ENV_REF,
-  KIMI_LOOPBACK_PLACEHOLDER,
+  LOOPBACK_API_KEY_PLACEHOLDER,
   OPENCLAW_API_KEY_ENV_REF,
   OPENCODE_PROVIDER_ID,
   buildClientConfig,
@@ -57,13 +57,12 @@ function ctx(config: OcxConfig = LOOPBACK): ExportContext {
 }
 
 describe("no secret reaches a client config", () => {
-  test("a client is loopback-only exactly when it has nowhere to put the admission header", () => {
-    // /v1/chat/completions rejects bearer credentials and requires the
-    // dedicated x-opencodex-api-key header (AUTH_MATRIX in auth-cors.ts), so a
-    // client whose schema has no header field cannot authenticate remotely at
-    // all. Saying so beats exporting a config that 401s.
+  test("the generated client support policy identifies every loopback-only integration", () => {
+    // Pi, Kimi and Gajae cannot emit the dedicated admission header. OMP can
+    // carry provider headers, but remote credential wiring is deliberately
+    // deferred from this initial generated integration.
     const loopbackOnly = EXPORT_CLIENT_IDS.filter(id => EXPORT_CLIENTS[id].loopbackOnly);
-    expect(loopbackOnly).toEqual(["pi", "kimi", "gajae"]);
+    expect(loopbackOnly).toEqual(["pi", "omp", "kimi", "gajae"]);
   });
 
   test("every client that is not loopback-only carries the header on a remote bind", () => {
@@ -235,7 +234,7 @@ describe("kimi", () => {
 
   test("uses the loopback placeholder because Kimi reads no environment", () => {
     const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;
-    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(KIMI_LOOPBACK_PLACEHOLDER);
+    expect(doc.providers[OPENCODE_PROVIDER_ID]!.api_key).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
   });
 
   test("never emits capabilities it cannot assert", () => {
@@ -268,7 +267,7 @@ describe("gajae", () => {
 
 describe("contributions name every fragment we own", () => {
   test("single-entry clients own exactly one path", () => {
-    for (const id of ["opencode", "pi", "hermes", "openclaw", "gajae"] as const) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "gajae"] as const) {
       expect(buildClientContribution(id, ctx()).fragments).toHaveLength(1);
     }
   });

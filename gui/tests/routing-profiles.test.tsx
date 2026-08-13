@@ -142,6 +142,18 @@ async function mountPage(): Promise<{ container: HTMLDivElement; root: Root }> {
   return { container, root };
 }
 
+function requirementSelect(container: HTMLDivElement, key: string): HTMLSelectElement | null {
+  // Scope the lookup to the "Hard requirements" fieldset so keys that also
+  // appear in the optimize/unknown-evidence fieldsets (health, cost, quota)
+  // cannot produce a false match.
+  const fieldset = [...container.querySelectorAll<HTMLFieldSetElement>("fieldset")]
+    .find(candidate => candidate.querySelector("legend")?.textContent === "Hard requirements");
+  const scope: ParentNode = fieldset ?? container;
+  const label = [...scope.querySelectorAll<HTMLLabelElement>("label")]
+    .find(candidate => candidate.querySelector("code")?.textContent === key);
+  return label?.querySelector<HTMLSelectElement>("select") ?? null;
+}
+
 test("routing page loads profiles, analytics, and marks the dry-run selection", async () => {
   const dryRunBodies: unknown[] = [];
   installFetch((url, init) => {
@@ -161,7 +173,13 @@ test("routing page loads profiles, analytics, and marks the dry-run selection", 
   const { container, root } = await mountPage();
   try {
     expect(container.querySelector('[data-page="routing"]')).toBeTruthy();
-    expect(container.textContent).toContain("Routing Intelligence (beta)");
+    /*
+     * The panel no longer renders its own title: it is a Models tab now, and the shell
+     * above it owns the page heading and subtitle. Rendering them here put both on
+     * screen twice. The string still exists in the product — as the tab label.
+     */
+    expect(container.textContent).not.toContain("Routing Intelligence (beta)");
+    expect(container.textContent).toContain("Create profile");
     expect(container.textContent).toContain("balanced");
     expect(container.textContent).toContain("policy/balanced");
     expect(container.textContent).toContain("rev-abc");
@@ -178,7 +196,7 @@ test("routing page loads profiles, analytics, and marks the dry-run selection", 
 
     expect(dryRunBodies).toEqual([{ profile: "balanced", evidence: {} }]);
     expect(container.textContent).toContain("selected");
-    expect(container.textContent).toContain("unknown-capability");
+    expect(container.textContent).toContain("unknown capability");
     expect(container.textContent).toContain("0.910");
   } finally {
     await act(async () => { root.unmount(); });
@@ -272,7 +290,7 @@ test("routing refreshes the selected profile after reload", async () => {
     await act(async () => { retry!.click(); });
     await tick(3);
     expect(container.textContent).toContain("rev-def");
-    expect(container.textContent).toContain("\"imageInput\": true");
+    expect(requirementSelect(container, "imageInput")?.value).toBe("true");
   } finally {
     await act(async () => { root.unmount(); });
   }
@@ -324,7 +342,7 @@ test("routing ignores a stale load body that finishes after a newer retry", asyn
     await tick(4);
 
     expect(container.textContent).toContain("rev-def");
-    expect(container.textContent).toContain("\"imageInput\": true");
+    expect(requirementSelect(container, "imageInput")?.value).toBe("true");
 
     await act(async () => {
       releaseStale();
@@ -345,3 +363,28 @@ test("routing ignores a stale load body that finishes after a newer retry", asyn
   }
 });
 
+test("routing rejects a profile missing a required nested object instead of crashing the load", async () => {
+  const malformed = {
+    ...PROFILE,
+    id: "malformed",
+    // require is a required DTO field; omitting it must drop the profile.
+    require: undefined,
+  };
+  installFetch((url, init) => {
+    if (url.endsWith("/api/routing-profiles") && (init?.method ?? "GET") === "GET") {
+      return Response.json({ profiles: [PROFILE, malformed] });
+    }
+    if (url.endsWith("/api/routing-analytics")) {
+      return Response.json(ANALYTICS);
+    }
+    return new Response("missing", { status: 404 });
+  });
+
+  const { container, root } = await mountPage();
+  try {
+    expect(container.textContent).toContain("balanced");
+    expect(container.textContent).not.toContain("malformed");
+  } finally {
+    await act(async () => { root.unmount(); });
+  }
+});

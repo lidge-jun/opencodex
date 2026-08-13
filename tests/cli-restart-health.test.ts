@@ -8,6 +8,13 @@ import { fileURLToPath } from "node:url";
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
+/**
+ * Every subprocess in this file runs against a private temp OPENCODEX_HOME so no
+ * check can ever discover/inspect/mutate the operator's real proxy state. The
+ * ready describe keeps ONLY the help-routing subprocess checks: the
+ * network/no-proxy/argument-validation ready tests live as injected tests in
+ * tests/cli-ready.test.ts (no real loopback/home).
+ */
 function runCli(args: string[], env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: repoRoot,
@@ -17,41 +24,69 @@ function runCli(args: string[], env: Record<string, string> = {}) {
   });
 }
 
+function isolatedHome(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function writeIsolatedConfig(dir: string): void {
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    port: 19999,
+    providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
+    defaultProvider: "openai",
+    codexAutoStart: false,
+  }), "utf8");
+}
+
 describe("ocx restart", () => {
   test("restart --help prints usage", () => {
-    const result = runCli(["restart", "--help"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("ocx restart");
+    const dir = isolatedHome("ocx-restart-help-");
+    try {
+      const result = runCli(["restart", "--help"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("ocx restart");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("help restart shows restart help entry", () => {
-    const result = runCli(["help", "restart"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Stop the proxy and restart");
+    const dir = isolatedHome("ocx-restart-help-entry-");
+    try {
+      const result = runCli(["help", "restart"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Stop the proxy and restart");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
 describe("ocx health", () => {
   test("health --help prints usage", () => {
-    const result = runCli(["health", "--help"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("ocx health");
+    const dir = isolatedHome("ocx-health-help-");
+    try {
+      const result = runCli(["health", "--help"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("ocx health");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("help health shows health help entry", () => {
-    const result = runCli(["help", "health"]);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Check proxy health");
+    const dir = isolatedHome("ocx-health-help-entry-");
+    try {
+      const result = runCli(["help", "health"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Check proxy health");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("health exits 1 with no proxy running (isolated home)", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-health-"));
-    writeFileSync(join(dir, "config.json"), JSON.stringify({
-      port: 19999,
-      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
-      defaultProvider: "openai",
-      codexAutoStart: false,
-    }), "utf8");
+    const dir = isolatedHome("ocx-health-");
+    writeIsolatedConfig(dir);
     try {
       const result = runCli(["health"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(1);
@@ -62,19 +97,42 @@ describe("ocx health", () => {
   });
 
   test("health --json exits 1 with valid JSON when no proxy", () => {
-    const dir = mkdtempSync(join(tmpdir(), "ocx-health-json-"));
-    writeFileSync(join(dir, "config.json"), JSON.stringify({
-      port: 19999,
-      providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } },
-      defaultProvider: "openai",
-      codexAutoStart: false,
-    }), "utf8");
+    const dir = isolatedHome("ocx-health-json-");
+    writeIsolatedConfig(dir);
     try {
       const result = runCli(["health", "--json"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(1);
       const parsed = JSON.parse(result.stdout);
       expect(parsed.ok).toBe(false);
       expect(parsed.pid).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ocx ready", () => {
+  // Only the help-routing subprocess checks live here. The default-probe,
+  // --json, --wait, --timeout, and argument-validation cases are injected tests
+  // in tests/cli-ready.test.ts (no real loopback/home).
+  test("ready --help prints usage (exit 0)", () => {
+    const dir = isolatedHome("ocx-ready-help-");
+    try {
+      const result = runCli(["ready", "--help"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("ocx ready");
+      expect(result.stdout).toContain("--wait");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("help ready shows the ready help entry", () => {
+    const dir = isolatedHome("ocx-ready-help-entry-");
+    try {
+      const result = runCli(["help", "ready"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("post-sync readiness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

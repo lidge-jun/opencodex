@@ -154,6 +154,16 @@ checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
 the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
 
+Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
+the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the
+effective `CODEX_HOME`. Relative SQLite homes resolve from the current working directory. When an
+explicit `CODEX_SQLITE_HOME` is present during service installation or repair, the durable launcher
+stores its install-time absolute path so the background proxy continues to address the same database.
+If `config.toml` or its root `sqlite_home` key is absent, OpenCodex continues to the
+environment/home fallback. If the file cannot be read or parsed, or the key is present but blank or
+not a string, SQLite-home resolution stops instead of risking history operations against a different
+database.
+
 On Windows, an Orca shell can set both `CODEX_HOME` and `ORCA_CODEX_HOME` to Orca's bundled runtime
 home while the ChatGPT/Codex app still reads `%USERPROFILE%\\.codex`. `ocx status` and `ocx doctor`
 warn about this exact mismatch and print redacted target paths. If a background service was installed
@@ -192,6 +202,25 @@ start and on `ocx sync`, opencodex:
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
 max | ultra` ladder; unsupported values are mapped or clamped before the upstream request.
+
+### Routed local tools
+
+Non-native routed catalog rows use `tool_mode: "code_mode_only"`. This lets Codex expose its official
+`exec` entrypoint and nested MCP tools, including Browser and Computer Use, while opencodex routes
+only the model's ordinary function call. Tool execution, permissions, and confirmations remain
+local to Codex; opencodex does not implement a second browser or desktop-control executor.
+
+For key-auth Responses providers that do not accept Codex's `exec` custom-tool grammar, opencodex
+encodes that declaration and its history as an upstream function tool, then restores the streamed
+function-call lifecycle to `custom_tool_call` before Codex sees it. Native OpenAI forward routing
+and the supported `apply_patch` custom tool stay unchanged.
+
+The selected provider must support function/tool calling. A text-only provider without tool-call
+support cannot use `exec`, Browser, or Computer Use. Native OpenAI rows keep their upstream tool
+mode unchanged.
+
+After `ocx sync` changes this metadata, restart Codex App and open a fresh task. Existing app-server
+processes and tasks may retain the catalog and tool plan they loaded at startup.
 
 ### Custom model display names
 

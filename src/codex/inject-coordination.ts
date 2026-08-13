@@ -229,7 +229,19 @@ export function recomputeInjectWitness(options: {
 /** Project a non-acquired lock result into the injection result shape. */
 export function codexInjectLockOutcome(
   result: Exclude<CodexWriteLockResult<unknown>, { status: "acquired" }>,
-): { success: false; message: string; retryable: boolean } {
+): { success: false; message: string; retryable: boolean } | {
+  success: true; status: "skipped"; skippedReason: "desired_disabled" | "desired_enabled"; message: string;
+} {
+  if (result.status === "skipped") {
+    return {
+      success: true,
+      status: "skipped",
+      skippedReason: result.reason,
+      message: result.reason === "desired_disabled"
+        ? "Codex integration is OFF; no Codex config, catalog, cache, or history was changed."
+        : "Codex integration was re-enabled; native restore was skipped.",
+    };
+  }
   if (result.status === "busy") {
     return {
       success: false,

@@ -107,15 +107,9 @@ export const OPENCODE_API_KEY_ENV = "OPENCODEX_OPENCODE_API_KEY";
 /** Env reference shared by apiKey and the dedicated proxy admission header. */
 export const OPENCODE_API_KEY_ENV_REF = `{env:${OPENCODE_API_KEY_ENV}}`;
 
-/** Env var Pi interpolates. Pi takes bare `$NAME`, not opencode's `{env:NAME}`. */
-export const PI_API_KEY_ENV = "OPENCODEX_API_KEY";
-
-/** Pi's reference form for the admission key. Never the value. */
-export const PI_API_KEY_ENV_REF = `$${PI_API_KEY_ENV}`;
-
 /**
  * Hermes interpolates `${VAR}` anywhere in config.yaml, so the credential stays
- * in the environment exactly as it does for OpenCode and Pi.
+ * in the environment exactly as it does for OpenCode.
  */
 export const HERMES_API_KEY_ENV = "OPENCODEX_HERMES_API_KEY";
 export const HERMES_API_KEY_ENV_REF = `\${${HERMES_API_KEY_ENV}}`;
@@ -125,12 +119,12 @@ export const OPENCLAW_API_KEY_ENV = "OPENCODEX_OPENCLAW_API_KEY";
 export const OPENCLAW_API_KEY_ENV_REF = `\${${OPENCLAW_API_KEY_ENV}}`;
 
 /**
- * Kimi Code reads credentials ONLY from its config file — it never falls back
- * to the shell environment. A loopback bind needs no real admission key, so we
- * emit the same placeholder the Grok managed block uses rather than a user
- * secret; a non-loopback bind is refused by the writer instead of papered over.
+ * Placeholder credential for loopback-only clients (Kimi, Pi). A loopback
+ * bind needs no real admission key, so we emit the same placeholder the Grok
+ * managed block uses rather than a user secret. Pi resolves `apiKey` before
+ * building its model list and hides the provider when an env reference is unset.
  */
-export const KIMI_LOOPBACK_PLACEHOLDER = "opencodex-loopback";
+export const LOOPBACK_API_KEY_PLACEHOLDER = "opencodex-loopback";
 
 /**
  * Gajae's `apiKeyEnv` is env-name-only and fail-closed. Its sibling `apiKey`
@@ -174,6 +168,49 @@ export function opencodeGlobalConfigPath(
 ): string {
   const xdg = env.XDG_CONFIG_HOME && env.XDG_CONFIG_HOME.length > 0 ? env.XDG_CONFIG_HOME : join(home, ".config");
   return join(xdg, "opencode", "opencode.json");
+}
+
+const OMP_PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const OMP_WINDOWS_RESERVED_PROFILE_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
+
+function ompProfileName(env: OpencodeLaunchEnv): string | undefined {
+  // OMP_PROFILE wins by presence, even when explicitly empty; PI_PROFILE is
+  // only the legacy fallback when the canonical variable is undefined.
+  const raw = env.OMP_PROFILE !== undefined ? env.OMP_PROFILE : env.PI_PROFILE;
+  const profile = raw?.trim();
+  if (!profile || profile === "default") return undefined;
+  if (
+    profile === "."
+    || profile === ".."
+    || profile.endsWith(".")
+    || !OMP_PROFILE_NAME_RE.test(profile)
+    || OMP_WINDOWS_RESERVED_PROFILE_RE.test(profile)
+  ) {
+    throw new ClientPathError(`Invalid OMP profile "${raw}"`);
+  }
+  return profile;
+}
+
+/** Resolve the global Oh My Pi agent directory using OMP's own env precedence. */
+export function ompAgentDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const profile = ompProfileName(env);
+  if (!profile) {
+    const override = env.PI_CODING_AGENT_DIR?.trim();
+    if (override) return absoluteClientPath(override, home, "PI_CODING_AGENT_DIR");
+  }
+  // OMP treats PI_CONFIG_DIR as a directory name relative to the user's home,
+  // even when the value starts with `/` or `~`. Mirror that path.join contract
+  // exactly instead of assigning those values different filesystem semantics.
+  const root = join(home, env.PI_CONFIG_DIR || ".omp");
+  return profile ? join(root, "profiles", profile, "agent") : join(root, "agent");
+}
+
+/** OMP's canonical custom-provider catalog. */
+export function ompModelsConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const agentDir = ompAgentDir(env, home);
+  const yamlFallback = join(agentDir, "models.yaml");
+  const canonical = join(agentDir, "models.yml");
+  return !existsSync(canonical) && existsSync(yamlFallback) ? yamlFallback : canonical;
 }
 
 /** Compose the OpenAI-compatible proxy base URL from a live probe result. */
@@ -354,6 +391,9 @@ export interface ExportModel {
   displayName?: string;
   contextWindow?: number;
   inputModalities?: string[];
+  /** Optional effort ladder exported only to clients that support it. */
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface ExportContext {
@@ -370,6 +410,7 @@ export interface ExportContext {
 export type ExportClientId =
   | "opencode"
   | "pi"
+  | "omp"
   | "hermes"
   | "openclaw"
   | "kimi"
@@ -405,14 +446,13 @@ export interface ExportClientSpec {
    */
   buildContribution: BuildContribution;
   /**
-   * True when this client can only reach a loopback bind.
+   * True when the generated integration deliberately supports loopback only.
    *
    * `/v1/chat/completions` rejects bearer credentials and requires the
    * dedicated `x-opencodex-api-key` header (AUTH_MATRIX in
-   * src/server/auth-cors.ts). A client whose schema has no place to put that
-   * header therefore cannot authenticate against a remote bind at all — so we
-   * say so rather than exporting a config that 401s. Same reasoning as the
-   * Grok managed block's non-loopback refusal.
+   * src/server/auth-cors.ts). If this exporter cannot safely emit that header,
+   * it refuses a remote bind rather than generating a config that 401s. Same
+   * reasoning as the Grok managed block's non-loopback refusal.
    */
   loopbackOnly: boolean;
 }
@@ -601,6 +641,50 @@ export interface PiGeneratedConfig {
 }
 
 /**
+ * omp accepts a model-level API override. Keep the provider on Chat
+ * Completions so routed providers retain their established wire format, while
+ * native OpenAI models can use the lossless Responses surface.
+ */
+export interface OmpModelEntry extends PiModelEntry {
+  api?: "openai-responses";
+  /** omp requires this flag before it honors a thinking block. */
+  reasoning?: true;
+  thinking?: {
+    mode: "effort";
+    efforts: string[];
+    defaultLevel?: string;
+  };
+}
+
+export interface OmpProviderBlock {
+  baseUrl: string;
+  api: typeof PI_API_DIALECT;
+  apiKey: string;
+  models: OmpModelEntry[];
+}
+
+export interface OmpGeneratedConfig {
+  providers: Record<string, OmpProviderBlock>;
+}
+
+/**
+ * omp validates model entries strictly. These are its documented effort
+ * values; omit an unknown value rather than invalidating the whole provider.
+ */
+const OMP_EFFORT_VOCABULARY = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function ompEfforts(model: ExportModel): string[] {
+  const efforts: string[] = [];
+  for (const effort of model.reasoningEfforts ?? []) {
+    const normalized = effort.trim().toLowerCase();
+    if (OMP_EFFORT_VOCABULARY.has(normalized) && !efforts.includes(normalized)) {
+      efforts.push(normalized);
+    }
+  }
+  return efforts;
+}
+
+/**
  * Hermes `~/.hermes/config.yaml`. We emit ONLY the provider entry — never
  * `model.default` — because hijacking the user's main model is not what a
  * connect action asks for.
@@ -728,7 +812,52 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
         api: PI_API_DIALECT,
-        apiKey: PI_API_KEY_ENV_REF,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+        models,
+      },
+    },
+  };
+}
+
+/**
+ * omp's models.yml is Pi-like, but it supports effort metadata and a per-model
+ * API dialect. Native OpenAI models use Responses; all routed models inherit
+ * the provider's existing Chat Completions dialect.
+ */
+function buildOmpClientConfig(ctx: ExportContext): OmpGeneratedConfig {
+  const models: OmpModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    const input = inputModalitiesForClient("pi", model.inputModalities);
+    if (input === null) continue;
+    const entry: OmpModelEntry = {
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      input,
+      ...(model.native && model.provider === "openai" ? { api: "openai-responses" } : {}),
+    };
+    const context = authoritativeContextWindow(model.contextWindow);
+    if (context !== undefined) {
+      entry.contextWindow = context;
+      entry.maxTokens = outputBudgetFor(context);
+    }
+    const efforts = ompEfforts(model);
+    if (efforts.length > 0) {
+      const defaultLevel = model.defaultReasoningEffort?.trim().toLowerCase();
+      entry.reasoning = true;
+      entry.thinking = {
+        mode: "effort",
+        efforts,
+        ...(defaultLevel && efforts.includes(defaultLevel) ? { defaultLevel } : {}),
+      };
+    }
+    models.push(entry);
+  }
+  return {
+    providers: {
+      [OPENCODE_PROVIDER_ID]: {
+        baseUrl: ctx.baseUrl,
+        api: PI_API_DIALECT,
+        apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
         models,
       },
     },
@@ -808,7 +937,7 @@ function buildKimiClientConfig(ctx: ExportContext): KimiGeneratedConfig {
       [OPENCODE_PROVIDER_ID]: {
         type: "openai",
         base_url: ctx.baseUrl,
-        api_key: KIMI_LOOPBACK_PLACEHOLDER,
+        api_key: LOOPBACK_API_KEY_PLACEHOLDER,
       },
     },
     models,
@@ -862,6 +991,11 @@ function summarizePi(document: unknown): { modelCount: number; modelsWithoutLimi
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
 }
 
+function summarizeOmp(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as OmpGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
 function summarizeHermes(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as HermesGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   // Hermes carries selectors only; it has no per-model limit to be missing.
@@ -898,6 +1032,11 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildPiClientConfig(ctx);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildOmpContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildOmpClientConfig(ctx);
+  return singleFragment("omp", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
 function buildHermesContribution(ctx: ExportContext): ManagedContribution {
@@ -949,15 +1088,28 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     id: "pi",
     filename: "pi-models.json",
     destination: () => join(homedir(), ".pi", "agent", "models.json"),
-    apiKeyEnv: PI_API_KEY_ENV,
-    exportHint: `export ${PI_API_KEY_ENV}=<your key>`,
+    apiKeyEnv: "",
+    exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
     build: buildPiClientConfig,
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,
-    // No header field in Pi's provider block (and the schema is unverified
-    // against a real install), so there is nowhere to put the dedicated
-    // admission header a remote bind requires.
+    // No header field in Pi's provider block, so there is nowhere to put the
+    // dedicated admission header a remote bind requires.
+    loopbackOnly: true,
+  },
+  omp: {
+    id: "omp",
+    filename: "omp-models.yaml",
+    destination: env => ompModelsConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "OMP reads a non-secret placeholder from models.yml; loopback needs no key.",
+    build: buildOmpClientConfig,
+    format: "yaml",
+    summarize: summarizeOmp,
+    buildContribution: buildOmpContribution,
+    // OMP supports provider-level headers, but remote credential wiring is
+    // intentionally deferred from this initial loopback-only integration.
     loopbackOnly: true,
   },
   hermes: {

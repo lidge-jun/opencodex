@@ -324,17 +324,33 @@ export function parseRequest(body: unknown): OcxParsedRequest {
   // synthetic `{type:"compaction"}` output item (src/responses/compaction.ts). Flagged for the server.
   let compactionRequest = false;
   let contextCompactionBoundary = false;
+  let continuationConversationMessageIndex: number | undefined;
 
   if (typeof data.instructions === "string" && data.instructions.length > 0) {
     systemPrompt.push(data.instructions);
   }
 
   if (typeof data.input === "string") {
+    if (data.previous_response_id) continuationConversationMessageIndex = messages.length;
     messages.push({ role: "user", content: data.input, timestamp: now });
   } else if (data.input) {
     for (let inputIndex = 0; inputIndex < data.input.length; inputIndex++) {
       const item = data.input[inputIndex];
       const effectiveType = (item as { type?: string }).type ?? ("role" in item ? "message" : undefined);
+      const itemRole = (item as { role?: string }).role;
+      // Raw protocol items do not map one-to-one onto context messages. Capture the boundary while
+      // both representations are available so later metadata can stay before conversation in both.
+      if (
+        data.previous_response_id
+        && inputIndex >= replayedInputPrefixLength
+        && continuationConversationMessageIndex === undefined
+        && (
+          effectiveType === "agent_message"
+          || (effectiveType === "message" && (itemRole === "user" || itemRole === "assistant"))
+        )
+      ) {
+        continuationConversationMessageIndex = messages.length;
+      }
 
       if (effectiveType === "compaction_trigger") {
         compactionRequest = true;
@@ -614,6 +630,9 @@ export function parseRequest(body: unknown): OcxParsedRequest {
       }
     }
   }
+  if (data.previous_response_id && continuationConversationMessageIndex === undefined) {
+    continuationConversationMessageIndex = messages.length;
+  }
 
   const declaredTools = buildTools(data.tools as unknown[] | undefined) ?? [];
   const loadedTools = buildTools(loadedToolSpecs) ?? [];
@@ -668,9 +687,12 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     ...(data.tools as unknown[] ?? []),
     ...loadedToolSpecs,
   ]);
-  // Detect structured-output mode (Responses `text.format`) so the web-search sidecar can render its
-  // tool_result as JSON rather than prose that could corrupt the model's schema-constrained answer.
-  const structuredOutput = detectStructuredOutput(data.text);
+  // Capture structured-output mode (Responses `text.format`): the format object rides
+  // options.textFormat for adapters whose wire has an equivalent (openai-chat response_format),
+  // while the `_structuredOutput` flag keeps the web-search sidecar rendering its tool_result
+  // as JSON rather than prose that could corrupt the model's schema-constrained answer.
+  const textFormat = parseTextFormat(data.text);
+  if (textFormat) options.textFormat = textFormat;
 
   return {
     modelId: data.model,
@@ -680,19 +702,35 @@ export function parseRequest(body: unknown): OcxParsedRequest {
     options,
     _rawBody: body,
     ...(replayedInputPrefixLength > 0 ? { _replayPrefixLen: replayedInputPrefixLength } : {}),
+    ...(continuationConversationMessageIndex !== undefined
+      ? { _continuationConversationMessageIndex: continuationConversationMessageIndex }
+      : {}),
     ...(webSearch ? { _webSearch: webSearch } : {}),
     ...(imageGen ? { _imageGeneration: imageGen } : {}),
-    ...(structuredOutput ? { _structuredOutput: true } : {}),
+    ...(textFormat ? { _structuredOutput: true } : {}),
     ...(compactionRequest ? { _compactionRequest: true } : {}),
     ...(contextCompactionBoundary ? { _contextCompactionBoundary: true } : {}),
   };
 }
 
-/** True when the Responses `text.format` requests structured output (json_schema or json_object). */
-function detectStructuredOutput(text: unknown): boolean {
-  if (!isObj(text)) return false;
+/**
+ * The Responses `text.format` object when it requests structured output (json_schema or
+ * json_object), undefined otherwise. Acceptance is identical to the boolean detector this
+ * replaces; unknown or malformed formats are ignored, never rejected, so the native
+ * passthrough keeps forwarding whatever the caller sent via `_rawBody`.
+ */
+function parseTextFormat(text: unknown): OcxRequestOptions["textFormat"] {
+  if (!isObj(text)) return undefined;
   const format = (text as { format?: unknown }).format;
-  if (!isObj(format)) return false;
-  const t = (format as { type?: unknown }).type;
-  return t === "json_schema" || t === "json_object";
+  if (!isObj(format)) return undefined;
+  const f = format as { type?: unknown; name?: unknown; description?: unknown; schema?: unknown; strict?: unknown };
+  if (f.type === "json_object") return { type: "json_object" };
+  if (f.type !== "json_schema") return undefined;
+  return {
+    type: "json_schema",
+    ...(typeof f.name === "string" ? { name: f.name } : {}),
+    ...(typeof f.description === "string" ? { description: f.description } : {}),
+    ...(isObj(f.schema) ? { schema: f.schema as Record<string, unknown> } : {}),
+    ...(typeof f.strict === "boolean" ? { strict: f.strict } : {}),
+  };
 }

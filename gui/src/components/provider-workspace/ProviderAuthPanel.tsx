@@ -3,7 +3,7 @@
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
  * handlers via props-down; no internal auth machinery.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
@@ -25,8 +25,76 @@ import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool
 import type { AccountLoadState, OAuthAccountRow, ApiKeyRow, LoginHint, ProviderAuthHandlers } from "./types";
 
 const QUOTA_ENRICH_RESERVE_MS = 4_000;
+const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
+
+type CockpitImportResult = {
+  importedCount: number;
+  updatedCount: number;
+  failedCount: number;
+  unsupportedCount: number;
+};
+
+const COCKPIT_RESULT_KEYS = new Set([
+  "totalCount", "importedCount", "updatedCount", "failedCount", "unsupportedCount", "results",
+]);
+const COCKPIT_RESULT_STATUSES = new Set(["imported", "updated", "failed", "unsupported"]);
+const COCKPIT_STATUS_CODES: Record<string, ReadonlySet<string>> = {
+  imported: new Set(["imported"]),
+  updated: new Set(["updated"]),
+  failed: new Set([
+    "invalid_record",
+    "credential_rejected",
+    "identity_mismatch",
+    "missing_project",
+    "persist_failed",
+  ]),
+  unsupported: new Set(["unsupported_provider", "unsupported_format"]),
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isSafeCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function safeCockpitImportResult(value: unknown): CockpitImportResult | null {
+  if (!isPlainObject(value) || Object.keys(value).some(key => !COCKPIT_RESULT_KEYS.has(key))) return null;
+  const { totalCount, importedCount, updatedCount, failedCount, unsupportedCount, results } = value;
+  if (
+    !isSafeCount(totalCount)
+    || !isSafeCount(importedCount)
+    || !isSafeCount(updatedCount)
+    || !isSafeCount(failedCount)
+    || !isSafeCount(unsupportedCount)
+    || !Array.isArray(results)
+    || results.length !== totalCount
+    || importedCount + updatedCount + failedCount + unsupportedCount !== totalCount
+  ) return null;
+
+  const observed = { imported: 0, updated: 0, failed: 0, unsupported: 0 };
+  for (const [index, result] of results.entries()) {
+    if (!isPlainObject(result) || Object.keys(result).some(key => !["index", "status", "code"].includes(key))) return null;
+    const status = String(result.status);
+    const code = String(result.code);
+    if (result.index !== index || !COCKPIT_RESULT_STATUSES.has(status)) return null;
+    const allowedCodes = COCKPIT_STATUS_CODES[status];
+    if (!allowedCodes?.has(code)) return null;
+    observed[status as keyof typeof observed] += 1;
+  }
+  if (
+    observed.imported !== importedCount
+    || observed.updated !== updatedCount
+    || observed.failed !== failedCount
+    || observed.unsupported !== unsupportedCount
+  ) return null;
+  return { importedCount, updatedCount, failedCount, unsupportedCount };
+}
 
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
@@ -51,7 +119,11 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
+  const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const [reserveQuotaSlots, setReserveQuotaSlots] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const deviceCodeCopy = useCopyFeedback<string>();
 
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
@@ -63,7 +135,7 @@ export default function ProviderAuthPanel({
   // suppressed here rather than refactored away.
   useEffect(() => {
     if (accounts.length === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
       setReserveQuotaSlots(false);
       return;
     }
@@ -123,6 +195,55 @@ export default function ProviderAuthPanel({
     }
   };
 
+  const importCockpitFile = async (file: File | undefined) => {
+    if (!file || importBusy) return;
+    setImportBusy(true);
+    setImportStatus("idle");
+    setImportResult(null);
+    try {
+      if (!file.name.toLowerCase().endsWith(".json") || file.size > COCKPIT_IMPORT_MAX_BYTES) {
+        setImportStatus("invalid");
+        return;
+      }
+      let document: unknown;
+      try {
+        document = JSON.parse(await file.text()) as unknown;
+      } catch {
+        setImportStatus("invalid");
+        return;
+      }
+      const response = await fetch(`${apiBase}/api/oauth/accounts/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document }),
+      });
+      if (!response.ok) {
+        setImportStatus("failed");
+        return;
+      }
+      const result = safeCockpitImportResult(await response.json().catch(() => null));
+      if (!result) {
+        setImportStatus("failed");
+        return;
+      }
+      setImportResult(result);
+      setImportStatus("complete");
+      // The validated import is complete independently of the best-effort list refresh.
+      // The account-pool owner reports refresh failure through accountLoadState, which
+      // remains visible beside this completed import result.
+      try {
+        await authHandlers.onRetryAccounts?.(item.name);
+      } catch {
+        /* Preserve the completed import state; accountLoadState owns refresh errors. */
+      }
+    } catch {
+      setImportStatus("failed");
+    } finally {
+      if (importFileRef.current) importFileRef.current.value = "";
+      setImportBusy(false);
+    }
+  };
+
   return (
     <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
       <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
@@ -131,6 +252,40 @@ export default function ProviderAuthPanel({
           <>
             {item.name === "anthropic" && (
               <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+            )}
+            {item.name === "google-antigravity" && (
+              <div className="pwi-auth-add-key">
+                <div>
+                  <div id="cockpit-import-description" className="pwi-auth-row-secondary">
+                    {t("pws.cockpitImportDescription")}
+                  </div>
+                  <label className="sr-only" htmlFor="cockpit-import-file">{t("pws.cockpitImportFileLabel")}</label>
+                  <input
+                    ref={importFileRef}
+                    id="cockpit-import-file"
+                    type="file"
+                    accept="application/json,.json"
+                    className="sr-only"
+                    aria-describedby="cockpit-import-description cockpit-import-status"
+                    disabled={importBusy}
+                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
+                  />
+                </div>
+                <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
+                  onClick={() => importFileRef.current?.click()}>
+                  {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
+                </button>
+                <div id="cockpit-import-status" role="status" aria-live="polite">
+                  {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
+                  {importStatus === "failed" && t("pws.cockpitImportFailed")}
+                  {importStatus === "complete" && importResult && t("pws.cockpitImportComplete", {
+                    imported: importResult.importedCount,
+                    updated: importResult.updatedCount,
+                    failed: importResult.failedCount,
+                    unsupported: importResult.unsupportedCount,
+                  })}
+                </div>
+              </div>
             )}
             <div className="pwi-auth-status-row">
               <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />

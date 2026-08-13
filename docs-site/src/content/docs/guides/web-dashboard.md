@@ -105,8 +105,21 @@ catalog entry.
 
 The **Codex Auth** page manages the native ChatGPT/Codex route:
 
-- Manually choosing an account changes the next new Codex session; an already-bound thread keeps its
-  current account for that manual switch.
+Pool mode selects across the main and added Codex accounts; Direct uses only the caller/main login.
+In-flight requests keep their captured credentials, and a 401/403 reauthentication or 429 cooldown
+may clear affinity and rotate to another eligible Pool account. This is separate from `openai-apikey`
+and other providers.
+
+- Manually choosing an account applies immediately: an already-bound thread moves to it on its next
+  request, and only requests already in flight keep the account they captured. A manual choice is also
+  pinned: the card shows a **PINNED** badge, and a higher selection order cannot preempt that account
+  until it is drained, you select another account, or you change any account's selection order.
+- Each account card carries a **Selection order** control (First, Earlier, Normal, Later, Last).
+  Higher order is used first, and the pool drops to a lower order only once every account above it is
+  drained or unavailable. A changed order applies from the next unbound request and never moves a
+  thread that is already bound. The Codex Desktop (main) account is ordered like any other, so it can
+  be set to **Last** and kept as the reserve. An order set from `ocx account priority` outside those
+  five presets stays visible and selectable on the card.
 - Thread affinity prevents per-request flapping. With quota auto-switch enabled, a long-running
   thread is periodically re-evaluated and may rebind after its relevant usage reaches the threshold
   and a strictly lower-usage eligible account exists.
@@ -118,6 +131,25 @@ The **Codex Auth** page manages the native ChatGPT/Codex route:
 - **Refresh quotas** re-reads account usage immediately so routing and the account cards use the same
   values.
 - Pool request logs use opaque labels such as `p3fa91c`, never account emails.
+- Each account card also shows that stable log label, the observed 30-day token total, an approximate
+  API-equivalent cost using currently configured display pricing, and the fraction of attempts with
+  measured usage. Active user `modelCosts` overlays take priority over bundled verified catalog and
+  price fallbacks, and historical usage is re-estimated from the pricing active when the summary is
+  read. The cost is an estimate for reconciliation, not a ChatGPT Plus/Pro subscription invoice.
+  Historical bare `openai` rows that predate explicit attribution remain ambiguous rather than being
+  assigned to the current main account.
+- **Target a specific Codex account from the model picker** is an explicit opt-in. When enabled,
+  ordinary supported GPT picker rows are replaced by one entry per public account selector.
+  Choosing one locks that conversation to the mapped account: it does not rotate, fall back, or
+  change the active Pool account. The built-in Codex App login has its own selector; generated maps
+  normally use `main`, with a collision-safe suffix such as `main-2` when needed. Added accounts
+  receive stable, privacy-safe labels, and existing custom selector labels are preserved.
+  Existing conversations and saved model selections continue routing. Turning the setting off
+  hides generated picker entries without deleting accounts, selectors, or exact routes. Plain GPT
+  model ids continue to use the configured Pool or Direct behavior.
+- Account add, remove, and picker-setting changes are saved before the model catalog is refreshed.
+  If that bounded refresh cannot finish, the dashboard shows an amber success-with-recovery notice;
+  run `ocx sync` to retry. The account or setting change itself remains saved.
 
 The Providers overview separately summarizes Pool-mode usage as a display-only weighted capacity
 estimate, alongside the effective account's raw quota and the next capacity recovery. See
@@ -130,7 +162,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
+| `GET` / `PUT /api/settings` | Read settings or update Codex autostart, stream/memory settings, and account-targeting picker visibility. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |
@@ -146,6 +178,7 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | `POST /api/oauth/login` · `GET /api/oauth/status` | Start a provider OAuth flow and poll for completion. |
 | `GET /api/codex-auth/accounts?refresh=1` | List main and pool accounts, force quota refresh, and report main-account `hasCredential` / terminal `needsReauth` state. |
 | `PUT /api/codex-auth/active` · `PUT /api/codex-auth/auto-switch` · `PUT /api/codex-auth/failover` | Select the account for the next request and configure pool routing. |
+| `GET /api/codex-auth/active` · `PUT /api/codex-auth/accounts/priority` | Read the effective account (including `pinned` and which account is `pinnedAccountId`) and set one account's selection order. |
 | `POST /api/codex-auth/login` · `GET /api/codex-auth/login-status` | Add a pool account through browser login. |
 | `GET /api/logs?tail=50&limit=20&offset=0&provider=...&status=5xx` | Read recent request metadata with optional tail, provider, and exact/class status filters. With `limit`/`offset`, paging walks backward from the newest row (`offset=0` returns the latest page). Response shape: `{ timeZone, total, logs }` where `total` is the filtered row count before pagination. |
 | `GET` / `PUT /api/subagent-models` | Read or set the five featured `spawn_agent` override models. |

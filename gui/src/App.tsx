@@ -3,23 +3,21 @@ import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
 import Models from "./pages/Models";
-import Combos from "./pages/Combos";
 import Subagents from "./pages/Subagents";
 import Logs from "./pages/Logs";
 import Usage from "./pages/Usage";
-import RoutingProfiles from "./pages/RoutingProfiles";
 import Storage from "./pages/Storage";
 import CodexAuth from "./pages/CodexAuth";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
-import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconTerminal, IconX, IconRoute } from "./icons";
-import { useI18n, useT, LOCALES, type Locale, type TKey } from "./i18n/shared";
+import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconKey, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX } from "./icons";
+import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select } from "./ui";
 import { installApiAuthFetch } from "./api";
 import { type Page } from "./app-routing";
-import { normalizeHashPath } from "./hash-routing";
+import { readModelsTab, type ModelsTab } from "./pages/models-tab";
 import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 
@@ -32,32 +30,29 @@ const PAGE_TKEY: Record<Page, TKey> = {
   startup: "nav.startup",
   providers: "nav.providers",
   models: "nav.models",
-  combos: "nav.combos",
   subagents: "nav.subagents",
   logs: "nav.logs",
   usage: "nav.usage",
   storage: "nav.storage",
   "codex-auth": "nav.codexAuth",
   integrations: "nav.integrations",
-  routing: "nav.routing",
 };
 
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 const THEME_KEY = "ocx-theme";
 
 /**
- * A sidebar row usually maps one-to-one onto a page. Claude does not: it is a
- * shortcut into a tab of the Integrations page, so it needs a destination that
- * is not the bare page hash and a current-state rule that is not `page === id`.
+ * Every sidebar row maps one-to-one onto a page again.
+ *
+ * The Claude row was the exception: a second entry pointing at a tab of Integrations,
+ * which needed `subPath`, `activeHashes`, and an `isNavEntryActive` helper whose only
+ * job was stopping the sidebar from lighting two rows and claiming the user was in two
+ * places. Removing the duplicate removed all four.
  */
 type NavEntry = {
   id: Page;
   tkey: TKey;
   Icon: typeof IconGrid;
-  /** Sub-path handed to navigateToPage; the row targets a tab of `id`. */
-  subPath?: string;
-  /** Hash prefixes that keep this row current, instead of the page match. */
-  activeHashes?: readonly string[];
 };
 
 const NAV: NavEntry[] = [
@@ -68,42 +63,9 @@ const NAV: NavEntry[] = [
   { id: "subagents", tkey: "nav.subagents", Icon: IconBot },
   { id: "logs", tkey: "nav.logs", Icon: IconList },
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
-  { id: "routing", tkey: "nav.routing", Icon: IconRoute },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
-  /*
-   * Claude sits directly above Integrations because it is a shortcut into that
-   * page. It carries navigation ONLY — the connection switch that used to live
-   * on this row now belongs to ClaudeCode, which owns GET/PUT /api/claude-code.
-   * A nav row owning a mutation is exactly the trap that was removed.
-   *
-   * The prefix also covers `integrations/claude/desktop`, so Desktop keeps the
-   * row current without a second entry.
-   */
-  {
-    id: "integrations",
-    tkey: "nav.claude",
-    Icon: IconTerminal,
-    subPath: "claude",
-    activeHashes: ["integrations/claude"],
-  },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
-
-/**
- * Two rows resolve to the same page, so `page === id` would light both at once
- * and the sidebar would claim the user is in two places. A row with
- * `activeHashes` wins its own hash; a plain row keeps the page match only while
- * no sibling has claimed the current hash.
- */
-function isNavEntryActive(entry: NavEntry, page: Page, rawHash: string): boolean {
-  if (entry.activeHashes) {
-    return entry.activeHashes.some(prefix => rawHash === prefix || rawHash.startsWith(`${prefix}/`));
-  }
-  if (entry.id !== page) return false;
-  return !NAV.some(sibling => sibling.activeHashes?.some(
-    prefix => rawHash === prefix || rawHash.startsWith(`${prefix}/`),
-  ));
-}
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
 const THEME_TKEY: Record<Theme, TKey> = { light: "theme.light", dark: "theme.dark", system: "theme.system" };
@@ -121,30 +83,33 @@ function readStoredTheme(): Theme {
 
 export default function App() {
   const { page, navigateToPage } = useAppRouteState();
+  /*
+   * App needs the Models tab for one reason only: the full-bleed combos modifier lives
+   * on `.main-inner`, which is App's element. Models owns every other tab concern.
+   */
+  const [modelsTab, setModelsTab] = useState<ModelsTab>(readModelsTab);
+  useEffect(() => {
+    const syncModelsTab = () => setModelsTab(readModelsTab());
+    window.addEventListener("hashchange", syncModelsTab);
+    window.addEventListener("popstate", syncModelsTab);
+    return () => {
+      window.removeEventListener("hashchange", syncModelsTab);
+      window.removeEventListener("popstate", syncModelsTab);
+    };
+  }, []);
   const [theme, setTheme] = useState<Theme>(readStoredTheme);
   const { locale, setLocale } = useI18n();
   const t = useT();
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
-  /*
-   * The sidebar's current row is a HASH question, not just a page question:
-   * Claude and Integrations are the same page and are told apart by the tab.
-   * `useAppRouteState` only surfaces the page, so track the raw hash here.
-   */
-  const [navHash, setNavHash] = useState(() => normalizeHashPath(
-    typeof window === "undefined" ? "" : window.location.hash,
-  ));
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const navWasOpen = useRef(false);
 
   useEffect(() => {
     // External navigation (hash edit, back/forward) also dismisses the mobile drawer.
-    const dismissNav = () => {
-      setNavOpen(false);
-      setNavHash(normalizeHashPath(window.location.hash));
-    };
+    const dismissNav = () => setNavOpen(false);
     window.addEventListener("hashchange", dismissNav);
     window.addEventListener("popstate", dismissNav);
     return () => {
@@ -259,27 +224,20 @@ export default function App() {
             one layout, so that filter would have hidden the page permanently.
           */}
           {/*
-            The sidebar is navigation only. The Claude row used to carry the
-            connection switch, which made a nav entry the owner of a mutation
-            and left the control stranded once the three integration pages
-            collapsed into one. ClaudeCode owns GET/PUT /api/claude-code, and
-            the switch lives on its own surface.
+            The sidebar is navigation only — no row owns a mutation. That rule was
+            written when the Claude row carried the Claude Code connection switch;
+            ClaudeCode owns GET/PUT /api/claude-code now, and the row itself is gone.
           */}
           {NAV.map(entry => {
-            const { id, tkey, Icon, subPath } = entry;
-            const active = isNavEntryActive(entry, page, navHash);
+            const { id, tkey, Icon } = entry;
+            const active = id === page;
             return (
-              <div key={subPath ? `${id}/${subPath}` : id} className="nav-entry">
+              <div key={id} className="nav-entry">
                 <button type="button" className={`nav-item${active ? " active" : ""}`}
-                  data-page={subPath ? `${id}/${subPath}` : id}
+                  data-page={id}
                   onClick={() => {
                     // Deliberate sidebar navigation — push a history entry.
-                    navigateToPage(id, subPath);
-                    // `hashchange` fires asynchronously and not at all when the
-                    // hash is unchanged, so the row that was just clicked would
-                    // otherwise stay un-highlighted for a frame or, for a repeat
-                    // click, forever.
-                    setNavHash(subPath ? `${id}/${subPath}` : id);
+                    navigateToPage(id);
                     setNavOpen(false);
                   }}
                   aria-current={active ? "page" : undefined}>
@@ -294,7 +252,7 @@ export default function App() {
             <IconGlobe aria-hidden />
             <Select
               value={locale}
-              options={LOCALES.map(l => ({ value: l.code, label: l.name }))}
+              options={LOCALES.map(l => ({ value: l.code, label: localeDisplayName(l.code) }))}
               onChange={v => setLocale(v as Locale)}
               label={t("lang.label")}
               placement="right"
@@ -324,7 +282,14 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        <div className={`main-inner${page === "combos" ? " main-inner--combos" : ""}`}>
+        {/*
+          Combos is full-bleed, unlike every other surface, and it is reachable only as
+          a Models tab. `.main-inner` is App's element, so App is the only place that
+          can know which tab is showing.
+        */}
+        <div className={`main-inner${
+          page === "models" && modelsTab === "combos" ? " main-inner--combos" : ""
+        }`}>
           <ErrorBoundary
             key={page}
             pageName={t(PAGE_TKEY[page])}
@@ -336,12 +301,10 @@ export default function App() {
             {page === "dashboard" && <Dashboard apiBase={API_BASE} />}
             {page === "startup" && <Startup apiBase={API_BASE} />}
             {page === "providers" && <Providers apiBase={API_BASE} />}
-            {page === "models" && <Models apiBase={API_BASE} />}
-            {page === "combos" && <Combos key={API_BASE} apiBase={API_BASE} />}
+            {page === "models" && <Models key={API_BASE} apiBase={API_BASE} />}
             {page === "subagents" && <Subagents key={API_BASE} apiBase={API_BASE} />}
             {page === "logs" && <Logs apiBase={API_BASE} />}
             {page === "usage" && <Usage apiBase={API_BASE} />}
-            {page === "routing" && <RoutingProfiles key={API_BASE} apiBase={API_BASE} />}
             {page === "storage" && <Storage apiBase={API_BASE} />}
             {page === "codex-auth" && <CodexAuth apiBase={API_BASE} />}
             {page === "integrations" && <Integrations apiBase={API_BASE} />}

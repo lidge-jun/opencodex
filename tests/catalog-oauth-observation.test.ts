@@ -19,6 +19,7 @@ import {
 import {
   gatherRoutedModelsForCatalogGather,
   type CatalogGatherProviderAuthOutcome,
+  type CatalogGatherProviderModelOutcome,
 } from "../src/codex/catalog/provider-fetch";
 import { clearModelCache } from "../src/codex/model-cache";
 import { getAuthRefreshIntentPath } from "../src/oauth/store";
@@ -93,15 +94,20 @@ function liveKimiProvider(onFetch: () => void): OcxProviderConfig {
 async function runCatalogGather(
   authStoreBuffer: Uint8Array | null,
   onFetch: () => void,
-): Promise<{ rows: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>; outcomes: CatalogGatherProviderAuthOutcome[] }> {
+): Promise<{
+  rows: Awaited<ReturnType<typeof gatherRoutedModelsForCatalogGather>>;
+  outcomes: CatalogGatherProviderAuthOutcome[];
+  modelOutcomes: CatalogGatherProviderModelOutcome[];
+}> {
   const config: OcxConfig = { providers: { kimi: liveKimiProvider(onFetch) } };
   const outcomes: CatalogGatherProviderAuthOutcome[] = [];
+  const modelOutcomes: CatalogGatherProviderModelOutcome[] = [];
   const rows = await gatherRoutedModelsForCatalogGather(
     config,
     { authStoreBuffer },
-    { providerAuthOutcomes: outcomes },
+    { providerAuthOutcomes: outcomes, providerModelOutcomes: modelOutcomes },
   );
-  return { rows, outcomes };
+  return { rows, outcomes, modelOutcomes };
 }
 
 beforeEach(() => {
@@ -149,12 +155,16 @@ describe("catalog gather OAuth observation", () => {
     };
 
     expect(observeActiveOAuthAccessToken("kimi", observedBuffer, now).kind).toBe("expired");
-    const { rows, outcomes } = await runCatalogGather(observedBuffer, () => { outboundCalls += 1; });
+    const { rows, outcomes, modelOutcomes } = await runCatalogGather(
+      observedBuffer,
+      () => { outboundCalls += 1; },
+    );
 
     expect(rows.map(row => row.id)).toEqual(["k3"]);
     expect(refreshCalls).toBe(0);
     expect(outboundCalls).toBe(0);
     expect(outcomes).toEqual([{ provider: "kimi", state: "expired" }]);
+    expect(modelOutcomes).toEqual([{ provider: "kimi", state: "degraded" }]);
     expectFileUnchanged(authPath, authBefore);
     expectFileUnchanged(intentPath, intentBefore);
     expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
@@ -176,10 +186,14 @@ describe("catalog gather OAuth observation", () => {
     };
 
     expect(observeActiveOAuthAccessToken("kimi", observedBuffer).kind).toBe("malformed");
-    const { rows, outcomes } = await runCatalogGather(observedBuffer, () => { outboundCalls += 1; });
+    const { rows, outcomes, modelOutcomes } = await runCatalogGather(
+      observedBuffer,
+      () => { outboundCalls += 1; },
+    );
 
     expect(rows.map(row => row.id)).toEqual(["k3"]);
     expect(outcomes).toEqual([{ provider: "kimi", state: "malformed" }]);
+    expect(modelOutcomes).toEqual([{ provider: "kimi", state: "degraded" }]);
     expect(refreshCalls).toBe(0);
     expect(outboundCalls).toBe(0);
     expectFileUnchanged(authPath, before);
@@ -203,10 +217,14 @@ describe("catalog gather OAuth observation", () => {
     };
 
     expect(observeActiveOAuthAccessToken("kimi", observedBuffer, now).kind).toBe("available");
-    const { rows, outcomes } = await runCatalogGather(observedBuffer, () => { outboundCalls += 1; });
+    const { rows, outcomes, modelOutcomes } = await runCatalogGather(
+      observedBuffer,
+      () => { outboundCalls += 1; },
+    );
 
     expect(rows.map(row => row.id)).toEqual(["k3"]);
     expect(outcomes).toEqual([{ provider: "kimi", state: "available" }]);
+    expect(modelOutcomes).toEqual([{ provider: "kimi", state: "authoritative" }]);
     expect(refreshCalls).toBe(0);
     expect(outboundCalls).toBe(1);
     expectFileUnchanged(authPath, before);

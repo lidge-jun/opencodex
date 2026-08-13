@@ -198,12 +198,14 @@ export function relaySseWithBlockRewrite(
   const emitProcessedBlocks = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     flushFinal = false,
-  ): void => {
+  ): number => {
+    let emitted = 0;
     let next: { block: string; delimiter: string; rest: string } | null;
     while ((next = nextSseBlock(buffer))) {
       replaceBuffer(next.rest);
       for (const outBlock of rewrite(next.block)) {
         enqueueText(controller, outBlock + next.delimiter);
+        emitted += 1;
       }
     }
     if (flushFinal && buffer.length > 0) {
@@ -213,28 +215,37 @@ export function relaySseWithBlockRewrite(
       const tailDelimiter = buffer.includes("\r\n") ? "\r\n\r\n" : "\n\n";
       for (let i = 0; i < tailBlocks.length; i++) {
         enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""));
+        emitted += 1;
       }
       releaseBuffer();
     }
+    return emitted;
   };
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
-        const { done, value } = await reader.read();
-        // A cancel raced this pending read: never feed the rewriter again
-        // after its disposal (#893 review).
-        if (cancelled) return;
-        if (done) {
-          appendBuffer(decoder.decode());
-          emitProcessedBlocks(controller, true);
-          releaseBuffer();
-          disposeRewrite();
-          controller.close();
-          return;
+        // A network chunk is not an SSE-event boundary. Bun may not issue a
+        // second pull after a fulfilled pull enqueues nothing, so keep reading
+        // until at least one complete rewritten block is available or EOF is
+        // reached. This also handles block rewrites that intentionally drop an
+        // event without parking the client stream.
+        for (;;) {
+          const { done, value } = await reader.read();
+          // A cancel raced this pending read: never feed the rewriter again
+          // after its disposal (#893 review).
+          if (cancelled) return;
+          if (done) {
+            appendBuffer(decoder.decode());
+            emitProcessedBlocks(controller, true);
+            releaseBuffer();
+            disposeRewrite();
+            controller.close();
+            return;
+          }
+          appendBuffer(decoder.decode(value, { stream: true }));
+          if (emitProcessedBlocks(controller) > 0) return;
         }
-        appendBuffer(decoder.decode(value, { stream: true }));
-        emitProcessedBlocks(controller);
       } catch (error) {
         releaseBuffer();
         disposeRewrite();

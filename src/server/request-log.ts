@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
   classifyError,
+  CYBER_POLICY_ERROR_CODE,
   httpStatusFromTerminalError as httpStatusFromClassifiedTerminalError,
   isClientClosedMessage,
+  isCyberPolicyCode,
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import { readCodexCatalogPath } from "../codex/catalog";
@@ -16,6 +18,7 @@ import {
   isKnownAdmissionKind,
   isKnownInboundProtocol,
   isKnownUsageSurface,
+  isCodexUsageAccountLogLabel,
   isValidReasoningWireValue,
   readRecentUsageEntries,
   usageForFinalLog,
@@ -54,6 +57,8 @@ export interface RequestLogContext {
    *  product: widening that enum would merge Responses and Chat Completions,
    *  since both leave it undefined. */
   inboundProtocol?: "responses" | "chat" | "messages";
+  /** Stable non-PII Codex Pool account identity for durable usage attribution. */
+  accountLogLabel?: string;
   requestedModel?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
@@ -68,6 +73,8 @@ export interface RequestLogContext {
   modelSupportsServiceTier?: boolean;
   responseServiceTier?: string;
   resolvedModel?: string;
+  /** Internal: client-facing response metadata must not replace the physical routed model. */
+  preserveResolvedModelFromRoute?: boolean;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   attempts?: PersistedUsageAttempt[];
@@ -92,6 +99,8 @@ export interface RequestLogContext {
   upstreamError?: string;
   /** HTTP status derived from a terminal `response.failed` SSE payload (429/401/503/etc.). */
   terminalHttpStatus?: number;
+  /** Recognized structured terminal code whose exact identity must survive status mapping. */
+  terminalErrorCode?: typeof CYBER_POLICY_ERROR_CODE;
   /** Structured reason from `response.incomplete`; internal-only input to log classification. */
   terminalIncompleteReason?: string;
   affinity?: "reused" | "new_bind" | "rebound" | "cleared";
@@ -119,6 +128,7 @@ export interface RequestLogEntry {
    *  product: widening that enum would merge Responses and Chat Completions,
    *  since both leave it undefined. */
   inboundProtocol?: "responses" | "chat" | "messages";
+  accountLogLabel?: string;
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   requestedModel?: string;
@@ -229,6 +239,9 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
     ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
+    ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
+      ? { accountLogLabel: entry.accountLogLabel }
+      : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(entry.requestedEffort ? { requestedEffort: entry.requestedEffort } : {}),
     ...(entry.effectiveEffort ? { effectiveEffort: entry.effectiveEffort } : {}),
@@ -252,7 +265,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     usageStatus: entry.usageStatus,
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-    ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
+    ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
     ...(routeDecision ? { routeDecision } : {}),
   };
 }
@@ -325,6 +338,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.apiKeyId ? { apiKeyId: entry.apiKeyId } : {}),
       ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
       ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+      ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
+        ? { accountLogLabel: entry.accountLogLabel }
+        : {}),
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
@@ -346,7 +362,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       usageStatus: entry.usageStatus,
       ...(entry.usage ? { usage: entry.usage } : {}),
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
-      ...(entry.attempts?.length ? { attempts: entry.attempts } : {}),
+      ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
       ...failureDiagnostics,
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
     });
@@ -444,12 +460,26 @@ export function recordAdapterReasoning(
   }
 }
 
-export function requestLogErrorCode(status: number, upstreamError?: string): string | undefined {
+export function requestLogErrorCode(
+  status: number,
+  upstreamError?: string,
+  terminalErrorCode?: string,
+): string | undefined {
   if (status >= 200 && status < 400) return undefined;
+  // A structured terminal code is authoritative even when the provider message is localized,
+  // generic, or absent. Only preserve the one narrowly recognized policy code here: broadly
+  // forwarding arbitrary upstream codes would change unrelated request-log taxonomy.
+  if (isCyberPolicyCode(terminalErrorCode)) return CYBER_POLICY_ERROR_CODE;
+  const classifiedCode = upstreamError?.trim()
+    ? classifyError(status, "upstream_error", upstreamError).code
+    : undefined;
   // Defense in depth: mid-stream web-search aborts used to land as 502 with this message.
-  if (status === 499 || (upstreamError?.trim() && classifyError(status, "upstream_error", upstreamError).code === "client_closed_request")) {
+  if (status === 499 || classifiedCode === "client_closed_request") {
     return "client_closed_request";
   }
+  // Keep the high-confidence message fallback for runtimes/providers that stripped the
+  // structured code before emitting response.failed.
+  if (classifiedCode === CYBER_POLICY_ERROR_CODE) return CYBER_POLICY_ERROR_CODE;
   if (status === 400 || status === 409) return "invalid_request_error";
   if (status === 401) return "invalid_api_key";
   if (status === 403) {
@@ -512,7 +542,11 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     : payload;
   if (!source || typeof source !== "object") return;
   const model = (source as { model?: unknown }).model;
-  if (typeof model === "string" && model.trim()) logCtx.resolvedModel = model;
+  if (
+    !logCtx.preserveResolvedModelFromRoute
+    && typeof model === "string"
+    && model.trim()
+  ) logCtx.resolvedModel = model;
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) logCtx.responseServiceTier = serviceTier;
   const usage = usageFromResponsesPayload((source as { usage?: unknown }).usage);
@@ -713,9 +747,17 @@ function captureTerminalHttpStatus(
   if (json.type !== "response.failed") return;
   const error = json.response?.error;
   if (!error || typeof error !== "object") return;
+  const terminalCode = error.code === null || typeof error.code === "string"
+    ? error.code
+    : undefined;
+  if (isCyberPolicyCode(terminalCode)) {
+    logCtx.terminalErrorCode = CYBER_POLICY_ERROR_CODE;
+  } else {
+    delete logCtx.terminalErrorCode;
+  }
   logCtx.terminalHttpStatus = httpStatusFromTerminalError({
     type: typeof error.type === "string" ? error.type : undefined,
-    code: error.code === null || typeof error.code === "string" ? error.code : undefined,
+    code: terminalCode,
     message: typeof error.message === "string" ? error.message : undefined,
   });
 }
@@ -771,7 +813,11 @@ export function addFinalRequestLog(
   const effectiveStatus = status >= 500 && logCtx.upstreamError && isClientClosedMessage(logCtx.upstreamError)
     ? 499
     : status;
-  const errorCode = requestLogErrorCode(effectiveStatus, logCtx.upstreamError);
+  const errorCode = requestLogErrorCode(
+    effectiveStatus,
+    logCtx.upstreamError,
+    logCtx.terminalErrorCode,
+  );
   // A response.failed whose classified status is 499 is still a client cancel, not an upstream
   // terminal failure — keep /api/logs closeReason aligned with that.
   const closeReason = effectiveStatus === 499
@@ -784,6 +830,10 @@ export function addFinalRequestLog(
       Date.now() - (logCtx.activeAttemptStartedAt ?? start),
       logCtx.usage,
     );
+    // The final row and its active physical attempt describe the same terminal. Preserve the
+    // semantic code on both so detailed attempt telemetry cannot regress to a generic status code.
+    if (errorCode) logCtx.activeAttempt.errorCode = errorCode;
+    else delete logCtx.activeAttempt.errorCode;
   }
   const existing = finalizedUsage(
     logCtx.providerAdapter ?? logCtx.provider,
@@ -809,6 +859,9 @@ export function addFinalRequestLog(
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),
     ...(logCtx.inboundProtocol ? { inboundProtocol: logCtx.inboundProtocol } : {}),
+    ...(isCodexUsageAccountLogLabel(logCtx.accountLogLabel)
+      ? { accountLogLabel: logCtx.accountLogLabel }
+      : {}),
     ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
     ...(logCtx.requestedModel ? { requestedModel: logCtx.requestedModel } : {}),
     ...(logCtx.requestedEffort ? { requestedEffort: logCtx.requestedEffort } : {}),
@@ -832,7 +885,7 @@ export function addFinalRequestLog(
     usageStatus,
     ...(loggedUsage ? { usage: loggedUsage } : {}),
     ...(totalTokens !== undefined ? { totalTokens } : {}),
-    ...(attempts?.length ? { attempts } : {}),
+    ...(attempts !== undefined ? { attempts } : {}),
     ...(logCtx.affinity ? { affinity: logCtx.affinity } : {}),
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
@@ -959,10 +1012,12 @@ export function sealRequestAttemptIdentity(
   attempt: PersistedUsageAttempt | undefined,
   provider: string,
   adapter: string,
+  accountLogLabel?: string,
 ): void {
   if (!attempt) return;
   attempt.provider = provider;
   attempt.adapter = adapter;
+  if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
 }
 
 export function noteAttemptSend(

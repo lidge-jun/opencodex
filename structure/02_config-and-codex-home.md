@@ -20,6 +20,41 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
+to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
+later repair or uninstall look foreign even though the service and runtime were started from the
+same environment. An explicit `CODEX_HOME` remains authoritative, and existing foreign ownership
+records are never migrated implicitly.
+
+[Decision Log]
+- 목적과 의도: Keep service ownership metadata aligned with the Codex home the proxy actually uses.
+- 기존 구현 및 제약 조건: The runtime performed narrow WSL Windows-home discovery, while service state used `CODEX_HOME || ~/.codex`.
+- 검토한 주요 대안: Bake `CODEX_HOME` into every service, migrate old state automatically, or reuse the runtime resolver.
+- 선택한 방식: Resolve service install and comparison state through the existing runtime Codex-home resolver.
+- 다른 대안 대신 이 방식을 선택한 이유: It preserves explicit overrides and the existing WSL ambiguity rules without rewriting user environment or foreign state.
+- 장점, 단점 및 영향: New installs and same-environment repairs agree with runtime targeting; genuinely foreign or ambiguous state remains fail-closed.
+
+SQLite-backed thread state may live outside `CODEX_HOME`. The one resolver in `src/codex/paths.ts`
+uses Codex's precedence: root `sqlite_home` in the effective `config.toml`, then
+`CODEX_SQLITE_HOME`, then the effective `CODEX_HOME`; relative SQLite homes resolve from the current
+working directory. History jobs resolve the database and its hashed backup identity together at
+call time, and admission/residue checks consume the same database path. Storage retention still
+owns the Codex-home tree separately and does not gain deletion authority over an external SQLite
+root from this resolver alone. Durable service launchers preserve an explicitly supplied
+`CODEX_SQLITE_HOME` so a background service resolves the same split state as the installing shell.
+An absent `config.toml` or absent root `sqlite_home` permits the environment/home fallback. Any
+other read failure, malformed TOML, wrong-typed or blank `sqlite_home` is indeterminate and fails
+closed so history code cannot select a different database by accident. This strict parse is scoped
+to SQLite ownership; the tolerant root-string helper used by injection and catalog reads is unchanged.
+
+[Decision Log]
+- 목적과 의도: Make every history safety check and mutation address the SQLite database Codex actually opened.
+- 기존 구현 및 제약 조건: History code rebuilt `CODEX_HOME/state_5.sqlite`, while Codex supports a config or environment-selected SQLite root for split Windows/WSL layouts.
+- 검토한 주요 대안: Copy the database into CODEX_HOME, teach only the writer about the override, or centralize the call-time target.
+- 선택한 방식: Add one Codex-compatible SQLite resolver, fail closed when its authoritative config is unreadable or its present `sqlite_home` cannot be parsed as a non-empty string, and share it across history jobs, provider defaults, admission, and residue classification.
+- 다른 대안 대신 이 방식을 선택한 이유: A writer-only override would let ownership checks authorize one database while the mutation touched another.
+- 장점, 단점 및 영향: Split-home history remains correct and backup identities stay database-specific; storage cleanup of an external root remains out of scope.
+
 Native-main profile ownership is bound to the real `CODEX_HOME`, not to an OpenCodex instance.
 Its encrypted vault, transaction journal, recovery marker, and referenced quarantine files live in
 the owner-only `.opencodex-native-main-profiles` directory. The unchanged
@@ -30,6 +65,20 @@ These paths and the OS keyring are owner-only: the operating-system account that
 trust boundary and already has direct access to active native credentials. OpenCodex detects and
 fails closed on file identities that change during an operation, but it does not claim isolation
 from a malicious process already running as that same trusted OS account.
+
+Startup and the periodic stage cleaner do not acquire the profile transaction lock when both the
+stage registry and this instance's staging tree are proven absent. This keeps an unused profile
+subsystem from fencing native traffic or creating lock contention. Presence, an unsafe entry type,
+or any observation error still takes the locked sweep and fails closed; the fast path is based only
+on proven absence, never on an unreadable path.
+
+[Decision Log]
+- 목적과 의도: Keep zero-profile and zero-stage installations out of the native-profile transaction path without weakening staged-credential cleanup.
+- 기존 구현 및 제약 조건: Every live server swept stages at startup and every minute, and a failed sweep closed the global native-main gate even when no stage artifact existed.
+- 검토한 주요 대안: Disable native-main ownership entirely when the vault is empty, add a stale-lock deletion command, or skip only the stage sweep when both artifact paths are absent.
+- 선택한 방식: Preserve owner and claim protection, but bypass `sweepStages()` only after proving the registry and staging tree are both absent.
+- 다른 대안 대신 이 방식을 선택한 이유: Physical credential ownership remains cross-process safe, while an inert optional subsystem can no longer create the reported lock/recovery catch-22.
+- 장점, 단점 및 영향: Fresh installs avoid the SQLite profile lock; any present or uncertain stage state retains the existing locked fail-closed cleanup and recovery behavior.
 
 OpenCodex never overrides an explicit `CODEX_HOME`. On Windows, `ocx doctor` and `ocx status`
 nevertheless diagnose the high-confidence Orca dual-home case: both `CODEX_HOME` and
@@ -52,6 +101,22 @@ the recorded service ownership.
 `atomicWriteFile` uses a temp file named `{path}.ocx.{pid}.{seq}.tmp` (process ID + incrementing
 sequence number) to avoid collisions when concurrent writers (e.g. `ocx stop` and the proxy's own
 shutdown handler) both restore Codex config simultaneously. The temp is renamed atomically into place.
+
+Windows secret-file hardening resolves the effective token SID through an absolute, trusted
+PowerShell path before granting the owner and removing inherited broad ACL entries. The normal
+path obtains System32 from `GetSystemDirectoryW`. Windows ARM64 Bun builds that cannot execute
+`bun:ffi` use a narrower ACL-only fallback to the fixed protected default installation path
+`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`. The fallback never applies to UAC or
+Task Scheduler launch, never consults environment variables or `PATH`, and fails closed when the
+fixed executable is absent.
+
+[Decision Log]
+- 목적과 의도: Preserve required Windows ACL hardening on the bundled Windows ARM64 runtime without weakening executable trust.
+- 기존 구현 및 제약 조건: The effective-SID query depended on the shared `GetSystemDirectoryW` FFI resolver; Bun 1.3.14 Windows ARM64 has no working `bun:ffi`, so config mutation reached `EACLIDENTITY` before PowerShell could start.
+- 검토한 주요 대안: Restore `USERDOMAIN\\USERNAME`; trust `SystemRoot`, `WINDIR`, or `PATH`; weaken required ACL writes; broaden the shared elevation resolver; or add a fixed-path fallback only for the non-elevated SID query.
+- 선택한 방식: Keep FFI authoritative, then allow only Windows ARM64 to use the existing default `C:\Windows\System32` PowerShell binary for the SID query when that exact file exists.
+- 다른 대안 대신 이 방식을 선택한 이유: Names and environment paths are caller-controlled, required secret writes must not silently skip ACLs, and elevation has a larger authority boundary that should remain FFI-only.
+- 장점, 단점 및 영향: Default Windows ARM64 installations can start and harden secrets; non-default Windows roots continue to fail closed until Bun exposes a trustworthy native system-directory API without FFI.
 
 Response-state loading performs a bounded recovery pass for interrupted snapshot writes. It only
 matches regular files named `responses-state.json.ocx.<pid>.<sequence>.tmp`, waits at least 15
@@ -78,7 +143,7 @@ matters for maintainers is which groups exist and who resolves them:
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
 | Routing | `defaultProvider`, `providers`, per-provider `selectedModels` | Explicit `provider/model` wins over `defaultProvider`. |
-| Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue` | Catalog state is derived; config only records intent. |
+| Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue`, `codexAccountNamespaces`, `codexAccountPickerEnabled` | Catalog state is derived; config only records intent. The picker flag is an explicit visibility override, while selector mappings remain the durable exact-routing contract. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
 | Transport | stream mode, timeouts, proxy settings, `websockets` | `streamMode` persists in config.json; Windows services need a persisted input, and macOS uses it for explicit eager-relay opt-in. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
@@ -136,6 +201,20 @@ config byte-for-byte unchanged and skip profile creation/updates and history mig
 provider managers own that routing configuration, and replacing their provider id can hide
 otherwise intact Codex sessions. This ownership check must run before catalog/cache refresh,
 journal creation, and the background history migration guardian.
+
+`ocx sync` and `ocx restore back` run the injector's non-writing preflight before provider
+discovery or catalog/cache replacement. Deterministic config and ownership refusals therefore
+leave the existing catalog and cache untouched, and their concrete messages are emitted on stderr.
+The real injection still revalidates under its normal write boundary after catalog convergence;
+the preflight is an early no-write guard, not an authorization token for a later write.
+
+[Decision Log]
+- 목적과 의도: Prevent a refused Codex config injection from degrading a previously usable model catalog and make the refusal actionable from the CLI.
+- 기존 구현 및 제약 조건: Catalog discovery and replacement ran before injection, while the injector alone owned the authoritative TOML transforms and write-coordination eligibility checks.
+- 검토한 주요 대안: Roll back catalog and cache bytes after a later refusal, duplicate a partial TOML validator in the CLI, or run the injector's existing planning path without committing before discovery.
+- 선택한 방식: Add a non-writing mode to the injector and call it before catalog work; keep the normal injector call as the final under-lock authority check.
+- 다른 대안 대신 이 방식을 선택한 이유: Post-hoc rollback can overwrite a concurrent catalog writer, and a second validator would drift from the real refusal rules. Reusing the injector keeps one policy path and avoids compensating writes.
+- 장점, 단점 및 영향: Deterministic refusals preserve catalog/cache bytes and print their reason on stderr. A concurrent state change can still make the final injection refuse, but catalog and injection retain their existing independent revalidation and serialization boundaries.
 
 `supports_websockets = true` is appended to the provider table only when `websocketsEnabled(config)`
 returns true.

@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 
 import { NativeProfileManager } from "../../src/codex/native-profile-manager";
 import { isCodexAccountUsable } from "../../src/codex/account-usability";
@@ -58,6 +58,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 }) as typeof fetch;
 
 const server = startServer(0, {
+  inspectNativeCodexOwnership: () => ({
+    ownership: "owned",
+    reason: "native startup test fixture",
+  }),
   nativeMainStartup: {
     manager,
     beforeRecovery: async () => {
@@ -67,7 +71,9 @@ const server = startServer(0, {
   managementApi: { nativeProfileApi: { manager } },
 });
 
-writeFileSync(portPath, String(server.port));
+// The parent treats existence as readiness and parses the port immediately. Publish
+// through a rename so it can never observe the file between create and write.
+atomicWriteFile(portPath, String(server.port));
 // #1061: the parent parses this file as soon as it exists, so a partial write
 // surfaces as `Unexpected EOF`. atomicWriteFile publishes through a rename, so a
 // reader sees either nothing or the whole document.

@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "./remove-tree";
 
 export interface IsolatedCodexHome {
   path: string;
@@ -18,7 +19,7 @@ export function installIsolatedCodexHome(prefix = "ocx-codex-home-"): IsolatedCo
     restore() {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
-      rmSync(path, { recursive: true, force: true });
+      removeTreeWithRetry(path);
     },
   };
 }

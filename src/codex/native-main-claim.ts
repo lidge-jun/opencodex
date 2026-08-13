@@ -22,7 +22,18 @@ export interface NativeMainClaimOptions {
   env?: NodeJS.ProcessEnv;
 }
 
-const hardenedIdentities = new Map<string, string>();
+export const NATIVE_MAIN_HARDENED_IDENTITY_MAX_ENTRIES = 32;
+export const hardenedIdentities = new Map<string, string>();
+
+export function rememberHardenedIdentity(path: string, identity: string): void {
+  hardenedIdentities.delete(path);
+  hardenedIdentities.set(path, identity);
+  while (hardenedIdentities.size > NATIVE_MAIN_HARDENED_IDENTITY_MAX_ENTRIES) {
+    const oldest = hardenedIdentities.keys().next().value;
+    if (oldest === undefined) break;
+    hardenedIdentities.delete(oldest);
+  }
+}
 
 export function nativeMainClaimPath(context: NativeProfileContext): string {
   return join(context.codexHome, NATIVE_MAIN_CLAIM_DB);
@@ -86,7 +97,7 @@ async function openClaimDatabase(
       // tests stayed green, because nearly every claim test injects `hardenPath`.
       await (options.hardenPath ?? ((target: string) => hardenStableLockFile(target, platform)))(path);
       assertStableLockFile(path, file);
-      hardenedIdentities.set(path, identity);
+      rememberHardenedIdentity(path, identity);
     }
     database = new Database(path, { create: true });
     // Journal-mode negotiation itself may need a database lock. Disable

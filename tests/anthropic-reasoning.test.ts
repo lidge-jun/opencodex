@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createAnthropicAdapter as createAnthropicAdapterProduction } from "../src/adapters/anthropic";
+import { chatCompletionsToResponsesBody } from "../src/chat/inbound";
 import { parseRequest } from "../src/responses/parser";
 import { anthropicToResponsesBody } from "../src/claude/inbound";
 import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
@@ -19,8 +20,8 @@ function parsed(reasoning?: string, extraOpts: Record<string, unknown> = {}, mod
   } as unknown as OcxParsedRequest;
 }
 
-async function bodyOf(p: OcxParsedRequest): Promise<Record<string, unknown>> {
-  const { body } = await createAnthropicAdapter(provider).buildRequest(p);
+async function bodyOf(p: OcxParsedRequest, configuredProvider = provider): Promise<Record<string, unknown>> {
+  const { body } = await createAnthropicAdapter(configuredProvider).buildRequest(p);
   return JSON.parse(typeof body === "string" ? body : JSON.stringify(body)) as Record<string, unknown>;
 }
 
@@ -67,6 +68,150 @@ describe("anthropic extended-thinking gate", () => {
   test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", async () => {
     const b = await bodyOf(parsed("minimal", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "low" });
+  });
+
+  test("forwards Responses JSON Schema output format to Anthropic", async () => {
+    const schema = {
+      type: "object",
+      properties: { score: { type: "integer", minimum: 1, maximum: 10 } },
+      required: ["score"],
+      additionalProperties: false,
+    };
+    const b = await bodyOf(parseRequest({
+      model: "claude-sonnet-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "score this" }] }],
+      text: { format: { type: "json_schema", name: "score", schema, strict: true } },
+    }));
+
+    expect(b.output_config).toEqual({
+      format: {
+        type: "json_schema",
+        schema: {
+          ...schema,
+          properties: {
+            score: {
+              type: "integer",
+              description: "{minimum: 1, maximum: 10}",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  test("preserves root definitions used by a root JSON Schema reference", async () => {
+    const schema = {
+      $ref: "#/$defs/answer",
+      $defs: {
+        answer: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+          additionalProperties: false,
+        },
+      },
+    };
+    const b = await bodyOf(parseRequest({
+      model: "claude-sonnet-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "answer this" }] }],
+      text: { format: { type: "json_schema", name: "answer", schema } },
+    }));
+
+    expect(b.output_config).toEqual({
+      format: { type: "json_schema", schema },
+    });
+  });
+
+  test("merges JSON Schema output format with adaptive thinking effort", async () => {
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    const b = await bodyOf(parseRequest({
+      model: "claude-sonnet-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "summarize this" }] }],
+      reasoning: { effort: "high" },
+      text: { format: { type: "json_schema", name: "summary", schema, strict: true } },
+    }));
+
+    expect(b.output_config).toEqual({
+      effort: "high",
+      format: { type: "json_schema", schema },
+    });
+  });
+
+  test("preserves unselected composition keywords as model guidance", async () => {
+    const oneOf = [{ type: "number", minimum: 0 }];
+    const allOf = [{ type: "string", minLength: 1 }];
+    const b = await bodyOf(parseRequest({
+      model: "claude-sonnet-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "answer this" }] }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "answer",
+          schema: {
+            anyOf: [{ type: "boolean" }],
+            oneOf,
+            allOf,
+          },
+        },
+      },
+    }));
+
+    expect(b.output_config).toEqual({
+      format: {
+        type: "json_schema",
+        schema: {
+          anyOf: [{ type: "boolean" }],
+          description: `{oneOf: ${JSON.stringify(oneOf)}, allOf: ${JSON.stringify(allOf)}}`,
+        },
+      },
+    });
+  });
+
+  test("translates Chat Completions JSON Schema output to Anthropic", async () => {
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "claude-sonnet-5",
+      messages: [{ role: "user", content: "summarize this" }],
+      reasoning_effort: "high",
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "summary",
+          description: "One summary object.",
+          schema,
+          strict: true,
+        },
+      },
+    });
+
+    const b = await bodyOf(parseRequest(responsesBody));
+
+    expect(b.output_config).toEqual({
+      effort: "high",
+      format: { type: "json_schema", schema },
+    });
+  });
+
+  test("rejects a JSON Schema without a type or composition keyword", async () => {
+    const request = parseRequest({
+      model: "claude-sonnet-5",
+      input: [{ role: "user", content: [{ type: "input_text", text: "summarize this" }] }],
+      text: { format: { type: "json_schema", name: "summary", schema: { description: "summary" } } },
+    });
+
+    await expect(bodyOf(request)).rejects.toThrow(
+      "JSON schema must have a type defined if anyOf/oneOf/allOf are not used",
+    );
   });
 
   test("adaptive-thinking model resizes max_tokens for high effort (issue #246)", async () => {
@@ -229,6 +374,37 @@ describe("anthropic extended-thinking gate", () => {
     expect(JSON.stringify(messages)).not.toContain("rs_other_provider");
     expect(JSON.stringify(messages)).not.toContain("signature");
     expect(messages).toEqual([{ role: "user", content: "continue on anthropic" }]);
+  });
+});
+
+describe("Anthropic Messages stored-OAuth round trip", () => {
+  test("Messages structured output survives the stored OAuth round trip", async () => {
+    const schema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const inbound = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      thinking: { type: "adaptive" },
+      output_config: {
+        effort: "high",
+        format: { type: "json_schema", schema },
+      },
+    });
+
+    const body = await bodyOf(parseRequest(inbound), {
+      ...provider,
+      authMode: "oauth",
+    });
+
+    expect(body.output_config).toEqual({
+      effort: "high",
+      format: { type: "json_schema", schema },
+    });
   });
 });
 

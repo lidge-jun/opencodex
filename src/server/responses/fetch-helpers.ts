@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import { codexWsUpstreamFetch, shouldUseCodexWsUpstream } from "./ws-upstream";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import {
   getConfigPath,
@@ -131,7 +132,17 @@ export function safeOriginLabel(url: string): string {
 
 
 export function providerFetch(provider: OcxProviderConfig): typeof globalThis.fetch {
-  return (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  const base = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  // ChatGPT Codex backend: streaming turns ride the responses_websockets
+  // transport (measured ~3s faster TTFT than the SSE POST queue); everything
+  // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
+  const wrapped = (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
+    if (typeof input === "string" && init && shouldUseCodexWsUpstream(input, init)) {
+      return codexWsUpstreamFetch(input, init, base);
+    }
+    return base(input, init);
+  };
+  return wrapped as typeof globalThis.fetch;
 }
 
 

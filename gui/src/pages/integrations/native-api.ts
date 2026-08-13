@@ -8,20 +8,24 @@ import { readJsonIfOk } from "../../fetch-json";
  * nothing caught it locally because GUI typecheck runs from its own tsconfig —
  * `bun x tsc --noEmit` at the repository root does not read this file. CI did.
  */
-export type NativeIntegrationClientId = "claude" | "grok" | "codex";
+export type NativeIntegrationClientId = "claude" | "grok" | "codex" | "claude-desktop";
 export type NativeIntegrationState = "absent" | "current" | "unsafe";
 export type NativeRefusalReason =
   | "not_installed"
   | "orphaned_marker"
   | "home_mismatch"
   | "config_busy"
-  | "write_failed";
+  | "write_failed"
+  | "metadata_unreadable"
+  | "cleanup_incomplete"
+  | "desired_state_changed";
 
 export interface NativeStatus {
   clientId: NativeIntegrationClientId;
   state: NativeIntegrationState;
   installed: boolean;
   configPath: string;
+  desiredEnabled: boolean;
   disableBlocked: { reason: NativeRefusalReason; message: string } | null;
 }
 
@@ -35,6 +39,7 @@ export interface NativeToggleEnvelope {
   changed: boolean;
   state: NativeIntegrationState;
   message: string;
+  desiredEnabled: boolean;
   reason?: string;
 }
 
@@ -44,6 +49,8 @@ export interface NativeRefusalEnvelope {
   clientId: NativeIntegrationClientId;
   reason: NativeRefusalReason;
   message: string;
+  desiredEnabled?: boolean;
+  residualPaths?: string[];
 }
 
 export interface NativeErrorEnvelope {
@@ -58,7 +65,7 @@ export type NativeErrorBody = NativeErrorEnvelope | NativeRefusalEnvelope;
 
 // Widening the type alone would leave this guard rejecting a `codex` response at
 // runtime, so the set moves with it.
-const NATIVE_CLIENTS: ReadonlySet<string> = new Set<NativeIntegrationClientId>(["claude", "grok", "codex"]);
+const NATIVE_CLIENTS: ReadonlySet<string> = new Set<NativeIntegrationClientId>(["claude", "grok", "codex", "claude-desktop"]);
 const NATIVE_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "native_integration_refused",
   "native_integration_failed",
@@ -69,6 +76,9 @@ const NATIVE_REFUSAL_REASONS: ReadonlySet<string> = new Set<NativeRefusalReason>
   "home_mismatch",
   "config_busy",
   "write_failed",
+  "metadata_unreadable",
+  "cleanup_incomplete",
+  "desired_state_changed",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

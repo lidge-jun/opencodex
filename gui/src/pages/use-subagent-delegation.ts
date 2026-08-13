@@ -19,6 +19,17 @@ export type DelegationPatch = {
   effort?: string | null;
 };
 
+/** Ultra mode (Proactive delegation for every model/effort) via /api/v2. */
+export type UltraModeState = {
+  enabled: boolean;
+  hintText: string | null;
+  multiAgentV2Enabled: boolean;
+};
+
+export type UltraModePatch = {
+  multiAgentModeHintText: string | null;
+};
+
 type DelegationResponse = {
   multiAgentGuidanceEnabled?: boolean;
   syncCodexSubagentDefaults?: boolean;

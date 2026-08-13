@@ -8,11 +8,13 @@ import { getAccountCredential, getAccountSet, removeAccount, saveAccountCredenti
 import { loginXai, refreshXaiToken, XAI_LOCAL_CLI_DETACH_WARNING, XaiTokenRequestError } from "./xai";
 import { ANTHROPIC_OAUTH_BETA, AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "./anthropic";
 import { loginKimi, refreshKimiToken } from "./kimi";
+import { loginNous, NousTokenError, refreshNousToken, clearNousRefreshIntent, RefreshIntentIOError } from "./nous";
 import { loginChatGPT, refreshChatGPTToken } from "./chatgpt";
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
+import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../providers/registry";
@@ -53,6 +55,8 @@ export interface OAuthAccessSnapshot {
   accountId: string;
   generation: string;
   accessToken: string;
+  /** Cloud Code Assist project selected during Antigravity login. */
+  projectId?: string;
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion">;
 }
@@ -191,6 +195,22 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     providerConfig: oauthConfig("kimi"),
     defaultModel: oauthDefaultModel("kimi"),
   },
+  nous: {
+    // Nous Portal device-grant login (RFC 8628) against portal.nousresearch.com.
+    // The access token is the per-request inference JWT (scope inference:invoke).
+    // Refresh tokens are single-use and rotated server-side on every refresh:
+    // keep background refresh lazy-only (the default) so concurrent refreshes
+    // cannot trip the Portal's token-reuse revocation.
+    login: (ctrl) => loginNous(ctrl),
+    refresh: (rt, signal) => refreshNousToken(rt, signal),
+    providerConfig: oauthConfig("nous"),
+    defaultModel: oauthDefaultModel("nous"),
+    // Single-use rotating refresh tokens must never be background-refreshed
+    // proactively: concurrent refreshes would trip the Portal's reuse
+    // revocation. Anchor the lazy-only default explicitly so it cannot be
+    // silently overridden to proactive.
+    defaultRefreshPolicy: "lazy-only",
+  },
   kiro: {
     login: (ctrl, opts) => loginKiro(ctrl, { forceLogin: opts?.forceLogin }),
     refresh: (rt, signal, credential) => refreshKiroToken(rt, signal, credential),
@@ -204,7 +224,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
     defaultModel: oauthDefaultModel("google-antigravity"),
   },
   cursor: {
-    login: (ctrl) => loginCursor(ctrl),
+    login: (ctrl, opts) => loginCursor(ctrl, undefined, { forceLogin: opts?.forceLogin }),
     refresh: refreshCursorToken,
     providerConfig: oauthConfig("cursor"),
     defaultModel: oauthDefaultModel("cursor"),
@@ -289,6 +309,7 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
+    ...(cred.projectId ? { projectId: cred.projectId } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -432,6 +453,11 @@ function terminal(error:unknown):boolean{
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
+  if(error instanceof NousTokenError)return error.terminal===true||["invalid_grant","refresh_token_reused","revoked","revoked_token","expired_token"].includes(error.oauthError??"");
+  // Local durable-write/read/cleanup failures are operational, not credential
+  // death: the provider credential was never rejected or consumed. Never mark
+  // the account needsReauth for broken local persistence infrastructure.
+  if (error instanceof RefreshIntentIOError) return false;
   return isTerminalRefreshError(error);
 }
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
@@ -453,6 +479,47 @@ function newerClaudeCredential(stored: OAuthCredentials, now: number): OAuthCred
   const disk = detectClaudeCodeToken();
   if (!disk || disk.expires <= now + REFRESH_SKEW_MS) return undefined;
   return credentialGeneration(disk) !== credentialGeneration(stored) ? disk : undefined;
+}
+
+/**
+ * Preserve an already-rotated Nous refresh token (RT-B) after a terminal refresh
+ * error (e.g. the returned access JWT lacked `inference:invoke`). The unusable
+ * access token is NOT persisted as valid: the recovery credential carries an
+ * empty access placeholder with a past expiry so it can never be routed, and the
+ * account is marked needsReauth by the caller. Generation-safe: a concurrent
+ * newer write wins and is never overwritten.
+ */
+async function preserveNousRotatedRefresh(
+  provider: string,
+  accountId: string,
+  rotatedRefresh: string,
+  expectedGeneration: string,
+  previous: OAuthCredentials,
+): Promise<{ kind: "persisted"; generation: string } | { kind: "superseded" } | { kind: "failed" }> {
+  try {
+    const recovery: OAuthCredentials = {
+      refresh: rotatedRefresh,
+      // Never persist the unusable access token: an empty placeholder with a
+      // past expiry can never be observed as a valid credential.
+      access: "",
+      expires: 0,
+      ...(previous.accountId ? { accountId: previous.accountId } : {}),
+      ...(previous.email ? { email: previous.email } : {}),
+      ...(previous.source ? { source: previous.source } : {}),
+    };
+    const outcome = await mergeAccountCredential(provider, accountId, recovery, { expectedGeneration });
+    if (outcome.superseded) return { kind: "superseded" };
+    // Return the exact generation this write produced, so the caller never
+    // re-reads the store (a concurrent writer could otherwise supply a different
+    // credential generation and be marked needsReauth by mistake).
+    return { kind: "persisted", generation: credentialGeneration(recovery) };
+  } catch (error) {
+    // A store-mutation busy outcome is transient and retryable; surface it
+    // unchanged so the caller can retry rather than treating it as a permanent
+    // RT-B persistence failure.
+    if (error instanceof OAuthMutationBusyError) throw error;
+    return { kind: "failed" };
+  }
 }
 
 export async function refreshAnthropicAccountWithLock(
@@ -568,10 +635,69 @@ export async function refreshGenericAccountWithLock(
         throw new OAuthLoginRequiredError(provider);
       }
       logOAuthEvent("OAuth credentials rotated and persisted", { provider, accountId });
+      // Best-effort bookkeeping cleanup: the rotated credential is already
+      // durably persisted. A failure to unlink the old-token intent file
+      // (EACCES/EPERM/EBUSY/EROFS) must not turn a committed rotation into a
+      // failed refresh. The stale intent keys the OLD token, which is no longer
+      // stored, so leaving it behind blocks nothing and is safe. It must also
+      // never route through the generic refresh error path (no needsReauth).
+      if (provider === "nous") {
+        try {
+          clearNousRefreshIntent(stored.refresh);
+        } catch (cleanupErr) {
+          logOAuthEvent("OAuth refresh intent cleanup failed (non-fatal)", {
+            provider,
+            accountId,
+            cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+          });
+        }
+      }
       return fresh.access;
     } catch (error) {
       if (error instanceof OAuthMutationBusyError) throw error;
       if (!terminal(error)) throw error;
+      // Nous-specific failure-atomicity: a terminal refresh error that carries
+      // an already-issued rotated refresh token (e.g. the access JWT lacked the
+      // required `inference:invoke` scope) means the server consumed RT-A and
+      // issued RT-B. RT-B must be preserved generation-safely BEFORE forcing
+      // reauthentication; discarding it would lose the only usable refresh
+      // material and force a full re-auth for no reason.
+      if (provider === "nous" && error instanceof NousTokenError) {
+        const rotated = error.getRotatedRefresh();
+        if (rotated !== undefined && rotated !== stored.refresh) {
+          const outcome = await preserveNousRotatedRefresh(
+            provider,
+            accountId,
+            rotated,
+            generation,
+            stored,
+          );
+          if (outcome.kind === "persisted") {
+            // RT-A's intent is cleared only after RT-B is durably persisted;
+            // cleanup itself stays best-effort (a stale RT-A intent keys a token
+            // that is no longer stored).
+            try {
+              clearNousRefreshIntent(stored.refresh);
+            } catch (cleanupErr) {
+              logOAuthEvent("OAuth refresh intent cleanup failed (non-fatal)", {
+                provider,
+                accountId,
+                cause: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+              });
+            }
+            // Mark exactly the generation this write produced — never a
+            // credential written by a concurrent login between the merge and
+            // this step.
+            await markAccountNeedsReauthIfGeneration(provider, accountId, outcome.generation, writerGeneration);
+          } else {
+            // RT-B persistence failed or a newer generation superseded it:
+            // never clear RT-A's intent (RT-A was consumed), and mark the old
+            // generation needsReauth (a no-op if a newer generation won).
+            await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
+          }
+          throw new OAuthLoginRequiredError(provider);
+        }
+      }
       await markAccountNeedsReauthIfGeneration(provider, accountId, generation, writerGeneration);
       throw new OAuthLoginRequiredError(provider);
     }
@@ -628,15 +754,15 @@ function modelDiscoveryTransportSeed(providerName: string, prov: OcxProviderConf
 }
 
 /**
- * Provider-correct `GET /models` request (URL + headers), so both model-listing paths fetch the
+ * Provider-correct model-discovery request (URL + headers), so both model-listing paths fetch the
  * LIVE catalog correctly per adapter. Anthropic is the special case: its endpoint is `/v1/models`
  * (not `/models`), it needs `anthropic-version`, and it authenticates with `x-api-key` by default
  * (or `Authorization: Bearer` when `apiKeyTransport = "bearer"`), plus the OAuth beta for oauth
  * mode — not a bare Bearer. Google (ai-studio mode)
  * is the other special case: `x-goog-api-key` + `/v1beta/models`, returning `{ models: [...] }`.
  * The catalog authority gate intentionally degrades that non-OpenAI shape to stale/static data.
- * Everyone else uses the OpenAI-style `/models` + Bearer with a `{ data: [{ id, owned_by? }] }`
- * response.
+ * Antigravity uses its CCA `:fetchAvailableModels` RPC; everyone else uses the OpenAI-style
+ * `/models` + Bearer with a `{ data: [{ id, owned_by? }] }` response.
  */
 export interface ModelsRequestObservedAuth {
   readonly oauthApiBaseUrl?: string;
@@ -647,7 +773,7 @@ export function buildModelsRequest(
   apiKey: string | undefined,
   providerName = "",
   observedAuth?: ModelsRequestObservedAuth,
-): { url: string; headers: Record<string, string> } {
+): { method?: "POST"; url: string; headers: Record<string, string> } {
   const transportSeed = modelDiscoveryTransportSeed(providerName, prov);
   const copilotApiBaseUrl = observedAuth === undefined
     ? (providerName === "github-copilot" ? getOAuthCredentialApiBaseUrl(providerName) : undefined)
@@ -665,6 +791,17 @@ export function buildModelsRequest(
     effectiveProvider.baseUrl,
     defaultUrl,
   );
+  if (effectiveGoogleMode(providerName, effectiveProvider) === "cloud-code-assist") {
+    headers.Accept = "application/json";
+    headers["Content-Type"] = "application/json";
+    headers["User-Agent"] = ANTIGRAVITY_REQUEST_UA;
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    return {
+      method: "POST",
+      url: discoveryUrl(`${effectiveProvider.baseUrl.replace(/\/+$/, "")}/v1internal:fetchAvailableModels`),
+      headers,
+    };
+  }
   if (effectiveGoogleMode(providerName, effectiveProvider) === "ai-studio") {
     // Generative Language API: API key goes in x-goog-api-key (never Authorization: Bearer),
     // models live under /v1beta (v1 misses preview models), and pageSize maxes at 1000 —
@@ -698,9 +835,7 @@ export function buildModelsRequest(
  *
  * Only touches providers that are registry-managed AND still `authMode: "oauth"`. Preset fields
  * are refreshed, while the registry's `liveModels` default is normally filled only when no value
- * is stored. Antigravity has one versioned exception below because its old GUI-generated `true`
- * cannot be distinguished from a hand-written pre-migration `true`. Persists + returns true when
- * anything changed.
+ * is stored. Persists + returns true when anything changed.
  */
 function cloneProviderField(value: unknown): unknown {
   if (Array.isArray(value)) return [...value];
@@ -727,9 +862,14 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
   "autoToolChoiceOnlyModels",
   "preserveReasoningContentModels",
 ];
+// `requiresReasoningPlaceholderModels` is deliberately NOT reconciled here: no
+// OAuth preset seeds it, so the delete-when-preset-undefined branch would wipe
+// an explicit user opt-out (`[]`) on every startup. Registry seeds still reach
+// existing rows through enrichProviderFromRegistry, which is fill-only and
+// preserves explicit saved values.
 
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
-const GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION = 1 as const;
+const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
 
 /** Only migrate the three-model experimental seed; an operator's later `liveModels: false` wins. */
 function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean {
@@ -738,10 +878,34 @@ function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean 
     && JSON.stringify(provider.models) === JSON.stringify(["deepseek-v4-flash", "kimi-k3", "glm-5.2"]);
 }
 
+function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean {
+  return provider.liveModels === false
+    && provider.adapter === "google"
+    && provider.baseUrl === "https://daily-cloudcode-pa.googleapis.com"
+    && provider.authMode === "oauth"
+    && provider.googleMode === "cloud-code-assist"
+    && provider.defaultModel === "gemini-3.6-flash"
+    && JSON.stringify(provider.models) === JSON.stringify([
+      "gemini-3.6-flash",
+      "gemini-3.1-pro",
+      "gemini-3.1-flash-image",
+      "claude-sonnet-4-6",
+      "claude-opus-4-6-thinking",
+      "gpt-oss-120b-medium",
+    ]);
+}
+
+/** Promote only the versioned canonical static seed; unmarked `liveModels: false` remains user intent. */
+function migrateLegacyAntigravityStaticCatalog(config: OcxConfig): boolean {
+  if (config.googleAntigravityStaticCatalogVersion !== 1) return false;
+  const provider = config.providers[GOOGLE_ANTIGRAVITY_PROVIDER];
+  if (provider && isLegacyAntigravityStaticCatalog(provider)) provider.liveModels = true;
+  config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION;
+  return true;
+}
+
 export function reconcileOAuthProviders(config: OcxConfig): boolean {
-  let changed = false;
-  const migrateAntigravityStaticCatalog =
-    config.googleAntigravityStaticCatalogVersion !== GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
+  let changed = migrateLegacyAntigravityStaticCatalog(config);
   for (const [name, prov] of Object.entries(config.providers)) {
     const def = OAUTH_PROVIDERS[name];
     if (name === "command-code" && isLegacyCommandCodeStaticCatalog(prov)) {
@@ -750,21 +914,7 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       prov.liveModels = true;
       changed = true;
     }
-    // Normalize the canonical row before the OAuth-only reconciliation guard. The old GUI and a
-    // manual edit both persist the same bare `true`, with no source metadata, so every ambiguous
-    // pre-marker value is reset once. A deliberate live-discovery choice can be re-enabled after
-    // the marker and is then preserved. Do this before the guard so omitted/non-OAuth authMode
-    // rows do not get stamped without actually receiving the new static default.
-    if (name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog && prov.liveModels !== false) {
-      prov.liveModels = false;
-      changed = true;
-    }
-    // During the one-time Antigravity static-catalog migration, also refresh preset catalog
-    // fields when authMode is omitted or non-oauth. Otherwise liveModels flips to static while
-    // a stale models[] remains the published catalog forever.
-    const migrateAntigravityCatalogFields =
-      name === GOOGLE_ANTIGRAVITY_PROVIDER && migrateAntigravityStaticCatalog;
-    if (!def || (prov.authMode !== "oauth" && !migrateAntigravityCatalogFields)) continue;
+    if (!def || prov.authMode !== "oauth") continue;
     const preset = def.providerConfig;
     for (const field of OAUTH_RECONCILE_FIELDS) {
       if (JSON.stringify(prov[field]) === JSON.stringify(preset[field])) continue;
@@ -775,9 +925,6 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       }
       changed = true;
     }
-    // Before this marker existed, the GUI materialized an omitted `liveModels` as `true` on any
-    // settings save. Since persisted values have no provenance, the pre-guard normalization above
-    // intentionally resets all pre-marker `true` values once. Later choices are version-bounded.
     if (prov.liveModels === undefined && preset.liveModels !== undefined) {
       prov.liveModels = preset.liveModels;
       changed = true;
@@ -790,10 +937,6 @@ export function reconcileOAuthProviders(config: OcxConfig): boolean {
       prov.defaultModel = preset.defaultModel;
       changed = true;
     }
-  }
-  if (migrateAntigravityStaticCatalog) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-    changed = true;
   }
   if (changed) saveConfig(config);
   return changed;
@@ -851,17 +994,14 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
   if (!def) return;
+  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
   const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
   if (namespaceCollision) throw new Error(namespaceCollision);
   const existing = config.providers[provider];
   const next: OcxProviderConfig = { ...def.providerConfig };
-  // `liveModels` is a user-facing provider toggle. A registry default seeds new rows, but an
-  // explicit post-migration choice must survive re-login and the latest-config upsert. Old GUI
-  // saves and manual edits left identical pre-marker `true` values, so that ambiguous state is
-  // reset once; users who deliberately forced discovery can re-enable it after migration.
-  const preserveExistingLiveModels = provider !== GOOGLE_ANTIGRAVITY_PROVIDER
-    || config.googleAntigravityStaticCatalogVersion === GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  if (preserveExistingLiveModels && typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
+  // `liveModels` is a user-facing provider toggle. Preserve either explicit setting across login;
+  // Antigravity's CCA discovery now uses its real RPC, so legacy `true` remains a valid choice.
+  if (typeof existing?.liveModels === "boolean" && !isLegacyCommandCodeStaticCatalog(existing)) {
     next.liveModels = existing.liveModels;
   }
   // The Command Code protocol-version pin is an operator compatibility control. A re-login,
@@ -869,6 +1009,12 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   // existing pin so authentication changes do not silently revert the documented control.
   if (existing?.commandCodeVersion !== undefined) {
     next.commandCodeVersion = existing.commandCodeVersion;
+  }
+  // User-configured price overlays are operator data, not preset state; a
+  // re-login, add-account, or reauth must not silently drop them from the
+  // Logs/Usage estimates.
+  if (existing?.modelCosts !== undefined) {
+    next.modelCosts = existing.modelCosts;
   }
   if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
@@ -893,9 +1039,6 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
     }
   }
   config.providers[provider] = next;
-  if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) {
-    config.googleAntigravityStaticCatalogVersion = GOOGLE_ANTIGRAVITY_STATIC_CATALOG_VERSION;
-  }
 }
 
 interface RunLoginDeps {
@@ -1023,11 +1166,15 @@ export async function runLogin(
   settleKiroTransaction(rawCred, true);
   if (provider !== "chatgpt") {
     try {
+      const { clearModelCache } = await import("../codex/model-cache");
+      const { clearGatherRoutedModelsInflight } = await import("../codex/catalog");
+      clearModelCache(provider);
+      clearGatherRoutedModelsInflight();
       const { clearAccountQuotaCache, clearProviderQuotaCache } = await import("../providers/quota");
       clearProviderQuotaCache();
       clearAccountQuotaCache(provider);
     } catch {
-      // Quota module may be unavailable in tightly scoped unit tests.
+      // Optional state modules may be unavailable in tightly scoped unit tests.
     }
   }
   return cred;
@@ -1160,8 +1307,16 @@ export function getLoginStatus(provider: string): { loggedIn: boolean; email?: s
     ...(a.needsReauth ? { needsReauth: true } : {}),
     expiresAt: a.credential.expires,
   }));
+
+  // A stored credential counts as "logged in" when it exists and is not marked for
+  // re-authentication. An expired access token with a valid refresh token is still
+  // logged in: request resolution refreshes expired/near-expiry credentials lazily.
+  // Invalid/unknown local-import expiries are handled at parse/adoption time
+  // (local-token-detect.ts), never by over-reporting login state here.
+  const activeNeedsReauth = set?.accounts
+    .find(a => a.id === set.activeAccountId)?.needsReauth === true;
   return {
-    loggedIn: !!cred,
+    loggedIn: !!cred && !activeNeedsReauth,
     email: maskEmail(cred?.email) ?? undefined,
     source: cred?.source,
     error: st?.error,

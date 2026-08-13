@@ -7,15 +7,22 @@ import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { createAnthropicAdapter } from "../src/adapters/anthropic";
 import { clearableDeadline } from "../src/lib/abort";
-import type { RequestLogContext } from "../src/server/request-log";
-import { startServer } from "../src/server";
 import {
+  clearRequestLogsForTests,
+  getRequestLogEntries,
+  type RequestLogContext,
+} from "../src/server/request-log";
+import { startServer } from "../src/server";
+import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
+import {
+  estimateClaudeRequestTokens,
   fetchWithHeaderDeadline,
   handleClaudeMessages,
   readBoundedPassthroughBody,
   resolvePassthroughBodyGuard,
   tapAnthropicSseForLog,
 } from "../src/server/claude-messages";
+import { estimateTokens } from "../src/lib/token-estimate";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { SERVER_BUDGET_MS } from "./helpers/test-budget";
@@ -35,6 +42,7 @@ import {
 
 let testDir = "";
 let previousHome: string | undefined;
+let previousDesktopConfigDir: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 const originalFetch = globalThis.fetch;
 
@@ -43,12 +51,16 @@ beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-claude-endpoint-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-claude-endpoint-"));
   process.env.OPENCODEX_HOME = testDir;
+  previousDesktopConfigDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(testDir, "claude-desktop");
   globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
+  if (previousDesktopConfigDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousDesktopConfigDir;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   globalThis.fetch = originalFetch;
@@ -181,6 +193,37 @@ test("non-streaming /v1/messages returns an Anthropic message JSON", async () =>
     expect(json.content[0].type).toBe("text");
     expect(json.content[0].text).toContain("Hello");
     expect(typeof json.usage.input_tokens).toBe("number");
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("Desktop OFF leaves Claude messages and health live", async () => {
+  const upstream = mockChatUpstream();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const disabled = await fetch(new URL("/api/native-integrations/claude-desktop", server.url), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(disabled.status).toBe(200);
+    expect((await disabled.json()) as { desiredEnabled: boolean }).toMatchObject({ desiredEnabled: false });
+
+    const message = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "still live" }],
+      }),
+    });
+    expect(message.status).toBe(200);
+    expect((await message.json()) as { type: string }).toMatchObject({ type: "message" });
+    expect((await fetch(new URL("/healthz", server.url))).status).toBe(200);
   } finally {
     await server.stop(true);
     upstream.stop(true);
@@ -376,6 +419,34 @@ function freshLogCtx(): RequestLogContext {
 }
 
 const MESSAGE_START_FRAME = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n';
+
+// #1170: the space after `data:` is optional in text/event-stream. This tap extracted usage with
+// a hardcoded `data: ` prefix, so a compliant provider that omits the space produced a logged turn
+// with no usage at all.
+const UNSPACED_USAGE_FRAMES = [
+  'event:message_start\ndata:{"type":"message_start","message":{"usage":{"input_tokens":11}}}\n\n',
+  'event:message_delta\ndata:{"type":"message_delta","usage":{"output_tokens":7}}\n\n',
+].join("");
+
+test("A0: usage extraction accepts unspaced data fields (#1170)", async () => {
+  const upstream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(sseEncoder.encode(UNSPACED_USAGE_FRAMES));
+      controller.close();
+    },
+  });
+  const { calls, finalize } = spyFinalize();
+  const ctx = freshLogCtx();
+  const tap = tapAnthropicSseForLog(upstream, ctx, finalize, { stallMs: 5_000, maxBytes: 0 });
+  const text = await new Response(tap).text();
+
+  // The bytes pass through untouched either way; what the strict prefix broke was the inspection.
+  expect(text).toContain("message_start");
+  // "terminal" rather than "eof" is itself part of the fix: recognizing the unspaced
+  // `message_delta` is what lets the tap classify the close as a real terminal frame.
+  expect(calls).toEqual([{ status: 200, closeReason: "terminal" }]);
+  expect(ctx.usage).toEqual(expect.objectContaining({ inputTokens: 11, outputTokens: 7 }));
+});
 
 test("A1: stalled upstream body gets an Anthropic timeout_error tail and body_stall close reason", async () => {
   const upstream = new ReadableStream<Uint8Array>({
@@ -583,11 +654,22 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
       return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
     },
   });
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    if (url.origin === "https://chatgpt.com") {
+      if (url.pathname !== "/backend-api/codex/responses") {
+        throw new Error(`unexpected canonical Codex path ${url.pathname}`);
+      }
+      return originalFetch(new URL("/responses", upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
   saveConfig({
     port: 0,
     defaultProvider: "native",
     providers: {
-      native: { adapter: "openai-responses", baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`, authMode: "forward", allowPrivateNetwork: true },
+      native: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
     },
   } as OcxConfig);
   const server = startServer(0);
@@ -615,10 +697,192 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
     expect(capture.body?.reasoning?.effort).toBe("high");
     expect(capture.headers?.["session_id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/);
   } finally {
+    globalThis.fetch = originalFetch;
     await server.stop(true);
     upstream.stop(true);
   }
 });
+
+test("native openai-responses Claude route logs cyber terminals as 400 cyber_policy", async () => {
+  clearRequestLogsForTests();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response([
+        "event: response.failed",
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+          },
+        })}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "native",
+    providers: {
+      native: {
+        adapter: "openai-responses",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        authMode: "forward",
+        allowPrivateNetwork: true,
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "native/gpt-test",
+        max_tokens: 128,
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("blocked");
+    const entry = getRequestLogEntries().findLast(e => e.surface === "claude");
+    expect(entry).toMatchObject({
+      status: 400,
+      errorCode: "cyber_policy",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "blocked",
+    });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+    clearRequestLogsForTests();
+  }
+});
+
+test("custom forward openai-responses route never receives the main ChatGPT credential", async () => {
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-secret-must-not-leave", account_id: "main-account-must-not-leave" },
+  }));
+  const captured: Array<{ authorization: string | null; accountId: string | null }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      captured.push({
+        authorization: req.headers.get("authorization"),
+        accountId: req.headers.get("chatgpt-account-id"),
+      });
+      return new Response([
+        'event: response.created\ndata: {"response":{"id":"resp_1","status":"in_progress"}}\n\n',
+        'event: response.output_text.delta\ndata: {"delta":"ok"}\n\n',
+        'event: response.completed\ndata: {"response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "custom",
+    providers: {
+      custom: {
+        adapter: "openai-chat",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        authMode: "forward",
+        allowPrivateNetwork: true,
+        modelAdapters: { "gpt-test": "openai-responses" },
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer claude-placeholder" },
+      body: JSON.stringify({
+        model: "custom/gpt-test",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    const responseBody = await response.text();
+    expect({ status: response.status, body: responseBody }).toMatchObject({ status: 200 });
+    expect(captured).toEqual([{ authorization: null, accountId: null }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("shadow-call rerouting cannot carry the main ChatGPT credential to a custom forward route", async () => {
+  writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+    tokens: { access_token: "main-secret-must-not-leave", account_id: "main-account-must-not-leave" },
+  }));
+  const captured: Array<{ authorization: string | null; accountId: string | null }> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req) {
+      captured.push({
+        authorization: req.headers.get("authorization"),
+        accountId: req.headers.get("chatgpt-account-id"),
+      });
+      return new Response([
+        'event: response.created\ndata: {"response":{"id":"resp_1","status":"in_progress"}}\n\n',
+        'event: response.output_text.delta\ndata: {"delta":"ok"}\n\n',
+        'event: response.completed\ndata: {"response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+      custom: {
+        adapter: "openai-chat",
+        baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+        authMode: "forward",
+        allowPrivateNetwork: true,
+        modelAdapters: { "gpt-test": "openai-responses" },
+      },
+    },
+    shadowCallIntercept: {
+      enabled: true,
+      model: "custom/gpt-test",
+      sourceModels: ["gpt-5.6-luna"],
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer claude-placeholder" },
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        max_tokens: 16,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    const responseBody = await response.text();
+    expect({ status: response.status, body: responseBody }).toMatchObject({ status: 200 });
+    expect(captured).toEqual([{ authorization: null, accountId: null }]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+/**
+ * This case sandboxes CODEX_HOME, so the service installed on the developer's
+ * machine is not evidence about it. See tests/helpers/owned-service-home.ts.
+ */
+const inspectNativeCodexOwnership = ownedServiceHomeInspection("claude replay main-enrichment test");
 
 test("Claude replay owns optional main enrichment while routed work survives drain and recovery", async () => {
   resetLifecycleDrainStateForTests();
@@ -653,7 +917,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
     },
   });
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
-  let server = startServer(0);
+  let server = startServer(0, { inspectNativeCodexOwnership });
   await waitForNativeMainStartupGate();
   let drain: ReturnType<typeof acquireNativeMainProfileDrain> = null;
   let recoveryHomeId: string | null = null;
@@ -717,7 +981,7 @@ test("Claude replay owns optional main enrichment while routed work survives dra
       activeCodexAccountId: "__main__",
       autoSwitchThreshold: 0,
     } as OcxConfig);
-    server = startServer(0);
+    server = startServer(0, { inspectNativeCodexOwnership });
     await waitForNativeMainStartupGate();
     recoveryHomeId = nativeMainStartupGateSnapshot().homeId ?? "claude-main-recovery-home";
     expect(blockNativeMainRecovery(recoveryHomeId, "manual")).toBe(true);
@@ -935,6 +1199,168 @@ test("count_tokens returns a positive estimate in the exact contract shape", asy
   }
 });
 
+/** Minimal PNG header (signature + IHDR) so the attachment sniffer can read real dimensions. */
+function countTokensPngBase64(width: number, height: number): string {
+  const u32be = (n: number): number[] => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const bytes = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ...u32be(13), 0x49, 0x48, 0x44, 0x52, // len + "IHDR"
+    ...u32be(width), ...u32be(height),
+    8, 6, 0, 0, 0, // bit depth, color type, etc.
+  ];
+  return Buffer.from(Uint8Array.from(bytes)).toString("base64");
+}
+
+test("count_tokens prices base64 attachments as attachments, not characters", async () => {
+  saveConfig(mockConfig("http://127.0.0.1:1/v1"));
+  const server = startServer(0);
+  try {
+    const data = "A".repeat(700_000); // ~512KB decoded; counting chars would report ~200k tokens
+    const response = await fetch(new URL("/v1/messages/count_tokens", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "what is in this screenshot?" },
+            { type: "image", source: { type: "base64", media_type: "image/png", data } },
+          ],
+        }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const json = await response.json() as { input_tokens: number };
+    // ceil(700000 * 3/4 / 512) = 1026 attachment tokens plus a small text remainder.
+    expect(json.input_tokens).toBeGreaterThanOrEqual(1026);
+    expect(json.input_tokens).toBeLessThan(2000);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("estimateClaudeRequestTokens matches the plain char estimate for text-only bodies", () => {
+  const raw = {
+    system: "be brief",
+    messages: [{ role: "user", content: "count me please, this is a sentence" }],
+    tools: [{ name: "Read", input_schema: { type: "object" } }],
+  };
+  const parts = [raw.system, JSON.stringify(raw.messages), JSON.stringify(raw.tools)];
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(Math.max(1, estimateTokens(parts.join("\n"), "m")));
+});
+
+test("estimateClaudeRequestTokens prices sniffable images by pixel dimensions", () => {
+  const raw = {
+    messages: [{
+      role: "user",
+      content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: countTokensPngBase64(1500, 2000) } }],
+    }],
+  };
+  const estimate = estimateClaudeRequestTokens(raw, "m");
+  // ceil(1500 * 2000 / 750) = 4000 attachment tokens plus the JSON skeleton.
+  expect(estimate).toBeGreaterThanOrEqual(4000);
+  expect(estimate).toBeLessThan(4100);
+});
+
+test("estimateClaudeRequestTokens strips base64 documents nested in tool_result content", () => {
+  const raw = {
+    messages: [{
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "t1",
+        content: [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: "Q".repeat(400_000) } }],
+      }],
+    }],
+  };
+  const estimate = estimateClaudeRequestTokens(raw, "m");
+  // ceil(400000 * 3/4 / 512) = 586 tokens, nowhere near the ~114k a char count would report.
+  expect(estimate).toBeGreaterThanOrEqual(586);
+  expect(estimate).toBeLessThan(1000);
+});
+
+test("estimateClaudeRequestTokens does not charge base64 padding as payload bytes", () => {
+  // Exactly 131072 decoded bytes: 174764 base64 chars ending in "=". Counting the padding
+  // would yield 131073 bytes and charge 257 tokens instead of 256.
+  const data = Buffer.from(new Uint8Array(131_072)).toString("base64");
+  const raw = {
+    messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data } }] }],
+  };
+  const stripped = {
+    messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: "image/png", data: "" } }] }],
+  };
+
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(
+    Math.max(1, estimateTokens(JSON.stringify(stripped.messages), "m") + 256),
+  );
+});
+
+test("estimateClaudeRequestTokens keeps base64-shaped tool_use input counted as text", () => {
+  // tool_use.input is serialized into function_call arguments and sent upstream, so a
+  // {type:"base64", data} shape inside it is NOT an attachment and must count as text.
+  const raw = {
+    messages: [{
+      role: "assistant",
+      content: [{ type: "tool_use", id: "t1", name: "upload", input: { type: "base64", data: "B".repeat(40_000) } }],
+    }],
+  };
+
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(
+    Math.max(1, estimateTokens(JSON.stringify(raw.messages), "m")),
+  );
+});
+
+test("estimateClaudeRequestTokens leaves complete attachment-shaped tool_use input intact", () => {
+  // Even a full {type:"image", source:{type:"base64", data}} object inside tool_use.input
+  // is a tool argument, not an attachment: the translator replays it verbatim inside
+  // function_call arguments, so it must count at its serialized size.
+  const raw = {
+    messages: [{
+      role: "assistant",
+      content: [{
+        type: "tool_use",
+        id: "t1",
+        name: "upload_image",
+        input: { type: "image", source: { type: "base64", media_type: "image/png", data: "C".repeat(50_000) } },
+      }],
+    }],
+  };
+
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(
+    Math.max(1, estimateTokens(JSON.stringify(raw.messages), "m")),
+  );
+});
+
+test("estimateClaudeRequestTokens leaves attachment-shaped tool schemas intact", () => {
+  // Tool definitions are forwarded to routed providers; an attachment-shaped example in a
+  // schema is not an attachment either.
+  const raw = {
+    messages: [{ role: "user", content: "hi" }],
+    tools: [{
+      name: "upload",
+      input_schema: { type: "object" },
+      example: { type: "image", source: { type: "base64", media_type: "image/png", data: "D".repeat(30_000) } },
+    }],
+  };
+  const parts = [JSON.stringify(raw.messages), JSON.stringify(raw.tools)];
+
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(
+    Math.max(1, estimateTokens(parts.join("\n"), "m")),
+  );
+});
+
+test("estimateClaudeRequestTokens counts text-source documents as ordinary text", () => {
+  const text = "plain text document body ".repeat(40);
+  const raw = {
+    messages: [{
+      role: "user",
+      content: [{ type: "document", source: { type: "text", media_type: "text/plain", data: text } }],
+    }],
+  };
+  expect(estimateClaudeRequestTokens(raw, "m")).toBe(Math.max(1, estimateTokens(JSON.stringify(raw.messages), "m")));
+});
+
 test("claudeCode.enabled=false -> 403 permission_error on both routes", async () => {
   saveConfig(mockConfig("http://127.0.0.1:1/v1", { enabled: false }));
   const server = startServer(0);
@@ -1012,6 +1438,69 @@ test("generated agent effort directive restores exact xhigh and max after Claude
       { model: "test-model", effort: "xhigh" },
       { model: "test-model", effort: "max" },
     ]);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("generated agent effort directive preserves routed Anthropic structured output", async () => {
+  const captured: Array<Record<string, unknown>> = [];
+  const upstream = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      captured.push(await req.json() as Record<string, unknown>);
+      return new Response([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\\"answer\\":\\"ok\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ].join(""), { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  saveConfig({
+    port: 0,
+    defaultProvider: "mock-anthropic",
+    providers: {
+      "mock-anthropic": {
+        adapter: "anthropic",
+        baseUrl: upstream.url.toString().replace(/\/$/, ""),
+        apiKey: "test-key",
+        allowPrivateNetwork: true,
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  const schema = {
+    type: "object",
+    properties: { answer: { type: "string" } },
+    required: ["answer"],
+    additionalProperties: false,
+  };
+  try {
+    const response = await postMessages(server.url.toString(), {
+      model: "claude-haiku-4-5",
+      max_tokens: 32000,
+      stream: true,
+      system: [
+        { type: "text", text: "<!-- ocx-route: claude-ocx-mock-anthropic--claude-sonnet-5 -->" },
+        { type: "text", text: "<!-- ocx-effort: max -->" },
+      ],
+      thinking: { type: "enabled", budget_tokens: 31999 },
+      output_config: {
+        format: { type: "json_schema", schema },
+      },
+      messages: [{ role: "user", content: "Return JSON" }],
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.output_config).toEqual({
+      effort: "max",
+      format: { type: "json_schema", schema },
+    });
   } finally {
     await server.stop(true);
     upstream.stop(true);

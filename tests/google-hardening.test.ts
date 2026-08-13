@@ -115,6 +115,18 @@ describe("google provider hardening", () => {
     expect(events.some(event => event.type === "done")).toBe(false);
   });
 
+  test("a malformed nested candidate is a terminal stream error", async () => {
+    const events = await collect(createGoogleAdapter(provider()).parseStream(
+      sseResponse([{ candidates: [null] }, { candidates: [{ finishReason: "STOP" }] }]),
+    ));
+
+    expect(events).toEqual([{
+      type: "error",
+      message: "google response contained invalid candidates",
+    }]);
+    expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
   test("EOF residual data frame without a trailing newline is parsed", async () => {
     const events = await collect(createGoogleAdapter(provider()).parseStream(
       new Response('data:{"candidates":[{"content":{"parts":[{"text":"final"}]},"finishReason":"STOP"}]}', {
@@ -281,6 +293,97 @@ describe("google provider hardening", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
+  test("thought text stays hidden reasoning in streaming and non-streaming responses", async () => {
+    const body = {
+      candidates: [{
+        content: { parts: [{ thought: true, text: "private analysis" }] },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "private analysis" });
+      expect(events).not.toContainEqual({ type: "text_delta", text: "private analysis" });
+    }
+  });
+
+  test("thought text preserves ordering before function calls in both response modes", async () => {
+    const body = {
+      candidates: [{
+        content: {
+          parts: [
+            { thought: true, text: "choose the tool" },
+            { functionCall: { name: "lookup", args: { id: 7 } } },
+          ],
+        },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events.slice(0, 4)).toEqual([
+        { type: "reasoning_raw_delta", text: "choose the tool" },
+        { type: "tool_call_start", id: expect.stringMatching(/^call_/), name: "lookup" },
+        { type: "tool_call_delta", arguments: '{"id":7}' },
+        { type: "tool_call_end" },
+      ]);
+      expect(events).not.toContainEqual({ type: "text_delta", text: "choose the tool" });
+    }
+  });
+
+  test("ordinary Google text remains visible in both response modes", async () => {
+    const body = {
+      candidates: [{ content: { parts: [{ text: "visible answer" }] }, finishReason: "STOP" }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "text_delta", text: "visible answer" });
+      expect(events).not.toContainEqual({ type: "reasoning_raw_delta", text: "visible answer" });
+    }
+  });
+
+  // `emittedContentEvent` decides `"content"` vs `"continue"`, and its only consumer is the
+  // synthetic-heartbeat suppression in the read loop. A thought delta is real upstream
+  // activity, so it must count as content: emitting a heartbeat alongside it would claim the
+  // stream was idle while the model was demonstrably working. Pinning that here keeps the
+  // classification a decision rather than a side effect of routing thought text elsewhere.
+  test("a thought-only frame counts as content, so no synthetic heartbeat is emitted", async () => {
+    const thoughtOnly = {
+      candidates: [{ content: { parts: [{ thought: true, text: "private analysis" }] } }],
+    };
+    const events = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([thoughtOnly])));
+
+    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "private analysis" });
+    expect(events.some(e => e.type === "heartbeat")).toBe(false);
+  });
+
+  // The visible-text control for the assertion above: an ordinary text frame has always
+  // suppressed the heartbeat, so a divergence here would mean thought parts are classified
+  // differently from the text they replaced.
+  test("a visible-text frame also suppresses the synthetic heartbeat", async () => {
+    const textOnly = {
+      candidates: [{ content: { parts: [{ text: "visible answer" }] } }],
+    };
+    const events = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([textOnly])));
+
+    expect(events).toContainEqual({ type: "text_delta", text: "visible answer" });
+    expect(events.some(e => e.type === "heartbeat")).toBe(false);
+  });
   test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {
     const direct = createGoogleAdapter(provider({
       modelReasoningEfforts: {
@@ -312,6 +415,95 @@ describe("google provider hardening", () => {
     expect(JSON.parse(unset.body).generationConfig).toBeUndefined();
     expect(JSON.parse(legacy.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "medium" });
     expect(JSON.parse(antigravity.body).request.generationConfig).toBeUndefined();
+  });
+
+  test("provider-wide effort ladder drives thinkingLevel for a non-image model", async () => {
+    const direct = createGoogleAdapter(provider({
+      reasoningEfforts: ["low", "medium", "high"],
+    }));
+    const request = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(request.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("effort ladder drives thinkingLevel beyond the flash slice", async () => {
+    const direct = createGoogleAdapter(provider({
+      modelReasoningEfforts: { "gemini-3.1-pro-preview": ["low", "medium", "high"] },
+    }));
+    const proHigh = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+      options: { reasoning: "high" },
+    });
+    const proMinimal = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+      options: { reasoning: "minimal" },
+    });
+    const proUnset = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-pro-preview",
+    });
+    const unladdered = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.5-flash-lite",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(proHigh.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+    // minimal is not on the pro-preview ladder; the clamp lands on the nearest supported tier.
+    expect(JSON.parse(proMinimal.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+    expect(JSON.parse(proUnset.body).generationConfig).toBeUndefined();
+    expect(JSON.parse(unladdered.body).generationConfig).toBeUndefined();
+  });
+
+  test("Vertex sends thinkingLevel only when a ladder is explicitly configured", async () => {
+    const frozen = createGoogleAdapter(provider({ googleMode: "vertex" }));
+    const opted = createGoogleAdapter(provider({
+      googleMode: "vertex",
+      modelReasoningEfforts: { "gemini-3-pro": ["low", "medium", "high"] },
+    }));
+    const withoutLadder = await frozen.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.5-flash",
+      options: { reasoning: "high" },
+    });
+    const withLadder = await opted.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3-pro",
+      options: { reasoning: "high" },
+    });
+
+    expect(JSON.parse(withoutLadder.body).generationConfig).toBeUndefined();
+    expect(JSON.parse(withLadder.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
+  });
+
+  test("unladdered direct flash keeps its hardcoded thinking slice", async () => {
+    const bare = createGoogleAdapter(provider());
+    const flash = await bare.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.6-flash",
+      options: { reasoning: "medium" },
+    });
+
+    expect(JSON.parse(flash.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "medium" });
+  });
+
+  test("image models keep responseModalities even with a provider-wide effort ladder", async () => {
+    const direct = createGoogleAdapter(provider({ reasoningEfforts: ["low", "high"] }));
+    const image = await direct.buildRequest({
+      ...parsed(),
+      modelId: "gemini-3.1-flash-image",
+      options: { reasoning: "high" },
+    });
+
+    const generationConfig = JSON.parse(image.body).generationConfig;
+    expect(generationConfig.thinkingConfig).toBeUndefined();
+    expect(generationConfig.responseModalities).toEqual(["TEXT", "IMAGE"]);
   });
 
   test("publishes audited AI Studio metadata while Vertex stays frozen", () => {

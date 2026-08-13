@@ -1,10 +1,34 @@
-import { useEffect, useRef, useState } from "react";
-import { IconAlert, IconCheck, IconInfo, IconRefresh, IconX } from "../icons";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import { IconAlert, IconCheck, IconChevron, IconInfo, IconRefresh, IconX } from "../icons";
 import { Trans } from "../i18n/provider";
+import type { TFn } from "../i18n/shared";
 import { Select } from "../ui";
+import { computeSelectMenuStyle } from "../select-position";
 import { formatNamespacedModelId } from "../provider-icons";
 import { navigateHash } from "../hash-routing";
-import { EFFORT_CAP_LEVELS, requireJson, shadowCallModelOptions, sidecarBackendForModel, updateJobLabel } from "./dashboard-shared";
+import {
+  clampVisionReasoningToLadder,
+  EFFORT_CAP_LEVELS,
+  parsePositiveInteger,
+  parseVisionTimeoutMs,
+  requireJson,
+  type SidecarPatch,
+  shadowCallModelOptions,
+  sidecarBackendForModel,
+  updateJobLabel,
+  visionEnabledPatch,
+  visionMaxDescriptionsPatch,
+  visionReasoningLadder,
+  visionReasoningOptionsFor,
+  visionReasoningPatch,
+  visionSidecarBackendForModel,
+  visionTimeoutPatch,
+  VISION_MAX_DESCRIPTIONS_DEFAULT,
+  VISION_TIMEOUT_MS_DEFAULT,
+  VISION_TIMEOUT_MS_MAX,
+  VISION_TIMEOUT_MS_MIN,
+} from "./dashboard-shared";
 import { shadowSourceModelBadge } from "./shadow-call-source";
 import type { useDashboardData } from "./use-dashboard-data";
 
@@ -91,14 +115,6 @@ export function DashboardEffortCapPanel({ apiBase, d }: { apiBase: string; d: Da
   );
 }
 
-/**
- * Delegation row: pick the model (and effort) inline, with a link to the rest.
- *
- * The two switches moved to the Subagents tab, which is where the roster they affect lives.
- * The model pick stays: it is the same shape as the sidecar rows below it (label left,
- * dropdown right), and it is the one delegation choice worth changing without leaving the
- * status page.
- */
 export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
   const {
     t, injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
@@ -131,11 +147,7 @@ export function DashboardInjectionPanel({ d }: { apiBase: string; d: Dash }) {
             label={t("dash.injectionEffortLabel")}
           />
         )}
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          onClick={() => navigateHash("#subagents")}
-        >
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateHash("#subagents")}>
           {t("dash.injectionManage")}
         </button>
       </div>
@@ -148,23 +160,11 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
     t, runSync, syncing, updateTriggerRef, openUpdateDialog, updateLoading, updateOpen,
     syncResult, syncError, updateJob, reconnecting, clearSyncFeedback,
   } = d;
-
-  // A sync result that carries actionable guidance (generic warning, native subagent
-  // defaults override, or the stale app-server hint) is the ONLY place that warning is
-  // visible, so it must not vanish on a timer: it stays until the next sync or an
-  // explicit dismiss.
   const syncHoldsWarning = !!syncResult && (
     !!syncResult.warning
     || !!syncResult.nativeSubagentDefaultsWarning
     || !!syncResult.staleAppServerHint
   );
-
-  // Sync feedback is a transient fixed toast instead of an inline notice: the toast sits
-  // outside the layout flow, so the result can appear without pushing the panels below
-  // this card down by a full box height (the old notice shifted the whole dashboard on
-  // every sync click). Plain results auto-dismiss; a new sync clears and re-arms it.
-  // Dismissal is published to the dashboard data (clearSyncFeedback), not just a local
-  // flag, so switching tabs and back cannot resurrect a stale result as a fresh toast.
   const [syncToastDismissed, setSyncToastDismissed] = useState(false);
   const syncToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -186,14 +186,11 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
     };
   }, [syncResult, syncError, syncHoldsWarning, clearSyncFeedback]);
 
-  // A fresh click re-arms the toast even if the previous one was already auto-dismissed.
   const handleRunSync = () => {
     setSyncToastDismissed(false);
     void runSync();
   };
 
-  // Shared dismiss affordance for the sync toast: closes it locally AND clears the
-  // dashboard-level result so it cannot remount as fresh on the next Overview visit.
   const dismissSyncToast = () => {
     setSyncToastDismissed(true);
     clearSyncFeedback();
@@ -202,7 +199,6 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   return (
     <>
       <div className="panel maintenance-panel">
-        {/* Same one-row chrome as Sub-agent delegation: copy left, action right. */}
         <div className="dash-sync-summary">
           <div className="dash-sync-copy">
             <div className="font-semibold">{t("dash.syncModels")}</div>
@@ -212,13 +208,6 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
             <button type="button" className="btn btn-ghost btn-sm" onClick={handleRunSync} disabled={syncing}>
               <IconRefresh className={syncing ? "spin-icon" : undefined} /> {syncing ? t("dash.syncing") : t("dash.syncRun")}
             </button>
-            {/*
-              The update flow lives in the sidebar footer, which reports whether one is waiting
-              and is reachable from every page. A second button here duplicated it without
-              adding that signal. The trigger stays as a zero-size anchor so the deep link
-              (`#dashboard/update`) still has something to open against and the dialog has a
-              focus target to return to on close.
-            */}
             <button
               ref={updateTriggerRef}
               type="button"
@@ -271,12 +260,223 @@ export function DashboardMaintenancePanel({ d }: { d: Dash }) {
   );
 }
 
+function VisionAdvancedPopover({ t, open, triggerRef, onClose, maxValue, maxInvalid, timeoutValue, timeoutInvalid, disabled, setMaxDraft, setMaxInvalid, setTimeoutDraft, setTimeoutInvalid, commitMaxDescriptions, commitTimeout }: {
+  t: TFn;
+  open: boolean;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+  maxValue: string;
+  maxInvalid: boolean;
+  timeoutValue: string;
+  timeoutInvalid: boolean;
+  disabled: boolean;
+  setMaxDraft: (v: string | null) => void;
+  setMaxInvalid: (v: boolean) => void;
+  setTimeoutDraft: (v: string | null) => void;
+  setTimeoutInvalid: (v: boolean) => void;
+  commitMaxDescriptions: (raw?: string) => void;
+  commitTimeout: (raw?: string) => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const firstInputRef = useRef<HTMLInputElement>(null);
+  const [style, setStyle] = useState<CSSProperties | undefined>();
+
+  const reposition = useCallback(() => {
+    if (!triggerRef.current) return;
+
+    setStyle(computeSelectMenuStyle(
+      triggerRef.current.getBoundingClientRect(),
+      {
+        align: "right",
+        placement: "below",
+        menuHeight: panelRef.current?.offsetHeight ?? 180,
+      },
+    ));
+  }, [triggerRef]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    reposition();
+    const onViewportChange = () => reposition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, reposition, maxInvalid, timeoutInvalid]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+
+      const activeElement = document.activeElement as HTMLElement | null;
+      if (activeElement && panelRef.current?.contains(activeElement)) {
+        activeElement.blur();
+      }
+
+      onClose();
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [open, onClose, triggerRef]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose, triggerRef]);
+  useEffect(() => {
+    if (!open) return;
+    firstInputRef.current?.focus();
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div ref={panelRef} id="dash-vision-advanced-popover" className="dash-vision-advanced-popover" role="dialog" aria-modal="false"
+      aria-label={t("dash.visionAdvancedPopover") as string}
+      style={{ ...style, zIndex: 60 }}>
+      <div className="dash-vision-advanced-popover-title">{t("dash.visionAdvancedPopover")}</div>
+      <label className="dash-vision-number">
+        <span className="muted setting-hint" id="dash-vision-max-label">{t("dash.visionMaxDescriptions")}</span>
+        <span className="codex-auto-switch-input-wrap">
+          <input
+            ref={firstInputRef}
+            className="input mono codex-auto-switch-input"
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            value={maxValue}
+            disabled={disabled}
+            aria-invalid={maxInvalid || undefined}
+            aria-label={t("dash.visionMaxDescriptions")}
+            aria-describedby={maxInvalid ? "dash-vision-max-error dash-vision-max-label" : "dash-vision-max-label"}
+            onChange={event => {
+              setMaxInvalid(false);
+              setMaxDraft(event.target.value);
+            }}
+            onBlur={event => commitMaxDescriptions(event.currentTarget.value)}
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing || disabled) return;
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitMaxDescriptions(event.currentTarget.value);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setMaxDraft(null);
+                setMaxInvalid(false);
+              }
+            }}
+          />
+        </span>
+        {maxInvalid && (
+          <span id="dash-vision-max-error" className="muted setting-hint" role="alert">
+            {t("dash.visionMaxDescriptionsInvalid")}
+          </span>
+        )}
+      </label>
+      <label className="dash-vision-number">
+        <span className="muted setting-hint" id="dash-vision-timeout-label">{t("dash.visionTimeout")}</span>
+        <span className="codex-auto-switch-input-wrap">
+          <input
+            className="input mono codex-auto-switch-input"
+            type="number"
+            min={VISION_TIMEOUT_MS_MIN}
+            max={VISION_TIMEOUT_MS_MAX}
+            step={1000}
+            inputMode="numeric"
+            value={timeoutValue}
+            disabled={disabled}
+            aria-invalid={timeoutInvalid || undefined}
+            aria-label={t("dash.visionTimeout")}
+            aria-describedby={timeoutInvalid ? "dash-vision-timeout-error dash-vision-timeout-label" : "dash-vision-timeout-label"}
+            onChange={event => {
+              setTimeoutInvalid(false);
+              setTimeoutDraft(event.target.value);
+            }}
+            onBlur={event => commitTimeout(event.currentTarget.value)}
+            onKeyDown={event => {
+              if (event.nativeEvent.isComposing || disabled) return;
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commitTimeout(event.currentTarget.value);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                setTimeoutDraft(null);
+                setTimeoutInvalid(false);
+              }
+            }}
+          />
+          <span className="codex-auto-switch-unit" aria-hidden="true">ms</span>
+        </span>
+        {timeoutInvalid && (
+          <span id="dash-vision-timeout-error" className="muted setting-hint" role="alert">
+            {t("dash.visionTimeoutInvalid", { min: VISION_TIMEOUT_MS_MIN, max: VISION_TIMEOUT_MS_MAX })}
+          </span>
+        )}
+      </label>
+    </div>
+  );
+}
+
 export function DashboardSidecarPanels({ d }: { d: Dash }) {
   const {
     t, settings, settingsSaving, toggleCodexAutoStart,
-    sidecar, sidecarSaving, sidecarModels, models, saveSidecar,
+    sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
+  const visionEnabled = sidecar?.vision.enabled !== false;
+  const visionModel = visionEnabled ? (sidecar?.vision.model ?? "gpt-5.4-mini") : "";
+  const persistedVisionReasoning = sidecar?.vision.reasoning ?? "low";
+  const visionLadder = visionReasoningLadder(models, visionModel);
+  const visionReasoning = clampVisionReasoningToLadder(visionLadder, persistedVisionReasoning);
+  const serverMaxDescriptions = String(sidecar?.vision.maxDescriptionsPerTurn ?? VISION_MAX_DESCRIPTIONS_DEFAULT);
+  const serverTimeoutMs = String(sidecar?.vision.timeoutMs ?? VISION_TIMEOUT_MS_DEFAULT);
+  const [maxDraft, setMaxDraft] = useState<string | null>(null);
+  const [timeoutDraft, setTimeoutDraft] = useState<string | null>(null);
+  const [maxInvalid, setMaxInvalid] = useState(false);
+  const [timeoutInvalid, setTimeoutInvalid] = useState(false);
+  const [visionAdvancedOpen, setVisionAdvancedOpen] = useState(false);
+  const visionAdvancedTriggerRef = useRef<HTMLButtonElement>(null);
+  const maxValue = maxDraft ?? serverMaxDescriptions;
+  const timeoutValue = timeoutDraft ?? serverTimeoutMs;
+
+  const commitMaxDescriptions = (raw = maxValue) => {
+    const parsed = parsePositiveInteger(raw);
+    if (parsed === undefined) {
+      setMaxDraft(raw);
+      setMaxInvalid(true);
+      return;
+    }
+    setMaxInvalid(false);
+    setMaxDraft(null);
+    if (parsed === (sidecar?.vision.maxDescriptionsPerTurn ?? VISION_MAX_DESCRIPTIONS_DEFAULT)) return;
+    void saveSidecar(visionMaxDescriptionsPatch(parsed));
+  };
+
+  const commitTimeout = (raw = timeoutValue) => {
+    const parsed = parseVisionTimeoutMs(raw);
+    if (parsed === undefined) {
+      setTimeoutDraft(raw);
+      setTimeoutInvalid(true);
+      return;
+    }
+    setTimeoutInvalid(false);
+    setTimeoutDraft(null);
+    if (parsed === (sidecar?.vision.timeoutMs ?? VISION_TIMEOUT_MS_DEFAULT)) return;
+    void saveSidecar(visionTimeoutPatch(parsed));
+  };
 
   return (
     <>
@@ -300,9 +500,14 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
       </div>
 
       <div className="dash-sidecar-grid">
-        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
-          <div className="dash-sidecar-card__row">
+        {/* Both sidecar cards wear the DashboardInjectionPanel shell: the PANEL is
+            the flex row, copy left, controls right. */}
+        <div className="panel dash-delegation-summary dash-sidecar-row-card" aria-busy={!sidecar || undefined}>
+          <div className="dash-sidecar-copy">
             <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
+            <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
+          </div>
+          <div className="dash-delegation-controls">
             <Select
               value={sidecar?.webSearch.model ?? "gpt-5.6-luna"}
               options={sidecarModels}
@@ -310,24 +515,100 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
               disabled={!sidecar || sidecarSaving}
               label={t("dash.sidecarModel")}
             />
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }} title={t("dash.webSearchStreamHint")}>
+              <span className="muted setting-hint">{t("dash.webSearchStream")}</span>
+              <button
+                type="button"
+                className={`switch ${sidecar?.webSearch.streamRoutedModelOutput ? "on" : ""}`}
+                onClick={() => {
+                  void saveSidecar({ webSearch: { streamRoutedModelOutput: !sidecar?.webSearch.streamRoutedModelOutput } });
+                }}
+                disabled={!sidecar || sidecarSaving}
+                aria-label={t("dash.webSearchStream")}
+                aria-pressed={sidecar?.webSearch.streamRoutedModelOutput === true}
+              >
+                <span className="knob" />
+              </button>
+            </div>
           </div>
-          <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
         </div>
 
-        <div className="panel dash-sidecar-card" aria-busy={!sidecar || undefined}>
-          <div className="dash-sidecar-card__row">
+        <div className="panel dash-delegation-summary dash-sidecar-row-card dash-vision-sidecar-card" aria-busy={!sidecar || undefined}>
+          <div className="dash-sidecar-copy">
             <div className="font-semibold">{t("dash.visionSidecar")}</div>
-            <Select
-              value={sidecar?.vision.model ?? "gpt-5.6-luna"}
-              options={sidecarModels}
-              onChange={model => { void saveSidecar({ vision: { model, backend: sidecarBackendForModel(models, model) } }); }}
-              disabled={!sidecar || sidecarSaving}
-              label={t("dash.sidecarModel")}
-            />
+            <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
           </div>
-          <div className="muted setting-hint">{t("dash.visionSidecarHint")}</div>
+          <div className="dash-delegation-controls">
+            <div className="dash-vision-select-row">
+              <Select
+                value={visionModel}
+                options={[{ value: "", label: t("dash.visionOff") }, ...visionModels]}
+                onChange={model => {
+                  if (model === "") {
+                    void saveSidecar(visionEnabledPatch(false));
+                    return;
+                  }
+                  const ladder = visionReasoningLadder(models, model);
+                  const reasoning = clampVisionReasoningToLadder(ladder, visionReasoning);
+                  const patch: SidecarPatch = { vision: { model, backend: visionSidecarBackendForModel(models, visionModels, model), reasoning } };
+                  // Choosing a model is the activation control: turning Vision back on from Off.
+                  if (!visionEnabled) patch.vision = { ...patch.vision, enabled: true };
+                  void saveSidecar(patch);
+                }}
+                disabled={!sidecar || sidecarSaving}
+                label={t("dash.sidecarModel")}
+              />
+              <Select
+                value={visionReasoning}
+                // Raw wire value (low…max), matching the delegation panel's bare `high`.
+                options={visionReasoningOptionsFor(visionLadder, visionReasoning)
+                  .map(value => ({ value, label: value }))}
+                onChange={reasoning => {
+                  void saveSidecar(visionReasoningPatch(reasoning as typeof visionReasoning));
+                }}
+                disabled={!visionEnabled || !sidecar || sidecarSaving}
+                align="right"
+                label={`${t("dash.visionSidecar")} — ${t("dash.injectionEffortLabel")}`}
+              />
+            </div>
+            <div className="dash-vision-advanced-row">
+              <button
+                type="button"
+                ref={visionAdvancedTriggerRef}
+                className="dash-vision-advanced-trigger"
+                onClick={() => setVisionAdvancedOpen(open => !open)}
+                disabled={!visionEnabled || !sidecar || sidecarSaving}
+                aria-expanded={visionAdvancedOpen}
+                aria-haspopup="dialog"
+                aria-controls="dash-vision-advanced-popover"
+              >
+                <span>{t("dash.visionAdvanced")}</span>
+                <IconChevron width={12} height={12} aria-hidden="true" style={{ transform: visionAdvancedOpen ? "rotate(90deg)" : "none", transition: "transform .12s" }} />
+              </button>
+            </div>
+          </div>
+          {createPortal(
+            <VisionAdvancedPopover
+              t={t}
+              open={visionAdvancedOpen}
+              triggerRef={visionAdvancedTriggerRef}
+              onClose={() => setVisionAdvancedOpen(false)}
+              maxValue={maxValue}
+              maxInvalid={maxInvalid}
+              timeoutValue={timeoutValue}
+              timeoutInvalid={timeoutInvalid}
+              disabled={!visionEnabled || !sidecar || sidecarSaving}
+              setMaxDraft={setMaxDraft}
+              setMaxInvalid={setMaxInvalid}
+              setTimeoutDraft={setTimeoutDraft}
+              setTimeoutInvalid={setTimeoutInvalid}
+              commitMaxDescriptions={commitMaxDescriptions}
+              commitTimeout={commitTimeout}
+            />,
+            document.body,
+          )}
+          </div>
         </div>
-      </div>
 
       <div className="panel" aria-busy={!shadowCall || undefined}>
         <div className="spread" style={{ alignItems: "center" }}>

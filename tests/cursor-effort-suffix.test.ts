@@ -3,6 +3,15 @@ import { createCursorRequest } from "../src/adapters/cursor/request-builder";
 import { cursorEffortSuffix, cursorModelEffortLadder } from "../src/adapters/cursor/effort-map";
 import type { OcxParsedRequest } from "../src/types";
 
+// Static fixture recorded from Cursor GetUsableModels on 2026-08-06. This pins the
+// exact wire ids observed during the incident; live availability normalization is
+// covered separately in cursor-discovery.test.ts.
+const RECORDED_CURSOR_GROK_45_DISCOVERY_IDS = [
+  "cursor-grok-4.5-low",
+  "cursor-grok-4.5-medium",
+  "cursor-grok-4.5-high",
+] as const;
+
 function modelIdFor(modelId: string, reasoning?: string): string {
   const parsed: OcxParsedRequest = {
     modelId,
@@ -84,13 +93,13 @@ describe("Cursor per-model reasoning-effort suffix", () => {
   });
 
   test("grok-4.5 uses current tiers and sends Fast as a separate model parameter", () => {
-    expect(modelIdFor("cursor/grok-4.5", "low")).toBe("grok-4.5-low");
-    expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("grok-4.5-medium");
-    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("grok-4.5-high");
-    expect(modelIdFor("cursor/grok-4.5")).toBe("grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5", "low")).toBe("cursor-grok-4.5-low");
+    expect(modelIdFor("cursor/grok-4.5", "medium")).toBe("cursor-grok-4.5-medium");
+    expect(modelIdFor("cursor/grok-4.5", "high")).toBe("cursor-grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5", "xhigh")).toBe("cursor-grok-4.5-high");
+    expect(modelIdFor("cursor/grok-4.5")).toBe("cursor-grok-4.5-high");
     expect(selectionFor("cursor/grok-4.5", "high")).toEqual({
-      modelId: "grok-4.5-high",
+      modelId: "cursor-grok-4.5-high",
       parameters: undefined,
     });
     expect(selectionFor("cursor/grok-4.5-fast", "low")).toEqual({
@@ -116,6 +125,14 @@ describe("Cursor per-model reasoning-effort suffix", () => {
     });
     expect(cursorModelEffortLadder("grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(cursorModelEffortLadder("grok-4.5-fast")).toEqual(["low", "medium", "high"]);
+  });
+
+  test("regular grok-4.5 request ids match the recorded discovery fixture", () => {
+    for (const effort of ["low", "medium", "high"] as const) {
+      const requestModelId = modelIdFor("cursor/grok-4.5", effort);
+      expect(requestModelId).toBe(`cursor-grok-4.5-${effort}`);
+      expect(RECORDED_CURSOR_GROK_45_DISCOVERY_IDS).toContain(requestModelId);
+    }
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

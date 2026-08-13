@@ -15,6 +15,7 @@ function entry(overrides: Partial<PersistedUsageEntry> & { ts: number }): Persis
     durationMs: rest.durationMs ?? 10,
     usageStatus: rest.usageStatus ?? "unreported",
     ...(rest.surface === "claude" ? { surface: rest.surface } : {}),
+    ...(rest.accountLogLabel !== undefined ? { accountLogLabel: rest.accountLogLabel } : {}),
     ...(rest.resolvedModel !== undefined ? { resolvedModel: rest.resolvedModel } : {}),
     ...(rest.usage ? { usage: rest.usage } : {}),
     ...(rest.totalTokens !== undefined ? { totalTokens: rest.totalTokens } : {}),
@@ -149,6 +150,153 @@ describe("summarizeUsage", () => {
     expect(sum.summary.totalTokens).toBe(15);
     expect(sum.summary.inputTokens).toBe(10);
     expect(sum.summary.outputTokens).toBe(5);
+  });
+
+  test("attributes Codex usage and API-equivalent cost by stable account log label", () => {
+    const entries: PersistedUsageEntry[] = [
+      entry({
+        ts: FIXED_NOW - 1_000,
+        requestId: "added-explicit",
+        provider: "openai-pabc123",
+        accountLogLabel: "pabc123",
+        usageStatus: "reported",
+        usage: { inputTokens: 100, outputTokens: 10 },
+        totalTokens: 110,
+      }),
+      entry({
+        ts: FIXED_NOW - 2_000,
+        requestId: "added-legacy",
+        provider: "openai-pabc123",
+        usageStatus: "estimated",
+        usage: { inputTokens: 40, outputTokens: 5, estimated: true },
+        totalTokens: 45,
+      }),
+      entry({
+        ts: FIXED_NOW - 3_000,
+        requestId: "main-explicit",
+        provider: "openai",
+        accountLogLabel: "main",
+        usageStatus: "reported",
+        usage: { inputTokens: 20, outputTokens: 2 },
+        totalTokens: 22,
+      }),
+      entry({
+        ts: FIXED_NOW - 4_000,
+        requestId: "main-legacy",
+        provider: "openai-main",
+        usageStatus: "reported",
+        usage: { inputTokens: 30, outputTokens: 3 },
+        totalTokens: 33,
+      }),
+      entry({
+        ts: FIXED_NOW - 5_000,
+        requestId: "legacy-bare",
+        provider: "openai",
+        usageStatus: "unreported",
+      }),
+      entry({
+        ts: FIXED_NOW - 6_000,
+        requestId: "custom-selector-explicit",
+        provider: "openai-side",
+        accountLogLabel: "pffffff",
+        usageStatus: "reported",
+        usage: { inputTokens: 500, outputTokens: 50 },
+        totalTokens: 550,
+      }),
+    ];
+
+    const sum = summarizeUsage(entries, "30d", FIXED_NOW, "codex");
+    expect(sum.accounts.map(row => row.accountLogLabel).sort()).toEqual([
+      "legacy-ambiguous",
+      "main",
+      "pabc123",
+      "pffffff",
+    ]);
+    expect(sum.accounts.find(row => row.accountLogLabel === "pabc123")).toMatchObject({
+      requests: 2,
+      attemptCount: 2,
+      measuredAttempts: 2,
+      reportedAttempts: 1,
+      estimatedAttempts: 1,
+      totalTokens: 155,
+      inputTokens: 140,
+      outputTokens: 15,
+      usageCoverageRatio: 1,
+      priceCoverageRatio: 1,
+    });
+    expect(sum.accounts.find(row => row.accountLogLabel === "pabc123")?.estimatedCostUsd)
+      .toBeCloseTo((140 * 5 + 15 * 30) / 1e6, 9);
+    expect(sum.accounts.find(row => row.accountLogLabel === "main")).toMatchObject({
+      requests: 2,
+      totalTokens: 55,
+      ambiguous: false,
+    });
+    expect(sum.accounts.find(row => row.accountLogLabel === "pffffff")).toMatchObject({
+      requests: 1,
+      totalTokens: 550,
+      ambiguous: false,
+    });
+    expect(sum.accounts.find(row => row.accountLogLabel === "legacy-ambiguous")).toMatchObject({
+      requests: 1,
+      unmeteredAttempts: 1,
+      totalTokens: 0,
+      usageCoverageRatio: 0,
+      ambiguous: true,
+    });
+  });
+
+  test("attributes combo attempts to the account that physically served each attempt", () => {
+    const combo = entry({
+      ts: FIXED_NOW - 1_000,
+      requestId: "combo-two-accounts",
+      provider: "combo",
+      model: "combo/native",
+      usageStatus: "reported",
+      usage: { inputTokens: 33, outputTokens: 3 },
+      totalTokens: 36,
+      attempts: [
+        {
+          ordinal: 1,
+          provider: "openai-p111111",
+          model: "gpt-5.5",
+          adapter: "openai-responses",
+          accountLogLabel: "p111111",
+          status: 502,
+          durationMs: 10,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 11, outputTokens: 1 },
+          totalTokens: 12,
+        },
+        {
+          ordinal: 2,
+          provider: "openai-p222222",
+          model: "gpt-5.5",
+          adapter: "openai-responses",
+          accountLogLabel: "p222222",
+          status: 200,
+          durationMs: 20,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 22, outputTokens: 2 },
+          totalTokens: 24,
+        },
+      ],
+    });
+
+    const rows = summarizeUsage([combo], "30d", FIXED_NOW, "codex").accounts;
+    expect(rows.find(row => row.accountLogLabel === "p111111")).toMatchObject({
+      requests: 1,
+      attemptCount: 1,
+      totalTokens: 12,
+    });
+    expect(rows.find(row => row.accountLogLabel === "p222222")).toMatchObject({
+      requests: 1,
+      attemptCount: 1,
+      totalTokens: 24,
+    });
   });
 
   test("three OpenAI API Pro selections stay separate from their resolved base models", () => {

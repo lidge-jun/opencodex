@@ -21,8 +21,9 @@ import {
   gatherCodexCatalogCandidate,
   type CodexCatalogCandidate,
 } from "../src/codex/convergence";
-import { resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
+import { CODEX_NATIVE_ALIAS_CATALOG_KIND, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
 import {
+  persistCodexRuntime,
   resetCodexRuntimeResolveCacheForTests,
   setCodexRuntimeResolveCacheForTests,
 } from "../src/codex/runtime";
@@ -195,6 +196,23 @@ test("used process-local authority drift rejects before every catalog target wri
   expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
 });
 
+test("custom catalog runtime-support drift rejects before every catalog target write", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const customPath = join(codexHome, "custom-catalog.json");
+  writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "custom-catalog.json"\n');
+  writeFileSync(customPath, sourceCatalog("custom"));
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] });
+  setBundledCatalogCacheForTests(runtime, JSON.parse(sourceCatalog("bundled-support")) as never);
+
+  const gathered = await candidate();
+  invalidateBundledCatalogCache();
+
+  expect(await commitCodexCatalogCandidate(gathered, 1_000))
+    .toEqual({ kind: "stale", reason: "process-local" });
+  expect(readFileSync(customPath, "utf8")).toBe(sourceCatalog("custom"));
+  expect(existsSync(join(codexHome, "models_cache.json"))).toBe(false);
+});
+
 test("catalog-only commit never creates the native pair or routing/history artifacts", async () => {
   const gathered = await candidate();
   expect((await commitCodexCatalogCandidate(gathered, 1_000)).kind).toBe("committed");
@@ -203,6 +221,83 @@ test("catalog-only commit never creates the native pair or routing/history artif
   expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
   expect(manifest(root).join("\n")).not.toContain("journal");
   expect(manifest(root).join("\n")).not.toContain("history");
+});
+
+test("management convergence restores omitted natives and retains a configured native alias", async () => {
+  const runtime = { command: "/tmp/codex", version: "0.146.0", source: "environment" as const };
+  const bundled = JSON.parse(sourceCatalog("bundled")) as { models: Array<Record<string, unknown>> };
+  bundled.models.push({
+    ...bundled.models[0],
+    slug: "gpt-5.5",
+    display_name: "GPT-5.5",
+  });
+  persistCodexRuntime(runtime, { configDir: opencodexHome, now: () => 0 });
+  setCodexRuntimeResolveCacheForTests({ runtime, failures: [] }, { discoverAlternatives: false });
+  setBundledCatalogCacheForTests(runtime, bundled, { opencodexHome });
+
+  const nativeAlias = {
+    ...bundled.models[0],
+    display_name: "Nova1 - Sol",
+    description: "Routed via opencodex → combo (combo).",
+    owned_by: "combo",
+    opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    input_modalities: ["text", "image"],
+  };
+  writeFileSync(join(codexHome, "opencodex-catalog.json"), `${JSON.stringify({
+    marker: "active-native-alias",
+    models: [nativeAlias],
+  }, null, 2)}\n`);
+
+  const liveConfig: OcxConfig = {
+    port: 10100,
+    defaultProvider: "Nova1",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+        liveModels: false,
+        models: [],
+      },
+      Nova1: {
+        adapter: "openai-chat",
+        baseUrl: "https://nova.example/v1",
+        liveModels: false,
+        models: [],
+      },
+    },
+    combos: {
+      nova: {
+        alias: "gpt-5.6-sol",
+        nativeAlias: true,
+        displayName: "Nova1 - Sol",
+        targets: [{ provider: "Nova1", model: "codex/gpt-5.6-sol" }],
+      },
+    },
+  };
+  saveConfig(liveConfig);
+
+  const beforeGather = manifest(root);
+  const gathered = await gatherCodexCatalogCandidate(captureCatalogAdmissionSnapshot(liveConfig));
+  expect(gathered.kind).toBe("candidate");
+  expect(manifest(root)).toEqual(beforeGather);
+  if (gathered.kind !== "candidate") throw new Error(JSON.stringify(gathered));
+  expect(await commitCodexCatalogCandidate(gathered.candidate, 1_000)).toMatchObject({ kind: "committed" });
+
+  const written = JSON.parse(readFileSync(join(codexHome, "opencodex-catalog.json"), "utf8")) as {
+    models: Array<Record<string, unknown>>;
+  };
+  expect(written.models.find(entry => entry.slug === "gpt-5.5")).toMatchObject({
+    display_name: "GPT-5.5",
+  });
+  expect(written.models.filter(entry => entry.slug === "gpt-5.6-sol")).toEqual([
+    expect.objectContaining({
+      display_name: "Nova1 - Sol",
+      owned_by: "combo",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+    }),
+  ]);
 });
 
 test("the total lazy adapter preserves a persisted-success route when factory construction fails", async () => {
@@ -229,9 +324,9 @@ test("the total lazy adapter preserves a persisted-success route when factory co
   });
 });
 
-test("the route inventory contains exactly the specified 6 + 6 + 2 + 2 convergence calls", () => {
+test("the route inventory contains exactly the specified 7 + 6 + 2 + 2 convergence calls", () => {
   const counts = Object.fromEntries([
-    ["provider-routes.ts", 6],
+    ["provider-routes.ts", 7],
     ["model-routes.ts", 6],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
@@ -243,9 +338,29 @@ test("the route inventory contains exactly the specified 6 + 6 + 2 + 2 convergen
     return [file, count];
   }));
   expect(counts).toEqual({
-    "provider-routes.ts": 6,
+    "provider-routes.ts": 7,
     "model-routes.ts": 6,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });
+});
+
+/**
+ * The inventory above is a bare count, so raising it is the obvious way to make this file
+ * green again — and a count that only ever gets raised stops being a contract. #1541's
+ * seventh call is legitimate: the attested reload route adopts a provider from disk into the
+ * live config, so it invalidates the same caches as the other write paths and must converge
+ * the catalog for the same reason. Assert that specific call directly, so a future bump
+ * cannot pass while some OTHER route quietly gained one, or while the reload route lost its own.
+ */
+test("the attested reload route converges the Codex catalog like the other write paths", () => {
+  const source = readFileSync(
+    join(import.meta.dir, "..", "src", "server", "management", "provider-routes.ts"),
+    "utf8",
+  );
+  const handlerStart = source.indexOf("LOCAL_PROVIDER_RELOAD_PATH && req.method === \"POST\"");
+  expect(handlerStart).toBeGreaterThan(-1);
+  // The reload handler returns before the next route check; scope the search to its body.
+  const handlerBody = source.slice(handlerStart, source.indexOf("url.pathname ===", handlerStart + 1));
+  expect(handlerBody).toContain("await convergeCodexCatalog()");
 });

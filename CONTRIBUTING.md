@@ -58,7 +58,7 @@ A ready-for-review PR is the author's claim that the change is complete, underst
 ## Pre-push hook
 
 After cloning, run once to install a local pre-push hook that runs the typecheck,
-GUI eslint, unit-test, privacy-scan, and (when `gui/` changed) React Doctor
+unit-test, privacy-scan, and (when `gui/` changed) GUI eslint and React Doctor
 portions of the CI gate:
 
 ```sh
@@ -66,8 +66,10 @@ bun run setup:hooks
 ```
 
 This installs a `pre-push` hook (into the hooks dir git reports, so worktrees and
-`core.hooksPath` work) that runs `bun run prepush` — `typecheck`, `lint:gui`,
-`test`, `privacy:scan`, and `doctor:gui:if-changed` — before every `git push`.
+`core.hooksPath` work) that runs `bun run prepush` — `typecheck`,
+`lint:gui:if-changed`, `test`, `privacy:scan`, and `doctor:gui:if-changed` —
+before every `git push`. Both `lint:gui:if-changed` and `doctor:gui:if-changed`
+run their check only when the push touches `gui/`.
 The same checks run on ubuntu-latest, macos-latest, and windows-latest in CI (CI
 additionally builds the GUI and smoke-tests the CLI). Skip in an emergency with
 `git push --no-verify`.

@@ -33,6 +33,29 @@ within their route; neither route falls through to the other. See
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
 
+### Mixed-wire provider defaults
+
+Registry `modelWireDefaults` select an evidence-backed upstream protocol for an exact model without
+changing the provider-wide adapter. Explicit, allowed `modelAdapters` configuration always wins,
+including an entry that opts the model back into the provider-wide wire. Defaults are applied only
+while the configured provider still matches the registry transport, so reusing a preset name for a
+different custom destination does not inherit its upstream assumptions.
+
+OpenCode Go documents `gpt-5.6-luna` on `/zen/go/v1/responses` while sibling models use its Chat or
+Anthropic endpoints. The built-in preset therefore selects `openai-responses` only for Luna and
+keeps the provider-wide `openai-chat` default for other non-pinned models. This endpoint correction
+does not set `modelResponsesUpstreamStreaming`: client `stream: true` remains real upstream
+streaming until a current-runtime reproduction justifies a separate bounded-JSON compatibility
+policy.
+
+[Decision Log]
+- 목적과 의도: Match OpenCode Go's model-specific Luna endpoint without changing sibling model behavior.
+- 기존 구현 및 제약 조건: The preset had one Chat default even though the upstream publishes a mixed Chat, Responses, and Anthropic matrix; operators must retain explicit override precedence.
+- 검토한 주요 대안: Move the whole preset to Responses; infer from the model name; declare one exact registry default; also force bounded JSON from an older conditional terminal report.
+- 선택한 방식: Use one exact Luna wire default and leave upstream streaming unchanged.
+- 다른 대안 대신 이 방식을 선택한 이유: The endpoint mismatch is reproducible from current code and upstream documentation, whereas a current-dev live canary has not established the separate terminal-delivery policy.
+- 장점, 단점 및 영향: Luna reaches its documented endpoint across inbound surfaces and explicit opt-out still works; any future stream workaround remains a separately reviewed compatibility decision.
+
 ### Passthrough SSE stream shapes (#314)
 
 Native passthrough SSE has TWO shapes, selected per request in
@@ -60,6 +83,15 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
+
+Translated response request-log tracking and the heartbeat relay also reuse
+`createSseInspector`. This keeps every client-facing SSE observation path on
+the same byte-bounded, discard-and-resynchronize frame policy and ensures the
+request-log, first-output, and terminal observers share one payload parse.
+The inspector records a structured `response.failed` status before invoking the
+terminal observer. Native Responses, Chat Completions, Claude Messages, and WebSocket
+request logs must therefore finalize through the context-aware terminal mapper; recognized
+`cyber_policy` terminals stay `400 / cyber_policy` rather than collapsing to a generic 502.
 
 ## Standalone Search and exact account selectors
 
@@ -211,8 +243,28 @@ upstream Responses endpoint for bounded JSON on ANY client transport — WebSock
 HTTP/SSE. The bridge reframes that JSON into the same Responses event sequence
 (`src/server/responses-json-events.ts`): WS turns send the frames as WebSocket messages, while
 HTTP clients that requested streaming receive a synthesized terminal SSE body (created →
-output_item.done → terminal → `[DONE]`). DeepSeek V4 Flash uses this path because its Codex
-streaming response can deliver output without closing on a terminal event.
+output_item.done → terminal → `[DONE]`). No production registry entry currently opts in:
+DeepSeek V4 Flash used this path while its public-beta Responses stream was suspected of not
+closing on the terminal event, but the official guide documents a
+`response.completed`/`response.incomplete`/`response.failed` terminal with no `data: [DONE]`
+sentinel, and live probes (2026-08-07) confirm the stream closes on the terminal. The relay's
+terminal-output boundary (`src/server/relay.ts`) cuts the stream at that event and synthesizes
+`[DONE]` itself, so DeepSeek streams live again; the registry knob remains as a one-line
+rollback for upstreams that regress, kept suite-reachable by a synthetic-registry fixture in
+`tests/deepseek-inbound-wire.test.ts`.
+Synthesized output is capped at 10,000 items across HTTP and WebSocket reframing. HTTP frames are
+encoded incrementally, so bounded upstream JSON cannot expand into an unbounded event array or SSE string.
+
+DeepSeek V4 Flash keeps native Responses streaming for progressive reasoning, text, and tool-call
+delivery. Its registry entry enables a model-scoped terminal repair before the existing
+inspection/client split. A real `response.completed`, `response.failed`, or `response.incomplete`
+event always passes through unchanged. If every opened output item has a structurally complete
+`output_item.done` and no real terminal arrives for five seconds, the repair emits exactly one
+`response.completed` snapshot and closes the upstream reader. EOF or `[DONE]` uses the same strict
+completion check; open, malformed, duplicate, contradictory, or unknown output graphs fail closed
+as `response.incomplete`, never synthetic success. The repair shares the per-turn translator byte
+budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
+WebSocket clients observe the same canonical lifecycle.
 
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
@@ -331,6 +383,21 @@ replays are explicit and receive the same repair.
 These compatibility guards are covered by focused tests and should stay close to the adapters that
 need them.
 
+DeepSeek's stateless Responses compatibility pass normalizes only unambiguous tool-call batches.
+Calls emitted before the first matched output stay together as one assistant batch, followed by
+their outputs in call order; hook-injected messages that split the batch move after it without being
+dropped. This preserves #1292's single-call adjacency repair without splitting a same-turn parallel
+batch away from its preceding plaintext reasoning (#1477). Tolerant providers never enter this pass,
+and duplicate, missing, or backwards call/result pairs are left for the upstream to reject rather than guessed.
+
+[Decision Log]
+- 목적과 의도: Preserve DeepSeek reasoning replay for parallel tool calls while retaining the provider-scoped repair for hook-interleaved results.
+- 기존 구현 및 제약 조건: Pair-by-pair adjacency fixed one call but split parallel calls into separate assistant turns; DeepSeek always enables parallel tool calling and merges adjacent reasoning and calls into one assistant message.
+- 검토한 주요 대안: Disable parallel calls, duplicate reasoning, remove the #1292 repair, or normalize one unambiguous call/output batch.
+- 선택한 방식: Group calls that occur before the first matched output, emit the call batch followed by outputs in call order, and retain intervening non-tool items after the batch.
+- 다른 대안 대신 이 방식을 선택한 이유: The batch shape matches the documented Responses contract without inventing reasoning or reintroducing hook-interleaving failures.
+- 장점, 단점 및 영향: Sequential and parallel tool continuations both retain their reasoning contract; only the declared strict provider changes order, and ambiguous histories still fail closed upstream.
+
 ## Cursor parameterized models
 
 Cursor Router's parameterized `default` model is represented in Codex by four catalog rows:
@@ -369,6 +436,43 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when historical markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
+
+## Google thought-text visibility boundary
+
+Google-family responses may represent model-internal reasoning as a text-bearing part with
+`thought: true`. The Google adapter maps that text to the internal `reasoning_raw_delta` event;
+only text without the marker becomes visible `text_delta`. Streaming SSE and buffered JSON share
+one classifier so transport selection cannot change whether provider-declared reasoning is shown
+as assistant output. Thought-signature observation still runs on the original parts before text
+classification, preserving the opaque continuation state independently of display semantics.
+
+[Decision Log]
+- 목적과 의도: Prevent provider-marked internal reasoning from appearing as ordinary assistant text while preserving reasoning and tool-call continuation.
+- 기존 구현 및 제약 조건: Both Google response paths emitted every non-empty `Part.text` as visible text; function calls, inline images, and Antigravity/Vertex thought-signature replay already depended on the original part ordering.
+- 검토한 주요 대안: Drop thought text; classify it separately in each parser; remove the marker and keep visible text; use one shared classifier without mutating the provider parts.
+- 선택한 방식: Map `thought: true` text to `reasoning_raw_delta` through one helper used by streaming and buffered parsing, leaving part order and signature observation unchanged.
+- 다른 대안 대신 이 방식을 선택한 이유: Dropping the text loses reasoning replay/display policy input, while duplicated parser rules can drift and exposing marked thoughts violates the provider's visibility boundary.
+- 장점, 단점 및 영향: Internal reasoning no longer leaks into normal answers and both transports stay consistent; downstream reasoning policy still decides whether raw reasoning is rendered or only preserved, and malformed non-boolean markers remain ordinary text rather than broadening hidden-content inference.
+
+## Google tool-call thought-signature replay
+
+Gemini may attach an opaque `thoughtSignature` to a `functionCall` and requires that exact value on
+the matching model turn when its tool result is submitted. Antigravity and Vertex share the existing
+bounded TTL/LRU replay store, keyed by compiled function-call name plus canonical arguments. Vertex
+prefixes its cache model key with the transport, project, and location identity, so a signature
+minted by Vertex cannot be sent to Antigravity even when both routes expose the same public model id.
+Vertex prefers Codex's opaque `prompt_cache_key` for session identity and falls back to the existing
+first-user-message derivation for clients that omit it; only the fixed hash is retained.
+Both streaming and non-streaming responses feed the store; request compilation happens before replay
+so matching uses the provider-visible tool name.
+
+[Decision Log]
+- 목적과 의도: Preserve Vertex Gemini tool-call continuation without exposing opaque signatures to Codex or another Google backend.
+- 기존 구현 및 제약 조건: Responses history does not carry a safe Gemini signature field; Antigravity already used a bounded in-process replay cache, while Vertex bypassed it and received HTTP 400 after the first tool call.
+- 검토한 주요 대안: Serialize the signature into Responses item ids or reasoning content; create an unbounded Vertex map; reuse the bounded cache with or without a transport namespace.
+- 선택한 방식: Reuse the bounded cache for Vertex, observe both response shapes, apply after wire-name compilation, and scope Vertex by transport/project/location plus the opaque client session key when available.
+- 다른 대안 대신 이 방식을 선택한 이유: Responses ids are not Gemini signatures and previously caused Base64/TYPE_BYTES failures; a second cache duplicates limits; an unscoped cache could send provider-private state across destinations.
+- 장점, 단점 및 영향: Tool loops continue with exact opaque state and bounded memory while cross-transport reuse fails closed. Replay remains process-local, matching the existing Antigravity contract.
 
 ## OpenRouter provider routing
 
@@ -483,6 +587,45 @@ adapters advertise the catalog bit only on explicit `true`; cursor keeps its own
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
 ledger: `devlog/_fin/260709_parallel_tool_calls/`.
 
+## Chat structured-output compatibility
+
+The `openai-chat` adapter translates Responses `text.format` and Chat Completions
+`response_format` through one internal format, then emits `response_format` on the upstream chat
+wire. That remains the default because silently returning prose breaks clients that requested a
+JSON object or schema. A mixed-capability gateway may list exact native model ids in
+`noStructuredOutputModels`; only those models omit the wire field, while siblings keep the normal
+translation. The proxy does not infer this from provider names, localhost destinations, or a model
+family shared by unrelated upstreams.
+
+[Decision Log]
+- 목적과 의도: Recover chat models that reject `response_format` without removing structured output from models that support it.
+- 기존 구현 및 제약 조건: The adapter forwarded the field to every routed chat model after #1137, while the same model id may sit behind gateways with different capabilities.
+- 검토한 주요 대안: Revert translation globally; blacklist a model id globally; detect a proxy by name or URL; add an explicit provider/model opt-out.
+- 선택한 방식: Preserve default translation and omit it only for exact ids in `noStructuredOutputModels`.
+- 다른 대안 대신 이 방식을 선택한 이유: Global or heuristic rules regress supported providers and make custom gateway names part of the wire contract.
+- 장점, 단점 및 영향: Compatible siblings retain schema enforcement and explicitly incompatible models avoid the upstream 400; operators must classify each unsupported model they route.
+
+## Anthropic structured-output compatibility
+
+The Anthropic adapter lowers Responses `text.format` and Chat Completions `response_format` JSON
+Schema requests to `output_config.format`. The local transform follows Anthropic's TypeScript SDK
+subset so upstream rejects neither OpenAI-only envelope fields nor unsupported schema constraints.
+The adapter merges `format` into an existing adaptive-thinking `output_config` rather than replacing
+it, so a compatible `output_config.effort` remains alongside the structured-output format.
+Routed Anthropic Messages input carries `output_config.format` through internal `text.format`, so
+stored-OAuth requests regain the same native format when the Anthropic adapter rebuilds the wire body.
+Unsupported constraints remain in `description` as model guidance instead of disappearing. Root
+`$defs` stay beside a root `$ref`, intentionally differing from the current SDK transform's early
+`$ref` return so local references remain resolvable.
+
+[Decision Log]
+- 목적과 의도: Preserve schema-constrained output when OpenAI-shaped Responses or Chat Completions requests route to Anthropic Messages.
+- 기존 구현 및 제약 조건: The parser retained the requested schema, but the Anthropic adapter dropped it; forwarding the OpenAI schema unchanged fails when it includes constraints outside Anthropic's supported subset.
+- 검토한 주요 대안: Keep tool-call emulation; forward the raw schema; depend on the full Anthropic SDK; maintain a local compatibility transform based on the SDK.
+- 선택한 방식: Merge Anthropic `output_config.format` into compatible adaptive-thinking configuration, mirror the SDK transform locally with strict `unknown` narrowing, move unsupported constraints into descriptions, and preserve root `$defs` before returning a root `$ref`.
+- 다른 대안 대신 이 방식을 선택한 이유: Native structured output avoids synthetic tools, raw forwarding produces upstream 400s, and importing the full SDK only for a small wire transform would duplicate the adapter's direct HTTP ownership.
+- 장점, 단점 및 영향: Both OpenAI-shaped input surfaces gain native Anthropic schema enforcement and unsupported intent remains visible to the model; the copied subset must track upstream SDK changes, description-carried constraints are guidance rather than hard validation, and the root-reference fix is an intentional divergence to keep definitions reachable.
+
 ## Reasoning display parity (hideThinkingSummary)
 
 `hideThinkingSummary` (request reasoning summary absent/"none" — the routed catalog default) is
@@ -493,6 +636,27 @@ Codex app, so tool cells group like native models — while the text still round
 `preserveReasoningContentModels` replay. Visible mode (summary "auto") keeps the raw
 `content[reasoning_text]` shape. Diagnosis and codex-rs grouping evidence:
 `devlog/_fin/260709_native_response_pattern/`.
+
+The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
+thread plus an exact provider destination, wire adapter, final model, and physical credential
+identity. API-key material is represented only by a process-keyed HMAC; OAuth replay is bound to the
+existing credential slot and exact credential generation, and an authentication-header override is
+folded into that identity without retaining the raw value. A token refresh intentionally starts a
+new fail-closed replay namespace. The destination is likewise process-HMACed because a configured
+base-URL path may itself be a credential. Header-only/keyless routes cannot establish a physical
+credential identity and therefore fail closed. Parsed-request copies and already-created bridges
+share one scope holder, and key/account rotation replaces its current identity before rebuilding
+the request. A retry may therefore reuse reasoning on the same physical target, but a provider, model, or
+credential failover receives the provider's configured placeholder instead of another target's raw
+reasoning.
+
+[Decision Log]
+- 목적과 의도: Preserve tool-call continuation compatibility without forwarding one provider or physical account's private reasoning to another fallback target.
+- 기존 구현 및 제약 조건: Conversation-only scoping stopped process-global call-id collisions, but combo and 429 failover can reuse the same thread and provider-generated call id across destinations or credentials.
+- 검토한 주요 대안: Disable replay on every failover-capable provider; key only by provider name; use persisted or truncated secret-derived ids; bind the in-memory cache to an exact process-local route and credential tuple.
+- 선택한 방식: Keep a shared mutable scope holder and key entries by thread, provider name, an opaque destination HMAC, adapter, final model, and an opaque HMAC/account identity; incomplete identities read and write nothing.
+- 다른 대안 대신 이 방식을 선택한 이유: Exact binding preserves same-generation same-target retries while making account switches and OAuth token refreshes fail closed, without logging, persisting, or exposing credential material.
+- 장점, 단점 및 영향: Cross-provider/account replay is blocked and rotations are visible to live bridges; providers without a stable credential identity lose cache replay and use the existing minimal placeholder path.
 
 ## Chat-to-Responses message phase inference
 

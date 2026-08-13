@@ -74,7 +74,7 @@ export function writeHistoryProviderTransition(
 export function writeLegacyOpenaiHistoryRecovery(
   permit: HistoryWritePermit,
   target: HistoryWriteTarget,
-): { rows: number; files: number; failed?: true } {
+): CodexHistorySyncResult {
   assertHistoryWritePermit(permit, target.canonicalStateDbPath);
   return restoreLegacyOpenaiHistory(target.canonicalStateDbPath);
 }

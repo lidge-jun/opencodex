@@ -52,7 +52,7 @@ Codex login を Pool モードで使うと、Providers の概要には任意の 
 | --- | --- | --- |
 | `key` | API キーを送信します(`Authorization: Bearer …`、またはアダプターにより `x-api-key` / `api-key`)。キーはリテラルまたは `${ENV_VAR}` 参照です。 | 大半のプロバイダー。 |
 | `forward` | **受け取った Codex 認証ヘッダーを**プロバイダーにそのまま中継します — キーを保存しません。ChatGPT ログインのパススルーです。 | OpenAI(`openai-responses` アダプター)。 |
-| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor。 |
+| `oauth` | 保存された OAuth アクセストークンを読み込み bearer キーとして使い、期限切れ前に自動更新します。 | xAI、Anthropic、Kimi、Kiro、Google Antigravity、Cursor、Command Code、GitHub Copilot、Nous Portal。 |
 
 [`retryOn429`](/ja/reference/configuration/)（同一キーでの 429 リトライ）は API キー プロバイダー
 （`authMode: "key"`）のみに適用されます。OAuth・forward・ローカル プリセットは除外されます —
@@ -84,7 +84,7 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 6 つで、これに実験的な非公式デバイスフロー
+OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
 ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
 自動更新されます。ログイン CLI は `chatgpt` も受け付けます。このコマンドは ChatGPT 認証情報を
 発行し `forward` モードのプロバイダーエントリを作成します。
@@ -93,9 +93,11 @@ OAuth ログインを使うプロバイダープリセットは 6 つで、こ�
 ocx login xai          # xAI Grok
 ocx login anthropic    # Anthropic Claude (Pro/Max)
 ocx login kimi         # Moonshot Kimi
+ocx login nous         # Nous Portal (デバイスグラント; 無料 + 有料モデル)
 ocx login kiro         # kiro-cli 認証情報の取り込み(トークンフォールバック対応)
 ocx login google-antigravity
 ocx login cursor       # Cursor 専用 PKCE ログイン
+ocx login command-code # Command Code のブラウザ OAuth (または ~/.commandcode/auth.json を取り込み)
 ocx login github-copilot  # GitHub デバイスフロー → Copilot トークン (Copilot Pro/Business)
 ocx login chatgpt      # 別途 ChatGPT OAuth ログイン
 ocx logout <provider>
@@ -106,10 +108,13 @@ ocx logout <provider>
 | `xai` | `openai-chat` | `https://api.x.ai/v1` | ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
-| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
-| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。CCA は汎用 `/models` エンドポイントを公開しないため、管理された 6 モデルの静的カタログを使用します。 |
+| `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
+| `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
+| `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
 | `cursor` | `cursor` | `https://api2.cursor.sh` | 実験的 PKCE ログイン、HTTP/2 トランスポート、アカウント別モデル探索をサポート。 |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | 実験的。GitHub デバイスフロー + `copilot_internal` 交換（VS Code OAuth クライアント）。有効な Copilot サブスクリプションが必要で、公式のサードパーティ API ではありません。 |
+
+Nous の refresh が終端失敗した場合は、再認証に `ocx login nous` を実行してください。
 
 正規の Kimi Coding Plan プリセット（`kimi` アカウントログインと `kimi-code` API key）では、
 opencodex は呼び出し元が指定した安定した `prompt_cache_key` だけを Chat Completions リクエストへ
@@ -128,6 +133,19 @@ Providers ページでアカウントを追加し、別アカウントをログ�
 `chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
 
+### Cockpit Tools Antigravity のインポート
+
+v1 で OpenCodex がインポートできるのは、`google-antigravity` プロバイダー向けの **Cockpit Tools Antigravity** JSON エクスポートのみです。Providers ダッシュボードでそのプロバイダーの Accounts タブを開き、ローカル JSON ファイルを選択します。ダッシュボードはファイル内容や認証情報の値を表示せず、インポート、更新、失敗、未対応の件数だけを表示します。他の Cockpit プロバイダーは v1 では未対応です。
+
+CLI はファイルまたは標準入力からのみエクスポートを受け取り、コマンド引数への貼り付けはできません。
+
+```bash
+ocx account import google-antigravity --format cockpit-tools --file <path> [--json]
+cat accounts.json | ocx account import google-antigravity --format cockpit-tools --stdin [--json]
+```
+
+インライン JSON と余分な位置引数は拒否されます。エクスポートファイルは非公開に保ち、インポート後は削除するか安全に保管してください。
+
 ### Kiro 認証情報の取り込み
 
 Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL https://cli.kiro.dev/install | bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1' | iex` でインストールしてから、先に `kiro-cli login` でサインインしてください。`kiro-cli` セッションがない場合、`ocx login kiro` は貼り付けたアクセストークンまたは `KIRO_ACCESS_TOKEN` 環境変数にフォールバックします。
@@ -143,7 +161,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 70 個含まれています。キー方式 58、OAuth 8、ローカル 3、
+opencodex には組み込みプリセットが 79 個含まれています。キー方式 67、OAuth 8、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -152,8 +170,8 @@ opencodex には組み込みプリセットが 70 個含まれています。キ
 [Cline の利用規約](https://cline.bot/tos)に記載された Cline Bot Inc. です。`cline-pass/cline-pass/kimi-k3` のようなルーティング ID は
 意図した形式です。先頭は opencodex のプロバイダー、残りの `cline-pass/kimi-k3` は upstream に送信する
 完全なモデル slug です。使用量はアカウントのローリング 5 時間、週次、月次の各上限で共有されます。
-現在 opencodex が公開する reasoning tier は実機検証済みの `low` のみで、より高い要求は公式範囲が
-公開または検証されるまで `low` にクランプされます。
+2026-08-13 の実機検証で、すべての静的 ClinePass モデルが gateway input で `low`、`medium`、`high`、`xhigh`、`max` を受け付けることを確認しました。
+opencodex は要求された tier をそのまま保持し、バックエンド固有の正規化は ClinePass 側に委ねます。
 
 **Cline** は同じ API キー・エンドポイントを従量課金で使い、100 以上のモデルにアクセスできます
 (OpenRouter 形式の ID、例: `anthropic/claude-sonnet-4-6`)。Cline の期間限定無料モデルは
@@ -175,10 +193,19 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
+| Chutes | `https://llm.chutes.ai/v1` |
 | DeepInfra | `https://api.deepinfra.com/v1/openai` |
 | Hyperbolic | `https://api.hyperbolic.xyz/v1` |
+| Nscale Serverless Inference | `https://inference.api.nscale.com/v1` |
+| Vultr Serverless Inference | `https://api.vultrinference.com/v1` |
 | Baseten Model APIs | `https://inference.baseten.co/v1` |
 | Command Code | `https://api.commandcode.ai/provider/v1` |
+| SambaNova Cloud | `https://api.sambanova.ai/v1` |
+| Nebius Token Factory | `https://api.tokenfactory.nebius.com/v1` |
+| DigitalOcean Serverless Inference | `https://inference.do-ai.run/v1` |
+| Scaleway Generative APIs | `https://api.scaleway.ai/v1` |
+| Featherless AI | `https://api.featherless.ai/v1` |
+| Novita AI | `https://api.novita.ai/openai/v1` |
 | Together | `https://api.together.xyz/v1` |
 | Fireworks | `https://api.fireworks.ai/inference/v1` |
 | Moonshot (Kimi API) · Kimi (coding) | `https://api.moonshot.ai/v1` · `https://api.kimi.com/coding/v1` |
@@ -191,10 +218,14 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …その他多数 | opencode zen、Vercel AI Gateway、Venice、NanoGPT、Synthetic、Qianfan、Alibaba、Parallel、ZenMux、LiteLLM |
+
+**OpenCode Zen**（`opencode-zen`）とキー不要の **OpenCode Free** プリセットは
+`https://opencode.ai/zen/v1` を共有します。このゲートウェイ上の無料モデルは、しばしばおおよそ毎分 15–20 リクエストの短時間レート制限に当たります（コミュニティ計測。OpenCode は RPM を公表しません）。Zen は `Retry-After` / `X-RateLimit-*` ヘッダーなしの汎用 429 を返すことがあります。これはキー不要デスクトップ枠（`opencode-free` で Big Pickle/無料モデル約 200 回 / 5 時間）とは別です。Zen がそのような 429 で `Retry-After` を省略した場合、opencodex はクライアント向けエラーに案内を足し、合成 `Retry-After` を付けます（上流の `Retry-After` があればそれが優先されます）。同一キーの待機再試行は [`retryOn429`](/ja/reference/configuration/) でオプトインします。
 
 大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
 (例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
@@ -211,6 +242,13 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 > 含まれます。Coding Plan のデフォルトは `ark-code-latest`、Agent Plan は
 > `deepseek-v4-pro` です。
 
+**Chutes の discovery:** `chutes` preset は Chutes の固定された共有 OpenAI 互換 LLM gateway を使います。
+公開 `/v1/models` catalog から `supported_features` が `tools` を示す行だけを残し、スラッシュを含む
+model id と安全な live metadata を保持します。discovery は 256 KiB と raw 128 行に制限されます。
+catalog は公開されているため、入力したキーの有効性は証明できませんが、chat request は設定済みの
+Bearer キーで認証されます。ユーザーが deploy した custom Chute host と LLM 以外の API は custom
+provider の範囲です。キーは [Chutes dashboard](https://chutes.ai/auth/start) で作成します。
+
 **DeepInfra の discovery:** キー方式の OpenAI Chat Completions プロバイダー `deepinfra` は、
 `openai-chat` アダプターと Bearer API キーを使います。registry が所有する DeepInfra のモデル一覧 URL から
 `chat` タグを持つ行だけを残し、スラッシュを含むネイティブモデル ID を保持します。live discovery は
@@ -221,6 +259,14 @@ Volcengine Agent Plan は `openai-responses` アダプターでネイティブ R
 vision-language chat のみを対象とし、別系統の image、audio、GPU endpoint は対象外です。キーは
 [Hyperbolic](https://app.hyperbolic.ai) で作成します。
 
+**Nscale と Vultr の discovery:** どちらの preset も認証付き `/v1/models` カタログを読み、ネイティブ ID を
+保持し、discovery を 256 KiB と raw 256 行に制限します。Nscale のカタログには modality フィールドなしで
+chat、image、embedding が混在するため、公式の tool-calling API 例で使われる
+`meta-llama/Llama-3.1-8B-Instruct` のみを許可します。Vultr は現在 `kimi-k2-instruct` だけに tool calling を
+明記しているため、そのモデルのみを公開します。ほかの行は同等の agent-tool 証拠が公開されるまで非表示です。
+Nscale の service token は [Nscale Console](https://console.nscale.com) で作成し、Vultr の inference key は
+[Vultr Console](https://my.vultr.com) の subscription overview から取得します。
+
 **Command Code の discovery:** preset は Command Code の `/provider/v1/models` リストを固定の
 Provider API ホストから読み、スラッシュを含むネイティブモデル ID を保持し、live discovery を
 256 KiB と raw 256 行に制限します。`ocx login command-code` はブラウザーでの OAuth サインインを
@@ -228,6 +274,45 @@ Provider API ホストから読み、スラッシュを含むネイティブモ�
 CLI 資格情報の取り込みも可能)。モデルカタログはアカウント単位で、ログイン後に認証済みの
 discovery エンドポイントから取得します。チャットリクエストは設定済みの bearer キーを使います。
 キーは [Command Code Studio](https://commandcode.ai/studio/) で作成します。
+
+**SambaNova Cloud の discovery:** preset は固定 API ホスト上の SambaNova Cloud の公開 `/v1/models` 一覧を読み、
+プロバイダー固有の ID を保持し、discovery を 128 KiB と raw 128 行に制限します。カタログは認証不要のため、
+CLI の login flow は公開レスポンスをキーの有効性の証拠にせず、キーを検証不能として報告します。chat リクエストは
+引き続き設定済み Bearer キーを使い、SambaNova がまだ対応していない並列 function call は無効にします。
+非公開の SambaStudio deployment endpoint は対象外です。キーは
+[SambaNova Cloud](https://cloud.sambanova.ai/apis) で作成します。
+
+**Nebius Token Factory の discovery:** preset は認証付きの verbose モデルカタログを取得し、architecture
+が text を出力する行だけを残して embedding と image-generation モデルを除外します。スラッシュを含む
+ネイティブ ID と、報告された context / input modality metadata を保持し、discovery を 512 KiB と raw
+512 行に制限します。dedicated deployment のホストは対象外です。キーは
+[Nebius Token Factory](https://tokenfactory.nebius.com) で作成します。
+**DigitalOcean の discovery:** preset は model access key を固定の共有 Serverless Inference ホストで使い、
+認証済み `/v1/models` の応答と DigitalOcean の公式ドキュメントで確認した Chat Completions allowlist の
+積集合だけを公開します。未知、Responses 専用、embedding、media generation の id は fail closed で除外し、
+discovery を 256 KiB と raw 256 行に制限します。agent 固有 host と dedicated host は対象外です。キーは
+[DigitalOcean Control Panel](https://cloud.digitalocean.com/model-studio/manage-keys) で作成します。
+
+**Scaleway の discovery:** 認証済みモデル一覧と公式ドキュメントで確認した Serverless Chat Completions
+allowlist の積集合だけを公開します。未知、Responses 専用、embedding、transcription、その他の media-model
+id は fail closed で除外し、discovery を 128 KiB と raw 128 行に制限します。default Project の共有
+endpoint を使用します。Project id 付き URL と dedicated deployment は custom provider で設定してください。
+API キーは [Scaleway console](https://console.scaleway.com/generative-api) で作成します。
+
+**Featherless の discovery:** 固定の OpenAI 互換ホストで認証し、chat と現在の plan に絞った人気順の
+先頭 100 model だけを取得します。各 row が plan で利用可能、Hugging Face gate なし、かつ
+`features.tool_use: true` と独立して報告しない限り fail closed で除外します。discovery は 128 KiB と
+raw 100 行が上限で、数万件の catalog 全体を download / cache しません。`/v1/models` は認証あり・なしの両方で呼び出せると文書化されているため、入力したキーの有効性は証明できませんが、chat request は設定済みの Bearer キーで認証されます。個人 plan は interactive / prototype
+用途に限られ、任意の application には Scale plan が必要です。キーは
+[Featherless dashboard](https://featherless.ai/account/api-keys) で作成します。
+
+**Novita の discovery:** キー方式のプリセットは `openai-chat` adapter を使用し、Bearer key は
+Novita の固定 OpenAI 互換 host にだけ送信します。公開 model list から `model_type: chat` と
+`chat/completions` endpoint の両方を報告する row だけを残し、discovery を 512 KiB と raw 256 行に
+制限します。catalog は公開されているため、login は list 成功を key の証明にせず「検証不能」と報告します。
+model ごとに capability が異なるため、provider 全体の parallel tool call と OpenAI
+`reasoning_effort` は宣伝しません。キーは
+[Novita key manager](https://novita.ai/settings/key-management) で作成します。
 
 > **Baseten の対象範囲:** このプリセットは Baseten の共有 [Model APIs](https://docs.baseten.co/inference/model-apis/overview)
 > のみを対象とします。ローカル利用では個人の [API キー](https://docs.baseten.co/organization/api-keys)を、

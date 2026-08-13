@@ -1,14 +1,18 @@
 import { describe, expect, test } from "bun:test";
 import {
+  accountBoundNativeOpenAiSlugs,
   accountBoundNativeDisplayName,
   accountBoundNativeModelSlugs,
   applyNativeVisibility,
   buildCatalogEntries,
   CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+  desktopAllowlistSuppressedNativeSlugs,
   disabledNativeSlugs,
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
   nativeModelRows,
+  observedAccountBoundNativeEntries,
+  observedAccountBoundNativeOpenAiSlugs,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
   trustedAccountBoundNativeCatalogSlug,
@@ -36,6 +40,8 @@ function nativeTemplate(): Record<string, unknown> {
       { effort: "low", description: "native low" },
       { effort: "high", description: "native high" },
     ],
+    shell_type: "shell_command",
+    comp_hash: "native-comp-hash",
   };
 }
 
@@ -63,6 +69,42 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(rows.find(r => r.slug === "gpt-5.5")?.disabled).toBe(false);
     // Known context metadata rides along for the dashboard.
     expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+  });
+
+  test("nativeModelRows applies providerContextCaps.openai as a ceiling (#1430)", () => {
+    const rows = nativeModelRows({
+      disabledModels: [],
+      providerContextCaps: { openai: 272_000 },
+    });
+    expect(rows.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(272_000);
+    expect(rows.find(r => r.slug === "gpt-5.6-luna")?.contextWindow).toBe(272_000);
+    // gpt-5.5 (272k native) is unchanged by the same cap.
+    expect(rows.find(r => r.slug === "gpt-5.5")?.contextWindow).toBe(272_000);
+    // A cap for another provider leaves natives untouched.
+    const other = nativeModelRows({ providerContextCaps: { "openai-apikey": 128_000 } });
+    expect(other.find(r => r.slug === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+  });
+
+  test("native aliases suppress their native dashboard row and activate Desktop allowlist pruning", () => {
+    const config = makeConfig({
+      disabledModels: ["gpt-5.6-sol", "gpt-5.5"],
+      combos: {
+        nova: {
+          alias: "gpt-5.6-sol",
+          nativeAlias: true,
+          displayName: "Nova1 - Sol",
+          targets: [{ provider: "nova", model: "codex/gpt-5.6-sol" }],
+        },
+      },
+    });
+    const rows = nativeModelRows(config);
+    expect(rows.some(row => row.slug === "gpt-5.6-sol")).toBe(false);
+    expect(rows.find(row => row.slug === "gpt-5.5")?.disabled).toBe(true);
+    expect(desktopAllowlistSuppressedNativeSlugs(config))
+      .toEqual(new Set(["gpt-5.6-sol", "gpt-5.5"]));
+    expect(desktopAllowlistSuppressedNativeSlugs(makeConfig({
+      disabledModels: ["gpt-5.5"],
+    }))).toEqual(new Set());
   });
 
   test("configured public selectors replace bare picker rows with account-qualified native clones", () => {
@@ -98,6 +140,76 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(side?.model_messages).toEqual(bare?.model_messages);
     expect(routed?.priority).toBeGreaterThan(side?.priority as number);
     expect(entries.every(entry => Number.isInteger(entry.priority))).toBe(true);
+  });
+
+  test("observed account-only native ids stay qualified and do not expand the bare set", () => {
+    const observedEntries = [
+      { ...nativeTemplate(), slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-hidden-daybreak", visibility: "hide", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-not-an-api-model", visibility: "list", supported_in_api: false },
+      { ...nativeTemplate(), slug: "provider/gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+    ];
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).toContain("gpt-daybreak-blue-latest");
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).not.toContain("gpt-hidden-daybreak");
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).not.toContain("gpt-not-an-api-model");
+
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.5"],
+      [],
+      [],
+      false,
+      "default",
+      new Set(),
+      ["team"],
+      new Set(),
+      new Set(),
+      undefined,
+      accountBoundNativeOpenAiSlugs(observedEntries),
+    );
+    expect(entries.find(entry => entry.slug === "gpt-daybreak-blue-latest")).toBeUndefined();
+    expect(entries.find(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toMatchObject({
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      visibility: "list",
+    });
+
+    expect(observedAccountBoundNativeEntries([{
+      ...nativeTemplate(),
+      slug: "gpt-daybreak-blue-latest",
+      visibility: "hide",
+      supported_in_api: true,
+      opencodex_account_observed_native: true,
+    }])).toHaveLength(1);
+    expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-daybreak-blue-latest"]);
+  });
+
+  test("a minimal hand-edited cache row is ignored", () => {
+    const handEdited = [{ slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true }];
+    expect(accountBoundNativeOpenAiSlugs(handEdited)).not.toContain("gpt-daybreak-blue-latest");
+    expect(observedAccountBoundNativeEntries(handEdited)).toEqual([]);
+  });
+
+  // The shape check is NOT a trust control, and this pins that so the next reader does not
+  // assume it is one. `models_cache.json` is a user-owned file with no signature or source
+  // identity to verify, so a complete hand-written row is indistinguishable from a real
+  // observation and is accepted. That is acceptable here only because it grants nothing new:
+  // `router.ts` already routes any bare `gpt-*` id under an account selector regardless of the
+  // catalog, so the effect is advertisement in discovery, not a newly reachable route. If this
+  // test ever needs to flip to rejection, the fix is a real provenance signal, not a longer
+  // list of fields to match.
+  test("a full-shape hand-written row IS accepted — the check is plausibility, not provenance", () => {
+    const forged = [{
+      slug: "gpt-not-a-real-model",
+      visibility: "list",
+      supported_in_api: true,
+      base_instructions: "anything non-empty",
+      comp_hash: null,
+      shell_type: "shell_command",
+      supported_reasoning_levels: [{ effort: "high" }],
+      model_messages: {},
+    }];
+
+    expect(accountBoundNativeOpenAiSlugs(forged)).toContain("gpt-not-a-real-model");
   });
 
   test("exact account disables hide only the matching generated picker row", () => {
@@ -270,6 +382,28 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     ]);
     expect(JSON.stringify(accountBoundNativeModelSlugs(config, ["gpt-5.5"])))
       .not.toContain("stored-side-account");
+  });
+
+  test("picker visibility hides generated catalog rows without deleting routing bindings", () => {
+    const codexAccountNamespaces = { desktop: "@main", team: "stored-side-account" };
+    const config = {
+      codexAccounts: [{ id: "stored-side-account", isMain: false }],
+      codexAccountNamespaces,
+      codexAccountPickerEnabled: false,
+    };
+
+    expect(visibleCodexAccountSelectors(config)).toEqual([]);
+    expect(accountBoundNativeModelSlugs(config, ["gpt-5.5"])).toEqual([]);
+    expect(config.codexAccountNamespaces).toBe(codexAccountNamespaces);
+
+    config.codexAccountPickerEnabled = true;
+    expect(visibleCodexAccountSelectors(config)).toEqual(["desktop", "team"]);
+
+    expect(visibleCodexAccountSelectors({
+      codexAccounts: config.codexAccounts,
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    })).toEqual([]);
   });
 
   test("catalog sync flips supported natives to visibility hide and restores list on re-enable", () => {

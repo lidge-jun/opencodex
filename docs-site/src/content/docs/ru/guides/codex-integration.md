@@ -204,6 +204,27 @@ Codex показывает модели из каталога на диске (`
 по шкале Codex `low | medium | high | xhigh | max | ultra`; неподдерживаемые значения
 сопоставляются или ограничиваются перед запросом к вышестоящему провайдеру.
 
+### Локальные инструменты для маршрутизируемых моделей
+
+Маршрутизируемые записи, которые не являются нативными, используют
+`tool_mode: "code_mode_only"`. Благодаря этому Codex предоставляет официальный entrypoint `exec`
+и вложенные MCP-инструменты, включая Browser и Computer Use, а opencodex маршрутизирует только
+обычный function call модели. Выполнение инструментов, разрешения и подтверждения остаются в
+Codex; opencodex не реализует второй executor для браузера или управления рабочим столом.
+
+Для key-auth Responses provider'ов, которые не принимают custom-tool grammar `exec` от Codex,
+opencodex кодирует объявление и историю как function tool для upstream, а затем восстанавливает
+потоковый lifecycle function call в `custom_tool_call` до передачи в Codex. Нативная forward-
+маршрутизация OpenAI и поддерживаемый custom tool `apply_patch` остаются без изменений.
+
+Выбранный provider должен поддерживать function/tool calling. Text-only provider без tool calls
+не может использовать `exec`, Browser или Computer Use. Нативные записи OpenAI сохраняют свой
+upstream tool mode без изменений.
+
+После того как `ocx sync` изменит эти metadata, перезапустите Codex App и откройте новую задачу.
+Существующие процессы app-server и задачи могут сохранять catalog и tool plan, загруженные при
+запуске.
+
 ### Пользовательские display-name моделей
 
 У custom-модели может быть человекочитаемый **display name**, который переопределяет метку в

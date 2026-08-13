@@ -112,15 +112,18 @@ export class CodexPoolAuthenticationError extends Error {
   }
 }
 
+export const CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE =
+  "OpenCodex local native-main profile maintenance is active; retry this request";
+
 export class CodexMainProfileDrainingError extends Error {
   constructor() {
-    super("Native Codex main profile is switching; retry this request");
+    super(CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
     this.name = "CodexMainProfileDrainingError";
   }
 }
 
 export function codexMainProfileDrainingResponse(): Response {
-  const response = formatErrorResponse(503, "server_busy", "Native Codex main profile is switching; retry this request");
+  const response = formatErrorResponse(503, "server_busy", CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE);
   const headers = new Headers(response.headers);
   headers.set("Retry-After", "1");
   return new Response(response.body, { status: response.status, headers });

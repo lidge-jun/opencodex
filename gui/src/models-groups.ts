@@ -14,6 +14,8 @@ export interface ConfiguredProviderSummary {
   disabled?: boolean;
   liveModels?: boolean;
   models?: string[];
+  contextWindow?: number;
+  modelContextWindows?: Record<string, number>;
   discovery?: ProviderDiscoverySummary;
 }
 
@@ -23,6 +25,8 @@ export interface ProviderModelGroup<Row> {
   native: boolean;
   liveModels: boolean;
   configuredModels: string[];
+  contextWindow?: number;
+  modelContextWindows?: Record<string, number>;
   discovery?: ProviderDiscoverySummary;
 }
 
@@ -56,6 +60,8 @@ export function buildProviderModelGroups<Row extends { provider: string; native?
         native: providerRows.length > 0 && providerRows.every(row => row.native === true),
         liveModels: configured?.liveModels !== false,
         configuredModels: configured?.models ?? [],
+        contextWindow: configured?.contextWindow,
+        modelContextWindows: configured?.modelContextWindows,
         discovery: configured?.discovery,
       };
     })

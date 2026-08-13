@@ -1,4 +1,4 @@
-import { countPendingOpencodexHistory, migrateHistoryToOpenai } from "./history-provider";
+import { migrateHistoryToOpenai } from "./history-provider";
 import { resolveCodexHistoryJobTarget, runCodexHistoryJob } from "./history-job";
 
 /**
@@ -23,7 +23,6 @@ export interface HistoryMigrationGuardianHandle {
 }
 
 export interface HistoryMigrationGuardianDeps {
-  countFn?: typeof countPendingOpencodexHistory;
   migrateFn?: () => ReturnType<typeof migrateHistoryToOpenai>
     | Promise<ReturnType<typeof migrateHistoryToOpenai>>;
   log?: Pick<Console, "log">;
@@ -43,7 +42,6 @@ function defaultSchedule(fn: () => void, ms: number): { cancel(): void } {
 }
 
 export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps = {}): HistoryMigrationGuardianHandle {
-  const countFn = deps.countFn ?? countPendingOpencodexHistory;
   // The default migration goes through the history job, so the guardian's timer
   // thread never performs the transition itself. A background repair that races
   // an apply or a restore is exactly what H exists to order.
@@ -53,7 +51,7 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
       operation: "migrate-openai",
     });
     return outcome.kind === "converged"
-      ? { rows: outcome.rows, files: outcome.files }
+      ? { rows: outcome.rows, files: outcome.files, verifiedNoop: outcome.proof?.kind === "verified-noop" }
       : { rows: 0, files: 0, failed: true as const };
   });
   const log = deps.log ?? console;
@@ -73,23 +71,18 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
     if (stopped) return;
     ticks++;
     try {
-      const count = countFn();
-      if (!count.failed && count.pendingRows === 0 && count.backupEntries === 0) {
-        stopped = true; // nothing left to migrate — normal steady state, no log noise
-        return;
-      }
-      // Locked probe or pending work: attempt one migration pass.
+      // The worker re-derives state under H on every pass; no pre-lock probe is
+      // allowed to stop or suppress this attempt.
       const result = await migrateFn();
       if (!result.failed) {
         const moved = result.rows + ((result as { ejectedRows?: number }).ejectedRows ?? 0);
         if (moved > 0) {
           log.log(`🩹 history-migration: ${moved} legacy opencodex thread(s) migrated back to openai.`);
         }
-        // A "successful" zero-row migration can also mean the DB does not exist YET while a
-        // backup manifest still holds restore work (fresh reinstall race). Only stop when a
-        // re-count proves nothing is pending; otherwise keep ticking within the budget.
-        const after = countFn();
-        if (moved > 0 || (!after.failed && after.pendingRows === 0 && after.backupEntries === 0)) {
+        // Zero mutations are authoritative only when the worker verified the
+        // exact DB/manifest state while H was held.
+        const verifiedNoop = (result as { verifiedNoop?: boolean }).verifiedNoop === true;
+        if (moved > 0 || verifiedNoop) {
           stopped = true;
           return;
         }
@@ -99,7 +92,7 @@ export function startHistoryMigrationGuardian(deps: HistoryMigrationGuardianDeps
     }
     if (ticks >= maxTicks) {
       stopped = true;
-      log.log("⚠️ history-migration: Codex history DB stayed locked; legacy threads not yet migrated. Close the Codex app and run 'ocx sync' (or check 'ocx doctor').");
+      log.log("⚠️ history-migration: Could not verify that legacy threads were migrated; the history database may be busy, unavailable, or not yet ready. Run 'ocx sync' (or check 'ocx doctor').");
       return;
     }
     schedule();

@@ -11,7 +11,8 @@
  */
 
 import type { OcxConfig } from "../types";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { applyProviderContextCap, providerContextCap } from "../providers/context-cap";
 import { PROVIDER_REGISTRY } from "../providers/registry";
 import {
   nativeInputModalities,
@@ -145,13 +146,18 @@ export function candidateCapabilityEvidence(
   const provider = config.providers[providerName];
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   const catalogRow = cachedCatalogModels().find(model => model.provider === providerName && model.id === modelId);
-  const isNative = providerName === "openai" && !modelId.includes("/");
+  const isNative = providerName === OPENAI_CODEX_PROVIDER_ID && !modelId.includes("/");
 
-  const contextWindow = provider?.modelContextWindows?.[modelId]
+  const rawContextWindow = provider?.modelContextWindows?.[modelId]
     ?? provider?.contextWindow
     ?? registryEntry?.modelContextWindows?.[modelId]
     ?? catalogRow?.contextWindow
     ?? (isNative ? nativeOpenAiContextWindow(modelId) : undefined);
+  // providerContextCaps.openai also ceilings native OpenAI rows (#1430), so routing
+  // evidence never contradicts a capped catalog entry.
+  const contextWindow = isNative
+    ? applyProviderContextCap(rawContextWindow, providerContextCap(config, OPENAI_CODEX_PROVIDER_ID)) ?? rawContextWindow
+    : rawContextWindow;
 
   const modalities = provider?.modelInputModalities?.[modelId]
     ?? registryEntry?.modelInputModalities?.[modelId]

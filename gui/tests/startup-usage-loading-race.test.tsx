@@ -133,15 +133,17 @@ test("an aborted Startup fetch must not clear loading while its replacement is i
   await settle();
 
   expect(container.textContent).toContain("Checking startup protection");
-  const refresh = container.querySelector<HTMLButtonElement>("button.btn");
-  expect(refresh?.disabled).toBe(true);
+  const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button.btn"))
+    .find(button => (button.textContent ?? "").includes("Refresh"));
+  expect(refresh).toBeTruthy();
+  expect(refresh!.disabled).toBe(true);
 
   await act(async () => {
     gates[1]!.resolve(FRESH);
     await Promise.resolve();
   });
   await waitFor(() => !(container.textContent ?? "").includes("Checking startup protection"));
-  expect(refresh?.disabled).toBe(false);
+  expect(refresh!.disabled).toBe(false);
 
   await act(async () => { root.unmount(); });
   container.remove();

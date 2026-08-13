@@ -1,6 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { sanitizeGeminiToolParameters } from "../src/adapters/google-tool-schema";
 
+function countSchemaNodes(value: unknown): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const schema = value as Record<string, unknown>;
+  let count = 1;
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    for (const child of Object.values(schema.properties)) count += countSchemaNodes(child);
+  }
+  if (schema.items !== undefined) count += countSchemaNodes(schema.items);
+  return count;
+}
+
 describe("sanitizeGeminiToolParameters", () => {
   test("drops JSON-Schema keywords outside Google's documented function-schema subset", () => {
     const out = sanitizeGeminiToolParameters({
@@ -332,15 +343,140 @@ describe("sanitizeGeminiToolParameters", () => {
     expect((node.properties as Record<string, Record<string, unknown>>).id.type).toBe("string");
   });
 
-  test("does not infinitely recurse on self-referential $defs", () => {
+  test("does not enumerate unsupported definition keys for repeated refs", () => {
+    let enumeratedDefinition = false;
+    const definition = new Proxy({
+      type: "object",
+      properties: { id: { type: "string" } },
+    }, {
+      ownKeys() {
+        enumeratedDefinition = true;
+        throw new Error("enumerated the full definition");
+      },
+    });
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        first: { $ref: "#/$defs/Wide" },
+        second: { $ref: "#/$defs/Wide" },
+      },
+      $defs: { Wide: definition },
+    });
+    const properties = out.properties as Record<string, Record<string, unknown>>;
+    expect(enumeratedDefinition).toBe(false);
+    expect(properties.first).toEqual({
+      type: "object",
+      properties: { id: { type: "string" } },
+    });
+    expect(properties.second).toEqual(properties.first);
+  });
+
+  test("widens recursive $refs without expanding sibling branches", () => {
     const out = sanitizeGeminiToolParameters({
       type: "object",
       properties: { tree: { $ref: "#/$defs/Tree" } },
-      $defs: { Tree: { type: "object", properties: { child: { $ref: "#/$defs/Tree" } } } },
+      $defs: {
+        Tree: {
+          type: "object",
+          properties: {
+            left: { $ref: "#/$defs/Tree" },
+            right: { $ref: "#/$defs/Tree" },
+          },
+        },
+      },
     });
-    expect(out.type).toBe("object");
     const tree = (out.properties as Record<string, Record<string, unknown>>).tree;
     expect(tree.type).toBe("object");
+    expect(tree.properties).toEqual({ left: {}, right: {} });
+  });
+
+  test("bounds acyclic shared-definition fan-out by node budget", () => {
+    const defs: Record<string, unknown> = {};
+    for (let index = 17; index >= 0; index--) {
+      defs[`Node${index}`] = index === 17
+        ? { type: "string" }
+        : {
+          type: "object",
+          properties: {
+            left: { $ref: `#/$defs/Node${index + 1}` },
+            right: { $ref: `#/$defs/Node${index + 1}` },
+          },
+        };
+    }
+
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { tree: { $ref: "#/$defs/Node0" } },
+      $defs: defs,
+    });
+    expect(countSchemaNodes(out)).toBeLessThanOrEqual(1_024);
+  });
+
+  test("truncates wide properties without dangling required names", () => {
+    const names = Array.from({ length: 2_000 }, (_, index) => `field_${index}`);
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: Object.fromEntries(names.map(name => [name, { type: "string" }])),
+      required: names,
+    });
+    const properties = out.properties as Record<string, unknown>;
+    const retainedNames = Object.keys(properties);
+    expect(retainedNames).toHaveLength(1_023);
+    expect(out.required).toEqual(retainedNames);
+    expect(Object.hasOwn(properties, names[1_023])).toBe(false);
+    expect(countSchemaNodes(out)).toBe(1_024);
+  });
+
+  test("stops reading anyOf branches when the budget is exhausted", () => {
+    const branches = Array.from({ length: 2_000 }, () => ({ type: "string" }));
+    let readPastBudget = false;
+    Object.defineProperty(branches, 1_022, {
+      configurable: true,
+      get() {
+        readPastBudget = true;
+        throw new Error("read past schema budget");
+      },
+    });
+
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        choice: {
+          description: "kept",
+          anyOf: branches,
+        },
+      },
+    });
+    const choice = (out.properties as Record<string, Record<string, unknown>>).choice;
+    expect(readPastBudget).toBe(false);
+    expect(choice).toEqual({ description: "kept" });
+  });
+
+  test("does not read items after earlier traversal exhausts the budget", () => {
+    const container: Record<string, unknown> = {
+      type: "array",
+      properties: Object.fromEntries(Array.from(
+        { length: 1_022 },
+        (_, index) => [`field_${index}`, { type: "string" }],
+      )),
+    };
+    let readItems = false;
+    Object.defineProperty(container, "items", {
+      configurable: true,
+      get() {
+        readItems = true;
+        throw new Error("read items past schema budget");
+      },
+    });
+
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { container },
+    });
+    const sanitized = (out.properties as Record<string, Record<string, unknown>>).container;
+    expect(readItems).toBe(false);
+    expect(sanitized.items).toBeUndefined();
+    expect(countSchemaNodes(out)).toBe(1_024);
   });
 
   test("falls back to an object schema for non-object input", () => {

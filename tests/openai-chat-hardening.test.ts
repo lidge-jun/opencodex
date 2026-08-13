@@ -1,11 +1,22 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
+import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 import { routeModel } from "../src/router";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { withTestTranslatorBudget } from "./helpers/translator-budget";
 
 const createOpenAIChatAdapter = (...args: Parameters<typeof createOpenAIChatAdapterProduction>) =>
   withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
+
+const previousDebug = process.env.OCX_DEBUG;
+
+afterEach(() => {
+  resetDebugSettingsForTests();
+  resetDebugLogBufferForTests();
+  if (previousDebug === undefined) delete process.env.OCX_DEBUG;
+  else process.env.OCX_DEBUG = previousDebug;
+});
 
 function parsed(): OcxParsedRequest {
   return {
@@ -116,6 +127,109 @@ describe("openai-chat non-stream response hardening", () => {
 
     expect(events).toEqual([{ type: "error", message: "upstream response contained invalid choices" }]);
   });
+
+  test("treats null tool calls as absent", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", content: "ok", tool_calls: null } }],
+      usage: { prompt_tokens: 7, completion_tokens: 2 },
+    })));
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "ok" },
+      { type: "done", usage: { inputTokens: 7, outputTokens: 2 } },
+    ]);
+  });
+
+  test("rejects malformed nested tool calls without throwing", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const toolCalls of [
+      { unexpected: true },
+      [null],
+      [{ id: "call_missing_function" }],
+    ]) {
+      const events = await adapter.parseResponse!(new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", tool_calls: toolCalls } }],
+        usage: { prompt_tokens: 7, completion_tokens: 2 },
+      })));
+      expect(events).toEqual([{
+        type: "error",
+        message: "upstream response contained invalid tool calls",
+        usage: { inputTokens: 7, outputTokens: 2 },
+      }]);
+    }
+  });
+
+  test("debug mode records only the non-stream tool-call shape failure", async () => {
+    process.env.OCX_DEBUG = "1";
+    const secretArguments = "private-tool-arguments";
+    const adapter = createOpenAIChatAdapter(provider());
+    const events = await adapter.parseResponse!(new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", tool_calls: [{
+        id: "call_1",
+        function: { name: "tool", arguments: { secretArguments } },
+      }] } }],
+    })));
+
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid tool calls" }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).toContain("[ocx:openai-chat:invalid-tool-calls]");
+    expect(lines).toContain('"mode":"response"');
+    expect(lines).toContain('"reason":"tool_call_function_arguments_invalid"');
+    expect(lines).toContain('"valueType":"object"');
+    expect(lines).not.toContain(secretArguments);
+    expect(lines).not.toContain("call_1");
+  });
+
+  test("tool-call structural diagnostics stay disabled by default", async () => {
+    delete process.env.OCX_DEBUG;
+    const adapter = createOpenAIChatAdapter(provider());
+    await adapter.parseResponse!(new Response(JSON.stringify({
+      choices: [{ message: { role: "assistant", tool_calls: { privateArguments: "secret" } } }],
+    })));
+
+    expect(getDebugLogEntries()).toHaveLength(0);
+  });
+
+  // The diagnostic's job is to say WHICH check rejected the payload. If its precedence drifts
+  // from the validator's, a payload with more than one problem is reported under the wrong
+  // reason and sends provider-compatibility work after the wrong shape. These cases each carry
+  // two defects at once, so only the matching order produces the expected reason.
+  describe("diagnostic precedence matches the buffered validator", () => {
+    async function reasonFor(toolCall: unknown): Promise<string> {
+      process.env.OCX_DEBUG = "1";
+      const adapter = createOpenAIChatAdapter(provider());
+      await adapter.parseResponse!(new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", tool_calls: [toolCall] } }],
+      })));
+      const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+      const match = /"reason":"([a-z_]+)"/.exec(lines);
+      return match?.[1] ?? "";
+    }
+
+    test("a bad function container outranks a bad id", async () => {
+      // Validator checks `!isRecord(rawToolCall.function)` before it reads `id`.
+      expect(await reasonFor({ id: 7, function: "not-an-object" }))
+        .toBe("tool_call_function_not_object");
+    });
+
+    test("a bad id outranks a bad name", async () => {
+      expect(await reasonFor({ id: 7, function: { name: 9, arguments: "{}" } }))
+        .toBe("tool_call_id_invalid");
+    });
+
+    test("a bad arguments type outranks a blank name", async () => {
+      // Both are rejected by the same validator condition; arguments is checked first there,
+      // so a blank name must not shadow it.
+      expect(await reasonFor({ id: "call_1", function: { name: "   ", arguments: 5 } }))
+        .toBe("tool_call_function_arguments_invalid");
+    });
+
+    test("a blank name is reported as blank, not as a type problem", async () => {
+      expect(await reasonFor({ id: "call_1", function: { name: "   ", arguments: "{}" } }))
+        .toBe("tool_call_function_name_blank");
+    });
+  });
 });
 
 describe("openai-chat stream response hardening", () => {
@@ -159,6 +273,64 @@ describe("openai-chat stream response hardening", () => {
 
     expect(events.at(-1)).toEqual({ type: "error", message: "malformed upstream SSE data frame" });
     expect(events.some(event => event.type === "done")).toBe(false);
+  });
+
+  test("treats null streaming tool calls as padding", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      'data: {"choices":[{"delta":{"content":"ok","tool_calls":null}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":2}}\n\n',
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([
+      { type: "text_delta", text: "ok" },
+      { type: "done", usage: { inputTokens: 7, outputTokens: 2 } },
+    ]);
+  });
+
+  test("malformed nested streaming tool calls are terminal errors", async () => {
+    const adapter = createOpenAIChatAdapter(provider());
+    for (const toolCalls of [{ unexpected: true }, [null]]) {
+      const response = new Response([
+        `data: ${JSON.stringify({
+          choices: [{ delta: { tool_calls: toolCalls } }],
+          usage: { prompt_tokens: 7, completion_tokens: 2 },
+        })}\n\n`,
+        "data: [DONE]\n\n",
+      ].join(""));
+
+      const events = await collect(adapter.parseStream(response));
+      expect(events).toEqual([{
+        type: "error",
+        message: "upstream response contained invalid tool calls",
+        usage: { inputTokens: 7, outputTokens: 2 },
+      }]);
+    }
+  });
+
+  test("debug mode classifies streaming tool-call structure without retaining values", async () => {
+    process.env.OCX_DEBUG = "1";
+    const privateName = "private-tool-name";
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{
+        privateName,
+        privateArguments: "private arguments",
+      }, null] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid tool calls" }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    expect(lines).toContain('"mode":"stream"');
+    expect(lines).toContain('"reason":"tool_call_not_object"');
+    expect(lines).toContain('"callIndex":1');
+    expect(lines).toContain('"valueType":"null"');
+    expect(lines).not.toContain(privateName);
+    expect(lines).not.toContain("private arguments");
   });
 });
 
@@ -233,6 +405,37 @@ describe("openai-chat credential hardening", () => {
     const body = JSON.parse(adapter.buildRequest(parsed()).body);
 
     expect(body).not.toHaveProperty("prompt_cache_key");
+  });
+
+  test("preserves a caller-supplied service tier when the provider opts in", () => {
+    const adapter = createOpenAIChatAdapter(provider({ chatServiceTier: true }));
+    const req = parsed();
+    req.options.serviceTier = "priority";
+
+    const body = JSON.parse(adapter.buildRequest(req).body);
+
+    expect(body.service_tier).toBe("priority");
+  });
+
+  // `service_tier` is an OpenAI-specific extension and this adapter serves 66 registry
+  // providers, several of which reject unknown body fields. Forwarding it by default would
+  // turn a caller-supplied tier into an upstream 400 on those routes, so absence of the
+  // opt-in must mean the field is dropped — the same contract `prompt_cache_key` uses.
+  test("drops a caller-supplied service tier when the provider has not opted in", () => {
+    for (const p of [provider(), provider({ chatServiceTier: false })]) {
+      const req = parsed();
+      req.options.serviceTier = "priority";
+
+      const body = JSON.parse(createOpenAIChatAdapter(p).buildRequest(req).body);
+
+      expect(body).not.toHaveProperty("service_tier");
+    }
+  });
+
+  test("an opted-in provider without a caller tier still sends no service_tier", () => {
+    const body = JSON.parse(createOpenAIChatAdapter(provider({ chatServiceTier: true })).buildRequest(parsed()).body);
+
+    expect(body).not.toHaveProperty("service_tier");
   });
 
   test("canonical Kimi Coding Plan routes forward Codex prompt_cache_key", () => {
@@ -338,5 +541,86 @@ describe("openai-chat max output defaults", () => {
 
     expect(body.max_tokens).toBe(20_000);
     expect(body.thinking_budget).toBe(15_000);
+  });
+});
+
+describe("openai-chat response_format emission", () => {
+  const bodyOf = (req: { body?: unknown }): Record<string, unknown> =>
+    JSON.parse(req.body as string) as Record<string, unknown>;
+
+  test("maps textFormat json_object onto response_format", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_object" } },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({ type: "json_object" });
+  });
+
+  test("re-nests textFormat json_schema as chat response_format", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: {
+        textFormat: { type: "json_schema", name: "answer", description: "shape", schema: { type: "object" }, strict: true },
+      },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", description: "shape", schema: { type: "object" }, strict: true },
+    });
+  });
+
+  test("defaults the json_schema name when the Responses form omits it", () => {
+    const req = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_schema", schema: { type: "object" } } },
+    });
+
+    expect(bodyOf(req).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "response", schema: { type: "object" } },
+    });
+  });
+
+  test("omits response_format without a textFormat option", () => {
+    const plain = createOpenAIChatAdapter(provider()).buildRequest(parsed());
+
+    expect(bodyOf(plain).response_format).toBeUndefined();
+  });
+
+  test("preserves a schema-less json_schema response_format", () => {
+    const schemaless = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      options: { textFormat: { type: "json_schema", name: "answer" } },
+    });
+
+    expect(bodyOf(schemaless).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer" },
+    });
+  });
+
+  test("omits response_format only for an explicitly opted-out model", () => {
+    const adapter = createOpenAIChatAdapter(provider({
+      noStructuredOutputModels: ["test-model"],
+    }));
+    const options: OcxParsedRequest["options"] = {
+      textFormat: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true },
+    };
+
+    const optedOut = adapter.buildRequest({ ...parsed(), options });
+    const supportedSibling = adapter.buildRequest({ ...parsed(), modelId: "supported-model", options });
+    const colonVariant = adapter.buildRequest({ ...parsed(), modelId: "test-model:structured", options });
+
+    expect(bodyOf(optedOut).response_format).toBeUndefined();
+    expect(bodyOf(supportedSibling).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+    expect(bodyOf(colonVariant).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
   });
 });

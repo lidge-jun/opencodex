@@ -18,14 +18,31 @@ routes, and limits delegated work.
 | `multiAgentGuidanceEnabled?` | `boolean` | `true` | Controls only opencodex-authored v1/v2 developer guidance; it does not change native agent defaults, tools, routing, rosters, or effort caps. |
 | `syncCodexSubagentDefaults?` | `boolean` | `false` | Opt into writing `injectionModel` and optional `injectionEffort` as Codex's native defaults during sync/restart. Requires `injectionModel`. |
 | `subagentModelFallback?` | `string[]` | `[]` | Priority-ordered global fallback models for spawned child turns. |
+| `subagentModelFallbackByModel?` | `Record<string, string[]>` | `{}` | Per-primary-model fallback chains, keyed by the requested primary model id. This is the supported home for per-role fallback metadata; `model_fallback` inside Codex agent TOML makes Codex 0.146+ skip the role (#1190). |
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Availability-probe cache interval. Values below 1000 ms fall back to the default. |
 | `effortCap?` | `string` | — | Hard ceiling for qualifying v2 main turns and marked spawned-child turns. Accepts `low` through `ultra`. |
 | `subagentEffortCap?` | `string` | — | Additional ceiling for spawned-child turns only. When both caps apply, the lower wins. |
+| `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
-Manage the surface with the dashboard or `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
+Manage the surface with the dashboard or
+`ocx v2 status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>`.
 Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
+
+**Ultra mode** (the Subagents dashboard toggle, `PUT /api/v2` field
+`multiAgentModeHintText`, and `ocx v2 mode-hint`) writes
+`features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
+`$CODEX_HOME/config.toml`. The CLI `ocx v2 mode-hint` command persists this key even
+when `multi_agent_v2` is disabled; it does not toggle the feature. The hint overrides
+codex-rs's effort-derived multi-agent policy, so any model and any reasoning effort
+receives the Proactive delegation prompt; it does **not** change reasoning effort.
+A `null` value removes the key so the effort-derived policy (ultra = proactive,
+otherwise explicit) resumes; empty or whitespace-only values are rejected because a
+present empty override would suppress even the ultra-derived Proactive message. The
+Subagents dashboard's Ultra mode **on** toggle requires both the native feature and
+an explicit v2 surface (`multiAgentMode: "v2"`, equivalent to `ocx v2 mode v2`);
+`ocx v2 on` alone does not satisfy that dashboard gate.
 
 The management API exposes `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
 `/api/subagent-models`, and `/api/subagent-model-fallback`. Injection-model updates are partial;
@@ -73,8 +90,13 @@ created Codex tasks and do not cause delegation by themselves.
 Spawned-child fallback order is:
 
 1. the requested primary model;
-2. role-level `model_fallback` from `$CODEX_HOME/agents/*.toml`; then
+2. per-model chains from `subagentModelFallbackByModel` (keyed by the primary model); then
 3. global `subagentModelFallback` entries.
+
+Per-role fallback chains must live in opencodex config. Writing `model_fallback` into
+`$CODEX_HOME/agents/*.toml` makes Codex 0.146+ reject the whole role file as an unknown
+field and skip the role (#1190). A legacy `model_fallback` line in the TOML is still
+read for backwards compatibility, but `ocx doctor` flags it.
 
 opencodex skips disabled, unroutable, unhealthy, cooling-down, or quota-threshold candidates. The
 availability snapshot is cached for `subagentModelFallbackPollMs`. Encrypted child tasks can restrict
@@ -89,10 +111,84 @@ fails instead of routing unreadable ciphertext elsewhere.
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
   "subagentModelFallback": ["gpt-5.4-mini"],
+  "subagentModelFallbackByModel": {
+    "gpt-5.5": ["gpt-5.4-mini"]
+  },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }
 ```
+
+## Encrypted v2 task recovery
+
+`agentTaskRecovery` is an experimental compatibility path for a native ChatGPT parent spawning a
+routed v2 child. It is disabled by default. When explicitly enabled and the final routed child task
+contains an otherwise unreadable Fernet payload, opencodex uses a raw Responses passthrough request
+to the fixed `https://chatgpt.com/backend-api/codex/responses` endpoint with forward-mode
+authentication. ChatGPT returns the plaintext assignment through a forced function call; opencodex
+then converts only that task item to a standard user message before routed-provider dispatch.
+
+This is not local decryption and does not fix the Codex wire protocol. It depends on undocumented
+ChatGPT backend behavior and may stop working after a backend change. The recovered assignment is
+model output, not a cryptographically verified plaintext, so byte-for-byte fidelity is not
+guaranteed. A scoped cache miss may add an authenticated ChatGPT request, consume account quota, and
+add latency before the routed request. Concurrent requests for the same scoped task share one
+recovery request. Startup prints a warning whenever the feature is enabled.
+
+Admission and retention are deliberately narrow:
+
+- recovery is available only while the proxy is bound to loopback;
+- only a native Codex caller with a matching ChatGPT bearer/account pair is eligible. This is the
+  credential shape used by the canonical `openai` provider with `authMode: "forward"`; recovery uses
+  only the pair on the incoming request and never substitutes API-key authentication, another
+  provider credential, or another Codex account;
+- callers using `x-opencodex-api-key`, `x-api-key`, generic API credentials, or a proxy admission
+  secret keep the existing `unreadable_encrypted_agent_task` failure;
+- raw ChatGPT credentials are sent only to the hard-coded ChatGPT endpoint and are never placed in
+  the request body, logs, cache keys, or provider request; the in-memory cache scope uses only a
+  process-random keyed digest of the caller credential and account;
+- the recovery request forwards only `authorization`, the matching `chatgpt-account-id`,
+  `originator`, and optional `openai-beta` and `user-agent` metadata; opencodex sets `content-type`
+  and `accept` itself, and no other caller headers cross this boundary;
+- recovered plaintext is never logged or persisted; the process-local cache is credential-, parent-
+  thread-, and ciphertext-scoped, expires after 15 minutes, and is bounded by both configured entry
+  count (200 by default, 512 maximum) and 8 MiB total;
+- any malformed envelope, failed recovery, timeout, or validation failure preserves the existing
+  fail-closed error; client cancellation returns 499. Neither path forwards ciphertext to the
+  routed provider.
+
+### Threat model
+
+This path assumes the local native Codex caller already holds a valid ChatGPT credential and that
+the fixed ChatGPT endpoint is trusted to authenticate it. It protects against generic proxy/API-key
+callers using the feature as a plaintext oracle, redirecting credentials to another destination,
+cross-account or cross-thread cache reuse, and sensitive-data logging or persistence. Admission
+checks token issuer, audience, Codex client, expiry/not-before bounds, and exact account match before
+every cache lookup; the endpoint remains the signature authority.
+
+It does not protect against another process running as the same OS user, a compromised ChatGPT
+backend or recovery model, prompt injection inside the encrypted task, model transcription errors,
+or memory inspection of the running proxy. Recovery output must therefore be treated as untrusted
+model output rather than authenticated plaintext.
+
+```json
+{
+  "agentTaskRecovery": {
+    "enabled": true,
+    "model": "gpt-5.6-sol",
+    "timeoutMs": 45000,
+    "cacheEntries": 200
+  }
+}
+```
+
+Enable this only when the additional authenticated request, quota use, plaintext-in-process boundary,
+and private-backend dependency are acceptable. Prefer a native ChatGPT child or v1 heterogeneous
+delegation when they are not.
+
+This recovery path applies to direct-routed children. At most 32 recovery requests can be active at
+once; additional misses fail closed. Combo routing keeps its existing native-only filter for
+encrypted tasks and does not invoke recovery.
 
 ## Effort caps
 

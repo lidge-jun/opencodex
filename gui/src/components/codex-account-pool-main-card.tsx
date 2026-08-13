@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
+import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import QuotaBars from "./QuotaBars";
 import { CodexPauseToggleLabel, CodexTicketBadge } from "./codex-account-pool-helpers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
+import type { NoticeTone } from "../ui";
+import { useI18n } from "../i18n/shared";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -14,6 +17,7 @@ import {
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../oauth-health-display";
+import { formatCostUsd, formatTokenCount } from "../provider-workspace/usage";
 
 export function CodexAccountPoolMainCard({
   t,
@@ -26,6 +30,10 @@ export function CodexAccountPoolMainCard({
   onTogglePause,
   pauseUpdatingId,
   pauseBusy,
+  onPriorityChange,
+  priorityUpdatingId,
+  switchingId,
+  pinnedId = null,
   onOpenReset,
   onCopyDoctor,
   doctorCopyOutcomeFor,
@@ -40,10 +48,21 @@ export function CodexAccountPoolMainCard({
   onTogglePause: (entry: CodexAccountEntry) => void;
   pauseUpdatingId: string | null;
   pauseBusy: boolean;
+  onPriorityChange: (entry: CodexAccountEntry, priority: number) => void;
+  priorityUpdatingId: string | null;
+  /** In-flight manual switch, which writes the same pin an order write clears. */
+  switchingId: string | null;
+  /**
+   * The account carrying the pin, which is not always the one routing is on: the pin caps
+   * selection at its own tier, and under round-robin or fill-first the cursor still moves
+   * within that tier. Badge the account the operator chose, not wherever routing landed.
+   */
+  pinnedId?: string | null;
   onOpenReset: (account: CodexAccountEntry) => void;
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
+  const { locale } = useI18n();
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
   const mainSwitchEntry: CodexAccountEntry = {
@@ -52,6 +71,7 @@ export function CodexAccountPoolMainCard({
     plan: main?.plan,
     isMain: true,
     paused: main?.paused ?? false,
+    priority: main?.priority ?? 0,
     hasCredential: true,
     quota: main?.quota ?? null,
   };
@@ -74,6 +94,8 @@ export function CodexAccountPoolMainCard({
               {t("codexAuth.paused")}
             </span>
           )}
+          <AccountPriorityBadge value={mainSwitchEntry.priority} />
+          {pinnedId === "__main__" && !main?.paused && <span className="badge badge-muted">{t("codexAuth.pinned")}</span>}
           {healthLabel && (
             <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
           )}
@@ -116,11 +138,34 @@ export function CodexAccountPoolMainCard({
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
       </div>
       <div className="card-sub">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
+      <div className="card-sub faint">{t("codexAuth.logLabel")}: <code>{main?.logLabel ?? "main"}</code></div>
+      {main?.usage30d && (
+        <div className="card-sub faint" title={t("logs.metric.estimatedCostTitle")}>
+          {t("usage.card.totalTokens")}: {formatTokenCount(main.usage30d.totalTokens, locale)} · {t("pws.estimatedCost")}: {formatCostUsd(main.usage30d.estimatedCostUsd, locale)} · {t("usage.coverage.measured")}: {Math.round(main.usage30d.usageCoverageRatio * 100)}%
+        </div>
+      )}
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
       {inCooldown && (
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
+      )}
+      {pinnedId === "__main__" && !main?.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
+      {/* Same rule as the pause button: without an app login there is no row to re-order. */}
+      {main && (
+        <AccountPriorityControl
+          value={mainSwitchEntry.priority}
+          // Derived from the synthesized id rather than hardcoded as "-main": a pool account
+          // may legitimately be named `main` (the id pattern allows it), and that account's
+          // control would then claim the same DOM id, pointing this label at its dropdown.
+          selectId={`codex-account-priority-${mainSwitchEntry.id}`}
+          // Any in-flight order write, not just this card's: order writes share one mutation
+          // ref, so a pick made during another card's write returns "busy" and is dropped
+          // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
+          // pin this clears, so the controller refuses to overlap them, just as silently.
+          disabled={priorityUpdatingId !== null || switchingId !== null}
+          onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
+        />
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>
@@ -154,7 +199,7 @@ export function CodexAccountPoolPageHead({
   pausingExhausted: boolean;
   pauseBusy?: boolean;
   actionFeedback?: string | null;
-  actionFeedbackTone?: "ok" | "err" | null;
+  actionFeedbackTone?: NoticeTone | null;
   onRefresh: () => void;
   onPauseExhausted: () => void;
 }) {
@@ -166,7 +211,7 @@ export function CodexAccountPoolPageHead({
       {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
       <div className={embedded ? "row" : "codex-auth-page-head__actions"}>
         <span
-          className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
+          className={`codex-auth-page-head__feedback${actionFeedbackTone === "ok" ? " is-ok" : ""}${actionFeedbackTone === "warn" ? " is-warn" : ""}${actionFeedbackTone === "err" ? " is-err" : ""}`}
           role="status"
           aria-live="polite"
         >

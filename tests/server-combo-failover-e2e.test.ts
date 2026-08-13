@@ -369,6 +369,35 @@ async function within<T>(promise: Promise<T>, ms = 2_000): Promise<T> {
 }
 
 describe("server combo failover 030 activation matrix", () => {
+  test("dispatches a selected concrete target despite a shadowing combo alias", async () => {
+    const hits: string[] = [];
+    const a = serve(async request => {
+      const body = await request.json() as { model?: string; messages?: Array<{ content?: string }> };
+      hits.push(`a:${body.model}:${body.messages?.[0]?.content}`);
+      return chatSuccess("intended", "m1");
+    });
+    const b = serve(async request => {
+      const body = await request.json() as { model?: string; messages?: Array<{ content?: string }> };
+      hits.push(`b:${body.model}:${body.messages?.[0]?.content}`);
+      return chatSuccess("shadow", "m2");
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    }, [{ provider: "a", model: "m1" }]);
+    config.defaultProvider = "b";
+    config.combos!.shadow = {
+      alias: "a/m1",
+      targets: [{ provider: "b", model: "m2" }],
+    };
+
+    const response = await post(config, { input: "SECRET_PROMPT_X" });
+
+    expect(response.status).toBe(200);
+    expect(JSON.stringify(await response.json())).toContain("intended");
+    expect(hits).toEqual(["a:m1:SECRET_PROMPT_X"]);
+  });
+
   test("ordinary openai-chat 503 hops to backup for non-stream and stream", async () => {
     const hits: string[] = [];
     const a = serve(async request => {

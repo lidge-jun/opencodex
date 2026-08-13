@@ -29,18 +29,17 @@ function manualScheduler() {
 const silent = { log: () => {} };
 
 describe("history migration guardian", () => {
-  test("stops silently when nothing is pending", async () => {
+  test("stops silently on a worker-verified no-op", async () => {
     const sched = manualScheduler();
     let migrations = 0;
     startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 0, backupEntries: 0 }),
-      migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
+      migrateFn: () => { migrations++; return { rows: 0, files: 0, verifiedNoop: true }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
     });
 
     expect(await sched.runNext()).toBe(true);
-    expect(migrations).toBe(0); // no pending work — never touches the migrate path
+    expect(migrations).toBe(1); // the locked worker owns no-op authority
     expect(sched.size).toBe(0); // and never reschedules
   });
 
@@ -49,7 +48,6 @@ describe("history migration guardian", () => {
     const logs: string[] = [];
     let attempts = 0;
     startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 3, backupEntries: 1 }),
       migrateFn: () => {
         attempts++;
         return attempts < 3
@@ -72,7 +70,6 @@ describe("history migration guardian", () => {
     const sched = manualScheduler();
     const logs: string[] = [];
     startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 1, backupEntries: 0 }),
       migrateFn: () => ({ rows: 0, files: 0, failed: true as const }),
       log: { log: (msg: string) => logs.push(msg) },
       scheduleFn: sched.scheduleFn,
@@ -82,14 +79,14 @@ describe("history migration guardian", () => {
     expect(await sched.runNext()).toBe(true);
     expect(await sched.runNext()).toBe(true);
     expect(sched.size).toBe(0); // budget exhausted — no reschedule
-    expect(logs.some(l => l.includes("stayed locked"))).toBe(true);
+    expect(logs.some(l => l.includes("Could not verify"))).toBe(true);
+    expect(logs.some(l => l.includes("stayed locked"))).toBe(false);
   });
 
   test("stop() cancels the pending tick", async () => {
     const sched = manualScheduler();
     let migrations = 0;
     const handle = startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 1, backupEntries: 0 }),
       migrateFn: () => { migrations++; return { rows: 0, files: 0, failed: true as const }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
@@ -100,36 +97,49 @@ describe("history migration guardian", () => {
     expect(migrations).toBe(0);
   });
 
-  test("a locked count probe still attempts migration and keeps ticking until a clean re-count", async () => {
+  test("stops on a worker-verified no-op without a pre-lock probe", async () => {
     const sched = manualScheduler();
     let migrations = 0;
-    let counts = 0;
     startHistoryMigrationGuardian({
-      countFn: () => {
-        counts++;
-        // First probe (pre-migrate) locked; re-count after migration comes back clean.
-        return counts === 1
-          ? { pendingRows: 0, backupEntries: 0, failed: true as const }
-          : { pendingRows: 0, backupEntries: 0 };
-      },
-      migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
+      migrateFn: () => { migrations++; return { rows: 0, files: 0, verifiedNoop: true }; },
       log: silent,
       scheduleFn: sched.scheduleFn,
     });
 
     expect(await sched.runNext()).toBe(true);
     expect(migrations).toBe(1);
-    expect(sched.size).toBe(0); // migration succeeded and re-count is clean → stop
+    expect(sched.size).toBe(0); // worker proof, not the advisory count, stops it
+  });
+
+  test("an unverified zero-row result cannot turn into success", async () => {
+    const sched = manualScheduler();
+    let attempts = 0;
+    startHistoryMigrationGuardian({
+      migrateFn: () => {
+        attempts++;
+        return attempts === 1
+          ? { rows: 0, files: 0, verifiedNoop: false }
+          : { rows: 0, files: 0, verifiedNoop: true };
+      },
+      log: silent,
+      scheduleFn: sched.scheduleFn,
+    });
+    expect(await sched.runNext()).toBe(true);
+    expect(attempts).toBe(1);
+    expect(sched.size).toBe(1);
+    expect(await sched.runNext()).toBe(true);
+    expect(attempts).toBe(2);
+    expect(sched.size).toBe(0);
   });
 
   test("does not stop on a zero-row 'success' while backup entries remain (missing-DB race)", async () => {
     const sched = manualScheduler();
     let migrations = 0;
-    // DB missing: count sees only the backup manifest; migrate 'succeeds' with 0 rows.
+    const logs: string[] = [];
+    // DB missing: the locked migration returns zero rows without a proof.
     startHistoryMigrationGuardian({
-      countFn: () => ({ pendingRows: 0, backupEntries: 2 }),
       migrateFn: () => { migrations++; return { rows: 0, files: 0 }; },
-      log: silent,
+      log: { log: (msg: string) => logs.push(msg) },
       scheduleFn: sched.scheduleFn,
       maxTicks: 3,
     });
@@ -140,5 +150,7 @@ describe("history migration guardian", () => {
     expect(await sched.runNext()).toBe(true);
     expect(await sched.runNext()).toBe(true); // budget exhausted on tick 3
     expect(sched.size).toBe(0);
+    expect(logs.some(l => l.includes("Could not verify"))).toBe(true);
+    expect(logs.some(l => l.includes("stayed locked"))).toBe(false);
   });
 });

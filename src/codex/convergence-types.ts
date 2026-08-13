@@ -422,7 +422,7 @@ export interface CatalogProviderDiscoveryPolicySnapshot {
     readonly path: CatalogDiscoveryPolicyField<string | undefined>;
     readonly query: CatalogDiscoveryPolicyField<Readonly<Record<string, string>> | undefined>;
   }>;
-  readonly finalMethod: "GET";
+  readonly finalMethod: "GET" | "POST";
   readonly finalUrl: string;
   readonly filter: CatalogDiscoveryPolicyField<ProviderModelDiscoveryFilter | undefined>;
   readonly maxResponseBytes: number;

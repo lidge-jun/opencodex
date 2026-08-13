@@ -6,10 +6,12 @@ import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../resp
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
+import { openaiResponsesUrl } from "./openai-responses-url";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -539,6 +541,107 @@ function repairOrphanedInputItems(body: unknown, dropReasoning: boolean): unknow
 }
 
 /**
+ * Make unambiguous Responses tool batches contiguous for upstream parsers that require it.
+ *
+ * [Decision Log]
+ * - 목적과 의도: Keep Codex hook-injected developer context without splitting a parallel tool-call turn away from its reasoning or making a strict upstream reject matching results.
+ * - 기존 구현 및 제약 조건: The orphan repair verifies only pair presence, while the original pair-by-pair reorder turned `reasoning, call A, call B, output A, output B` into two assistant turns and made DeepSeek reject call B for missing reasoning (#1477).
+ * - 검토한 주요 대안: Disable parallel calls (DeepSeek always enables them); duplicate reasoning per call; reorder each pair; or normalize the complete unambiguous call batch.
+ * - 선택한 방식: Treat calls emitted before the first matched result as one batch, emit all calls followed by their matched outputs, and preserve intervening non-tool items immediately after the batch.
+ * - 다른 대안 대신 이 방식을 선택한 이유: Batch normalization matches the Responses parallel-call shape without fabricating reasoning, while the provider gate and unique-pair requirement keep the blast radius narrow.
+ * - 장점, 단점 및 영향: DeepSeek keeps one reasoning-bearing assistant turn for parallel calls and still accepts hook-interleaved single calls; tolerant providers stay byte/order equivalent, and duplicate, missing, or backwards call/result pairs are not guessed.
+ */
+function normalizeResponsesToolResultAdjacency(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input;
+  const calls = new Map<string, number[]>();
+  const outputs = new Map<string, number[]>();
+
+  const appendIndex = (map: Map<string, number[]>, key: string, index: number): void => {
+    const existing = map.get(key);
+    if (existing) existing.push(index);
+    else map.set(key, [index]);
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index];
+    if (!isPlainObject(item) || typeof item.call_id !== "string" || item.call_id.length === 0) continue;
+    if (item.type === "function_call" || item.type === "local_shell_call") {
+      appendIndex(calls, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call") {
+      appendIndex(calls, `custom:${item.call_id}`, index);
+    } else if (item.type === "function_call_output") {
+      appendIndex(outputs, `function:${item.call_id}`, index);
+    } else if (item.type === "custom_tool_call_output") {
+      appendIndex(outputs, `custom:${item.call_id}`, index);
+    }
+  }
+
+  const pairs: Array<{ callIndex: number; outputIndex: number }> = [];
+  for (const [key, callIndices] of calls) {
+    const outputIndices = outputs.get(key);
+    if (!outputIndices) return body;
+    if (callIndices.length !== 1 || outputIndices.length !== 1) return body;
+    const callIndex = callIndices[0]!;
+    const outputIndex = outputIndices[0]!;
+    if (outputIndex <= callIndex) return body;
+    pairs.push({ callIndex, outputIndex });
+  }
+  // Reject any collected output that lacks exactly one matching call. A lone or
+  // duplicated output is ambiguous, and normalizing on top of it could sever a
+  // result from the reasoning-bearing call turn it belongs to.
+  for (const [key, outputIndices] of outputs) {
+    const callIndices = calls.get(key);
+    if (!callIndices || callIndices.length !== 1 || outputIndices.length !== 1) return body;
+  }
+  pairs.sort((left, right) => left.callIndex - right.callIndex);
+
+  const movedIndices = new Set<number>();
+  const batchAt = new Map<number, unknown[]>();
+  for (let cursor = 0; cursor < pairs.length;) {
+    const group = [pairs[cursor]!];
+    let firstOutputIndex = pairs[cursor]!.outputIndex;
+    let next = cursor + 1;
+    while (next < pairs.length && pairs[next]!.callIndex < firstOutputIndex) {
+      group.push(pairs[next]!);
+      firstOutputIndex = Math.min(firstOutputIndex, pairs[next]!.outputIndex);
+      next += 1;
+    }
+
+    // Within one reasoning turn the outputs must appear in the same order as their
+    // calls. If they are reversed, normalizing would fabricate a new output order;
+    // leave the ambiguous history untouched instead.
+    for (let groupIndex = 1; groupIndex < group.length; groupIndex += 1) {
+      if (group[groupIndex]!.outputIndex < group[groupIndex - 1]!.outputIndex) return body;
+    }
+
+    const batch = [
+      ...group.map(pair => input[pair.callIndex]),
+      ...group.map(pair => input[pair.outputIndex]),
+    ];
+    const anchor = group[0]!.callIndex;
+    const alreadyContiguous = batch.every((item, offset) => input[anchor + offset] === item);
+    if (!alreadyContiguous) {
+      batchAt.set(anchor, batch);
+      for (const pair of group) {
+        movedIndices.add(pair.callIndex);
+        movedIndices.add(pair.outputIndex);
+      }
+    }
+    cursor = next;
+  }
+  if (batchAt.size === 0) return body;
+
+  const normalized: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    const batch = batchAt.get(index);
+    if (batch) normalized.push(...batch);
+    if (!movedIndices.has(index)) normalized.push(input[index]);
+  }
+  return { ...body, input: normalized };
+}
+
+/**
  * Remove `previous_response_id` before forwarding. Two triggers:
  * - the proxy expanded the request into a full input replay (the id is now redundant), or
  * - the target is the ChatGPT backend (`authMode: "forward"`), whose Codex REST endpoint
@@ -1048,7 +1151,8 @@ function stripInputImagesDeep(value: unknown): unknown {
  */
 function buildRoutedCompactionBody(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, ...rest } = body;
+  // `text` goes with the tool fields: the summary must be prose, not schema-constrained JSON.
+  const { tools: _tools, tool_choice: _toolChoice, parallel_tool_calls: _parallel, text: _text, ...rest } = body;
   const input = Array.isArray(body.input) ? body.input : [];
   const kept = input.filter(item => !isPlainObject(item)
     // `additional_tools` is how Codex Desktop's responses-lite shape carries tools;
@@ -1110,29 +1214,38 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let url: string;
 
       if (provider.authMode === "forward") {
+        const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
         // OAuth passthrough: ChatGPT backend path is `${baseUrl}/responses` (no /v1).
-        url = `${provider.baseUrl}/responses`;
+        const baseUrl = mayForwardCallerCredentials
+          ? CODEX_FORWARD_BASE_URL
+          : provider.baseUrl.replace(/\/+$/, "");
+        url = `${baseUrl}/responses`;
         if (provider.headers) Object.assign(headers, provider.headers); // static headers first…
         const runtimeProvider = provider as {
           _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
           _codexAccountRequired?: boolean;
         };
-        if (runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
+        if (
+          mayForwardCallerCredentials
+          && runtimeProvider._codexAccountRequired
+          && !runtimeProvider._codexAccountOverride
+        ) {
           throw new Error("Codex pool account auth is required but unavailable");
         }
-        for (const h of FORWARD_HEADERS) {
-          const v = incoming?.headers.get(h);
-          if (v) headers[h] = v;                                        // …so forwarded auth always wins.
+        if (mayForwardCallerCredentials) {
+          for (const h of FORWARD_HEADERS) {
+            const v = incoming?.headers.get(h);
+            if (v) headers[h] = v;                                      // …so forwarded auth always wins.
+          }
         }
         const override = runtimeProvider._codexAccountOverride;
-        if (override) {
+        if (override && mayForwardCallerCredentials) {
           headers["authorization"] = `Bearer ${override.accessToken}`;
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
       } else {
         if (provider.responsesPath === undefined) {
-          const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-          url = `${base}/v1/responses`;
+          url = openaiResponsesUrl(provider.baseUrl);
         } else {
           const base = provider.baseUrl.replace(/\/$/, "");
           url = `${base}${provider.responsesPath}`;
@@ -1156,6 +1269,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // reaches the wire is unparseable.
       if (forward || stateless) {
         outBody = repairOrphanedInputItems(outBody, unexpandedMiss);
+      }
+      if (provider.requiresAdjacentResponsesToolResults === true) {
+        outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
         outBody = stripUnsupportedForwardParams(outBody);
@@ -1181,6 +1297,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       // rewrite while the server still routes it as a summarizer turn (#422).
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
+      }
+      if (provider.authMode !== "forward") {
+        outBody = rewriteRoutedCustomToolsForUpstream(outBody).body;
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(

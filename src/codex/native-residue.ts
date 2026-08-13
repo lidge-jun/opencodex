@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  readSync,
+  statSync,
+} from "node:fs";
 import type { Stats } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -20,6 +30,7 @@ import {
   DEFAULT_CATALOG_PATH,
   getCodexHome,
   readRootTomlString,
+  resolveCodexStateDbPath,
 } from "./paths";
 
 export type NativeResidueSurface =
@@ -67,8 +78,9 @@ const PROFILE_FILE_NAME = basename(CODEX_PROFILE_PATH);
 const CATALOG_FILE_NAME = basename(DEFAULT_CATALOG_PATH);
 const MODELS_CACHE_FILE_NAME = basename(CODEX_MODELS_CACHE_PATH);
 const JOURNAL_FILE_NAME = "opencodex-journal.json";
-const HISTORY_DATABASE_FILE_NAME = "state_5.sqlite";
 const ROUTED_CATALOG_DESCRIPTION_PREFIX = "Routed via opencodex → ";
+const MAX_ROLLOUT_INSPECTION_BYTES = 64 * 1024 * 1024;
+const ROLLOUT_READ_CHUNK_BYTES = 64 * 1024;
 
 function errorCode(error: unknown): string | undefined {
   return (error as NodeJS.ErrnoException | undefined)?.code;
@@ -139,6 +151,53 @@ function indeterminate(
   reason: string,
 ): NativeRoutedResidueResult {
   return { kind: "indeterminate", surface, path, reason };
+}
+
+function rolloutSessionMetaPayload(
+  line: string,
+): { kind: "payload"; payload: Record<string, unknown> | null } | { kind: "malformed"; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch (error) {
+    return { kind: "malformed", reason: `malformed rollout JSONL: ${errorReason(error)}` };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "malformed", reason: "rollout JSONL record is not an object" };
+  }
+  const record = parsed as Record<string, unknown>;
+  if (record.type !== "session_meta") return { kind: "payload", payload: null };
+  if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
+    return { kind: "malformed", reason: "session_meta payload has an unknown shape" };
+  }
+  return { kind: "payload", payload: record.payload as Record<string, unknown> };
+}
+
+function consumeRolloutLines(
+  surface: "history" | "history-backup",
+  path: string,
+  partial: string,
+  first: Record<string, unknown> | undefined,
+  latest: Record<string, unknown> | undefined,
+): NativeRoutedResidueResult | { kind: "continue"; partial: string; first: Record<string, unknown> | undefined; latest: Record<string, unknown> | undefined } {
+  let rest = partial;
+  let newline = rest.indexOf("\n");
+  while (newline !== -1) {
+    const line = rest.slice(0, newline);
+    rest = rest.slice(newline + 1);
+    if (line.trim()) {
+      const payload = rolloutSessionMetaPayload(line);
+      if (payload.kind === "malformed") {
+        return indeterminate(surface, path, payload.reason);
+      }
+      if (payload.payload !== null) {
+        first ??= payload.payload;
+        latest = payload.payload;
+      }
+    }
+    newline = rest.indexOf("\n");
+  }
+  return { kind: "continue", partial: rest, first, latest };
 }
 
 function classifyToml(
@@ -358,50 +417,104 @@ function classifyReferencedRollout(
   surface: "history" | "history-backup",
   reference: RolloutReference,
 ): NativeRoutedResidueResult {
-  const read = readRegularFile(reference.path);
-  if (read.kind === "absent") {
+  const resolved = resolveRegularFile(reference.path);
+  if (resolved.kind === "absent") {
     return indeterminate(surface, reference.path, "referenced rollout is absent");
   }
-  if (read.kind === "indeterminate") return indeterminate(surface, reference.path, read.reason);
+  if (resolved.kind === "indeterminate") return indeterminate(surface, reference.path, resolved.reason);
+
+  let handle: number;
+  try {
+    handle = openSync(resolved.path, "r");
+  } catch (error) {
+    return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
+  }
 
   let first: Record<string, unknown> | undefined;
   let latest: Record<string, unknown> | undefined;
-  for (const line of read.content.split("\n")) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
+  let partial = "";
+  let totalRead = 0;
+  try {
+    const opened = fstatSync(handle);
+    if (opened.size > MAX_ROLLOUT_INSPECTION_BYTES) {
+      return indeterminate(
+        surface,
+        resolved.path,
+        `referenced rollout exceeds the ${MAX_ROLLOUT_INSPECTION_BYTES} byte inspection limit`,
+      );
+    }
+    const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+    const buffer = Buffer.allocUnsafe(ROLLOUT_READ_CHUNK_BYTES);
+    while (totalRead < opened.size) {
+      const remaining = Math.min(buffer.length, opened.size - totalRead);
+      const count = readSync(handle, buffer, 0, remaining, totalRead);
+      if (count === 0) {
+        return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
+      }
+      if (count < 0) {
+        return indeterminate(surface, resolved.path, "rollout read ended before the observed size");
+      }
+      totalRead += count;
+      partial += decoder.decode(buffer.subarray(0, count), { stream: true });
+      const consumed = consumeRolloutLines(surface, resolved.path, partial, first, latest);
+      if (consumed.kind !== "continue") return consumed;
+      partial = consumed.partial;
+      first = consumed.first;
+      latest = consumed.latest;
+    }
+    partial += decoder.decode();
+    const consumed = consumeRolloutLines(surface, resolved.path, partial, first, latest);
+    if (consumed.kind !== "continue") return consumed;
+    partial = consumed.partial;
+    first = consumed.first;
+    latest = consumed.latest;
+    if (partial.trim()) {
+      const payload = rolloutSessionMetaPayload(partial);
+      if (payload.kind === "malformed") {
+        return indeterminate(surface, resolved.path, payload.reason);
+      }
+      if (payload.payload !== null) {
+        first ??= payload.payload;
+        latest = payload.payload;
+      }
+    }
+    const after = fstatSync(handle);
+    if (!sameStat(resolved.stat, after)) {
+      return indeterminate(surface, resolved.path, "rollout changed while it was being observed");
+    }
+    const pathAfter = statSync(resolved.path);
+    if (!sameStat(resolved.stat, pathAfter)) {
+      return indeterminate(surface, resolved.path, "rollout pathname was replaced while it was being observed");
+    }
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") {
+      return indeterminate(surface, resolved.path, "referenced rollout is absent");
+    }
+    return indeterminate(surface, resolved.path, `unreadable rollout: ${errorReason(error)}`);
+  } finally {
     try {
-      parsed = JSON.parse(line);
-    } catch (error) {
-      return indeterminate(surface, read.path, `malformed rollout JSONL: ${errorReason(error)}`);
+      closeSync(handle);
+    } catch {
+      // Closing an already-closed descriptor cannot affect the classification.
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return indeterminate(surface, read.path, "rollout JSONL record is not an object");
-    }
-    const record = parsed as Record<string, unknown>;
-    if (record.type !== "session_meta") continue;
-    if (!record.payload || typeof record.payload !== "object" || Array.isArray(record.payload)) {
-      return indeterminate(surface, read.path, "session_meta payload has an unknown shape");
-    }
-    const payload = record.payload as Record<string, unknown>;
-    first ??= payload;
-    latest = payload;
   }
 
   if (!first || !latest) {
-    return indeterminate(surface, read.path, "referenced rollout has no session_meta metadata");
+    return indeterminate(surface, resolved.path, "referenced rollout has no session_meta metadata");
   }
+  let hasOpenCodexProvider = false;
   for (const [position, payload] of [["first", first], ["latest", latest]] as const) {
     if (payload.id !== reference.id) {
-      return indeterminate(surface, read.path, `${position} session_meta does not identify the referenced thread`);
+      return indeterminate(surface, resolved.path, `${position} session_meta does not identify the referenced thread`);
     }
     if (typeof payload.model_provider !== "string" || !payload.model_provider) {
-      return indeterminate(surface, read.path, `${position} session_meta has no provider metadata`);
+      return indeterminate(surface, resolved.path, `${position} session_meta has no provider metadata`);
     }
-    if (payload.model_provider === "opencodex") {
-      return { kind: "residue", surface, path: read.path };
-    }
+    hasOpenCodexProvider = hasOpenCodexProvider || payload.model_provider === "opencodex";
   }
-  return { kind: "clean" };
+  return hasOpenCodexProvider
+    ? { kind: "residue", surface, path: resolved.path }
+    : { kind: "clean" };
 }
 
 function classifyReferencedRollouts(
@@ -527,8 +640,20 @@ export function classifyNativeRoutedResidue(): NativeRoutedResidueResult {
     return indeterminate("partial-write", unresolved, `CODEX_HOME cannot be resolved: ${errorReason(error)}`);
   }
 
-  const stateDatabasePath = join(codexHome, HISTORY_DATABASE_FILE_NAME);
   const configPath = join(codexHome, CONFIG_FILE_NAME);
+  let stateDatabasePath: string;
+  try {
+    stateDatabasePath = resolveCodexStateDbPath({ codexHome });
+  } catch (error) {
+    // Residue classification is a total, read-only safety boundary. An
+    // indeterminate SQLite authority must refuse coordination without escaping
+    // as an exception or falling through to a different state database.
+    return indeterminate(
+      "config",
+      configPath,
+      `SQLite home cannot be resolved: ${errorReason(error)}`,
+    );
+  }
   const profilePath = join(codexHome, PROFILE_FILE_NAME);
   const modelsCachePath = join(codexHome, MODELS_CACHE_FILE_NAME);
   const journalPath = join(codexHome, JOURNAL_FILE_NAME);

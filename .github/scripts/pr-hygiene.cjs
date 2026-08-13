@@ -1,5 +1,7 @@
 "use strict";
 
+const { assessSponsoredSurface } = require("./pr-sponsored-surface.cjs");
+
 const GENERATED_PREFIXES = [
   "gui/dist/",
   "dist/",
@@ -218,9 +220,76 @@ function assessHygiene({ files = [], labels = [] }) {
   return failures;
 }
 
+/**
+ * Human-readable one-liners for each deterministic hygiene failure code.
+ * Shared by the hygiene workflow comment and the PR quality gate actions.
+ */
+const HYGIENE_FAILURE_HINTS = {
+  missing_regression_test:
+    "Behavior changed under `src/` or `gui/src/` without a test change. Add focused coverage or obtain `test-exception-approved`.",
+  generated_output:
+    "Generated build output is committed. Remove it or obtain `generated-change-approved`.",
+  orphan_lockfile:
+    "`bun.lock` changed without `package.json`. Revert accidental churn or obtain `dependency-change-approved`.",
+  new_suppression:
+    "A new TypeScript, lint, formatter, or similar suppression was added. Fix the underlying issue or obtain `suppression-approved`.",
+  focused_or_skipped_test:
+    "A focused or skipped test was added. Restore the complete suite or obtain `test-exception-approved`.",
+  empty_catch:
+    "An empty catch block was added. Handle, report, or deliberately propagate the error.",
+  unsponsored_surface:
+    "This changes an authentication, workflow, release-automation, or dependency surface. `MAINTAINERS.md` requires security review for these; ask a maintainer to apply `maintainer-sponsored` once they have reviewed it.",
+};
+
+/**
+ * Labels that can clear or reinstate a hygiene failure. The quality gate must
+ * wake on these so READY / DRAFT tracks sponsorship and exception approvals
+ * without waiting for an unrelated synchronize.
+ */
+const HYGIENE_GATE_LABELS = [
+  "intake: hygiene-blocked",
+  "maintainer-sponsored",
+  "test-exception-approved",
+  "suppression-approved",
+  "generated-change-approved",
+  "dependency-change-approved",
+];
+
+/**
+ * Combine patch-hygiene and sponsored-surface failures into one list so the
+ * hygiene workflow and the PR quality gate cannot disagree about Ready.
+ */
+function collectDeterministicHygieneFailures({
+  files = [],
+  labels = [],
+  authorHasPushPermission = false,
+}) {
+  // Renames must keep the source path: moving a restricted file to a
+  // non-restricted destination must not drop the sponsorship requirement.
+  const changedFiles = [
+    ...new Set(
+      files.flatMap((file) => [
+        file.filename,
+        ...(file.previous_filename ? [file.previous_filename] : []),
+      ]),
+    ),
+  ];
+  return [
+    ...assessHygiene({ files, labels }),
+    ...assessSponsoredSurface({
+      authorHasPushPermission,
+      changedFiles,
+      labels,
+    }),
+  ];
+}
+
 module.exports = {
   addedLines,
   assessHygiene,
+  collectDeterministicHygieneFailures,
+  HYGIENE_FAILURE_HINTS,
+  HYGIENE_GATE_LABELS,
   hasEmptyCatch,
   hasDeletions,
   isBehaviorPath,

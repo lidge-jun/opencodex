@@ -18,6 +18,7 @@ import {
 import { loadConfig, saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
+import { handleSearch, SEARCH_RESPONSE_MAX_BYTES } from "../src/server/search";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -449,6 +450,181 @@ test("relays search upstream error status and body verbatim", async () => {
     await server.stop(true);
     await upstream.stop(true);
   }
+});
+
+test("relays arbitrary search response bytes and content type verbatim", async () => {
+  const payload = new Uint8Array([0x00, 0xff, 0x80, 0xc3, 0x28]);
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(payload, { status: 418, headers: { "content-type": "application/octet-stream" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    });
+    expect(response.status).toBe(418);
+    expect(response.headers.get("content-type")).toContain("application/octet-stream");
+    expect(Array.from(new Uint8Array(await response.arrayBuffer()))).toEqual(Array.from(payload));
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("cancels an oversized streaming search response without draining the stream", async () => {
+  const cap = SEARCH_RESPONSE_MAX_BYTES;
+  let upstreamCanceled = false;
+  let tailPulled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname !== "chatgpt.com") return originalFetch(input, init);
+    const chunks = [
+      new Uint8Array(cap),
+      new Uint8Array([0x01]),
+      new Uint8Array([0x7f]),
+      new Uint8Array([0x7e]),
+    ];
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (!chunk) return controller.close();
+        if (chunk.byteLength === 1 && chunk[0] === 0x7e) tailPulled = true;
+        controller.enqueue(chunk);
+      },
+      cancel() { upstreamCanceled = true; },
+    }), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  saveConfig(forwardConfig());
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    });
+    expect(response.status).toBe(502);
+    expect(((await response.json()) as { error: { message: string } }).error.message)
+      .toContain("search response too large");
+    expect(upstreamCanceled).toBe(true);
+    // WHATWG streams may prefetch one queued chunk, but cancellation must stop further draining.
+    expect(tailPulled).toBe(false);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("a search body that stalls after headers retains the total 504 deadline", async () => {
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(new ReadableStream<Uint8Array>({
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({ ...forwardConfig(), search: { timeoutMs: 50 } } as OcxConfig);
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+      body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    });
+    expect(response.status).toBe(504);
+    expect(((await response.json()) as { error: { message: string } }).error.message).toContain("timed out");
+    expect(upstreamCanceled).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+}, 5_000);
+
+test("a client abort during search body reading maps to 499 and cancels upstream", async () => {
+  let markBodyStarted: (() => void) | undefined;
+  const bodyStarted = new Promise<void>(resolve => { markBodyStarted = resolve; });
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      return new Response(new ReadableStream<Uint8Array>({
+        pull() { markBodyStarted?.(); },
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const parent = new AbortController();
+  const request = new Request("http://127.0.0.1/v1/alpha/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      "chatgpt-account-id": "acct-123",
+    },
+    body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    signal: parent.signal,
+  });
+  const reading = handleSearch(request, forwardConfig(), { model: "", provider: "" });
+  await bodyStarted;
+  parent.abort(new Error("client stopped"));
+
+  const response = await reading;
+  expect(response.status).toBe(499);
+  expect(upstreamCanceled).toBe(true);
+});
+
+test("a client abort before the search reader attaches cancels the untouched upstream body", async () => {
+  const parent = new AbortController();
+  let upstreamCanceled = false;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    if (new URL(requestUrl).hostname === "chatgpt.com") {
+      const response = new Response(new ReadableStream<Uint8Array>({
+        cancel() { upstreamCanceled = true; },
+      }), { headers: { "content-type": "application/json" } });
+      parent.abort(new Error("client stopped before body read"));
+      return response;
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const request = new Request("http://127.0.0.1/v1/alpha/search", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+      "chatgpt-account-id": "acct-123",
+    },
+    body: JSON.stringify({ id: "search-session", model: "gpt-test" }),
+    signal: parent.signal,
+  });
+
+  const response = await handleSearch(request, forwardConfig(), { model: "", provider: "" });
+  expect(response.status).toBe(499);
+  expect(upstreamCanceled).toBe(true);
 });
 
 test("a hung search upstream times out with 504 after config.search.timeoutMs", async () => {

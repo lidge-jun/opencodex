@@ -1,35 +1,49 @@
-import http, { type IncomingMessage, type RequestOptions } from "node:http";
+import http, { type ClientRequest, type IncomingMessage, type RequestOptions } from "node:http";
 import https from "node:https";
 
 export type PinnedAddress = { address: string; family: number };
 
-export interface PinnedHttpGetOptions {
+export type PinnedHttpErrorCode = "connect_timeout";
+
+export class PinnedHttpError extends Error {
+  override readonly name = "PinnedHttpError";
+  constructor(readonly code: PinnedHttpErrorCode, message: string) { super(message); }
+}
+
+export interface PinnedHttpRequestOptions {
   headers?: HeadersInit;
   maxBytes?: number;
+  /** Optional deadline for establishing the TCP connection and, for HTTPS, completing TLS. */
+  connectTimeoutMs?: number;
   idleTimeoutMs?: number;
   rejectUnauthorized?: boolean;
   context?: string;
 }
 
-/**
- * GET a URL through one previously validated address. The original hostname
- * remains authoritative for Host, SNI, and certificate verification.
- */
-export function pinnedHttpGet(
+/** @deprecated Use {@link PinnedHttpRequestOptions}. */
+export type PinnedHttpGetOptions = PinnedHttpRequestOptions;
+
+function pinnedHttpRequest(
   url: string,
   pinned: PinnedAddress,
+  method: "GET" | "POST",
+  body: string | undefined,
   signal?: AbortSignal,
-  options?: PinnedHttpGetOptions,
+  options?: PinnedHttpRequestOptions,
 ): Promise<Response> {
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`${options?.context ?? "request"} must use HTTP or HTTPS, got ${parsed.protocol}`);
   }
   const context = options?.context ?? "request";
+  const connectTimeoutMs = options?.connectTimeoutMs;
   const idleTimeoutMs = options?.idleTimeoutMs ?? 60_000;
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
+  if (body !== undefined && !headers.has("content-length")) {
+    headers.set("content-length", String(Buffer.byteLength(body)));
+  }
   const requestHeaders: Record<string, string> = {};
   headers.forEach((value, key) => { requestHeaders[key] = value; });
 
@@ -40,8 +54,15 @@ export function pinnedHttpGet(
     }
 
     let settled = false;
+    let req: ClientRequest | undefined;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearConnectTimer = () => {
+      if (connectTimer !== undefined) clearTimeout(connectTimer);
+      connectTimer = undefined;
+    };
     const fail = (error: unknown) => {
-      try { req.destroy(); } catch { /* ignore */ }
+      clearConnectTimer();
+      try { req?.destroy(); } catch { /* ignore */ }
       if (settled) return;
       settled = true;
       reject(error instanceof Error ? error : new Error(String(error)));
@@ -51,7 +72,7 @@ export function pinnedHttpGet(
       hostname: parsed.hostname,
       port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
       path: `${parsed.pathname}${parsed.search}`,
-      method: "GET",
+      method,
       headers: requestHeaders,
       ...(parsed.protocol === "https:"
         ? {
@@ -79,6 +100,7 @@ export function pinnedHttpGet(
     };
 
     const onResponse = (response: IncomingMessage) => {
+      clearConnectTimer();
       const status = response.statusCode ?? 0;
       const responseHeaders = new Headers();
       for (const [key, value] of Object.entries(response.headers)) {
@@ -92,7 +114,7 @@ export function pinnedHttpGet(
 
       if (status < 200 || status >= 300) {
         try { response.destroy(); } catch { /* ignore */ }
-        try { req.destroy(); } catch { /* ignore */ }
+        try { req?.destroy(); } catch { /* ignore */ }
         if (settled) return;
         settled = true;
         resolve(new Response(null, { status, headers: responseHeaders }));
@@ -127,7 +149,7 @@ export function pinnedHttpGet(
           });
         },
         cancel() {
-          req.destroy();
+          req?.destroy();
         },
       });
 
@@ -137,15 +159,53 @@ export function pinnedHttpGet(
     };
 
     const requestFn = parsed.protocol === "https:" ? https.request : http.request;
-    const req = requestFn(requestOptions, onResponse);
+    req = requestFn(requestOptions, onResponse);
     const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
     signal?.addEventListener("abort", onAbort, { once: true });
+    req.on("socket", (socket) => {
+      if (!socket.connecting || connectTimeoutMs === undefined) return;
+      const connectedEvent = parsed.protocol === "https:" ? "secureConnect" : "connect";
+      connectTimer = setTimeout(() => fail(new PinnedHttpError("connect_timeout", `${context} connect timed out`)), connectTimeoutMs);
+      socket.once(connectedEvent, clearConnectTimer);
+      socket.once("error", clearConnectTimer);
+      socket.once("close", clearConnectTimer);
+    });
     req.setTimeout(idleTimeoutMs, () => fail(new Error(`${context} timed out`)));
     req.on("error", error => {
       signal?.removeEventListener("abort", onAbort);
       fail(error);
     });
-    req.on("close", () => signal?.removeEventListener("abort", onAbort));
-    req.end();
+    req.on("close", () => {
+      clearConnectTimer();
+      signal?.removeEventListener("abort", onAbort);
+    });
+    req.end(body);
   });
+}
+
+/**
+ * GET a URL through one previously validated address. The original hostname
+ * remains authoritative for Host, SNI, and certificate verification.
+ */
+export function pinnedHttpGet(
+  url: string,
+  pinned: PinnedAddress,
+  signal?: AbortSignal,
+  options?: PinnedHttpRequestOptions,
+): Promise<Response> {
+  return pinnedHttpRequest(url, pinned, "GET", undefined, signal, options);
+}
+
+/**
+ * POST a string body through one previously validated address. The original
+ * hostname remains authoritative for Host, SNI, and certificate verification.
+ */
+export function pinnedHttpPost(
+  url: string,
+  pinned: PinnedAddress,
+  body: string,
+  signal?: AbortSignal,
+  options?: PinnedHttpRequestOptions,
+): Promise<Response> {
+  return pinnedHttpRequest(url, pinned, "POST", body, signal, options);
 }

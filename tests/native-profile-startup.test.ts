@@ -30,6 +30,7 @@ import type {
 } from "../src/codex/native-profile-types";
 import type { OcxConfig } from "../src/types";
 import {
+  blockNativeMainStartupForUnownedServiceHome,
   initializeNativeMainStartupGate,
   isNativeMainTrafficBlocked,
   nativeMainStartupGateSnapshot,
@@ -286,6 +287,48 @@ const recoverable: Array<{ phase: Phase; observation: Observation; active: "sour
 ];
 
 describe("native-main startup journal gate", () => {
+  test("unowned service homes close native-main admission without starting ownership", async () => {
+    const foreign = blockNativeMainStartupForUnownedServiceHome("foreign-ownership");
+    const unknown = blockNativeMainStartupForUnownedServiceHome("ownership-unknown");
+    try {
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "foreign-ownership",
+      });
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      expect(tryClaimNativeMainProfileForTurn()).toBe(false);
+      expect(tryAcquireNativeMainProfileClaim()).toBeNull();
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+
+      expect(await initializeNativeMainStartupGate({
+        manager: { context: { homeId: "competing-owned-home" } } as unknown as NativeProfileManager,
+        probeRecoveryState: () => "none",
+      })).toEqual({ status: "ready", homeId: "competing-owned-home" });
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "foreign-ownership",
+      });
+
+      await foreign.release();
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      expect(nativeMainStartupGateSnapshot()).toEqual({
+        status: "blocked",
+        homeId: null,
+        reason: "ownership-unknown",
+      });
+      await foreign.release();
+      expect(isNativeMainTrafficBlocked()).toBe(true);
+      await unknown.release();
+      expect(isNativeMainTrafficBlocked()).toBe(false);
+      expect(nativeMainStartupGateSnapshot()).toEqual({ status: "ready", homeId: "competing-owned-home" });
+    } finally {
+      await foreign.release();
+      await unknown.release();
+    }
+  });
+
   test("combined turn and standalone claims reject retained recovery before native-main reads", async () => {
     const homeId = "home-combined-admission";
     resetLifecycleDrainStateForTests();

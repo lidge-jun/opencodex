@@ -3,7 +3,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 
 const NOW = 1_800_000_000_000;
 const account = (
-  plan: string | null,
+  plan: unknown,
   weeklyPercent: number | undefined,
   options: Partial<CodexCapacityAccount> & { weeklyResetAt?: number; monthlyPercent?: number; monthlyResetAt?: number } = {},
 ): CodexCapacityAccount => ({
@@ -44,6 +44,34 @@ describe("configured-weight Codex pool capacity", () => {
     expect(aggregateCodexPoolCapacity(rows(9), NOW).quota?.weeklyPercent).toBeCloseTo(39.33333333, 8);
   });
 
+  test("legacy Team and Business plans share configured weight", () => {
+    const result = aggregateCodexPoolCapacity([
+      account("team", 20, { isMain: true, active: true }),
+      account("business", 60),
+    ], NOW);
+    expect(result.quota?.weeklyPercent).toBe(40);
+    expect(result.aggregation).toMatchObject({
+      includedAccounts: 2,
+      excludedAccounts: 0,
+      unknownPlanAccounts: 0,
+      incomplete: false,
+    });
+  });
+
+  test("an all-Team pool has complete configured-weight coverage", () => {
+    const result = aggregateCodexPoolCapacity([
+      account("team", 20, { isMain: true, active: true }),
+      account("team", 60),
+    ], NOW);
+    expect(result.quota?.weeklyPercent).toBe(40);
+    expect(result.aggregation).toMatchObject({
+      includedAccounts: 2,
+      excludedAccounts: 0,
+      unknownPlanAccounts: 0,
+      incomplete: false,
+    });
+  });
+
   test("same-time resets group partial consumed capacity and expose only recovery percent", () => {
     const result = aggregateCodexPoolCapacity([
       account("pro", 25, { weeklyResetAt: NOW + 10_000 }),
@@ -66,7 +94,7 @@ describe("configured-weight Codex pool capacity", () => {
   test("unknown, missing, paused, and reauth rows are excluded with incomplete coverage", () => {
     const result = aggregateCodexPoolCapacity([
       account("pro", 10, { active: true, isMain: true }),
-      account("team", 50),
+      account("future-plan", 50),
       account("plus", undefined),
       account("prolite", 20, { paused: true }),
       account("business", 30, { needsReauth: true }),
@@ -109,7 +137,7 @@ describe("configured-weight Codex pool capacity", () => {
     ], NOW);
     expect(expired.aggregation?.weekly).not.toHaveProperty("nextRecoveryAt");
     const fallback = aggregateCodexPoolCapacity([
-      account("team", 70, { active: true, isMain: true }),
+      account("future-plan", 70, { active: true, isMain: true }),
       account("go", 80),
     ], NOW);
     expect(fallback.aggregation).toMatchObject({
@@ -179,6 +207,16 @@ describe("configured-weight Codex pool capacity", () => {
     expect(Number.isFinite(result.quota?.weeklyPercent)).toBe(true);
   });
 
+  test("non-string plans are excluded and never exposed in current-account metadata", () => {
+    const result = aggregateCodexPoolCapacity([
+      account({ tier: "pro" }, 20, { active: true, isMain: true }),
+    ], NOW);
+    expect(result.quota).toBeNull();
+    expect(result.aggregation).toMatchObject({ unknownPlanAccounts: 1, includedAccounts: 0 });
+    expect(result.aggregation?.currentAccount).not.toHaveProperty("plan");
+    expect(result.aggregation?.currentAccount?.quota?.weeklyPercent).toBe(20);
+  });
+
   test("all-stale rows expose incomplete coverage without an aggregate window", () => {
     const rows = [account("pro", 80, { active: true, isMain: true }), account("prolite", 20)];
     for (const row of rows) {
@@ -199,7 +237,7 @@ describe("configured-weight Codex pool capacity", () => {
     const stale = account("pro", 90);
     stale.quota = { ...stale.quota!, updatedAt: NOW - CODEX_CAPACITY_MAX_QUOTA_AGE_MS - 1 };
     const result = aggregateCodexPoolCapacity([
-      account("team", 10, { active: true, isMain: true }),
+      account("future-plan", 10, { active: true, isMain: true }),
       account("plus", undefined),
       account("prolite", 20, { paused: true }),
       account("business", 30, { needsReauth: true }),

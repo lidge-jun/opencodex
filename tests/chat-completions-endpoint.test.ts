@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
-import type { OcxConfig } from "../src/types";
+import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
+import type { OcxConfig, OcxProviderConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { chatCompletionsToResponsesBody, ChatCompletionsRequestError } from "../src/chat/inbound";
 import { chatCompletionsUsage } from "../src/chat/outbound";
@@ -136,12 +137,18 @@ function mockDualWireUpstream() {
   return { server, captured };
 }
 
-function mockConfig(baseUrl: string): OcxConfig {
+function mockConfig(baseUrl: string, providerOverrides: Partial<OcxProviderConfig> = {}): OcxConfig {
   return {
     port: 0,
     defaultProvider: "mock",
     providers: {
-      mock: { adapter: "openai-chat", baseUrl, apiKey: "k", allowPrivateNetwork: true },
+      mock: {
+        adapter: "openai-chat",
+        baseUrl,
+        apiKey: "k",
+        allowPrivateNetwork: true,
+        ...providerOverrides,
+      },
     },
   } as OcxConfig;
 }
@@ -379,6 +386,60 @@ test("invalid chat completions body returns OpenAI-style 400", async () => {
   }
 });
 
+test("large image chat-completions request remains within its bounded replay budget", async () => {
+  const upstream = mockChatUpstream();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{
+          role: "user",
+          content: [{
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${"a".repeat(25 * 1024 * 1024)}` },
+          }],
+        }],
+      }),
+    });
+    expect(response.status).toBe(200);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("chat-completions replay copy overflow returns JSON 413", async () => {
+  // The serialized replay body is the one retained request copy. A payload above
+  // the 32 MiB turn limit must remain a structured client error.
+  saveConfig(mockConfig("http://127.0.0.1:1/v1"));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: false,
+        messages: [{ role: "user", content: "x".repeat(33 * 1024 * 1024) }],
+      }),
+    });
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type") ?? "").toContain("application/json");
+    const json = await response.json() as { error?: { message?: string; type?: string; code?: string } };
+    expect(json.error).toMatchObject({
+      message: "request translation buffer exceeded the safe limit",
+      type: "request_too_large",
+      code: "translation_buffer_limit",
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
 
 test("chatCompletionsToResponsesBody maps response_format and rejects unknown types", () => {
   const jsonObject = chatCompletionsToResponsesBody({
@@ -467,8 +528,8 @@ test("responsesSseToChatCompletionsSse delivers the first frame before a macrota
   await reader.cancel();
 });
 
-test("POST /v1/chat/completions rejects response_format for routed openai-chat", async () => {
-  const upstream = mockChatUpstream();
+test("POST /v1/chat/completions forwards response_format to routed openai-chat", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
   const server = startServer(0);
   try {
@@ -477,15 +538,101 @@ test("POST /v1/chat/completions rejects response_format for routed openai-chat",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock/test-model",
-        stream: false,
+        stream: true,
         messages: [{ role: "user", content: "hi" }],
-        response_format: { type: "json_object" },
+        response_format: { type: "json_schema", json_schema: { name: "answer", schema: { type: "object" }, strict: true } },
       }),
     });
-    expect(response.status).toBe(400);
-    const json = await response.json() as { error: { message: string; type: string } };
-    expect(json.error.message).toContain("response_format");
-    expect(json.error.type).toBe("invalid_request_error");
+    expect(response.status).toBe(200);
+    await response.text();
+    // Round trip: chat nested -> internal flat text.format -> re-nested on the wire, byte-identical.
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/responses carries text.format onto the routed chat wire", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        text: { format: { type: "json_schema", name: "answer", schema: { type: "object" }, strict: true } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "answer", schema: { type: "object" }, strict: true },
+    });
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/chat/completions honors the per-model response_format opt-out", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    noStructuredOutputModels: ["test-model"],
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+        response_format: { type: "json_schema", json_schema: { name: "answer", schema: { type: "object" } } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.response_format).toBeUndefined();
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("POST /v1/responses honors the per-model response_format opt-out", async () => {
+  const { server: upstream, captured } = mockChatUpstreamCapturing();
+  saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    noStructuredOutputModels: ["test-model"],
+  }));
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock/test-model",
+        stream: true,
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        text: { format: { type: "json_schema", name: "answer", schema: { type: "object" } } },
+      }),
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.response_format).toBeUndefined();
   } finally {
     await server.stop(true);
     upstream.stop(true);
@@ -551,6 +698,12 @@ test("POST /v1/chat/completions direct mode forwards caller Authorization", asyn
   }
 });
 
+/**
+ * This case sandboxes CODEX_HOME, so the service installed on the developer's
+ * machine is not evidence about it. See tests/helpers/owned-service-home.ts.
+ */
+const inspectNativeCodexOwnership = ownedServiceHomeInspection("chat replay main-enrichment test");
+
 test("Chat replay owns optional main enrichment while routed work survives drain and recovery", async () => {
   resetLifecycleDrainStateForTests();
   writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
@@ -584,7 +737,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
     },
   });
   saveConfig(mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`));
-  let server = startServer(0);
+  let server = startServer(0, { inspectNativeCodexOwnership });
   await waitForNativeMainStartupGate();
   const request = () => fetch(new URL("/v1/chat/completions", server.url), {
     method: "POST",
@@ -643,7 +796,7 @@ test("Chat replay owns optional main enrichment while routed work survives drain
       activeCodexAccountId: "__main__",
       autoSwitchThreshold: 0,
     } as OcxConfig);
-    server = startServer(0);
+    server = startServer(0, { inspectNativeCodexOwnership });
     await waitForNativeMainStartupGate();
     recoveryHomeId = nativeMainStartupGateSnapshot().homeId ?? "chat-main-recovery-home";
     expect(blockNativeMainRecovery(recoveryHomeId, "manual")).toBe(true);
@@ -729,6 +882,80 @@ test("POST /v1/chat/completions finalizes native passthrough request logs", asyn
   } finally {
     await server.stop(true);
     upstream.stop(true);
+    globalThis.fetch = originalFetch;
+    clearRequestLogsForTests();
+  }
+});
+
+test("POST /v1/chat/completions logs native cyber terminals as 400 cyber_policy", async () => {
+  const { clearRequestLogsForTests, getRequestLogEntries } = await import("../src/server/request-log");
+  clearRequestLogsForTests();
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      return new Response([
+        "event: response.failed",
+        `data: ${JSON.stringify({
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { type: "invalid_request_error", code: "cyber_policy", message: "blocked" },
+          },
+        })}`,
+        "",
+        "",
+      ].join("\n"), { headers: { "Content-Type": "text/event-stream" } });
+    },
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+    const url = new URL(requestUrl);
+    const prefix = "/backend-api/codex";
+    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
+      return originalFetch(new URL(`${url.pathname.slice(prefix.length)}${url.search}`, upstream.url), init);
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+  saveConfig({
+    port: 0,
+    defaultProvider: "openai",
+    providers: {
+      openai: {
+        adapter: "openai-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward",
+        codexAccountMode: "direct",
+      },
+    },
+  } as OcxConfig);
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/chat/completions", server.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: ["Bear" + "er", "caller-direct-token"].join(" "),
+      },
+      body: JSON.stringify({
+        model: "gpt-test",
+        stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("blocked");
+    const entry = getRequestLogEntries().findLast(e => e.inboundProtocol === "chat");
+    expect(entry).toMatchObject({
+      status: 400,
+      errorCode: "cyber_policy",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      upstreamError: "blocked",
+    });
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
     globalThis.fetch = originalFetch;
     clearRequestLogsForTests();
   }

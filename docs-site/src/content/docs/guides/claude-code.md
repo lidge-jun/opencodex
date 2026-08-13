@@ -156,12 +156,16 @@ caching and billing identity stay fully native, and routed models keep working i
 via the picker aliases.
 
 **Header handling:** hop-by-hop headers plus `host`, `content-length`, `accept-encoding`,
-`x-opencodex-api-key`, and `origin` are stripped before forwarding. All other headers (including
-`anthropic-beta` and `anthropic-version`) pass through.
+`x-opencodex-api-key`, and `origin` are always stripped before forwarding. On a non-loopback bind,
+native passthrough also requires a valid proxy credential in `x-opencodex-api-key`; `Authorization`
+and `x-api-key` then belong only to Anthropic. A proxy admission secret found in either provider
+header is removed, while a genuine provider credential in the other header is preserved. Ambiguous
+comma-joined credential headers are not forwarded.
 
-The passthrough fires when **all four** conditions are met: `nativePassthrough` is not `false`;
-the model begins with `claude` or `anthropic`; the bearer or `x-api-key` starts with `sk-ant-`;
-and alias/model-map resolution returns the same model unchanged. This also means the
+The passthrough fires when all of these conditions are met: `nativePassthrough` is not `false`;
+the model begins with `claude` or `anthropic`; the bearer token or `x-api-key` starts with `sk-ant-`;
+alias/model-map resolution returns the same model unchanged; and, on a non-loopback bind, the
+dedicated proxy admission header is valid. This also means the
 "claude.ai connectors are disabled" warning no longer appears with `ocx claude`.
 
 Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
@@ -371,7 +375,7 @@ Claude Code's `/effort` setting is preserved across the adapter:
 | --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Effort passed directly (`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, above→`high` |
-| `thinking.type: "disabled"` | Reasoning parameters omitted entirely |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }`; summary omitted |
 
 The resolved value appears in the request log's **Reasoning effort** column.
 
@@ -389,7 +393,7 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | User `tool_result` | `function_call_output` (`is_error` → `[tool error]` prefix) |
 | `thinking` / `redacted_thinking` replay | Dropped |
 | Function tools | `{type: "function"}` (`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`, `none`→`none`, `any`→`required`, named function→`{type:"function",name}`, hosted WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

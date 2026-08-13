@@ -31,11 +31,20 @@
 
 import { existsSync, statSync } from "node:fs";
 import { env, platform } from "node:process";
+import {
+  resolveCurrentWindowsPrincipal,
+  resolveCurrentWindowsPrincipalAsync,
+  setSyntheticWindowsPrincipalForTests,
+} from "./windows-user-principal";
 
 const hardenedDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
-/** Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them. */
-const timedOutPaths = new Set<string>();
+/**
+ * Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them.
+ * `false` means one explicitly authorized recovery attempt remains; `true` means
+ * that attempt was consumed. Ordinary callers never consume it.
+ */
+const timedOutPaths = new Map<string, boolean>();
 
 /**
  * The memo value: `object:freshness` for a file a harden was actually attributed
@@ -212,6 +221,12 @@ export interface HardenOptions {
    * Must NOT be a parent directory — directory ACLs are not authoritative for new files.
    */
   timeoutMemoKey?: string;
+  /**
+   * Consume the one recovery attempt for a previously timed-out memo key.
+   * Only a caller that owns its own single-flight and bounded retry policy should
+   * set this. It never clears or bypasses an already-consumed timeout memo.
+   */
+  retryTimedOutOnce?: boolean;
 }
 
 /**
@@ -219,9 +234,23 @@ export interface HardenOptions {
  * timeout retry and the diagnostic verification pass (no per-attempt fresh budget:
  * loadConfig hardens dir+config+auth sequentially, so per-attempt budgets stack
  * into multi-minute startup stalls). Override with OPENCODEX_ACL_TIMEOUT_MS
- * (integer ms, clamped to [1000, 60000]; invalid values fall back to 5000).
+ * (integer ms, clamped to [1000, 60000]; invalid values fall back to 30000).
+ *
+ * The default was 5s until #1156. One envelope has to cover the whole sequence —
+ * `/grant:r`, `/inheritance:r`, `/remove:g`, plus the conditional `/findsid`
+ * verification — and on machines where icacls is slow (Defender real-time scanning,
+ * roaming profiles, a domain-controller round trip) 5s ran out mid-sequence. The
+ * harden then failed closed, the native-main owner published a permanent
+ * `unavailable`, and every native request returned 503 until restart. A slow start
+ * is recoverable; that is not.
+ *
+ * The cost is honest and worth stating: because loadConfig hardens three paths
+ * sequentially, the timeout-path worst case at load is ~90s, and the owner path
+ * (initial call + one recovery) is ~60.25s. Both require icacls to be
+ * pathologically slow on every call; a healthy machine finishes in milliseconds
+ * and sees no change. Operators who prefer the old bound can set the env override.
  */
-const HARDEN_DEADLINE_DEFAULT_MS = 5_000;
+const HARDEN_DEADLINE_DEFAULT_MS = 30_000;
 const HARDEN_DEADLINE_MIN_MS = 1_000;
 const HARDEN_DEADLINE_MAX_MS = 60_000;
 
@@ -312,9 +341,21 @@ export function setAsyncIcaclsRunnerForTests(runner: AsyncIcaclsRunner | null): 
   asyncIcaclsRunner = runner ?? defaultAsyncIcaclsRunner;
 }
 
-/** Test seam: force the platform gate (e.g. "win32") so CI on POSIX reaches the runner. */
+/**
+ * Test seam: force the platform gate (e.g. "win32") so CI on POSIX reaches the runner.
+ *
+ * Faking win32 on a host without System32 also has to supply a principal, or
+ * every forced-branch test would fail on the identity lookup instead of
+ * exercising icacls. The synthetic value is registered with the resolver, not
+ * chosen here, so a test that injects its own runner still wins.
+ */
+const SYNTHETIC_TEST_PRINCIPAL = "*S-1-5-21-1-2-3-1001";
+
 export function setPlatformForTests(value: string | null): void {
   platformOverride = value;
+  setSyntheticWindowsPrincipalForTests(
+    value === "win32" && platform !== "win32" ? SYNTHETIC_TEST_PRINCIPAL : null,
+  );
 }
 
 /** Test seam: injectable clock for deadline tests (no real sleeps). */
@@ -384,17 +425,26 @@ function icaclsError(step: string, result: IcaclsResult): NodeJS.ErrnoException 
 }
 
 /**
- * Return the current Windows username from the environment.
- * Falls back to USERDOMAIN\USERNAME if USERNAME alone is ambiguous.
- * The value is used directly in icacls arguments, so it must be present.
+ * The ACL principal is the effective token SID and nothing else.
+ *
+ * There is no name-shaped fallback here, and that absence is the fix for #1149
+ * rather than an omission. `USERDOMAIN\USERNAME` has the right shape but is not
+ * evidence of the current token's subject, and both variables are writable by
+ * the process that launched us. Granting Full Control to a wrong principal and
+ * then running `/inheritance:r` is destructive in both directions: another
+ * account can be left holding the secret, or the file can be left with no ACE
+ * the current user can use. When the SID cannot be resolved we decline.
+ *
+ * Non-Windows hosts that force this branch through `setPlatformForTests` get
+ * their principal from `setSyntheticWindowsPrincipalForTests`, which lives with
+ * the resolver so an injected runner can still take precedence over it.
  */
-function currentWindowsUser(): string | undefined {
-  const username = env["USERNAME"];
-  const domain = env["USERDOMAIN"];
-  if (!username) return undefined;
-  // USERDOMAIN is the machine/domain name; USERNAME is the account name.
-  // icacls accepts "DOMAIN\User" or just "User" for local accounts.
-  return domain ? `${domain}\\${username}` : username;
+function currentWindowsPrincipal(deadline: number): string {
+  return resolveCurrentWindowsPrincipal(deadline - nowFn());
+}
+
+async function currentWindowsPrincipalAsync(deadline: number): Promise<string> {
+  return resolveCurrentWindowsPrincipalAsync(deadline - nowFn());
 }
 
 /**
@@ -414,10 +464,7 @@ function grantAce(user: string, directory: boolean): string {
 }
 
 function runIcacls(targetPath: string, directory: boolean, deadline: number): void {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = currentWindowsPrincipal(deadline);
 
   // The deadline is owned by hardenEntry (total budget incl. retry + verification).
   const run = (step: string, args: string[]): IcaclsResult => {
@@ -434,7 +481,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
   // Step 1: grant current user full control BEFORE any destructive ACL change.
   // If this fails, inheritance is untouched and the writer keeps inherited access.
-  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
 
   // Step 2: disable inheritance and remove inherited ACEs. The explicit owner ACE
   // from step 1 survives this transition, so a later failure still leaves cleanup access.
@@ -463,10 +510,7 @@ function runIcacls(targetPath: string, directory: boolean, deadline: number): vo
 
 /** Async counterpart of runIcacls — same step order and timeout/error classification (#612). */
 async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: number): Promise<void> {
-  const user = currentWindowsUser();
-  if (!user) {
-    throw new Error("Cannot determine current Windows user for ACL hardening");
-  }
+  const principal = await currentWindowsPrincipalAsync(deadline);
 
   const run = async (step: string, args: string[]): Promise<IcaclsResult> => {
     const remaining = deadline - nowFn();
@@ -480,7 +524,7 @@ async function runIcaclsAsync(targetPath: string, directory: boolean, deadline: 
     if (!result.success) throw icaclsError(step, result);
   };
 
-  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(user, directory)]);
+  await runOrThrow("/grant:r", [targetPath, "/grant:r", grantAce(principal, directory)]);
   await runOrThrow("/inheritance:r", [targetPath, "/inheritance:r"]);
 
   const removal = await run("/remove:g", [targetPath, "/remove:g", ...BROAD_SIDS]);
@@ -514,6 +558,8 @@ function sanitizeDiagnostics(error: unknown): string {
       return `ACL hardening failed (${code}) — permission denied running icacls`;
     case "EICACLS":
       return "ACL hardening failed (EICACLS) — icacls command error; filesystem may not support per-user NTFS ACLs";
+    case "EACLIDENTITY":
+      return "ACL hardening failed (EACLIDENTITY) — the effective Windows account SID could not be resolved";
     default:
       return `ACL hardening failed${code ? ` (${code})` : ""} — filesystem may not support per-user NTFS ACLs`;
   }
@@ -522,6 +568,60 @@ function sanitizeDiagnostics(error: unknown): string {
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && "code" in error
     && String((error as NodeJS.ErrnoException).code) === "ETIMEDOUT";
+}
+
+/** Preserve only the bounded machine-readable cause on a sanitized public error. */
+function sanitizedAclError(diagnostics: string, cause: unknown): NodeJS.ErrnoException {
+  const error = new Error(diagnostics) as NodeJS.ErrnoException;
+  const code = cause && typeof cause === "object" && "code" in cause
+    ? String((cause as { code?: unknown }).code)
+    : "";
+  // EACLIDENTITY belongs here for the same reason as the rest: a caller that
+  // catches a required-mode failure has to tell "the SID could not be resolved"
+  // apart from "icacls stalled". Without it the code was dropped and only the
+  // message carried the cause, which no caller can branch on.
+  if (
+    code === "ETIMEDOUT" ||
+    code === "EICACLS" ||
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "EACLIDENTITY"
+  ) {
+    error.code = code;
+  }
+  return error;
+}
+
+function previousTimeoutError(retryConsumed: boolean): NodeJS.ErrnoException {
+  if (retryConsumed) {
+    const error = new Error(
+      "ACL hardening skipped — the previous timeout recovery was already consumed",
+    ) as NodeJS.ErrnoException;
+    error.code = "EACLRETRYEXHAUSTED";
+    return error;
+  }
+  return sanitizedAclError(
+    "ACL hardening skipped — previous attempt timed out",
+    Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+  );
+}
+
+/** Consume, but never reset, the single explicit recovery attempt for this key. */
+function timeoutMemoErrorIfBlocked(
+  memoKey: string,
+  opts: HardenOptions,
+): NodeJS.ErrnoException | null {
+  const retryConsumed = timedOutPaths.get(memoKey);
+  if (retryConsumed === undefined) return null;
+  if (opts.retryTimedOutOnce && retryConsumed === false) {
+    timedOutPaths.set(memoKey, true);
+    return null;
+  }
+  return previousTimeoutError(retryConsumed);
+}
+
+function recordTimeout(memoKey: string): void {
+  if (!timedOutPaths.has(memoKey)) timedOutPaths.set(memoKey, false);
 }
 
 /**
@@ -588,10 +688,10 @@ function hardenEntry(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -606,6 +706,7 @@ function hardenEntry(
         if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
         return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
       }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
       // A substitution is not a transient icacls stall; do not spend the retry on it.
@@ -617,14 +718,14 @@ function hardenEntry(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = describeAclStateAfterTimeout(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 
@@ -639,10 +740,10 @@ async function hardenEntryAsync(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
-  if (timedOutPaths.has(memoKey)) {
-    const diagnostics = "ACL hardening skipped — previous attempt timed out";
-    if (opts.required) throw new Error(diagnostics);
-    return { ok: false, diagnostics };
+  const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
+  if (timeoutMemoError) {
+    if (opts.required) throw timeoutMemoError;
+    return { ok: false, diagnostics: timeoutMemoError.message };
   }
 
   const deadline = nowFn() + resolveHardenDeadlineMs();
@@ -656,6 +757,7 @@ async function hardenEntryAsync(
         if (opts.required) throw new Error(SUBSTITUTED_DIAGNOSTIC);
         return { ok: false, diagnostics: SUBSTITUTED_DIAGNOSTIC };
       }
+      timedOutPaths.delete(memoKey);
       return { ok: true };
     } catch (err) {
       if (err instanceof Error && err.message === SUBSTITUTED_DIAGNOSTIC) throw err;
@@ -666,14 +768,14 @@ async function hardenEntryAsync(
 
   const diagnostics = sanitizeDiagnostics(lastErr);
   if (isTimeoutError(lastErr)) {
-    timedOutPaths.add(memoKey);
+    recordTimeout(memoKey);
     const state = await describeAclStateAfterTimeoutAsync(targetPath, deadline);
     const annotated = `${diagnostics}; ${state}`;
-    if (opts.required) throw new Error(annotated);
+    if (opts.required) throw sanitizedAclError(annotated, lastErr);
     console.warn(`[opencodex] ${annotated} — continuing without NTFS ACL harden`);
     return { ok: false, diagnostics: annotated };
   }
-  if (opts.required) throw new Error(diagnostics);
+  if (opts.required) throw sanitizedAclError(diagnostics, lastErr);
   return { ok: false, diagnostics };
 }
 

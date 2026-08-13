@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, win32 } from "node:path";
 import { expandUserPath, getConfigDir, loadConfig } from "../config";
 import { recordOwnedConfigPath } from "./config-ownership";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV, durableBunRuntime } from "./bun-runtime";
@@ -63,6 +63,11 @@ function currentCodexHomeAbsolute(): string {
   return raw ? resolve(expandUserPath(raw)) : join(homedir(), ".codex");
 }
 
+function windowsServicePathAbsolute(raw: string): string {
+  const expanded = expandUserPath(raw);
+  return win32.isAbsolute(expanded) ? win32.normalize(expanded) : resolve(expanded);
+}
+
 export interface WinswEntry {
   bun: string;
   /** Provenance of `bun`, resolved together with it so the two can never disagree. */
@@ -103,6 +108,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
     `  <env name="OCX_API_TOKEN_FILE" value="${xmlEscape(serviceApiTokenFilePath())}"/>`,
     `  <env name="PATH" value="${xmlEscape(env.PATH ?? "")}"/>`,
     env.CODEX_HOME?.trim() ? `  <env name="CODEX_HOME" value="${xmlEscape(currentCodexHomeAbsolute())}"/>` : null,
+    env.CODEX_SQLITE_HOME?.trim() ? `  <env name="CODEX_SQLITE_HOME" value="${xmlEscape(windowsServicePathAbsolute(env.CODEX_SQLITE_HOME.trim()))}"/>` : null,
     `  <env name="OPENCODEX_HOME" value="${xmlEscape(getConfigDir())}"/>`,
     aclTimeout ? `  <env name="OPENCODEX_ACL_TIMEOUT_MS" value="${xmlEscape(aclTimeout)}"/>` : null,
   ].filter((line): line is string => Boolean(line));
@@ -328,7 +334,23 @@ export async function installWinswService(entry: WinswEntry, deps: WinswInstallD
 }
 
 export function startWinswService(): void { runWinsw(["start"]); }
-export function stopWinswService(): void { try { runWinsw(["stopwait"]); } catch { /* not running */ } }
+
+/**
+ * Stop the native service and prove it is no longer running. `stopwait` can fail both
+ * for the benign already-stopped case and for real access/timeout failures, so a bare
+ * catch cannot decide whether it is safe for lifecycle callers to continue. Re-read
+ * SCM state and only accept the two states that cannot still own the proxy listener.
+ */
+export function stopWinswService(): void {
+  try { runWinsw(["stopwait"]); } catch { /* classify by verified state below */ }
+  const status = statusWinswRaw();
+  if (status === "stopped" || status === "nonexistent") return;
+  if (status === "unknown") {
+    throw new Error("Native service stop could not be verified.");
+  }
+  throw new Error("Native service is still running after stop.");
+}
+
 export function uninstallWinswService(): void {
   if (!existsSync(winswExePath())) {
     // The binary is gone but the SCM registration can outlive it (quarantine, partial

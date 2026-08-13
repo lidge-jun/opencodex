@@ -2,6 +2,7 @@ import { IconAlert, IconInfo } from "../icons";
 import { type TKey, useT } from "../i18n/shared";
 import { formatTokens } from "../format-tokens";
 import { formatUptime } from "../formatUptime";
+import { navigateHash } from "../hash-routing";
 import type { useDashboardData } from "./use-dashboard-data";
 
 type Dash = ReturnType<typeof useDashboardData>;
@@ -85,7 +86,7 @@ export function DashboardOverviewHead({
 
         <div className="startup-health-slot" aria-live="polite">
           {startupHealth ? (
-            <a className="startup-health-bar" href="#startup">
+            <button type="button" className="startup-health-bar" onClick={() => navigateHash("startup")}>
               <span className={`dot ${startupHealth === "error" ? "dot-red" : startupHealth === "at-risk" ? "dot-amber" : "dot-green"}`} aria-hidden="true" />
               <span className="startup-health-bar__summary">
                 {t(startupHealth === "error"
@@ -96,7 +97,7 @@ export function DashboardOverviewHead({
                       ? "startup.summary.protected"
                       : "startup.summary.native")}
               </span>
-            </a>
+            </button>
           ) : (
             <div className="startup-health-bar startup-health-bar--pending" aria-hidden="true">
               <span className="dot dot-amber" />

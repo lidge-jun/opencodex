@@ -4,6 +4,10 @@ dist/
 *.log
 .DS_Store
 
+# Generated CL compatibility identity embedded by prepare:package. It must stay
+# untracked so the manifest cannot hash itself.
+src/generated/compatibility-version.json
+
 # Maintainer planning notes are TRACKED in this repository (`devlog/`). Security
 # material is not: see the "Security working notes" section of AGENTS.md.
 #
@@ -35,6 +39,9 @@ devlog/**/security-advisory-draft*
 **/.codexclaw/
 .omo/
 **/.omo/
+
+# Local development worktrees
+.worktrees/
 
 # Test-generated artifacts
 tests/.tmp-*/

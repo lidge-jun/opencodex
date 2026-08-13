@@ -134,6 +134,25 @@ Codex には、ディスク上のカタログ (デフォルトでは `$CODEX_HOM
 プロバイダーとモデルメタデータに応じて Codex の `low | medium | high | xhigh | max | ultra` 段階を使い、
 上流がサポートしない値はリクエスト送信前にマッピングまたはサポート範囲に下げます。
 
+### ルーティングされたローカルツール
+
+ネイティブではないルーティング済みカタログ項目は `tool_mode: "code_mode_only"` を使用します。これにより、
+Codex は公式の `exec` エントリポイントと、Browser や Computer Use を含むネストされた MCP ツールを公開できます。
+opencodex がルーティングするのはモデルの通常の function call だけです。ツールの実行、権限、確認は Codex 内に
+残り、opencodex が別のブラウザーやデスクトップ操作 executor を実装することはありません。
+
+Codex の `exec` custom-tool grammar を受け付けない key-auth Responses provider に対しては、opencodex が宣言と
+履歴を上流向けの function tool にエンコードし、ストリーミングされた function-call lifecycle を Codex に返す前に
+`custom_tool_call` へ復元します。ネイティブ OpenAI の forward routing と、対応済みの `apply_patch` custom tool は
+変更されません。
+
+選択した provider は function/tool calling をサポートしている必要があります。tool call に対応しない text-only
+provider では `exec`、Browser、Computer Use は使用できません。ネイティブ OpenAI の項目は上流の tool mode を
+そのまま維持します。
+
+`ocx sync` でこの metadata を変更した後は Codex App を再起動し、新しいタスクを開いてください。既存の
+app-server process とタスクは、起動時に読み込んだ catalog と tool plan を保持している場合があります。
+
 ### カスタムモデルの表示名
 
 カスタム モデルは、モデルのルーティング方法を何も変更することなく、Codex がモデル ピッカーに表示するラベルをオーバーライドする人間が判読できる **表示名** を付けることができます。表示名はカタログ エントリの `display_name` フィールドのみにマップされます。ルーティング スラグ (`<provider>/<model>`)、エイリアスの衝突順序、プロバイダー、およびネイティブ OpenAI マーケティング名はすべて変更されません。

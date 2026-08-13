@@ -3,6 +3,7 @@ import { readJsonIfOk } from "../../fetch-json";
 export const FILE_INTEGRATION_CLIENTS = [
   "opencode",
   "pi",
+  "omp",
   "hermes",
   "openclaw",
   "kimi",
@@ -268,6 +269,9 @@ async function readOptional<T>(request: Promise<Response>): Promise<T | null> {
 
 export async function loadCodexRoutingStatus(apiBase: string, signal?: AbortSignal) {
   const body = await readOptional<{
+    desiredEnabled?: unknown;
+    installed?: unknown;
+    observedKind?: unknown;
     routingInjected?: unknown;
     status?: unknown;
     recommendedCommand?: unknown;
@@ -320,9 +324,15 @@ export async function loadClaudeDesktopStatus(apiBase: string, signal?: AbortSig
     stale?: unknown;
     activeProfile?: unknown;
     appliedAt?: unknown;
+    desiredEnabled?: unknown;
+    installed?: unknown;
+    observedKind?: unknown;
   }>(fetch(`${apiBase}/api/claude-desktop/status`, { signal }));
-  if (!body) return null;
+  if (!body || typeof body.desiredEnabled !== "boolean" || typeof body.installed !== "boolean" || typeof body.observedKind !== "string") return null;
   return {
+    desiredEnabled: body.desiredEnabled,
+    installed: body.installed,
+    observedKind: body.observedKind,
     applied: body.applied === true,
     stale: body.stale === true,
     // Tri-state on purpose: `null` means undeterminable, which must not be

@@ -35,6 +35,7 @@ import {
   setPlatformForTests,
 } from "../src/lib/windows-secret-acl";
 import { handleManagementAPI } from "../src/server/management-api";
+import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../src/server/management/system-restart";
 import type { OcxConfig } from "../src/types";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "./helpers/test-budget";
 
@@ -298,6 +299,7 @@ describe("Windows tray packaging and command safety", () => {
   test("PowerShell controller uses mutex/event shutdown and bans command evaluation", () => {
     const typescript = readFileSync(join(import.meta.dir, "..", "src", "tray", "windows.ts"), "utf8");
     const source = readFileSync(join(import.meta.dir, "..", "src", "tray", "windows-tray.ps1"), "utf8");
+    const cli = readFileSync(join(import.meta.dir, "..", "src", "cli", "index.ts"), "utf8");
     expect(typescript).not.toContain("\u0000");
     expect(typescript).toContain("OCX_TRAY_ENTRY_B64");
     expect(typescript).toContain("$startInfo.UseShellExecute = $true");
@@ -307,6 +309,29 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).toContain("GetPathRoot");
     expect(source).toContain("$heartbeat.hostPid = $HostPid");
     expect(source).toContain('Start-OcxCommand @("__tray-restart")');
+    expect(source).toContain("-TrackExit");
+    expect(source).toContain("$script:pendingProcess.HasExited");
+    expect(source).toContain('if ($null -ne $script:pendingAction)');
+    expect(source).toContain('$startItem.Enabled = $false');
+    expect(source).toContain('ignored because $($script:pendingAction) is still pending');
+    const startBudget = source.match(/Set-PendingAction "Start Proxy" (\d+)/);
+    expect(startBudget).not.toBeNull();
+    expect(Number(startBudget![1])).toBeGreaterThanOrEqual(75);
+    const restartBudget = source.match(/Set-PendingAction "Restart Proxy" (\d+)/);
+    expect(restartBudget).not.toBeNull();
+    expect(Number(restartBudget![1]) * 1000).toBeGreaterThanOrEqual(
+      MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + 30_000,
+    );
+    expect(cli).toContain("requestBoundSystemRestart(previous, deadlineAt)");
+    expect(cli).toContain("Date.now() + PROXY_RESTART_OBSERVE_MS");
+    expect(cli).toContain("discoverStableProxyForRestart");
+    expect(cli).toContain("isProxyReplacement(previous, live)");
+    expect(cli).toContain("process.exitCode = result.ok ? 0 : 1");
+    expect(cli).toContain("waitForProxy(40_000)");
+    expect(cli).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");
+    expect(cli).toContain("function detachedStartEnvironment()");
+    expect(cli).toContain("delete env.OCX_SERVICE");
+    expect(cli).not.toContain("OCX_KEEP_ROUTING");
     expect(source).toContain('Load-TrayIcon "opencodex-tray-online.ico"');
     expect(source).toContain('Load-TrayIcon "opencodex-tray-warning.ico"');
     expect(source).toContain('Load-TrayIcon "opencodex-tray-offline.ico"');

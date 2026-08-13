@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_SYNTHESIZED_OUTPUT_ITEMS,
   responsesJsonEventSequence,
   responsesJsonToSseBody,
+  responsesJsonToSseStream,
 } from "../src/server/responses-json-events";
 
 describe("responsesJsonEventSequence", () => {
@@ -59,5 +61,29 @@ describe("responsesJsonToSseBody", () => {
     expect(frames[2]).toContain('"type":"response.completed"');
     expect(frames[3]).toBe("data: [DONE]");
     expect(body.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  test("rejects output arrays that could amplify synthesized frames", () => {
+    const output = Array.from({ length: MAX_SYNTHESIZED_OUTPUT_ITEMS + 1 }, () => null);
+    expect(() => responsesJsonToSseBody({ id: "r", output })).toThrow(RangeError);
+    expect(() => responsesJsonToSseStream({ id: "r", output })).toThrow(RangeError);
+  });
+
+  test("streams one SSE frame per pull and ends with [DONE]", async () => {
+    const stream = responsesJsonToSseStream({
+      id: "r",
+      status: "completed",
+      output: [{ type: "message", id: "m" }],
+    });
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    const chunks: string[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(decoder.decode(value));
+    }
+    expect(chunks).toHaveLength(4);
+    expect(chunks.at(-1)).toBe("data: [DONE]\n\n");
   });
 });

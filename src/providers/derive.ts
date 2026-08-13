@@ -1,5 +1,10 @@
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
-import { PROVIDER_REGISTRY, providerMatchesRegistryTransport, type ProviderRegistryEntry } from "./registry";
+import {
+  PROVIDER_REGISTRY,
+  providerMatchesRegistryTransport,
+  registryEntryForProviderDestination,
+  type ProviderRegistryEntry,
+} from "./registry";
 
 export interface DerivedKeyLoginProvider {
   label: string;
@@ -31,6 +36,7 @@ export interface DerivedKeyLoginProvider {
   noPenaltyModels?: string[];
   autoToolChoiceOnlyModels?: string[];
   preserveReasoningContentModels?: string[];
+  requiresReasoningPlaceholderModels?: string[];
   reasoningSplitModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -104,6 +110,94 @@ function cloneNestedRecord(input: Record<string, Record<string, string>>): Recor
   return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, { ...value }]));
 }
 
+function sameStringArray(left: readonly string[] | undefined, right: readonly string[]): boolean {
+  return left?.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+type DirectReasoningEffortOverrides = Pick<
+  OcxProviderConfig,
+  "thinkingBudgetModels" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "modelReasoningEffortMap"
+>;
+
+function fillFoldedModelDefault<T>(
+  merged: Record<string, T> | undefined,
+  explicit: Record<string, T> | undefined,
+  model: string,
+  registryDefault: T | undefined,
+  clone: (value: T) => T,
+): Record<string, T> | undefined {
+  const folded = model.toLowerCase();
+  const explicitEntries = Object.entries(explicit ?? {}).filter(([key]) => key.toLowerCase() === folded);
+  if (explicitEntries.length === 0) {
+    return registryDefault === undefined ? merged : { ...(merged ?? {}), [model]: clone(registryDefault) };
+  }
+
+  const next = Object.fromEntries(
+    Object.entries(merged ?? {}).filter(([key]) => key.toLowerCase() !== folded),
+  ) as Record<string, T>;
+  for (const [key, value] of explicitEntries) next[key] = clone(value);
+  return next;
+}
+
+/**
+ * Apply a registry-owned direct `reasoning_effort` contract after user/seed metadata is merged.
+ *
+ * Provider presets are persisted with capability metadata, so an existing config can retain an
+ * obsolete thinking-budget classification after the registry learns that a model has a native
+ * effort field. The registry opts only verified model contracts into this repair; providers that
+ * do not resolve through the matching registry entry keep their user-supplied classification.
+ */
+export function applyDirectReasoningEffortContracts(
+  entry: ProviderRegistryEntry,
+  prov: OcxProviderConfig,
+  explicit: DirectReasoningEffortOverrides = prov,
+): void {
+  const models = entry.directReasoningEffortModels;
+  if (!models || models.length === 0) return;
+
+  for (const model of models) {
+    // Old generated presets persisted the direct model at the front of the registry's budget
+    // list. Routing merges registry-first, which moves that one stale entry to the end. Repair
+    // only those two exact generated shapes; any partial, reordered, or case-varied list is a
+    // deliberate user value and remains untouched.
+    const currentBudgetModels = entry.thinkingBudgetModels ?? [];
+    const staleSeedShape = [model, ...currentBudgetModels];
+    const staleRoutedShape = [...currentBudgetModels, model];
+    if (sameStringArray(explicit.thinkingBudgetModels, staleSeedShape)
+      || sameStringArray(explicit.thinkingBudgetModels, staleRoutedShape)) {
+      prov.thinkingBudgetModels = [...currentBudgetModels];
+    }
+
+    const efforts = entry.modelReasoningEfforts?.[model];
+    prov.modelReasoningEfforts = fillFoldedModelDefault(
+      prov.modelReasoningEfforts,
+      explicit.modelReasoningEfforts,
+      model,
+      efforts,
+      value => [...value],
+    );
+
+    const defaultEffort = entry.modelDefaultReasoningEfforts?.[model];
+    prov.modelDefaultReasoningEfforts = fillFoldedModelDefault(
+      prov.modelDefaultReasoningEfforts,
+      explicit.modelDefaultReasoningEfforts,
+      model,
+      defaultEffort,
+      value => value,
+    );
+
+    // An explicit empty model map masks any provider-wide aliases. Without it, a stale global
+    // mapping such as xhigh -> max would win before the verified direct ladder can clamp it.
+    prov.modelReasoningEffortMap = fillFoldedModelDefault(
+      prov.modelReasoningEffortMap,
+      explicit.modelReasoningEffortMap,
+      model,
+      {},
+      value => ({ ...value }),
+    );
+  }
+}
+
 /**
  * Build the provider config a registry entry contributes when a preset is materialized.
  * The registry auth kind is preserved verbatim (including `"local"`) so fail-closed gates
@@ -145,10 +239,15 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
     ...(entry.parallelToolCalls !== undefined ? { parallelToolCalls: entry.parallelToolCalls } : {}),
     ...(entry.promptCacheKey !== undefined ? { promptCacheKey: entry.promptCacheKey } : {}),
+    ...(entry.chatServiceTier !== undefined ? { chatServiceTier: entry.chatServiceTier } : {}),
     ...(entry.responsesPath !== undefined ? { responsesPath: entry.responsesPath } : {}),
     ...(entry.statelessResponses !== undefined ? { statelessResponses: entry.statelessResponses } : {}),
+    ...(entry.requiresAdjacentResponsesToolResults !== undefined
+      ? { requiresAdjacentResponsesToolResults: entry.requiresAdjacentResponsesToolResults }
+      : {}),
     ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
     ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+    ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
     ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
     ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -194,6 +293,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.noPenaltyModels ? { noPenaltyModels: [...entry.noPenaltyModels] } : {}),
       ...(entry.autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels: [...entry.autoToolChoiceOnlyModels] } : {}),
       ...(entry.preserveReasoningContentModels ? { preserveReasoningContentModels: [...entry.preserveReasoningContentModels] } : {}),
+      ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
       ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
       ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
       ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -239,9 +339,61 @@ export function deriveProviderPresets(): DerivedProviderPreset[] {
   return [...dedupePresets(presets), customPreset()];
 }
 
+/**
+ * Merge registry reasoning-summary defaults PER KEY, letting explicit user values win.
+ *
+ * Not a whole-Record `=== undefined` fill like the scalars around it: a user who sets one
+ * model's flag creates a defined Record, and a whole-object check would then suppress every
+ * registry default for that provider. Spreading registry-first also preserves an explicit
+ * `false` — someone who disabled summaries for a model because their backend 400s on it keeps
+ * that. The result is a fresh object, so saved config never aliases the registry constant.
+ */
+function applyReasoningSummaryDefaults(
+  prov: OcxProviderConfig,
+  defaults: Readonly<Record<string, boolean>> | undefined,
+): void {
+  if (!defaults) return;
+  prov.modelSupportsReasoningSummaries = {
+    ...defaults,
+    ...(prov.modelSupportsReasoningSummaries ?? {}),
+  };
+}
+
+/**
+ * Last-resort enrichment for a provider whose NAME matches no registry id.
+ *
+ * #1100 was reported against a hand-added provider called "GLM" pointing at a vendor endpoint
+ * we recognize. Routing worked, so the row looked healthy, but every piece of registry metadata
+ * was skipped and the reasoning ladder was advertised without summary support — exactly the
+ * inconsistency that makes Codex drop the inbound reasoning object.
+ *
+ * Deliberately narrow: only the reasoning-summary map, and only via
+ * `registryEntryForProviderDestination`, which matches fixed key destinations and refuses
+ * templated or overridable base URLs. A custom row keeps its own identity for everything else.
+ */
+function enrichReasoningSummariesByDestination(prov: OcxProviderConfig): void {
+  const destination = registryEntryForProviderDestination(prov);
+  applyReasoningSummaryDefaults(prov, destination?.modelSupportsReasoningSummaries);
+}
+
 export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig): void {
   const entry = PROVIDER_REGISTRY.find(row => row.id === name);
-  if (!entry || !providerMatchesRegistryTransport(name, prov)) return;
+  if (!entry || !providerMatchesRegistryTransport(name, prov)) {
+    // Name lookup failed, but the row may still point at a vendor route we know. #1100 was
+    // reported against a hand-added provider literally named "GLM": routing worked, yet every
+    // piece of registry metadata was skipped because no registry id is called "GLM".
+    // `registryEntryForProviderDestination` answers the question that actually matters here —
+    // which vendor endpoint is this row talking to — and is already restricted to fixed key
+    // destinations, so a templated or overridable base URL cannot be claimed by it.
+    enrichReasoningSummariesByDestination(prov);
+    return;
+  }
+  const explicitDirectReasoning: DirectReasoningEffortOverrides = {
+    thinkingBudgetModels: prov.thinkingBudgetModels,
+    modelReasoningEfforts: prov.modelReasoningEfforts,
+    modelDefaultReasoningEfforts: prov.modelDefaultReasoningEfforts,
+    modelReasoningEffortMap: prov.modelReasoningEffortMap,
+  };
   const seed = providerConfigSeed(entry);
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
@@ -268,14 +420,19 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.noPenaltyModels && seed.noPenaltyModels) prov.noPenaltyModels = [...seed.noPenaltyModels];
   if (prov.parallelToolCalls === undefined && seed.parallelToolCalls !== undefined) prov.parallelToolCalls = seed.parallelToolCalls;
   if (prov.promptCacheKey === undefined && seed.promptCacheKey !== undefined) prov.promptCacheKey = seed.promptCacheKey;
+  if (prov.chatServiceTier === undefined && seed.chatServiceTier !== undefined) prov.chatServiceTier = seed.chatServiceTier;
   // Fill-only: a hand-edited path must survive, and a config saved before the registry
   // learned this route still gets backfilled.
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   if (prov.statelessResponses === undefined && seed.statelessResponses !== undefined) prov.statelessResponses = seed.statelessResponses;
+  if (prov.requiresAdjacentResponsesToolResults === undefined && seed.requiresAdjacentResponsesToolResults !== undefined) {
+    prov.requiresAdjacentResponsesToolResults = seed.requiresAdjacentResponsesToolResults;
+  }
   // Registry-only metadata (never seeded into saved config): backfill straight from
   // the entry so an explicit user value stays distinguishable from the default.
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
+  applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
   // Registry-only repair policy (#938): fill only when the runtime provider has
   // no explicit policy, and deep-clone so saved/user values never alias the
   // registry constant.
@@ -293,6 +450,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   }
   if (!prov.autoToolChoiceOnlyModels && seed.autoToolChoiceOnlyModels) prov.autoToolChoiceOnlyModels = [...seed.autoToolChoiceOnlyModels];
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
+  if (!prov.requiresReasoningPlaceholderModels && seed.requiresReasoningPlaceholderModels) prov.requiresReasoningPlaceholderModels = [...seed.requiresReasoningPlaceholderModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];
   if (!prov.thinkingToggleModels && seed.thinkingToggleModels) prov.thinkingToggleModels = [...seed.thinkingToggleModels];
   if (!prov.thinkingBudgetModels && seed.thinkingBudgetModels) prov.thinkingBudgetModels = [...seed.thinkingBudgetModels];
@@ -301,6 +459,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.freeTier === undefined && seed.freeTier !== undefined) prov.freeTier = seed.freeTier;
   if (prov.modelSuffixBracketStrip === undefined && seed.modelSuffixBracketStrip !== undefined) prov.modelSuffixBracketStrip = seed.modelSuffixBracketStrip;
   if (!prov.headers && seed.headers) prov.headers = { ...seed.headers };
+  applyDirectReasoningEffortContracts(entry, prov, explicitDirectReasoning);
 }
 
 export function deriveFeaturedProviderIds(): string[] {

@@ -35,6 +35,10 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
   "grok-4.5": ["low", "medium", "high"],
   "grok-4.5-fast": ["low", "medium", "high"],
+  // 260813 preemptive: grok-4.6 tiers mirrored from grok-4.5 ahead of Cursor's lineup update,
+  // so the suffix/wire handling is already correct the day the slugs appear.
+  "grok-4.6": ["low", "medium", "high"],
+  "grok-4.6-fast": ["low", "medium", "high"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],
@@ -125,4 +129,15 @@ export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: s
     return `${baseModelId.slice(0, -"-fast".length)}-${effortSuffix}-fast`;
   }
   return `${baseModelId}-${effortSuffix}`;
+}
+
+/**
+ * Compose the exact flattened id sent by AgentService/Run. Discovery normalizes Cursor's optional
+ * `cursor-` prefix only for catalog matching, but regular Grok 4.5 requests require that prefix on
+ * the wire. Keep this separate from {@link cursorWireModelIdWithEffort} so discovery can continue
+ * comparing canonical, prefix-free ids. Grok Fast uses requested_model parameters instead.
+ */
+export function cursorRequestWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
+  const flattened = cursorWireModelIdWithEffort(baseModelId, effortSuffix);
+  return baseModelId === "grok-4.5" || baseModelId === "grok-4.6" ? `cursor-${flattened}` : flattened;
 }

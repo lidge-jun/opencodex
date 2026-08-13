@@ -10,6 +10,8 @@ interface ResponsesItemIdRepairState {
   readonly repairInvalidIds: boolean;
   readonly placeholders: Record<RepairableItemType, ReadonlySet<string>>;
   readonly outputIds: Record<RepairableItemType, Map<number, string>>;
+  /** JSON [outputIndex, rawId] -> canonical id, for exact item_id rewrites on part/delta events. */
+  readonly rawIds: Map<string, string>;
   readonly scope: string;
   readonly budget?: TranslatorBudget;
 }
@@ -63,6 +65,7 @@ function createRepairState(config: ResponsesItemIdRepairConfig, budget?: Transla
       message: new Map<number, string>(),
       reasoning: new Map<number, string>(),
     },
+    rawIds: new Map<string, string>(),
     scope: randomUUID().replace(/-/g, ""),
     budget,
   };
@@ -97,6 +100,9 @@ function rememberMappedId(
   if (!mapped) return null;
   state.budget?.chargeRetained(new TextEncoder().encode(JSON.stringify([outputIndex, rawId, mapped])).byteLength, { kind: "item_ids" });
   state.outputIds[type].set(outputIndex, mapped);
+  // Keyed by (index, rawId): an upstream that reuses one placeholder id across
+  // several items must not collapse them into the last item's canonical id.
+  if (rawId !== mapped) state.rawIds.set(JSON.stringify([outputIndex, rawId]), mapped);
   return mapped;
 }
 
@@ -120,11 +126,24 @@ function rewriteItemIdField(
 ): { event: Record<string, unknown>; changed: boolean } {
   const eventType = typeof event.type === "string" ? ITEM_ID_EVENT_TYPES[event.type] : undefined;
   if (!eventType) return { event, changed: false };
+  const currentId = typeof event.item_id === "string" ? event.item_id : undefined;
+  // content_part.* events are shared between message and reasoning items (DeepSeek's
+  // streamed reasoning wraps its text in content parts), so the static event-type map
+  // can point at the wrong id table. The rewrite is therefore exact-only when the
+  // event carries an item_id: it fires when (output_index, item_id) names an id the
+  // item stream already repaired, and otherwise leaves the event alone — an unknown
+  // id belongs to an item this repair never touched (function_call, already-canonical
+  // ids), and guessing by index could borrow a sibling item's identity. The index
+  // table serves only events with NO item_id, where repairMissingTerminalIds
+  // explicitly opts into the positional guess (the pre-existing contract).
+  if (currentId !== undefined) {
+    const mapped = state.rawIds.get(JSON.stringify([outputIndex, currentId]));
+    if (!mapped || currentId === mapped) return { event, changed: false };
+    return { event: { ...event, item_id: mapped }, changed: true };
+  }
+  if (!state.repairMissingTerminalIds) return { event, changed: false };
   const mapped = state.outputIds[eventType].get(outputIndex);
   if (!mapped) return { event, changed: false };
-  const currentId = typeof event.item_id === "string" ? event.item_id : undefined;
-  if (currentId === mapped) return { event, changed: false };
-  if (currentId === undefined && !state.repairMissingTerminalIds) return { event, changed: false };
   return { event: { ...event, item_id: mapped }, changed: true };
 }
 

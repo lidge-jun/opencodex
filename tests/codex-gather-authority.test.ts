@@ -295,4 +295,73 @@ describe("catalog gather discovery-policy authority", () => {
       clearModelCache("together");
     }
   });
+
+  test("different combo retention sets cannot join another admission's flight (OCX-111)", async () => {
+    // retainConfiguredModelIds is part of providerGraphIdentity. Concurrent gathers that
+    // share providers but differ in combo targets must not coalesce onto the wrong retain set.
+    clearModelCache("or-flight");
+    clearGatherRoutedModelsInflight();
+
+    const firstResponse = deferred();
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) await firstResponse.promise;
+      return Response.json({ data: [{ id: "or-flight/other-model" }] });
+    }) as typeof fetch;
+
+    const provider = {
+      adapter: "openai-chat" as const,
+      baseUrl: "https://or-flight.example.test/v1",
+      authMode: "key" as const,
+      apiKey: "sk-flight",
+      liveModels: true as const,
+      models: ["openai/gpt-5.6-luna"],
+      modelContextWindows: { "openai/gpt-5.6-luna": 200_000 },
+    };
+    const withoutCombo = withStubbedProviderFetch({
+      port: 10100,
+      defaultProvider: "or-flight",
+      modelCacheTtlMs: 0,
+      providers: { "or-flight": provider },
+    });
+    const withCombo = withStubbedProviderFetch({
+      port: 10100,
+      defaultProvider: "or-flight",
+      modelCacheTtlMs: 0,
+      providers: { "or-flight": provider },
+      combos: {
+        failover: {
+          strategy: "failover",
+          stickyLimit: 1,
+          defaultEffort: "medium",
+          alias: null,
+          nativeAlias: false,
+          displayName: null,
+          targets: [
+            { provider: "or-flight", model: "openai/gpt-5.6-luna", weight: 1 },
+            { provider: "or-flight", model: "or-flight/other-model", weight: 1 },
+          ],
+        },
+      },
+    });
+
+    try {
+      const first = gatherRoutedModels(withoutCombo);
+      await Bun.sleep(20);
+      expect(fetchCount).toBe(1);
+
+      const second = gatherRoutedModels(withCombo);
+      await Bun.sleep(20);
+      expect(fetchCount).toBe(2);
+
+      firstResponse.resolve();
+      const [noComboRows, comboRows] = await Promise.all([first, second]);
+      expect(noComboRows.some(r => r.provider === "or-flight" && r.id === "openai/gpt-5.6-luna")).toBe(false);
+      expect(comboRows.some(r => r.provider === "or-flight" && r.id === "openai/gpt-5.6-luna")).toBe(true);
+    } finally {
+      clearGatherRoutedModelsInflight();
+      clearModelCache("or-flight");
+    }
+  });
 });

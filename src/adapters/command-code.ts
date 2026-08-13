@@ -21,6 +21,10 @@ const COMMAND_CODE_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "glm-5.2": "zai-org/GLM-5.2",
 };
 
+function canonicalCommandCodeModelId(modelId: string): string {
+  return Object.hasOwn(COMMAND_CODE_MODEL_ALIASES, modelId) ? COMMAND_CODE_MODEL_ALIASES[modelId]! : modelId;
+}
+
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
 function toolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
@@ -44,20 +48,79 @@ function wireImagePart(imageUrl: string): Record<string, unknown> {
   return { type: "image", image: imageUrl, ...(mediaType ? { mediaType } : {}) };
 }
 
+/**
+ * The /alpha/generate wire pairs every assistant `tool-call` with a following `tool` message
+ * whose `tool-result.toolCallId` matches it. Codex history is not guaranteed to carry that
+ * pairing (interrupted turns, compacted threads, and multi-step tool rounds all can leave an
+ * assistant call with no recorded result), and the upstream rejects an unpaired call with
+ * `Tool result is missing for tool call <id>`, which currently surfaces as a generic 502
+ * (#1383). This builder keeps the pairing invariant:
+ *
+ * - a `toolResult` that matches a declared assistant call emits the native `tool-result`;
+ * - a `toolResult` with no matching declared call degrades to a text carrier so the model
+ *   still sees the outcome without a 400-prone standalone `tool` message;
+ * - every declared assistant call that never received a result gets an explicit error
+ *   `tool-result`, so the upstream never sees an unpaired call.
+ */
 function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
+  const pendingCalls: Array<{ id: string; name: string }> = [];
+  // Image parts returned by a tool cannot live inside the text-only `tool-result` wire
+  // output. They ride a follow-up user message, but that user message must not break the
+  // adjacency of the assistant turn's tool results, so carriers are buffered and flushed
+  // only after every declared call has its native or synthesized result.
+  const pendingImageCarriers: Array<Record<string, unknown>> = [];
+  // The /alpha/generate wire requires every assistant tool-call to be closed by a matching
+  // `tool-result` immediately after the declaring assistant message. Close any declared call
+  // that never received a result before a non-toolResult message moves the turn forward, so a
+  // synthesized `tool` message never lands after a user message or a new assistant turn.
+  const closePendingCalls = (): void => {
+    for (const call of pendingCalls) {
+      out.push({ role: "tool", content: [{
+        type: "tool-result",
+        toolCallId: call.id,
+        toolName: call.name,
+        output: { type: "error-text", value: "[ocx] no tool result was recorded for this tool call; execution status unknown." },
+      }] });
+    }
+    pendingCalls.length = 0;
+    if (pendingImageCarriers.length > 0) {
+      out.push(...pendingImageCarriers);
+      pendingImageCarriers.length = 0;
+    }
+  };
   for (const message of messages) {
     if (message.role === "assistant") {
+      closePendingCalls();
       const content: Array<Record<string, unknown>> = [];
       for (const part of message.content) {
         if (part.type === "text") content.push({ type: "text", text: part.text });
         else if (part.type === "thinking") content.push({ type: "reasoning", text: part.thinking });
-        else content.push({ type: "tool-call", toolCallId: part.id, toolName: namespacedToolName(part.namespace, part.name), input: part.arguments });
+        else {
+          const wireName = namespacedToolName(part.namespace, part.name);
+          content.push({ type: "tool-call", toolCallId: part.id, toolName: wireName, input: part.arguments });
+          pendingCalls.push({ id: part.id, name: wireName });
+        }
       }
       out.push({ role: "assistant", content });
       continue;
     }
     if (message.role === "toolResult") {
+      const callIndex = pendingCalls.findIndex(call => call.id === message.toolCallId);
+      const paired = callIndex >= 0;
+      if (paired) pendingCalls.splice(callIndex, 1);
+      if (!paired) {
+        // Pending calls from an earlier assistant turn must still be closed before any user
+        // message lands, or their synthesized results would follow the orphan carrier.
+        closePendingCalls();
+        // The upstream rejects a standalone tool message whose call was never declared by an
+        // assistant turn. Preserve the outcome as text so the model can still act on it.
+        const label = message.toolName ? `${message.toolName} (${message.toolCallId})` : message.toolCallId;
+        const text = toolResultText(message.content);
+        // The orphan result cannot ride a `tool` message; carry it in a user message instead.
+        out.push({ role: "user", content: [{ type: "text", text: `[tool result without adjacent tool call: ${label}]\n${text}` }] });
+        continue;
+      }
       out.push({ role: "tool", content: [{
         type: "tool-result",
         toolCallId: message.toolCallId,
@@ -69,10 +132,12 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
       // message using the same image encoding as the user branch so the bytes reach the model.
       const images = typeof message.content === "string" ? [] : message.content.filter(part => part.type === "image");
       if (images.length > 0) {
-        out.push({ role: "user", content: images.map(part => wireImagePart((part as { imageUrl: string }).imageUrl)) });
+        pendingImageCarriers.push({ role: "user", content: images.map(part => wireImagePart((part as { imageUrl: string }).imageUrl)) });
       }
       continue;
     }
+    // User/developer message: no pending tool results may follow it on the wire.
+    closePendingCalls();
     const content: Array<Record<string, unknown>> = [];
     if (typeof message.content === "string") content.push({ type: "text", text: message.content });
     else for (const part of message.content) {
@@ -81,6 +146,7 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
     }
     out.push({ role: "user", content });
   }
+  closePendingCalls();
   return out;
 }
 
@@ -134,6 +200,8 @@ const MAX_RECENT_COMMIT_LENGTH = 512;
 const MAX_GIT_STATUS_LENGTH = 2048;
 /** Keep collected workspace/git metadata fresh for this long (ms) so repeated requests reuse it. */
 const WORKSPACE_METADATA_TTL_MS = 30_000;
+/** Hard cap on cached workspace metadata entries to prevent unbounded growth across distinct cwds. */
+export const MAX_WORKSPACE_METADATA_ENTRIES = 128;
 
 /** Derive a bounded project slug from the working directory for the `x-project-slug` header. */
 function projectSlug(cwd: string): string {
@@ -148,7 +216,32 @@ interface GitWorkspaceInfo {
   recentCommits: string[];
 }
 
-const workspaceMetadataCache = new Map<string, { collectedAt: number; value: GitWorkspaceInfo }>();
+export const workspaceMetadataCache = new Map<string, { collectedAt: number; value: GitWorkspaceInfo }>();
+
+/**
+ * Evict expired entries first, then the oldest live entry if at capacity.
+ * Called before inserting a new key so the cache never exceeds the cap.
+ */
+export function pruneWorkspaceMetadataCache(now: number): void {
+  // Pass 1: remove expired entries.
+  for (const [key, entry] of workspaceMetadataCache) {
+    if (now - entry.collectedAt >= WORKSPACE_METADATA_TTL_MS) {
+      workspaceMetadataCache.delete(key);
+    }
+  }
+  // Pass 2: if still at capacity, evict the oldest live entry.
+  if (workspaceMetadataCache.size >= MAX_WORKSPACE_METADATA_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestAt = Infinity;
+    for (const [key, entry] of workspaceMetadataCache) {
+      if (entry.collectedAt < oldestAt) {
+        oldestAt = entry.collectedAt;
+        oldestKey = key;
+      }
+    }
+    if (oldestKey !== null) workspaceMetadataCache.delete(oldestKey);
+  }
+}
 
 const execFile = promisify(execFileCallback);
 
@@ -180,7 +273,9 @@ async function gitWorkspaceInfo(cwd: string | undefined): Promise<GitWorkspaceIn
           .map(commit => commit.slice(0, MAX_RECENT_COMMIT_LENGTH)),
       }
     : fallback;
-  workspaceMetadataCache.set(cwd, { collectedAt: Date.now(), value });
+  const now = Date.now();
+  if (!workspaceMetadataCache.has(cwd)) pruneWorkspaceMetadataCache(now);
+  workspaceMetadataCache.set(cwd, { collectedAt: now, value });
   return value;
 }
 
@@ -235,6 +330,18 @@ function eventError(value: unknown): string {
     if (typeof message === "string" && message) return message;
   }
   return "Command Code stream error";
+}
+
+/**
+ * True when the upstream rejected a tool-result continuation because an assistant tool call
+ * had no matching result (`Tool result is missing for tool call <id>`). The proxy now keeps
+ * that pairing invariant before sending, so this error is a distinct provider-side
+ * validation failure rather than a generic stream fault; classify it as such for the
+ * dashboard/logs instead of a plain upstream 502.
+ */
+function isMissingToolResultError(value: unknown): boolean {
+  const text = eventError(value).toLowerCase();
+  return text.includes("tool result is missing") || text.includes("tool_result is missing");
 }
 
 async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenerator<Record<string, unknown>> {
@@ -318,7 +425,7 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
   // reasoning effort because the official table is keyed by the canonical ids.
-  const canonicalId = COMMAND_CODE_MODEL_ALIASES[modelId] ?? modelId;
+  const canonicalId = canonicalCommandCodeModelId(modelId);
   const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
   if (!supported) return undefined;
   // Command Code's official profiles describe xhigh and ultra as the CLI labels that map to
@@ -347,7 +454,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         config: await commandCodeConfig(cwd), memory: "", taste: null, skills: null,
         permissionMode: "standard", mode: "agent",
         params: {
-          model: COMMAND_CODE_MODEL_ALIASES[parsed.modelId] ?? parsed.modelId,
+          model: canonicalCommandCodeModelId(parsed.modelId),
           messages: wireMessages(parsed.context.messages),
           tools: wireTools(tools),
           system,
@@ -437,7 +544,18 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             yield { type: "done", usage: usage(usageValue), stopReason };
             break;
           }
-          case "error": yield { type: "error", message: eventError(event.error), status: 502 }; break;
+          case "error": {
+            const message = eventError(event.error);
+            if (isMissingToolResultError(message)) {
+              // Provider-side tool-result validation: the request carried an assistant tool
+              // call the upstream refused to accept. This is not a network/stream stall; the
+              // proxy normally prevents it by pairing every call, so flag it distinctly.
+              yield { type: "error", message, status: 502, errorType: "upstream_error", code: "missing_tool_result" };
+            } else {
+              yield { type: "error", message, status: 502 };
+            }
+            break;
+          }
         }
       }
       // A stream that ends without a finish event still needs a terminal done so the

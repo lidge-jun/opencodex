@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createAdapterEventQueue } from "../adapters/run-turn-queue";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderContinuationState, OcxRequestOptions, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
-import { namespacedToolName } from "../types";
+import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
@@ -662,7 +662,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   const toolNsMap = new Map<string, { namespace: string; name: string }>();
   const freeform = new Set<string>();
   const toolSearch = new Set<string>();
+  const toolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice);
   for (const t of parsed.context.tools ?? []) {
+    if (!toolAllowed(t)) continue;
     if (t.namespace) toolNsMap.set(namespacedToolName(t.namespace, t.name), { namespace: t.namespace, name: t.name });
     if (t.freeform) freeform.add(t.name);
     if (t.toolSearch) toolSearch.add(t.name);
@@ -900,12 +902,12 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   }
 
   const sse = bridgeToResponsesSSE(
-    produce(), parsed.modelId, toolNsMap, freeform, toolSearch, () => {
+    produce(), parsed._responseModelId ?? parsed.modelId, toolNsMap, freeform, toolSearch, () => {
       internalAbort.abort("client closed responses stream");
     }, 2_000,
     {
       translatorBudget,
-      replayCacheScope: parsed._clientThreadId ?? "global",
+      replayCacheScope: parsed._reasoningReplayScope,
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       stallTimeoutSec: deps.stallTimeoutSec,

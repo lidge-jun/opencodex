@@ -28,6 +28,7 @@ const result = await injectCodexConfig(payload.port ?? 10100, config, {
 
 console.log(JSON.stringify({
   success: result.success,
+  status: result.status,
   retryable: (result as { retryable?: boolean }).retryable ?? false,
   message: result.message.slice(0, 200),
 }));

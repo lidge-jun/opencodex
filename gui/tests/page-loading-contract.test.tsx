@@ -133,7 +133,7 @@ const CACHED_PAGE = {
 beforeEach(() => {
   clearClientResourceStoresForTests();
   previousGlobals = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previousGlobals;
-  testWindow = new Window({ url: "http://localhost/#combos" });
+  testWindow = new Window({ url: "http://localhost/#models/combos" });
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: testWindow.document },
     window: { configurable: true, value: testWindow.window },

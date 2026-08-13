@@ -8,6 +8,7 @@ import { startServer } from "../src/server";
 import * as systemEnv from "../src/server/system-env";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 
 // Full-suite Windows load: startServer + multi-PUT management flows often exceed bun's
 // default 5s per-test budget (same flake class as 810fa115 / kiro-oauth).
@@ -118,6 +119,27 @@ test("PUT round-trips settings and persists to config", async () => {
     expect(after.claudeCode?.model).toBeUndefined();
     expect(after.claudeCode?.smallFastModel).toBe("mock/test-model");
     expect(after.claudeCode?.enabled).toBe(false);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("a rejected PUT does not apply fastMode in memory", async () => {
+  const config = loadConfig();
+  config.fastMode = false;
+  saveConfig(config);
+  const server = startServer(0);
+  try {
+    const put = await fetch(new URL("/api/claude-code", server.url), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fastMode: true, modelMap: { invalid: "" } }),
+    });
+    expect(put.status).toBe(400);
+
+    const get = await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>;
+    expect(get.fastMode).toBe(false);
+    expect(loadConfig().fastMode).toBe(false);
   } finally {
     await server.stop(true);
   }
@@ -690,12 +712,33 @@ test("Claude Desktop apply honors the profile in the request body over daemon-st
 test("Claude Desktop apply validates the mode body", async () => {
   const server = startServer(0);
   try {
+    const beforeMalformed = structuredClone(loadConfig());
+    const malformed = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{",
+    });
+    expect(malformed.status).toBe(400);
+    expect(await malformed.json()).toEqual({ error: "invalid JSON body" });
+    expect(loadConfig()).toEqual(beforeMalformed);
+
+    const beforeBadMode = structuredClone(loadConfig());
     const bad = await fetch(new URL("/api/claude-desktop/apply", server.url), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "nonsense" }),
     });
     expect(bad.status).toBe(400);
+    expect(loadConfig()).toEqual(beforeBadMode);
+
+    const beforeBadProfile = structuredClone(loadConfig());
+    const badProfile = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profile: { version: 2 } }),
+    });
+    expect(badProfile.status).toBe(400);
+    expect(loadConfig()).toEqual(beforeBadProfile);
 
     const hybrid = await fetch(new URL("/api/claude-desktop/apply", server.url), {
       method: "POST",
@@ -706,6 +749,24 @@ test("Claude Desktop apply validates the mode body", async () => {
     const result = await hybrid.json() as { path: string };
     const written = JSON.parse(readFileSync(result.path, "utf8")) as { modelDiscoveryEnabled: boolean };
     expect(written.modelDiscoveryEnabled).toBe(true);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Claude Desktop apply rejects an oversized decompressed body without mutating config", async () => {
+  const server = startServer(0);
+  try {
+    const before = structuredClone(loadConfig());
+    const oversized = JSON.stringify({ pad: "x".repeat(MANAGEMENT_JSON_BODY_MAX_BYTES) });
+    const response = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Encoding": "gzip" },
+      body: Bun.gzipSync(new TextEncoder().encode(oversized)),
+    });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "request body too large" });
+    expect(loadConfig()).toEqual(before);
   } finally {
     await server.stop(true);
   }

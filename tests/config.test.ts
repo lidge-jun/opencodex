@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import {
   CODEX_SHIM_AUTO_RESTORE_ENV,
   codexAutoStartEnabled,
@@ -18,15 +18,21 @@ import {
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   readConfigDiagnostics,
+  readPid,
   readRuntimePort,
   removePid,
   removeRuntimePort,
+  ocxStartProcessCacheSizeForTests,
+  setOcxStartProcessCacheForTests,
+  setProcessCommandLineExecForTests,
+  setProcessCommandLinePlatformForTests,
   validateConfigCandidate,
   writeRuntimePort,
   writePid,
 } from "../src/config";
 
 import * as windowsAcl from "../src/lib/windows-secret-acl";
+import { setTrustedWindowsSystemDirectoryResolverForTests } from "../src/lib/windows-elevation";
 import { AtomicWriteResidualTempError, atomicWriteFile, atomicWriteFileAsync, hardenConfigDir, hardenExistingSecret, renameAtomicFile, saveConfig } from "../src/config";
 let testDir = "";
 
@@ -164,17 +170,15 @@ describe("opencodex config defaults", () => {
     writeConfig({
       port: 12345,
       defaultProvider: "custom",
-      googleAntigravityStaticCatalogVersion: 99,
+      googleAntigravityStaticCatalogVersion: 2,
       providers: { custom: { adapter: "openai-chat", baseUrl: "https://example.test/v1" } },
     });
-    const degraded = loadConfig();
-    expect(degraded.googleAntigravityStaticCatalogVersion).toBeUndefined();
-    expect(degraded.providers.custom.baseUrl).toBe("https://example.test/v1");
+    expect(loadConfig().googleAntigravityStaticCatalogVersion).toBe(2);
     expect(backupNames()).toEqual([]);
 
     expect(validateConfigCandidate({
       ...getDefaultConfig(),
-      googleAntigravityStaticCatalogVersion: 99,
+      googleAntigravityStaticCatalogVersion: 3,
     })).toMatchObject({
       ok: false,
       error: expect.stringContaining("googleAntigravityStaticCatalogVersion"),
@@ -200,6 +204,45 @@ describe("opencodex config defaults", () => {
     expect(validateConfigCandidate({ ...base, hostname: "127.0.0.1" })).toMatchObject({
       ok: true,
       config: expect.objectContaining({ hostname: "127.0.0.1" }),
+    });
+  });
+
+  // A write must not inherit the read path's degrade-to-undefined: dropping a malformed
+  // map on load leaves the raw entries in the file to be repaired by hand, but dropping
+  // it on a write erases every order the user had set and still reports success.
+  test("config candidates reject a malformed selection-order map instead of erasing it", () => {
+    const base = getDefaultConfig();
+
+    expect(validateConfigCandidate({ ...base, codexAccountPriorities: { work: 2, side: 200 } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("codexAccountPriorities"),
+    });
+    expect(validateConfigCandidate({ ...base, codexAccountPriorities: { "bad id!": 1 } })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("codexAccountPriorities"),
+    });
+    expect(validateConfigCandidate({ ...base, activeCodexAccountPinned: "not a valid id" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("activeCodexAccountPinned"),
+    });
+    // A coercing guard lets these through — String(123) matches the id pattern — and the
+    // schema's .catch(undefined) then drops the pin while reporting the write as a success.
+    for (const pin of [123, true, ["work"]]) {
+      expect(validateConfigCandidate({ ...base, activeCodexAccountPinned: pin })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("activeCodexAccountPinned"),
+      });
+    }
+    expect(validateConfigCandidate({
+      ...base,
+      codexAccountPriorities: { work: 2, __main__: -2 },
+      activeCodexAccountPinned: "work",
+    })).toMatchObject({
+      ok: true,
+      config: expect.objectContaining({
+        codexAccountPriorities: { work: 2, __main__: -2 },
+        activeCodexAccountPinned: "work",
+      }),
     });
   });
 
@@ -393,6 +436,61 @@ describe("opencodex config defaults", () => {
       const diagnostics = readConfigDiagnostics();
       expect(diagnostics.source).toBe("fallback");
       expect(diagnostics.error).toContain("multiAgentGuidanceEnabled");
+    }
+  });
+
+  test("agentTaskRecovery is explicit, bounded, and degrades invalid hand edits", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+        },
+      },
+      defaultProvider: "custom",
+    };
+    expect(getDefaultConfig().agentTaskRecovery).toBeUndefined();
+
+    const recovery = {
+      enabled: true,
+      model: "gpt-5.6-sol",
+      timeoutMs: 45_000,
+      cacheEntries: 200,
+    };
+    writeConfig({ ...base, agentTaskRecovery: recovery });
+    expect(loadConfig()).toMatchObject({ ...base, agentTaskRecovery: recovery });
+    expect(validateConfigCandidate({ ...base, agentTaskRecovery: recovery })).toMatchObject({
+      ok: true,
+      config: { agentTaskRecovery: recovery },
+    });
+
+    for (const invalid of [
+      true,
+      { enabled: "true" },
+      { enabled: true, model: " " },
+      { enabled: true, timeoutMs: 999 },
+      { enabled: true, timeoutMs: 120_001 },
+      { enabled: true, cacheEntries: 0 },
+      { enabled: true, cacheEntries: 513 },
+      { enabled: true, url: "https://attacker.example/responses" },
+    ]) {
+      writeConfig({ ...base, agentTaskRecovery: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        config: base,
+      });
+      expect(diagnostics.config.agentTaskRecovery).toBeUndefined();
+      expect(diagnostics.warnings?.some(warning => warning.startsWith("agentTaskRecovery"))).toBe(true);
+      expect(loadConfig()).toMatchObject(base);
+      expect(loadConfig().agentTaskRecovery).toBeUndefined();
+      expect(validateConfigCandidate({ ...base, agentTaskRecovery: invalid })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("agentTaskRecovery"),
+      });
+      expect(backupNames()).toEqual([]);
     }
   });
 
@@ -1477,7 +1575,7 @@ describe("opencodex config defaults", () => {
     expect(isValidProviderName("constructor")).toBe(false);
   });
 
-  test("persists an explicit Codex account selector map without enabling it by default", () => {
+  test("persists an explicit Codex account selector map without adding one to defaults", () => {
     const selectors = {
       desktop: "@main",
       work: "work-account",
@@ -1490,6 +1588,94 @@ describe("opencodex config defaults", () => {
     expect(diagnostics.error).toBeNull();
     expect(diagnostics.config.codexAccountNamespaces).toEqual(selectors);
     expect(Object.hasOwn(getDefaultConfig(), "codexAccountNamespaces")).toBe(false);
+  });
+
+  test("persists the optional picker override without adding it to defaults", () => {
+    for (const enabled of [true, false]) {
+      writeAccountNamespaceConfig({ desktop: "@main" }, { codexAccountPickerEnabled: enabled });
+
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics.error).toBeNull();
+      expect(diagnostics.config.codexAccountPickerEnabled).toBe(enabled);
+    }
+
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountPickerEnabled")).toBe(false);
+  });
+
+  test("malformed persisted picker visibility fails closed without discarding accounts or providers", () => {
+    writeAccountNamespaceConfig({ desktop: "@main", side: "stored-account" }, {
+      codexAccountPickerEnabled: "yes",
+      codexAccounts: [
+        { id: "main", email: "main@example.test", isMain: true },
+        { id: "stored-account", email: "side@example.test", isMain: false },
+      ],
+    });
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics).toMatchObject({
+      source: "file",
+      error: null,
+      config: {
+        defaultProvider: "openai",
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+        codexAccounts: [
+          { id: "main", email: "main@example.test", isMain: true },
+          { id: "stored-account", email: "side@example.test", isMain: false },
+        ],
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        codexAccountPickerEnabled: false,
+      },
+    });
+    expect(diagnostics.warnings).toContain(
+      "codexAccountPickerEnabled ignored: expected a boolean",
+    );
+    expect(backupNames()).toEqual([]);
+
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(loadConfig()).toMatchObject({
+        codexAccountPickerEnabled: false,
+        codexAccountNamespaces: { desktop: "@main", side: "stored-account" },
+        providers: { openai: { baseUrl: "https://chatgpt.com/backend-api/codex" } },
+      });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("codexAccountPickerEnabled ignored"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    for (const invalid of [null, "false", 1]) {
+      expect(validateConfigCandidate({
+        ...getDefaultConfig(),
+        codexAccountPickerEnabled: invalid,
+      })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("codexAccountPickerEnabled"),
+      });
+    }
+
+    const inherited = Object.assign(
+      Object.create({ codexAccountPickerEnabled: true }) as Record<string, unknown>,
+      getDefaultConfig(),
+    );
+    expect(validateConfigCandidate(inherited)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("own boolean data property"),
+    });
+
+    let getterCalls = 0;
+    const accessor = { ...getDefaultConfig() } as Record<string, unknown>;
+    Object.defineProperty(accessor, "codexAccountPickerEnabled", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return true;
+      },
+    });
+    expect(validateConfigCandidate(accessor)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("own boolean data property"),
+    });
+    expect(getterCalls).toBe(0);
   });
 
   test("validates Claude Desktop profiles and Codex account selectors independently", () => {
@@ -1573,6 +1759,8 @@ describe("opencodex config defaults", () => {
     ],
     ["the combo namespace", { combo: "side-account" }, {}, "must not collide"],
     ["the combo namespace with different casing", { Combo: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace", { policy: "side-account" }, {}, "must not collide"],
+    ["the routing policy namespace with different casing", { Policy: "side-account" }, {}, "must not collide"],
     ["the canonical OpenAI namespace with different casing", { OpenAI: "side-account" }, {}, "must not collide"],
     [
       "the canonical OpenAI provider namespace before legacy migration",
@@ -1701,6 +1889,97 @@ describe("opencodex config defaults", () => {
     writePid(process.pid);
 
     expect(readFileSync(getPidPath(), "utf-8")).toBe(String(process.pid));
+  });
+
+  test("pid validation does not execute ps from PATH", () => {
+    const attackerDir = join(testDir, "attacker-bin");
+    const fakePs = join(attackerDir, "ps");
+    const markerPath = `${fakePs}.executed`;
+    const previousPath = process.env.PATH;
+    const probes: string[] = [];
+    mkdirSync(attackerDir);
+    writeFileSync(fakePs, `#!/bin/sh\ntouch "$0.executed"\necho 'ocx start'\n`, { mode: 0o755 });
+
+    setOcxStartProcessCacheForTests([]);
+    try {
+      setProcessCommandLinePlatformForTests("darwin");
+      setProcessCommandLineExecForTests((executable) => {
+        probes.push(executable);
+        throw new Error("fixed ps probe unavailable");
+      });
+      process.env.PATH = `${attackerDir}${delimiter}${previousPath ?? ""}`;
+      writePid(process.pid);
+
+      expect(readPid()).toBeNull();
+      expect(probes).toEqual(["/bin/ps", "/usr/bin/ps"]);
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      setProcessCommandLineExecForTests(null);
+      setProcessCommandLinePlatformForTests(null);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      setOcxStartProcessCacheForTests([]);
+    }
+
+    expect(process.env.PATH).toBe(previousPath);
+    expect(ocxStartProcessCacheSizeForTests()).toBe(0);
+  });
+
+  test("pid validation selects only trusted Windows process probes", () => {
+    const previousSystemRoot = process.env.SystemRoot;
+    const previousWindir = process.env.WINDIR;
+    const trustedSystem32 = join(testDir, "trusted", "System32");
+    const trustedWmic = join(trustedSystem32, "wbem", "WMIC.exe");
+    const trustedPowerShell = join(
+      trustedSystem32,
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const attackerRoot = join(testDir, "attacker-windows");
+    const calls: string[] = [];
+
+    try {
+      mkdirSync(dirname(trustedPowerShell), { recursive: true });
+      writeFileSync(trustedPowerShell, "", { mode: 0o755 });
+      setProcessCommandLinePlatformForTests("win32");
+      setTrustedWindowsSystemDirectoryResolverForTests(() => trustedSystem32);
+      process.env.SystemRoot = attackerRoot;
+      process.env.WINDIR = attackerRoot;
+      writeFileSync(getPidPath(), String(process.pid), "utf-8");
+      setOcxStartProcessCacheForTests([]);
+
+      setProcessCommandLineExecForTests((executable) => {
+        calls.push(executable);
+        if (executable === trustedWmic) return "CommandLine=ocx start\r\n";
+        throw new Error(`unexpected process probe: ${executable}`);
+      });
+      expect(readPid()).toBe(process.pid);
+      expect(calls).toEqual([trustedWmic]);
+
+      calls.length = 0;
+      setOcxStartProcessCacheForTests([]);
+      setProcessCommandLineExecForTests((executable) => {
+        calls.push(executable);
+        if (executable === trustedWmic) throw new Error("WMIC unavailable");
+        if (executable === trustedPowerShell) return "ocx start\n";
+        throw new Error(`unexpected process probe: ${executable}`);
+      });
+      expect(readPid()).toBe(process.pid);
+      expect(calls).toEqual([trustedWmic, trustedPowerShell]);
+      expect(calls.every(executable => !executable.startsWith(attackerRoot))).toBe(true);
+    } finally {
+      setProcessCommandLineExecForTests(null);
+      setProcessCommandLinePlatformForTests(null);
+      setTrustedWindowsSystemDirectoryResolverForTests(null);
+      setOcxStartProcessCacheForTests([]);
+      if (previousSystemRoot === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = previousSystemRoot;
+      if (previousWindir === undefined) delete process.env.WINDIR;
+      else process.env.WINDIR = previousWindir;
+    }
+
+    expect(ocxStartProcessCacheSizeForTests()).toBe(0);
   });
 
   test("removes pid file only when the expected pid still matches", () => {
@@ -2096,5 +2375,102 @@ describe("config.ts – async atomic writes preserve symlinked destinations", ()
     await expect(atomicWriteFileAsync(link, "recovered")).rejects.toThrow(/unresolvable symlinked write target/);
     expect(lstatSync(link).isSymbolicLink()).toBe(true);
     expect(existsSync(join(testDir, "gone-async"))).toBe(false);
+  });
+});
+
+describe("codex account selection order", () => {
+  function writePriorityConfig(
+    codexAccountPriorities: unknown,
+    overrides: Record<string, unknown> = {},
+  ): void {
+    writeConfig({
+      port: 10100,
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      defaultProvider: "openai",
+      codexAccountPriorities,
+      ...overrides,
+    });
+  }
+
+  test("round-trips pool ids, the main account, and negative order", () => {
+    const priorities = { work: 2, side: 1, __main__: -2 };
+    writePriorityConfig(priorities);
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.config.codexAccountPriorities).toEqual(priorities);
+    expect(Object.hasOwn(getDefaultConfig(), "codexAccountPriorities")).toBe(false);
+  });
+
+  test.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "work"],
+    ["a fractional value", { work: 1.5 }],
+    ["a stringified number", { work: "2" }],
+    ["a boolean", { work: true }],
+    ["an above-range value", { work: 101 }],
+    ["a below-range value", { work: -101 }],
+    ["a reserved constructor key", { constructor: 1 }],
+    ["a slash in the key", { "work/account": 1 }],
+  ] as const)("degrades %s to no ordering without discarding the rest of the config", (_label, priorities) => {
+    writePriorityConfig(priorities);
+
+    const diagnostics = readConfigDiagnostics();
+    // Selection order is a preference: a malformed map must never trip the
+    // backup-and-defaults repair path that would reset providers.
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.error).toBeNull();
+    expect(diagnostics.config.codexAccountPriorities).toBeUndefined();
+    expect(Object.keys(diagnostics.config.providers)).toContain("openai");
+    expect(backupNames()).toHaveLength(0);
+    expect(diagnostics.warnings).toContainEqual(expect.stringContaining("account selection order is disabled"));
+  });
+
+  test("degrades a literal __proto__ entry, which JSON.parse materializes as an own key", () => {
+    writeConfig(
+      '{"port":10100,"providers":{"openai":{"adapter":"openai-responses",'
+      + '"baseUrl":"https://chatgpt.com/backend-api/codex","authMode":"forward"}},'
+      + '"defaultProvider":"openai","codexAccountPriorities":{"__proto__":1,"work":2}}',
+    );
+
+    const diagnostics = readConfigDiagnostics();
+    expect(diagnostics.source).toBe("file");
+    expect(diagnostics.config.codexAccountPriorities).toBeUndefined();
+    expect(Object.keys(diagnostics.config.providers)).toContain("openai");
+    expect(diagnostics.warnings).toContainEqual(expect.stringContaining("account selection order is disabled"));
+  });
+
+  test("warns when load degrades a malformed selection-order map", () => {
+    writePriorityConfig({ work: 101 });
+    const warnSpy = spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const loaded = loadConfig();
+      expect(loaded.codexAccountPriorities).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("account selection order is disabled"));
+      expect(backupNames()).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("keeps a valid pin and degrades a malformed one", () => {
+    writePriorityConfig({ work: 1 }, { activeCodexAccountPinned: "work" });
+    expect(readConfigDiagnostics().config.activeCodexAccountPinned).toBe("work");
+
+    writePriorityConfig({ work: 1 }, { activeCodexAccountPinned: "work/account" });
+    const degraded = readConfigDiagnostics();
+    expect(degraded.source).toBe("file");
+    expect(degraded.config.activeCodexAccountPinned).toBeUndefined();
+    expect(degraded.config.codexAccountPriorities).toEqual({ work: 1 });
+    expect(degraded.warnings).toContainEqual(expect.stringContaining("no longer pinned"));
   });
 });

@@ -139,11 +139,15 @@ describe("ocx export human output (accept criterion 2)", () => {
     expect(result.stdout).toContain("3 models; 1 omit context limits");
   });
 
-  test("Pi names its own destination and env var", async () => {
+  test("Pi names its own destination and needs no env var", async () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "pi"], { baseUrl: proxy.baseUrl });
     expect(result.stdout).toContain(join(".pi", "agent", "models.json"));
-    expect(result.stdout).toContain("export OPENCODEX_API_KEY=");
+    // Pi resolves `apiKey` before building its model list and hides the provider
+    // when an env reference is unset, so a loopback bind ships the non-secret
+    // placeholder instead of an env var the user was never told to export.
+    expect(result.stdout).toContain("opencodex-loopback");
+    expect(result.stdout).not.toContain("export OPENCODEX_API_KEY=");
   });
 });
 
@@ -202,7 +206,7 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });
     expect(result.code).toBe(2);
-    for (const id of ["opencode", "pi", "hermes", "openclaw", "kimi", "gajae"]) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]) {
       expect(result.stderr).toContain(id);
     }
     expect(result.stdout).toBe("");
@@ -297,8 +301,10 @@ describe("ocx export never serializes a key (accept criterion 6)", () => {
     for (const [args, envRef] of [
       [["--client", "opencode"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
       [["--client", "opencode", "--json"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
-      [["--client", "pi"], "$OPENCODEX_API_KEY"],
-      [["--client", "pi", "--json"], "$OPENCODEX_API_KEY"],
+      // Pi ships the non-secret loopback placeholder rather than an env reference;
+      // the property under test is unchanged — no real key ever reaches stdout.
+      [["--client", "pi"], "opencodex-loopback"],
+      [["--client", "pi", "--json"], "opencodex-loopback"],
     ] as Array<[string[], string]>) {
       logs = [];
       errors = [];

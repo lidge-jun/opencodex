@@ -2,9 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
 	BOUNDED_BODY_MAX_BYTES,
 	boundedBodyBufferGrowthsForTests,
+	readBoundedResponseBytes,
 	readBoundedResponseBody,
 } from "../src/lib/bounded-body";
 import { UPSTREAM_JSON_BODY_READ_OPTIONS } from "../src/server/responses/core";
+import { readBoundedJsonRequestBody } from "../src/server/request-decompress";
 
 const encoder = new TextEncoder();
 
@@ -363,5 +365,117 @@ describe("readBoundedResponseBody", () => {
 		expect(result.text).toBe("original");
 		expect(response.bodyUsed).toBe(true);
 		expect(cloneCalls).toBe(0);
+	});
+
+	test("reads arbitrary response bytes exactly through the raw primitive", async () => {
+		const expected = new Uint8Array([0x00, 0xff, 0x80, 0xc3, 0x28]);
+		const response = responseFromChunks(expected.subarray(0, 2), expected.subarray(2));
+
+		const result = await readBoundedResponseBytes(response, { maxBytes: expected.byteLength });
+
+		expect(result.oversized).toBe(false);
+		expect(Array.from(result.bytes)).toEqual(Array.from(expected));
+	});
+
+	test("raw byte reads discard the prefix and cancel without draining the stream", async () => {
+		let cancelled = false;
+		let tailPulled = false;
+		const chunks = [new Uint8Array(3), new Uint8Array(3), new Uint8Array([0x7f]), new Uint8Array([0x7e])];
+		const response = new Response(new ReadableStream<Uint8Array>({
+			pull(controller) {
+				const chunk = chunks.shift();
+				if (!chunk) return controller.close();
+				if (chunk.byteLength === 1 && chunk[0] === 0x7e) tailPulled = true;
+				controller.enqueue(chunk);
+			},
+			cancel() { cancelled = true; },
+		}));
+
+		const result = await readBoundedResponseBytes(response, { maxBytes: 5 });
+
+		expect(result.oversized).toBe(true);
+		expect(result.bytes.byteLength).toBe(0);
+		expect(cancelled).toBe(true);
+		// WHATWG streams may prefetch one queued chunk, but cancellation must stop further draining.
+		expect(tailPulled).toBe(false);
+	});
+
+	test("raw byte reads preserve the parent abort reason and cancel the stream", async () => {
+		const parent = new AbortController();
+		const reason = { code: "client-stopped" };
+		let cancelled = false;
+		const response = new Response(new ReadableStream<Uint8Array>({
+			cancel() { cancelled = true; },
+		}));
+		const reading = readBoundedResponseBytes(response, { maxBytes: 5, signal: parent.signal });
+		parent.abort(reason);
+
+		let caught: unknown;
+		try { await reading; } catch (error) { caught = error; }
+		expect(caught).toBe(reason);
+		expect(cancelled).toBe(true);
+	});
+
+	test("raw byte cancellation rejection is observed", async () => {
+		const unhandled: unknown[] = [];
+		const listener = (reason: unknown) => unhandled.push(reason);
+		process.on("unhandledRejection", listener);
+		try {
+			// Bun's test runner fails a test on a real unhandled rejection even when a
+			// process listener is installed. Prove the pinned runtime's event path in an
+			// isolated process, then keep this process clean for the negative assertion.
+			const control = Bun.spawnSync({
+				cmd: [
+					process.execPath,
+					"-e",
+					'process.on("unhandledRejection", () => console.log("observed"));'
+						+ 'void Promise.reject(new Error("control"));setTimeout(() => {}, 10);',
+				],
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			expect(control.exitCode).toBe(0);
+			expect(new TextDecoder().decode(control.stdout)).toContain("observed");
+
+			let cancelCalls = 0;
+			const response = new Response(new ReadableStream<Uint8Array>({
+				start(controller) { controller.enqueue(new Uint8Array(6)); },
+				cancel() {
+					cancelCalls++;
+					return Promise.reject(new Error("cancel failed"));
+				},
+			}));
+			const result = await readBoundedResponseBytes(response, { maxBytes: 5 });
+			expect(result.oversized).toBe(true);
+			await new Promise(resolve => setTimeout(resolve, 10));
+			expect(cancelCalls).toBe(1);
+			expect(unhandled).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", listener);
+		}
+	});
+});
+
+describe("readBoundedJsonRequestBody", () => {
+	test("an explicit deadline signal bounds request ingestion independently of req.signal", async () => {
+		let cancelled = false;
+		const request = new Request("http://localhost/import", {
+			method: "POST",
+			body: new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(encoder.encode('{"partial":'));
+				},
+				cancel() { cancelled = true; },
+			}),
+			duplex: "half",
+		} as RequestInit & { duplex: "half" });
+		const deadline = new AbortController();
+		const reading = readBoundedJsonRequestBody(request, 1024, undefined, { signal: deadline.signal });
+
+		deadline.abort(new DOMException("deadline", "TimeoutError"));
+
+		await expect(reading).rejects.toMatchObject({ name: "TimeoutError" });
+		expect(request.signal.aborted).toBe(false);
+		expect(cancelled).toBe(true);
 	});
 });

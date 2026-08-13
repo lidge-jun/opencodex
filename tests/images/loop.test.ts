@@ -126,6 +126,35 @@ describe("runWithImageBridge", () => {
     expect(sse).toContain("hello world");
   });
 
+  test("image-loop SSE snapshots preserve the client-facing model selector", async () => {
+    const parsed = makeParsed();
+    parsed.modelId = "claude-sonnet-5";
+    parsed._responseModelId = "anthropic/claude-sonnet-5";
+    let upstreamModel = "";
+    streamQueue = [[{ type: "text_delta", text: "hello" }, { type: "done" }]];
+    const response = await runWithImageBridge({
+      parsed,
+      adapter: {
+        ...mockAdapter,
+        buildRequest: async request => {
+          upstreamModel = request.modelId;
+          return { url: "https://test/v1/chat", method: "POST", headers: {}, body: "{}" };
+        },
+      },
+      plan,
+    });
+    const models = (await response.text()).split("\n\n").flatMap(block => {
+      const data = block.split("\n").find(line => line.startsWith("data: "))?.slice(6);
+      if (!data || data === "[DONE]") return [];
+      const payload = JSON.parse(data) as { response?: { model?: unknown } };
+      return typeof payload.response?.model === "string" ? [payload.response.model] : [];
+    });
+
+    expect(upstreamModel).toBe("claude-sonnet-5");
+    expect(models.length).toBeGreaterThan(0);
+    expect(new Set(models)).toEqual(new Set(["anthropic/claude-sonnet-5"]));
+  });
+
   test("single image call → fulfilled, second iteration yields text", async () => {
     const sse = await runAndGetSSE(
       [imageCallEvents, [{ type: "text_delta", text: "Here is your image" }, { type: "done" }]],

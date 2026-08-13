@@ -162,20 +162,109 @@ describe("Command Code provider", () => {
       context: {
         ...parsed().context,
         messages: [{
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "view_image", arguments: {} }],
+          timestamp: 1,
+        }, {
           role: "toolResult",
           toolCallId: "call_1",
           toolName: "view_image",
           content: [{ type: "text", text: "screenshot:" }, { type: "image", imageUrl: image }],
           isError: false,
-          timestamp: 1,
+          timestamp: 2,
         }],
       },
     });
     const body = JSON.parse(built.body);
     expect(body.params.messages).toEqual([
+      { role: "assistant", content: [{ type: "tool-call", toolCallId: "call_1", toolName: "view_image", input: {} }] },
       { role: "tool", content: [{ type: "tool-result", toolCallId: "call_1", toolName: "view_image", output: { type: "text", value: "screenshot:[image]" } }] },
       { role: "user", content: [{ type: "image", image, mediaType: "image/png" }] },
     ]);
+  });
+
+  test("synthesizes an error result for every assistant tool call that never received a result", async () => {
+    const built = await builtRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        messages: [
+          { role: "user", content: "run tools", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call_1", name: "lookup", arguments: { q: "a" } },
+              { type: "toolCall", id: "call_2", name: "lookup", arguments: { q: "b" } },
+            ],
+            timestamp: 2,
+          },
+          { role: "toolResult", toolCallId: "call_1", toolName: "lookup", content: "one", isError: false, timestamp: 3 },
+          { role: "user", content: "continue", timestamp: 4 },
+        ],
+      },
+    });
+    const body = JSON.parse(built.body);
+    const wire = body.params.messages;
+    expect(wire[0]).toEqual({ role: "user", content: [{ type: "text", text: "run tools" }] });
+    expect(wire[1]).toMatchObject({ role: "assistant", content: [{ type: "tool-call", toolCallId: "call_1" }, { type: "tool-call", toolCallId: "call_2" }] });
+    expect(wire[2]).toMatchObject({ role: "tool", content: [{ type: "tool-result", toolCallId: "call_1", output: { type: "text", value: "one" } }] });
+    // call_2 never received a result: the adapter must close it with an explicit error result
+    // BEFORE the next user message, or the upstream rejects the unpaired call (#1383).
+    expect(wire[3]).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool-result", toolCallId: "call_2", toolName: "lookup", output: { type: "error-text" } }],
+    });
+    expect(wire[4]).toEqual({ role: "user", content: [{ type: "text", text: "continue" }] });
+  });
+
+  test("keeps tool results contiguous before buffered image carriers", async () => {
+    const image = "data:image/png;base64,AAAA";
+    const built = await builtRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "toolCall", id: "call_1", name: "view_image", arguments: {} },
+              { type: "toolCall", id: "call_2", name: "lookup", arguments: { q: "b" } },
+            ],
+            timestamp: 1,
+          },
+          { role: "toolResult", toolCallId: "call_1", toolName: "view_image", content: [{ type: "text", text: "shot" }, { type: "image", imageUrl: image }], isError: false, timestamp: 2 },
+          { role: "toolResult", toolCallId: "call_2", toolName: "lookup", content: "two", isError: false, timestamp: 3 },
+        ],
+      },
+    });
+    const body = JSON.parse(built.body);
+    const wire = body.params.messages;
+    // Both tool results must precede the user image carrier so the assistant turn's tool
+    // results stay contiguous on the wire (#1383 / CodeRabbit adjacency finding).
+    expect(wire[1]).toMatchObject({ role: "tool", content: [{ type: "tool-result", toolCallId: "call_1" }] });
+    expect(wire[2]).toMatchObject({ role: "tool", content: [{ type: "tool-result", toolCallId: "call_2" }] });
+    expect(wire[3]).toEqual({ role: "user", content: [{ type: "image", image, mediaType: "image/png" }] });
+  });
+
+  test("degrades an orphan tool result without a declared call to a text carrier", async () => {
+    const built = await builtRequest({
+      ...parsed(),
+      context: {
+        ...parsed().context,
+        messages: [
+          { role: "user", content: "go", timestamp: 1 },
+          { role: "toolResult", toolCallId: "call_orphan", toolName: "lookup", content: "outcome", isError: false, timestamp: 2 },
+        ],
+      },
+    });
+    const body = JSON.parse(built.body);
+    const wire = body.params.messages;
+    // The upstream rejects a standalone `tool` message whose call was never declared by an
+    // assistant turn; the outcome must ride a user text carrier instead (#1383).
+    expect(wire[1]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: expect.stringContaining("[tool result without adjacent tool call: lookup (call_orphan)]") }],
+    });
   });
 
   test("keeps the generate config to bounded workspace and git metadata", async () => {
@@ -212,6 +301,15 @@ describe("Command Code provider", () => {
     // Legacy compatibility id resolves to the canonical effort table before the lookup.
     const legacy = await builtRequest({ ...parsed(), modelId: "deepseek-v4-flash" });
     expect(JSON.parse(legacy.body).params.reasoning_effort).toBe("high");
+  });
+
+  test("treats prototype property names as literal model ids", async () => {
+    for (const modelId of ["__proto__", "constructor", "toString"]) {
+      const built = await builtRequest(parsed(modelId));
+      const params = JSON.parse(built.body).params;
+      expect(params.model).toBe(modelId);
+      expect(params).not.toHaveProperty("reasoning_effort");
+    }
   });
 
   test("filters tool declarations when tool_choice disables tools", async () => {
@@ -284,6 +382,32 @@ describe("Command Code provider", () => {
     for await (const event of createCommandCodeAdapter(provider).parseStream(response, createTestTranslatorBudget())) events.push(event);
     expect(events).toEqual([
       { type: "error", message: "upstream boom", status: 502 },
+      { type: "done", usage: undefined, stopReason: undefined },
+    ]);
+  });
+
+  test("classifies a missing-tool-result upstream error distinctly", async () => {
+    const response = new Response(JSON.stringify({
+      type: "error",
+      error: { message: "Provider stream error: Tool result is missing for tool call call_01_x." },
+    }));
+    const events = [];
+    for await (const event of createCommandCodeAdapter(provider).parseStream(response, createTestTranslatorBudget())) events.push(event);
+    expect(events).toEqual([
+      { type: "error", message: "Provider stream error: Tool result is missing for tool call call_01_x.", status: 502, errorType: "upstream_error", code: "missing_tool_result" },
+      { type: "done", usage: undefined, stopReason: undefined },
+    ]);
+  });
+
+  test("classifies the underscored missing-tool-result variant distinctly", async () => {
+    const response = new Response(JSON.stringify({
+      type: "error",
+      error: { message: "Provider stream error: tool_result is missing for call_02_y." },
+    }));
+    const events = [];
+    for await (const event of createCommandCodeAdapter(provider).parseStream(response, createTestTranslatorBudget())) events.push(event);
+    expect(events).toEqual([
+      { type: "error", message: "Provider stream error: tool_result is missing for call_02_y.", status: 502, errorType: "upstream_error", code: "missing_tool_result" },
       { type: "done", usage: undefined, stopReason: undefined },
     ]);
   });

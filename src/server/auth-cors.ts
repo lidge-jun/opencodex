@@ -6,12 +6,15 @@ import {
   modelAdapterRecordConfigError,
   modelPreferHostedToolsConfigError,
   codexAutoStartEnabled,
+  nonBlankStringArrayConfigError,
   positiveIntegerConfigError,
   positiveIntegerRecordConfigError,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
+  providerModelCostsConfigError,
   reasoningSummaryDeliveryRecordConfigError,
   retryOn429PolicyConfigError,
+  sanitizeModelCostsForDisplay,
 } from "../config";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { redactSecretString } from "../lib/redact";
@@ -73,7 +76,7 @@ export function isSameOriginAsRequest(req: Request, origin: string): boolean {
   }
 }
 
-export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean {
+export function isAllowedRequestOrigin(req: Request, config: RequestPolicyView): boolean {
   const origin = req.headers.get("Origin");
   if (!isApiAuthRequired(config)) {
     if (!isLoopbackRequestHost(req.headers.get("Host"))) return false;
@@ -82,7 +85,7 @@ export function isAllowedRequestOrigin(req: Request, config: OcxConfig): boolean
   return !origin || isLoopbackOriginValue(origin) || isSameOriginAsRequest(req, origin) || isExtraAllowedOrigin(origin, config);
 }
 
-function isExtraAllowedOrigin(origin: string, cfg: OcxConfig): boolean {
+function isExtraAllowedOrigin(origin: string, cfg: RequestPolicyView): boolean {
   if (!cfg.corsAllowOrigins?.length) return false;
   const parsedOrigin = comparableOrigin(origin);
   return cfg.corsAllowOrigins.some(allowed => {
@@ -136,7 +139,7 @@ export function browserSecurityHeaders(): Record<string, string> {
   };
 }
 
-export function corsHeaders(req?: Request, config?: OcxConfig): Record<string, string> {
+export function corsHeaders(req?: Request, config?: RequestPolicyView): Record<string, string> {
   const origin = req?.headers.get("Origin");
   const allowOrigin = origin && req && config && isAllowedRequestOrigin(req, config) ? origin : _corsOrigin;
   return {
@@ -160,7 +163,7 @@ export function managementCorsHeaders(req?: Request, config?: OcxConfig): Record
   return headers;
 }
 
-export function withCors(response: Response, req: Request, config: OcxConfig): Response {
+export function withCors(response: Response, req: Request, config: RequestPolicyView): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(corsHeaders(req, config))) {
     headers.set(name, value);
@@ -184,14 +187,18 @@ export function withManagementCors(response: Response, req: Request, config: Ocx
   });
 }
 
-export function jsonResponse(data: unknown, status = 200, req?: Request, config?: OcxConfig): Response {
+export function jsonResponse(data: unknown, status = 200, req?: Request, config?: RequestPolicyView): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: { "Content-Type": "application/json", ...corsHeaders(req, config) },
   });
 }
 
-export function configuredApiAuthToken(_config: OcxConfig): string | undefined {
+// The parameter is vestigial — the token has always come from the environment — but callers
+// pass a config, so keep accepting one. Typed as `unknown` rather than `OcxConfig` so a narrow
+// policy view can reach it too (#1102); widening to OcxConfig here would force every caller in
+// the admission path back to the full config.
+export function configuredApiAuthToken(_config?: unknown): string | undefined {
   const token = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
   return token || undefined;
 }
@@ -208,8 +215,35 @@ export function isLoopbackHostname(hostname: string | undefined): boolean {
   return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
-export function isApiAuthRequired(config: OcxConfig): boolean {
+export function isApiAuthRequired(config: Pick<OcxConfig, "hostname">): boolean {
   return !isLoopbackHostname(config.hostname);
+}
+
+/**
+ * The slice of config that decides admission and CORS, and nothing else (#1102).
+ *
+ * The unauthenticated loopback listener shares this process with the public one: same routing,
+ * same account pool, same drain. The only thing it must see differently is its own bind
+ * address, because `isApiAuthRequired` reads `hostname` and the shared config says "0.0.0.0".
+ *
+ * Two ways to express that were rejected. Passing the whole config with `hostname` rewritten
+ * and holding it for the listener's lifetime would go stale the moment the management API
+ * changes a setting. Adding an `allowUnauthenticated` parameter to the resolvers would create a
+ * callable admission bypass that the PUBLIC listener could also reach — the switch would exist
+ * on the wrong side of the boundary.
+ *
+ * So this type is deliberately narrow: it cannot masquerade as a business config, and a policy
+ * view that leaks into a routing path fails to typecheck rather than silently taking effect.
+ */
+export type RequestPolicyView = Pick<OcxConfig, "hostname" | "corsAllowOrigins" | "apiKeys">;
+
+/** Derive the per-request policy view for a listener. Cheap enough to build per request. */
+export function requestPolicyView(config: OcxConfig, bindHostname: string): RequestPolicyView {
+  return {
+    hostname: bindHostname,
+    ...(config.corsAllowOrigins ? { corsAllowOrigins: config.corsAllowOrigins } : {}),
+    ...(config.apiKeys ? { apiKeys: config.apiKeys } : {}),
+  };
 }
 
 export function assertServerAuthConfig(config: OcxConfig): void {
@@ -253,7 +287,7 @@ export type DataPlaneAdmission =
  * discarded, which is what makes per-key attribution possible without touching
  * the admission decision itself.
  */
-export function resolveDataPlaneAdmissionSecret(token: string, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveDataPlaneAdmissionSecret(token: string, config: Pick<OcxConfig, "apiKeys">): DataPlaneAdmission | null {
   const actual = token.trim();
   if (!actual) return null;
   if (secretEquals(actual, configuredApiAuthToken(config))) return { kind: "environment" };
@@ -341,7 +375,7 @@ export function validateForwardAdmissionCredential(headers: Headers, config: Ocx
  * Resolving form of `hasValidApiAuth`: identical header precedence, identical
  * decision, but it names the admission instead of collapsing it to a boolean.
  */
-export function resolveApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
   // A loopback bind never reads a token at all, so there is no key to name.
   if (!isApiAuthRequired(config)) return { kind: "loopback" };
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
@@ -352,11 +386,11 @@ export function resolveApiAuth(req: Request, config: OcxConfig): DataPlaneAdmiss
   return resolveDataPlaneAdmissionSecret(actual, config);
 }
 
-export function hasValidApiAuth(req: Request, config: OcxConfig): boolean {
+export function hasValidApiAuth(req: Request, config: RequestPolicyView): boolean {
   return resolveApiAuth(req, config) !== null;
 }
 
-export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-plane"): Response | null {
+export function requireApiAuth(req: Request, config: RequestPolicyView, _kind: "data-plane"): Response | null {
   if (hasValidApiAuth(req, config)) return null;
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");
 }
@@ -366,7 +400,7 @@ export function requireApiAuth(req: Request, config: OcxConfig, _kind: "data-pla
  * Codex Direct. Remote binds must use the dedicated proxy header so the two bearer
  * domains can never be confused.
  */
-export function resolveResponsesApiAuth(req: Request, config: OcxConfig): DataPlaneAdmission | null {
+export function resolveResponsesApiAuth(req: Request, config: RequestPolicyView): DataPlaneAdmission | null {
   if (!isApiAuthRequired(config)) return { kind: "loopback" };
   // Dedicated header ONLY. `Authorization` on these transports may belong to
   // Codex Direct passthrough, and the two bearer domains must stay unconfusable.
@@ -375,7 +409,7 @@ export function resolveResponsesApiAuth(req: Request, config: OcxConfig): DataPl
   return resolveDataPlaneAdmissionSecret(actual, config);
 }
 
-export function requireResponsesApiAuth(req: Request, config: OcxConfig): Response | null {
+export function requireResponsesApiAuth(req: Request, config: RequestPolicyView): Response | null {
   if (resolveResponsesApiAuth(req, config)) return null;
   return formatErrorResponse(401, "authentication_error", "opencodex API key required");
 }
@@ -416,6 +450,9 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     if (seed) seed.codexAccountMode = raw.codexAccountMode;
     const canonicalCandidate = { ...raw };
     delete canonicalCandidate.responsesSnapshotRepair;
+    // modelCosts is a user-owned display overlay, not part of the canonical
+    // forward seed; it is validated separately below (providerModelCostsConfigError).
+    delete canonicalCandidate.modelCosts;
     const canonical = seed && sameCanonicalProviderSeed(canonicalCandidate, seed);
     if (!canonical) {
       return `provider ${name} must equal the canonical built-in provider seed`;
@@ -439,6 +476,12 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
+  }
+  const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
+  if (modelCostsError) {
+    // The provider name is caller-controlled and can be token-shaped; redact and JSON-escape
+    // it before it reaches the management API response (same rule as retryOn429 above).
+    return `provider ${JSON.stringify(redactSecretString(name))} ${modelCostsError}`;
   }
   const apiKeyTransportError = apiKeyTransportConfigError(typed);
   if (apiKeyTransportError) return `provider ${name} ${apiKeyTransportError}`;
@@ -467,6 +510,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
   if (defaultMaxOutputError) return `provider ${name} ${defaultMaxOutputError}`;
   const maxOutputError = positiveIntegerRecordConfigError(raw.modelMaxOutputTokens, "modelMaxOutputTokens");
   if (maxOutputError) return `provider ${name} ${maxOutputError}`;
+  const structuredOutputOptOutError = nonBlankStringArrayConfigError(
+    raw.noStructuredOutputModels,
+    "noStructuredOutputModels",
+  );
+  if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   if (typed.authMode === "local") {
@@ -513,6 +561,7 @@ export function copyIfDefined<K extends keyof OcxProviderConfig>(
   if (value !== undefined) out[key as string] = value as unknown;
 }
 
+/** Public dashboard DTO for config.json: provider entries with secrets stripped and documented fields exposed (including `modelCosts`). */
 export function safeConfigDTO(config: OcxConfig): unknown {
   const providers: Record<string, Record<string, unknown>> = {};
   for (const [name, provider] of Object.entries(config.providers)) {
@@ -546,12 +595,16 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "noTemperatureModels",
       "noTopPModels",
       "noPenaltyModels",
+      "noStructuredOutputModels",
       "autoToolChoiceOnlyModels",
       "preserveReasoningContentModels",
+      "requiresReasoningPlaceholderModels",
       "escapeBuiltinToolNames",
     ] as const) {
       copyIfDefined(dto, provider, key);
     }
+    const modelCosts = sanitizeModelCostsForDisplay(provider.modelCosts);
+    if (modelCosts) dto.modelCosts = modelCosts;
     // Resolve the note by DESTINATION, not by name. A preset saved under a custom name is
     // still pointed at the same vendor route, and a usage restriction the user needs to see
     // must not disappear because the row was renamed. Prefer the same-name entry so an

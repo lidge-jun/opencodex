@@ -12,12 +12,25 @@ import {
 } from "../src/codex/account-namespace-match";
 import {
   appendDefaultCodexAccountNamespace,
+  codexAccountPickerEnabled,
   codexAccountNamespaceEntries,
   defaultCodexAccountNamespaces,
+  initializeDefaultCodexAccountNamespaces,
   isMainCodexAccountTarget,
   isValidCodexAccountNamespaceTarget,
 } from "../src/codex/account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../src/codex/main-account";
+import type { OcxConfig } from "../src/types";
+
+type InitializableAccountNamespaceConfig = Pick<
+  OcxConfig,
+  | "codexAccountPickerEnabled"
+  | "codexAccountNamespaces"
+  | "codexAccounts"
+  | "combos"
+  | "providers"
+  | "routingProfiles"
+>;
 
 describe("Codex account namespace foundations", () => {
   test("uses persisted random labels without deriving selectors from aliases or emails", () => {
@@ -150,6 +163,41 @@ describe("Codex account namespace foundations", () => {
     expect(namespaces).toEqual({ "main-2": "@main", "p111111-2": "stored-account-id" });
   });
 
+  test("avoids routing-profile alias prefixes when allocating defaults", () => {
+    const namespaces = defaultCodexAccountNamespaces({
+      providers: {},
+      routingProfiles: {
+        main: {
+          alias: " main/gpt-5.5 ",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+        side: {
+          alias: "p111111/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+      codexAccounts: [{
+        id: "stored-account-id",
+        logLabel: "p111111",
+        isMain: false,
+      }],
+    });
+
+    expect(namespaces).toEqual({ "main-2": "@main", "p111111-2": "stored-account-id" });
+  });
+
+  test("keeps routing-profile alias-prefix matching exact-case", () => {
+    expect(defaultCodexAccountNamespaces({
+      providers: {},
+      routingProfiles: {
+        mixedCase: {
+          alias: "Main/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+    })).toEqual({ main: "@main" });
+  });
+
   test("avoids provider names case-insensitively when allocating defaults", () => {
     expect(defaultCodexAccountNamespaces({
       providers: {
@@ -176,6 +224,31 @@ describe("Codex account namespace foundations", () => {
       p222222: "new-account-id",
     });
     expect(appendDefaultCodexAccountNamespace(config, account)).toBe(false);
+  });
+
+  test("append avoids routing-profile alias prefixes without rewriting existing selectors", () => {
+    const codexAccountNamespaces = { main: "@main" };
+    const config = {
+      providers: {},
+      routingProfiles: {
+        side: {
+          alias: "p222222/gpt-5.5",
+          candidates: [{ provider: "openai", model: "gpt-5.5" }],
+        },
+      },
+      codexAccountNamespaces,
+    };
+
+    expect(appendDefaultCodexAccountNamespace(config, {
+      id: "new-account-id",
+      logLabel: "p222222",
+      isMain: false,
+    })).toBe(true);
+    expect(config.codexAccountNamespaces).toBe(codexAccountNamespaces);
+    expect(config.codexAccountNamespaces).toEqual({
+      main: "@main",
+      "p222222-2": "new-account-id",
+    });
   });
 
   test("refuses to append an account id already owned by a selector key", () => {
@@ -304,6 +377,99 @@ describe("Codex account namespace foundations", () => {
         { id: "desktop-row", email: "third@example.test", logLabel: "p464646", isMain: true },
       ],
     })).toEqual({ "main-2": "@main", p454545: "main" });
+  });
+
+  test("initializes selectors only for an explicit opt-in with no existing bindings", () => {
+    const absent: InitializableAccountNamespaceConfig = {
+      providers: {},
+      codexAccountPickerEnabled: true,
+    };
+    expect(initializeDefaultCodexAccountNamespaces(absent)).toBe(true);
+    expect(absent.codexAccountNamespaces).toEqual({ main: "@main" });
+
+    const originalEmpty = {} as Record<string, string>;
+    const empty = {
+      providers: {},
+      codexAccountPickerEnabled: true,
+      codexAccountNamespaces: originalEmpty,
+    };
+    expect(initializeDefaultCodexAccountNamespaces(empty)).toBe(true);
+    expect(empty.codexAccountNamespaces).not.toBe(originalEmpty);
+    expect(empty.codexAccountNamespaces).toEqual({ main: "@main" });
+
+    for (const codexAccountPickerEnabled of [undefined, false]) {
+      const inert = { providers: {}, codexAccountPickerEnabled };
+      expect(initializeDefaultCodexAccountNamespaces(inert)).toBe(false);
+      expect(inert).not.toHaveProperty("codexAccountNamespaces");
+    }
+  });
+
+  test("initializer preserves a non-empty selector map by identity and order", () => {
+    const codexAccountNamespaces = { side: "stored-account", desktop: "@main" };
+    const config = {
+      providers: {},
+      codexAccountPickerEnabled: true,
+      codexAccountNamespaces,
+    };
+
+    const labelSpy = spyOn(accountLabels, "createCodexAccountLogLabel");
+    try {
+      expect(initializeDefaultCodexAccountNamespaces(config)).toBe(false);
+      expect(config.codexAccountNamespaces).toBe(codexAccountNamespaces);
+      expect(Object.keys(config.codexAccountNamespaces)).toEqual(["side", "desktop"]);
+      expect(labelSpy).not.toHaveBeenCalled();
+    } finally {
+      labelSpy.mockRestore();
+    }
+  });
+
+  test("initializer assigns nothing when safe selector allocation fails", () => {
+    const labelSpy = spyOn(accountLabels, "createCodexAccountLogLabel").mockReturnValue("p111111");
+    try {
+      for (const startsWithEmptyMap of [false, true]) {
+        const originalEmpty = {} as Record<string, string>;
+        const config: InitializableAccountNamespaceConfig = {
+          providers: {},
+          codexAccountPickerEnabled: true,
+          codexAccounts: [{ id: "p111111", logLabel: "legacy", isMain: false }],
+          ...(startsWithEmptyMap ? { codexAccountNamespaces: originalEmpty } : {}),
+        };
+
+        expect(() => initializeDefaultCodexAccountNamespaces(config))
+          .toThrow("Unable to allocate a unique Codex account selector");
+        if (startsWithEmptyMap) {
+          expect(config.codexAccountNamespaces).toBe(originalEmpty);
+          expect(config.codexAccountNamespaces).toEqual({});
+        } else {
+          expect(config).not.toHaveProperty("codexAccountNamespaces");
+        }
+      }
+    } finally {
+      labelSpy.mockRestore();
+    }
+  });
+
+  test("keeps existing selector maps enabled unless the visibility override is false", () => {
+    expect(codexAccountPickerEnabled({ codexAccountNamespaces: { desktop: "@main" } })).toBe(true);
+    expect(codexAccountPickerEnabled({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: true,
+    })).toBe(true);
+    expect(codexAccountPickerEnabled({
+      codexAccountNamespaces: { desktop: "@main" },
+      codexAccountPickerEnabled: false,
+    })).toBe(false);
+    expect(codexAccountPickerEnabled({
+      codexAccountNamespaces: {},
+      codexAccountPickerEnabled: true,
+    })).toBe(false);
+    expect(codexAccountPickerEnabled({})).toBe(false);
+    for (const malformed of [null, "false", 0, {}, []]) {
+      expect(codexAccountPickerEnabled({
+        codexAccountNamespaces: { desktop: "@main" },
+        codexAccountPickerEnabled: malformed as never,
+      })).toBe(false);
+    }
   });
 
   test("matches route and account namespaces exactly but provider namespaces case-insensitively", () => {

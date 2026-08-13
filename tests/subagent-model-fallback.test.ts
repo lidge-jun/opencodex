@@ -13,6 +13,8 @@ import {
   readCodexAgentModelFallback,
   resetSubagentModelFallbackStateForTests,
   resolveAgentModelFallbackForPrimary,
+  resolveConfiguredModelFallbackForPrimary,
+  scanCodexAgentRolesWithTomlModelFallback,
   selectAvailableSubagentModel,
   setSubagentQuotaPrimeForTests,
   subagentFallbackGuidanceText,
@@ -917,6 +919,244 @@ describe("subagent model fallback chain", () => {
     ]);
     expect(readCodexAgentModelFallback("executor", dir)).toEqual([
       "alibaba-token-plan/qwen3.8-max",
+    ]);
+  });
+
+  test("config-keyed per-model fallback resolves for the primary model", () => {
+    const config = cfg({
+      subagentModelFallbackByModel: {
+        "gpt-5.6-sol": ["alibaba-token-plan/qwen3.8-max", "kimi/k3"],
+        "other-model": ["xai/grok-4.5"],
+      },
+    });
+    expect(resolveConfiguredModelFallbackForPrimary("gpt-5.6-sol", config)).toEqual([
+      "alibaba-token-plan/qwen3.8-max",
+      "kimi/k3",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("other-model", config)).toEqual([
+      "xai/grok-4.5",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("unlisted", config)).toEqual([]);
+  });
+
+  test("config-keyed fallback dedupes across keys and preserves account-selector case", () => {
+    const config = cfg({
+      codexAccountNamespaces: { work: "account-a", Work: "account-b" },
+      subagentModelFallbackByModel: {
+        "gpt-5.6-sol": ["work/gpt-5.5", "Work/gpt-5.5", "work/GPT-5.5", "kimi/k3"],
+        "openrouter/anthropic/claude": ["xai/grok-4.5"],
+        "openrouter/anthropic-claude": ["kimi/k3", "xai/grok-4.5"],
+      },
+    });
+    expect(resolveConfiguredModelFallbackForPrimary("gpt-5.6-sol", config)).toEqual([
+      "work/gpt-5.5",
+      "Work/gpt-5.5",
+      "kimi/k3",
+    ]);
+    expect(resolveConfiguredModelFallbackForPrimary("openrouter/anthropic/claude", config)).toEqual([
+      "xai/grok-4.5",
+      "kimi/k3",
+    ]);
+  });
+
+  test("applySubagentModelFallback prefers config-keyed chains over TOML model_fallback", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "executor.toml"), [
+      "name = \"executor\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    updateAccountQuota("pool-a", 95);
+    const parsed = {
+      modelId: "gpt-5.6-sol",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "gpt-5.6-sol" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      cfg({
+        subagentModelFallback: undefined,
+        subagentModelFallbackByModel: {
+          "gpt-5.6-sol": ["alibaba-token-plan/qwen3.8-max"],
+        },
+      }),
+    );
+    expect(result?.to).toBe("alibaba-token-plan/qwen3.8-max");
+  });
+
+  test("applySubagentModelFallback orders and dedupes all four fallback stages", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "executor.toml"), [
+      "name = \"executor\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"xai/grok-4.5\", \"KIMI/K3\"]",
+      "",
+    ].join("\n"), "utf8");
+    const config = cfg({
+      subagentModelFallbackByModel: {
+        "gpt-5.6-sol": ["alibaba-token-plan/qwen3.8-max", "GPT-5.6-SOL"],
+      },
+      subagentModelFallback: ["kimi/k3", "ALIBABA-TOKEN-PLAN/QWEN3.8-MAX"],
+    });
+    updateAccountQuota("pool-a", 95);
+    for (const model of ["alibaba-token-plan/qwen3.8-max", "kimi/k3", "xai/grok-4.5"]) {
+      noteSubagentModelFailure(model, "quota exhausted", config);
+    }
+    const parsed = {
+      modelId: "gpt-5.6-sol",
+      options: {},
+      context: { messages: [] },
+      _rawBody: { model: "gpt-5.6-sol" },
+    };
+    const result = applySubagentModelFallback(
+      parsed as never,
+      new Headers({ "x-openai-subagent": "collab_spawn" }),
+      config,
+    );
+    expect(result).toEqual({
+      from: "gpt-5.6-sol",
+      to: "gpt-5.6-sol",
+      skipped: [
+        "gpt-5.6-sol",
+        "alibaba-token-plan/qwen3.8-max",
+        "kimi/k3",
+        "xai/grok-4.5",
+      ],
+    });
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback reports roles carrying the field, including empty arrays", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "with_fallback.toml"), [
+      "name = \"with_fallback\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "empty_fallback.toml"), [
+      "name = \"empty_fallback\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = []",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "clean.toml"), [
+      "name = \"clean\"",
+      "model = \"gpt-5.6-sol\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "empty_fallback",
+      "with_fallback",
+    ]);
+    expect(readCodexAgentModelFallback("empty_fallback", dir)).toEqual([]);
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback recognizes quoted model_fallback keys", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "quoted_key.toml"), [
+      "name = \"quoted_key\"",
+      "model = \"gpt-5.6-sol\"",
+      "\"model_fallback\" = [\"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "literal_key.toml"), [
+      "name = \"literal_key\"",
+      "model = \"gpt-5.6-sol\"",
+      "'model_fallback' = []",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "literal_key",
+      "quoted_key",
+    ]);
+    expect(readCodexAgentModelFallback("quoted_key", dir)).toEqual(["kimi/k3"]);
+    expect(readCodexAgentModelFallback("literal_key", dir)).toEqual([]);
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback ignores model_fallback text inside strings", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "multiline_text.toml"), [
+      "name = \"multiline_text\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"",
+      "model_fallback = []",
+      "\"model_fallback\" = [\"kimi/k3\"]",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "single_line_text.toml"), [
+      "name = \"single_line_text\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"model_fallback = [\\\"kimi/k3\\\"]\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("multiline_text", dir)).toEqual([]);
+  });
+
+  test("scanCodexAgentRolesWithTomlModelFallback handles escaped triple quotes inside multiline strings", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "escaped_open.toml"), [
+      "name = \"escaped_open\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"a\\\"\"\"",
+      "model_fallback = []",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "escaped_continuation.toml"), [
+      "name = \"escaped_continuation\"",
+      "model = \"gpt-5.6-sol\"",
+      "description = \"\"\"",
+      "still inside \\\"\"\"",
+      "model_fallback = []",
+      "\"\"\"",
+      "",
+    ].join("\n"), "utf8");
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("escaped_open", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("escaped_continuation", dir)).toEqual([]);
+  });
+
+  test("readCodexAgentModelFallback rejects string arrays without proper commas", () => {
+    const dir = codexHomeFixture();
+    writeFileSync(join(dir, "agents", "missing_comma.toml"), [
+      "name = \"missing_comma\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\" \"alibaba-token-plan/qwen3.8-max\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "leading_comma.toml"), [
+      "name = \"leading_comma\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [, \"kimi/k3\"]",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "trailing_token.toml"), [
+      "name = \"trailing_token\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"] invalid",
+      "",
+    ].join("\n"), "utf8");
+    writeFileSync(join(dir, "agents", "inline_comment.toml"), [
+      "name = \"inline_comment\"",
+      "model = \"gpt-5.6-sol\"",
+      "model_fallback = [\"kimi/k3\"] # keep",
+      "",
+    ].join("\n"), "utf8");
+    expect(readCodexAgentModelFallback("missing_comma", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("leading_comma", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("trailing_token", dir)).toEqual([]);
+    expect(readCodexAgentModelFallback("inline_comment", dir)).toEqual(["kimi/k3"]);
+    // Doctor reports every role carrying the field, even when its value is malformed.
+    expect(scanCodexAgentRolesWithTomlModelFallback(dir).sort()).toEqual([
+      "inline_comment",
+      "leading_comma",
+      "missing_comma",
+      "trailing_token",
     ]);
   });
 

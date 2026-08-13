@@ -17,7 +17,7 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
 
@@ -30,6 +30,8 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent s
 | `mode default` | Respect upstream model surface pins. |
 | `mode v2` | Force all models to v2, enable native v2, and preserve the active thread limit. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
+| `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
+| `mode-hint --clear` | Remove the hint so the effort-derived policy (ultra = proactive) resumes. |
 
 ```bash
 ocx v2 status
@@ -37,12 +39,25 @@ ocx v2 mode v1
 ocx v2 mode default
 ocx v2 on
 ocx v2 threads 16
+ocx v2 mode-hint "Proactive multi-agent delegation is active."
+ocx v2 mode-hint --clear
 ```
 
 The `mode` subcommand writes `multiAgentMode` to the opencodex config and resyncs the Codex catalog.
 Mode and flag transitions move the current numeric thread limit between the valid v1/v2 Codex keys;
 a failed transition restores the original `config.toml`. Changes apply to new Codex sessions, while
 running sessions keep their pinned surface.
+
+`mode-hint` writes `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex's
+`$CODEX_HOME/config.toml` even when `multi_agent_v2` is currently disabled. The
+command only persists the override; it does not enable or disable the feature, so
+the hint takes effect when a matching Codex surface is active. The hint overrides
+codex-rs's effort-derived multi-agent policy, so any model and any reasoning effort
+receives the Proactive delegation prompt. It does **not** change reasoning effort
+itself. A missing argument or a whitespace-only value is rejected; only `--clear`
+removes the hint. The Subagents dashboard's Ultra mode **on** toggle has a stricter
+gate: it requires the native feature to be enabled with an explicit v2 surface
+(`ocx v2 mode v2`); `ocx v2 on` alone does not satisfy that dashboard gate.
 
 ## Combo routing
 
@@ -56,6 +71,13 @@ combo is currently the supported routing resource. Targets use
 ocx combo list
 ocx route combo set reliable --targets ark/model-a:2,openai/gpt-5.5
 ```
+
+`set` accepts `--strategy`, `--sticky`, `--effort`, `--alias`, `--rename-from`, `--native-alias`, and
+`--display-name <label|->` (`-` clears the label). A native alias captures only one currently supported,
+unqualified bare OpenAI model id. Bare `gpt-5.6-*` native aliases use Codex Pool/Direct credentials.
+Account-qualified OpenAI routes remain distinct, while provider-qualified routes such as
+`openai-apikey/gpt-5.6-*` use their configured API key and never fall through to the native alias.
+Read the safety and visibility contract in the guide before enabling the compatibility pair.
 
 See [Combos](/guides/combos/) for routing behavior and configuration guidance.
 
@@ -146,40 +168,49 @@ Manage and apply the Grok Build model fence.
 
 ## Client config export
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
 
-Print a client config wired to the running proxy. opencode and [Pi](/guides/pi/) read providers
-from their own JSON config rather than environment variables, so this command serializes the
-`opencodex` provider block — base URL, model list, and the client's env reference — for you to
-merge into that file.
+Print a client config wired to the running proxy. The command serializes the
+`opencodex` provider block — base URL, model list, and the client's credential
+reference or loopback placeholder — in the selected client's native format.
 
 The proxy must be running; the command resolves its live port, reads `/api/models`, and emits only
 models Codex can currently see.
 
 | Flag | Action |
 | --- | --- |
-| `--client <opencode\|pi>` | Required. Selects the client dialect: opencode's keyed `provider` object or Pi's `providers` array. |
-| `--json` | Print only the config JSON on stdout, so a redirect captures byte-exact output. Every diagnostic, including the `--out` write note, goes to stderr. |
-| `--out <path>` | Write the config to `<path>`. Refuses to replace an existing file. |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | Required. Selects the client config dialect. |
+| `--json` | Print the generated document as JSON on stdout for scripts. This is JSON even when the selected client's native format is YAML, TOML, or JSON5. |
+| `--out <path>` | Write the client's native config format to `<path>`. Refuses to replace an existing file. |
 | `--force` | Allow `--out` to replace an existing file. |
 
 ```bash
 ocx export --client opencode                     # config plus destination, merge warning, and counts
-ocx export --client pi --json > pi-models.json   # byte-exact JSON for a pipe or a diff
+ocx export --client pi --json > pi-models.json   # JSON document for a pipe or a diff
+ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Without `--json` the JSON leads, then the canonical destination path, the merge warning, the env
-export line, and a model count with how many rows omit context limits (the client applies its own
-defaults for those).
+Without `--json` the generated config leads, then the canonical destination path, the merge warning, the env
+export line where the client has one, and a model count with how many rows omit context limits (the
+client applies its own defaults for those).
 
 | Client | Canonical destination | Download filename | Env var |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json` (`XDG_CONFIG_HOME` wins when set) | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | none — the block carries the literal `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml` (`OMP_PROFILE` wins over `PI_PROFILE`, even when empty; named profiles use the home-relative `PI_CONFIG_DIR` directory name and ignore `PI_CODING_AGENT_DIR`, while the default profile lets `PI_CODING_AGENT_DIR` win) | `omp-models.yaml` | none — loopback placeholder |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | none — loopback placeholder |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
 
-The two env var names are different, and each client only interpolates its own. opencode reads
-`{env:OPENCODEX_OPENCODE_API_KEY}`; Pi reads `$OPENCODEX_API_KEY`.
+opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
+not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
+This is load-bearing because both clients resolve `apiKey` while building their model lists and
+hide the whole provider when an existing config contains an unset env reference. The proxy never
+checks the generated placeholder on loopback. OMP supports provider-level headers, but this initial
+integration deliberately remains loopback-only; remote `x-opencodex-api-key` wiring is deferred.
 
 :::caution[Merge, never replace]
 `ocx export` never writes your real client config. The destination is printed for you to merge by
@@ -187,9 +218,10 @@ hand, and `--out` refuses to overwrite an existing file without `--force`, becau
 config destroys the other providers, agents, and MCP entries already in it.
 :::
 
-No key is ever serialized. The config carries only the client's env reference, so the secret stays
-in your environment. A loopback proxy (`127.0.0.1`, the default) requires no admission key at all —
-the reference is simply unused. Set the variable only when the proxy binds beyond loopback; see
+No key is ever serialized. Configs carry either a documented environment reference or a
+non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
+admission key at all. Set a referenced variable only when the client schema supports it and
+the proxy binds beyond loopback; see
 [Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).

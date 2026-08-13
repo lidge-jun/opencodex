@@ -7,9 +7,14 @@ const {
 } = require("./pr-quality.cjs");
 const {
   GATE_MARKER,
+  HYGIENE_MARKER,
+  HYGIENE_BLOCK_START,
+  HYGIENE_BLOCK_END,
   inlineCode,
   readinessChecklistLines,
   buildGateCommentBody,
+  extractHygieneSection,
+  withHygieneSection,
   descriptionFailureLines,
   buildFailureSections,
   failureSummary,
@@ -208,23 +213,21 @@ describe("buildStaleNotice", () => {
 });
 
 describe("buildClaimCheckNotice", () => {
-  it("names each violated claim and the reset action", () => {
+  it("names the latest-dev violation and the reset action", () => {
     const notice = buildClaimCheckNotice(
-      ["ci_green", "latest_dev"],
+      ["latest_dev"],
       "3f1c0de0a6a4d0a3f9a1b2c3d4e5f60718293a4b",
     );
-    assert.match(notice[0], /CI is not green on the current head `3f1c0de`/);
-    assert.match(notice[0], /\*\*CI green\*\* box has been unticked/);
-    assert.match(notice[1], /more than 10 commits behind `dev`/);
-    assert.match(notice[1], /\*\*latest dev\*\* box has been unticked/);
-    assert.match(notice[2], /reset: re-test against the latest code/);
+    assert.match(notice[0], /more than 10 commits behind `dev`/);
+    assert.match(notice[0], /\*\*latest dev\*\* box has been unticked/);
+    assert.match(notice[1], /reset: re-test against the latest code/);
   });
 
-  it("handles a single violation", () => {
+  it("ignores a stale ci_green code without inventing GitHub-CI copy", () => {
     const notice = buildClaimCheckNotice(["ci_green"], "a".repeat(40));
-    assert.equal(notice.length, 2);
-    assert.match(notice[0], /CI is not green/);
-    assert.match(notice[1], /has been reset/);
+    assert.equal(notice.length, 1);
+    assert.match(notice[0], /has been reset/);
+    assert.doesNotMatch(notice[0], /CI is not green/);
   });
 
   it("returns only the reset line for an empty violation list", () => {
@@ -252,5 +255,169 @@ describe("buildFindingsClaimNotice", () => {
     assert.equal(notice.length, 2);
     assert.match(notice[0], /CodeRabbit has 1 unresolved finding/);
     assert.match(notice[1], /Resolve every open review conversation/);
+  });
+});
+
+describe("hygiene section round-trip", () => {
+  const GATE = [
+    GATE_MARKER,
+    '<!-- opencodex-pr-gate-state:{"version":1,"active":false} -->',
+    "",
+    "## ✅ READY",
+    "- all PR quality gates passed.",
+  ].join("\n");
+
+  it("renders a hygiene block in the gate comment when requested", () => {
+    const body = buildGateCommentBody(
+      { version: 1, active: false },
+      {
+        status: "READY",
+        statusReason: "all PR quality gates passed.",
+        checklistRequired: false,
+        hygiene: ["✅ **Deterministic PR hygiene checks passed.**"],
+      },
+    ).join("\n");
+    assert.ok(body.includes(HYGIENE_BLOCK_START));
+    assert.ok(body.includes(HYGIENE_BLOCK_END));
+    assert.ok(body.includes(HYGIENE_MARKER));
+    assert.ok(body.includes("✅ **Deterministic PR hygiene checks passed.**"));
+  });
+
+  it("extracts the hygiene content from a gate comment", () => {
+    const withBlock = `${GATE}\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n✅ **Deterministic PR hygiene checks passed.**\n\n${HYGIENE_BLOCK_END}\n`;
+    const extracted = extractHygieneSection(withBlock);
+    assert.equal(extracted, "✅ **Deterministic PR hygiene checks passed.**");
+    assert.equal(extractHygieneSection(GATE), null);
+  });
+
+  it("replaces an existing hygiene block without duplicating it", () => {
+    const withBlock = `${GATE}\n\n## Hygiene\n\n${HYGIENE_BLOCK_START}\n${HYGIENE_MARKER}\n\n✅ **Deterministic PR hygiene checks passed.**\n\n${HYGIENE_BLOCK_END}\n`;
+    const updated = withHygieneSection(withBlock, [
+      "⚠️ **Deterministic hygiene checks failed.**",
+      "- `missing_regression_test` — Behavior changed under `src/` without a test change.",
+    ]);
+    assert.ok(updated.includes("⚠️ **Deterministic hygiene checks failed.**"));
+    assert.ok(!updated.includes("✅ **Deterministic PR hygiene checks passed.**"));
+    assert.equal(updated.split(HYGIENE_BLOCK_START).length - 1, 1);
+  });
+
+  it("appends a hygiene block when the gate comment has none", () => {
+    const updated = withHygieneSection(GATE, [
+      "✅ **Deterministic PR hygiene checks passed.**",
+    ]);
+    assert.ok(updated.includes(HYGIENE_BLOCK_START));
+    assert.ok(updated.includes("✅ **Deterministic PR hygiene checks passed.**"));
+    assert.ok(updated.includes(GATE_MARKER));
+  });
+
+  it("ignores delimiter text embedded inside a hygiene content line", () => {
+    // A contributor-controlled changed filename can contain delimiter text
+    // mid-line (e.g. `src/<!-- pr-hygiene-block:end -->/x.ts`). The block
+    // regex must anchor delimiters to complete lines so such a line neither
+    // ends the block early nor corrupts the next rewrite.
+    const malicious = [
+      GATE_MARKER,
+      '<!-- opencodex-pr-gate-state:{"version":1,"active":false} -->',
+      "",
+      "## ✅ READY",
+      "- all PR quality gates passed.",
+      "",
+      "## Hygiene",
+      "",
+      HYGIENE_BLOCK_START,
+      "<!-- pr-hygiene -->",
+      "",
+      "✅ **Deterministic PR hygiene checks passed.**",
+      `- Paths: \`src/${HYGIENE_BLOCK_END}/x.ts\`.`,
+      "",
+      HYGIENE_BLOCK_END,
+    ].join("\n");
+
+    const extracted = extractHygieneSection(malicious);
+    assert.ok(extracted);
+    assert.ok(extracted.includes("✅ **Deterministic PR hygiene checks passed.**"));
+    assert.ok(extracted.includes("Paths"));
+
+    // Replacing must preserve the malicious line inside the block, not split
+    // the block at the embedded delimiter.
+    const updated = withHygieneSection(malicious, [
+      "⚠️ **Deterministic hygiene checks failed.**",
+    ]);
+    assert.ok(updated.includes(HYGIENE_BLOCK_START));
+    assert.ok(updated.includes(HYGIENE_BLOCK_END));
+    assert.ok(updated.includes("⚠️ **Deterministic hygiene checks failed.**"));
+    assert.equal(updated.split(HYGIENE_BLOCK_START).length - 1, 1);
+    assert.equal(updated.split(HYGIENE_BLOCK_END).length - 1, 1);
+  });
+
+  it("preserves both sections across an interleaved gate rebuild and hygiene update", () => {
+    // The gate and hygiene workflows share one concurrency group, but the
+    // merge helpers must also be order-independent: whichever write lands
+    // second must preserve the other's section. Start with a gate comment
+    // carrying a hygiene block, apply a gate rebuild, then a hygiene update,
+    // and assert both the gate status and the hygiene status survive.
+    const withBlock = [
+      GATE_MARKER,
+      '<!-- opencodex-pr-gate-state:{"version":1,"active":false} -->',
+      "",
+      "## ✅ READY",
+      "- all PR quality gates passed.",
+      "",
+      "## Hygiene",
+      "",
+      HYGIENE_BLOCK_START,
+      "<!-- pr-hygiene -->",
+      "",
+      "✅ **Deterministic PR hygiene checks passed.**",
+      "",
+      HYGIENE_BLOCK_END,
+    ].join("\n");
+
+    // Gate rebuild (the gate rewrites its own section, preserving hygiene).
+    const afterGate = buildGateCommentBody(
+      { version: 1, active: false },
+      {
+        status: "READY",
+        statusReason: "all PR quality gates passed.",
+        checklistRequired: false,
+        hygiene: ["✅ **Deterministic PR hygiene checks passed.**"],
+      },
+    ).join("\n");
+
+    // Hygiene update (the hygiene workflow rewrites its block, preserving gate).
+    const afterHygiene = withHygieneSection(afterGate, [
+      "✅ **Deterministic PR hygiene checks passed.**",
+    ]);
+
+    assert.ok(afterHygiene.includes(GATE_MARKER));
+    assert.ok(afterHygiene.includes("## ✅ READY"));
+    assert.ok(afterHygiene.includes("✅ **Deterministic PR hygiene checks passed.**"));
+    assert.equal(afterHygiene.split(HYGIENE_BLOCK_START).length - 1, 1);
+    assert.equal(afterHygiene.split(HYGIENE_BLOCK_END).length - 1, 1);
+
+    // Reverse order: hygiene first, then gate rebuild — same invariant.
+    const afterHygieneFirst = withHygieneSection(withBlock, [
+      "⚠️ **Deterministic hygiene checks failed.**",
+      "- `missing_regression_test` — Behavior changed under `src/` without a test change.",
+    ]);
+    // The gate rebuild must consume the hygiene content the hygiene update
+    // wrote, not a hard-coded copy — otherwise the test passes even if the
+    // rebuild discards the prior update.
+    const extractedHygiene = extractHygieneSection(afterHygieneFirst);
+    assert.ok(extractedHygiene, "hygiene block must survive the hygiene update");
+    const afterGateSecond = buildGateCommentBody(
+      { version: 1, active: false },
+      {
+        status: "READY",
+        statusReason: "all PR quality gates passed.",
+        checklistRequired: false,
+        hygiene: extractedHygiene.split("\n"),
+      },
+    ).join("\n");
+    assert.ok(afterGateSecond.includes(GATE_MARKER));
+    assert.ok(afterGateSecond.includes("## ✅ READY"));
+    assert.ok(afterGateSecond.includes("⚠️ **Deterministic hygiene checks failed.**"));
+    assert.equal(afterGateSecond.split(HYGIENE_BLOCK_START).length - 1, 1);
+    assert.equal(afterGateSecond.split(HYGIENE_BLOCK_END).length - 1, 1);
   });
 });

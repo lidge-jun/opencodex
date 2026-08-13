@@ -372,6 +372,7 @@ describe("xAI reasoning_content cache preservation", () => {
   test("registry preset replays reasoning_content for grok reasoning models only", () => {
     const entry = getProviderRegistryEntry("xai");
     expect(entry?.preserveReasoningContentModels).toEqual([
+      "grok-4.6",
       "grok-4.5",
       "grok-4.3",
       "grok-4.20-0309-reasoning",

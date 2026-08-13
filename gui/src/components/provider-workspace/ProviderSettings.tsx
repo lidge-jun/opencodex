@@ -105,6 +105,7 @@ export default function ProviderSettings({
       });
     return () => { cancelled = true; };
     // Remount via key={item.name}; capture savedBaseUrl once per mount/fetch.
+    // oxlint-disable-next-line react/react-compiler -- existing exhaustive-deps exception is intentional
     // eslint-disable-next-line react-hooks/exhaustive-deps -- item.baseUrl sync is handled by the form-reset effect
   }, [apiBase, item.name]);
 

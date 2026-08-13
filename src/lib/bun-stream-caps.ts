@@ -94,7 +94,7 @@ export function decideEagerRelay(
  * Windows preserves the decision for no-rewrite traffic. Darwin permits only
  * explicit config opt-in; `auto` remains tee even on a future fixed runtime.
  * Returns the normalized effective decision, or null when platform policy,
- * rewrite needs, or a Darwin non-config-eager mode selects tee.
+ * Windows rewrite needs, or a Darwin non-config-eager mode selects tee.
  */
 export function selectEagerPath(
   platform: NodeJS.Platform,
@@ -103,12 +103,12 @@ export function selectEagerPath(
   version: string = Bun.version,
   minFixed: string | null = MIN_FIXED_BUN_VERSION,
 ): EagerRelayDecision | null {
-  if (needsClientRewrite || (platform !== "win32" && platform !== "darwin")) {
+  if (platform !== "win32" && platform !== "darwin") {
     return null;
   }
 
   const decision = decideEagerRelay(mode, version, minFixed);
-  if (platform === "win32") return decision;
+  if (platform === "win32") return needsClientRewrite ? null : decision;
   return decision.reason === "config-eager" ? decision : null;
 }
 

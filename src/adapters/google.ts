@@ -30,7 +30,7 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
-import { mapReasoningEffort } from "../reasoning-effort";
+import { configuredReasoningEfforts, mapReasoningEffort } from "../reasoning-effort";
 
 // Google-family models (Gemini/Vertex/Antigravity) tend to emit long running commentary between
 // tool calls. This steers them to keep the BETWEEN-STEP text to one line and reason internally
@@ -49,6 +49,13 @@ const GOOGLE_BREVITY_INSTRUCTION = [
 function resolveVertexApiKey(optKey?: string): string | undefined {
   const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
   return realKey || process.env.GOOGLE_CLOUD_API_KEY;
+}
+
+/** Prefer Codex's stable opaque thread key; retain the existing deterministic fallback for clients
+ * that omit it. The replay store hashes this value and never retains the raw session identifier. */
+function vertexReplaySessionId(parsed: OcxParsedRequest): string {
+  const threadId = parsed._clientThreadId?.trim();
+  return threadId || antigravitySessionId(parsed);
 }
 
 /**
@@ -297,11 +304,34 @@ function artifactMarkdownUrl(filePath: string): string {
   return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
 }
 
+interface GoogleResponsePart {
+  text?: string;
+  thought?: boolean;
+  functionCall?: { name: string; args: unknown };
+}
+
+/**
+ * Google marks model-internal reasoning as a normal text-bearing part plus `thought: true`.
+ * Keep that provider visibility bit authoritative here so the streaming and buffered parsers
+ * cannot accidentally expose the same hidden reasoning through different event types.
+ */
+function googlePartTextEvent(part: GoogleResponsePart): AdapterEvent | undefined {
+  if (!part.text) return undefined;
+  return part.thought === true
+    ? { type: "reasoning_raw_delta", text: part.text }
+    : { type: "text_delta", text: part.text };
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
   let antigravitySession: string | undefined;
+  // Vertex returns the same opaque Gemini thought signatures as CCA, but its replay namespace
+  // must stay transport-scoped: a signature minted by one Google backend must never be sent to
+  // another merely because the public model id and first prompt happen to match.
+  let vertexReplayModel: string | undefined;
+  let vertexReplaySession: string | undefined;
   let restoreGoogleToolName = (name: string): string => name;
   return {
     name: "google",
@@ -340,12 +370,22 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (parsed.options.temperature !== undefined) generationConfig.temperature = parsed.options.temperature;
       if (parsed.options.topP !== undefined) generationConfig.topP = parsed.options.topP;
       if (parsed.options.stopSequences) generationConfig.stopSequences = parsed.options.stopSequences;
-      const directFlashThinking = provider.googleMode !== "vertex"
-        && provider.googleMode !== "cloud-code-assist"
-        && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")
+      // Effort → thinkingLevel follows the configured ladder: any model advertising reasoning
+      // efforts (registry preset or user config) sends the mapped level, so a picker-selected
+      // effort actually reaches the wire (gemini-3.1-pro-preview ships a ladder). The original
+      // gemini-3.5/3.6-flash direct-mode slice stays hardcoded so unladdered configs keep their
+      // current behavior; Vertex participates only through an explicitly configured ladder (the
+      // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
+      // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
+      const thinkingEligible = provider.googleMode !== "cloud-code-assist"
+        && !isImageCapableModel(parsed.modelId)
+        && (configuredReasoningEfforts(provider, parsed.modelId) !== undefined
+          || (provider.googleMode !== "vertex"
+            && (parsed.modelId === "gemini-3.5-flash" || parsed.modelId === "gemini-3.6-flash")));
+      const thinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
-      if (directFlashThinking) generationConfig.thinkingConfig = { thinkingLevel: directFlashThinking };
+      if (thinkingLevel) generationConfig.thinkingConfig = { thinkingLevel };
       if (!generationConfig.thinkingConfig && isImageCapableModel(parsed.modelId)) {
         generationConfig.responseModalities = ["TEXT", "IMAGE"];
       }
@@ -426,6 +466,20 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (provider.googleMode === "vertex") {
         const compiled = compileGoogleWireBody(body);
         restoreGoogleToolName = compiled.restoreToolName;
+        const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
+        const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
+        vertexReplayModel = `vertex:${vertexProject}:${vertexLocation}:${parsed.modelId}`;
+        vertexReplaySession = vertexReplaySessionId(parsed);
+        // Compile names before replay so the cache matches the exact provider-visible
+        // functionCall identity. This is the same bounded TTL/LRU store used by CCA, with the
+        // transport prefix above preventing cross-backend signature reuse (#1254).
+        if (Array.isArray((compiled.body as { contents?: unknown[] }).contents)) {
+          applyAntigravityReplay(
+            vertexReplayModel,
+            vertexReplaySession,
+            (compiled.body as { contents: unknown[] }).contents,
+          );
+        }
         // Vertex AI: project/location endpoint with GCP ADC, or x-goog-api-key fast path.
         const apiKey = resolveVertexApiKey(provider.apiKey);
         if (apiKey) {
@@ -487,13 +541,23 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         let emittedContentEvent = false;
 
-        let chunk: Record<string, unknown>;
+        let parsed: unknown;
         try {
-          chunk = JSON.parse(payload);
+          parsed = JSON.parse(payload);
         } catch {
           yield { type: "error", message: "malformed upstream SSE data frame" };
           return "terminate";
         }
+        // `JSON.parse("null")` returns null rather than throwing, so the catch above cannot cover
+        // it and the `chunk.error` read below crashed the stream (see openai-chat.ts). Skip such a
+        // frame rather than terminating, for the reason given there: it is padding between real
+        // frames, not a broken stream. Deliberately returns BEFORE `sawAnyFrame`, so a stream made
+        // only of non-record frames still fails the terminal-signal check below instead of
+        // completing empty. An unparseable frame stays terminal.
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return "continue";
+        }
+        const chunk = parsed as Record<string, unknown>;
         sawAnyFrame = true;
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
@@ -501,9 +565,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const err = chunk.error as { message?: string } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry so the next turn starts clean instead of re-injecting a bad sig.
-          if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession
+          const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+          const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+          if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+            && replayModel && replaySession
             && /signature|invalid_argument|invalid argument/i.test(err?.message ?? "")) {
-            clearAntigravityReplay(antigravityModel, antigravitySession);
+            clearAntigravityReplay(replayModel, replaySession);
           }
           yield { type: "error", message: err?.message ?? "upstream error" };
           return "terminate";
@@ -528,24 +595,46 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           pendingUsage = usageFromGemini(usageMeta);
           sawTerminalSignal = true;
         }
-        const candidates = root.candidates as { content?: { parts?: unknown[] }; finishReason?: string }[] | undefined;
-        if (!candidates?.length) return "continue";
+        const rawCandidates = root.candidates;
+        if (rawCandidates === undefined) return "continue";
+        if (!Array.isArray(rawCandidates)) {
+          yield { type: "error", message: "google response contained invalid candidates" };
+          return "terminate";
+        }
+        if (rawCandidates.length === 0) return "continue";
+        const rawCandidate = rawCandidates[0];
+        if (rawCandidate === null || typeof rawCandidate !== "object" || Array.isArray(rawCandidate)) {
+          // Unlike a root `data: null` keepalive, this is a claimed response candidate. Treat it
+          // as terminal protocol corruption so the turn cannot complete after silently losing
+          // a candidate or tool call (#1325).
+          yield { type: "error", message: "google response contained invalid candidates" };
+          return "terminate";
+        }
+        const candidate = rawCandidate as {
+          content?: { parts?: unknown[] };
+          finishReason?: string;
+        };
 
-        if (typeof candidates[0].finishReason === "string" && candidates[0].finishReason) {
-          lastFinishReason = candidates[0].finishReason;
+        if (typeof candidate.finishReason === "string" && candidate.finishReason) {
+          lastFinishReason = candidate.finishReason;
           sawTerminalSignal = true;
         }
 
-        const parts = candidates[0].content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
-        // Antigravity reasoning-replay: record thoughtSignatures from the model parts for the next turn.
-        if (provider.googleMode === "cloud-code-assist" && parts && antigravityModel && antigravitySession) {
-          observeAntigravityReplay(antigravityModel, antigravitySession, parts as unknown[]);
+        const parts = candidate.content?.parts as GoogleResponsePart[] | undefined;
+        // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
+        // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
+        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          && parts && replayModel && replaySession) {
+          observeAntigravityReplay(replayModel, replaySession, parts as unknown[]);
         }
         if (parts) {
           for (const part of parts) {
-            if (part.text) {
+            const textEvent = googlePartTextEvent(part);
+            if (textEvent) {
               emittedContentEvent = true;
-              yield { type: "text_delta", text: part.text };
+              yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
@@ -747,19 +836,24 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const events: AdapterEvent[] = [];
 
-      const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
+      const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
       if (!candidates?.length) {
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
       let toolCallsStarted = 0;
       const imageBudget = createImageBudget();
       if (candidates?.[0]?.content?.parts) {
-        // Non-streaming CCA: observe thoughtSignatures for the next turn, same as the stream path.
-        if (provider.googleMode === "cloud-code-assist" && antigravityModel && antigravitySession) {
-          observeAntigravityReplay(antigravityModel, antigravitySession, candidates[0].content.parts as unknown[]);
+        // Non-streaming Google-family response: observe thought signatures for the next turn,
+        // using the same transport-scoped namespace as the streaming path.
+        const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
+        const replaySession = provider.googleMode === "cloud-code-assist" ? antigravitySession : vertexReplaySession;
+        if ((provider.googleMode === "cloud-code-assist" || provider.googleMode === "vertex")
+          && replayModel && replaySession) {
+          observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
-          if (part.text) events.push({ type: "text_delta", text: part.text });
+          const textEvent = googlePartTextEvent(part);
+          if (textEvent) events.push(textEvent);
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
             if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {

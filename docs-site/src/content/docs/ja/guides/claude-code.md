@@ -50,12 +50,16 @@ ocx claude
 ネイティブ状態で維持され、同じセッションでピッカーエイリアスを使ってルーティングモデルも引き続き使えます。
 
 **ヘッダー処理:** hop-by-hop ヘッダーと `host`、`content-length`、`accept-encoding`、
-`x-opencodex-api-key`、`origin` は転送前に削除します。それ以外のヘッダー(`anthropic-beta`、
-`anthropic-version` を含む)はそのまま転送します。
+`x-opencodex-api-key`、`origin` は常に転送前に削除します。非ループバック bind のネイティブ
+パススルーでは、有効なプロキシ認証情報を `x-opencodex-api-key` でも要求し、
+`Authorization` と `x-api-key` は Anthropic 専用になります。いずれかの provider ヘッダーに
+プロキシ admission secret があれば削除し、もう一方の実際の provider 認証情報は維持します。
+カンマで結合された曖昧な認証ヘッダーは転送しません。
 
-次の 4 つの条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
-モデル名が `claude` または `anthropic` で始まり、bearer または `x-api-key` が `sk-ant-` で
-始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであること。そのため `ocx claude` を
+次の条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
+モデル名が `claude` または `anthropic` で始まり、bearer トークンまたは `x-api-key` が `sk-ant-` で
+始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであり、非ループバック bind
+では専用プロキシ admission ヘッダーも有効であること。そのため `ocx claude` を
 使うとき "claude.ai connectors are disabled" 警告ももう表示されません。
 
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
@@ -250,7 +254,7 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
  --- | --- |
 | `thinking.type: "adaptive"` + `output_config.effort` | Effort をそのまま渡します(`minimal`\|`low`\|`medium`\|`high`\|`xhigh`\|`max`\|`ultra`) |
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`、≤16384→`medium`、それより大→`high` |
-| `thinking.type: "disabled"` | 推論パラメータをすべて省略します |
+| `thinking.type: "disabled"` | `reasoning: { effort: "none" }` を明示し、`summary` は省略します |
 
 解釈された値はリクエストログの **Reasoning effort** 列に表示されます。
 
@@ -268,7 +272,7 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | ユーザー `tool_result` | `function_call_output`(`is_error` → `[tool error]` 接頭辞) |
 | `thinking` / `redacted_thinking` 再生 | 破棄 |
 | Function ツール | `{type: "function"}`(`web_search*` → `{type: "web_search"}`) |
-| `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定→`{type:"function",name}` |
+| `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 

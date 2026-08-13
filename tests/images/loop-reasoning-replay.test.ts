@@ -86,7 +86,23 @@ const imagePlan = {
 } as ImageBridgePlan;
 
 function makeParsed(): OcxParsedRequest {
-  return { modelId: "test-model", context: { messages: [], tools: [] }, stream: true, options: {} } as OcxParsedRequest;
+  return {
+    modelId: "test-model",
+    context: { messages: [], tools: [] },
+    stream: true,
+    options: {},
+    _clientThreadId: "image-replay-test",
+    _reasoningReplayScope: {
+      clientThreadId: "image-replay-test",
+      current: {
+        providerName: "test",
+        providerDestinationIdentity: "destination:test",
+        adapterName: "test",
+        modelId: "test-model",
+        credentialIdentity: "key:test",
+      },
+    },
+  } as OcxParsedRequest;
 }
 
 describe("issue #950 — image-bridge synthetic tool round (raw reasoning)", () => {

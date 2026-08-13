@@ -412,10 +412,13 @@ function bookkeeping(): Pick<IntegrationIO, "appendJournal" | "putRecord" | "dro
 }
 
 describe("refusals", () => {
-  test("conflict rejects disable without changing foreign-edited bytes", async () => {
+  test("conflict rejects disable without changing a managed-field edit", async () => {
     const configPath = installHermes();
     expect((await put("hermes", true)).status).toBe(200);
-    const edited = `${readFileSync(configPath, "utf8")}# a human edited this\n`;
+    const edited = readFileSync(configPath, "utf8").replace(
+      "api_mode: chat_completions",
+      "api_mode: user_edited",
+    );
     writeFileSync(configPath, edited);
     const journalBefore = store.listOperations().length;
 
