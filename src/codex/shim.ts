@@ -31,6 +31,7 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { windowsEnvIndirectBatchValue } from "../lib/win-paths";
 import { isWslRuntime, wslAutomountRoot } from "./home";
 import { truncateRetainedUtf8 } from "../lib/admission";
+import { renameNoReplace } from "../lib/rename-no-replace";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -403,6 +404,32 @@ function stableShimPathProbe(path: string): StableShimPathProbe | null {
   return contentSize > 0 ? { fingerprint, prefix } : null;
 }
 
+function shimPathFingerprint(path: string): ShimPathFingerprint | null {
+  const before = statFingerprint(path, false);
+  if (!before) return null;
+  if (before.kind !== "symlink") {
+    const after = statFingerprint(path, false);
+    return after && sameFingerprint(before, after) ? before : null;
+  }
+  const targetBefore = statFingerprint(path, true);
+  if (!targetBefore) return null;
+  const targetAfter = statFingerprint(path, true);
+  const after = statFingerprint(path, false);
+  if (!targetAfter || !after
+    || !sameFingerprint(targetBefore, targetAfter)
+    || !sameFingerprint(before, after)) return null;
+  return { ...before, target: targetBefore };
+}
+
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return fileErrorCode(error) !== "ENOENT";
+  }
+}
+
 function sameStableShimPathProbe(left: StableShimPathProbe, right: StableShimPathProbe): boolean {
   return left.prefix === right.prefix && sameFingerprint(left.fingerprint, right.fingerprint);
 }
@@ -644,6 +671,7 @@ let codexShimProbeHookForTests: (() => void) | null = null;
 let codexShimProbeShellForTests: string | null = null;
 let codexShimGuardedWriteHookForTests: (() => void) | null = null;
 let codexShimFreshWriteHookForTests: (() => void) | null = null;
+let codexShimFreshBackupHookForTests: ((target: ShimFileState, index: number) => void) | null = null;
 let codexShimProbeObservationMs = CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS;
 
 /** Narrow deterministic seam for transaction rollback tests. */
@@ -669,6 +697,13 @@ export function setCodexShimGuardedWriteHookForTests(hook: (() => void) | null):
 /** Narrow deterministic seam for fresh-install partial-write rollback tests. */
 export function setCodexShimFreshWriteHookForTests(hook: (() => void) | null): void {
   codexShimFreshWriteHookForTests = hook;
+}
+
+/** @internal Test-only hook for fresh-install backup reservation races. */
+export function setCodexShimFreshBackupHookForTests(
+  hook: ((target: ShimFileState, index: number) => void) | null,
+): void {
+  codexShimFreshBackupHookForTests = hook;
 }
 
 function readProbeMetadata(path: string, maxBytes: number): string | null {
@@ -829,10 +864,10 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
       errors.push(error instanceof Error ? error : new Error(String(error)));
     }
     try {
-      if (entry.originalMovedToBackup && existsSync(target.backupPath)) {
-        const movedOriginal = stableShimPathProbe(target.backupPath);
+      if (entry.originalMovedToBackup) {
+        const movedOriginal = shimPathFingerprint(target.backupPath);
         if (!movedOriginal || !entry.movedOriginalFingerprint
-          || !sameFingerprint(movedOriginal.fingerprint, entry.movedOriginalFingerprint)) {
+          || !sameFingerprint(movedOriginal, entry.movedOriginalFingerprint)) {
           throw new Error("Codex shim fresh-install backup changed during rollback");
         }
         if (sourceOccupied) {
@@ -842,7 +877,13 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
           // lose the command entirely. Keep it in that case — a stray
           // `codex.opencodex-real` is recoverable, a deleted launcher is not.
           if (ownsWrapperNow) unlinkSync(target.backupPath);
-        } else renameSync(target.backupPath, target.originalPath);
+        } else {
+          renameNoReplace(target.backupPath, target.originalPath);
+          const restoredOriginal = shimPathFingerprint(target.originalPath);
+          if (!restoredOriginal || !sameFingerprintAfterRename(restoredOriginal, movedOriginal)) {
+            throw new Error("Codex shim fresh-install original changed during rollback restore");
+          }
+        }
       }
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -1052,59 +1093,71 @@ function gitBashPath(path: string): string {
 }
 
 /**
- * Write the wrapper and return the identity of the inode this call created, or
- * `undefined` where the platform still writes the destination in place.
+ * Write the wrapper through a private same-directory staging entry and return
+ * the identity of the inode this call created. The one legacy Windows refresh
+ * path that intentionally replaces an existing wrapper keeps its prior direct
+ * write behavior and therefore returns `undefined`.
  *
  * Callers must derive ownership from the returned identity rather than from a
  * later `stat` of `wrapperPath`: the shim markers are public, so a concurrent
  * updater's wrapper can carry them, and a replacement landing between the write
  * and the observation is otherwise indistinguishable from our own file.
  */
-function writeShim(wrapperPath: string, realCodexPath: string): { dev: number; ino: number } | undefined {
+function writeShim(
+  wrapperPath: string,
+  realCodexPath: string,
+  options: { replaceExisting?: boolean } = {},
+): { dev: number; ino: number } | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry();
+  let source: string;
+  let executable = false;
   if (process.platform === "win32") {
     const lower = wrapperPath.toLowerCase();
     if (lower.endsWith(".ps1")) {
       // UTF-8 BOM: Windows PowerShell 5.1 decodes BOM-less .ps1 files in the ANSI
       // codepage, which mangles non-ASCII paths embedded in the shim.
-      writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`, "utf8");
+      source = `\uFEFF${buildWindowsPowerShellCodexShim(realCodexPath, bun, cli, bunRuntimeSource)}`;
     } else if (lower.endsWith(".cmd") || lower.endsWith(".bat")) {
-      writeFileSync(wrapperPath, buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource), "utf8");
+      source = buildWindowsCodexShim(realCodexPath, bun, cli, bunRuntimeSource);
     } else {
       // Extensionless Git-Bash sh launcher: sh shim with forward-slash paths.
-      writeFileSync(
-        wrapperPath,
-        buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath())),
-        "utf8",
+      source = buildUnixCodexShim(
+        gitBashPath(realCodexPath),
+        gitBashPath(bun),
+        gitBashPath(cli),
+        bunRuntimeSource,
+        gitBashPath(serviceApiTokenFilePath()),
       );
     }
-    return undefined;
   } else {
-    // Stage the wrapper as its own inode and rename it into place, so ownership
-    // comes from the write itself rather than from observing the path afterwards.
-    // Writing the destination directly leaves a window in which a concurrent
-    // updater can replace the file between our write and our fingerprint; we would
-    // then adopt that replacement as ours and unlink it during rollback, deleting
-    // an executable we never wrote.
-    // Hidden and non-executable while staged, so a crash between the write and the
-    // rename cannot leave an executable `codex*` artifact that a glob or a shell
-    // completion would surface.
-    const staged = join(dirname(wrapperPath), `.${basename(wrapperPath)}.opencodex-staging.${process.pid}.${randomUUID()}`);
-    let renamed = false;
-    try {
-      // "wx" fails if the staging path somehow exists, so we never inherit a file.
-      writeFileSync(staged, buildUnixCodexShim(realCodexPath, bun, cli, bunRuntimeSource), { encoding: "utf8", flag: "wx", mode: 0o600 });
-      const stagedStat = lstatSync(staged);
-      chmodSync(staged, 0o755);
-      renameSync(staged, wrapperPath);
-      renamed = true;
-      // rename() preserves dev/ino and updates ctime, so identity is the inode
-      // pair, captured from the file we created rather than from the destination.
-      return { dev: stagedStat.dev, ino: stagedStat.ino };
-    } finally {
-      if (!renamed) {
-        try { unlinkSync(staged); } catch { /* best-effort: nothing to clean up */ }
-      }
+    source = buildUnixCodexShim(realCodexPath, bun, cli, bunRuntimeSource);
+    executable = true;
+  }
+
+  // Preserve the old Windows overwrite behavior only for the direct refresh
+  // path whose destination intentionally exists. Fresh and transactional paths
+  // always publish a private inode with no-replace semantics.
+  if (process.platform === "win32" && options.replaceExisting) {
+    writeFileSync(wrapperPath, source, "utf8");
+    return undefined;
+  }
+
+  // Hidden and non-executable while staged, so a crash before publication does
+  // not leave an executable `codex*` artifact that a glob or shell completion
+  // would surface. The no-replace move makes destination ownership linearizable.
+  const staged = join(dirname(wrapperPath), `.${basename(wrapperPath)}.opencodex-staging.${process.pid}.${randomUUID()}`);
+  let renamed = false;
+  try {
+    writeFileSync(staged, source, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    if (executable) chmodSync(staged, 0o755);
+    const stagedStat = lstatSync(staged);
+    if (options.replaceExisting) renameSync(staged, wrapperPath);
+    else renameNoReplace(staged, wrapperPath);
+    renamed = true;
+    return { dev: stagedStat.dev, ino: stagedStat.ino };
+  } finally {
+    if (!renamed) {
+      try { unlinkSync(staged); } catch { /* best-effort: nothing to clean up */ }
     }
   }
 }
@@ -1224,7 +1277,7 @@ function refreshShimFile(file: ShimFileState): boolean {
   }
   if (file.originalPath !== file.wrapperPath && existsSync(file.originalPath) && existsSync(file.wrapperPath) && isShim(file.wrapperPath)) {
     replaceOwnedBackup(file.originalPath, file.backupPath);
-    writeShim(file.wrapperPath, file.realPath ?? file.backupPath);
+    writeShim(file.wrapperPath, file.realPath ?? file.backupPath, { replaceExisting: true });
     return true;
   }
   return false;
@@ -1817,11 +1870,14 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
   if (!targets) return { installed: false, message: lastShimDiscoveryError ?? "Could not find a codex executable on PATH." };
 
   for (const target of targets) {
-    if (existsSync(target.backupPath)) return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
+    if (pathEntryExists(target.backupPath)) {
+      return { installed: false, message: `Refusing to overwrite existing backup: ${target.backupPath}` };
+    }
   }
   const freshJournal: FreshShimInstallJournalEntry[] = [];
   let freshApplyError: Error | null = null;
-  for (const target of targets) {
+  let occupiedBackupPath: string | null = null;
+  for (const [index, target] of targets.entries()) {
     const entry: FreshShimInstallJournalEntry = {
       target,
       originalMovedToBackup: false,
@@ -1830,22 +1886,25 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
     freshJournal.push(entry);
     try {
       if (existsSync(target.originalPath)) {
-        renameSync(target.originalPath, target.backupPath);
+        codexShimFreshBackupHookForTests?.(target, index);
+        try {
+          renameNoReplace(target.originalPath, target.backupPath);
+        } catch (error) {
+          if (fileErrorCode(error) === "EEXIST") occupiedBackupPath = target.backupPath;
+          throw error;
+        }
         entry.originalMovedToBackup = true;
+        const movedOriginalFingerprint = shimPathFingerprint(target.backupPath);
+        if (!movedOriginalFingerprint) {
+          throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
+        }
+        entry.movedOriginalFingerprint = movedOriginalFingerprint;
         if (process.platform !== "win32") {
           const movedOriginal = stableShimPathProbe(target.backupPath);
           if (!movedOriginal) throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
-          entry.movedOriginalFingerprint = movedOriginal.fingerprint;
-        }
-      }
-      if (!target.preserveOnly) {
-        entry.wrapperWriteStarted = true;
-        const writtenInode = writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
-        entry.writtenWrapperInode = writtenInode;
-        codexShimFreshWriteHookForTests?.();
-        if (process.platform !== "win32") {
-          if (!writtenInode) throw new Error("Codex shim fresh install could not fingerprint the generated wrapper");
-          entry.writtenWrapperFingerprint = ownedWrapperFingerprint(target.wrapperPath, writtenInode);
+          if (!sameFingerprint(movedOriginal.fingerprint, movedOriginalFingerprint)) {
+            throw new Error("Codex shim fresh install staged launcher changed while being fingerprinted");
+          }
         }
       }
     } catch (error) {
@@ -1853,15 +1912,53 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       break;
     }
   }
-  if (process.platform !== "win32") {
-    if (freshApplyError) {
+  if (!freshApplyError) {
+    for (const entry of freshJournal) {
+      const target = entry.target;
       try {
-        rollbackFreshShimInstall(freshJournal);
-      } catch (rollbackError) {
-        throw new AggregateError([freshApplyError, rollbackError], "Codex shim installation and rollback failed");
+        if (target.preserveOnly) continue;
+        entry.wrapperWriteStarted = true;
+        const writtenInode = writeShim(target.wrapperPath, target.realPath ?? target.backupPath);
+        if (!writtenInode) throw new Error("Codex shim fresh install could not identify the generated wrapper");
+        entry.writtenWrapperInode = writtenInode;
+        entry.writtenWrapperFingerprint = ownedWrapperFingerprint(target.wrapperPath, writtenInode);
+        if (!entry.writtenWrapperFingerprint) {
+          throw new Error("Codex shim fresh install could not fingerprint the generated wrapper");
+        }
+        codexShimFreshWriteHookForTests?.();
+        const currentWrapper = ownedWrapperFingerprint(target.wrapperPath, writtenInode);
+        if (!currentWrapper || !sameFingerprint(currentWrapper, entry.writtenWrapperFingerprint)) {
+          throw new Error("Codex shim fresh install generated wrapper changed after publication");
+        }
+      } catch (error) {
+        freshApplyError = error instanceof Error ? error : new Error(String(error));
+        break;
       }
-      throw freshApplyError;
     }
+  }
+  if (!freshApplyError) {
+    const changedEntry = freshJournal.find(entry => {
+      if (entry.target.preserveOnly) return false;
+      if (!entry.writtenWrapperInode || !entry.writtenWrapperFingerprint) return true;
+      const current = ownedWrapperFingerprint(entry.target.wrapperPath, entry.writtenWrapperInode);
+      return !current || !sameFingerprint(current, entry.writtenWrapperFingerprint);
+    });
+    if (changedEntry) {
+      freshApplyError = new Error("Codex shim fresh install generated wrapper set changed before commit");
+    }
+  }
+  if (freshApplyError) {
+    try {
+      rollbackFreshShimInstall(freshJournal);
+    } catch (rollbackError) {
+      throw new AggregateError([freshApplyError, rollbackError], "Codex shim installation and rollback failed");
+    }
+    if (occupiedBackupPath) {
+      return { installed: false, message: `Refusing to overwrite existing backup: ${occupiedBackupPath}` };
+    }
+    throw freshApplyError;
+  }
+  if (process.platform !== "win32") {
     let unsafe: UnixShimProbeResult = null;
     let probeError: Error | null = null;
     try {
@@ -1903,8 +2000,6 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
           : `Refusing Codex autostart shim because ${reason}. The original launcher was restored; reinstall Codex as a concrete executable before enabling codexAutoStart.`,
       };
     }
-  } else if (freshApplyError) {
-    throw freshApplyError;
   }
   writeState(primaryState(targets));
   return {

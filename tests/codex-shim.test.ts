@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
+import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, installCodexShim, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshBackupHookForTests, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, uninstallCodexShim } from "../src/codex/shim";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
 const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
@@ -220,7 +220,9 @@ describe("Codex autostart shim", () => {
 
     expect(source).toContain('const gitBashLauncher = join(dir, "codex");');
     expect(source).toContain("for (const path of [cmd, ps1, gitBashLauncher])");
-    expect(source).toContain("buildUnixCodexShim(gitBashPath(realCodexPath), gitBashPath(bun), gitBashPath(cli), bunRuntimeSource, gitBashPath(serviceApiTokenFilePath()))");
+    expect(source).toContain("source = buildUnixCodexShim(");
+    expect(source).toContain("gitBashPath(realCodexPath),");
+    expect(source).toContain("gitBashPath(serviceApiTokenFilePath()),");
   });
 
   test("Unix shim accepts an injected token-file path (Git-Bash shims need forward slashes everywhere)", () => {
@@ -444,6 +446,260 @@ exit 126
         expect(existsSync(join(home, "codex-shim.json"))).toBe(true);
       } finally {
         setCodexShimProbeShellForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("fresh install never overwrites a backup created during reservation", () => {
+    const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-racing-backup-bin-"));
+    const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-racing-backup-home-"));
+    const oldPath = process.env.PATH;
+    const oldHome = process.env.OPENCODEX_HOME;
+    const codexPath = join(binDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    const backupPath = process.platform === "win32"
+      ? join(binDir, "codex.opencodex-real.cmd")
+      : `${codexPath}.opencodex-real`;
+    const original = successfulLauncher("reservation race original");
+    const concurrentBackup = successfulLauncher("reservation race winner");
+    try {
+      process.env.PATH = prependPath(binDir, oldPath);
+      process.env.OPENCODEX_HOME = home;
+      writeFileSync(codexPath, original, { encoding: "utf8", mode: 0o755 });
+      setCodexShimFreshBackupHookForTests((_, index) => {
+        if (index === 0) writeFileSync(backupPath, concurrentBackup, { encoding: "utf8", flag: "wx", mode: 0o755 });
+      });
+
+      expect(installCodexShim()).toEqual({
+        installed: false,
+        message: `Refusing to overwrite existing backup: ${backupPath}`,
+      });
+      expect(readFileSync(codexPath, "utf8")).toBe(original);
+      expect(readFileSync(backupPath, "utf8")).toBe(concurrentBackup);
+      expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+    } finally {
+      setCodexShimFreshBackupHookForTests(null);
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+      if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = oldHome;
+      rmSync(binDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "fresh install never overwrites a dangling backup created during reservation",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-racing-dangling-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-racing-dangling-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const backupPath = `${codexPath}.opencodex-real`;
+      const original = successfulLauncher("dangling reservation original");
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, original, { encoding: "utf8", mode: 0o755 });
+        setCodexShimFreshBackupHookForTests((_, index) => {
+          if (index === 0) symlinkSync(join(binDir, "missing"), backupPath, "file");
+        });
+
+        expect(installCodexShim()).toEqual({
+          installed: false,
+          message: `Refusing to overwrite existing backup: ${backupPath}`,
+        });
+        expect(readFileSync(codexPath, "utf8")).toBe(original);
+        expect(lstatSync(backupPath).isSymbolicLink()).toBe(true);
+        expect(existsSync(backupPath)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        setCodexShimFreshBackupHookForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows fresh install rolls back earlier reservations when a later backup races",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-multi-reservation-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-multi-reservation-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const originals = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")];
+      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1"), join(binDir, "codex.opencodex-real")];
+      const contents = originals.map((_, index) => successfulLauncher(`reservation original ${index}`));
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        originals.forEach((path, index) => writeFileSync(path, contents[index]!, "utf8"));
+        let earlierReservationObserved = false;
+        let contendedBackup: string | undefined;
+        setCodexShimFreshBackupHookForTests((target, index) => {
+          if (index > 0) earlierReservationObserved = true;
+          if (target.originalPath === join(binDir, "codex.ps1")) {
+            contendedBackup = target.backupPath;
+            writeFileSync(target.backupPath, "concurrent backup\r\n", { flag: "wx" });
+          }
+        });
+
+        expect(installCodexShim()).toEqual({
+          installed: false,
+          message: `Refusing to overwrite existing backup: ${backups[1]}`,
+        });
+        expect(earlierReservationObserved).toBe(true);
+        expect(contendedBackup).toBe(backups[1]);
+        originals.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(contents[index]));
+        backups.forEach(path => {
+          if (path !== contendedBackup) expect(existsSync(path)).toBe(false);
+        });
+        expect(readFileSync(backups[1]!, "utf8")).toBe("concurrent backup\r\n");
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        setCodexShimFreshBackupHookForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows fresh install removes an earlier wrapper when a later write fails",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-write-rollback-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-write-rollback-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const originals = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")];
+      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1"), join(binDir, "codex.opencodex-real")];
+      const contents = originals.map((_, index) => successfulLauncher(`write rollback original ${index}`));
+      let writes = 0;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        originals.forEach((path, index) => writeFileSync(path, contents[index]!, "utf8"));
+        setCodexShimFreshWriteHookForTests(() => {
+          writes += 1;
+          if (writes === 1) throw new Error("synthetic Windows sibling write failure");
+        });
+
+        expect(() => installCodexShim()).toThrow("synthetic Windows sibling write failure");
+
+        expect(writes).toBe(1);
+        originals.forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(contents[index]));
+        backups.forEach(path => expect(existsSync(path)).toBe(false));
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+        expect(readdirSync(binDir).filter(name => name.includes("opencodex-staging"))).toEqual([]);
+      } finally {
+        setCodexShimFreshWriteHookForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows fresh install refuses to adopt a wrapper replaced after publication",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-write-replacement-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-write-replacement-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const originals = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")];
+      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1"), join(binDir, "codex.opencodex-real")];
+      const contents = originals.map((_, index) => successfulLauncher(`write replacement original ${index}`));
+      const replacement = "concurrent Windows updater\r\n";
+      let writes = 0;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        originals.forEach((path, index) => writeFileSync(path, contents[index]!, "utf8"));
+        setCodexShimFreshWriteHookForTests(() => {
+          writes += 1;
+          if (writes !== 1) return;
+          const staged = `${originals[0]}.concurrent`;
+          writeFileSync(staged, replacement, "utf8");
+          renameSync(staged, originals[0]!);
+        });
+
+        expect(() => installCodexShim())
+          .toThrow("Codex shim fresh install generated wrapper changed after publication");
+
+        expect(writes).toBe(1);
+        expect(readFileSync(originals[0]!, "utf8")).toBe(replacement);
+        expect(readFileSync(backups[0]!, "utf8")).toBe(contents[0]);
+        originals.slice(1).forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(contents[index + 1]));
+        backups.slice(1).forEach(path => expect(existsSync(path)).toBe(false));
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+        expect(readdirSync(binDir).filter(name => name.includes("opencodex-staging"))).toEqual([]);
+      } finally {
+        setCodexShimFreshWriteHookForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows fresh install revalidates earlier wrappers after later sibling writes",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-sibling-replacement-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-sibling-replacement-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const originals = [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")];
+      const backups = [join(binDir, "codex.opencodex-real.cmd"), join(binDir, "codex.opencodex-real.ps1"), join(binDir, "codex.opencodex-real")];
+      const contents = originals.map((_, index) => successfulLauncher(`sibling replacement original ${index}`));
+      const replacement = "later Windows updater\r\n";
+      let writes = 0;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        originals.forEach((path, index) => writeFileSync(path, contents[index]!, "utf8"));
+        setCodexShimFreshWriteHookForTests(() => {
+          writes += 1;
+          if (writes !== 2) return;
+          const staged = `${originals[0]}.later-concurrent`;
+          writeFileSync(staged, replacement, "utf8");
+          renameSync(staged, originals[0]!);
+        });
+
+        expect(() => installCodexShim())
+          .toThrow("Codex shim fresh install generated wrapper set changed before commit");
+
+        expect(writes).toBe(3);
+        expect(readFileSync(originals[0]!, "utf8")).toBe(replacement);
+        expect(readFileSync(backups[0]!, "utf8")).toBe(contents[0]);
+        originals.slice(1).forEach((path, index) => expect(readFileSync(path, "utf8")).toBe(contents[index + 1]));
+        backups.slice(1).forEach(path => expect(existsSync(path)).toBe(false));
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+        expect(readdirSync(binDir).filter(name => name.includes("opencodex-staging"))).toEqual([]);
+      } finally {
+        setCodexShimFreshWriteHookForTests(null);
         if (oldPath === undefined) delete process.env.PATH;
         else process.env.PATH = oldPath;
         if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -790,6 +1046,132 @@ wait "$child"
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "Unix fresh install restores an original that cannot be content-probed",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-empty-original-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-empty-original-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const backupPath = `${codexPath}.opencodex-real`;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, "", "utf8");
+        chmodSync(codexPath, 0o755);
+
+        expect(() => installCodexShim())
+          .toThrow("Codex shim fresh install could not fingerprint the staged launcher");
+
+        expect(readFileSync(codexPath, "utf8")).toBe("");
+        expect(lstatSync(codexPath).mode & 0o777).toBe(0o755);
+        expect(existsSync(backupPath)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "Unix fresh install reports a dangling staged backup as rollback validation failure",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-dangling-backup-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-dangling-backup-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const targetPath = join(binDir, "real-codex");
+      const backupPath = `${codexPath}.opencodex-real`;
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(targetPath, successfulLauncher("dangling backup target"), "utf8");
+        chmodSync(targetPath, 0o755);
+        symlinkSync(targetPath, codexPath);
+        setCodexShimFreshWriteHookForTests(() => {
+          rmSync(targetPath, { force: true });
+          throw new Error("synthetic dangling backup rollback");
+        });
+
+        let thrown: unknown;
+        try {
+          installCodexShim();
+        } catch (error) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(AggregateError);
+        const topLevel = thrown as AggregateError;
+        expect(topLevel.message).toBe("Codex shim installation and rollback failed");
+        expect(topLevel.errors.map(error => String(error))).toContainEqual(
+          expect.stringContaining("synthetic dangling backup rollback"),
+        );
+        const rollbackError = topLevel.errors.find(error => error instanceof AggregateError) as AggregateError | undefined;
+        expect(rollbackError).toBeInstanceOf(AggregateError);
+        expect(rollbackError?.errors.map(error => String(error))).toContainEqual(
+          expect.stringContaining("Codex shim fresh-install backup changed during rollback"),
+        );
+        expect(existsSync(codexPath)).toBe(false);
+        expect(lstatSync(backupPath).isSymbolicLink()).toBe(true);
+        expect(existsSync(backupPath)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        setCodexShimFreshWriteHookForTests(null);
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "Unix fresh install preserves a pre-existing dangling backup",
+    () => {
+      const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-install-existing-dangling-backup-bin-"));
+      const home = mkdtempSync(join(tmpdir(), "ocx-shim-install-existing-dangling-backup-home-"));
+      const oldPath = process.env.PATH;
+      const oldHome = process.env.OPENCODEX_HOME;
+      const codexPath = join(binDir, "codex");
+      const missingTarget = join(binDir, "missing-original");
+      const backupPath = `${codexPath}.opencodex-real`;
+      const original = successfulLauncher("pre-existing dangling backup original");
+      try {
+        process.env.PATH = prependPath(binDir, oldPath);
+        process.env.OPENCODEX_HOME = home;
+        writeFileSync(codexPath, original, "utf8");
+        chmodSync(codexPath, 0o755);
+        symlinkSync(missingTarget, backupPath);
+
+        const result = installCodexShim();
+
+        expect(result).toEqual({
+          installed: false,
+          message: `Refusing to overwrite existing backup: ${backupPath}`,
+        });
+        expect(readFileSync(codexPath, "utf8")).toBe(original);
+        expect(lstatSync(backupPath).isSymbolicLink()).toBe(true);
+        expect(existsSync(backupPath)).toBe(false);
+        expect(existsSync(join(home, "codex-shim.json"))).toBe(false);
+      } finally {
+        if (oldPath === undefined) delete process.env.PATH;
+        else process.env.PATH = oldPath;
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        rmSync(binDir, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("Unix fresh install removes its marker-bearing partial wrapper before rollback", () => {
     if (process.platform === "win32") return;
