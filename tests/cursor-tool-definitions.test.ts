@@ -330,6 +330,7 @@ describe("Cursor tool definitions", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("Windows PowerShell 5.1");
+    expect(note).toContain("never emit Get-Content or Get-ChildItem unless the host shell is PowerShell");
     expect(note).toContain("cd /d");
     expect(note).toContain("<<EOF");
     expect(note).toContain("if ($?)");
