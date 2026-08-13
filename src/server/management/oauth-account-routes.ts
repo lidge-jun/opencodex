@@ -322,21 +322,32 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, activeAccountId: body.accountId });
   }
 
-  // Opt-in OAuth account pools (Anthropic #294 / Command Code): enable/threshold/strategy + clear cooldown.
+  // Opt-in Anthropic OAuth account pool (#294): enable/threshold/strategy + clear cooldown.
   if (url.pathname === "/api/oauth/accounts/pool" && req.method === "GET") {
     const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
-    if (provider !== "anthropic" && provider !== "command-code") {
-      return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    if (provider === "anthropic") {
+      const pool = config.anthropicAccountPool ?? {};
+      return jsonResponse({
+        provider,
+        enabled: pool.enabled === true,
+        autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
+        strategy: normalizeAccountPoolStrategy(pool.strategy),
+        stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
+        experimental: true,
+      });
     }
-    const pool = provider === "anthropic" ? config.anthropicAccountPool ?? {} : config.commandCodeAccountPool ?? {};
-    return jsonResponse({
-      provider,
-      enabled: pool.enabled === true,
-      autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
-      strategy: normalizeAccountPoolStrategy(pool.strategy),
-      stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
-      experimental: true,
-    });
+    if (provider === "command-code") {
+      const pool = config.commandCodeAccountPool ?? {};
+      return jsonResponse({
+        provider,
+        enabled: pool.enabled === true,
+        autoSwitchThreshold: typeof pool.autoSwitchThreshold === "number" ? pool.autoSwitchThreshold : 80,
+        strategy: normalizeAccountPoolStrategy(pool.strategy),
+        stickyLimit: normalizeAccountPoolStickyLimit(pool.stickyLimit),
+        experimental: true,
+      });
+    }
+    return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
   }
   if (url.pathname === "/api/oauth/accounts/pool" && (req.method === "PUT" || req.method === "PATCH")) {
     const parsedBody = await readManagementJsonBodyOr(req, {});
@@ -353,10 +364,39 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       activeAccountPinned?: unknown;
     };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
-    if (provider !== "anthropic" && provider !== "command-code") {
-      return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    if (provider !== "anthropic" && provider !== "command-code") return jsonResponse({ error: "pool config is only supported for anthropic and command-code" }, 400);
+    if (provider === "anthropic") {
+      // Anthropic path — upstream verbatim. Do not generalize.
+      let enabled = config.anthropicAccountPool?.enabled === true;
+      if (body.enabled !== undefined) {
+        if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
+        enabled = body.enabled;
+      }
+      let threshold = config.anthropicAccountPool?.autoSwitchThreshold ?? 80;
+      if (body.autoSwitchThreshold !== undefined) {
+        if (typeof body.autoSwitchThreshold !== "number" || !Number.isInteger(body.autoSwitchThreshold) || body.autoSwitchThreshold < 0 || body.autoSwitchThreshold > 100) return jsonResponse({ error: "autoSwitchThreshold must be an integer 0-100" }, 400);
+        threshold = body.autoSwitchThreshold;
+      }
+      let strategy = config.anthropicAccountPool?.strategy;
+      if (body.strategy !== undefined) {
+        const parsed = parseAccountPoolStrategy(body.strategy);
+        if (parsed === null) return jsonResponse({ error: "strategy must be one of: quota, round-robin, fill-first" }, 400);
+        strategy = parsed;
+      }
+      let stickyLimit = config.anthropicAccountPool?.stickyLimit;
+      if (body.stickyLimit !== undefined) {
+        const parsed = parseAccountPoolStickyLimit(body.stickyLimit);
+        if (parsed === null) return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
+        stickyLimit = parsed;
+      }
+      if (body.accountPriorities !== undefined || body.activeAccountPinned !== undefined) return jsonResponse({ error: "account priorities and manual pins are only supported for command-code" }, 400);
+      config.anthropicAccountPool = { enabled, autoSwitchThreshold: threshold, ...(strategy !== undefined ? { strategy } : {}), ...(stickyLimit !== undefined ? { stickyLimit } : {}) };
+      saveConfigPreservingClaudeCode(config);
+      reconcileLiveStateStores();
+      return jsonResponse({ ok: true, provider, enabled, autoSwitchThreshold: threshold, strategy: normalizeAccountPoolStrategy(strategy), stickyLimit: normalizeAccountPoolStickyLimit(stickyLimit), experimental: true });
     }
-    const poolKey = provider === "anthropic" ? "anthropicAccountPool" : "commandCodeAccountPool";
+    // Command Code path — alongside, not merged with Anthropic.
+    const poolKey = "commandCodeAccountPool" as const;
     let enabled = config[poolKey]?.enabled === true;
     if (body.enabled !== undefined) {
       if (typeof body.enabled !== "boolean") return jsonResponse({ error: "enabled must be a boolean" }, 400);
@@ -389,9 +429,6 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         return jsonResponse({ error: "stickyLimit must be an integer 1-100" }, 400);
       }
       stickyLimit = parsed;
-    }
-    if (provider !== "command-code" && (body.accountPriorities !== undefined || body.activeAccountPinned !== undefined)) {
-      return jsonResponse({ error: "account priorities and manual pins are only supported for command-code" }, 400);
     }
     const poolConfig = (config[poolKey] ?? {}) as {
       accountPriorities?: Record<string, number>;
@@ -442,14 +479,19 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown };
     const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
-    if (provider !== "anthropic" && provider !== "command-code") {
-      return jsonResponse({ error: "clear-cooldown is only supported for anthropic and command-code" }, 400);
+    if (provider === "anthropic") {
+      if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
+      const { clearAnthropicAccountCooldown } = await import("../../oauth/anthropic-routing");
+      const cleared = clearAnthropicAccountCooldown(accountId);
+      return jsonResponse({ ok: true, cleared });
     }
-    if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
-    const cleared = provider === "anthropic"
-      ? (await import("../../oauth/anthropic-routing")).clearAnthropicAccountCooldown(accountId)
-      : (await import("../../oauth/command-code-routing")).clearCommandCodeAccountCooldown(accountId);
-    return jsonResponse({ ok: true, cleared });
+    if (provider === "command-code") {
+      if (!accountId) return jsonResponse({ error: "missing accountId" }, 400);
+      const { clearCommandCodeAccountCooldown } = await import("../../oauth/command-code-routing");
+      const cleared = clearCommandCodeAccountCooldown(accountId);
+      return jsonResponse({ ok: true, cleared });
+    }
+    return jsonResponse({ error: "clear-cooldown is only supported for anthropic and command-code" }, 400);
   }
 
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {
