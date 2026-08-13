@@ -65,5 +65,7 @@ export function defineAdapterRegistry<const T extends Record<string, AdapterDefi
       }),
     ]),
   );
-  return Object.freeze(registered) as { readonly [K in keyof T]: AdapterDefinition<T[K]> };
+  return Object.freeze(registered) as unknown as {
+    readonly [K in keyof T]: AdapterDefinition<T[K]>;
+  };
 }
