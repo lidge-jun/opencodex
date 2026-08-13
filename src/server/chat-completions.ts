@@ -255,10 +255,15 @@ async function handleChatCompletionsWithBudget(
     const upstreamHeaders = new Headers({ "content-type": "application/json" });
     const providerConfig: OcxProviderConfig = routeInfo.provider;
     const providerApiKey: string | undefined = providerConfig.apiKey;
-    const hasProviderKey = typeof providerApiKey === "string" && providerApiKey.trim().length > 0;
-    if (hasProviderKey) {
-      upstreamHeaders.set("authorization", `Bearer ${providerApiKey!.trim()}`);
+    const hasCredential = typeof providerApiKey === "string" && providerApiKey.trim().length > 0;
+    // When authMode is "key" and keyOptional is false, the adapter itself rejects
+    // missing credentials; mirror that guard here instead of silently fetching without Authorization.
+    if (providerConfig.authMode === "key" && !providerConfig.keyOptional && !hasCredential) {
+      finishRequestAttempt(attempt, 401, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 401, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(401, "Missing API key for provider", "authentication_error", "invalid_api_key");
     }
+    if (hasCredential) upstreamHeaders.set("authorization", `Bearer ${providerApiKey!.trim()}`);
     if (providerConfig.headers) {
       for (const [k, v] of Object.entries(providerConfig.headers)) upstreamHeaders.set(k, v);
     }
@@ -267,6 +272,13 @@ async function handleChatCompletionsWithBudget(
       ? stripBracketedModelSuffix(routeInfo.modelId)
       : routeInfo.modelId;
     const chatBodyForWire: Rec = { ...rawChat, model: wireModelId, stream: chatStreamForUpstream };
+    // Preserve parity with openai-chat adapter: streaming turns include usage by default so the
+    // deferred usage path always has tokens to attach to the turn.
+    if (chatStreamForUpstream && isRec(chatBodyForWire.stream_options)) {
+      // client supplied stream_options - preserve as-is
+    } else if (chatStreamForUpstream) {
+      chatBodyForWire.stream_options = { include_usage: true };
+    }
     if (chatBodyForWire.store === true) chatBodyForWire.store = false;
     if (
       chatBodyForWire.response_format !== undefined
@@ -379,16 +391,15 @@ async function handleChatCompletionsWithBudget(
         const msg = err instanceof Error ? err.message : String(err);
         finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
         if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
-        return chatCompletionsErrorResponse(502, redactSecretString(msg).slice(0, 500), "server_error");
+        break;
       }
     }
     {
-      let currentKey: string | undefined = providerApiKey;
+      const apiKeyPool = providerConfig.apiKeyPool;
+      const maxRotations = Array.isArray(apiKeyPool) ? apiKeyPool.length : (hasKeyPoolFailover(providerConfig) ? 10 : 0);
+      let currentKey: string | undefined = providerConfig.apiKey;
       let rotations = 0;
-      const maxRotations = Array.isArray((providerConfig as unknown as { apiKeyPool?: unknown[] }).apiKeyPool)
-        ? ((providerConfig as unknown as { apiKeyPool: unknown[] }).apiKeyPool.length)
-        : (hasKeyPoolFailover(providerConfig) ? 10 : 0);
-      let activeProvider: OcxProviderConfig = providerConfig;
+      let activeProvider = providerConfig;
       while (
         response.status === 429
         && hasKeyPoolFailover(activeProvider)
@@ -396,13 +407,9 @@ async function handleChatCompletionsWithBudget(
         && !req.signal.aborted
         && rotations < maxRotations
       ) {
-        const rotated = rotateProviderTransportOn429(config, routeInfo.providerName, activeProvider, {
-          retryAfter: response.headers.get("retry-after"),
-          now: Date.now(),
-          attemptedKey: currentKey,
-        });
+        const rotated = rotateProviderTransportOn429(config, routeInfo.providerName, activeProvider, { retryAfter: response.headers.get("retry-after"), now: Date.now(), attemptedKey: currentKey });
         if (!rotated) break;
-        const nextProvider: OcxProviderConfig = rotated as unknown as OcxProviderConfig;
+        const nextProvider = rotated;
         if (nextProvider.apiKey) upstreamHeaders.set("authorization", `Bearer ${nextProvider.apiKey.trim()}`);
         if (nextProvider.headers) for (const [k, v] of Object.entries(nextProvider.headers)) upstreamHeaders.set(k, v);
         try { void response.body?.cancel().catch(() => {}); } catch { /* noop */ }
@@ -458,7 +465,37 @@ async function handleChatCompletionsWithBudget(
       let upstreamCode: string | null | undefined;
       let upstreamType: string | undefined;
       try {
-        const text = await response.text();
+        let text = "";
+        try {
+          const reader = response.body ? response.body.getReader() : null;
+          if (!reader) {
+            text = await response.text();
+          } else {
+            const decoder = new TextDecoder();
+            let acc = "";
+            // Bound the error body to 8 KiB — enough for structured error, avoids unbounded buffering.
+            const limit = 8192;
+            let consumed = 0;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                const chunk = decoder.decode(value, { stream: true });
+                if (consumed + chunk.length > limit) {
+                  acc += chunk.slice(0, limit - consumed);
+                  try { void reader.cancel().catch(() => {}); } catch { /* noop */ }
+                  break;
+                }
+                acc += chunk;
+                consumed += chunk.length;
+              }
+            }
+            acc += decoder.decode();
+            text = acc;
+          }
+        } catch {
+          text = "";
+        }
         try {
           const parsed = JSON.parse(text) as { error?: { message?: string; type?: string; code?: string | null } | string; message?: string };
           const nested = typeof parsed?.error === "object" && parsed.error ? parsed.error : undefined;
@@ -504,11 +541,13 @@ async function handleChatCompletionsWithBudget(
 
     // Success: stream passthrough or JSON — preserve Chat wire verbatim.
     const ct = response.headers.get("content-type") ?? "";
-    // Requested streaming wins even when the mock omits content-type on some paths;
-    // non-streaming JSON must be returned even if upstream sent SSE frames.
     const wantsStream = stream;
     const isSseContentType = ct.includes("text/event-stream");
-    const shouldStream = (wantsStream && !!response.body) || (isSseContentType && !!response.body && wantsStream);
+    // Only stream directly when upstream is actually SSE; a streaming client
+    // that receives JSON must go through the bounded completion path and be
+    // synthesized into SSE so finish_reason/tool_calls are preserved.
+    const shouldStream = wantsStream && !!response.body && isSseContentType;
+    const shouldSynthesizeStream = wantsStream && !!response.body && !isSseContentType;
     const sseHeaders: Record<string, string> = {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache",
@@ -569,6 +608,15 @@ async function handleChatCompletionsWithBudget(
                         choices: [{ index: 0, delta: (choice0?.delta as Rec) ?? {}, finish_reason: (choice0?.finish_reason as string | null) ?? null }],
                         ...(rec.usage ? { usage: rec.usage } : {}),
                       };
+                      if (isRec(rec.usage)) {
+                        const u = rec.usage as Rec;
+                        const prompt = typeof u.prompt_tokens === "number" ? u.prompt_tokens : undefined;
+                        const comp = typeof u.completion_tokens === "number" ? u.completion_tokens : undefined;
+                        if (prompt !== undefined || comp !== undefined) {
+                          logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 };
+                          if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage;
+                        }
+                      }
                       noteSseFirstOutput();
                       controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
                     }
@@ -606,6 +654,7 @@ async function handleChatCompletionsWithBudget(
               const rec = parsed as Rec;
               // Already a proper chunk — forward as-is.
               if (rec.object === "chat.completion.chunk") {
+                noteSseFirstOutput();
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(rec)}\n\n`));
                 continue;
               }
@@ -624,6 +673,15 @@ async function handleChatCompletionsWithBudget(
                 }],
                 ...(rec.usage ? { usage: rec.usage } : {}),
               };
+              if (isRec(rec.usage)) {
+                const u = rec.usage as Rec;
+                const prompt = typeof u.prompt_tokens === "number" ? u.prompt_tokens : undefined;
+                const comp = typeof u.completion_tokens === "number" ? u.completion_tokens : undefined;
+                if (prompt !== undefined || comp !== undefined) {
+                  logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 };
+                  if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage;
+                }
+              }
               noteSseFirstOutput();
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
             }
@@ -655,6 +713,86 @@ async function handleChatCompletionsWithBudget(
         return responseWithDeferredRequestLog(withAbort, logIds.requestId, logIds.start, logCtx);
       }
       return withAbort;
+    }
+
+    // Streaming client that received non-SSE JSON (some providers/upstreams): synthesize SSE from completion.
+    if (shouldSynthesizeStream) {
+      // Reuse the JSON completion path, then fan out as SSE chunks.
+      // Keep this minimal: read bounded JSON, synthesize a single SSE frame sequence.
+      let synthJsonText: string;
+      let synthReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      try {
+        const r = response.body ? (synthReader = response.body.getReader()) : null;
+        if (!r) {
+          synthJsonText = await response.text();
+          translatorBudget.chargeRetained(new TextEncoder().encode(synthJsonText).byteLength, { kind: "request_copies" });
+        } else {
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          for (;;) {
+            const { done, value } = await r.read();
+            if (done) break;
+            if (value) { translatorBudget.chargeRetained(value.byteLength, { kind: "request_copies" }); chunks.push(value); total += value.byteLength; }
+          }
+          const merged = new Uint8Array(total);
+          let off = 0;
+          for (const c of chunks) { merged.set(c, off); off += c.byteLength; }
+          synthJsonText = new TextDecoder().decode(merged);
+        }
+      } catch (err) {
+        if (synthReader) { try { void synthReader.cancel().catch(() => {}); } catch { /* noop */ } }
+        if (isTranslatorBudgetExceededError(err)) {
+          cleanup(); finishRequestAttempt(attempt, 413, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+          if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
+          return chatCompletionsErrorResponse(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+        }
+        cleanup(); finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(502, "upstream returned a non-JSON response", "server_error");
+      }
+      cleanup();
+      let synthParsed: unknown | null = null;
+      try { synthParsed = JSON.parse(synthJsonText); } catch { synthParsed = null; }
+      const rec2 = isRec(synthParsed) ? synthParsed as Rec : null;
+      const choices2 = rec2 && Array.isArray(rec2.choices) ? rec2.choices as Rec[] : [];
+      const msg2 = choices2[0] && isRec(choices2[0].message) ? choices2[0].message as Rec : null;
+      const usage2 = rec2 && isRec(rec2.usage) ? rec2.usage as Rec : undefined;
+      if (usage2) {
+        const prompt = typeof usage2.prompt_tokens === "number" ? usage2.prompt_tokens : undefined;
+        const comp = typeof usage2.completion_tokens === "number" ? usage2.completion_tokens : undefined;
+        if (prompt !== undefined || comp !== undefined) { logCtx.usage = { inputTokens: prompt ?? 0, outputTokens: comp ?? 0 }; if (logCtx.activeAttempt) logCtx.activeAttempt.usage = logCtx.usage; }
+      }
+      const synthId = (rec2?.id as string) || `chatcmpl-${Date.now().toString(36)}`;
+      const synthCreated = typeof rec2?.created === "number" ? rec2?.created as number : Math.floor(Date.now() / 1000);
+      const synthModel = typeof rec2?.model === "string" ? rec2?.model as string : requestedModel;
+      const content2 = msg2 && typeof msg2.content === "string" ? msg2.content as string : (msg2?.content ?? null);
+      const toolCalls2 = msg2 && Array.isArray(msg2.tool_calls) ? msg2.tool_calls as unknown[] : undefined;
+      const finish2 = choices2[0] && typeof choices2[0].finish_reason === "string" ? choices2[0].finish_reason as string : "stop";
+      const encoder2 = new TextEncoder();
+      const synthStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const delta: Rec = {};
+          if (typeof content2 === "string" && content2.length > 0) delta.content = content2;
+          if (toolCalls2) delta.tool_calls = toolCalls2 as unknown as Rec;
+          const chunk: Rec = { id: synthId, object: "chat.completion.chunk", created: synthCreated, model: synthModel, choices: [{ index: 0, delta, finish_reason: null }] };
+          controller.enqueue(encoder2.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          const finalChunk: Rec = { id: synthId, object: "chat.completion.chunk", created: synthCreated, model: synthModel, choices: [{ index: 0, delta: {}, finish_reason: finish2 }], ...(usage2 ? { usage: usage2 } : {}) };
+          controller.enqueue(encoder2.encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
+          controller.enqueue(encoder2.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      const sseHeaders2: Record<string, string> = { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache", Connection: "keep-alive" };
+      let firstSynth = false;
+      const noteFirstSynth = () => { if (firstSynth || !logIds) return; firstSynth = true; recordFirstOutput(logCtx, logIds.start); };
+      const tracked2 = trackStreamLifetime(synthStream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ transform(chunk, controller) { noteFirstSynth(); controller.enqueue(chunk); } })), ac, () => {
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 200, { closeReason: "terminal" });
+        finishRequestAttempt(attempt, 200, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+      }, logIds?.turnAdmissionLease);
+      const withAbort2 = new Response(tracked2, { status: 200, headers: sseHeaders2 });
+      cancelBodyOnAbort(tracked2, ac.signal);
+      if (logIds) return responseWithDeferredRequestLog(withAbort2, logIds.requestId, logIds.start, logCtx);
+      return withAbort2;
     }
 
     // Non-streaming: reuse collectChatCompletion so tool_calls/finish_reason survive

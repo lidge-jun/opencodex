@@ -754,7 +754,8 @@ test("chat-native non-stream budget overflow returns 413 without hanging", async
       body: JSON.stringify({ model: "mock/test-model", stream: false, messages: [{ role: "user", content: "hi" }] }),
     });
     expect(response2.status).toBe(200);
-    // Prove the overflow path released the body/reader: second request consumed a fresh upstream response.
+    const j2 = await response2.json() as { choices?: Array<{ message?: { content?: string } }> };
+    expect(j2.choices?.[0]?.message?.content).toBe("ok");
     expect(calls).toBe(2);
   } finally {
     await server.stop(true);
