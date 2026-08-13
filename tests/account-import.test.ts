@@ -422,6 +422,62 @@ describe("Cockpit account-import atomic identity upsert", () => {
     expect(JSON.parse(readFileSync(join(testHome, "auth.json"), "utf8"))[ACCOUNT_IMPORT_PROVIDER].accounts).toHaveLength(1);
   });
 
+  test("prefers an exact accountId row over an earlier email-only legacy row", async () => {
+    testHome = mkdtempSync(join(tmpdir(), "ocx-account-import-store-"));
+    process.env.OPENCODEX_HOME = testHome;
+    const authPath = join(testHome, "auth.json");
+    writeFileSync(authPath, JSON.stringify({
+      [ACCOUNT_IMPORT_PROVIDER]: {
+        activeAccountId: "legacy-email-row",
+        accounts: [
+          {
+            id: "legacy-email-row",
+            credential: {
+              access: "access-legacy",
+              refresh: "refresh-legacy",
+              expires: 1,
+              email: "shared@example.com",
+              projectId: "project-legacy",
+            },
+            addedAt: 1,
+          },
+          {
+            id: "stable-subject-row",
+            credential: {
+              access: "access-stable",
+              refresh: "refresh-stable",
+              expires: 1,
+              email: "shared@example.com",
+              accountId: "google-subject-1",
+              projectId: "project-stable",
+            },
+            addedAt: 2,
+          },
+        ],
+      },
+    }), { mode: 0o600 });
+
+    expect(await upsertCredentialByIdentity(ACCOUNT_IMPORT_PROVIDER, {
+      access: "access-updated",
+      refresh: "refresh-updated",
+      expires: 2,
+      email: "SHARED@example.com",
+      accountId: "google-subject-1",
+      projectId: "project-updated",
+    })).toBe("updated");
+
+    const set = getAccountSet(ACCOUNT_IMPORT_PROVIDER);
+    expect(set?.accounts).toHaveLength(2);
+    expect(set?.activeAccountId).toBe("legacy-email-row");
+    const legacyCredential = set?.accounts.find(account => account.id === "legacy-email-row")?.credential;
+    expect(legacyCredential?.access).toBe("access-legacy");
+    expect(legacyCredential?.accountId).toBeUndefined();
+    expect(set?.accounts.find(account => account.id === "stable-subject-row")?.credential)
+      .toMatchObject({ access: "access-updated", accountId: "google-subject-1" });
+    expect(set?.accounts.filter(account => account.credential.accountId === "google-subject-1"))
+      .toHaveLength(1);
+  });
+
   test("does not overwrite a stable accountId row from an incoming email-only credential", async () => {
     testHome = mkdtempSync(join(tmpdir(), "ocx-account-import-store-"));
     process.env.OPENCODEX_HOME = testHome;

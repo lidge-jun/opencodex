@@ -541,15 +541,7 @@ export async function upsertCredentialByIdentity(
   }
   return await mutateStore(store => {
     const set = store[provider];
-    const matches = (account: ProviderAccount): boolean => {
-      if (safe.accountId) {
-        if (account.credential.accountId) return account.credential.accountId === safe.accountId;
-        return Boolean(
-          safe.email
-          && account.credential.email
-          && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
-        );
-      }
+    const matchesEmailOnly = (account: ProviderAccount): boolean => {
       if (account.credential.accountId) return false;
       return Boolean(
         safe.email
@@ -557,7 +549,10 @@ export async function upsertCredentialByIdentity(
         && account.credential.email.toLowerCase() === safe.email.toLowerCase(),
       );
     };
-    const existing = set?.accounts.find(matches);
+    const existing = safe.accountId
+      ? set?.accounts.find(account => account.credential.accountId === safe.accountId)
+        ?? set?.accounts.find(matchesEmailOnly)
+      : set?.accounts.find(matchesEmailOnly);
     if (existing && set) {
       existing.credential = safe;
       delete existing.needsReauth;
