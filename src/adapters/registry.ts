@@ -66,7 +66,7 @@ export const ADAPTER_REGISTRY = defineAdapterRegistry({
     kind: "direct",
     wire: "cursor",
     mutation: "mutation.codex-owned-with-gated-native-fallback",
-    create: provider => createCursorAdapter(provider),
+    create: (provider, context) => createCursorAdapter(provider, context.cursorDeps),
   },
   "mimo-free": {
     kind: "wrapper",
