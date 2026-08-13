@@ -158,8 +158,9 @@ başlatabilirsiniz.
 Kimlik bilgileri kararlı bir hesap kimliği veya e-posta içeren OAuth
 sağlayıcıları birden fazla oturum tutabilir. Sağlayıcılar sayfası bu hesapları
 bir açılır menüde gösterir, başka bir tane eklemenize izin verir ve diğerlerinin
-oturumunu kapatmadan etkin hesabı değiştirir. Yalnızca kimliği olmayan Kimi
-kimlik bilgileri etkin yuvanın yerini alır; Kiro hesapları profil ARN'sine göre
+oturumunu kapatmadan etkin hesabı değiştirir. Normal oturum açmada kimliği olmayan
+Kimi kimlik bilgileri etkin yuvanın yerini alır; açık **Hesap ekle** akışı mevcut
+yuvayı korur ve ayrı yeni yuvayı etkinleştirir. Kiro hesapları profil ARN'sine göre
 anahtarlanır. `chatgpt` her zaman tek yuvalıdır çünkü Codex havuz hesaplarının
 ayrı bir defteri vardır. Belirteçler `~/.opencodex/auth.json` içinde kalır;
 `/api/oauth/accounts` yalnızca maskelenmiş meta verileri döndürür.
@@ -661,5 +662,4 @@ Canlı araştırmaya sahip sağlayıcılar: OpenAI/Codex, Anthropic, xAI, Cursor
 Kimi, Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt ve a6api destekli herhangi
 bir özel sağlayıcı.
-
 

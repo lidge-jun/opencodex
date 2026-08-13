@@ -134,8 +134,9 @@ You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 
 OAuth providers whose credentials include a stable account id or email can keep more than one
 login. The Providers page shows those accounts in a dropdown, lets you add another, and switches the
-active account without logging the others out. Only identity-less Kimi credentials replace the
-active slot; Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
+active account without logging the others out. A normal login with an identity-less Kimi credential
+replaces the active slot, while an explicit **Add account** preserves that slot and activates a new,
+distinct one. Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 

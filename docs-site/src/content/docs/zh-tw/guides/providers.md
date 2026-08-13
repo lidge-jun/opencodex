@@ -124,8 +124,9 @@ session／task key 有助提升 Code Plan cache hit rate；沒有 key 的請求�
 ### 多個 OAuth 帳號
 
 credential 內含穩定 account id 或 email 的 OAuth provider 可以保存多個登入。Providers 頁面會在下拉
-選單顯示這些帳號、允許新增帳號，並在不登出其他帳號的情況下切換目前帳號。只有沒有 identity 的 Kimi
-credential 會取代 active slot；Kiro 帳號以 profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
+選單顯示這些帳號、允許新增帳號，並在不登出其他帳號的情況下切換目前帳號。一般登入時，沒有 identity 的
+Kimi credential 會取代 active slot；明確的 **新增帳號** 會保留原有 slot 並啟用另一個新 slot。Kiro 帳號以
+profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
 Codex pool 帳號使用獨立 ledger。Token 仍存放在 `~/.opencodex/auth.json`；`/api/oauth/accounts` 只回傳
 遮蔽後的 metadata。
 

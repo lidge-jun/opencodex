@@ -1124,7 +1124,7 @@ export async function runLogin(
       await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred);
     } else {
       await (deps.saveCredential ?? saveCredential)(provider, cred, {
-        preserveIdentityless: provider === "kiro" && opts?.forceLogin === true,
+        preserveIdentityless: opts?.forceLogin === true,
       });
     }
     if (provider !== "chatgpt") {

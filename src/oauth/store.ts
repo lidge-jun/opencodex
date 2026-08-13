@@ -10,10 +10,11 @@
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
  *   for Codex pool logins, which have their own ledger (codex-accounts.json).
- * - Credentials without identity (no accountId/email) replace the active slot
- *   instead of appending: their refresh tokens rotate, so a derived id would duplicate the
- *   same human on every re-login. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor
- *   extracts JWT `sub` — both append distinct accounts under multiauth.
+ * - Credentials without identity (no accountId/email) replace the active slot on a normal
+ *   login: their refresh tokens rotate, so a derived id would duplicate the same human on every
+ *   re-login. An explicit add-account login instead preserves the prior slot and appends a
+ *   distinct one. Kimi extracts JWT `user_id`/`sub` as accountId; Cursor extracts JWT `sub` —
+ *   both append distinct identified accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
@@ -300,6 +301,17 @@ function newAccountId(cred: OAuthCredentials): string {
   return createHash("sha256").update(identity).digest("hex").slice(0, 32);
 }
 
+/** Allocate a persisted slot id without reusing any existing account's ownership key. */
+function distinctAccountId(cred: OAuthCredentials, accounts: readonly ProviderAccount[]): string {
+  const base = newAccountId(cred);
+  const occupied = new Set(accounts.map(account => account.id));
+  if (!occupied.has(base)) return base;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    if (!occupied.has(candidate)) return candidate;
+  }
+}
+
 function normalizeAccount(value: unknown): ProviderAccount | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<ProviderAccount>;
@@ -473,7 +485,8 @@ export function getCredential(provider: string): OAuthCredentials | null {
  * Persist a credential as the ACTIVE account. Identity-matching (accountId ?? email) upserts
  * the same human's slot; a new identity appends a new account. Credentials without identity
  * (rotating refresh tokens would fabricate duplicates) and single-slot providers replace the
- * active slot / whole set instead.
+ * active slot / whole set instead. An explicit add-account login can preserve the legacy slot;
+ * an identity-less credential then gets its deterministic refresh-derived account id.
  */
 export async function saveCredential(
   provider: string,
@@ -508,18 +521,24 @@ export async function saveCredential(
         delete active.needsReauth;
         return;
       }
-      const id = newAccountId(safe);
+      const id = distinctAccountId(safe, set.accounts);
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
       return;
     }
-    // No identity: replace the active slot in place (single-account semantics).
+    if (opts.preserveIdentityless) {
+      const id = distinctAccountId(safe, set.accounts);
+      set.accounts.push({ id, credential: safe, addedAt: Date.now() });
+      set.activeAccountId = id;
+      return;
+    }
+    // No identity during a normal login: replace the active slot in place.
     const active = set.accounts.find(a => a.id === set.activeAccountId);
     if (active) {
       active.credential = safe;
       delete active.needsReauth;
     } else {
-      const id = newAccountId(safe);
+      const id = distinctAccountId(safe, set.accounts);
       set.accounts.push({ id, credential: safe, addedAt: Date.now() });
       set.activeAccountId = id;
     }

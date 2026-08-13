@@ -145,6 +145,66 @@ describe("multi-account auth store", () => {
     expect(getCredential("cursor")?.access).toBe("rotated");
   });
 
+  test("explicit add-account preserves an identity-less slot and activates the new one", async () => {
+    await saveCredential("cursor", cred({ access: "legacy-access", refresh: "legacy-refresh" }));
+    const legacySlotId = getAccountSet("cursor")!.activeAccountId;
+
+    await saveCredential("cursor", cred({
+      access: "new-access",
+      refresh: "new-refresh",
+    }), { preserveIdentityless: true });
+
+    const set = getAccountSet("cursor")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(set.activeAccountId).not.toBe(legacySlotId);
+    expect(getAccountCredential("cursor", legacySlotId)).toMatchObject({
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+    });
+    expect(getCredential("cursor")).toMatchObject({
+      access: "new-access",
+      refresh: "new-refresh",
+    });
+  });
+
+  test("explicit add-account does not reuse the legacy slot when opaque credentials share a refresh token", async () => {
+    await saveCredential("cursor", cred({ access: "legacy-access", refresh: "shared-refresh" }));
+    const legacySlotId = getAccountSet("cursor")!.activeAccountId;
+
+    await saveCredential("cursor", cred({
+      access: "new-access",
+      refresh: "shared-refresh",
+    }), { preserveIdentityless: true });
+
+    const set = getAccountSet("cursor")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(new Set(set.accounts.map(account => account.id)).size).toBe(2);
+    expect(set.activeAccountId).not.toBe(legacySlotId);
+    expect(getAccountCredential("cursor", legacySlotId)?.access).toBe("legacy-access");
+    expect(getCredential("cursor")?.access).toBe("new-access");
+  });
+
+  test("explicit add-account keeps slot ids distinct across refresh and verified-identity seed collisions", async () => {
+    await saveCredential("cursor", cred({ access: "legacy-access", refresh: "shared-seed" }));
+    const legacySlotId = getAccountSet("cursor")!.activeAccountId;
+
+    await saveCredential("cursor", cred({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      accountId: "shared-seed",
+    }), { preserveIdentityless: true });
+
+    const set = getAccountSet("cursor")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(new Set(set.accounts.map(account => account.id)).size).toBe(2);
+    expect(set.activeAccountId).not.toBe(legacySlotId);
+    expect(getAccountCredential("cursor", legacySlotId)?.access).toBe("legacy-access");
+    expect(getCredential("cursor")).toMatchObject({
+      access: "identified-access",
+      accountId: "shared-seed",
+    });
+  });
+
   test("cursor with distinct accountIds appends a second account", async () => {
     await saveCredential("cursor", cred({ accountId: "google-oauth2|user_a", access: "access-a" }));
     await saveCredential("cursor", cred({ accountId: "google-oauth2|user_b", access: "access-b" }));
