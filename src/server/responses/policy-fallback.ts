@@ -5,6 +5,7 @@ import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
 import { handleResponses as handleResponsesCore } from "./core";
+import { requestPacingOverloadResponse } from "./pacing-overload";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -122,7 +123,14 @@ export async function handleResponsesWithPolicyFallback(
     // Core owns the client-facing parse/decompression error.
   }
 
-  let response = await runCore(req, config, logCtx, options);
+  let response: Response;
+  try {
+    response = await runCore(req, config, logCtx, options);
+  } catch (error) {
+    const overload = requestPacingOverloadResponse(error);
+    if (overload) return overload;
+    throw error;
+  }
   const initialTrace = logCtx.routeDecision;
   const initialRequestedModel = logCtx.requestedModel;
   if (!rawBody || !isPolicyDecision(initialTrace)) return response;
@@ -140,7 +148,13 @@ export async function handleResponsesWithPolicyFallback(
     finishFailedPolicyAttempt(logCtx, response.status);
     const retryRequest = requestWithCandidate(req, rawBody, next);
     try {
-      response = await runCore(retryRequest, config, logCtx, options);
+      try {
+        response = await runCore(retryRequest, config, logCtx, options);
+      } catch (error) {
+        const overload = requestPacingOverloadResponse(error);
+        if (overload) return overload;
+        throw error;
+      }
     } finally {
       logCtx.requestedModel = initialRequestedModel;
       logCtx.routeDecision = initialTrace;
