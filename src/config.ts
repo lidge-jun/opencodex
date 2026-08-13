@@ -633,8 +633,12 @@ const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
  * bytes → harden preserved → mkdir claim dir → rename source onto the unique
  * claim path → read the claimed inode → unlink only the claim. The original
  * backup path is never unlinked, so a replacement that appears after the claim
- * stays. Pre-harden failures scrub the unverified destination and never claim
- * the source. Shared by startup migration recovery and `ocx init` cleanup.
+ * stays. After a successful claim, a claimed-read or claimed-byte failure never
+ * unlinks the claimed path: it independently hardens that leftover, independently
+ * restores the original directory entry when vacant (EEXIST keeps a replacement),
+ * and throws `OpenAiTierRollbackPreserveClaimError` with `claimedPath`. Pre-harden
+ * failures scrub the unverified destination and never claim the source. Shared by
+ * startup migration recovery and `ocx init` cleanup.
  */
 export function preserveOpenAiTierRollbackSnapshot(
   configPath = getConfigPath(),
@@ -693,6 +697,12 @@ export function preserveOpenAiTierRollbackSnapshot(
     }
   };
 
+  const failClaimedSnapshot = (claimedPath: string, cause?: unknown): never => {
+    try { io.harden(claimedPath); } catch { /* claimed leftover must remain inspectable; restore still runs */ }
+    try { restoreClaimedIfVacant(claimedPath); } catch { /* EEXIST keeps B; other restore failures must not hide claimedPath */ }
+    throw new OpenAiTierRollbackPreserveClaimError(claimedPath, cause === undefined ? undefined : { cause });
+  };
+
   for (let attempt = 0; attempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; attempt++) {
     const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
     try {
@@ -746,17 +756,11 @@ export function preserveOpenAiTierRollbackSnapshot(
       try {
         return io.read(claimedPath);
       } catch (error) {
-        throw new OpenAiTierRollbackPreserveError("Failed to read claimed rollback backup", { cause: error, code: "changed" });
+        return failClaimedSnapshot(claimedPath, error);
       }
     })();
     if (!sameBytes(copied, claimedBytes)) {
-      try { io.harden(claimedPath); } catch { /* claimed leftover must remain inspectable */ }
-      try {
-        restoreClaimedIfVacant(claimedPath);
-      } catch (error) {
-        throw new OpenAiTierRollbackPreserveClaimError(claimedPath, { cause: error });
-      }
-      throw new OpenAiTierRollbackPreserveClaimError(claimedPath);
+      failClaimedSnapshot(claimedPath);
     }
 
     try {

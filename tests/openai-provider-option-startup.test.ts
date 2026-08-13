@@ -1049,4 +1049,76 @@ describe("OpenAI provider option startup coordinator", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("startup does not save when claimed-read fails after a replacement backup appears (#1599)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-1599-claimedread-"));
+    try {
+      const configPath = join(dir, "config.json");
+      const v2Backup = `${configPath}.pre-openai-tiers-v2.bak`;
+      const currentConfig: OcxConfig = {
+        port: 10100,
+        defaultProvider: "kimi",
+        providers: { kimi: { adapter: "openai-chat", baseUrl: "https://api.moonshot.cn/v1" } },
+      };
+      const currentBytes = `${JSON.stringify(currentConfig, null, 2)}\n`;
+      const bytesA = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+      const bytesB = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai", providers: {} });
+      writeFileSync(configPath, currentBytes);
+      writeFileSync(v2Backup, bytesA);
+      const backups: string[] = [];
+      const saves: number[] = [];
+      const hardened: string[] = [];
+      const unlinks: string[] = [];
+
+      let thrown: unknown;
+      try {
+        runOpenAiTierStartupMigration(currentConfig, {
+          project: projectOpenAiTierMigration,
+          backup: () => {
+            backups.push(readFileSync(v2Backup, "utf8"));
+            backupConfigBeforeOpenAiTierMigration(configPath);
+          },
+          preserveRollback: () => {
+            preserveOpenAiTierRollbackSnapshot(configPath, preserveIo(v2Backup, {
+              read: path => {
+                if (path.endsWith("claimed.bak")) throw new Error("read claimed failed");
+                return readFileSync(path);
+              },
+              harden: path => { hardened.push(path); },
+              claimExclusive: (source, destination) => {
+                renameSync(source, destination);
+                writeFileSync(source, bytesB);
+              },
+              unlink: path => {
+                unlinks.push(path);
+                throw new Error("claimed-read failure must not unlink");
+              },
+            }));
+          },
+          save: () => { saves.push(1); },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      expect(thrown).toBeInstanceOf(OpenAiTierRollbackPreserveClaimError);
+      const claimed = thrown as OpenAiTierRollbackPreserveClaimError;
+      expect(claimed.claimedPath.endsWith("claimed.bak")).toBe(true);
+      expect(existsSync(claimed.claimedPath)).toBe(true);
+      expect(readFileSync(claimed.claimedPath, "utf8")).toBe(bytesA);
+      expect((claimed.cause as Error).message).toBe("read claimed failed");
+      expect(hardened).toContain(claimed.claimedPath);
+      expect(backups).toEqual([bytesA]);
+      expect(saves).toEqual([]);
+      expect(unlinks).toEqual([]);
+      expect(readFileSync(v2Backup, "utf8")).toBe(bytesB);
+      expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
+      const preserved = readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"));
+      expect(preserved).toHaveLength(1);
+      expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(bytesA);
+      expect(hardened[0]).toBe(join(dir, preserved[0]!));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

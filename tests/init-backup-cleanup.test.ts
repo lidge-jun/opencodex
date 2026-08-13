@@ -426,4 +426,72 @@ describe("cleanupOpenAiTierBackupAfterInit", () => {
     expect(unlinks[0]!.endsWith("claimed.bak")).toBe(true);
     expect(existsSync(unlinks[0]!)).toBe(false);
   });
+
+  test("preserveOpenAiTierRollbackSnapshot restores a claimed snapshot when claimed-read fails", () => {
+    const dir = makeDir();
+    const configPath = join(dir, "config.json");
+    const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+    const bytesA = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+    writeFileSync(backup, bytesA);
+    const hardened: string[] = [];
+    const unlinks: string[] = [];
+    try {
+      preserveOpenAiTierRollbackSnapshot(configPath, preserveIo(backup, {
+        read: path => {
+          if (path.endsWith("claimed.bak")) throw new Error("read claimed failed");
+          return readFileSync(path);
+        },
+        harden: path => { hardened.push(path); },
+        unlink: path => {
+          unlinks.push(path);
+          throw new Error("claimed-read failure must not unlink");
+        },
+      }));
+      throw new Error("expected claimed-read failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAiTierRollbackPreserveClaimError);
+      const claimed = error as OpenAiTierRollbackPreserveClaimError;
+      expect(claimed.claimedPath.endsWith("claimed.bak")).toBe(true);
+      expect(existsSync(claimed.claimedPath)).toBe(true);
+      expect(readFileSync(claimed.claimedPath, "utf8")).toBe(bytesA);
+      expect(claimed.cause).toBeInstanceOf(Error);
+      expect((claimed.cause as Error).message).toBe("read claimed failed");
+      expect(hardened).toContain(claimed.claimedPath);
+    }
+    expect(readFileSync(backup, "utf8")).toBe(bytesA);
+    const preserved = readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"));
+    expect(preserved).toHaveLength(1);
+    expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(bytesA);
+    expect(hardened[0]).toBe(join(dir, preserved[0]!));
+    expect(unlinks).toEqual([]);
+  });
+
+  test("preserveOpenAiTierRollbackSnapshot keeps claimedPath when claimed harden and restore fail", () => {
+    const dir = makeDir();
+    const configPath = join(dir, "config.json");
+    const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+    const bytesA = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+    writeFileSync(backup, bytesA);
+    try {
+      preserveOpenAiTierRollbackSnapshot(configPath, preserveIo(backup, {
+        read: path => {
+          if (path.endsWith("claimed.bak")) throw new Error("read claimed failed");
+          return readFileSync(path);
+        },
+        harden: path => {
+          if (path.endsWith("claimed.bak")) throw new Error("claimed harden failed");
+        },
+        linkExclusive: () => { throw new Error("restore failed"); },
+        unlink: () => { throw new Error("claimed-read failure must not unlink"); },
+      }));
+      throw new Error("expected claimed-read failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(OpenAiTierRollbackPreserveClaimError);
+      const claimed = error as OpenAiTierRollbackPreserveClaimError;
+      expect(claimed.claimedPath.endsWith("claimed.bak")).toBe(true);
+      expect(existsSync(claimed.claimedPath)).toBe(true);
+      expect(readFileSync(claimed.claimedPath, "utf8")).toBe(bytesA);
+      expect((claimed.cause as Error).message).toBe("read claimed failed");
+    }
+  });
 });
