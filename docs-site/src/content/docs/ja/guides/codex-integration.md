@@ -163,16 +163,20 @@ CLI から表示名を追加します (プロキシは、ライブ時にカタ�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-リモート Codex クライアントは、管理 API 経由で同じ生成されたカタログをフェッチできます (他の `/api/*` ルートと同じアドミッション トークン)。
+リモート Codex クライアントは、推論に既に使用している同じデータプレーン キーで、**データプレーン**から同じカタログを取得します。
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+[Proxy API Formats](/ja/reference/proxy-formats/) の正式なアトミック ダウンロード手順に従ってください。宛先ディレクトリ内の一時ファイルに書き込み、成功した場合にのみリネームするため、失敗・中断した転送が動作中のカタログを置き換えることはありません。`${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json` に配置したうえで、次を実行します。
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
+
+このために管理トークンをクライアント マシンへ送ってはいけません。`GET /api/catalog` は同じドキュメントを返しますが、信頼できるマシン上のダッシュボードと運用ツール向けの管理プレーン ルートです。管理シークレットを必要とし、そのシークレットはプロバイダー設定・OAuth 管理・プロキシ停止も認可します。
 
 応答は生の `opencodex-catalog.json` ドキュメント (プロバイダーの資格情報なし) です。利用可能な場合、`x-opencodex-codex-version` ヘッダーはサーバー上の Codex ランタイム バージョンを報告するため、クライアントはバージョンの偏りを特定できます。
 

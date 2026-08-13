@@ -209,16 +209,24 @@ Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不�
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-远程 Codex 客户端也可以通过管理 API 拉取同一个生成好的 catalog（与其他 `/api/*` 路由使用相同的 admission token）：
+远程 Codex 客户端从**数据平面**拉取同一份 catalog，使用它们本来就用于推理的数据平面密钥：
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+请按照 [Proxy API Formats](/zh-cn/reference/proxy-formats/) 中的权威原子下载流程操作：它先写入目标目录中的
+临时文件，只有成功后才重命名到位，因此失败或中断的传输永远不会替换一份可用的 catalog。把它安装到
+`${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json`，然后运行：
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
+
+绝不要为此把管理 token 发送到客户端机器。`GET /api/catalog` 返回同一份文档，但它是面向 Dashboard 和运维
+工具（在可信机器上）的管理平面路由；它需要 admin secret，而该密钥同时还授权 provider 配置、OAuth 管理和
+proxy 关闭。
 
 响应就是原始的 `opencodex-catalog.json` 文档（不含 provider 凭据）。当可用时，
 `x-opencodex-codex-version` header 会报告服务器上的 Codex runtime 版本，方便客户端发现版本偏移。

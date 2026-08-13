@@ -235,17 +235,28 @@ Add a display name from the CLI (the proxy syncs the catalog right away when liv
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-Remote Codex clients can fetch the same generated catalog over the management API (same
-admission token as other `/api/*` routes):
+Remote Codex clients fetch the same catalog from the **data plane**, using the same
+data-plane key they already use for inference:
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+Follow the canonical atomic download workflow in
+[Proxy API Formats](/reference/proxy-formats/) — it writes to a temporary file in the
+destination directory and renames it into place only on success, so a failed or interrupted
+transfer never replaces a working catalog. Install it at
+`${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json`, then run:
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
+
+Never send the management token to a client machine for this. `GET /api/catalog` returns the
+same document but is a management-plane route for the dashboard and operator tooling on the
+trusted machine; it requires the admin secret, which also authorizes provider configuration,
+OAuth management, and proxy shutdown.
 
 The response is the raw `opencodex-catalog.json` document (no provider credentials). When
 available, the `x-opencodex-codex-version` header reports the Codex runtime version on the

@@ -215,17 +215,23 @@ provider 與原生 OpenAI 行銷名稱都維持不動。
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-遠端 Codex client 也能透過管理 API 取得相同的產生目錄，使用與其他 `/api/*` route 相同的 admission
-token：
+遠端 Codex client 從**data plane** 取得相同的目錄，使用它們本來就用於推論的 data-plane 金鑰：
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+請依照 [Proxy API Formats](/zh-tw/reference/proxy-formats/) 中的權威原子下載流程：它先寫入目標目錄中的
+暫存檔，只有成功後才重新命名到位，因此失敗或中斷的傳輸永遠不會取代一份可用的目錄。將它安裝到
+`${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json`，然後執行：
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
+
+切勿為此把管理 token 送到客戶端機器。`GET /api/catalog` 回傳同一份文件，但它是面向儀表板與運維工具
+（在可信機器上）的管理平面 route；它需要管理秘密，而該秘密同時也授權供應商設定、OAuth 管理與 proxy 關閉。
 
 回應是原始的 `opencodex-catalog.json` 文件，不包含 provider 憑證。若可用，
 `x-opencodex-codex-version` 標頭會回報伺服器上的 Codex runtime 版本，讓 client 能辨識版本差異。
