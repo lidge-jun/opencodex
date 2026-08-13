@@ -1549,7 +1549,7 @@ async function handleResponsesInner(
       );
   }
 
-  let parsed;
+  let parsed: OcxParsedRequest;
   let toolBridgeMaps: ReturnType<typeof buildToolBridgeMaps>;
   try {
     parsed = parseRequest(body);
@@ -1630,19 +1630,9 @@ async function handleResponsesInner(
   }
 
   /**
-   * Reject only when a heuristic estimate exceeds the routed model's effective limit plus
-   * the admission uncertainty band: per-model `modelMaxInputTokens` first, then the context window resolved through
-   * the shared route-capability chain (provider `modelContextWindows`, provider-wide
-   * `contextWindow`, provider registry, cached Codex catalog, native metadata, and provider
-   * caps), so a limit advertised through ANY of those sources is enforced. The client
-   * compacts well before this limit, so an oversized body means abnormal duplication
-   * (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M, ballooning
-   * bun RSS and native-crashing the proxy on Windows, issue #314). Admission also reserves
-   * bounded guidance, compaction, bridge-tool, and image-description mutations so a request
-   * that must receive a 413 cannot perform quota or sidecar I/O first.
+   * Resolve the routed model's effective input limit. Prefer the per-model maximum
+   * input, then use the context window from the shared route-capability chain.
    */
-  /** The routed model's effective input limit: per-model maximum input, then the context
-   *  window resolved through the shared route-capability chain. */
   const effectiveInputLimitFor = (candidateRoute: typeof route): number | undefined => {
     const limit =
       candidateRoute.provider.modelMaxInputTokens?.[candidateRoute.modelId]
@@ -1650,6 +1640,7 @@ async function handleResponsesInner(
     return typeof limit === "number" && limit > 0 ? limit : undefined;
   };
 
+  /** Format the stable public 413 contract for an input rejected by admission. */
   const oversizedInputResponse = (
     modelId: string,
     effectiveLimit: number,
@@ -1675,6 +1666,10 @@ async function handleResponsesInner(
     estimatedInputTokens: number;
   };
 
+  /**
+   * Project deterministic prompt text that later request normalization or bridge
+   * planning will add, without performing quota, sidecar, or provider I/O.
+   */
   const projectedAdmissionText = (
     candidateRoute: typeof route,
     candidateParsed: OcxParsedRequest,
@@ -1769,6 +1764,7 @@ async function handleResponsesInner(
     return projected;
   };
 
+  /** Estimate one routed candidate against its hard admission scan cap. */
   const estimateInputFor = (
     candidateRoute: typeof route,
     candidateParsed: OcxParsedRequest,
@@ -1781,6 +1777,7 @@ async function handleResponsesInner(
     { extraText: projectedAdmissionText(candidateRoute, candidateParsed, options) },
   );
 
+  /** Return structured rejection evidence for one routed candidate, if oversized. */
   const inputAdmissionFor = (
     candidateRoute: typeof route,
     candidateParsed: OcxParsedRequest = parsed,
@@ -1799,6 +1796,7 @@ async function handleResponsesInner(
       : undefined;
   };
 
+  /** Convert a candidate's admission result into the public response contract. */
   const inputGuardFor = (
     candidateRoute: typeof route,
     candidateParsed: OcxParsedRequest = parsed,

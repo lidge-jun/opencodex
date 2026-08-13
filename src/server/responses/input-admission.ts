@@ -11,10 +11,12 @@ export interface InputAdmissionEstimateOptions {
   extraText?: readonly string[];
 }
 
+/** Add the estimator uncertainty band to a model's advertised input limit. */
 export function hardAdmissionThreshold(inputLimit: number): number {
   return Math.ceil(inputLimit * (1 + ADMISSION_ESTIMATE_HEADROOM_RATIO));
 }
 
+/** Decide whether an approximate token estimate is safely beyond the hard threshold. */
 export function shouldRejectEstimatedInput(estimatedTokens: number, inputLimit: number): boolean {
   return estimatedTokens > hardAdmissionThreshold(inputLimit);
 }

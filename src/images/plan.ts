@@ -40,6 +40,10 @@ export function resolveXaiImageApiKey(provider: OcxProviderConfig): string | und
   return apiKey || undefined;
 }
 
+/**
+ * Build the image bridge plan without performing provider or filesystem I/O.
+ * Returns undefined when the request or routed provider should not use the bridge.
+ */
 export function planImageBridgeSync(
   config: OcxConfig,
   parsed: OcxParsedRequest,

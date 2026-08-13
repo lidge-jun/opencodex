@@ -11,6 +11,10 @@ const MAX_CANONICAL_DEPTH = 256;
 const canonicalOverflow = Symbol("canonical-overflow");
 const STABLE_CALL_ID_KEYS = ["call_id", "callId"] as const;
 
+/**
+ * Canonicalize a replay item iteratively, sorting object keys and normalizing
+ * equivalent search shapes. Returns a sentinel when the depth bound is exceeded.
+ */
 function canonicalValue(value: unknown): unknown {
   type Slot = { value: unknown };
   type Frame =
@@ -123,6 +127,7 @@ function canonicalValue(value: unknown): unknown {
   return overflowed ? canonicalOverflow : root.value;
 }
 
+/** Build the content key used to compare stored and resent replay items. */
 function canonicalItemKey(item: unknown): string | undefined {
   if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
   const { id: _id, status: _status, sequence_number: _sequenceNumber, ...stable } =
@@ -131,6 +136,10 @@ function canonicalItemKey(item: unknown): string | undefined {
   return canonical === canonicalOverflow ? undefined : JSON.stringify(canonical);
 }
 
+/**
+ * Check whether matching items retain a provider-issued identity that proves
+ * they are the same occurrence rather than coincidentally equal content.
+ */
 function sharesStableIdentity(stored: unknown, request: unknown): boolean {
   if (
     !stored
@@ -157,6 +166,10 @@ function sharesStableIdentity(stored: unknown, request: unknown): boolean {
     && storedRecord.id === requestRecord.id;
 }
 
+/**
+ * Return true only when the request contains the complete stored prefix and at
+ * least one provider-output item retains a stable protocol identity.
+ */
 export function hasProvenCompleteReplayPrefix(
   stored: readonly unknown[],
   requestInput: readonly unknown[],
