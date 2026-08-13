@@ -852,4 +852,51 @@ describe("summarizeUsage", () => {
     });
   });
 
+  test("7d and 30d range windows align to calendar day boundaries (00:00:00) so completed days remain stable (#1580)", () => {
+    // Construct local midnight for 2026-08-13
+    const todayMidnight = new Date(2026, 7, 13, 0, 0, 0, 0).getTime();
+    const dayMs = 86_400_000;
+
+    // Day -6 (2026-08-07) at 02:30 AM
+    const dayMinus6Early = todayMidnight - 6 * dayMs + 2.5 * 3600_000;
+    // Yesterday (2026-08-12) at 03:00 AM
+    const yesterdayEarly = todayMidnight - 1 * dayMs + 3 * 3600_000;
+    // Yesterday (2026-08-12) at 19:00 PM
+    const yesterdayLate = todayMidnight - 1 * dayMs + 19 * 3600_000;
+    // Today (2026-08-13) at 08:00 AM
+    const todayMorning = todayMidnight + 8 * 3600_000;
+
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: dayMinus6Early, usageStatus: "reported", usage: { inputTokens: 250, outputTokens: 250 }, totalTokens: 500 }),
+      entry({ ts: yesterdayEarly, usageStatus: "reported", usage: { inputTokens: 400, outputTokens: 400 }, totalTokens: 800 }),
+      entry({ ts: yesterdayLate, usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 100 }, totalTokens: 200 }),
+      entry({ ts: todayMorning, usageStatus: "reported", usage: { inputTokens: 150, outputTokens: 150 }, totalTokens: 300 }),
+    ];
+
+    // Summary at 09:00 AM today
+    const sumMorning = summarizeUsage(entries, "7d", todayMidnight + 9 * 3600_000);
+    const day6Morning = sumMorning.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayMorningTotal = sumMorning.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+
+    expect(day6Morning).toBe(500);
+    expect(yesterdayMorningTotal).toBe(1000);
+
+    // Summary at 23:30 PM today (later in the day) with an additional turn today
+    const todayEvening = todayMidnight + 20 * 3600_000;
+    const entriesLater = [
+      ...entries,
+      entry({ ts: todayEvening, usageStatus: "reported", usage: { inputTokens: 50, outputTokens: 50 }, totalTokens: 100 }),
+    ];
+    const sumEvening = summarizeUsage(entriesLater, "7d", todayMidnight + 23.5 * 3600_000);
+    const day6Evening = sumEvening.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayEveningTotal = sumEvening.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+    const todayEveningTotal = sumEvening.days.find(d => d.date.endsWith("08-13"))?.totalTokens;
+
+    // Critical assertion: completed days NEVER lose tokens as hours progress
+    expect(day6Evening).toBe(500);
+    expect(yesterdayEveningTotal).toBe(1000);
+    expect(todayEveningTotal).toBe(400); // 300 + 100
+    expect(sumMorning.since).toBe(sumEvening.since);
+  });
+
 });
