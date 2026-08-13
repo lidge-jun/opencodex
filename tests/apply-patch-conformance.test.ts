@@ -5,16 +5,22 @@ import { fileURLToPath } from "node:url";
 import {
   ADAPTER_REGISTRY,
   adapterDefinitions,
+  createRegisteredAdapter,
   effectiveAdapterContract,
 } from "../src/adapters/registry";
 import { REQUIRED_ROUTED_TOOL_CONTRACTS } from "../src/adapters/contracts";
 import { ensureStrictCatalogFields, normalizeRoutedCatalogEntry } from "../src/codex/catalog/parsing";
 import { PROVIDER_REGISTRY } from "../src/providers/registry";
+import type { AdapterWire } from "../src/adapters/contracts";
+import type { OcxParsedRequest, OcxProviderConfig } from "../src/types";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../src/types";
+import { TOOL_WIRE_DRIVERS } from "./helpers/apply-patch-conformance/wire-drivers";
 
 const serverDir = fileURLToPath(new URL("../src/server/", import.meta.url));
 const adapterResolvePath = fileURLToPath(new URL("../src/server/adapter-resolve.ts", import.meta.url));
 const routerPath = fileURLToPath(new URL("../src/router.ts", import.meta.url));
+const execDescription =
+  "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
 
 async function collectTypeScriptFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -32,6 +38,47 @@ async function directAdapterFactoryImports(path: string): Promise<string[]> {
   return [...source.matchAll(
     /import\s+\{[^}]*\bcreate\w+Adapter\b[^}]*\}\s+from\s+["'][^"']*adapters\/(?!registry(?:["']))[^"']+["']/gs,
   )].map(match => match[0]!);
+}
+
+function providerFixture(adapter: string, wire: AdapterWire): OcxProviderConfig {
+  return {
+    adapter,
+    baseUrl: wire === "cursor" ? "https://api2.cursor.sh" : "https://example.test/v1",
+    authMode: wire === "anthropic" ? "oauth" : "key",
+    apiKey: "test-key",
+    defaultMaxOutputTokens: 64_000,
+    googleMode: "ai-studio",
+  } as OcxProviderConfig;
+}
+
+function codeModeParsed(wire: AdapterWire): OcxParsedRequest {
+  const parsed: OcxParsedRequest = {
+    modelId: "test-model",
+    stream: true,
+    options: { toolChoice: { name: "exec" } },
+    context: {
+      systemPrompt: ["Use apply_patch for local file edits."],
+      messages: [{ role: "user", content: "Patch the requested file.", timestamp: 0 }],
+      tools: [
+        { name: "exec", description: execDescription, parameters: {} },
+        { name: "wait", description: "Wait for work.", parameters: {} },
+      ],
+    },
+    _rawBody: {
+      model: "test-model",
+      input: "Patch the requested file.",
+      stream: true,
+      tool_choice: { type: "custom", name: "exec" },
+      tools: [{
+        type: "custom",
+        name: "exec",
+        description: execDescription,
+        format: { type: "grammar", syntax: "lark" },
+      }],
+    },
+  };
+  if (wire === "kiro") parsed._kiroAuthContext = { apiRegion: "us-east-1" };
+  return parsed;
 }
 
 test("global apply_patch precondition forces routed catalog rows to freeform", () => {
@@ -85,6 +132,24 @@ test("all configured adapter ids are members of the authoritative adapter regist
   }
   for (const adapterId of MODEL_ADAPTER_OVERRIDE_ALLOWED) {
     expect(ADAPTER_REGISTRY[adapterId as keyof typeof ADAPTER_REGISTRY], adapterId).toBeTruthy();
+  }
+});
+
+test("every registered adapter keeps the nested apply_patch helper in its final post-tool_choice request", async () => {
+  for (const [adapterId] of adapterDefinitions()) {
+    const contract = effectiveAdapterContract(adapterId);
+    const parsed = codeModeParsed(contract.wire);
+    const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
+    const body = await TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed);
+    const normalized = body.replace(/\\n/g, " ").replace(/\s+/g, " ");
+
+    expect(normalized, adapterId).toContain("apply_patch(input: string)");
+    expect(normalized, adapterId).not.toMatch(
+      /(?:do not|don't|never|must not|cannot|can't)[^.]{0,260}\bapply_patch\b/i,
+    );
+    expect(normalized, adapterId).not.toMatch(
+      /\bapply_patch\b[^.]{0,180}\b(?:forbidden|unavailable|off-limits)\b/i,
+    );
   }
 });
 
