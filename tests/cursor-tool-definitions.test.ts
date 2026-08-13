@@ -306,7 +306,10 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("current tool catalog as ground truth");
     expect(note).toContain("This turn does not expose neighboring-agent tool names `Read`, `Grep`, `Glob`, `Bash`, `LS`");
     expect(note).toContain("not an external MCP server tool");
-    expect(note).toContain("Never tell the user that shell or read access is blocked");
+    expect(note).toContain("routing fallback");
+    expect(note).toContain("nativeLocalExec");
+    expect(note).not.toContain("Never tell the user");
+    expect(note).not.toContain("silently call");
     expect(note).toContain("prefer one response containing multiple tool calls");
     expect(note).toContain("Use MCP only for explicit discovery/resource tasks");
     expect(note).toContain("not generic tool-count demos");
@@ -321,7 +324,9 @@ describe("Cursor tool definitions", () => {
     expect(note).toContain("`shell_command`");
     expect(note).toContain("`shell_command` and `exec_command` are aliases of the same bridge");
     expect(note).toContain("mcp_opencodex-responses_shell_command");
-    expect(note).toContain("Never tell the user that shell or read access is blocked");
+    expect(note).toContain("routing fallback");
+    expect(note).not.toContain("Never tell the user");
+    expect(note).not.toContain("silently call");
   });
 
   test("adds host-shell-neutral PowerShell and one-retry-stop guidance (#604)", () => {

@@ -94,33 +94,18 @@ say where it is; do not add it to `devlog/`, `structure/`, or `docs-site/`.
 ## User-consent actions
 
 Some actions write to the **user's own accounts and identity** rather than to
-this repository, and an agent must never perform or auto-answer them. The one
-that exists today is starring the repository on GitHub, which only comes up when
-an agent is *running* opencodex — not when it is working on this codebase.
+this repository, and an agent must never perform or auto-answer them. There is
+currently no such product action.
 
-The rule lives in [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md), which is the file
-an installing or operating agent reads. It was moved out of here because a
-development-facing file is the wrong place to trigger on it: this file is loaded
-for every code change, and the consent boundary applies to none of them.
+If you add an action that spends the user's identity, credits, or reputation,
+gate it in code rather than relying on a prompt an agent can answer. Detect
+agent-driven callers with [`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts)
+and refuse the mutation from any management endpoint an agent can reach with a
+readable token. Cover the gate with a focused regression test.
 
-What matters for development work: the enforcement is code, not prose —
-[`src/cli/agent-driven.ts`](./src/cli/agent-driven.ts),
-[`src/cli/star-prompt.ts`](./src/cli/star-prompt.ts), and
-[`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts),
-covered by `tests/startup-prompt.test.ts`, `tests/agent-driven.test.ts`, and
-`tests/sidebar-routes.test.ts`. If you add another action that spends the user's
-identity, credits, or reputation, gate it the same way rather than relying on a
-prompt an agent can answer, and document it in `AGENTS_INSTALL.md`.
-
-**Be clear about what that enforcement is and is not.** The management endpoint
-requires a dashboard session, which stops the casual path — an agent that would
-have POSTed there because the endpoint existed, and one holding only the admin
-token. It is not a technical barrier against a determined local agent: a process
-running as the user can mint its own session from the loopback dashboard
-bootstrap, and can skip the proxy entirely by running `gh` itself. Every local
-credential is equally reachable by both the browser and the agent, so no check
-inside this process can tell them apart. The real boundary is the rule above, and
-it binds you regardless of which mechanism is within reach.
+Do not reintroduce a GitHub identity mutation (starring this repository from
+the CLI, the management API, or the dashboard). The repo-hygiene guard in
+`tests/hardening-guards.test.ts` forbids that class of write in runtime code.
 
 ## Commands
 

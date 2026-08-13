@@ -124,29 +124,6 @@ estimate, alongside the effective account's raw quota and the next capacity reco
 [Providers overview pool capacity](/guides/providers/#providers-overview-pool-capacity) for the
 visible fields, incomplete-coverage meaning, and routing boundary.
 
-## Starring is yours to decide, not an agent's
-
-The sidebar's star button — and the one-time question `ocx start` asks in an interactive
-terminal — goes through **your own `gh` login**. opencodex holds no GitHub token, and the
-only thing it learns is your yes or no.
-
-Because that writes to your GitHub account, agent-driven callers are refused rather than
-allowed to answer for you:
-
-- `ocx start` and `ocx service install` **skip the prompt entirely** when an agent or CI
-  harness is driving them (`CLAUDECODE`, `CODEX_THREAD_ID`, `CURSOR_TRACE_ID`, `CI`, and
-  similar). The one-time marker stays unwritten, so the real prompt still shows up on your
-  next hand-typed run. The agent is told to ask you instead — and to ask as a plain Yes/No
-  choice you have to answer, not as a soft aside it can slip past you. If you never get
-  around to answering, the agent is told to re-ask rather than treat your silence as a no.
-- `POST /api/github/star` answers `403` with `code: "agent_consent_required"` when the proxy
-  runs under an agent session and the request has no dashboard browser session. Possessing
-  the admin token is not consent: an agent on your machine can read that file.
-- The dashboard button keeps working normally. A real click carries same-origin session
-  evidence, so it is recognized as you even when an agent started the proxy.
-- Saying no ends it. Nothing is persisted and nothing is added to any model prompt to nudge
-  you later.
-
 ## How the dashboard talks to the proxy
 
 The GUI is a thin client over the proxy's JSON management API. Useful endpoints include:
@@ -154,7 +131,6 @@ The GUI is a thin client over the proxy's JSON management API. Useful endpoints 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET` / `PUT /api/settings` | Read settings or toggle Codex autostart. |
-| `GET` / `POST /api/github/star` | Read the `gh`-derived star state, or star the repository. The POST is refused with `403` `agent_consent_required` for agent-driven callers without a dashboard session. |
 | `GET /api/startup-health` | Read secret-free routing, service, shim, and restart-safety diagnostics. |
 | `POST /api/startup-action` | Install the background service or Codex launcher shim through fixed, allowlisted actions. |
 | `GET` / `POST /api/windows-tray` | Read or change the Windows tray installation and visible-process state. POST accepts `install`, `start`, `stop`, or `uninstall`. |

@@ -37,8 +37,6 @@ import { defaultWinswEntry, installWinswService, startWinswService, stopWinswSer
 import { hardenSecretDir, hardenSecretPath } from "./lib/windows-secret-acl";
 import { windowsEnvIndirectBatchPathList, windowsEnvIndirectBatchValue } from "./lib/win-paths";
 import { recordOwnedConfigPath } from "./lib/config-ownership";
-import { maybeShowStarPrompt } from "./cli/star-prompt";
-
 const LABEL = "com.opencodex.proxy";
 const TASK = "opencodex-proxy";
 
@@ -2651,11 +2649,6 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       // installed artifact instead.
       await reportServiceServing("installed", { port: resolveServiceListenPort() });
       if (process.platform === "linux") console.log("   For auto-start on boot: loginctl enable-linger $USER");
-      // Service users never reach the `ocx start` prompt: the proxy they run is the
-      // supervised child, which always carries OCX_SERVICE=1. This command, though, is
-      // hand-typed in a real terminal, so it is the one interactive moment they get.
-      // Same one-time marker and same guards (TTY, gh auth, agent deferral) apply.
-      await maybeShowStarPrompt();
       break;
     case "start":
       ops.start();

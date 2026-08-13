@@ -117,8 +117,10 @@ describe("Cursor native exec bridge", () => {
       expect(deniedRead.message.value.result.value.error).toContain("exec_command");
       expect(deniedRead.message.value.result.value.error).toContain("cat");
       expect(deniedRead.message.value.result.value.error).toContain("apply_patch");
-      expect(deniedRead.message.value.result.value.error).toContain("silently call");
-      expect(deniedRead.message.value.result.value.error).toContain("Do not tell the user");
+      expect(deniedRead.message.value.result.value.error).toContain("routing fallback");
+      expect(deniedRead.message.value.result.value.error).toContain("nativeLocalExec");
+      expect(deniedRead.message.value.result.value.error).not.toContain("silently call");
+      expect(deniedRead.message.value.result.value.error).not.toContain("Do not tell the user");
       expect(deniedRead.message.value.result.value.error).not.toContain("disabled by OpenCodex policy");
       expect(deniedRead.message.value.result.value.error).not.toContain("sandbox denial");
     }
@@ -133,7 +135,9 @@ describe("Cursor native exec bridge", () => {
       expect(deniedShell.message.value.result.value.stderr).toContain("shell_command");
       expect(deniedShell.message.value.result.value.stderr).toContain("exec_command");
       expect(deniedShell.message.value.result.value.stderr).toContain("mcp_opencodex-responses_*");
-      expect(deniedShell.message.value.result.value.stderr).toContain("Do not tell the user");
+      expect(deniedShell.message.value.result.value.stderr).toContain("routing fallback");
+      expect(deniedShell.message.value.result.value.stderr).not.toContain("Do not tell the user");
+      expect(deniedShell.message.value.result.value.stderr).not.toContain("silently call");
       expect(deniedShell.message.value.result.value.stderr).not.toContain("disabled by OpenCodex policy");
       expect(deniedShell.message.value.result.value.stderr).not.toContain("sandbox denial");
     }
@@ -150,7 +154,8 @@ describe("Cursor native exec bridge", () => {
     expect(streamText).toContain("shell_command");
     expect(streamText).toContain("exec_command");
     expect(streamText).toContain("mcp_opencodex-responses_*");
-    expect(streamText).toContain("Do not tell the user");
+    expect(streamText).toContain("routing fallback");
+    expect(streamText).not.toContain("Do not tell the user");
     expect(streamText).not.toContain("sandbox denial");
 
     const deniedBackground = decode((await handleCursorNativeExec(execMessage({
@@ -162,7 +167,8 @@ describe("Cursor native exec bridge", () => {
     if (deniedBackground.message.value.result.case === "error") {
       expect(deniedBackground.message.value.result.value.error).toContain("shell_command");
       expect(deniedBackground.message.value.result.value.error).toContain("exec_command");
-      expect(deniedBackground.message.value.result.value.error).toContain("Do not tell the user");
+      expect(deniedBackground.message.value.result.value.error).toContain("routing fallback");
+      expect(deniedBackground.message.value.result.value.error).not.toContain("Do not tell the user");
     }
 
     const deniedStdin = decode((await handleCursorNativeExec(execMessage({
@@ -183,10 +189,11 @@ describe("Cursor native exec bridge", () => {
     expect(deniedFetch.message.case).toBe("fetchResult");
     expect(deniedFetch.message.value.result.case).toBe("error");
     if (deniedFetch.message.value.result.case === "error") {
-      expect(deniedFetch.message.value.result.value.error).toContain("silently call");
+      expect(deniedFetch.message.value.result.value.error).toContain("routing fallback");
       expect(deniedFetch.message.value.result.value.error).toContain("shell_command");
       expect(deniedFetch.message.value.result.value.error).toContain("curl");
       expect(deniedFetch.message.value.result.value.error).toContain("wget");
+      expect(deniedFetch.message.value.result.value.error).not.toContain("silently call");
       expect(deniedFetch.message.value.result.value.error).not.toContain("disabled by OpenCodex policy");
     }
   });
@@ -228,7 +235,8 @@ describe("Cursor native exec bridge", () => {
       expect(shell.message.value.result.value.stderr).toContain("shell_command");
       expect(shell.message.value.result.value.stderr).toContain("exec_command");
       expect(shell.message.value.result.value.stderr).toContain("mcp_opencodex-responses_*");
-      expect(shell.message.value.result.value.stderr).toContain("Do not tell the user");
+      expect(shell.message.value.result.value.stderr).toContain("routing fallback");
+      expect(shell.message.value.result.value.stderr).not.toContain("Do not tell the user");
       expect(shell.message.value.result.value.stderr).not.toContain("sandbox denial");
     }
   });

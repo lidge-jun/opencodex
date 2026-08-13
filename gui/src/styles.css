@@ -325,10 +325,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-link:hover { background: var(--accent-soft); color: var(--text); text-decoration: none; }
 .sidebar-link svg { width: 16px; height: 16px; }
 
-/* GitHub row: the label keeps the full-width link affordance, the two circular
-   satellites (star, update) sit at the trailing edge without shrinking the label's
-   hover target. The update orb only exists when an update is available, so the row
-   is one or two circles wide — never a placeholder. */
+/* GitHub row: the label keeps the full-width link affordance; the update orb sits
+   at the trailing edge without shrinking the label's hover target. */
 .sidebar-github-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .sidebar-github-link { flex: 1 1 auto; min-width: 0; }
 .sidebar-github-actions { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
@@ -343,8 +341,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .sidebar-orb svg { width: 14px; height: 14px; }
 .sidebar-orb:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); border-color: var(--accent-ring); }
 .sidebar-orb:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
-/* Already starred: a settled state, not a disabled control that looks broken. */
-.sidebar-orb--starred { color: var(--amber); cursor: default; opacity: 1; }
 /* Update pending: the one blue accent in the sidebar, so a waiting release is visible
    at a glance without shouting like an error state. */
 .sidebar-orb--update {

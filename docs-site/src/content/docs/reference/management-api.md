@@ -193,19 +193,11 @@ keys are not returned to dashboard clients.
 `provider_has_dependent_combos` is a safety barrier: remove or edit the dependent combos before
 deleting their provider.
 
-### Sidebar and consent-bound actions
+### Sidebar
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/github/star` | Read repository star status through the user's `gh` session | Status-specific fixed result codes |
-| `POST /api/github/star` | Star the repository only from an authenticated human action | 403 `agent_consent_required` for agent-driven callers without dashboard-session evidence |
 | `GET /api/update/badge` | Read the cheap sidebar update-badge state | — |
-
-:::caution
-Management authentication proves access to the proxy; it does not prove consent to spend the
-user's identity. An agent must not route around `agent_consent_required`. The user must choose
-whether to star the repository.
-:::
 
 ### System lifecycle
 

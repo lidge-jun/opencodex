@@ -136,4 +136,24 @@ describe("cli wiring", () => {
     expect(cli).toContain("case \"__refresh-version\"");
     expect(cli).toContain("refreshVersionCache");
   });
+
+  test("update eligibility does not depend on a GitHub-star marker", async () => {
+    const notify = await readText("src/update/notify.ts");
+    expect(notify).not.toContain("star-prompt");
+    expect(notify).not.toContain("hasStarPromptRun");
+    expect(notify).not.toContain(".star-prompted");
+  });
+
+  test("an available update is offered interactively, never applied silently", async () => {
+    const notify = await readText("src/update/notify.ts");
+    expect(notify).toContain("await rl.question(renderPrompt");
+    expect(notify).toContain('if (choice === "1")');
+    expect(notify).toContain("await runUpdate()");
+    const runUpdateIndex = notify.indexOf("await runUpdate()");
+    const choiceIndex = notify.indexOf('if (choice === "1")');
+    expect(choiceIndex).toBeGreaterThan(-1);
+    expect(runUpdateIndex).toBeGreaterThan(choiceIndex);
+    expect(notify).not.toMatch(/runUpdate\(\)[\s\S]{0,40}void/);
+    expect(notify.match(/await runUpdate\(\)/g) ?? []).toHaveLength(1);
+  });
 });

@@ -36,7 +36,6 @@ type ConfigUninstallManifest = ConfigOwner & {
 const METADATA_MAX_BYTES = 64 * 1024;
 const MANIFEST_MAX_PATHS = 1024;
 const INITIAL_OWNED_PATHS = [
-  ".star-prompted",
   "artifacts",
   "auth.json",
   "auth.store.lock",

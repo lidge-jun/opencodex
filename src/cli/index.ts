@@ -37,7 +37,6 @@ import { installShellHook, uninstallShellHook } from "../server/system-env";
 import { startTokenGuardian } from "../oauth/token-guardian";
 import { startHistoryMigrationGuardian } from "../codex/history-migration-guardian";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
-import { maybeShowStarPrompt } from "./star-prompt";
 import { scheduleCatalogPrewarm } from "./catalog-prewarm";
 import { maybeShowUpdatePrompt } from "../update/notify";
 import { syncModelsToCodex } from "../codex/sync";
@@ -320,7 +319,6 @@ async function handleStart(options: { block?: boolean } = {}) {
   // Auto-install .zshrc hook (idempotent — skips if already present).
   installShellHook();
 
-  await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   const startupSync = await syncCodexOnStartIfEnabled(port, config);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only

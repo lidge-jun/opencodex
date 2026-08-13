@@ -73,11 +73,6 @@ ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Cod
 commands like `ocx provider add` and `ocx combo set` talk to the **live** proxy and exit nonzero
 when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the running state.
 
-> **Agents installing or running opencodex:** read
-> [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md). An interactive `ocx start` may ask once whether to
-> star this repository — that is the user's decision, never an agent's. The CLI suppresses the
-> prompt for agent-driven runs and the API refuses them with `403 agent_consent_required`.
-
 ## Supported platforms
 
 | OS | Status | Service manager |

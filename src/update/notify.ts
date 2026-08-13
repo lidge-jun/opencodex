@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { atomicWriteFile, getConfigDir } from "../config";
-import { hasStarPromptRun } from "../cli/star-prompt";
 import {
   type Channel,
   currentVersion,
@@ -120,7 +119,7 @@ export function isSourceBuildVersion(v: string): boolean {
   return v.trim() === "0.0.0";
 }
 
-/** The interactive/TTY + install-method gate shared with the star prompt. */
+/** The interactive/TTY gate: never prompt (and never auto-update) off a TTY. */
 function interactiveGuardOk(): boolean {
   return !(process.env.OCX_SERVICE || !process.stdin.isTTY || !process.stdout.isTTY);
 }
@@ -128,15 +127,14 @@ function interactiveGuardOk(): boolean {
 /**
  * Decide whether this run should even consider showing the prompt. Returns the
  * channel + current version when eligible, else null. Eligibility requires a
- * real global install, a non-source version, the interactive guard, and that
- * the one-time star prompt has already run (first-run yield, O1).
+ * real global install, a non-source version, and the interactive guard.
+ * The prompt itself is always interactive — this helper never runs an update.
  */
 export function shouldConsider(): { channel: Channel; current: string } | null {
   if (detectInstall() === "source") return null;
   const current = currentVersion();
   if (current === "?" || isSourceBuildVersion(current)) return null;
   if (!interactiveGuardOk()) return null;
-  if (!hasStarPromptRun()) return null; // yield on the very first run
   return { channel: updateTag(current), current };
 }
 

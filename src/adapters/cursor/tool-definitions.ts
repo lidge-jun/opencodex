@@ -11,7 +11,7 @@ export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
 export const CURSOR_EXEC_COMMAND_TOOL = CODEX_EXEC_COMMAND_TOOL;
 export const CODEX_SHELL_BRIDGE_TOOL_NAMES = [CODEX_EXEC_COMMAND_TOOL, CODEX_SHELL_COMMAND_TOOL] as const;
 export const CURSOR_SHELL_ALIAS_SYSTEM_NOTE =
-  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell; never say native shell is blocked.';
+  'Shell commands use the Codex shell bridge tool shown in this turn\'s catalog (`shell_command` or `exec_command`) with JSON arguments like {"cmd":"..."}. The long `mcp_opencodex-responses_*` display name is the same tool. Prefer it over Cursor-native Shell: native local exec is off, and this is a routing fallback to the bridge rather than a missing capability.';
 const NEIGHBOR_AGENT_TOOL_NAMES = ["Read", "Grep", "Glob", "Bash", "LS"] as const;
 
 export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
@@ -24,7 +24,7 @@ export const CURSOR_GENERIC_TOOL_USE_USER_HINT = [
   "If parallel emission is unavailable, continue with separate shell-bridge calls until the requested count has returned.",
   "Do not use `tool_search`, external MCP, or resource discovery just to pad the count unless explicitly asked.",
   "Do not suggest or switch to neighboring-agent tools such as `Grep`, `Read`, `Glob`, `Bash`, or `LS` unless this turn's catalog lists those exact names.",
-  "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Do not narrate Cursor-native Shell/Read routing.",
+  "Cursor-native Shell/Read are not used in this mode (`nativeLocalExec` is off). Prefer the Codex shell bridge for equivalent work; this is a routing fallback, not a missing capability. If the bridge itself fails, report that bridge error.",
 ].join(" ");
 
 export const CURSOR_EXEC_COMMAND_INPUT_SCHEMA = {
@@ -435,7 +435,7 @@ export function buildCursorToolGuidanceSystemNote(
       ? "Your tool list may display it under a longer `mcp_opencodex-responses_shell_command` / `mcp_opencodex-responses_exec_command` name; those are the SAME tool — call whichever your list shows, and do not comment on the naming difference to the user."
       : undefined,
     hasBareExec
-      ? "Never tell the user that shell or read access is blocked, disabled, or denied unless the Codex shell bridge tool itself fails. Prefer the bridge over Cursor-native Shell/Read; do not narrate phrases like \"Native shell access is blocked\" — silently call `shell_command` / `exec_command`."
+      ? "Cursor-native Shell/Read are not used in this mode (`nativeLocalExec` is off). Prefer the Codex shell bridge (`shell_command` / `exec_command`) for equivalent work; this is a routing fallback, not a missing capability. If the bridge itself fails, report that bridge error."
       : undefined,
     hostShellNote,
     "Cursor product features (Chronicle, screen recording, Notes, Plans, background agents) are available only if this turn's catalog lists a matching tool; do not offer or promise them otherwise.",
@@ -457,7 +457,7 @@ export function buildCursorToolGuidanceSystemNote(
       : undefined,
     "Do not count or report a tool call unless a tool result was actually returned.",
     hasBareExec
-      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, silently use ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). Do not tell the user access is blocked. For file edits, use \`apply_patch\` when available.`
+      ? `If a Cursor-native file read, directory listing, grep, or shell operation is rejected by the runtime, retry through ${shellBridgeLabel} with an equivalent host-shell-safe command (POSIX: \`cat\`/\`ls\`/\`rg\`; Windows PowerShell: \`Get-Content\`/\`Get-ChildItem\`/\`Select-String\`). That rejection means native local exec is off; the bridge remains available. For file edits, use \`apply_patch\` when available.`
       : undefined,
   ].filter((note): note is string => typeof note === "string");
   return notes.join(" ");

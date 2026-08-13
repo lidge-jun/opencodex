@@ -175,17 +175,11 @@ Authorization: Bearer <admin-token>
 
 `provider_has_dependent_combos`는 안전 장치입니다. provider를 삭제하기 전에 종속된 combo를 제거하거나 수정하십시오.
 
-### 사이드바 및 동의가 필요한 작업
+### 사이드바
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET /api/github/star` | 사용자의 `gh` 세션을 통해 저장소 star 상태를 읽습니다 | 상태별 고정 결과 코드 |
-| `POST /api/github/star` | 인증된 사람의 작업에서만 저장소를 star합니다 | 대시보드 세션 증거가 없는 agent-driven 호출에는 403 `agent_consent_required` |
 | `GET /api/update/badge` | 저렴한 sidebar update-badge 상태를 읽습니다 | — |
-
-:::caution
-관리자 인증은 프록시에 대한 접근만 증명할 뿐, 사용자의 신원을 써도 된다는 동의까지 증명하지는 않습니다. 에이전트는 `agent_consent_required`를 우회해서는 안 됩니다. 저장소를 star할지 여부는 사용자가 직접 선택해야 합니다.
-:::
 
 ### 시스템 수명 주기
 

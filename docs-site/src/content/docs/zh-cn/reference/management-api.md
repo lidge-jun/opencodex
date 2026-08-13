@@ -175,17 +175,11 @@ Authorization: Bearer <admin-token>
 
 `provider_has_dependent_combos` 是一个安全屏障：在删除 provider 之前，先移除或编辑依赖它的 combos。
 
-### 侧边栏与基于同意的动作
+### 侧边栏
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET /api/github/star` | 通过用户的 `gh` 会话读取仓库星标状态 | 与状态相关的固定结果代码 |
-| `POST /api/github/star` | 仅允许来自经过身份验证的人类操作来给仓库加星 | 对缺少仪表板会话证据的 agent 驱动调用返回 403 `agent_consent_required` |
 | `GET /api/update/badge` | 读取便宜的侧边栏更新徽标状态 | — |
-
-:::caution
-管理身份验证只能证明对代理的访问权限；它不能证明用户同意消耗自己的身份。agent 不得绕过 `agent_consent_required`。是否给仓库加星，应由用户自行决定。
-:::
 
 ### 系统生命周期
 
