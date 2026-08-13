@@ -25,7 +25,9 @@ import {
   OpenAiTierBackupCollisionError,
   OpenAiTierBackupRollbackError,
   OpenAiTierBackupSecretResidualError,
+  OpenAiTierRollbackPreserveCleanupError,
   OpenAiTierRollbackPreserveError,
+  OpenAiTierRollbackPreserveSecretResidualError,
   preserveOpenAiTierRollbackSnapshot,
   type OpenAiTierBackupIO,
   type OpenAiTierRollbackPreserveIO,
@@ -680,7 +682,9 @@ describe("OpenAI provider option startup coordinator", () => {
         read: path => readFileSync(path),
         copyExclusive: () => { throw new Error("copy failed"); },
         harden: () => { throw new Error("harden must not run"); },
-        unlink: unlinkSync,
+        truncate: () => { throw new Error("truncate must not run"); },
+        write: () => { throw new Error("write must not run"); },
+        unlink: () => { throw new Error("unlink must not run"); },
       };
 
       expect(() => runOpenAiTierStartupMigration(currentConfig, {
@@ -737,8 +741,10 @@ describe("OpenAI provider option startup coordinator", () => {
           copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
         },
         harden: () => { calls.push("harden"); throw new Error("harden failed"); },
+        truncate: path => { calls.push("truncate"); truncateSync(path, 0); },
+        write: () => { throw new Error("write must not run"); },
         unlink: path => {
-          calls.push(`unlink:${path}`);
+          calls.push(path === v2Backup ? "unlink-source" : "unlink-preserved");
           if (path === v2Backup) throw new Error("source unlink must not run");
           unlinkSync(path);
         },
@@ -751,10 +757,11 @@ describe("OpenAI provider option startup coordinator", () => {
         save: () => { calls.push("save"); },
       })).toThrow("harden failed");
 
-      expect(calls).toEqual(["copy", "harden"]);
+      expect(calls).toEqual(["copy", "harden", "truncate", "unlink-preserved"]);
       expect(readFileSync(v2Backup, "utf8")).toBe(rollbackBytes);
       expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
       expect(calls.includes("save")).toBe(false);
+      expect(readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"))).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -776,6 +783,7 @@ describe("OpenAI provider option startup coordinator", () => {
       writeFileSync(configPath, currentBytes);
       writeFileSync(v2Backup, bytesA);
       const saves: number[] = [];
+      const hardened: string[] = [];
       const changingIo: OpenAiTierRollbackPreserveIO = {
         exists: existsSync,
         read: path => readFileSync(path),
@@ -783,7 +791,9 @@ describe("OpenAI provider option startup coordinator", () => {
           copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
           writeFileSync(source, bytesB);
         },
-        harden: () => {},
+        harden: path => { hardened.push(path); },
+        truncate: () => { throw new Error("verified hardened copy must not be scrubbed"); },
+        write: () => { throw new Error("verified hardened copy must not be overwritten"); },
         unlink: () => { throw new Error("source unlink must not run"); },
       };
 
@@ -800,6 +810,7 @@ describe("OpenAI provider option startup coordinator", () => {
       const preserved = readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"));
       expect(preserved).toHaveLength(1);
       expect(readFileSync(join(dir, preserved[0]!), "utf8")).toBe(bytesA);
+      expect(hardened).toEqual([join(dir, preserved[0]!)]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -829,6 +840,8 @@ describe("OpenAI provider option startup coordinator", () => {
         },
         copyExclusive: (source, destination) => { copyFileSync(source, destination, fsConstants.COPYFILE_EXCL); },
         harden: () => { throw new Error("harden must not run"); },
+        truncate: path => truncateSync(path, 0),
+        write: () => { throw new Error("write must not run"); },
         unlink: path => {
           unlinks.push(path);
           if (path === v2Backup) throw new Error("source unlink must not run");
@@ -849,6 +862,103 @@ describe("OpenAI provider option startup coordinator", () => {
       expect(readFileSync(v2Backup, "utf8")).toBe(rollbackBytes);
       expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
       expect(readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("startup does not save when preserved cleanup cannot unlink a scrubbed copy (#1599)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-1599-cleanupfail-"));
+    try {
+      const configPath = join(dir, "config.json");
+      const v2Backup = `${configPath}.pre-openai-tiers-v2.bak`;
+      const currentConfig: OcxConfig = {
+        port: 10100,
+        defaultProvider: "kimi",
+        providers: { kimi: { adapter: "openai-chat", baseUrl: "https://api.moonshot.cn/v1" } },
+      };
+      const currentBytes = `${JSON.stringify(currentConfig, null, 2)}\n`;
+      const rollbackBytes = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+      writeFileSync(configPath, currentBytes);
+      writeFileSync(v2Backup, rollbackBytes);
+      const saves: number[] = [];
+      const leftoverHarden: string[] = [];
+      const failingIo: OpenAiTierRollbackPreserveIO = {
+        exists: existsSync,
+        read: path => {
+          if (path.includes("pre-openai-tiers-v1-rollback")) throw new Error("read preserved failed");
+          return readFileSync(path);
+        },
+        copyExclusive: (source, destination) => { copyFileSync(source, destination, fsConstants.COPYFILE_EXCL); },
+        harden: path => { leftoverHarden.push(path); },
+        truncate: path => truncateSync(path, 0),
+        write: () => { throw new Error("write must not run"); },
+        unlink: path => {
+          if (path === v2Backup) throw new Error("source unlink must not run");
+          throw new Error("unlink failed");
+        },
+      };
+
+      expect(() => runOpenAiTierStartupMigration(currentConfig, {
+        project: projectOpenAiTierMigration,
+        backup: () => backupConfigBeforeOpenAiTierMigration(configPath),
+        preserveRollback: () => { preserveOpenAiTierRollbackSnapshot(configPath, failingIo); },
+        save: () => { saves.push(1); },
+      })).toThrow(OpenAiTierRollbackPreserveCleanupError);
+
+      expect(saves).toEqual([]);
+      expect(readFileSync(v2Backup, "utf8")).toBe(rollbackBytes);
+      expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
+      const leftover = readdirSync(dir).filter(name => name.includes("pre-openai-tiers-v1-rollback"));
+      expect(leftover).toHaveLength(1);
+      expect(readFileSync(join(dir, leftover[0]!), "utf8")).toBe("");
+      expect(leftoverHarden).toEqual([join(dir, leftover[0]!)]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("startup propagates residual-secret errors without saving or deleting the v2 backup (#1599)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-1599-residual-"));
+    try {
+      const configPath = join(dir, "config.json");
+      const v2Backup = `${configPath}.pre-openai-tiers-v2.bak`;
+      const currentConfig: OcxConfig = {
+        port: 10100,
+        defaultProvider: "kimi",
+        providers: { kimi: { adapter: "openai-chat", baseUrl: "https://api.moonshot.cn/v1" } },
+      };
+      const currentBytes = `${JSON.stringify(currentConfig, null, 2)}\n`;
+      const rollbackBytes = JSON.stringify({ openaiProviderTierVersion: 1, defaultProvider: "openai-multi", providers: {} });
+      writeFileSync(configPath, currentBytes);
+      writeFileSync(v2Backup, rollbackBytes);
+      const saves: number[] = [];
+      const failingIo: OpenAiTierRollbackPreserveIO = {
+        exists: existsSync,
+        read: path => {
+          if (path.includes("pre-openai-tiers-v1-rollback")) throw new Error("read preserved failed");
+          return readFileSync(path);
+        },
+        copyExclusive: (source, destination) => { copyFileSync(source, destination, fsConstants.COPYFILE_EXCL); },
+        harden: () => {},
+        truncate: () => { throw new Error("truncate failed"); },
+        write: () => { throw new Error("write failed"); },
+        unlink: path => {
+          if (path === v2Backup) throw new Error("source unlink must not run");
+          throw new Error("unlink failed");
+        },
+      };
+
+      expect(() => runOpenAiTierStartupMigration(currentConfig, {
+        project: projectOpenAiTierMigration,
+        backup: () => backupConfigBeforeOpenAiTierMigration(configPath),
+        preserveRollback: () => { preserveOpenAiTierRollbackSnapshot(configPath, failingIo); },
+        save: () => { saves.push(1); },
+      })).toThrow(OpenAiTierRollbackPreserveSecretResidualError);
+
+      expect(saves).toEqual([]);
+      expect(readFileSync(v2Backup, "utf8")).toBe(rollbackBytes);
+      expect(readFileSync(configPath, "utf8")).toBe(currentBytes);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -390,6 +390,20 @@ export class OpenAiTierRollbackPreserveError extends Error {
   }
 }
 
+export class OpenAiTierRollbackPreserveSecretResidualError extends Error {
+  constructor(readonly preservedPath: string, options?: ErrorOptions) {
+    super("OpenAI tier rollback preserve could not scrub or remove an unverified snapshot", options);
+    this.name = "OpenAiTierRollbackPreserveSecretResidualError";
+  }
+}
+
+export class OpenAiTierRollbackPreserveCleanupError extends Error {
+  constructor(readonly preservedPath: string, readonly restricted = false, options?: ErrorOptions) {
+    super("OpenAI tier rollback preserve could not remove a scrubbed unverified snapshot", options);
+    this.name = "OpenAiTierRollbackPreserveCleanupError";
+  }
+}
+
 export class OpenAiTierBackupSecretResidualError extends Error {
   constructor(readonly tempPath: string, options?: ErrorOptions) {
     super("OpenAI tier backup could not scrub or remove a secret-bearing temporary file", options);
@@ -571,6 +585,8 @@ export interface OpenAiTierRollbackPreserveIO {
   read(path: string): Uint8Array;
   copyExclusive(source: string, destination: string): void;
   harden(path: string): void;
+  truncate(path: string): void;
+  write(path: string, bytes: Uint8Array): void;
   unlink(path: string): void;
 }
 
@@ -581,12 +597,15 @@ const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
     copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
   },
   harden: target => {
-    try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
-    // Same Windows ACL path as v2 migration backup: required:false so a wedged
-    // icacls on CI temp volumes cannot abort start, but the secret-path helper
-    // still runs. CopyFile does not copy the source DACL.
-    if (process.platform === "win32") hardenSecretPath(target, { required: false });
+    // Fail closed: chmod errors propagate. Windows ACL uses required:true so a
+    // failed icacls cannot continue into source unlink. The v2 migration backup
+    // path keeps required:false; this callback is only for preserved rollback
+    // snapshots. CopyFile does not copy the source DACL.
+    chmodSync(target, 0o600);
+    if (process.platform === "win32") hardenSecretPath(target, { required: true });
   },
+  truncate: target => truncateSync(target, 0),
+  write: (target, bytes) => writeFileSync(target, bytes),
   unlink: unlinkSync,
 };
 
@@ -597,8 +616,10 @@ const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
  * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then unlink the
  * blocking v2 name. Order is copy → verify bytes → harden → re-read source →
  * unlink source. The v2 path is removed only after the copy is verified, the
- * destination is hardened, and the source still matches. Shared by startup
- * migration recovery and `ocx init` cleanup so the two paths cannot drift.
+ * destination is hardened, and the source still matches. Pre-harden failures
+ * scrub and remove the unverified destination; they never unlink the source.
+ * Shared by startup migration recovery and `ocx init` cleanup so the two paths
+ * cannot drift.
  */
 export function preserveOpenAiTierRollbackSnapshot(
   configPath = getConfigPath(),
@@ -612,6 +633,42 @@ export function preserveOpenAiTierRollbackSnapshot(
   if (classifyOpenAiTierBackup(original) !== "rollback") {
     throw new OpenAiTierRollbackPreserveError("OpenAI tier backup is not a rollback snapshot", { code: "not-rollback" });
   }
+
+  const failUnverifiedCopy = (preserved: string, cause: unknown): never => {
+    let scrubbed = false;
+    try {
+      io.truncate(preserved);
+      scrubbed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) scrubbed = true;
+      else {
+        try { io.write(preserved, new Uint8Array()); scrubbed = true; } catch { /* removal may still succeed */ }
+      }
+    }
+    let removed = false;
+    try {
+      io.unlink(preserved);
+      removed = true;
+    } catch (error) {
+      if (isMissingPathError(error)) removed = true;
+      else {
+        try { io.unlink(preserved); removed = true; }
+        catch (retryError) { if (isMissingPathError(retryError)) removed = true; }
+      }
+    }
+    let restricted = false;
+    if (!removed) {
+      try { io.harden(preserved); restricted = true; } catch { /* leftover restriction is best-effort */ }
+    }
+    if (!removed && !scrubbed) {
+      throw new OpenAiTierRollbackPreserveSecretResidualError(preserved, { cause });
+    }
+    if (!removed) {
+      throw new OpenAiTierRollbackPreserveCleanupError(preserved, restricted, { cause });
+    }
+    throw cause;
+  };
+
   for (let attempt = 0; attempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; attempt++) {
     const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
     try {
@@ -620,18 +677,21 @@ export function preserveOpenAiTierRollbackSnapshot(
       if (isAlreadyExistsError(error)) continue;
       throw error;
     }
-    let copied: Uint8Array;
-    try {
-      copied = io.read(preserved);
-    } catch (error) {
-      try { io.unlink(preserved); } catch { /* unverified copy cleanup is best-effort; never unlink the source */ }
-      throw new OpenAiTierRollbackPreserveError("Failed to read preserved rollback snapshot", { cause: error, code: "mismatch" });
-    }
+    const copied = (() => {
+      try {
+        return io.read(preserved);
+      } catch (error) {
+        return failUnverifiedCopy(preserved, new OpenAiTierRollbackPreserveError("Failed to read preserved rollback snapshot", { cause: error, code: "mismatch" }));
+      }
+    })();
     if (!sameBytes(original, copied)) {
-      try { io.unlink(preserved); } catch { /* keep the original backup; incomplete copy is best-effort */ }
-      throw new OpenAiTierRollbackPreserveError("Preserved rollback snapshot does not match source bytes", { code: "mismatch" });
+      failUnverifiedCopy(preserved, new OpenAiTierRollbackPreserveError("Preserved rollback snapshot does not match source bytes", { code: "mismatch" }));
     }
-    io.harden(preserved);
+    try {
+      io.harden(preserved);
+    } catch (error) {
+      failUnverifiedCopy(preserved, error);
+    }
     let sourceNow: Uint8Array;
     try {
       sourceNow = io.read(backup);
