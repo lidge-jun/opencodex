@@ -1,5 +1,6 @@
 import { PublicEvidenceValidationError } from "./validate";
 
+const MAX_PUBLIC_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_PUBLIC_JSON_DEPTH = 8;
 const MAX_PUBLIC_JSON_OBJECT_KEYS = 64;
 const MAX_PUBLIC_JSON_ARRAY_ELEMENTS = 512;
@@ -183,7 +184,14 @@ export function parseStrictPublicJson(
   bytes: Uint8Array,
   label = "public JSON",
   invalidCode = "public_json",
+  maxBytes = MAX_PUBLIC_JSON_BYTES,
 ): unknown {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
+    throw new PublicEvidenceValidationError(invalidCode, `${label} byte limit is invalid`);
+  }
+  if (bytes.byteLength > maxBytes) {
+    throw new PublicEvidenceValidationError(invalidCode, `${label} exceeds ${maxBytes} bytes`);
+  }
   const buffer = Buffer.from(bytes);
   const text = buffer.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(buffer)) {

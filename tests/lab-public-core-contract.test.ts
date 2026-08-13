@@ -112,6 +112,8 @@ describe("CL-10 public evidence core contract", () => {
       .toThrow(/array exceeds 512/i);
     const wide = `{${Array.from({ length: 65 }, (_, index) => `"k${index}":0`).join(",")}}`;
     expect(() => parseStrictPublicJson(Buffer.from(wide, "utf8"))).toThrow(/object exceeds 64/i);
+    expect(() => parseStrictPublicJson(Buffer.alloc((2 * 1024 * 1024) + 1, 0x20)))
+      .toThrow(/exceeds 2097152 bytes/i);
   });
 
   test("local signing rejects artifact bytes before creating publisher state", () => {
