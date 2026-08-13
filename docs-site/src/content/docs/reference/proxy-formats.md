@@ -232,7 +232,8 @@ Route-specific failures:
 | 404 | `catalog_not_found` | The proxy has no catalog document to serve. Distinct from the generic `not_found` an unknown `/v1/*` path returns, so a script can tell the two apart |
 | 405 | `method_not_allowed` | A non-read method was used. The response carries `Allow: GET, HEAD` |
 | 500 | `catalog_unsafe` | The stored catalog carries content that must not be distributed (credential-, identity-, or configuration-shaped values or keys). The error is deliberately content-free |
-| 500 | `catalog_too_large` | The catalog document exceeds the 8 MiB data-plane ceiling |
+| 500 | `catalog_too_large` | The serialized catalog document exceeds the 8 MiB data-plane ceiling |
+| 500 | `catalog_source_too_large` | The stored catalog file exceeds the safe source read limit, so it was refused before parsing. Reported separately because the serialized size is unknown in that case |
 
 A missing or invalid credential is rejected with 401 before the method is considered, so an
 anonymous `POST`, `PUT`, `PATCH`, or `DELETE` answers `authentication_error` rather than
@@ -250,16 +251,23 @@ travels only in the request header, never in the URL:
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# Remove the temporary file on every exit path, including Ctrl-C and SIGTERM.
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# Same-directory rename: the previous catalog survives until this succeeds.
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "catalog install failed; previous catalog left in place" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 The same key then serves inference:

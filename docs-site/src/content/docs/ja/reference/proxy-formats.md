@@ -173,7 +173,8 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 | 404 | `catalog_not_found` |提供できるカタログ ドキュメントがありません。未知の `/v1/*` パスが返す一般的な `not_found` とは区別されるため、スクリプトが両者を判別できます |
 | 405 | `method_not_allowed` |読み取り以外のメソッドが使用されました。応答には `Allow: GET, HEAD` が含まれます |
 | 500 | `catalog_unsafe` |保存されたカタログに配布してはならない内容（資格情報・アイデンティティ・設定の形をした値やキー）が含まれています。このエラーは意図的に内容を含みません |
-| 500 | `catalog_too_large` |カタログ ドキュメントが 8 MiB のデータプレーン上限を超えています |
+| 500 | `catalog_too_large` |シリアライズ後のカタログ ドキュメントが 8 MiB のデータプレーン上限を超えています |
+| 500 | `catalog_source_too_large` |保存されたカタログ ファイルが安全な読み取り上限を超えたため、解析前に拒否されました。この場合シリアライズ後のサイズは不明なので、別のコードで報告されます |
 
 資格情報が欠落または無効な場合、メソッドを検討する前に 401 で拒否されます。したがって匿名の `POST`、`PUT`、`PATCH`、`DELETE` は、ルートの存在を明かすのではなく `authentication_error` を受け取ります。`OPTIONS` は恒常的な例外です。CORS プリフライトは、どのルート認証よりも前に、グローバル ハンドラーが本文なしの 204 で応答します — このルートも他のルートと同じです。
 
@@ -185,16 +186,23 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# Ctrl-C や SIGTERM を含む、あらゆる終了経路で一時ファイルを削除します。
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# 同一ディレクトリ内でのリネーム。これが成功するまで既存のカタログはそのまま残ります。
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "catalog install failed; previous catalog left in place" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 同じキーを推論にも使用します。

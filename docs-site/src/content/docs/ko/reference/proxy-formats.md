@@ -210,7 +210,8 @@ data-plane 예외를 추가하지도 않았습니다.
 | 404 | `catalog_not_found` | 제공할 카탈로그 문서가 없습니다. 알 수 없는 `/v1/*` 경로가 반환하는 일반 `not_found`와 구분되므로 스크립트가 둘을 구별할 수 있습니다 |
 | 405 | `method_not_allowed` | 읽기가 아닌 메서드를 사용했습니다. 응답에 `Allow: GET, HEAD`가 포함됩니다 |
 | 500 | `catalog_unsafe` | 저장된 카탈로그에 배포해서는 안 되는 내용(credential·신원·설정 모양의 값이나 키)이 들어 있습니다. 이 오류는 의도적으로 아무 내용도 담지 않습니다 |
-| 500 | `catalog_too_large` | 카탈로그 문서가 8 MiB data-plane 상한을 초과했습니다 |
+| 500 | `catalog_too_large` | 직렬화된 카탈로그 문서가 8 MiB data-plane 상한을 초과했습니다 |
+| 500 | `catalog_source_too_large` | 저장된 카탈로그 파일이 안전한 읽기 상한을 초과해 파싱 전에 거부되었습니다. 이 경우 직렬화 크기를 알 수 없으므로 별도 코드로 보고합니다 |
 
 credential이 없거나 유효하지 않으면 메서드를 따지기 전에 401로 거부되므로, 익명의 `POST`, `PUT`, `PATCH`,
 `DELETE`는 경로의 존재를 드러내지 않고 `authentication_error`를 받습니다. `OPTIONS`는 상시 예외입니다. CORS
@@ -226,16 +227,23 @@ preflight는 어떤 경로 인증보다도 먼저 전역 핸들러가 본문 없
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# Ctrl-C와 SIGTERM을 포함한 모든 종료 경로에서 임시 파일을 제거합니다.
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# 같은 디렉터리 안에서의 이름 변경: 이것이 성공할 때까지 기존 카탈로그는 그대로 남습니다.
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "catalog install failed; previous catalog left in place" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 같은 key를 추론에도 사용합니다.

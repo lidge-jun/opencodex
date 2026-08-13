@@ -87,27 +87,42 @@ The maintainer-accepted invariants for #809 are exactly these:
 - The data plane and the management plane stay separate. The catalog reaches remote clients
   through a data-plane route; no data-plane credential exception is carved into `/api/*`, and
   **`/api/catalog` must never accept a data-plane credential.**
-- One safe catalog materialization authority. `src/codex/catalog/distribution.ts` owns the bounded
-  source read, the safe-to-distribute verdict, the serialization, and the
-  `x-opencodex-codex-version` header; management `GET /api/catalog` and data-plane `GET`/`HEAD
-  /v1/catalog` both go through it and serialize nothing themselves. A second catalog generator, a
-  second serializer, or a second safety rule on either surface is the failure this boundary exists
-  to prevent. The two routes expose equivalent catalog content; only transport-owned behavior
-  (admission helper, CORS wrapper, error envelope, cache policy, response ceiling) may differ.
+- One catalog materialization authority. `src/codex/catalog/distribution.ts` owns the bounded source
+  read, the safety verdict, the serialization, and the `x-opencodex-codex-version` header;
+  management `GET /api/catalog` and data-plane `GET`/`HEAD /v1/catalog` both go through it and
+  serialize nothing themselves. A second catalog generator, a second serializer, or a second safety
+  rule on either surface is the failure this boundary exists to prevent. The two routes expose
+  equivalent catalog content; only transport-owned behavior (admission helper, CORS wrapper, error
+  envelope, cache policy, response ceiling) may differ.
 - The data-plane catalog surface is read-only: `GET` and `HEAD` are served, mutations are refused,
   and no catalog mutation API exists under `/v1`.
-- No credential, account identity, provider configuration, or management-only state is distributed.
-  `RawCatalog` preserves unknown fields because Codex owns the schema, so the boundary cannot prove
-  every field is model metadata; a document carrying credential-shaped, identity-shaped, or
-  config-shaped content is rejected deterministically with a content-free error rather than served
-  or silently stripped. Stripping was rejected because deleting unknown fields can corrupt a
-  document whose schema belongs to Codex.
+- No credential, account identity, provider configuration, filesystem path, or management-only state
+  may be distributed. **This is the accepted invariant. How it is enforced is not**: the mechanism
+  currently in the tree is an executor choice, described below, and it does not prove the invariant
+  holds for content that carries no recognizable shape.
 - A data-plane credential still cannot reach any `/api/*` read or mutation.
 
 Everything below is an executor-selected implementation detail. It is what the code currently does
 and tests pin it, but none of it has been individually accepted by a maintainer, and changing it is
 a policy call rather than a regression:
 
+- **Enforcement strategy: heuristic rejection.** `isCatalogDocumentSafeToDistribute` walks every key
+  and string value and refuses the whole document — content-free error, no stripping — when it sees
+  a sensitive key spelling or a recognizable credential/identity/home-path value shape. Wholesale
+  rejection was chosen over field stripping because deleting unknown fields can corrupt a document
+  whose schema belongs to Codex. **It is a denylist, not a guarantee**, and it does not detect a raw
+  provider base URL in an ordinary string field, an arbitrary-format token, an arbitrary account
+  identifier under an innocuous key, or a non-home absolute path such as `D:\ocx\config.json`. Those
+  gaps are pinned as known behavior in `tests/v1-catalog-route.test.ts`. Widening the denylist to
+  cover them is not the fix — a blanket URL or absolute-path rule would reject real catalogs, whose
+  instruction text legitimately contains such values, and turn both routes into permanent 500s.
+  Representation equivalence is in scope and enforced: Authorization scheme matching is
+  case-insensitive, and key normalization drops every non-alphanumeric character, so `account.id`,
+  `account_id`, `account-id`, and `accountId` are one key.
+- **Compatibility is a tested requirement of that strategy.** Because a rejected document takes both
+  routes down together, `tests/v1-catalog-route.test.ts` asserts the pinned upstream snapshot
+  (`src/codex/data/upstream-models.json`) plus the OpenCodex-owned extension fields are safe to
+  distribute. A Codex schema addition that trips a rule must fail there rather than in production.
 - Admission is resolved before the method, so an anonymous `POST`/`PUT`/`PATCH`/`DELETE` answers
   401 while an admitted caller gets 405 with `Allow: GET, HEAD`. CORS preflight is the standing
   exception: the global `OPTIONS` handler answers a bodyless 204 before any route authentication
@@ -120,10 +135,14 @@ a policy call rather than a regression:
 - `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` are set on every outcome —
   success, `HEAD`, and each error — so a cached `404 catalog_not_found` cannot hide a catalog
   generated later.
-- `DATA_PLANE_CATALOG_MAX_BYTES` (8 MiB, serialized UTF-8 response bytes) refuses an oversized
-  document as `500 catalog_too_large` rather than truncating it. The exact threshold and the 500
-  status are executor choices. `CATALOG_SOURCE_MAX_BYTES` (32 MiB) bounds the raw file read before
-  `JSON.parse` inside the shared materializer, so it applies to both routes.
+- The two size limits answer with distinct codes because only one of their claims can be true for a
+  given file. `DATA_PLANE_CATALOG_MAX_BYTES` (8 MiB, serialized UTF-8 response bytes) refuses an
+  oversized document as `500 catalog_too_large` rather than truncating it. `CATALOG_SOURCE_MAX_BYTES`
+  (32 MiB) bounds the raw file read before `JSON.parse` inside the shared materializer, so it applies
+  to both routes; on the data plane it answers `500 catalog_source_too_large` and states only that
+  the source exceeded the safe read limit. Reusing `catalog_too_large` there would assert a
+  serialized size that was never computed — a 33 MiB pretty-printed file can compact below 8 MiB.
+  The thresholds, the `500` status, and the new public code are executor choices.
 - The two routes currently return byte-identical success bodies. The issue required equivalent
   content; byte identity is the stricter pin the tests chose.
 - The route is not in `loopbackRouteAllowed`. The unauthenticated loopback listener serves what a
@@ -131,16 +150,25 @@ a policy call rather than a regression:
 
 Open maintainer decisions, recorded here rather than presented as accepted design:
 
-- **Strict projection versus safe rejection.** The current boundary rejects an unsafe document
-  wholesale. The alternative — serializing only an allowlisted field projection — would keep a
-  partially-contaminated catalog usable but risks deleting unknown fields that belong to the real
-  Codex schema. Choosing between them, and tuning the rejection rule set, is a maintainer call.
+- **Strict projection versus heuristic rejection or exact-value comparison.** This is the open
+  question, and it is what decides whether the no-leakage invariant is actually enforced or merely
+  approximated. Three candidates:
+  1. *Heuristic rejection* (in the tree today): cheap, no new dependency, but a denylist with the
+     verified gaps listed above.
+  2. *Strict field projection*: serialize only an allowlisted field set. Closes every gap by
+     construction, but silently drops fields belonging to a Codex schema this release does not know,
+     which is its own compatibility hazard.
+  3. *Exact-value comparison*: compare candidate strings against the live configuration and
+     credential stores. Closes the arbitrary-secret gap precisely, but pulls a config/credential
+     dependency into the materializer — deliberately not done without maintainer approval.
+  Tuning the rule set of option 1 is part of the same call.
 - **Shared rejection on the management plane.** Because the safety verdict lives in the one shared
   materializer, `GET /api/catalog` also refuses an unsafe or oversized-source document (it
   previously served any parseable file). Keeping management exempt would require a second, weaker
   materialization path.
-- **The `500` status family** for `catalog_unsafe` and `catalog_too_large`, and the specific 8 MiB
-  and 32 MiB thresholds.
+- **The `500` status family and the public error codes** for `catalog_unsafe`,
+  `catalog_too_large`, and `catalog_source_too_large`, plus the specific 8 MiB and 32 MiB
+  thresholds.
 
 ## API ownership
 

@@ -190,7 +190,8 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 | 404 | `catalog_not_found` | 代理没有可提供的 catalog 文档。它与未知 `/v1/*` 路径返回的通用 `not_found` 不同，因此脚本可以区分两者 |
 | 405 | `method_not_allowed` | 使用了非读取方法。响应携带 `Allow: GET, HEAD` |
 | 500 | `catalog_unsafe` | 存储的 catalog 携带了不得分发的内容（形似凭证、身份或配置的值或键名）。该错误刻意不包含任何内容 |
-| 500 | `catalog_too_large` | catalog 文档超过 8 MiB 的数据平面上限 |
+| 500 | `catalog_too_large` | 序列化后的 catalog 文档超过 8 MiB 的数据平面上限 |
+| 500 | `catalog_source_too_large` | 存储的 catalog 文件超过安全读取上限，因此在解析之前就被拒绝。单独上报是因为此时序列化后的大小是未知的 |
 
 缺失或无效的凭证会在考虑方法之前就以 401 被拒绝，因此匿名的 `POST`、`PUT`、`PATCH` 或 `DELETE` 得到的是 `authentication_error`，而不是暴露该路由的存在。`OPTIONS` 是固定的例外：CORS 预检在任何路由认证之前就由全局处理器以无正文的 204 应答，此路由与其他路由一样。
 
@@ -202,16 +203,23 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# 在每一条退出路径上都删除临时文件，包括 Ctrl-C 和 SIGTERM。
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "catalog 下载失败；保留原有 catalog" >&2
   exit 1
 fi
+
+# 同目录内重命名：在它成功之前，原有 catalog 始终保持不变。
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "catalog 安装失败；保留原有 catalog" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 同一个密钥随后用于推理：

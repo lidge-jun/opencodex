@@ -176,7 +176,8 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | 404 | `catalog_not_found` | 代理沒有可提供的目錄文件。這與未知 `/v1/*` 路徑回傳的一般 `not_found` 不同，因此腳本可以區分兩者 |
 | 405 | `method_not_allowed` | 使用了非讀取方法。回應帶有 `Allow: GET, HEAD` |
 | 500 | `catalog_unsafe` | 儲存的目錄帶有不得散布的內容（形似憑證、身分或設定的值或鍵名）。此錯誤刻意不含任何內容 |
-| 500 | `catalog_too_large` | 目錄文件超過 8 MiB 的 data-plane 上限 |
+| 500 | `catalog_too_large` | 序列化後的目錄文件超過 8 MiB 的 data-plane 上限 |
+| 500 | `catalog_source_too_large` | 儲存的目錄檔案超過安全讀取上限，因此在解析之前就被拒絕。單獨回報是因為此時序列化後的大小是未知的 |
 
 缺失或無效的憑證會在考慮方法之前就以 401 被拒絕，因此匿名的 `POST`、`PUT`、`PATCH` 或 `DELETE` 得到的是 `authentication_error`，而不是揭露此路由的存在。`OPTIONS` 是固定的例外：CORS 預檢在任何路由認證之前就由全域處理器以無本文的 204 回應，此路由與其他路由相同。
 
@@ -188,16 +189,23 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# 在每一條退出路徑上都刪除暫存檔，包含 Ctrl-C 與 SIGTERM。
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "目錄下載失敗；保留原有目錄" >&2
   exit 1
 fi
+
+# 同目錄內重新命名：在它成功之前，原有目錄始終保持不變。
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "目錄安裝失敗；保留原有目錄" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 同一個金鑰接著用於推論：

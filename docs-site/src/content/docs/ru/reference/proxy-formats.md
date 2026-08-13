@@ -225,7 +225,8 @@ management-префикс `/api/*` не добавлено никакого ис
 | 404 | `catalog_not_found` | У прокси нет документа каталога. Отличается от общего `not_found`, который возвращает неизвестный путь `/v1/*`, поэтому скрипт может различить эти два случая |
 | 405 | `method_not_allowed` | Использован метод, не являющийся чтением. Ответ несёт `Allow: GET, HEAD` |
 | 500 | `catalog_unsafe` | Сохранённый каталог несёт содержимое, которое нельзя распространять (значения или ключи, похожие на credential, идентичность или конфигурацию). Ошибка намеренно не содержит содержимого |
-| 500 | `catalog_too_large` | Документ каталога превышает предел data plane в 8 MiB |
+| 500 | `catalog_too_large` | Сериализованный документ каталога превышает предел data plane в 8 MiB |
+| 500 | `catalog_source_too_large` | Сохранённый файл каталога превышает безопасный предел чтения, поэтому был отклонён до разбора. Сообщается отдельным кодом, так как сериализованный размер в этом случае неизвестен |
 
 Отсутствующий или недействительный credential отклоняется с 401 ещё до проверки метода, поэтому
 анонимный `POST`, `PUT`, `PATCH` или `DELETE` получает `authentication_error`, а не раскрытие
@@ -243,16 +244,23 @@ plane. Скачивайте во временный файл и атомарно
 codex_dir="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$codex_dir"
 tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
-if curl -fsS \
+# Удаляем временный файл на любом пути выхода, включая Ctrl-C и SIGTERM.
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
     -o "$tmp" \
     https://proxy.example.com/v1/catalog; then
-  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
-else
-  rm -f "$tmp"
   echo "catalog download failed; previous catalog left in place" >&2
   exit 1
 fi
+
+# Переименование внутри той же директории: прежний каталог жив, пока оно не удалось.
+if ! mv -f "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "catalog install failed; previous catalog left in place" >&2
+  exit 1
+fi
+trap - EXIT HUP INT TERM
 ```
 
 Тот же ключ затем работает для inference:
