@@ -358,16 +358,28 @@ async function handleChatCompletionsWithBudget(
       sameTargetRetries += 1;
       noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, "rate-limit-429");
       try {
-        response = await fetchWithHeaderTimeout(
-          url,
-          { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson },
-          ac.signal,
-          connectMs,
-          stream,
-          providerFetch(providerConfig),
+        response = await fetchWithTransientRetry(
+          (recovery) =>
+            fetchWithHeaderTimeout(
+              url,
+              { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson, ...(recovery ? { keepalive: false } as unknown as RequestInit : {}) },
+              ac.signal,
+              connectMs,
+              stream,
+              providerFetch(providerConfig),
+            ),
+          { abortSignal: ac.signal, label: safeHostLabel(url) },
         );
-      } catch {
-        break;
+      } catch (err) {
+        cleanup();
+        if (req.signal.aborted || ac.signal.aborted) {
+          if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 499, { closeReason: "client_cancel" });
+          return chatCompletionsErrorResponse(499, "Client cancelled request", "client_cancelled");
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+        if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+        return chatCompletionsErrorResponse(502, redactSecretString(msg).slice(0, 500), "server_error");
       }
     }
     {
@@ -396,16 +408,28 @@ async function handleChatCompletionsWithBudget(
         try { void response.body?.cancel().catch(() => {}); } catch { /* noop */ }
         noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, "key-429");
         try {
-          response = await fetchWithHeaderTimeout(
-            url,
-            { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson },
-            ac.signal,
-            connectMs,
-            stream,
-            providerFetch(nextProvider),
+          response = await fetchWithTransientRetry(
+            (recovery) =>
+              fetchWithHeaderTimeout(
+                url,
+                { method: "POST", headers: Object.fromEntries(upstreamHeaders.entries()), body: bodyJson, ...(recovery ? { keepalive: false } as unknown as RequestInit : {}) },
+                ac.signal,
+                connectMs,
+                stream,
+                providerFetch(nextProvider),
+              ),
+            { abortSignal: ac.signal, label: safeHostLabel(url) },
           );
-        } catch {
-          break;
+        } catch (err) {
+          cleanup();
+          if (req.signal.aborted || ac.signal.aborted) {
+            if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 499, { closeReason: "client_cancel" });
+            return chatCompletionsErrorResponse(499, "Client cancelled request", "client_cancelled");
+          }
+          const msg = err instanceof Error ? err.message : String(err);
+          finishRequestAttempt(attempt, 502, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()));
+          if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 502, { closeReason: "non_stream" });
+          return chatCompletionsErrorResponse(502, redactSecretString(msg).slice(0, 500), "server_error");
         }
         activeProvider = nextProvider;
         currentKey = nextProvider.apiKey;
