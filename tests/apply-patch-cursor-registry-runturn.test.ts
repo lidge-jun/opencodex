@@ -38,6 +38,6 @@ test("Cursor registry construction reaches the real runTurn path with injected t
   expect(events).toHaveLength(1);
   expect(events[0]).toMatchObject({
     type: "error",
-    message: expect.stringContaining("explicit disabled Cursor transport"),
+    message: expect.stringContaining("live Cursor transport is disabled"),
   });
 });
