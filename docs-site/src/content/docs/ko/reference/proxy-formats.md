@@ -198,7 +198,7 @@ data-plane 예외를 추가하지도 않았습니다.
 | 메서드 | `GET`과 `HEAD`만 허용합니다. 이 표면은 읽기 전용이며 `/v1` 아래에 카탈로그 변경 API는 없습니다 |
 | Body | 카탈로그 문서로, `GET /api/catalog`가 반환하는 바이트와 동일합니다 |
 | 콘텐츠 타입 | `application/json`, 그리고 `X-Content-Type-Options: nosniff` |
-| 캐싱 | `Cache-Control: no-store`. 이 문서는 실시간 provider, 표시 여부, selector 상태를 반영하고 credential별로 제공되므로 중간 계층이 보관하거나 재전송해서는 안 됩니다 |
+| 캐싱 | 모든 응답에 `Cache-Control: no-store`가 붙습니다 — 문서 본문과 각 오류 모두 동일합니다. 이 문서는 실시간 provider, 표시 여부, selector 상태를 반영하고 credential별로 제공되므로 중간 계층이 보관하거나 재전송해서는 안 되고, 캐시된 404가 이후 생성된 카탈로그를 가려서도 안 됩니다 |
 | 버전 메타데이터 | `x-opencodex-codex-version`은 이 프록시가 선택한 Codex 버전을 보고합니다. 프록시에 신뢰할 수 있는 런타임 버전이 없으면 헤더는 추측되지 않고 생략됩니다 |
 | `HEAD` | `GET`과 같은 상태와 헤더에 `Content-Length`를 더하고 body는 없습니다. 내려받기 전에 크기와 버전 차이를 확인할 수 있습니다 |
 | 응답 상한 | 8 MiB. 더 큰 문서는 스트리밍되지 않고 결정적으로 거부됩니다 |
@@ -209,20 +209,33 @@ data-plane 예외를 추가하지도 않았습니다.
 | --- | --- | --- |
 | 404 | `catalog_not_found` | 제공할 카탈로그 문서가 없습니다. 알 수 없는 `/v1/*` 경로가 반환하는 일반 `not_found`와 구분되므로 스크립트가 둘을 구별할 수 있습니다 |
 | 405 | `method_not_allowed` | 읽기가 아닌 메서드를 사용했습니다. 응답에 `Allow: GET, HEAD`가 포함됩니다 |
+| 500 | `catalog_unsafe` | 저장된 카탈로그에 배포해서는 안 되는 내용(credential·신원·설정 모양의 값이나 키)이 들어 있습니다. 이 오류는 의도적으로 아무 내용도 담지 않습니다 |
 | 500 | `catalog_too_large` | 카탈로그 문서가 8 MiB data-plane 상한을 초과했습니다 |
 
-credential이 없거나 유효하지 않으면 메서드를 따지기 전에 401로 거부되므로, 익명의 비읽기 요청은 경로의 존재를
-드러내지 않고 `authentication_error`를 받습니다.
+credential이 없거나 유효하지 않으면 메서드를 따지기 전에 401로 거부되므로, 익명의 `POST`, `PUT`, `PATCH`,
+`DELETE`는 경로의 존재를 드러내지 않고 `authentication_error`를 받습니다. `OPTIONS`는 상시 예외입니다. CORS
+preflight는 어떤 경로 인증보다도 먼저 전역 핸들러가 본문 없는 204로 응답하며, 이 경로도 다른 경로와 같습니다.
 
 ### 여러 머신에서 카탈로그 내려받기
 
-중앙 호스팅 배포에서는 클라이언트 머신이 자신의 data-plane key로 카탈로그를 내려받습니다.
+중앙 호스팅 배포에서는 클라이언트 머신이 자신의 data-plane key로 카탈로그를 내려받습니다. 임시 파일로 내려받고
+성공했을 때만 원자적으로 이름을 바꾸십시오. 실패하거나 중단된 전송이 Codex가 사용 중인 카탈로그를 자르거나
+덮어쓰는 일이 없어집니다. key는 요청 헤더로만 전달하고 URL에는 절대 넣지 않습니다.
 
 ```bash
-curl -fsS \
-  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
-  https://proxy.example.com/v1/catalog \
-  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$codex_dir"
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
+if curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    https://proxy.example.com/v1/catalog; then
+  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
+else
+  rm -f "$tmp"
+  echo "catalog download failed; previous catalog left in place" >&2
+  exit 1
+fi
 ```
 
 같은 key를 추론에도 사용합니다.

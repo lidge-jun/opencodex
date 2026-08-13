@@ -164,7 +164,7 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | 方法 | 僅 `GET` 與 `HEAD`。此介面為唯讀，`/v1` 之下不存在任何目錄變更 API |
 | Body | 目錄文件，與 `GET /api/catalog` 回傳的位元組完全相同 |
 | 內容型別 | `application/json`，並帶 `X-Content-Type-Options: nosniff` |
-| 快取 | `Cache-Control: no-store`。該文件追蹤即時的供應商、可見性與 selector 狀態，且按憑證提供，因此中介不得保留或重播它 |
+| 快取 | 每一個回應都帶 `Cache-Control: no-store` —— 文件本身與每種錯誤皆然。該文件追蹤即時的供應商、可見性與 selector 狀態，且按憑證提供，因此中介不得保留或重播它；被快取的 404 也不得掩蓋之後生成的目錄 |
 | 版本中繼資料 | `x-opencodex-codex-version` 回報本代理選定的 Codex 版本。當代理沒有權威的執行期版本時，此標頭會被省略，而不是猜測一個值 |
 | `HEAD` | 與 `GET` 相同的狀態與標頭，另加 `Content-Length`，且沒有 body —— 在下載前檢查大小與版本偏差 |
 | 回應上限 | 8 MiB。更大的文件會被確定性地拒絕，而不是繼續傳輸 |
@@ -175,19 +175,29 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | --- | --- | --- |
 | 404 | `catalog_not_found` | 代理沒有可提供的目錄文件。這與未知 `/v1/*` 路徑回傳的一般 `not_found` 不同，因此腳本可以區分兩者 |
 | 405 | `method_not_allowed` | 使用了非讀取方法。回應帶有 `Allow: GET, HEAD` |
+| 500 | `catalog_unsafe` | 儲存的目錄帶有不得散布的內容（形似憑證、身分或設定的值或鍵名）。此錯誤刻意不含任何內容 |
 | 500 | `catalog_too_large` | 目錄文件超過 8 MiB 的 data-plane 上限 |
 
-缺失或無效的憑證會在考慮方法之前就以 401 被拒絕，因此匿名的非讀取請求得到的是 `authentication_error`，而不是揭露此路由的存在。
+缺失或無效的憑證會在考慮方法之前就以 401 被拒絕，因此匿名的 `POST`、`PUT`、`PATCH` 或 `DELETE` 得到的是 `authentication_error`，而不是揭露此路由的存在。`OPTIONS` 是固定的例外：CORS 預檢在任何路由認證之前就由全域處理器以無本文的 204 回應，此路由與其他路由相同。
 
 ### 多機器目錄下載
 
-在集中託管的部署中，客戶端機器以自己的 data-plane 金鑰下載目錄：
+在集中託管的部署中，客戶端機器以自己的 data-plane 金鑰下載目錄。先下載到暫存檔，只有在成功後才原子地重新命名到目標位置，如此失敗或中斷的傳輸永遠不會截斷或取代 Codex 正在使用的目錄。金鑰只透過請求標頭傳遞，絕不放入 URL：
 
 ```bash
-curl -fsS \
-  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
-  https://proxy.example.com/v1/catalog \
-  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$codex_dir"
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
+if curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    https://proxy.example.com/v1/catalog; then
+  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
+else
+  rm -f "$tmp"
+  echo "目錄下載失敗；保留原有目錄" >&2
+  exit 1
+fi
 ```
 
 同一個金鑰接著用於推論：

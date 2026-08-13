@@ -220,7 +220,7 @@ data-plane exception was added to the `/api/*` management prefix.
 | Methods | `GET` and `HEAD` only. The surface is read-only and there is no catalog mutation API under `/v1` |
 | Body | The catalog document, byte-identical to what `GET /api/catalog` returns |
 | Content type | `application/json`, with `X-Content-Type-Options: nosniff` |
-| Caching | `Cache-Control: no-store`. The document tracks live provider, visibility, and selector state and is served per credential, so an intermediary must not retain or replay it |
+| Caching | `Cache-Control: no-store` on every response — the document and each error alike. The document tracks live provider, visibility, and selector state and is served per credential, so an intermediary must not retain or replay it, and a cached 404 must not hide a catalog generated later |
 | Version metadata | `x-opencodex-codex-version` reports the Codex version this proxy selected. The header is omitted rather than guessed when the proxy has no authoritative runtime version |
 | `HEAD` | Same status and headers as `GET`, plus `Content-Length`, and no body — check size and version skew before downloading |
 | Response ceiling | 8 MiB. A larger document is refused deterministically instead of being streamed |
@@ -231,20 +231,35 @@ Route-specific failures:
 | --- | --- | --- |
 | 404 | `catalog_not_found` | The proxy has no catalog document to serve. Distinct from the generic `not_found` an unknown `/v1/*` path returns, so a script can tell the two apart |
 | 405 | `method_not_allowed` | A non-read method was used. The response carries `Allow: GET, HEAD` |
+| 500 | `catalog_unsafe` | The stored catalog carries content that must not be distributed (credential-, identity-, or configuration-shaped values or keys). The error is deliberately content-free |
 | 500 | `catalog_too_large` | The catalog document exceeds the 8 MiB data-plane ceiling |
 
 A missing or invalid credential is rejected with 401 before the method is considered, so an
-anonymous non-read request answers `authentication_error` rather than disclosing the route.
+anonymous `POST`, `PUT`, `PATCH`, or `DELETE` answers `authentication_error` rather than
+disclosing the route. `OPTIONS` is the standing exception: CORS preflight is answered globally
+with a bodyless 204 before any route authentication runs, on this route as on every other.
 
 ### Multi-machine catalog download
 
-On a centrally hosted deployment, a client machine downloads the catalog with its data-plane key:
+On a centrally hosted deployment, a client machine downloads the catalog with its data-plane key.
+Download into a temporary file and rename it into place only on success, so a failed or
+interrupted transfer never truncates or replaces the catalog Codex is already using. The key
+travels only in the request header, never in the URL:
 
 ```bash
-curl -fsS \
-  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
-  https://proxy.example.com/v1/catalog \
-  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$codex_dir"
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
+if curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    https://proxy.example.com/v1/catalog; then
+  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
+else
+  rm -f "$tmp"
+  echo "catalog download failed; previous catalog left in place" >&2
+  exit 1
+fi
 ```
 
 The same key then serves inference:

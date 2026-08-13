@@ -161,7 +161,7 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 |メソッド | `GET` と `HEAD` のみ。このサーフェスは読み取り専用で、`/v1` 配下にカタログ変更 API はありません |
 | Body |カタログ ドキュメント。`GET /api/catalog` が返すバイト列と同一です |
 |コンテンツ タイプ | `application/json`、および `X-Content-Type-Options: nosniff` |
-|キャッシュ | `Cache-Control: no-store`。このドキュメントはライブのプロバイダー、可視性、セレクター状態を反映し、資格情報ごとに提供されるため、中間層が保持または再送してはなりません |
+|キャッシュ |すべての応答に `Cache-Control: no-store` が付きます — ドキュメント本体も各エラーも同様です。このドキュメントはライブのプロバイダー、可視性、セレクター状態を反映し、資格情報ごとに提供されるため、中間層が保持または再送してはなりません。キャッシュされた 404 が、後から生成されたカタログを隠すこともあってはなりません |
 |バージョン メタデータ | `x-opencodex-codex-version` はこのプロキシが選択した Codex バージョンを報告します。プロキシに信頼できるランタイム バージョンがない場合、ヘッダーは推測されるのではなく省略されます |
 | `HEAD` | `GET` と同じステータスとヘッダーに加えて `Content-Length` を返し、本文はありません。ダウンロード前にサイズとバージョン差分を確認できます |
 |応答上限 | 8 MiB。これを超えるドキュメントは中継されず、確定的に拒否されます |
@@ -172,19 +172,29 @@ admission secret も削除され、別の実際の Anthropic 認証情報は維�
 | --- | --- | --- |
 | 404 | `catalog_not_found` |提供できるカタログ ドキュメントがありません。未知の `/v1/*` パスが返す一般的な `not_found` とは区別されるため、スクリプトが両者を判別できます |
 | 405 | `method_not_allowed` |読み取り以外のメソッドが使用されました。応答には `Allow: GET, HEAD` が含まれます |
+| 500 | `catalog_unsafe` |保存されたカタログに配布してはならない内容（資格情報・アイデンティティ・設定の形をした値やキー）が含まれています。このエラーは意図的に内容を含みません |
 | 500 | `catalog_too_large` |カタログ ドキュメントが 8 MiB のデータプレーン上限を超えています |
 
-資格情報が欠落または無効な場合、メソッドを検討する前に 401 で拒否されます。したがって匿名の読み取り以外のリクエストは、ルートの存在を明かすのではなく `authentication_error` を受け取ります。
+資格情報が欠落または無効な場合、メソッドを検討する前に 401 で拒否されます。したがって匿名の `POST`、`PUT`、`PATCH`、`DELETE` は、ルートの存在を明かすのではなく `authentication_error` を受け取ります。`OPTIONS` は恒常的な例外です。CORS プリフライトは、どのルート認証よりも前に、グローバル ハンドラーが本文なしの 204 で応答します — このルートも他のルートと同じです。
 
 ### 複数マシンでのカタログ ダウンロード
 
-集中ホスト型のデプロイでは、クライアント マシンが自身のデータプレーン キーでカタログをダウンロードします。
+集中ホスト型のデプロイでは、クライアント マシンが自身のデータプレーン キーでカタログをダウンロードします。一時ファイルにダウンロードし、成功した場合にのみアトミックにリネームしてください。失敗・中断した転送が、Codex が使用中のカタログを切り詰めたり置き換えたりすることはなくなります。キーはリクエスト ヘッダーだけで渡し、URL には決して含めません。
 
 ```bash
-curl -fsS \
-  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
-  https://proxy.example.com/v1/catalog \
-  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$codex_dir"
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
+if curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    https://proxy.example.com/v1/catalog; then
+  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
+else
+  rm -f "$tmp"
+  echo "catalog download failed; previous catalog left in place" >&2
+  exit 1
+fi
 ```
 
 同じキーを推論にも使用します。

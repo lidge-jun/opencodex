@@ -178,7 +178,7 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 | 方法 | 只有 `GET` 和 `HEAD`。该表面是只读的，`/v1` 下不存在任何 catalog 变更 API |
 | Body | catalog 文档，与 `GET /api/catalog` 返回的字节完全一致 |
 | 内容类型 | `application/json`，并带 `X-Content-Type-Options: nosniff` |
-| 缓存 | `Cache-Control: no-store`。该文档跟踪实时的 provider、可见性和 selector 状态，并按凭证提供，因此中间层不得保留或重放它 |
+| 缓存 | 每一个响应都带 `Cache-Control: no-store` —— 文档本身和每种错误都一样。该文档跟踪实时的 provider、可见性和 selector 状态，并按凭证提供，因此中间层不得保留或重放它；被缓存的 404 也不得掩盖之后生成的 catalog |
 | 版本元数据 | `x-opencodex-codex-version` 报告本代理选定的 Codex 版本。当代理没有权威运行时版本时，该头会被省略，而不是猜测一个值 |
 | `HEAD` | 与 `GET` 相同的状态和响应头，另外带 `Content-Length`，且没有 body —— 在下载前检查大小和版本偏差 |
 | 响应上限 | 8 MiB。更大的文档会被确定性地拒绝，而不是继续传输 |
@@ -189,19 +189,29 @@ choice 增量、带 `finish_reason` 的终止 choice，以及 `data: [DONE]`。�
 | --- | --- | --- |
 | 404 | `catalog_not_found` | 代理没有可提供的 catalog 文档。它与未知 `/v1/*` 路径返回的通用 `not_found` 不同，因此脚本可以区分两者 |
 | 405 | `method_not_allowed` | 使用了非读取方法。响应携带 `Allow: GET, HEAD` |
+| 500 | `catalog_unsafe` | 存储的 catalog 携带了不得分发的内容（形似凭证、身份或配置的值或键名）。该错误刻意不包含任何内容 |
 | 500 | `catalog_too_large` | catalog 文档超过 8 MiB 的数据平面上限 |
 
-缺失或无效的凭证会在考虑方法之前就以 401 被拒绝，因此匿名的非读取请求得到的是 `authentication_error`，而不是暴露该路由的存在。
+缺失或无效的凭证会在考虑方法之前就以 401 被拒绝，因此匿名的 `POST`、`PUT`、`PATCH` 或 `DELETE` 得到的是 `authentication_error`，而不是暴露该路由的存在。`OPTIONS` 是固定的例外：CORS 预检在任何路由认证之前就由全局处理器以无正文的 204 应答，此路由与其他路由一样。
 
 ### 多机器 catalog 下载
 
-在集中托管的部署中，客户端机器用自己的数据平面密钥下载 catalog：
+在集中托管的部署中，客户端机器用自己的数据平面密钥下载 catalog。先下载到临时文件，只有在成功后才原子地重命名到目标位置，这样失败或中断的传输永远不会截断或替换 Codex 正在使用的 catalog。密钥只通过请求头传递，绝不放进 URL：
 
 ```bash
-curl -fsS \
-  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
-  https://proxy.example.com/v1/catalog \
-  > "${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p "$codex_dir"
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")"
+if curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    https://proxy.example.com/v1/catalog; then
+  mv -f "$tmp" "$codex_dir/opencodex-catalog.json"
+else
+  rm -f "$tmp"
+  echo "catalog 下载失败；保留原有 catalog" >&2
+  exit 1
+fi
 ```
 
 同一个密钥随后用于推理：
