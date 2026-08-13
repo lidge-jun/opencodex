@@ -719,6 +719,35 @@ describe("Responses previous_response_id state", () => {
     expect(responseStateMetrics().spillStubCount).toBe(1);
   });
 
+  test("durable spill retains the provider-output replay boundary", async () => {
+    setResponseStateByteCapForTests(1_024);
+    const user = { role: "user", content: "r".repeat(8_000) };
+    const assistantOutput = {
+      type: "message",
+      role: "assistant",
+      id: "msg_spill_replay",
+      status: "completed",
+      content: [{ type: "output_text", text: "done" }],
+    };
+    rememberResponseState(
+      { input: [user] },
+      fixedResponse("resp_spill_replay_boundary", [assistantOutput]),
+    );
+    await flushResponseState();
+    clearResponseStateMemoryForTests();
+    setResponseStateByteCapForTests(1_024);
+
+    const assistantInput: Record<string, unknown> = { ...assistantOutput };
+    delete assistantInput.status;
+    const full = [user, assistantInput, { role: "user", content: "next" }];
+    const expanded = expandPreviousResponseInput({
+      previous_response_id: "resp_spill_replay_boundary",
+      input: full,
+    }) as { input: unknown[] };
+
+    expect(expanded.input).toEqual(full);
+  });
+
   test("spill references bind the expected response id and use the locked digest basename", () => {
     const ref = writeResponseSpillDurably("resp_identity", {
       createdAt: Date.now(),
@@ -986,7 +1015,7 @@ describe("Responses previous_response_id state", () => {
       );
       const items = [{ role: "user", content: "한글🙂" }, ...output];
       const expected = Buffer.byteLength(JSON.stringify({
-        responseId: "resp_다국어", createdAt: at, items, providers,
+        responseId: "resp_다국어", createdAt: at, items, providerOutputStart: 1, providers,
       }), "utf8");
       expect(getStoredResponseBytesForTests()).toBe(expected);
     } finally {

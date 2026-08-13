@@ -52,9 +52,10 @@ const userItem = (text: string): Record<string, unknown> => ({
   content: [{ type: "input_text", text }],
 });
 
-const assistantInputItem = (text: string): Record<string, unknown> => ({
+const assistantInputItem = (text: string, id?: string): Record<string, unknown> => ({
   type: "message",
   role: "assistant",
+  ...(id ? { id } : {}),
   content: [{ type: "output_text", text }],
 });
 
@@ -66,11 +67,58 @@ const assistantOutputItem = (text: string): Record<string, unknown> => ({
   content: [{ type: "output_text", text }],
 });
 
+const replayAnchor = [
+  { type: "function_call", name: "anchor", call_id: "call_anchor", arguments: "{}" },
+  { type: "function_call_output", call_id: "call_anchor", output: "ok" },
+];
+
 const MODEL = "deepseek/deepseek-v4-flash";
 
 describe("previous_response_id replay overlap", () => {
+  test("a legitimate delta may repeat the complete stored message prefix", () => {
+    const repeated = { ...userItem("repeat"), id: "client_msg_repeat" };
+    rememberResponseState(
+      { model: MODEL, input: [repeated] },
+      { id: "resp_repeat", status: "completed", output: [] },
+      undefined,
+      { force: true },
+    );
+
+    const request = [{ ...userItem("repeat"), id: "client_msg_repeat" }, userItem("new")];
+    const expanded = expandPreviousResponseInput({
+      model: MODEL,
+      previous_response_id: "resp_repeat",
+      input: request,
+    });
+
+    expect(expanded.input).toEqual([repeated, ...request]);
+  });
+
+  test("a request-owned call_id cannot prove that repeated content is replay", () => {
+    const repeated = {
+      type: "function_call_output",
+      call_id: "call_client_owned",
+      output: "same result",
+    };
+    rememberResponseState(
+      { model: MODEL, input: [repeated] },
+      { id: "resp_client_call_id", status: "completed", output: [] },
+      undefined,
+      { force: true },
+    );
+
+    const request = [repeated, userItem("new")];
+    const expanded = expandPreviousResponseInput({
+      model: MODEL,
+      previous_response_id: "resp_client_call_id",
+      input: request,
+    });
+
+    expect(expanded.input).toEqual([repeated, ...request]);
+  });
+
   test("full-history chained turns stay 1x across four turns", () => {
-    const base = Array.from({ length: 20 }, (_, i) => userItem(`base ${i}`));
+    const base = [...Array.from({ length: 20 }, (_, i) => userItem(`base ${i}`)), ...replayAnchor];
     const conversation = [...base, userItem("turn 1")];
     let respId = "resp_0";
     rememberResponseState(
@@ -79,7 +127,7 @@ describe("previous_response_id replay overlap", () => {
       undefined,
       { force: true },
     );
-    conversation.push(assistantInputItem("a1"));
+    conversation.push(assistantInputItem("a1", "msg_a1"));
 
     for (let i = 2; i <= 5; i++) {
       conversation.push(userItem(`turn ${i}`));
@@ -94,7 +142,7 @@ describe("previous_response_id replay overlap", () => {
         undefined,
         { force: true },
       );
-      conversation.push(assistantInputItem(`a${i}`));
+      conversation.push(assistantInputItem(`a${i}`, `msg_a${i}`));
     }
   });
 
@@ -116,15 +164,15 @@ describe("previous_response_id replay overlap", () => {
     expect((expanded.input as unknown[]).at(-1)).toEqual(userItem("delta"));
   });
 
-  test("stored output-shaped items canonical-match the client input resend", () => {
+  test("stored output-shaped items match when the client retains provider identity", () => {
     rememberResponseState(
       { model: MODEL, input: [userItem("hello")] },
       { id: "resp_shape", status: "completed", output: [assistantOutputItem("hi")] },
       undefined,
       { force: true },
     );
-    // The client resend carries the assistant reply as an input item without id/status.
-    const full = [userItem("hello"), assistantInputItem("hi"), userItem("next")];
+    // Status is transport metadata, while the retained provider id proves this is a replay.
+    const full = [userItem("hello"), { ...assistantInputItem("hi"), id: "msg_hi" }, userItem("next")];
     const expanded = expandPreviousResponseInput({
       model: MODEL,
       previous_response_id: "resp_shape",
@@ -143,6 +191,7 @@ describe("previous_response_id replay overlap", () => {
     };
     const resendItem = {
       role: "assistant",
+      id: "msg_x",
       content: [{ text: "hi", type: "output_text" }],
       type: "message",
     };
@@ -176,6 +225,7 @@ describe("previous_response_id replay overlap", () => {
     };
     const resendSearch: Record<string, unknown> = {
       type: "web_search_call",
+      id: "ws_stored",
       action: {
         type: "search",
         query: "opencodex context bug",
@@ -320,7 +370,11 @@ describe("stateless DeepSeek end-to-end replay", () => {
     }) as typeof fetch;
 
     const config = statelessDeepseekConfig();
-    const conversation = [...Array.from({ length: 20 }, (_, i) => userItem(`base ${i}`)), userItem("turn 1")];
+    const conversation = [
+      ...Array.from({ length: 20 }, (_, i) => userItem(`base ${i}`)),
+      ...replayAnchor,
+      userItem("turn 1"),
+    ];
     let respId = "";
     for (let i = 1; i <= 4; i++) {
       if (i > 1) conversation.push(userItem(`turn ${i}`));
@@ -331,7 +385,7 @@ describe("stateless DeepSeek end-to-end replay", () => {
       });
       expect(res.status).toBe(200);
       expect(upstreamBodies.at(-1)?.length).toBe(conversation.length);
-      conversation.push(assistantInputItem(`a${i}`));
+      conversation.push(assistantInputItem(`a${i}`, `msg_a${i}`));
       respId = `resp_${i}`;
     }
     expect(upstreamBodies).toHaveLength(4);

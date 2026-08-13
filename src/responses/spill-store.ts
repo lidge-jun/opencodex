@@ -35,6 +35,7 @@ export interface ResponseSpillPayload {
   responseId: string;
   createdAt: number;
   items: unknown[];
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
 }
 
@@ -260,10 +261,20 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "items", "providers"].includes(key))) return false;
+  if (keys.some(key =>
+    !["version", "responseId", "createdAt", "items", "providerOutputStart", "providers"].includes(key)
+  )) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (!Array.isArray(payload.items)) return false;
+  if (
+    payload.providerOutputStart !== undefined
+    && (
+      !Number.isSafeInteger(payload.providerOutputStart)
+      || (payload.providerOutputStart as number) < 0
+      || (payload.providerOutputStart as number) > payload.items.length
+    )
+  ) return false;
   if (payload.providers !== undefined) {
     if (!payload.providers || typeof payload.providers !== "object" || Array.isArray(payload.providers)) return false;
     for (const providerState of Object.values(payload.providers)) {
@@ -285,6 +296,9 @@ export function writeResponseSpillDurably(
       responseId,
       createdAt: state.createdAt,
       items: state.items,
+      ...(state.providerOutputStart !== undefined
+        ? { providerOutputStart: state.providerOutputStart }
+        : {}),
       ...(state.providers ? { providers: state.providers } : {}),
     };
     const serialized = JSON.stringify(payload);

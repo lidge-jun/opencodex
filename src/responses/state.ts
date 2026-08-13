@@ -13,6 +13,7 @@ import {
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
+import { hasProvenCompleteReplayPrefix } from "./replay-provenance";
 
 const MAX_STORED_RESPONSES = 1_000;
 const RESPONSE_TTL_MS = 60 * 60 * 1_000;
@@ -38,6 +39,8 @@ interface ResidentResponseState {
   kind: "resident";
   createdAt: number;
   items: unknown[];
+  /** First item sourced from provider output; absent on legacy snapshots. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
 }
@@ -45,6 +48,8 @@ interface ResidentResponseState {
 interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
+  /** Mirrored from the spill payload so provenance survives demotion without a read. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -125,6 +130,9 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
     responseId: id,
     createdAt: entry.createdAt,
     items: entry.items,
+    ...(entry.providerOutputStart !== undefined
+      ? { providerOutputStart: entry.providerOutputStart }
+      : {}),
     ...(entry.providers ? { providers: entry.providers } : {}),
   });
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
@@ -224,6 +232,9 @@ function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: 
   const base: Omit<SpilledResponseState, "sizeBytes"> = {
     kind: "spill",
     createdAt: expected.createdAt,
+    ...(expected.providerOutputStart !== undefined
+      ? { providerOutputStart: expected.providerOutputStart }
+      : {}),
     ...(expected.providers ? { providers: expected.providers } : {}),
     spill: ref,
   };
@@ -245,11 +256,17 @@ function replaceSpillEntryAtomically(
     const ref = writeResponseSpillDurably(id, {
       createdAt: candidate.createdAt,
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined
+        ? { providerOutputStart: candidate.providerOutputStart }
+        : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.providerOutputStart !== undefined
+        ? { providerOutputStart: candidate.providerOutputStart }
+        : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -323,6 +340,9 @@ function admitOversizedCandidate(
     const ref = writeResponseSpillDurably(id, {
       createdAt: candidate.createdAt,
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined
+        ? { providerOutputStart: candidate.providerOutputStart }
+        : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     // Enforce the ceiling against the REAL envelope: the spill payload adds
@@ -337,6 +357,9 @@ function admitOversizedCandidate(
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
+      ...(candidate.providerOutputStart !== undefined
+        ? { providerOutputStart: candidate.providerOutputStart }
+        : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -386,6 +409,7 @@ function snapshotPath(): string {
 interface LegacySnapshotState {
   createdAt?: unknown;
   items?: unknown;
+  providerOutputStart?: unknown;
   providers?: OcxProviderContinuationState;
   conversationId?: unknown;
   cursorCheckpointUsable?: unknown;
@@ -410,6 +434,10 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
+      ...(Number.isSafeInteger(rec.providerOutputStart)
+        && (rec.providerOutputStart as number) >= 0
+        ? { providerOutputStart: rec.providerOutputStart as number }
+        : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -435,6 +463,11 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const resident = measureResidentEntry(id, {
     createdAt: rec.createdAt,
     items: rec.items,
+    ...(Number.isSafeInteger(rec.providerOutputStart)
+      && (rec.providerOutputStart as number) >= 0
+      && (rec.providerOutputStart as number) <= rec.items.length
+      ? { providerOutputStart: rec.providerOutputStart as number }
+      : {}),
     ...(providers ? { providers } : {}),
   });
   if (!resident) {
@@ -725,149 +758,6 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
-/** Deepest canonical tree retained by replay-overlap detection. */
-const CANONICAL_REPLAY_MAX_DEPTH = 256;
-/**
- * Marker for a client-controlled subtree that nests past the canonical budget. The whole
- * item then yields no canonical key (undefined), so overlap detection stays conservative
- * instead of letting a deep resend silently break the prefix match.
- */
-const canonicalReplayOverflow = Symbol("canonical-replay-overflow");
-
-/**
- * Canonical identity used by replay-overlap detection. Volatile fields that differ between a
- * stored response item and the client's later input resend (`id`, `status`, sequence numbers)
- * are ignored; the remaining shape is what identifies "the same history item".
- *
- * The walk is iterative over container/index frames and stops at a bounded depth, so
- * client-controlled nesting cannot overflow the call stack or allocate unbounded memory
- * (same hardening as the admission walks). Returns the overflow marker when the depth
- * budget is exceeded.
- */
-function canonicalReplayValue(value: unknown): unknown {
-  type Slot = { value: unknown };
-  type Frame =
-    | { kind: "node"; node: unknown; slot: Slot; depth: number }
-    | { kind: "array"; array: unknown[]; index: number; next: unknown[]; slot: Slot; depth: number }
-    | { kind: "object"; keys: Generator<string>; record: Record<string, unknown>; next: Record<string, unknown>; slot: Slot; depth: number }
-    | { kind: "assign"; next: unknown[] | Record<string, unknown>; position: number | string; slot: Slot };
-  /** Lazily enumerate a parsed object's own enumerable string keys. */
-  function* ownEnumerableKeys(record: Record<string, unknown>): Generator<string> {
-    for (const key in record) {
-      if (Object.prototype.hasOwnProperty.call(record, key)) yield key;
-    }
-  }
-
-  let overflowed = false;
-  const rootSlot: Slot = { value };
-  const stack: Frame[] = [{ kind: "node", node: value, slot: rootSlot, depth: 0 }];
-  while (stack.length > 0) {
-    const frame = stack.pop()!;
-    if (frame.kind === "node") {
-      const node = frame.node;
-      if (Array.isArray(node)) {
-        if (frame.depth >= CANONICAL_REPLAY_MAX_DEPTH) {
-          overflowed = true;
-          frame.slot.value = canonicalReplayOverflow;
-        } else {
-          stack.push({ kind: "array", array: node, index: 0, next: new Array<unknown>(node.length), slot: frame.slot, depth: frame.depth });
-        }
-      } else if (node && typeof node === "object") {
-        if (frame.depth >= CANONICAL_REPLAY_MAX_DEPTH) {
-          overflowed = true;
-          frame.slot.value = canonicalReplayOverflow;
-        } else {
-          stack.push({
-            kind: "object",
-            record: node as Record<string, unknown>,
-            keys: ownEnumerableKeys(node as Record<string, unknown>),
-            // Null prototype so an own JSON `__proto__` key survives as a serializable
-            // property instead of being treated as a prototype assignment.
-            next: Object.create(null),
-            slot: frame.slot,
-            depth: frame.depth,
-          });
-        }
-      } else {
-        frame.slot.value = node;
-      }
-    } else if (frame.kind === "array") {
-      if (frame.index < frame.array.length) {
-        const childSlot: Slot = { value: frame.array[frame.index] };
-        stack.push({ kind: "array", array: frame.array, index: frame.index + 1, next: frame.next, slot: frame.slot, depth: frame.depth });
-        stack.push({ kind: "assign", next: frame.next, position: frame.index, slot: childSlot });
-        stack.push({ kind: "node", node: frame.array[frame.index], slot: childSlot, depth: frame.depth + 1 });
-      } else {
-        frame.slot.value = frame.next;
-      }
-    } else if (frame.kind === "object") {
-      const nextKey = frame.keys.next();
-      if (nextKey.done) {
-        // The web-search bridge writes `queries` alongside the singular `query` for single-query
-        // calls, while history recorded before that fix carries only `query` and is repaired
-        // outbound by backfillWebSearchQueries (#930). Normalize BEFORE sorting so the derived
-        // key occupies the same canonical position on both sides; a real batch (`queries`
-        // without `query`) is left untouched. Children are already canonical by this point.
-        const normalized: Record<string, unknown> = { ...frame.next };
-        if (normalized.type === "search" && typeof normalized.query === "string") {
-          normalized.queries = Array.isArray(normalized.queries)
-            ? normalized.queries
-            : [normalized.query];
-        }
-        const out: Record<string, unknown> = Object.create(null);
-        for (const key of Object.keys(normalized).sort()) {
-          out[key] = normalized[key];
-        }
-        frame.slot.value = out;
-      } else {
-        const key = nextKey.value;
-        const childSlot: Slot = { value: frame.record[key] };
-        stack.push({ kind: "object", keys: frame.keys, record: frame.record, next: frame.next, slot: frame.slot, depth: frame.depth });
-        stack.push({ kind: "assign", next: frame.next, position: key, slot: childSlot });
-        stack.push({ kind: "node", node: frame.record[key], slot: childSlot, depth: frame.depth + 1 });
-      }
-    } else {
-      const next = frame.next as unknown[] | Record<string, unknown>;
-      if (typeof frame.position === "number") {
-        (next as unknown[])[frame.position] = frame.slot.value;
-      } else {
-        (next as Record<string, unknown>)[frame.position] = frame.slot.value;
-      }
-    }
-  }
-  return overflowed ? canonicalReplayOverflow : rootSlot.value;
-}
-
-/**
- * Canonical identity of a single Responses input item for replay-overlap detection.
- * Volatile `id`, `status`, and sequence fields are excluded, and retained keys are
- * recursively sorted so equivalent items match regardless of property order. Returns
- * undefined for non-object items, which never count as overlap evidence.
- */
-function canonicalReplayItemKey(item: unknown): string | undefined {
-  if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
-  const { id: _id, status: _status, sequence_number: _sequenceNumber, ...rest } = item as Record<string, unknown>;
-  const canonical = canonicalReplayValue(rest);
-  // Sort every retained key (including nested objects and arrays) so equivalent items
-  // produce the same canonical string regardless of the original property order.
-  // A subtree beyond the depth budget yields no key at all; the item then never counts
-  // as overlap evidence (never passes an unbounded result to JSON.stringify).
-  if (canonical === canonicalReplayOverflow) return undefined;
-  return JSON.stringify(canonical);
-}
-
-/** Longest leading run of stored history items already present at the start of the request input. */
-function replayedPrefixOverlap(stored: unknown[], requestInput: unknown[]): number {
-  let n = 0;
-  while (n < stored.length && n < requestInput.length) {
-    const left = canonicalReplayItemKey(stored[n]);
-    const right = canonicalReplayItemKey(requestInput[n]);
-    if (left === undefined || left !== right) break;
-    n++;
-  }
-  return n;
-}
-
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
     if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
@@ -892,6 +782,9 @@ function pruneResponses(at = now()): void {
       const ref = writeResponseSpillDurably(oldestId, {
         createdAt: entry.createdAt,
         items: entry.items,
+        ...(entry.providerOutputStart !== undefined
+          ? { providerOutputStart: entry.providerOutputStart }
+          : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
       });
       if (swapResidentForSpill(oldestId, entry, ref)) spillCounters.writes += 1;
@@ -933,6 +826,9 @@ export function evictOldestResponseContinuationForBudget(): number {
     const ref = writeResponseSpillDurably(id, {
       createdAt: entry.createdAt,
       items: entry.items,
+      ...(entry.providerOutputStart !== undefined
+        ? { providerOutputStart: entry.providerOutputStart }
+        : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
     });
     if (swapResidentForSpill(id, entry, ref)) spillCounters.writes += 1;
@@ -973,6 +869,9 @@ function materializeEntry(
   const state = measureResidentEntry(id, {
     createdAt: result.payload.createdAt,
     items: result.payload.items,
+    ...(result.payload.providerOutputStart !== undefined
+      ? { providerOutputStart: result.payload.providerOutputStart }
+      : {}),
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
   });
   if (!state) {
@@ -986,10 +885,9 @@ function materializeEntry(
 
 /**
  * Expand a chained /v1/responses request's `previous_response_id` into the full stored
- * history when the request carries only a delta, and never duplicate history the request
- * already carries (stateless upstreams force full-body resends). Returns a new body so
- * callers can tell expansion happened; an overlap-only request keeps its own input
- * untouched and marks the leading stored-length items as the replay prefix.
+ * history when the request carries only a delta. A full-body resend stays untouched only
+ * when a stable provider item id or tool call id proves the complete canonical prefix is
+ * replayed; ambiguous content equality stays conservative and preserves every occurrence.
  */
 export function expandPreviousResponseInput(body: unknown): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -1012,13 +910,17 @@ export function expandPreviousResponseInput(body: unknown): unknown {
   // full-body request duplicates it, and remembering that duplicated body makes the bloat
   // sticky across turns: 1x -> 2x -> 3x -> ... (observed 1,333,682 input tokens on
   // 2026-08-10, ~10x the real ~127k conversation). Detect the overlap: ONLY a complete
-  // canonical stored-prefix overlap keeps the request untouched. Request length is not proof
+  // canonical stored-prefix match with stable protocol identity keeps the request untouched.
+  // Matching content alone is not proof
   // of a full resend — a genuine delta can be as long as the stored history, and returning it
   // unchanged would drop the required prefix. Delta turns prepend the stored history and
   // append the ENTIRE request input: request items are never dropped, because a repeated
   // `context_compaction` marker or an identical message is a new occurrence that must survive.
-  const overlap = replayedPrefixOverlap(storedItems, requestItems);
-  if (overlap >= storedItems.length) {
+  if (hasProvenCompleteReplayPrefix(
+    storedItems,
+    requestItems,
+    materialized.state.providerOutputStart,
+  )) {
     const full = { ...request };
     replayedInputPrefixLengths.set(full, Math.min(storedItems.length, requestItems.length));
     return full;
@@ -1167,9 +1069,11 @@ export function rememberResponseState(
       return !!item && typeof item === "object" && (item as { type?: unknown }).type === "function_call";
     });
   }
+  const storedInputItems = inputItems(request.input);
   setResidentEntry(response.id, {
     createdAt: now(),
-    items: [...inputItems(request.input), ...response.output],
+    items: [...storedInputItems, ...response.output],
+    providerOutputStart: storedInputItems.length,
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
     // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
     // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an

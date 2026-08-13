@@ -52,16 +52,15 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 未知项目类型会作为宽松的类型化项被接受，以保证前向兼容。已翻译的适配器只处理它们能识别的项目类型，并且可能会拒绝其提供方无法表示的特性。
 
-如果解析后的 `input` 估计会超过目标模型的有效输入上限（按模型配置的最大输入，缺失时回退到
-由提供方、注册表或目录元数据解析出的上下文窗口）——这是一个基于模型、对消息文本、
-`instructions`、工具定义、结构化输出 schema 和非文本内容的近似 token 估算——代理会在
-adapter 构建和模型服务上游 I/O 之前以 `413 request_too_large`（code
-`input_context_window_exceeded`）拒绝该请求。请求体准入（解压、大小上限、解析）先于该守卫。
-HTTP 请求还会在认证之前被拒绝；WebSocket 帧已经通过握手认证和来源准入，因此对它们而言守卫在
-每轮 adapter 构建和上游 I/O 之前运行。线程派生请求可能在此之前运行配额探测——这是唯一可能
-先于拒绝发生的上游 I/O。Codex 会远早于该限制进行压缩，因此过大的请求体意味着异常重复——例如
-链式续接把完整对话重新发送给了无状态提供方。请压缩对话或新建线程后重试；被拒绝的请求永远不会
-转发到上游。
+如果解析后的 `input` 估算超过目标模型的有效输入上限（按模型配置的最大输入，缺失时回退到
+由提供方、注册表或目录元数据解析出的上下文窗口）再加 10% 的估算误差带，代理会以
+`413 request_too_large`（code `input_context_window_exceeded`）拒绝。估算会累计消息文本、
+`instructions`、工具定义和结构化输出 schema，并为图片及后续确定性的 guidance、压缩提示和
+bridge 工具注入单独预留空间；不会把 base64 图片字节当作普通文本 token。请求体准入先于该守卫。
+HTTP 请求还会在认证之前被拒绝；WebSocket 帧已通过握手认证和来源准入。准入检查发生在配额探测、
+sidecar、adapter 构建和模型上游 I/O 之前，terminal-guard continuation 也会在自己的上游发送前再次检查。
+误差带内的请求会交给 provider 的 tokenizer 决定。完整历史重发只有在保留的 provider item id 或 tool
+call id 证明整个已存储前缀确为重放时才会去重；仅内容相同绝不会丢弃一次出现。
 
 ### JSON 和 SSE 输出
 
@@ -243,7 +242,7 @@ Responses 家族和 Chat 请求会把 `Authorization` 留给提供方或 Codex D
 | 503 | `combo_unavailable` | 所选 combo 中的所有目标都不可用、处于冷却、已禁用或以其他方式不具备资格 |
 | 400 | `unreadable_encrypted_agent_task` | 一个加密的 v2 worker task 没有任何可消费它的合格原生 ChatGPT 目标 |
 | 426 | `upgrade_required` | Responses WebSocket 传输被禁用，或升级失败；请改用 HTTP |
-| 413 | `request_too_large` | 估算的 `input` 超过目标模型的有效输入上限（code `input_context_window_exceeded`）；在 adapter 构建和模型服务上游 I/O 之前被拒绝（线程派生配额探测可能先行） |
+| 413 | `request_too_large` | 估算的 `input` 超过目标模型的有效输入上限及 10% 估算误差带（code `input_context_window_exceeded`）；在配额、sidecar、adapter 或模型上游 I/O 之前被拒绝 |
 
 Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方言中的 origin 拒绝会是
 403 `permission_error`，而不是 OpenAI 风格的 `origin_rejected` body。

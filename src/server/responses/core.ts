@@ -50,8 +50,7 @@ import {
 import { isInjectionDebugEnabled } from "../../lib/debug-settings";
 import { injectionDebugLog } from "../../lib/injection-debug-log";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
-import { charsPerToken, estimateTokens } from "../../lib/token-estimate";
-import { walkJsonTree } from "../../lib/json-walk";
+import { charsPerToken } from "../../lib/token-estimate";
 import { candidateCapabilityEvidence } from "../../routing/capability";
 import { enrichOpenCodeZenRateLimitMessage } from "../../providers/opencode-zen-rate-limit";
 import { modelInList, namespacedToolName } from "../../types";
@@ -206,7 +205,8 @@ import {
   restoreImageGenCallsInJson,
 } from "../responses-image-gen-repair";
 import { createResponsesModelPayloadRewrite, rewriteResponsesModelJson } from "../responses-model-rewrite";
-import type { EffectiveSubagentRoster, SpawnAgentSurface } from "../../codex/catalog";
+import { MAX_SPAWN_AGENT_MODEL_OVERRIDES, type EffectiveSubagentRoster, type SpawnAgentSurface } from "../../codex/catalog";
+import { CODEX_REASONING_LEVELS } from "../../reasoning-effort";
 
 import {
   applyInjectionPlaceholders,
@@ -216,6 +216,7 @@ import {
   multiAgentGuidanceText,
   PROACTIVE_MULTI_AGENT_MODE_TEXT,
   subagentRosterText,
+  V2_GUIDANCE_CHAR_BUDGET,
 } from "./collaboration";
 import { hasUnreadableEncryptedAgentTask, looksLikeBackendCiphertext, sanitizeEncryptedContentInPlace } from "./encrypted-payload";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel } from "./fetch-helpers";
@@ -246,6 +247,11 @@ import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-t
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
+import {
+  estimateAdmissionInput as estimateParsedAdmissionInput,
+  hardAdmissionThreshold,
+  shouldRejectEstimatedInput,
+} from "./input-admission";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -1624,20 +1630,16 @@ async function handleResponsesInner(
   }
 
   /**
-   * Reject a request whose estimated input exceeds the FINAL routed model's effective
-   * limit: per-model `modelMaxInputTokens` first, then the context window resolved through
+   * Reject only when a heuristic estimate exceeds the routed model's effective limit plus
+   * the admission uncertainty band: per-model `modelMaxInputTokens` first, then the context window resolved through
    * the shared route-capability chain (provider `modelContextWindows`, provider-wide
    * `contextWindow`, provider registry, cached Codex catalog, native metadata, and provider
    * caps), so a limit advertised through ANY of those sources is enforced. The client
    * compacts well before this limit, so an oversized body means abnormal duplication
    * (observed: a 4x replay expansion pushed a ~400k-token conversation to 1.6M, ballooning
-   * bun RSS and native-crashing the proxy on Windows, issue #314). `estimateGuidance`
-   * additionally counts the multi-agent guidance that route normalization will inject, so
-   * a pre-quota check cannot let a doomed near-limit request perform upstream quota I/O
-   * first (deterministic parts only: the v1 proactive text, and the v2 injectionPrompt with
-   * resolved placeholder values, using configured candidates as a safe upper bound for the
-   * catalog-dependent parts). `extraText` adds a pre-computed projection of later
-   * prompt-bearing mutations (bridge tool injections) for the final pre-construction guard.
+   * bun RSS and native-crashing the proxy on Windows, issue #314). Admission also reserves
+   * bounded guidance, compaction, bridge-tool, and image-description mutations so a request
+   * that must receive a 413 cannot perform quota or sidecar I/O first.
    */
   /** The routed model's effective input limit: per-model maximum input, then the context
    *  window resolved through the shared route-capability chain. */
@@ -1657,142 +1659,155 @@ async function handleResponsesInner(
       error: {
         type: "request_too_large",
         code: "input_context_window_exceeded",
-        message: `input (≈${estimatedInputTokens} tokens) exceeds ${modelId} input limit (${effectiveLimit} tokens); refusing to forward`,
+        message: `input estimate (≈${estimatedInputTokens} tokens) exceeds the safe admission threshold for ${modelId} (${effectiveLimit}-token input limit); refusing to forward`,
       },
     },
     { status: 413 },
   );
 
-  /**
-   * Walk the parsed request once and estimate the adapter-bound input tokens for
-   * `modelId`, stopping as soon as the running estimate crosses `cap` so an oversized
-   * payload never forces a full scan before the 413. The counted content is identical
-   * across fallback candidates — only the chars-per-token ratio and the limit vary — so
-   * the candidate loop calls this once per distinct ratio against the strictest limit.
-   */
-  const estimateAdmissionInput = (
-    modelId: string,
-    cap: number,
-    options: { estimateGuidance?: boolean; extraText?: string } = {},
-  ): number => {
-    let estimatedInputTokens = 0;
-    const countText = (text: string) => {
-      estimatedInputTokens += estimateTokens(text, modelId);
-    };
-    /**
-     * Estimate a JSON payload structurally instead of serializing a full copy: the walk
-     * stops as soon as the running estimate crosses the cap, so an oversized schema never
-     * materializes as one giant string before the 413. Traversal is the shared read-only
-     * walker (iterative frames, lazy keys), so the walk keeps O(depth) memory instead of
-     * materializing sibling lists or key arrays for the whole payload.
-     */
-    const countJsonTokens = (value: unknown): void => {
-      walkJsonTree(value, {
-        isDone: () => estimatedInputTokens > cap,
-        onValue: (current) => {
-          if (typeof current === "string") {
-            countText(current);
-          } else if (typeof current === "number" || typeof current === "boolean") {
-            countText(String(current));
-          }
-        },
-        onObjectKey: (key) => countText(key),
-      });
-    };
+  type InputAdmissionOptions = {
+    estimateGuidance?: boolean;
+    reservePendingMutations?: boolean;
+  };
+  type InputAdmissionFailure = {
+    modelId: string;
+    effectiveLimit: number;
+    estimatedInputTokens: number;
+  };
+
+  const projectedAdmissionText = (
+    candidateRoute: typeof route,
+    candidateParsed: OcxParsedRequest,
+    options: InputAdmissionOptions,
+  ): string[] => {
+    const projected: string[] = [];
     if (options.estimateGuidance) {
-      const surface = collabSurface(parsed);
-      if (surface === "v1" && (parsed.options.reasoning === "max" || parsed.options.reasoning === "ultra")) {
-        countText(`<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`);
-      } else if (surface === "v2" && config.multiAgentGuidanceEnabled !== false) {
+      const surface = collabSurface(candidateParsed);
+      if (
+        surface === "v1"
+        && (candidateParsed.options.reasoning === "max" || candidateParsed.options.reasoning === "ultra")
+      ) {
+        projected.push(`<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`);
+      } else if (
+        surface === "v2"
+        && config.multiAgentGuidanceEnabled !== false
+        && (
+          typeof config.injectionModel === "string"
+          || (config.subagentModels?.length ?? 0) > 0
+          || (config.subagentModelFallback?.length ?? 0) > 0
+        )
+      ) {
+        const candidates = [
+          ...(typeof config.injectionModel === "string" ? [config.injectionModel] : []),
+          ...(config.subagentModels ?? []),
+        ];
+        const model = candidates.reduce(
+          (longest, candidate) => candidate.length > longest.length ? candidate : longest,
+          "",
+        );
+        const fallback = subagentFallbackGuidanceText(config);
         if (typeof config.injectionPrompt === "string" && config.injectionPrompt.length > 0) {
-          // Resolve placeholders with the values available before catalog lookup:
-          // {{model}} gets the longest configured candidate (the catalog-backed
-          // `preferred` can only pick from the configured lists), {{effort}} the
-          // configured effort, and {{roster}}/{{fallback}} upper bounds built from the
-          // configured model lists. The post-normalization guard re-measures the actual
-          // injected text, so this pre-quota estimate only needs to be >= the floor of
-          // what injection can add.
-          const candidates = [
-            ...(typeof config.injectionModel === "string" ? [config.injectionModel] : []),
-            ...(config.subagentModels ?? []),
-          ];
-          const model = candidates.reduce(
-            (longest, m) => (m.length > longest.length ? m : longest),
-            "",
+          const allEfforts = CODEX_REASONING_LEVELS.map(level => level.effort);
+          const reserveModelLength = Math.max(256, model.length);
+          const conservativeModels = Array.from(
+            { length: Math.min(MAX_SPAWN_AGENT_MODEL_OVERRIDES, candidates.length) },
+            (_, index) => `reserve_${index}`.padEnd(reserveModelLength, "x"),
           );
           const roster = subagentRosterText(
-            (config.subagentModels ?? []).map(model => ({ model, efforts: [] })),
+            conservativeModels.map((candidate, index) => ({
+              model: candidate,
+              // Distinct sentinels force the longer per-model roster form while retaining
+              // every real effort label. This is estimation text only, never injected.
+              efforts: [...allEfforts, `reserve_${index}`],
+            })),
           );
-          const fallback = subagentFallbackGuidanceText(config);
-          countText(`<multi_agent_mode>${applyInjectionPlaceholders(config.injectionPrompt, model, config.injectionEffort, roster, fallback)}</multi_agent_mode>`);
-        }
-        // Without injectionPrompt the v2 guidance is catalog-conditional and bounded by
-        // V2_GUIDANCE_CHAR_BUDGET; the post-normalization guard accounts for it exactly.
-      }
-    }
-    if (options.extraText !== undefined && options.extraText.length > 0) {
-      countText(options.extraText);
-    }
-    for (const msg of parsed.context.messages) {
-      const content = msg.content;
-      if (typeof content === "string") {
-        countText(content);
-      } else if (Array.isArray(content)) {
-        for (const part of content) {
-          if (!part || typeof part !== "object") continue;
-          // Text parts are counted directly; non-text parts (images carrying base64 data,
-          // thinking blocks, tool-call arguments) are counted structurally so the estimate
-          // covers the whole adapter-bound message.
-          const text = (part as { text?: unknown }).text;
-          if (typeof text === "string") countText(text);
-          else countJsonTokens(part);
+          projected.push(
+            `<multi_agent_mode>${applyInjectionPlaceholders(
+              config.injectionPrompt,
+              model.padEnd(model.length > 0 ? reserveModelLength : 0, "x"),
+              config.injectionEffort,
+              roster,
+              fallback,
+            )}</multi_agent_mode>`,
+          );
+        } else {
+          // Default v2 guidance depends on the local Codex catalog, which is resolved only
+          // during final-route normalization. Reserve its documented character budget now
+          // so a thread-spawn request cannot cross the hard threshold only after quota I/O.
+          // The fallback and longest configured selector are added separately because they
+          // can remain after an oversized roster is dropped from the bounded default text.
+          projected.push(`<multi_agent_mode>${"x".repeat(V2_GUIDANCE_CHAR_BUDGET)}</multi_agent_mode>`);
+          if (fallback) projected.push(fallback);
+          if (model) projected.push(model.padEnd(256, "x"));
+          if (config.injectionEffort) projected.push(config.injectionEffort);
         }
       }
-      // Message-level metadata rides the adapter-bound request too: Kiro's
-      // `kiroRedactedReasoning` is an opaque blob the adapter replays verbatim, and
-      // tool-result messages serialize `toolCallId`/`toolName`/`toolNamespace`/`isError`.
-      // Count the envelope without double-counting content (dropped via undefined).
-      countJsonTokens({ ...msg, content: undefined });
     }
-    // The selected adapter also forwards prompt-bearing fields that the parser moved out of
-    // `input` (instructions -> systemPrompt) or that never live in messages at all (tool
-    // names, descriptions, and serialized parameter schemas). Count them so a short-message
-    // request cannot smuggle an oversized prompt past the guard.
-    for (const prompt of parsed.context.systemPrompt ?? []) {
-      countText(prompt);
+    if (options.reservePendingMutations) {
+      if (
+        candidateParsed._compactionRequest === true
+        && !isCanonicalOpenAiForwardProvider(candidateRoute.provider)
+      ) {
+        projected.push(COMPACT_PROMPT);
+      }
+      // These bridges replace hosted capabilities with small deterministic function
+      // definitions later. Reserve only routes where the corresponding bridge can run,
+      // keeping near-threshold native passthrough requests out of a false 413.
+      if (
+        candidateParsed._webSearch !== undefined
+        && candidateRoute.provider.adapter !== "openai-responses"
+      ) {
+        projected.push(JSON.stringify(buildWebSearchTool()));
+      }
+      if (planImageBridgeSync(config, candidateParsed, candidateRoute.provider)) {
+        projected.push(JSON.stringify(buildImageTool()));
+      }
+      if (planVideoBridgeSync(config, candidateParsed, candidateRoute.provider)) {
+        projected.push(JSON.stringify(buildVideoTool()));
+      }
     }
-    for (const tool of parsed.context.tools ?? []) {
-      // Count the whole tool entry (name, description, parameter schema, flags, and any
-      // loose or hosted extra fields) so a short-named tool cannot smuggle a large schema
-      // or hosted configuration past the guard.
-      countJsonTokens(tool);
-    }
-    // Structured-output schemas (text.format) and stashed hosted tool configs also ride the
-    // adapter-bound request; count them so a large response schema or hosted-tool
-    // configuration cannot slip past the guard.
-    if (parsed.options.textFormat !== undefined) {
-      countJsonTokens(parsed.options.textFormat);
-    }
-    if (parsed._webSearch !== undefined) {
-      countJsonTokens(parsed._webSearch);
-    }
-    if (parsed._imageGeneration?.originalTool !== undefined) {
-      countJsonTokens(parsed._imageGeneration.originalTool);
-    }
-    return estimatedInputTokens;
+    return projected;
+  };
+
+  const estimateInputFor = (
+    candidateRoute: typeof route,
+    candidateParsed: OcxParsedRequest,
+    effectiveLimit: number,
+    options: InputAdmissionOptions = {},
+  ): number => estimateParsedAdmissionInput(
+    candidateParsed,
+    candidateRoute.modelId,
+    hardAdmissionThreshold(effectiveLimit),
+    { extraText: projectedAdmissionText(candidateRoute, candidateParsed, options) },
+  );
+
+  const inputAdmissionFor = (
+    candidateRoute: typeof route,
+    candidateParsed: OcxParsedRequest = parsed,
+    options: InputAdmissionOptions = {},
+  ): InputAdmissionFailure | undefined => {
+    const effectiveLimit = effectiveInputLimitFor(candidateRoute);
+    if (effectiveLimit === undefined) return undefined;
+    const estimatedInputTokens = estimateInputFor(
+      candidateRoute,
+      candidateParsed,
+      effectiveLimit,
+      options,
+    );
+    return shouldRejectEstimatedInput(estimatedInputTokens, effectiveLimit)
+      ? { modelId: candidateRoute.modelId, effectiveLimit, estimatedInputTokens }
+      : undefined;
   };
 
   const inputGuardFor = (
     candidateRoute: typeof route,
-    options: { estimateGuidance?: boolean; extraText?: string } = {},
+    candidateParsed: OcxParsedRequest = parsed,
+    options: InputAdmissionOptions = {},
   ): Response | undefined => {
-    const effectiveLimit = effectiveInputLimitFor(candidateRoute);
-    if (effectiveLimit === undefined) return undefined;
-    const estimatedInputTokens = estimateAdmissionInput(candidateRoute.modelId, effectiveLimit, options);
-    if (estimatedInputTokens > effectiveLimit) {
-      return oversizedInputResponse(candidateRoute.modelId, effectiveLimit, estimatedInputTokens);
-    }
-    return undefined;
+    const failure = inputAdmissionFor(candidateRoute, candidateParsed, options);
+    return failure
+      ? oversizedInputResponse(failure.modelId, failure.effectiveLimit, failure.estimatedInputTokens)
+      : undefined;
   };
 
   const hasUnexpandedPreviousResponse = !!parsed.previousResponseId
@@ -1804,7 +1819,7 @@ async function handleResponsesInner(
   const initialInputGuard = hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
     ? undefined
-    : inputGuardFor(route, { estimateGuidance: true });
+    : inputGuardFor(route, parsed, { estimateGuidance: true, reservePendingMutations: true });
   if (initialInputGuard) return initialInputGuard;
 
   // Exact account selectors are isolated from Pool-wide quota work. A canonical replay miss must
@@ -1869,25 +1884,38 @@ async function handleResponsesInner(
           continue;
         }
       }
-      const byRatio = new Map<number, Array<{ route: typeof route; limit: number }>>();
+      const byProjection = new Map<string, Array<{ route: typeof route; limit: number }>>();
       for (const entry of candidateLimits) {
         const ratio = charsPerToken(entry.route.modelId);
-        const group = byRatio.get(ratio) ?? [];
+        const projected = projectedAdmissionText(
+          entry.route,
+          parsed,
+          { estimateGuidance: true, reservePendingMutations: true },
+        );
+        // Equal char ratios are not enough to share a scan: route capabilities can
+        // reserve different compaction or bridge mutations.
+        const key = JSON.stringify([ratio, projected]);
+        const group = byProjection.get(key) ?? [];
         group.push(entry);
-        byRatio.set(ratio, group);
+        byProjection.set(key, group);
       }
-      for (const group of byRatio.values()) {
+      for (const group of byProjection.values()) {
         const minLimit = Math.min(...group.map(entry => entry.limit));
-        // Cap the walk at the strictest limit in the group: if the running estimate
-        // crosses it, that strictest candidate rejects; otherwise the estimate is the
-        // full count and can be compared against every candidate's own limit.
-        const estimate = estimateAdmissionInput(group[0]!.route.modelId, minLimit, { estimateGuidance: true });
-        if (estimate > minLimit) {
+        // Cap the walk at the strictest candidate's hard admission threshold. If the
+        // running estimate crosses it, that candidate rejects; otherwise the estimate
+        // is complete and can be compared against every candidate's own threshold.
+        const estimate = estimateInputFor(
+          group[0]!.route,
+          parsed,
+          minLimit,
+          { estimateGuidance: true, reservePendingMutations: true },
+        );
+        if (shouldRejectEstimatedInput(estimate, minLimit)) {
           const strictest = group.find(entry => entry.limit === minLimit)!;
           return oversizedInputResponse(strictest.route.modelId, minLimit, estimate);
         }
         for (const { route: candidateRoute, limit } of group) {
-          if (estimate > limit) {
+          if (shouldRejectEstimatedInput(estimate, limit)) {
             return oversizedInputResponse(candidateRoute.modelId, limit, estimate);
           }
         }
@@ -2072,7 +2100,11 @@ async function handleResponsesInner(
 
   // Input-size guard, final route: subagent fallback may have settled a different model or
   // provider, so re-validate before auth, adapter construction, or upstream I/O.
-  const finalInputGuard = inputGuardFor(route, { estimateGuidance: true });
+  const finalInputGuard = inputGuardFor(
+    route,
+    parsed,
+    { estimateGuidance: true, reservePendingMutations: true },
+  );
   if (finalInputGuard) return finalInputGuard;
 
   // Captured before normalization: whether the CLIENT asked for SSE. The
@@ -2089,12 +2121,6 @@ async function handleResponsesInner(
     inboundWire,
     inboundTransport: options.inboundTransport,
   });
-  // Input-size guard, post-normalization: route normalization may have injected
-  // multi-agent guidance (developer message) that pushes a near-limit request over the
-  // window. Re-measure against the ACTUAL parsed context before authentication, adapter
-  // construction, or upstream I/O.
-  const postNormalizationGuard = inputGuardFor(route);
-  if (postNormalizationGuard) return postNormalizationGuard;
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
   if (route.codexAccountNamespace) {
@@ -2387,48 +2413,13 @@ async function handleResponsesInner(
     parsed.context.messages.push({ role: "user", content: COMPACT_PROMPT, timestamp: Date.now() });
   }
 
-  // FINAL input-size guard: describeImagesInPlace (vision sidecar) and the routed
-  // compaction prompt already mutated the parsed context, and the image/video/web-search
-  // bridge tool injections happen later — all AFTER the pre-auth guard. Project the
-  // deterministic additions and re-validate before adapter construction or upstream I/O
-  // (auth has already happened; this is the last rejection point before any provider call).
-  // planWebSearch reads the auth store (which hardens files and may back up invalid
-  // config), so compute it ONCE here and reuse it in the dispatch path below instead of
-  // repeating that synchronous filesystem work.
+  // The pre-auth admission pass reserves every mutation below: bounded per-image
+  // descriptions, COMPACT_PROMPT, and all possible bridge tool definitions. Therefore
+  // no 413 path remains after optional vision-sidecar I/O. planWebSearch reads the auth
+  // store, so compute it ONCE here and reuse it in the dispatch path below.
   const wsPlan = !routedCompaction && !isPassthrough
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
     : undefined;
-  let projectedBridgeToolText = "";
-  if (!routedCompaction && !isPassthrough) {
-    const finalImgPlan = planImageBridgeSync(config, parsed, route.provider);
-    const finalVidPlan = planVideoBridgeSync(config, parsed, route.provider);
-    const webSearchActive = !!wsPlan && !adapter.runTurn;
-    if (webSearchActive) {
-      projectedBridgeToolText += JSON.stringify(buildWebSearchTool());
-    }
-    // The media bridge injects only on streaming requests and only when web search does
-    // not take priority for this turn, and it skips tools the client already declared
-    // (mirroring the injection path's existingNames duplicate check).
-    if (parsed.stream && (finalImgPlan || finalVidPlan) && (!wsPlan || adapter.runTurn)) {
-      const bridgeTools = (parsed.context.tools ?? []).filter(t => {
-        if (t.imageGeneration) return false;
-        if (t.videoGeneration) return false;
-        if (finalImgPlan && finalImgPlan.toolNames.has(t.name)) return false;
-        if (finalImgPlan && t.namespace && finalImgPlan.toolNames.has(namespacedToolName(t.namespace, t.name))) return false;
-        if (finalVidPlan && !t.namespace && finalVidPlan.toolNames.has(t.name)) return false;
-        return true;
-      });
-      const existingNames = new Set(bridgeTools.map(t => t.name));
-      if (finalImgPlan && !existingNames.has(IMAGE_GEN_TOOL_NAME)) {
-        projectedBridgeToolText += JSON.stringify(buildImageTool());
-      }
-      if (finalVidPlan && !existingNames.has(VIDEO_GEN_TOOL_NAME)) {
-        projectedBridgeToolText += JSON.stringify(buildVideoTool());
-      }
-    }
-  }
-  const finalAdmissionGuard = inputGuardFor(route, { extraText: projectedBridgeToolText });
-  if (finalAdmissionGuard) return finalAdmissionGuard;
 
   if ("passthrough" in adapter && adapter.passthrough && !routedCompaction) {
     let hostAdmissionLease = pendingHostAdmissionLease;
@@ -3888,6 +3879,17 @@ async function handleResponsesInner(
    * never sees a second hidden HTTP response or an unbounded retry loop.
    */
   const fetchTerminalGuardContinuation = async function* (nextParsed: OcxParsedRequest): AsyncGenerator<AdapterEvent> {
+    const admissionFailure = inputAdmissionFor(route, nextParsed);
+    if (admissionFailure) {
+      yield {
+        type: "error",
+        status: 413,
+        errorType: "request_too_large",
+        code: "input_context_window_exceeded",
+        message: `input estimate (≈${admissionFailure.estimatedInputTokens} tokens) exceeds the safe admission threshold for ${admissionFailure.modelId} (${admissionFailure.effectiveLimit}-token input limit); refusing terminal continuation`,
+      };
+      return;
+    }
     let response: Response | undefined;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined;

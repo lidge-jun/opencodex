@@ -7,7 +7,6 @@ import {
   readJsonRequestBody,
   UnsupportedContentEncodingError,
 } from "../src/server/request-decompress";
-import { translatorAggregateCurrentBytesForTests } from "../src/lib/translator-budget";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../src/server/management/body";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
@@ -393,9 +392,10 @@ describe("readJsonRequestBody", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload),
     });
-    const parsed = await readJsonRequestBody(req, createTestTranslatorBudget());
+    const budget = createTestTranslatorBudget();
+    const parsed = await readJsonRequestBody(req, budget);
     expect(parsed).toEqual(payload);
     const serializedBytes = new TextEncoder().encode(JSON.stringify(parsed)).byteLength;
-    expect(translatorAggregateCurrentBytesForTests()).toBe(serializedBytes);
+    expect(budget.snapshot().currentBytes).toBe(serializedBytes);
   });
 });

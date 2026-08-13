@@ -79,6 +79,36 @@ describe("server terminal guard integration", () => {
     expect(messages.at(-1)?.content?.[0]?.text).toContain("你刚才只描述了计划");
   });
 
+  test("revalidates the terminal-guard continuation before its upstream send", async () => {
+    const boundedConfig = {
+      ...config,
+      providers: {
+        "claude-se": {
+          adapter: "anthropic",
+          baseUrl: "https://example.test",
+          apiKey: "sk-test",
+          modelMaxInputTokens: { "se-claude-opus-4.8": 60 },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "修复",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", parameters: {} }],
+      }),
+    }), boundedConfig, { model: "", provider: "" });
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toBe(1);
+    expect(text).toContain("input_context_window_exceeded");
+  });
+
   test("terminal-guard continuation 429 replays on the same key before surfacing", async () => {
     const retryConfig = {
       ...config,

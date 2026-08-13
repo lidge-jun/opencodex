@@ -23,6 +23,7 @@ import {
 import { estimateTokens } from "../src/lib/token-estimate";
 import { COMPACT_PROMPT } from "../src/responses/compaction";
 import { encodeReasoningEnvelope } from "../src/responses/reasoning-envelope";
+import { hardAdmissionThreshold } from "../src/server/responses/input-admission";
 
 setDefaultTimeout(30_000);
 
@@ -100,6 +101,55 @@ async function expectOversizedRejection(res: Response): Promise<void> {
 }
 
 describe("responses input-size guard", () => {
+  test("rounds the aggregate estimate instead of every tiny text field", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_tiny_fields",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    const res = await postResponses(deepseekConfig({ maxInput: 50, contextWindow: 1_000 }), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [{
+        role: "user",
+        content: Array.from({ length: 100 }, () => ({ type: "input_text", text: "a" })),
+      }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+  });
+
+  test("fails open inside the estimator uncertainty band at the model boundary", async () => {
+    let upstreamCalls = 0;
+    globalThis.fetch = (async () => {
+      upstreamCalls += 1;
+      return Response.json({
+        id: "resp_near_boundary",
+        object: "response",
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      });
+    }) as typeof fetch;
+
+    // The heuristic estimates this just over 100 tokens. It is not an exact
+    // tokenizer result, so a hard refusal at this boundary would be a false-positive risk.
+    const res = await postResponses(deepseekConfig({ maxInput: 100, contextWindow: 1_000 }), {
+      model: "deepseek/deepseek-v4-flash",
+      input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(351) }] }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+  });
+
   test("rejects an input above the advertised context window without calling upstream", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
@@ -134,11 +184,12 @@ describe("responses input-size guard", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       });
     }) as typeof fetch;
-    // OpenAI-style routes advertise 1,050,000 context but cap input at 922,000; an estimate
-    // between the two must be rejected. 3.4M chars ≈ 971k tokens at 3.5 chars/token.
+    // OpenAI-style routes advertise 1,050,000 context but cap input at 922,000. The
+    // admission guard reserves a 10% estimator uncertainty band, so this fixture sits
+    // above that hard threshold while remaining below the advertised context window.
     const res = await postResponses(deepseekConfig({ maxInput: 922_000, contextWindow: 1_050_000 }), {
       model: "deepseek/deepseek-v4-flash",
-      input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(3_400_000) }] }],
+      input: [{ role: "user", content: [{ type: "input_text", text: "a".repeat(3_600_000) }] }],
     });
     await expectOversizedRejection(res);
     expect(upstreamCalls).toBe(0);
@@ -373,7 +424,7 @@ describe("responses input-size guard", () => {
     expect(upstreamCalls).toBe(0);
   });
 
-  test("counts non-text image content against the window", async () => {
+  test("does not tokenize an inline image URL as ordinary prompt text", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
@@ -385,8 +436,8 @@ describe("responses input-size guard", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       });
     }) as typeof fetch;
-    // Image parts carry base64 data in the adapter-bound request; a short text message
-    // must not hide an oversized image from the guard.
+    // The adapter or vision sidecar prices/replaces image content separately. Treating
+    // base64 bytes as prompt text would reject image requests that fit the model.
     const res = await postResponses(deepseekConfig(), {
       model: "deepseek/deepseek-v4-flash",
       input: [
@@ -399,8 +450,8 @@ describe("responses input-size guard", () => {
         },
       ],
     });
-    await expectOversizedRejection(res);
-    expect(upstreamCalls).toBe(0);
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
   });
 
   test("counts the structured-output schema against the window", async () => {
@@ -466,7 +517,7 @@ describe("responses input-size guard", () => {
     expect(upstreamCalls).toBe(0);
   });
 
-  test("rejects after the routed compaction prompt is added, before any upstream call", async () => {
+  test("reserves the routed compaction prompt before any upstream call", async () => {
     let upstreamCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
@@ -478,15 +529,15 @@ describe("responses input-size guard", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       });
     }) as typeof fetch;
-    // The pre-auth guards pass (the compaction_trigger item is dropped from messages),
-    // but normalization is followed by the routed compaction prompt (~425 chars); only
-    // the final pre-construction guard can catch the resulting over-limit request. The
-    // fixture is bound to the actual COMPACT_PROMPT so a prompt change fails loudly.
+    // The compaction_trigger item is dropped from messages, but the routed compaction
+    // prompt is added later. Admission must reserve it before auth or sidecar work.
     const LIMIT = 1_000_000;
+    const hardThreshold = hardAdmissionThreshold(LIMIT);
     const compactPromptTokens = estimateTokens(COMPACT_PROMPT, "deepseek-v4-flash");
     expect(compactPromptTokens).toBeGreaterThan(100);
-    // Within (LIMIT - prompt, LIMIT): pre-auth guards pass, the final guard must reject.
-    const inputTokens = LIMIT - Math.ceil(compactPromptTokens / 2);
+    // The body alone is inside the estimator band; adding the prompt crosses the
+    // conservative hard threshold, so only the final guard rejects it.
+    const inputTokens = hardThreshold - Math.ceil(compactPromptTokens / 2);
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const res = await postResponses(deepseekConfig(), {
       model: "deepseek/deepseek-v4-flash",
@@ -580,11 +631,13 @@ describe("responses input-size guard", () => {
       });
     }) as typeof fetch;
     const LIMIT = 1_000_000;
+    const hardThreshold = hardAdmissionThreshold(LIMIT);
     const modelId = "deepseek-v4-flash";
     const guidanceText = `<multi_agent_mode>${PROACTIVE_MULTI_AGENT_MODE_TEXT}</multi_agent_mode>`;
     const guidanceTokens = estimateTokens(guidanceText, modelId);
-    // Below the limit on its own, over it once the proactive guidance is counted.
-    const inputTokens = LIMIT - guidanceTokens - 1;
+    // The body alone is inside the estimator band; deterministic guidance pushes the
+    // complete request across the conservative hard threshold.
+    const inputTokens = hardThreshold - Math.ceil(guidanceTokens / 2);
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const res = await postResponses(deepseekConfig(), {
       model: "deepseek/deepseek-v4-flash",
@@ -616,18 +669,20 @@ describe("responses input-size guard", () => {
       quotaPrimeCalls += 1;
     });
     const LIMIT = 1_000_000;
+    const hardThreshold = hardAdmissionThreshold(LIMIT);
     const modelId = "deepseek-v4-flash";
     const prompt = "a".repeat(500);
     const floorText = `<multi_agent_mode>${applyInjectionPlaceholders(prompt, "", "", "", "")}</multi_agent_mode>`;
     const floorTokens = estimateTokens(floorText, modelId);
-    // Under the limit without the prompt floor, over it once the prompt is counted; the
-    // oversized rejection must precede the quota probe (no upstream I/O before the 413).
-    const inputTokens = LIMIT - floorTokens - 1;
+    // Under the hard threshold without the prompt floor, over it once the prompt is
+    // counted; the rejection must precede the quota probe.
+    const inputTokens = hardThreshold - floorTokens + 20;
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const config = {
       port: 0,
       defaultProvider: "deepseek",
       injectionPrompt: prompt,
+      injectionModel: "deepseek/deepseek-v4-lite",
       providers: {
         deepseek: {
           adapter: "openai-responses",
@@ -671,6 +726,7 @@ describe("responses input-size guard", () => {
       quotaPrimeCalls += 1;
     });
     const LIMIT = 1_000_000;
+    const hardThreshold = hardAdmissionThreshold(LIMIT);
     const modelId = "deepseek-v4-flash";
     const subagentModel = "deepseek/deepseek-v4-lite";
     const prompt = `${"a".repeat(100)} {{roster}}`;
@@ -688,9 +744,11 @@ describe("responses input-size guard", () => {
     const resolvedTokens = estimateTokens(resolvedText, modelId);
     const floorTokens = estimateTokens(floorText, modelId);
     const toolTokens = estimateTokens("spawn_agent", modelId);
-    // input + tool + floor < LIMIT (passes without roster), input + tool + resolved > LIMIT.
-    const inputTokens = LIMIT - Math.ceil((floorTokens + resolvedTokens + toolTokens) / 2);
-    expect(inputTokens + toolTokens + floorTokens).toBeLessThan(LIMIT);
+    // input + tool + floor stays below the hard threshold, while resolving the roster
+    // crosses it and must reject before quota polling.
+    const inputTokens = hardThreshold - Math.ceil((floorTokens + resolvedTokens + toolTokens) / 2);
+    expect(inputTokens + toolTokens + floorTokens).toBeLessThan(hardThreshold);
+    expect(inputTokens + toolTokens + resolvedTokens).toBeGreaterThan(hardThreshold);
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const config = {
       port: 0,
@@ -723,8 +781,9 @@ describe("responses input-size guard", () => {
     expect(quotaPrimeCalls).toBe(0);
   });
 
-  test("revalidates input after injected guidance is added during normalization", async () => {
+  test("reserves bounded default v2 guidance before quota polling", async () => {
     let upstreamCalls = 0;
+    let quotaPrimeCalls = 0;
     globalThis.fetch = (async () => {
       upstreamCalls += 1;
       return Response.json({
@@ -735,12 +794,16 @@ describe("responses input-size guard", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       });
     }) as typeof fetch;
+    setSubagentQuotaPrimeForTests(async () => {
+      quotaPrimeCalls += 1;
+    });
     const LIMIT = 1_000_000;
+    const hardThreshold = hardAdmissionThreshold(LIMIT);
     // No injectionPrompt on v2 means the pre-quota estimate counts NO guidance, but
     // normalization still injects the default v2 guidance plus the configured fallback
     // chain text. Only the post-normalization re-validation can catch this request
     // (before any auth or upstream I/O).
-    const inputTokens = LIMIT - 100;
+    const inputTokens = hardThreshold - 100;
     const bigText = "a".repeat(Math.floor((inputTokens - 1) * 3.5) + 1);
     const previousOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
     process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
@@ -761,13 +824,18 @@ describe("responses input-size guard", () => {
           },
         },
       } as OcxConfig;
-      const res = await postResponses(config, {
-        model: "deepseek/deepseek-v4-flash",
-        tools: [{ type: "function", name: "spawn_agent", description: "" }],
-        input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
-      });
+      const res = await postResponses(
+        config,
+        {
+          model: "deepseek/deepseek-v4-flash",
+          tools: [{ type: "function", name: "spawn_agent", description: "" }],
+          input: [{ role: "user", content: [{ type: "input_text", text: bigText }] }],
+        },
+        { "x-openai-subagent": "collab_spawn" },
+      );
       await expectOversizedRejection(res);
       expect(upstreamCalls).toBe(0);
+      expect(quotaPrimeCalls).toBe(0);
     } finally {
       if (previousOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
       else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = previousOverride;

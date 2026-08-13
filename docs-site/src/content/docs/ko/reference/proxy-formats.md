@@ -54,17 +54,13 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 알 수 없는 항목 유형은 앞으로의 호환성을 위해 느슨한 형식의 typed item으로 허용됩니다. 변환된 어댑터는
 자신이 인식하는 항목 유형만 처리하며, 제공자가 표현할 수 없는 기능은 거부할 수 있습니다.
 
-파싱된 `input`이 라우팅된 모델의 유효 입력 한도(모델별 최대 입력, 없으면 제공자·레지스트리·카탈로그
-메타데이터에서 해석된 컨텍스트 창)를 초과할 것으로 추정되는 요청은 어댑터 구성과 모델 제공 업스트림
-I/O 전에 `413 request_too_large`(code `input_context_window_exceeded`)로 거부됩니다. 이 판정은
-메시지 텍스트, `instructions`, 도구 정의, 구조화 출력 스키마, 비텍스트 콘텐츠를 대상으로 하는 모델
-인지 근사 토큰 추정입니다. 본문 허용(압축 해제, 크기 상한, 파싱)이 가드보다 먼저 수행됩니다. HTTP
-요청은 인증 전에도 거부됩니다. WebSocket 프레임은 이미 핸드셰이크 인증과 출처 허용을 통과했으므로,
-가드는 매 턴의 어댑터 구성과 업스트림 I/O 전에 실행됩니다. 스레드 생성 요청은 그 전에 할당량 프로브를
-실행할 수 있습니다—이는 거부에 앞설 수 있는 유일한 업스트림 I/O입니다. Codex는 이 제한보다 훨씬
-전에 압축하므로, 과도한 본문은 비정상적인 중복(예: 상태 비저장 제공자에게 전체 대화를 다시 보내는
-체인 연속)을 나타냅니다. 대화를 압축하거나 새 스레드를 시작한 후 다시 시도하세요. 거부된 요청은
-업스트림으로 전달되지 않습니다.
+파싱된 `input`의 근사 추정치가 라우팅된 모델의 유효 입력 한도에 10% 추정 오차 대역을 더한
+값을 넘으면 `413 request_too_large`(code `input_context_window_exceeded`)로 거부됩니다.
+추정치는 메시지, `instructions`, 도구, 구조화 출력 스키마를 합산하고 이미지 및 이후의 guidance,
+압축 프롬프트, bridge 도구 주입에는 별도의 제한된 여유를 둡니다. base64를 일반 텍스트로 계산하지
+않습니다. 가드는 할당량, sidecar, adapter, 모델 업스트림 I/O 전에 실행되며 terminal-guard continuation도
+자체 전송 전에 다시 검사됩니다. 오차 대역 안의 요청은 provider tokenizer가 결정합니다. 전체 기록은
+provider item id 또는 tool call id가 저장된 전체 접두사의 재전송임을 증명할 때만 중복 제거됩니다.
 
 ### JSON과 SSE 출력
 
@@ -266,7 +262,7 @@ data-plane key는 management credential이 아닙니다. management API는 별�
 | 503 | `combo_unavailable` | 선택한 combo의 모든 대상이 사용할 수 없거나, cooldown 중이거나, 비활성화되어 있거나, 다른 이유로 부적합합니다 |
 | 400 | `unreadable_encrypted_agent_task` | 암호화된 v2 worker task를 소비할 수 있는 적격 네이티브 ChatGPT 대상이 없습니다 |
 | 426 | `upgrade_required` | Responses WebSocket transport가 비활성화되어 있거나 업그레이드에 실패했습니다. HTTP를 사용하십시오 |
-| 413 | `request_too_large` | 추정된 `input`이 라우팅된 모델의 유효 입력 한도를 초과합니다 (code `input_context_window_exceeded`). 어댑터 구성과 모델 제공 업스트림 I/O 전에 거부(스레드 생성 할당량 프로브가 선행할 수 있음) |
+| 413 | `request_too_large` | 추정 `input`이 유효 입력 한도와 10% 추정 오차 대역을 초과합니다(code `input_context_window_exceeded`). 할당량, sidecar, adapter, 모델 업스트림 I/O 전에 거부됩니다 |
 
 Anthropic-origin 실패는 Anthropic의 error envelope로 렌더링됩니다. 따라서 해당 방언에서 origin 거부는
 OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입니다.

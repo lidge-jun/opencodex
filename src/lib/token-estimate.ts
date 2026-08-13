@@ -55,15 +55,21 @@ function cjkRatio(text: string): number {
   return sampled === 0 ? 0 : cjk / sampled;
 }
 
-/**
- * Estimate the token count of a text blob. Pure and deterministic.
- * Returns 0 for empty/whitespace-free-empty input; otherwise ceil(length / ratio), min 1.
- */
-export function estimateTokens(text: string, modelId?: string): number {
+/** Unrounded estimate used when many fields share one admission budget. */
+export function estimateTokenFraction(text: string, modelId?: string): number {
   if (!text) return 0;
   const len = text.length;
   if (len === 0) return 0;
   let ratio = charsPerToken(modelId);
   if (cjkRatio(text) > CJK_RATIO_THRESHOLD) ratio = Math.min(ratio, CJK_CHARS_PER_TOKEN);
-  return Math.max(1, Math.ceil(len / ratio));
+  return len / ratio;
+}
+
+/**
+ * Estimate the token count of a text blob. Pure and deterministic.
+ * Returns 0 for empty input; otherwise ceil(length / ratio), min 1.
+ */
+export function estimateTokens(text: string, modelId?: string): number {
+  const estimate = estimateTokenFraction(text, modelId);
+  return estimate === 0 ? 0 : Math.max(1, Math.ceil(estimate));
 }
