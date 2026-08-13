@@ -382,7 +382,7 @@ export class OpenAiTierBackupCollisionError extends Error {
 }
 
 export class OpenAiTierRollbackPreserveError extends Error {
-  readonly code?: "missing" | "not-rollback" | "mismatch" | "exhausted";
+  readonly code?: "missing" | "not-rollback" | "mismatch" | "exhausted" | "changed";
   constructor(message: string, options?: ErrorOptions & { code?: OpenAiTierRollbackPreserveError["code"] }) {
     super(message, options);
     this.name = "OpenAiTierRollbackPreserveError";
@@ -570,6 +570,7 @@ export interface OpenAiTierRollbackPreserveIO {
   exists(path: string): boolean;
   read(path: string): Uint8Array;
   copyExclusive(source: string, destination: string): void;
+  harden(path: string): void;
   unlink(path: string): void;
 }
 
@@ -579,6 +580,13 @@ const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
   copyExclusive: (source, destination) => {
     copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
   },
+  harden: target => {
+    try { chmodSync(target, 0o600); } catch { /* platform may ignore chmod */ }
+    // Same Windows ACL path as v2 migration backup: required:false so a wedged
+    // icacls on CI temp volumes cannot abort start, but the secret-path helper
+    // still runs. CopyFile does not copy the source DACL.
+    if (process.platform === "win32") hardenSecretPath(target, { required: false });
+  },
   unlink: unlinkSync,
 };
 
@@ -587,8 +595,9 @@ const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
 /**
  * Copy a rollback-classified `.pre-openai-tiers-v2.bak` to a unique
  * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then unlink the
- * blocking v2 name. The original bytes are copied with no-replace publication;
- * the v2 path is removed only after the copy is verified. Shared by startup
+ * blocking v2 name. Order is copy → verify bytes → harden → re-read source →
+ * unlink source. The v2 path is removed only after the copy is verified, the
+ * destination is hardened, and the source still matches. Shared by startup
  * migration recovery and `ocx init` cleanup so the two paths cannot drift.
  */
 export function preserveOpenAiTierRollbackSnapshot(
@@ -615,11 +624,22 @@ export function preserveOpenAiTierRollbackSnapshot(
     try {
       copied = io.read(preserved);
     } catch (error) {
+      try { io.unlink(preserved); } catch { /* unverified copy cleanup is best-effort; never unlink the source */ }
       throw new OpenAiTierRollbackPreserveError("Failed to read preserved rollback snapshot", { cause: error, code: "mismatch" });
     }
     if (!sameBytes(original, copied)) {
       try { io.unlink(preserved); } catch { /* keep the original backup; incomplete copy is best-effort */ }
       throw new OpenAiTierRollbackPreserveError("Preserved rollback snapshot does not match source bytes", { code: "mismatch" });
+    }
+    io.harden(preserved);
+    let sourceNow: Uint8Array;
+    try {
+      sourceNow = io.read(backup);
+    } catch (error) {
+      throw new OpenAiTierRollbackPreserveError("Failed to re-read OpenAI tier rollback backup before unlink", { cause: error, code: "changed" });
+    }
+    if (!sameBytes(copied, sourceNow)) {
+      throw new OpenAiTierRollbackPreserveError("OpenAI tier rollback backup changed after it was copied", { code: "changed" });
     }
     io.unlink(backup);
     return preserved;
