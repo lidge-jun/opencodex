@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync } from "node:fs";
 import { Database } from "bun:sqlite";
-import { prepareConfigMutationDatabasePathForWrite } from "../config";
+import { NestedConfigMutationError, prepareConfigMutationDatabasePathForWrite } from "../config";
 import { initializeConfigGeneration } from "./generation";
 import {
   compareCodexResetCreditRecoveryGenerationOrder,
@@ -243,6 +243,7 @@ function parseRecord(row: ResetCreditOperationRow | null): ResetCreditOperationR
     return undefined;
   }
   const terminal = state === "confirmed" || state === "stopped";
+  if (!terminal && code !== null) return undefined;
   const terminalState = typeof code === "string"
     && Object.prototype.hasOwnProperty.call(TERMINAL_STATE_BY_CODE, code)
     ? TERMINAL_STATE_BY_CODE[code as CodexResetCreditConsumeCode]
@@ -512,8 +513,7 @@ function isLedgerBusyError(error: unknown): boolean {
 
 function warnLedgerUnavailable(error: unknown): void {
   if (isLedgerBusyError(error)) return;
-  const nested = error instanceof Error
-    && error.message === "prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync";
+  const nested = error instanceof NestedConfigMutationError;
   console.warn(nested
     ? "[opencodex] Reset-credit operation ledger refused a nested config mutation."
     : "[opencodex] Reset-credit operation ledger is unavailable.");
@@ -727,27 +727,24 @@ export function openManualResetCreditOperation(
         if (current.operationKind !== "manual") {
           return Object.freeze({ kind: "unavailable" as const });
         }
-        if (current.operationId !== identity.operationId) {
-          if (!isTerminal(current)) {
-            return Object.freeze({
-              kind: "execute" as const,
-              operationId: current.operationId as CodexReservedOperationId,
-              resumed: true,
-            });
-          }
-        } else if (isTerminal(current)) {
-          return Object.freeze({
-            kind: "terminal" as const,
-            operationId: current.operationId as CodexReservedOperationId,
-            code: current.code!,
-          });
-        } else {
+        if (!isTerminal(current)) {
+          // One physical account owns at most one unsettled manual intent. A
+          // different caller id joins that intent instead of opening a second one.
           return Object.freeze({
             kind: "execute" as const,
             operationId: current.operationId as CodexReservedOperationId,
             resumed: true,
           });
         }
+        if (current.operationId === identity.operationId) {
+          return Object.freeze({
+            kind: "terminal" as const,
+            operationId: current.operationId as CodexReservedOperationId,
+            code: current.code!,
+          });
+        }
+        // Deliberate: a distinct caller id after a settled intent represents a
+        // new explicit redemption and replaces the terminal record below.
       } else if (recordCount >= MAX_RESET_CREDIT_OPERATION_ACCOUNTS) {
         return Object.freeze({ kind: "capacity" as const });
       }

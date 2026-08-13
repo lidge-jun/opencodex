@@ -161,7 +161,7 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
-檢查帳號的 Codex reset credits。消耗 credit 是破壞性的，需要同時提供 `--consume` 與 `--yes`。
+檢查帳號的 Codex reset credits。消耗 credit 是破壞性操作，僅限使用者親自輸入並確認的執行同時提供 `--consume` 與 `--yes`。代理驅動的執行會在簽發一次性本機同意 capability 前遭拒；可重複使用的管理權杖不能取代該同意。
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 

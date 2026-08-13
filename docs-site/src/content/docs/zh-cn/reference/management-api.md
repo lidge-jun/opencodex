@@ -219,7 +219,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |
 | `GET /api/codex-auth/reset-credits` | 检查某个账户是否具备 reset-credit 资格 | 400 缺少账户 id；上游状态透传；500 查询失败 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit | 400 缺少账户 id；上游状态透传；503 `server_busy`；500 消耗失败 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要 GUI session 或 CLI 的一次性本地同意 capability，不能用可重复使用的管理认证或 `confirmed` 字段代替 | 400 身份无效；403 `agent_consent_required`；上游状态透传；503 `server_busy`；500 消耗失败 |
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |

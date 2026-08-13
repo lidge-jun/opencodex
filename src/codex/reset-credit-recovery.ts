@@ -35,7 +35,7 @@ export type CodexReservedOperationId = string & {
 };
 
 export const CODEX_RESET_CREDIT_OPERATION_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export function isCodexResetCreditOperationId(value: unknown): value is string {
   return typeof value === "string" && CODEX_RESET_CREDIT_OPERATION_ID_PATTERN.test(value);
@@ -497,13 +497,13 @@ export class CodexResetCreditRecoveryCoordinator {
    * this seam; ordinary requests must keep using createLogicalTurn().
    */
   createLogicalTurnForOperation(operationId: CodexReservedOperationId): CodexResetCreditLogicalTurn {
-    if (!isCodexResetCreditOperationId(operationId)) {
-      throw new TypeError("operationId must be an RFC 4122 version 4 UUID");
-    }
     return this.registerLogicalTurn(operationId);
   }
 
   private registerLogicalTurn(operationId: string): CodexResetCreditLogicalTurn {
+    if (!isCodexResetCreditOperationId(operationId)) {
+      throw new TypeError("operationId must be an RFC 4122 version 4 UUID");
+    }
     const turn = Object.freeze({ operationId });
     this.logicalTurns.set(turn, {});
     return turn;

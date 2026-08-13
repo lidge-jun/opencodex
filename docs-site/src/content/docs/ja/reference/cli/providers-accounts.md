@@ -207,7 +207,7 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
-アカウントの Codex リセット クレジットを検査します。クレジットの消費は破壊的であり、`--consume` と `--yes` の両方が必要です。
+アカウントの Codex リセット クレジットを検査します。消費は破壊的なため、ユーザーが手入力で確認した実行で `--consume` と `--yes` の両方が必要です。エージェント駆動の実行は one-shot のローカル同意 capability を発行する前に拒否され、再利用可能な管理トークンでは代替できません。
 
 ### `ocx account main <subcommand>`
 

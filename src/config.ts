@@ -2531,11 +2531,16 @@ function configMutationDatabasePath(): string {
  * {@link withConfigMutationLockSync}; a second `BEGIN IMMEDIATE` deliberately
  * fails busy instead of joining an uncommitted transaction.
  */
+export class NestedConfigMutationError extends Error {
+  constructor() {
+    super("prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync");
+    this.name = "NestedConfigMutationError";
+  }
+}
+
 export function prepareConfigMutationDatabasePathForWrite(): string {
   if (configMutationLockDepth > 0) {
-    throw new Error(
-      "prepareConfigMutationDatabasePathForWrite must not run inside withConfigMutationLockSync",
-    );
+    throw new NestedConfigMutationError();
   }
   return configMutationDatabasePath();
 }

@@ -217,7 +217,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
 | `GET /api/codex-auth/quota` | 계정별 캐시된 quota 상태를 읽습니다 | — |
 | `GET /api/codex-auth/reset-credits` | 계정의 reset-credit 자격을 확인합니다 | 400 누락된 account id; upstream 상태 전달; 500 조회 실패 |
-| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다 | 400 누락된 account id; upstream 상태 전달; 503 `server_busy`; 500 소비 실패 |
+| `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다. GUI 세션 또는 CLI의 one-shot 로컬 동의 capability가 필요하며 재사용 가능한 관리 인증이나 `confirmed` 필드로 대체할 수 없습니다 | 400 잘못된 식별자; 403 `agent_consent_required`; upstream 상태 전달; 503 `server_busy`; 500 소비 실패 |
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |

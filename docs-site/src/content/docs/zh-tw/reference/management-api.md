@@ -212,7 +212,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT /api/codex-auth/failover` | 設定帳號容錯移轉閾值 | 400 無效閾值 |
 | `GET /api/codex-auth/quota` | 依帳號讀取快取配額狀態 | — |
 | `GET /api/codex-auth/reset-credits` | 檢查帳號的 reset-credit 資格 | 400 缺失帳號 id；上游狀態 passthrough；500 查詢失敗 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗一個合格的 reset credit | 400 缺失帳號 id；上游狀態 passthrough；503 `server_busy`；500 消耗失敗 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要 GUI session 或 CLI 的一次性本機同意 capability，不能以可重複使用的管理認證或 `confirmed` 欄位取代 | 400 身分無效；403 `agent_consent_required`；上游狀態 passthrough；503 `server_busy`；500 消耗失敗 |
 | `POST /api/codex-auth/login` | 啟動 Codex 登入或重新認證 | 400 無效請求；衝突／忙碌登入狀態 |
 | `POST /api/codex-auth/login/code` | 為 Codex 登入流程提交手動碼 | 400 無效流程／碼 |
 | `POST /api/codex-auth/login/cancel` | 取消 Codex 登入流程 | — |

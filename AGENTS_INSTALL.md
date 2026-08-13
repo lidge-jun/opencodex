@@ -5,8 +5,8 @@ user's machine. It is not about contributing to this repository — that is
 [`AGENTS.md`](./AGENTS.md), and nothing here concerns you if you are only
 reading or changing this codebase.
 
-There is one rule, and it exists because `ocx start` can print a question that
-an agent is capable of answering and must not.
+There is one consent rule, and it covers user-owned identity and scarce credits
+that an agent is capable of spending and must not.
 
 For everything else about driving opencodex from a scripted terminal —
 installation, `ocx init`, headless flags, exit codes — see the
@@ -22,7 +22,8 @@ install or operations task authorizes, and an agent must never perform or
 auto-answer them — even when the surrounding task is approved, even when the
 credential is sitting right there.
 
-The current one is **starring the repository on GitHub**.
+The current consent-bound actions are **starring the repository on GitHub** and
+**consuming a Codex reset credit**.
 
 ### Do not
 
@@ -35,6 +36,13 @@ The current one is **starring the repository on GitHub**.
   `ocx service install`. When an agent is detected the prompt is deliberately
   suppressed and its one-time marker left unwritten, so the user still gets the
   real question on their own next run.
+- Do **not** run `ocx account reset-credits <id|main> --consume --yes` or call
+  `POST /api/codex-auth/reset-credits/consume` on the user's behalf. Inspecting
+  reset credits is read-only and allowed; consuming one is not. Agent-driven
+  CLI runs are refused, and the API returns `403 agent_consent_required` unless
+  the request carries a dashboard GUI session or the CLI's short-lived,
+  one-shot local consent capability. A reusable admin token or a client
+  `confirmed` field is not consent; do not route around either refusal.
 
 ### Do
 
@@ -68,10 +76,18 @@ agent-driven callers regardless:
   the one-time marker.
 - [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts)
   — the `403 agent_consent_required` refusal.
+- [`src/cli/account-auth.ts`](./src/cli/account-auth.ts) and
+  [`src/cli/reset-credit-consent-client.ts`](./src/cli/reset-credit-consent-client.ts)
+  — hand-typed reset-credit consent and one-shot capability transport.
+- [`src/codex/auth-api.ts`](./src/codex/auth-api.ts) and
+  [`src/server/management-auth.ts`](./src/server/management-auth.ts) — consent
+  principal enforcement before any reset-credit dispatch.
 
 Regression coverage: `tests/startup-prompt.test.ts`,
-`tests/agent-driven.test.ts`, `tests/sidebar-routes.test.ts`.
+`tests/agent-driven.test.ts`, `tests/sidebar-routes.test.ts`,
+`tests/cli-account.test.ts`, `tests/reset-credit-consent-client.test.ts`,
+`tests/server-management-auth.test.ts`, and `tests/codex-auth-api.test.ts`.
 
-If a future action spends the user's identity, credits, or reputation, gate it
+If another action spends the user's identity, credits, or reputation, gate it
 the same way rather than relying on a prompt an agent can answer, and document
 it here.

@@ -70,12 +70,24 @@ import {
   resolveFirstUsableOpenAiSidecar,
 } from "../src/providers/openai-sidecar";
 import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
+import type { ManagementPrincipal } from "../src/server/management-auth";
+import {
+  CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER,
+} from "../src/lib/codex-reset-credit-consent-contract";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
 const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 function resetCreditConsumeBody(accountId: string): string {
   return JSON.stringify({ accountId, operationId: randomUUID() });
+}
+function handleResetCreditConsume(
+  req: Request,
+  config: OcxConfig,
+  principal: ManagementPrincipal | undefined = "gui-session",
+): Promise<Response | null> {
+  return handleCodexAuthAPI(req, new URL(req.url), config, undefined, principal);
 }
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
@@ -554,7 +566,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody(MAIN_CODEX_ACCOUNT_ID),
       });
-      return handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      return handleResetCreditConsume(req, makeConfig());
     };
 
     const pending = request();
@@ -680,7 +692,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody("quota-reset-busy"),
       });
-      const response = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const response = await handleResetCreditConsume(req, config);
       expect(response?.status).toBe(503);
       expect(response?.headers.get("Retry-After")).toBe("1");
       expect(await response?.json()).toMatchObject({ code: "server_busy" });
@@ -2126,9 +2138,81 @@ describe("codex-auth API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ accountId: "../bad" }),
     });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    const resp = await handleResetCreditConsume(req, makeConfig());
     expect(resp!.status).toBe(400);
     expect(await resp!.json()).toMatchObject({ error: "Invalid account id format" });
+  });
+
+  for (const principal of [undefined, "admin-token"] as const) {
+    test(`reset-credit consume refuses ${principal ?? "missing"} consent authority before upstream work`, async () => {
+      let fetchCalls = 0;
+      globalThis.fetch = (async () => {
+        fetchCalls += 1;
+        return Response.json({ code: "reset" });
+      }) as typeof fetch;
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountId: "pool-consent-boundary",
+          operationId: randomUUID(),
+          confirmed: true,
+        }),
+      });
+
+      const resp = principal === undefined
+        ? await handleCodexAuthAPI(req, new URL(req.url), makeConfig())
+        : await handleResetCreditConsume(req, makeConfig(), principal);
+
+      expect(resp?.status).toBe(403);
+      expect(await resp?.json()).toEqual({
+        error: "User consent is required to consume a reset credit",
+        code: "agent_consent_required",
+      });
+      expect(fetchCalls).toBe(0);
+    });
+  }
+
+  test("reset-credit consume reads the capability-bound account and operation from a bodyless request", async () => {
+    const config = makeConfig();
+    const accountId = "pool-local-consent";
+    const operationId = randomUUID();
+    seedPoolAccount(config, { id: accountId, email: "local-consent@example.test" });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain("/rate-limit-reset-credits/consume");
+      return Response.json({ code: "nothing_to_reset" });
+    }) as typeof fetch;
+    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+      method: "POST",
+      headers: {
+        "content-length": "0",
+        [CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER]: accountId,
+        [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: operationId,
+      },
+    });
+
+    const resp = await handleResetCreditConsume(req, config, "local-reset-credit-capability");
+
+    expect(resp?.status).toBe(200);
+    expect(await resp?.json()).toEqual({ code: "nothing_to_reset" });
+  });
+
+  test("reset-credit consume rejects non-canonical uppercase operation ids", async () => {
+    const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        accountId: "pool-uppercase-operation",
+        operationId: randomUUID().toUpperCase(),
+      }),
+    });
+
+    const resp = await handleResetCreditConsume(req, makeConfig());
+
+    expect(resp?.status).toBe(400);
+    expect(await resp?.json()).toEqual({
+      error: "operationId must be an RFC 4122 version 4 UUID",
+    });
   });
 
   test("reset-credit consume requires a caller-stable operation id", async () => {
@@ -2137,7 +2221,7 @@ describe("codex-auth API", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ accountId: "pool-without-operation" }),
     });
-    const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+    const resp = await handleResetCreditConsume(req, makeConfig());
     expect(resp!.status).toBe(400);
     expect(await resp!.json()).toEqual({
       error: "operationId must be an RFC 4122 version 4 UUID",
@@ -2162,7 +2246,7 @@ describe("codex-auth API", () => {
         body: resetCreditConsumeBody("pool-aborted"),
         signal: controller.signal,
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const resp = await handleResetCreditConsume(req, config);
       expect(resp?.status).toBe(499);
       const body = await resp?.text();
       expect(body).not.toContain("private client cancellation detail");
@@ -2201,7 +2285,7 @@ describe("codex-auth API", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ accountId: "pool-ambiguous", operationId }),
         });
-        return handleCodexAuthAPI(req, new URL(req.url), config);
+        return handleResetCreditConsume(req, config);
       };
 
       const first = await request();
@@ -2245,7 +2329,7 @@ describe("codex-auth API", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ accountId: "pool-conflict", operationId }),
         });
-        return await handleCodexAuthAPI(req, new URL(req.url), config);
+        return await handleResetCreditConsume(req, config);
       };
       expect((await call(randomUUID()))?.status).toBe(502);
       expect((await call(randomUUID()))?.status).toBe(502);
@@ -2285,7 +2369,7 @@ describe("codex-auth API", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ accountId: "pool-flight", operationId }),
         });
-        return handleCodexAuthAPI(req, new URL(req.url), config);
+        return handleResetCreditConsume(req, config);
       };
       const first = request();
       await started;
@@ -2296,6 +2380,7 @@ describe("codex-auth API", () => {
       const [firstResponse, secondResponse] = await Promise.all([first, second]);
       expect(firstResponse?.status).toBe(200);
       expect(secondResponse?.status).toBe(503);
+      expect(secondResponse?.headers.get("Retry-After")).toBe("1");
       expect(await firstResponse?.json()).toEqual({ code: "nothing_to_reset" });
       expect(await secondResponse?.json()).toEqual({ error: "server_busy", code: "server_busy" });
       expect(consumeCalls).toBe(1);
@@ -2339,7 +2424,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody("pool-reset"),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "reset", remaining: 2 });
       expect(usageCalls).toBe(1);
@@ -2374,7 +2459,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody("pool-idempotent"),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "already_redeemed", remaining: 3 });
       expect(getAccountQuota("pool-idempotent")?.resetCredits).toBe(3);
@@ -2408,7 +2493,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody("pool-nocount"),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "reset" });
       // Cache may still preserve the prior credit count for other callers.
@@ -2440,7 +2525,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody("pool-wham-fail"),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+      const resp = await handleResetCreditConsume(req, config);
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "reset" });
       expect(getAccountQuota("pool-wham-fail")?.resetCredits).toBe(5);
@@ -2474,7 +2559,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody(MAIN_CODEX_ACCOUNT_ID),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const resp = await handleResetCreditConsume(req, makeConfig());
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "already_redeemed" });
       expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.resetCredits).toBe(4);
@@ -2511,7 +2596,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody(MAIN_CODEX_ACCOUNT_ID),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const resp = await handleResetCreditConsume(req, makeConfig());
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "reset" });
       expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.resetCredits).toBe(6);
@@ -2549,7 +2634,7 @@ describe("codex-auth API", () => {
         headers: { "content-type": "application/json" },
         body: resetCreditConsumeBody(MAIN_CODEX_ACCOUNT_ID),
       });
-      const resp = await handleCodexAuthAPI(req, new URL(req.url), makeConfig());
+      const resp = await handleResetCreditConsume(req, makeConfig());
       expect(resp!.status).toBe(200);
       expect(await resp!.json()).toEqual({ code: "reset", remaining: 1 });
       expect(getAccountQuota(MAIN_CODEX_ACCOUNT_ID)?.resetCredits).toBe(1);

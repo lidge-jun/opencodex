@@ -44,6 +44,7 @@ import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspect
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../src/lib/local-provider-reload-contract";
+import { CODEX_RESET_CREDIT_CONSENT_CAPABILITY_VERSION } from "../src/lib/codex-reset-credit-consent-contract";
 
 import { watchdogMs } from "./helpers/ci-watchdog";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -819,6 +820,7 @@ describe("server local API auth", () => {
         "pid",
         "port",
         "providerReloadCapability",
+        "resetCreditConsentCapability",
         "restartCapability",
         "service",
         "status",
@@ -827,6 +829,7 @@ describe("server local API auth", () => {
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
       expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
+      expect(healthBody.resetCreditConsentCapability).toBe(CODEX_RESET_CREDIT_CONSENT_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {
       await server.stop(true);

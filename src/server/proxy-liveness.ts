@@ -21,6 +21,7 @@ export interface HealthzIdentity {
   port?: unknown;
   restartCapability?: unknown;
   providerReloadCapability?: unknown;
+  resetCreditConsentCapability?: unknown;
 }
 
 export interface LivenessIo {

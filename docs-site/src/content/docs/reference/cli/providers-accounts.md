@@ -279,7 +279,8 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 Inspect Codex reset credits for an account. Consuming a credit is destructive and requires both
-`--consume` and `--yes`.
+`--consume` and `--yes` in a hand-typed user-confirmed run. Agent-driven runs are refused before
+the one-shot local consent capability is minted; a reusable management token cannot substitute.
 
 ### `ocx account main <subcommand>`
 

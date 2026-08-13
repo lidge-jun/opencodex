@@ -250,7 +250,7 @@ manager. Its routes are:
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Read cached quota state by account | — |
 | `GET /api/codex-auth/reset-credits` | Inspect reset-credit eligibility for an account | 400 missing account id; upstream status passthrough; 500 lookup failure |
-| `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit | 400 missing account id; upstream status passthrough; 503 `server_busy`; 500 consume failure |
+| `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit; requires a GUI session or the CLI's one-shot local consent capability, not reusable admin auth or a `confirmed` field | 400 invalid identity; 403 `agent_consent_required`; upstream status passthrough; 503 `server_busy`; 500 consume failure |
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |

@@ -58,6 +58,10 @@ export interface AccountDeps {
   stageHeartbeatIntervalMinMs?: number;
   /** Test-only clock for deterministic native-profile lease deadline coverage. */
   stageLeaseClock?: StageLeaseClock;
+  /** Test seam for the consent-bound reset-credit client. */
+  requestResetCreditConsentImpl?: typeof import("./reset-credit-consent-client").requestBoundCodexResetCreditConsent;
+  /** Test seam for the process-level user-consent guard. */
+  isAgentDrivenImpl?: () => boolean;
 }
 
 export function classifyAccount(config: OcxConfig, name: string): ClassifyResult {

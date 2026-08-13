@@ -54,6 +54,13 @@ most once per opencodex version, and a later version asks again on its own. Star
 only after an explicit yes; an explicit no settles it permanently and is never raised again.
 :::
 
+:::caution[Codex reset-credit consent]
+Inspecting reset credits is read-only. Never run `ocx account reset-credits <id|main> --consume --yes`
+or call the consume endpoint on the user's behalf. Agent-driven attempts are refused with
+`agent_consent_required`; do not bypass the refusal with an admin token or a client `confirmed`
+field. Only a hand-typed user-confirmed CLI run or the dashboard's GUI session may consume a credit.
+:::
+
 ## Check a headless installation
 
 Use these read-only checks in scripts and agent runs:

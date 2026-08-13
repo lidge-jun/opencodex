@@ -58,6 +58,19 @@ import {
   createLocalProviderReloadCapability,
   verifyLocalProviderReloadCapability,
 } from "../src/lib/local-provider-reload-contract";
+import {
+  CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_CAPABILITY_TTL_MS,
+  CODEX_RESET_CREDIT_CONSENT_EXPECTED_PID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_EXPIRES_AT_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_METHOD,
+  CODEX_RESET_CREDIT_CONSENT_NONCE_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_PATH,
+  createCodexResetCreditConsentCapability,
+  verifyCodexResetCreditConsentCapability,
+} from "../src/lib/codex-reset-credit-consent-contract";
 import { setSystemRestartIoForTests } from "../src/server/management/system-restart";
 
 const previousHome = process.env.OPENCODEX_HOME;
@@ -467,6 +480,148 @@ describe("management and data-plane credential separation", () => {
     )).toBe(false);
   });
 
+  test("a reset-credit consent capability is one-shot and exact to its operation", () => {
+    const secret = "A".repeat(43);
+    const nonce = "L".repeat(43);
+    const accountId = "pool-consent-auth";
+    const operationId = "00112233-4455-4677-8899-aabbccddeeff";
+    const expiresAt = Date.now() + CODEX_RESET_CREDIT_CONSENT_CAPABILITY_TTL_MS;
+    const unavailable = { available: false, reason: "injected unavailable state" } as const;
+    const local = { attestationSecret: secret, pid: process.pid, port: 10100 };
+    const headers = {
+      [CODEX_RESET_CREDIT_CONSENT_EXPECTED_PID_HEADER]: String(process.pid),
+      [CODEX_RESET_CREDIT_CONSENT_NONCE_HEADER]: nonce,
+      [CODEX_RESET_CREDIT_CONSENT_EXPIRES_AT_HEADER]: String(expiresAt),
+      [CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER]: accountId,
+      [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: operationId,
+      "content-length": "0",
+      [CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER]: createCodexResetCreditConsentCapability(
+        secret,
+        nonce,
+        CODEX_RESET_CREDIT_CONSENT_METHOD,
+        CODEX_RESET_CREDIT_CONSENT_PATH,
+        accountId,
+        operationId,
+        process.pid,
+        local.port,
+        expiresAt,
+      )!,
+    };
+
+    const request = new Request(`http://127.0.0.1:${local.port}${CODEX_RESET_CREDIT_CONSENT_PATH}`, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers,
+    });
+    expect(requireManagementAuth(request, unavailable, remoteConfig(), local)).toBeNull();
+    expect(managementPrincipal(request, unavailable, remoteConfig(), local))
+      .toBe("local-reset-credit-capability");
+
+    const replay = new Request(request.url, { method: CODEX_RESET_CREDIT_CONSENT_METHOD, headers });
+    expect(requireManagementAuth(replay, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const wrongAccount = new Request(request.url, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers: { ...headers, [CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER]: "other-account" },
+    });
+    expect(requireManagementAuth(wrongAccount, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const wrongOperation = new Request(request.url, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers: { ...headers, [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: "11112222-3333-4444-8999-aabbccddeeff" },
+    });
+    expect(requireManagementAuth(wrongOperation, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const query = new Request(`${request.url}?confirm=1`, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers,
+    });
+    expect(requireManagementAuth(query, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const body = new Request(request.url, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers: { ...headers, "content-length": "2" },
+      body: "{}",
+    });
+    expect(requireManagementAuth(body, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const chunked = new Request(request.url, {
+      method: CODEX_RESET_CREDIT_CONSENT_METHOD,
+      headers: { ...headers, "transfer-encoding": "chunked" },
+    });
+    expect(requireManagementAuth(chunked, unavailable, remoteConfig(), local)?.status).toBe(503);
+  });
+
+  test("reset-credit consent capability binds method path identity process endpoint and TTL", () => {
+    const secret = "A".repeat(43);
+    const nonce = "M".repeat(43);
+    const now = 1_800_000_000_000;
+    const accountId = "pool-consent-contract";
+    const operationId = "00112233-4455-4677-8899-aabbccddeeff";
+    const pid = 4242;
+    const port = 10100;
+    const validExpiry = now + CODEX_RESET_CREDIT_CONSENT_CAPABILITY_TTL_MS;
+    const capability = createCodexResetCreditConsentCapability(
+      secret,
+      nonce,
+      CODEX_RESET_CREDIT_CONSENT_METHOD,
+      CODEX_RESET_CREDIT_CONSENT_PATH,
+      accountId,
+      operationId,
+      pid,
+      port,
+      validExpiry,
+    )!;
+    const verify = (
+      method = CODEX_RESET_CREDIT_CONSENT_METHOD,
+      path = CODEX_RESET_CREDIT_CONSENT_PATH,
+      selectedAccountId = accountId,
+      selectedOperationId = operationId,
+      selectedPid = pid,
+      selectedPort = port,
+      expiresAt = validExpiry,
+      candidate = capability,
+    ) => verifyCodexResetCreditConsentCapability(
+      secret,
+      nonce,
+      method,
+      path,
+      selectedAccountId,
+      selectedOperationId,
+      selectedPid,
+      selectedPort,
+      expiresAt,
+      candidate,
+      now,
+    );
+
+    expect(verify()).toBe(true);
+    expect(verify("GET")).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, "/api/codex-auth/reset-credits")).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, CODEX_RESET_CREDIT_CONSENT_PATH, "../bad")).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, CODEX_RESET_CREDIT_CONSENT_PATH, accountId, operationId.toUpperCase())).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, CODEX_RESET_CREDIT_CONSENT_PATH, accountId, operationId, pid + 1)).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, CODEX_RESET_CREDIT_CONSENT_PATH, accountId, operationId, pid, port + 1)).toBe(false);
+    expect(verify(CODEX_RESET_CREDIT_CONSENT_METHOD, CODEX_RESET_CREDIT_CONSENT_PATH, accountId, operationId, pid, port, now)).toBe(false);
+
+    const tooLate = now + CODEX_RESET_CREDIT_CONSENT_CAPABILITY_TTL_MS + 1;
+    const tooLateCapability = createCodexResetCreditConsentCapability(
+      secret,
+      nonce,
+      CODEX_RESET_CREDIT_CONSENT_METHOD,
+      CODEX_RESET_CREDIT_CONSENT_PATH,
+      accountId,
+      operationId,
+      pid,
+      port,
+      tooLate,
+    )!;
+    expect(verify(
+      CODEX_RESET_CREDIT_CONSENT_METHOD,
+      CODEX_RESET_CREDIT_CONSENT_PATH,
+      accountId,
+      operationId,
+      pid,
+      port,
+      tooLate,
+      tooLateCapability,
+    )).toBe(false);
+  });
+
   test("management-token temp cleanup forgets successful ACL memos and retains failed removals", () => {
     const temporary = join(testHome, ".admin-token.tmp");
     const previousUsername = process.env.USERNAME;
@@ -839,6 +994,62 @@ describe("management and data-plane credential separation", () => {
       await server.stop(true);
     }
   });
+
+  test("live server refuses admin-token reset-credit consume and admits GUI-session validation", async () => {
+    const config = remoteConfig();
+    config.hostname = "127.0.0.1";
+    saveConfig(config);
+    const state = initializeManagementAuthState(config);
+    const server = startServer(0, { managementAuthState: state });
+    try {
+      const operationId = "123e4567-e89b-42d3-a456-426614174000";
+      const adminResponse = await fetch(
+        new URL("/api/codex-auth/reset-credits/consume", server.url),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-opencodex-api-key": "admin-secret",
+          },
+          body: JSON.stringify({
+            accountId: "pool-account",
+            operationId,
+            confirmed: true,
+          }),
+        },
+      );
+      expect(adminResponse.status).toBe(403);
+      expect(await adminResponse.json()).toEqual({
+        error: "User consent is required to consume a reset credit",
+        code: "agent_consent_required",
+      });
+
+      const pageRequest = new Request(server.url, {
+        headers: { Host: server.url.host },
+      });
+      const session = issueGuiSession(pageRequest, config, state);
+      expect(session).not.toBeNull();
+
+      const guiResponse = await fetch(
+        new URL("/api/codex-auth/reset-credits/consume", server.url),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Origin: server.url.origin,
+            "x-opencodex-api-key": session?.token ?? "",
+            "x-opencodex-gui-origin": session?.origin ?? "",
+            "x-opencodex-csrf-token": session?.csrfToken ?? "",
+          },
+          body: "{}",
+        },
+      );
+      expect(guiResponse.status).toBe(400);
+      expect(await guiResponse.json()).toEqual({ error: "accountId required" });
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
 
   test("a non-loopback binding never issues a GUI session from a forged loopback Host", () => {
     const config = remoteConfig();

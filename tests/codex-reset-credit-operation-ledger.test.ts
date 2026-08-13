@@ -106,6 +106,14 @@ describe("Codex reset-credit operation ledger", () => {
     });
     const migrated = new Database(databasePath(), { readonly: true });
     try {
+      expect(migrated.query<{ sql: string }, []>(`
+        SELECT sql FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_operations'
+      `).get()?.sql).toBe(RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS);
+      expect(migrated.query<{ name: string }, []>(`
+        SELECT name FROM main.sqlite_schema
+         WHERE name = 'reset_credit_operations_legacy_v1'
+      `).get()).toBeNull();
       expect(migrated.query<Record<string, unknown>, []>(
         "SELECT * FROM reset_credit_operations",
       ).get()).toMatchObject({
@@ -151,6 +159,27 @@ describe("Codex reset-credit operation ledger", () => {
       kind: "terminal",
       operationId: identity.operationId,
       code: "already_redeemed",
+    });
+  });
+
+  test("a distinct manual id after settlement opens one explicit new intent", () => {
+    const first = {
+      accountId: "pool-manual-new-intent",
+      chatgptAccountId: "chatgpt-new-intent",
+      operationId: fixtureOperationId(706),
+    };
+    expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(first, "reset", 200)).toEqual({ kind: "updated" });
+    const second = { ...first, operationId: fixtureOperationId(707) };
+    expect(openManualResetCreditOperation(second, 300)).toEqual({
+      kind: "execute",
+      operationId: second.operationId,
+      resumed: false,
+    });
+    expect(openManualResetCreditOperation(second, 400)).toEqual({
+      kind: "execute",
+      operationId: second.operationId,
+      resumed: true,
     });
   });
 
@@ -336,6 +365,51 @@ describe("Codex reset-credit operation ledger", () => {
       ).get()?.operation_id).toBe("not-a-uuid");
     } finally {
       database.close();
+    }
+  });
+
+  test("rejects a nonterminal row carrying any code without overwriting it", () => {
+    const opened = openResetCreditOperation(GENERATION, 100);
+    if (opened.kind !== "execute") throw new Error("reservation failed");
+    const database = new Database(databasePath());
+    try {
+      database.run("UPDATE reset_credit_operations SET code = 'garbage'");
+    } finally {
+      database.close();
+    }
+    expect(openResetCreditOperation(GENERATION, 200)).toEqual({ kind: "unavailable" });
+    expect(markResetCreditOperationAmbiguous(GENERATION, opened.operationId, 300))
+      .toEqual({ kind: "unavailable" });
+    const stored = new Database(databasePath(), { readonly: true });
+    try {
+      expect(stored.query<{ code: string }, []>(
+        "SELECT code FROM reset_credit_operations",
+      ).get()?.code).toBe("garbage");
+    } finally {
+      stored.close();
+    }
+  });
+
+  test("fails closed for a noncanonical uppercase operation id", () => {
+    const opened = openResetCreditOperation(GENERATION, 100);
+    if (opened.kind !== "execute") throw new Error("reservation failed");
+    const uppercase = opened.operationId.toUpperCase();
+    const database = new Database(databasePath());
+    try {
+      database.prepare("UPDATE reset_credit_operations SET operation_id = ?").run(uppercase);
+    } finally {
+      database.close();
+    }
+    expect(openResetCreditOperation(GENERATION, 200)).toEqual({ kind: "unavailable" });
+    expect(settleResetCreditOperation(GENERATION, opened.operationId, "reset", 300))
+      .toEqual({ kind: "unavailable" });
+    const stored = new Database(databasePath(), { readonly: true });
+    try {
+      expect(stored.query<{ operation_id: string }, []>(
+        "SELECT operation_id FROM reset_credit_operations",
+      ).get()?.operation_id).toBe(uppercase);
+    } finally {
+      stored.close();
     }
   });
 

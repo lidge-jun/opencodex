@@ -280,7 +280,7 @@ export async function handleManagementAPI(
     const { ConfigMutationLockError } = await import("../config");
     const { CodexCredentialRefreshLockTimeoutError } = await import("../codex/account-store");
     try {
-      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog);
+      return await handleCodexAuthAPI(req, url, config, convergeCodexCatalog, principal);
     } catch (error) {
       // Credential writers remap ConfigMutationLockError to CodexCredentialRefreshLockTimeoutError;
       // treat both as the same retryable busy response.

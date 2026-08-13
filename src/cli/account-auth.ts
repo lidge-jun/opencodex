@@ -1,5 +1,8 @@
 import { writeSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { isAgentDriven } from "./agent-driven";
+import { requestBoundCodexResetCreditConsent } from "./reset-credit-consent-client";
+import type { AccountDeps } from "./account-api";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import {
   CliUsageError,
@@ -222,7 +225,7 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }
 
-async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
   const args = [...argv];
   const rawId = args.shift()?.trim();
   const wantsJson = takeFlag(args, "--json");
@@ -232,16 +235,51 @@ async function resetCredits(argv: string[], deps: RuntimeApiDeps): Promise<void>
   if (consume && !yes) throw new CliUsageError("consuming a reset credit requires --yes", USAGE);
   rejectArgs(args, USAGE);
   const accountId = rawId === "main" ? "__main__" : rawId;
-  const result = consume
-    ? await runtimeRequest("/api/codex-auth/reset-credits/consume", {
-        method: "POST",
-        body: JSON.stringify({ accountId, operationId: randomUUID() }),
-      }, deps)
-    : await runtimeRequest(`/api/codex-auth/reset-credits?accountId=${encodeURIComponent(accountId)}`, {}, deps);
+  let result: unknown;
+  if (consume) {
+    if ((deps.isAgentDrivenImpl ?? isAgentDriven)()) {
+      throw new CliUsageError(
+        "reset-credit consumption requires a hand-typed user-confirmed run",
+        USAGE,
+      );
+    }
+    const operationId = randomUUID();
+    const consent = await (deps.requestResetCreditConsentImpl ?? requestBoundCodexResetCreditConsent)(
+      accountId,
+      operationId,
+    );
+    if (consent.kind !== "response") {
+      throw new CliUsageError(
+        consent.reason === "invalid-identity"
+          ? "Invalid account id format"
+          : "reset-credit consent capability is unavailable",
+        USAGE,
+      );
+    }
+    const text = await consent.response.text();
+    let body: unknown = null;
+    if (text) {
+      try { body = JSON.parse(text); } catch { body = text; }
+    }
+    if (!consent.response.ok) {
+      const detail = body && typeof body === "object"
+        && typeof (body as { error?: unknown }).error === "string"
+        ? (body as { error: string }).error
+        : `Reset-credit request failed (${consent.response.status})`;
+      throw new CliUsageError(detail, USAGE);
+    }
+    result = body;
+  } else {
+    result = await runtimeRequest(
+      `/api/codex-auth/reset-credits?accountId=${encodeURIComponent(accountId)}`,
+      {},
+      deps,
+    );
+  }
   printData(result, wantsJson);
 }
 
-export async function handleAccountAuthCommand(sub: string, argv: string[], deps: RuntimeApiDeps = {}): Promise<number | null> {
+export async function handleAccountAuthCommand(sub: string, argv: string[], deps: AccountDeps = {}): Promise<number | null> {
   let action: (() => Promise<void>) | undefined;
   if (sub === "login" || sub === "reauth") action = () => login(sub === "reauth" ? [...argv, "--reauth"] : argv, deps);
   else if (sub === "code") action = () => code(argv, deps);

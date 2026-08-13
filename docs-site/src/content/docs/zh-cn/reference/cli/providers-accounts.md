@@ -238,8 +238,8 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
-查看某个账号的 Codex 重置额度。消耗额度会造成破坏性影响，因此同时需要 `--consume`
-和 `--yes`。
+查看某个账号的 Codex 重置额度。消耗额度是破坏性操作，只有用户亲自输入并确认的运行才可同时使用
+`--consume` 和 `--yes`。代理驱动的运行会在签发一次性本地同意 capability 之前被拒绝；可重复使用的管理令牌不能替代该同意。
 
 ### `ocx account main <subcommand>`
 

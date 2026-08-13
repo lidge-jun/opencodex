@@ -102,6 +102,11 @@ import { CodexWarmupError, codexWarmupFailureReason, warmCodexAccount } from "./
 export { maskEmail } from "../lib/privacy";
 import type { CodexAccount, CodexAccountCredentials, OcxConfig } from "../types";
 import type { CatalogDisposition } from "./convergence-types";
+import type { ManagementPrincipal } from "../server/management-auth";
+import {
+  CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER,
+} from "../lib/codex-reset-credit-consent-contract";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerCodexAccountMode } from "../providers/registry";
 import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBody } from "../lib/bounded-body";
@@ -1388,6 +1393,7 @@ export async function handleCodexAuthAPI(
   url: URL,
   config: OcxConfig,
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
+  principal?: ManagementPrincipal,
 ): Promise<Response | null> {
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
@@ -1728,7 +1734,18 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/reset-credits/consume" && req.method === "POST") {
-    const body = (await req.json().catch(() => ({}))) as { accountId?: string; operationId?: string };
+    if (principal !== "gui-session" && principal !== "local-reset-credit-capability") {
+      return jsonResponse({
+        error: "User consent is required to consume a reset credit",
+        code: "agent_consent_required",
+      }, 403);
+    }
+    const body = principal === "local-reset-credit-capability"
+      ? {
+          accountId: req.headers.get(CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER) ?? undefined,
+          operationId: req.headers.get(CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER) ?? undefined,
+        }
+      : (await req.json().catch(() => ({}))) as { accountId?: string; operationId?: string };
     if (!body.accountId) return jsonResponse({ error: "accountId required" }, 400);
     if (body.accountId !== MAIN_CODEX_ACCOUNT_ID && !isValidCodexAccountId(body.accountId)) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
@@ -1749,18 +1766,14 @@ export async function handleCodexAuthAPI(
           };
           const opened = openManualResetCreditOperation(identity);
           if (opened.kind === "capacity" || opened.kind === "unavailable") {
-            const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
-            response.headers.set("Retry-After", "1");
-            return response;
+            return manualResetCreditBusyResponse();
           }
           let code: CodexResetCreditConsumeCode;
           if (opened.kind === "terminal") {
             code = opened.code;
           } else {
             if (opened.kind !== "execute") {
-              const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
-              response.headers.set("Retry-After", "1");
-              return response;
+              return manualResetCreditBusyResponse();
             }
             const effectiveIdentity: ManualResetCreditOperationIdentity = {
               ...identity,
@@ -1780,9 +1793,7 @@ export async function handleCodexAuthAPI(
             }
             const settled = settleManualResetCreditOperation(effectiveIdentity, code);
             if (settled.kind !== "updated") {
-              const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
-              response.headers.set("Retry-After", "1");
-              return response;
+              return manualResetCreditBusyResponse();
             }
           }
           // After a successful redeem (or an idempotent already_redeemed), refresh WHAM usage
@@ -1813,9 +1824,7 @@ export async function handleCodexAuthAPI(
       return operation.ok ? operation.value : operation.response;
     } catch (e) {
       if (e instanceof PoolQuotaProbeBusyError) {
-        const response = jsonResponse({ error: "server_busy", code: "server_busy" }, 503);
-        response.headers.set("Retry-After", "1");
-        return response;
+        return manualResetCreditBusyResponse();
       }
       if (req.signal.aborted) {
         return jsonResponse({ error: "Reset credit consume cancelled by client" }, 499);

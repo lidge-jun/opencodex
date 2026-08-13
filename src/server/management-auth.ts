@@ -39,6 +39,17 @@ import {
   parseExpectedLocalProviderReloadPid,
   verifyLocalProviderReloadCapability,
 } from "../lib/local-provider-reload-contract";
+import {
+  CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_EXPECTED_PID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_EXPIRES_AT_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_NONCE_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER,
+  CODEX_RESET_CREDIT_CONSENT_PATH,
+  parseExpectedCodexResetCreditConsentPid,
+  verifyCodexResetCreditConsentCapability,
+} from "../lib/codex-reset-credit-consent-contract";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
@@ -58,6 +69,9 @@ const admittedLocalReadRequests = new WeakSet<Request>();
 const LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT = 256;
 const consumedLocalProviderReloadCapabilities = new Map<string, number>();
 const admittedLocalProviderReloadRequests = new WeakSet<Request>();
+const RESET_CREDIT_CONSENT_REPLAY_LIMIT = 256;
+const consumedResetCreditConsentCapabilities = new Map<string, number>();
+const admittedResetCreditConsentRequests = new WeakSet<Request>();
 
 interface GuiSessionRecord {
   csrfToken: string;
@@ -279,13 +293,15 @@ export function issueGuiSession(
  * rather than off request headers, which the token holder can forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
  * PID and listening port. Local reads are accepted only for two exact GET paths;
- * restart and provider reload remain separate wire contracts for their exact POSTs.
+ * restart, provider reload, and reset-credit consent remain separate wire contracts
+ * for their exact POSTs.
  */
 export type ManagementPrincipal =
   | "admin-token"
   | "gui-session"
   | "local-read-capability"
   | "local-provider-reload-capability"
+  | "local-reset-credit-capability"
   | "system-restart-capability";
 
 export interface LocalManagementAuthContext {
@@ -416,6 +432,54 @@ function hasLocalProviderReloadCapability(
   return true;
 }
 
+function hasResetCreditConsentCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (admittedResetCreditConsentRequests.has(req)) return true;
+  if (!local || req.method !== "POST") return false;
+  let url: URL;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return false;
+  }
+  if (url.pathname !== CODEX_RESET_CREDIT_CONSENT_PATH || url.search !== "") return false;
+  const contentLength = req.headers.get("content-length");
+  if (contentLength !== "0" || req.headers.has("transfer-encoding")) return false;
+  const expectedPid = parseExpectedCodexResetCreditConsentPid(
+    req.headers.get(CODEX_RESET_CREDIT_CONSENT_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  const expiresAtRaw = req.headers.get(CODEX_RESET_CREDIT_CONSENT_EXPIRES_AT_HEADER);
+  if (!expiresAtRaw || !/^[1-9]\d*$/.test(expiresAtRaw)) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const capability = req.headers.get(CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyCodexResetCreditConsentCapability(
+    local.attestationSecret,
+    req.headers.get(CODEX_RESET_CREDIT_CONSENT_NONCE_HEADER),
+    req.method,
+    url.pathname,
+    req.headers.get(CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER),
+    req.headers.get(CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER),
+    local.pid,
+    local.port,
+    expiresAt,
+    capability,
+    now,
+  )) return false;
+  for (const [consumed, retainedUntil] of consumedResetCreditConsentCapabilities) {
+    if (retainedUntil <= now) consumedResetCreditConsentCapabilities.delete(consumed);
+  }
+  if (!capability || consumedResetCreditConsentCapabilities.has(capability)) return false;
+  if (consumedResetCreditConsentCapabilities.size >= RESET_CREDIT_CONSENT_REPLAY_LIMIT) return false;
+  consumedResetCreditConsentCapabilities.set(capability, expiresAt);
+  admittedResetCreditConsentRequests.add(req);
+  return true;
+}
+
 /**
  * The principal for a request that already passed `requireManagementAuth`. Kept as a
  * separate resolution (rather than a changed return type) so every existing caller
@@ -430,6 +494,7 @@ export function managementPrincipal(
   local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
   if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
+  if (hasResetCreditConsentCapability(req, local)) return "local-reset-credit-capability";
   if (hasLocalProviderReloadCapability(req, local)) return "local-provider-reload-capability";
   if (hasLocalReadCapability(req, local)) return "local-read-capability";
   if (!state.available) return null;
@@ -449,6 +514,7 @@ export function requireManagementAuth(
   local?: LocalManagementAuthContext,
 ): Response | null {
   if (hasSystemRestartCapability(req, local)) return null;
+  if (hasResetCreditConsentCapability(req, local)) return null;
   if (hasLocalProviderReloadCapability(req, local)) return null;
   if (hasLocalReadCapability(req, local)) return null;
   if (!state.available) {

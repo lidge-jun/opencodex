@@ -1407,20 +1407,64 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(requests).toHaveLength(before);
     });
 
-    test("reset-credit consume sends one UUIDv4 operation identity", async () => {
-      const result = await run(["reset-credits", "main", "--consume", "--yes", "--json"]);
+    test("reset-credit consume sends one UUIDv4 identity through the consent-bound client", async () => {
+      let requested: { accountId: string; operationId: string } | undefined;
+      const result = await run(
+        ["reset-credits", "main", "--consume", "--yes", "--json"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => false,
+          requestResetCreditConsentImpl: async (accountId, operationId) => {
+            requested = { accountId, operationId };
+            return { kind: "response", response: json({ code: "reset" }) };
+          },
+        },
+      );
 
       expect(result.code).toBe(0);
-      expect(requests.at(-1)).toEqual(expect.objectContaining({
-        method: "POST",
-        path: "/api/codex-auth/reset-credits/consume",
-        body: expect.objectContaining({
-          accountId: "__main__",
-          operationId: expect.stringMatching(
-            /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-          ),
-        }),
-      }));
+      expect(requested).toEqual({
+        accountId: "__main__",
+        operationId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+        ),
+      });
+      expect(JSON.parse(result.stdout)).toEqual({ code: "reset" });
+    });
+
+    test("agent-driven reset-credit consumption stops before minting consent", async () => {
+      let consentCalls = 0;
+      const result = await run(
+        ["reset-credits", "main", "--consume", "--yes"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => true,
+          requestResetCreditConsentImpl: async () => {
+            consentCalls += 1;
+            return { kind: "response", response: json({ code: "reset" }) };
+          },
+        },
+      );
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("hand-typed user-confirmed run");
+      expect(consentCalls).toBe(0);
+    });
+
+    test("reset-credit consume preserves the invalid-account diagnostic", async () => {
+      const result = await run(
+        ["reset-credits", "../bad", "--consume", "--yes"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => false,
+          requestResetCreditConsentImpl: async () => ({
+            kind: "unavailable",
+            reason: "invalid-identity",
+          }),
+        },
+      );
+
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("Invalid account id format");
     });
 
     test("a silent pipe times out and cleans up its listeners", async () => {
