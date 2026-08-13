@@ -1,6 +1,5 @@
 import type { OcxProviderConfig } from "../types";
 import type { ProviderAdapter } from "./base";
-import type { CursorAdapterDeps } from "./cursor";
 
 export const REQUIRED_ROUTED_TOOL_CONTRACTS = [
   "tools.code-mode-nested-helper",
@@ -28,7 +27,6 @@ export type AdapterCacheRetention = "none" | "short" | "long";
 
 export interface AdapterFactoryContext {
   cacheRetention?: AdapterCacheRetention;
-  cursorDeps?: CursorAdapterDeps;
 }
 
 export type AdapterFactory = (
