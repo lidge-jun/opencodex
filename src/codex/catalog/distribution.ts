@@ -15,13 +15,13 @@ import { parseCatalogJson, readCodexCatalogPath } from "./parsing";
  * 1. A hard-bounded source read. The file's size is checked through the open descriptor
  *    before any bytes are read, so an arbitrarily large file is refused without being
  *    pulled into memory and handed to `JSON.parse`.
- * 2. A safety verdict. `RawCatalog` deliberately preserves unknown fields (Codex owns the
- *    schema and grows it), which means this process cannot know that every field is safe
- *    to distribute. A document carrying credential-shaped, account-shaped, or
- *    config-shaped content is REJECTED deterministically rather than served, and rather
- *    than silently stripped — deleting unknown fields would corrupt a document whose
- *    schema belongs to Codex. Whether a strict field projection should replace this
- *    rejection is an open maintainer decision recorded in
+ * 2. A safety verdict — a HEURISTIC DENYLIST, not a guarantee. See
+ *    {@link isCatalogDocumentSafeToDistribute} for exactly what it does and does not
+ *    catch. The current strategy (reject the whole document rather than project or strip
+ *    fields) is an executor choice, not accepted architecture; the accepted invariant is
+ *    only that credentials, account identity, provider configuration, filesystem paths,
+ *    and management-only state must not be distributed. "Strict projection versus
+ *    heuristic rejection" is an open maintainer decision recorded in
  *    `structure/05_gui-and-management-api.md`.
  * 3. Serialization. The exact bytes both routes send.
  *
@@ -68,10 +68,14 @@ export type CatalogDistribution =
 /**
  * Object keys that mark a document as carrying non-catalog state.
  *
- * Keys are compared after lowercasing and stripping `_`, `-`, and spaces, so `api_key`,
- * `apiKey`, and `API-Key` are one key. The rules were checked against every key in the
- * pinned upstream catalog snapshot (`src/codex/data/upstream-models.json`) plus the
- * OpenCodex-added markers, so a genuine catalog does not trip them — e.g.
+ * Keys are compared after lowercasing and dropping every non-alphanumeric character, so
+ * `api_key`, `apiKey`, `API-Key`, `api.key`, and `api key` are one key. Normalizing all
+ * punctuation rather than a chosen three (`_`, `-`, space) is what keeps a spelling like
+ * `account.id` from walking past the `accountid` suffix below; the "a real generated
+ * catalog stays distributable" tests in tests/v1-catalog-route.test.ts hold the other
+ * side, that a real catalog's keys still pass. Grounded in every key of the pinned
+ * upstream snapshot
+ * (`src/codex/data/upstream-models.json`) plus the OpenCodex-added markers — e.g.
  * `auto_compact_token_limit` normalizes to a `…limit` suffix, not `…token`.
  */
 const SENSITIVE_KEY_EXACT = new Set([
@@ -105,12 +109,17 @@ const SENSITIVE_KEY_SUFFIXES = [
 ] as const;
 
 /**
- * String values that mark a document as carrying secrets, identities, or local paths.
+ * String values whose SHAPE marks a document as carrying secrets, identities, or paths.
  *
- * Grounded in the same snapshot: the genuine catalog contains URLs inside instruction
- * text (so a URL rule would reject every real catalog and is deliberately absent), but
+ * Grounded in the same snapshot: a genuine catalog contains URLs inside instruction text
+ * (so a blanket URL rule would reject every real catalog and is deliberately absent), but
  * it contains no email addresses, no home-directory paths, no `Bearer` values, and no
  * token-shaped strings. Each pattern below therefore only ever matches injected content.
+ *
+ * Case-insensitive where the protocol is: an HTTP scheme token is case-insensitive, so
+ * `bearer <token>` and `Bearer <token>` are the same header value and must be treated
+ * alike. The vendor prefixes (`sk-`, `ghp_`, `ocx_`, `eyJ`) stay case-sensitive because
+ * those literals are fixed by their issuers' formats.
  */
 const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
   // The proxy's own admission-secret shapes (see isProxyAdmissionSecret).
@@ -121,7 +130,7 @@ const SENSITIVE_VALUE_PATTERNS: readonly RegExp[] = [
   /\bghp_[A-Za-z0-9_]{20,}/,
   /\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,
   // Authorization header values. The length floor keeps prose like "Bearer token" out.
-  /Bearer\s+[A-Za-z0-9._~+/=-]{16,}/,
+  /bearer\s+[A-Za-z0-9._~+/=-]{16,}/i,
   // Local filesystem home paths, POSIX and Windows.
   /\/(?:Users|home)\/[^\s"'\\]+/,
   /[A-Za-z]:[\\/](?:Users|home)[\\/]/i,
@@ -153,7 +162,9 @@ function containsEmailShapedValue(value: string): boolean {
 }
 
 function isSensitiveKey(key: string): boolean {
-  const normalized = key.toLowerCase().replace(/[-_\s]/g, "");
+  // Drop every separator, not a chosen subset: `account.id`, `account-id`, `account_id`,
+  // `account id`, and `accountId` are one spelling of one key.
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (SENSITIVE_KEY_EXACT.has(normalized)) return true;
   return SENSITIVE_KEY_SUFFIXES.some(suffix => normalized.endsWith(suffix));
 }
@@ -163,12 +174,34 @@ function isSensitiveValue(value: string): boolean {
 }
 
 /**
- * Whether a parsed catalog document is safe to distribute.
+ * Whether a parsed catalog document *appears* safe to distribute.
  *
  * Iterative walk (a hostile document can nest deeper than the call stack), every key and
  * every string value at every depth. The answer is a bare boolean by design: the caller's
  * error must not echo which key or value matched, because the match IS the sensitive
  * content.
+ *
+ * **This is a heuristic denylist, not a guarantee, and it must not be described as one.**
+ * It catches content that announces itself — a sensitive key spelling, or a value in a
+ * recognizable credential/identity/home-path format. It does NOT catch a secret with no
+ * recognizable shape sitting in a legitimate catalog field. Verified gaps:
+ *
+ * - a raw provider base URL in an ordinary string field (a URL rule would reject every
+ *   real catalog, whose instruction text contains URLs);
+ * - an arbitrary-format admin or provider token, e.g. a bare hex string;
+ * - an arbitrary account identifier that is not email-shaped and sits under a key that
+ *   does not name an account;
+ * - an absolute path outside a home directory, e.g. `D:\ocx\config.json`.
+ *
+ * Closing those needs a different strategy, not a wider denylist: either a strict field
+ * projection (serialize only allowlisted fields) or exact-value comparison against the
+ * live configuration and credential stores. Both are policy calls — projection can delete
+ * fields belonging to a Codex schema this release does not know, and value comparison
+ * would pull a config/credential dependency into this materializer — so they are recorded
+ * as open maintainer decisions in `structure/05_gui-and-management-api.md` rather than
+ * guessed at here. What this function is for is stopping the accidental and the obvious;
+ * the accepted invariant it serves is that such content must not be distributed, not that
+ * this predicate proves it never is.
  */
 export function isCatalogDocumentSafeToDistribute(document: unknown): boolean {
   const pending: unknown[] = [document];

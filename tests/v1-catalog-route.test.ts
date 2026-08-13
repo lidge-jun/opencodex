@@ -3,7 +3,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
-import { CATALOG_SOURCE_MAX_BYTES, materializeCatalogDistribution } from "../src/codex/catalog/distribution";
+import {
+  CATALOG_SOURCE_MAX_BYTES,
+  isCatalogDocumentSafeToDistribute,
+  materializeCatalogDistribution,
+} from "../src/codex/catalog/distribution";
+import upstreamModelsSnapshot from "../src/codex/data/upstream-models.json";
 import { startServer } from "../src/server";
 import { DATA_PLANE_CATALOG_MAX_BYTES } from "../src/server/data-plane-catalog";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -433,6 +438,150 @@ describe("the data-plane catalog response carries no management state (#809)", (
   });
 });
 
+describe("the safety heuristic treats equivalent representations alike (#809)", () => {
+  /**
+   * Unit-level, because these are properties of the predicate rather than of the route.
+   * Each pair is the SAME content written two ways: if only one spelling is rejected, the
+   * other is a bypass that costs an attacker nothing.
+   */
+  function doc(entry: Record<string, unknown>): unknown {
+    return { models: [{ slug: "fixture/probe", visibility: "list", ...entry }] };
+  }
+
+  const token = "abcdefghijklmnopqrstuvwxyz012345";
+
+  test.each([
+    ["Bearer", `Bearer ${token}`],
+    ["bearer", `bearer ${token}`],
+    ["BEARER", `BEARER ${token}`],
+    ["BeArEr", `BeArEr ${token}`],
+  ])("an Authorization value spelled %s is rejected", (_label, value) => {
+    // HTTP scheme tokens are case-insensitive, so the casing carries no meaning and
+    // cannot be allowed to carry a verdict either.
+    expect(isCatalogDocumentSafeToDistribute(doc({ note: value }))).toBe(false);
+  });
+
+  test.each([
+    ["account_id", "account_id"],
+    ["account.id", "account.id"],
+    ["account-id", "account-id"],
+    ["accountId", "accountId"],
+    ["account id", "account id"],
+    ["ACCOUNT.ID", "ACCOUNT.ID"],
+  ])("a key spelled %s is rejected", (_label, key) => {
+    expect(isCatalogDocumentSafeToDistribute(doc({ [key]: "acct-123" }))).toBe(false);
+  });
+
+  test.each([
+    ["api_key", "api_key"],
+    ["api.key", "api.key"],
+    ["provider:apiKey", "provider:apiKey"],
+    ["x-api-key", "x-api-key"],
+  ])("a credential key spelled %s is rejected", (_label, key) => {
+    expect(isCatalogDocumentSafeToDistribute(doc({ [key]: "unset" }))).toBe(false);
+  });
+
+  test("a legitimate catalog field whose name merely resembles one of the rules stays safe", () => {
+    // Guard against the equivalence widening into a false positive: these are real
+    // catalog keys, and a normalizer that matched substrings instead of suffixes would
+    // reject them.
+    expect(isCatalogDocumentSafeToDistribute(doc({
+      auto_compact_token_limit: 100,
+      tool_mode: "auto",
+      truncation_policy: { mode: "tokens", limit: 10_000 },
+      description: "Visit https://platform.openai.com/docs for the tool contract.",
+    }))).toBe(true);
+  });
+
+  /**
+   * The gaps this heuristic does NOT close, pinned as documented behavior rather than
+   * left as a surprise. If a future change starts rejecting these, that is a policy
+   * change (see "strict projection versus heuristic rejection" in
+   * structure/05_gui-and-management-api.md) and this test should be updated
+   * deliberately — not a regression to be silently absorbed.
+   */
+  test.each([
+    ["a raw provider base URL in an ordinary field", { note: "https://api.vendor.example/v1" }],
+    ["an arbitrary-format token in an ordinary field", { note: "9f2c7b41d8e05a6c3b9d" }],
+    ["a non-home absolute path", { note: "D:\\ocx\\config.json" }],
+  ])("known heuristic gap: %s is NOT detected", (_label, entry) => {
+    expect(isCatalogDocumentSafeToDistribute(doc(entry))).toBe(true);
+  });
+});
+
+describe("a real generated catalog stays distributable (#809)", () => {
+  /**
+   * The compatibility half of the heuristic. Every rule above is a chance to reject a
+   * legitimate document, and a rejected document turns BOTH `/api/catalog` and
+   * `/v1/catalog` into permanent 500s. This test makes a Codex schema addition that trips
+   * a rule fail here — loudly, in the catalog subsystem — instead of in production.
+   */
+  test("the pinned upstream Codex snapshot is safe to distribute", () => {
+    expect(isCatalogDocumentSafeToDistribute(upstreamModelsSnapshot)).toBe(true);
+  });
+
+  test("the OpenCodex-owned extension fields a generated catalog carries are safe too", () => {
+    // The snapshot is upstream's shape. What ships is the snapshot PLUS the markers and
+    // normalized fields the writer adds (src/codex/catalog/parsing.ts
+    // ensureStrictCatalogFields, sync.ts, account-models.ts, metadata.ts), so those are
+    // asserted explicitly rather than assumed to be covered above.
+    const generated = {
+      models: [
+        {
+          slug: "fixture/gpt-fixture",
+          id: "gpt-fixture",
+          display_name: "gpt-fixture",
+          description: "Routed via opencodex → fixture",
+          owned_by: "fixture",
+          priority: 2,
+          visibility: "list",
+          base_instructions: "You are a helpful coding assistant.",
+          comp_hash: "opencodex",
+          shell_type: "shell_command",
+          input_modalities: ["text", "image"],
+          context_window: 128_000,
+          max_context_window: 128_000,
+          effective_context_window_percent: 95,
+          auto_compact_token_limit: 115_200,
+          truncation_policy: { mode: "tokens", limit: 10_000 },
+          apply_patch_tool_type: "freeform",
+          experimental_supported_tools: [],
+          support_verbosity: true,
+          default_verbosity: "low",
+          supports_reasoning_summaries: false,
+          default_reasoning_summary: "none",
+          supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+          default_reasoning_level: "medium",
+          supports_parallel_tool_calls: true,
+          supports_image_detail_original: false,
+          supports_search_tool: false,
+          supports_websockets: true,
+          web_search_tool_type: "text_and_image",
+          multi_agent_version: 2,
+          service_tier: "priority",
+          service_tiers: ["default", "priority"],
+          default_service_tier: "default",
+          additional_speed_tiers: [],
+          model_messages: {},
+          opencodex_catalog_kind: "provider-model-v1",
+          opencodex_account_observed_native: true,
+          opencodex_account_observed_selectors: ["workspace-a"],
+        },
+        {
+          // An account-bound generated row: the public selector is legitimate catalog
+          // content and must not be mistaken for account identity.
+          slug: "workspace-a/gpt-5.3-codex",
+          display_name: "workspace-a / 5.3 Codex",
+          visibility: "list",
+          input_modalities: ["text"],
+          opencodex_catalog_kind: "account-selector-v1",
+        },
+      ],
+    };
+    expect(isCatalogDocumentSafeToDistribute(generated)).toBe(true);
+  });
+});
+
 describe("an unsafe catalog is refused, not distributed (#809)", () => {
   /**
    * `RawCatalog` keeps unknown fields because Codex owns the schema, so the distribution
@@ -703,6 +852,60 @@ describe("data-plane catalog response boundaries (#809)", () => {
       Buffer.alloc(CATALOG_SOURCE_MAX_BYTES + 1, 0x78),
     );
     expect(await materializeCatalogDistribution()).toEqual({ status: "source-too-large" });
+  });
+
+  test("the source refusal is its own code and claims nothing about the serialized size", async () => {
+    codexHome = installIsolatedCodexHome("ocx-v1-catalog-source-route-");
+    // A real catalog padded past the SOURCE bound. Its compact serialization would be far
+    // under the 8 MiB response ceiling, which is exactly why answering with
+    // `catalog_too_large` — "document exceeds the 8388608 byte data-plane limit" — would
+    // be a false statement. The marker proves no source content reaches the caller.
+    const marker = "sourceboundcatalogfragment";
+    const padded = {
+      models: [{
+        slug: "fixture/padded-source",
+        display_name: "padded source",
+        description: marker + " ".repeat(CATALOG_SOURCE_MAX_BYTES),
+        visibility: "list",
+        input_modalities: ["text"],
+      }],
+    };
+    writeFileSync(join(codexHome.path, "opencodex-catalog.json"), JSON.stringify(padded), "utf8");
+    saveConfig(remoteConfig());
+    const server = startServer(0);
+    const url = new URL("/v1/catalog", server.url);
+    try {
+      for (const method of ["GET", "HEAD"] as const) {
+        const response = await fetch(url, {
+          method,
+          headers: { "x-opencodex-api-key": DATA_PLANE_KEY },
+        });
+        expect({ method, status: response.status }).toEqual({ method, status: 500 });
+        // Hygiene headers hold on this branch too.
+        expect({
+          method,
+          cacheControl: response.headers.get("cache-control"),
+          nosniff: response.headers.get("x-content-type-options"),
+        }).toEqual({ method, cacheControl: "no-store", nosniff: "nosniff" });
+
+        const headers = [...response.headers.entries()].map(([n, v]) => `${n}: ${v}`).join("\n");
+        const text = await response.text();
+        // No partial catalog and no source content anywhere a caller can see it.
+        expect(`${headers}\n${text}`).not.toContain(marker);
+        expect(`${headers}\n${text}`).not.toContain("fixture/padded-source");
+        if (method === "GET") {
+          const body = JSON.parse(text) as { error?: { code?: string; message?: string } };
+          expect(body.error?.code).toBe("catalog_source_too_large");
+          // The distinguishing property: it must not repeat the serialized-limit claim.
+          expect(body.error?.message).not.toContain(String(DATA_PLANE_CATALOG_MAX_BYTES));
+          expect(body.error?.message).not.toContain("data-plane limit");
+        } else {
+          expect(text).toBe("");
+        }
+      }
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 
