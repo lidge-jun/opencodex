@@ -209,9 +209,10 @@ export default function ProviderAuthPanel({
       setManualCode("");
       setManualCodeOk(true);
       setManualCodeMsg(t("prov.pasteOk"));
-    } catch {
+    } catch (error) {
       setManualCodeOk(false);
-      setManualCodeMsg(t("prov.pasteFail", { error: "network error" }));
+      const message = error instanceof Error && error.message.trim() ? error.message : "network error";
+      setManualCodeMsg(t("prov.pasteFail", { error: message }));
     } finally {
       setManualCodeBusy(false);
     }
@@ -357,7 +358,7 @@ export default function ProviderAuthPanel({
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <input
-                          type="text"
+                          type={item.name === "command-code" ? "password" : "text"}
                           autoComplete="off"
                           spellCheck={false}
                           value={manualCode}

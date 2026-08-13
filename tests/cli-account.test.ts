@@ -264,6 +264,9 @@ async function mockManagementApi(req: Request): Promise<Response> {
     if (payload.provider !== "anthropic" && payload.provider !== "command-code") {
       return json({ error: "priority is only supported for anthropic and command-code pools" }, 400);
     }
+    const account = oauthAccounts.find(entry => entry.id === payload.id);
+    if (!account) return json({ error: "account not found" }, 404);
+    account.priority = payload.priority ?? 0;
     return json({ ok: true, provider: payload.provider, id: payload.id, priority: payload.priority });
   }
 
@@ -462,7 +465,7 @@ beforeEach(() => {
     { id: "chatgpt_1", email: "j***@example.com", plan: "pro", needsReauth: true, priority: 1, quota: null },
   ];
   oauthAccounts = [
-    { id: "acct_1", email: "a***@example.com" },
+    { id: "acct_1", email: "a***@example.com", priority: 2 },
     { id: "acct_2" },
   ];
   oauthActiveId = "acct_1";
@@ -502,7 +505,7 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     // column reads as a position on an axis rather than a magnitude. Without this the
     // whole suite passes with priorityText's `+${n}` branch collapsed to String(n).
     expect(result.stdout).toMatch(/^openai\s+codex\s+chatgpt_1\s+\S+\s+\+1\s/m);
-    expect(result.stdout).toMatch(/^anthropic\s+oauth\s+acct_1\s+a\*\*\*@example\.com\s+-\s+active/m);
+    expect(result.stdout).toMatch(/^anthropic\s+oauth\s+acct_1\s+a\*\*\*@example\.com\s+\+2\s+active/m);
     expect(result.stdout).toMatch(/^openrouter\s+api-key\s+key_1\s+test\*\*\*\*7890 \(personal\)\s+-\s+active/m);
     expect(result.stdout).not.toContain("__main__");
 
@@ -848,6 +851,10 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     expect(JSON.parse(setResult.stdout)).toEqual({ ok: true, provider: "command-code", id: "cc_a", priority: 2, preset: "first" });
     const priorityPut = requests.find(request => request.path === "/api/oauth/accounts/pool/priority");
     expect(priorityPut?.body).toEqual({ provider: "command-code", id: "cc_a", priority: 2 });
+
+    const readResult = await run(["priority", "command-code", "cc_a", "--json"]);
+    expect(readResult.code).toBe(0);
+    expect(JSON.parse(readResult.stdout)).toEqual({ ok: true, provider: "command-code", id: "cc_a", priority: 2, preset: "first" });
   });
 
   test("22: remove without --yes prints the re-run hint and sends no request", async () => {

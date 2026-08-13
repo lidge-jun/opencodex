@@ -559,4 +559,23 @@ describe("Command Code account pool strategy management API", () => {
       await server.stop(true);
     }
   });
+
+  test("deleting the pinned Command Code account clears the persisted pin", async () => {
+    const server = startServer(0);
+    try {
+      await fetch(new URL("/api/oauth/accounts/active", server.url), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "command-code", accountId: "ccaa1111" }),
+      });
+      expect(loadConfig().commandCodeAccountPool?.activeAccountPinned).toBe("ccaa1111");
+      const res = await fetch(new URL("/api/oauth/accounts?provider=command-code&id=ccaa1111", server.url), {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(200);
+      expect(loadConfig().commandCodeAccountPool?.activeAccountPinned).toBeUndefined();
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

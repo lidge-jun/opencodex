@@ -1312,15 +1312,8 @@ async function fetchCommandCodeUsageQuota(accessToken: string): Promise<Provider
     const weeklyResetAt = normalizeResetAt(weekly?.resetAt);
     if (fiveHourResetAt !== undefined) quota.fiveHourResetAt = fiveHourResetAt;
     if (weeklyResetAt !== undefined) quota.weeklyResetAt = weeklyResetAt;
-    // Monthly credit pool is the plan's headline balance; surface as a custom window.
-    const monthly = credits?.monthlyCredits;
-    const totalMonthly = credits?.monthlyCredits;
-    if (typeof monthly === "number" && typeof totalMonthly === "number" && totalMonthly > 0) {
-      const monthlyPercent = percent(monthly, totalMonthly);
-      if (monthlyPercent !== undefined) {
-        quota.monthlyPercent = monthlyPercent;
-      }
-    }
+    // Command Code exposes only a remaining monthly balance, not a used/cap
+    // denominator. Do not manufacture a monthly percentage from it.
     // Empty / schema-changed payloads must not cache as "success with no bars".
     return hasQuotaRows(quota) ? quota : null;
   })().finally(() => {
@@ -1518,9 +1511,13 @@ async function fetchAccountQuota(
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
     try {
       const token = await getTokenForAccountQuotaProbe(provider, accountId);
+      // Never default a future provider onto Command Code's host: that would
+      // disclose its bearer token to an unrelated credential destination.
       const quota = provider === "anthropic"
         ? await fetchAnthropicUsageQuota(token)
-        : await fetchCommandCodeUsageQuota(token);
+        : provider === "command-code"
+          ? await fetchCommandCodeUsageQuota(token)
+          : null;
       if (!quota) {
         // Preserve last-good bars and mark unavailable; advance TTL so failures
         // negative-cache instead of re-probing on every GUI poll.
@@ -2000,7 +1997,9 @@ async function maybeFetchProviderQuota(
     }
     if (provider.authMode === "oauth" && name === "xai") return fetchXaiQuota(name);
     if (provider.authMode === "oauth" && name === "anthropic") return fetchAnthropicQuota(name);
-    if (provider.authMode === "oauth" && name === "command-code") return fetchCommandCodeQuota(name);
+    if (provider.authMode === "oauth" && name === "command-code" && provider.adapter === "command-code") {
+      return fetchCommandCodeQuota(name);
+    }
     if (provider.authMode === "oauth" && name === "cursor") return fetchCursorQuota(name);
     if (provider.authMode === "oauth" && name === "google-antigravity") return fetchAntigravityQuota(name, provider);
     // Kimi Code `/usages` accepts OAuth or coding-plan API keys, but only on the canonical

@@ -248,6 +248,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const projectAccounts = () => {
       const set = getAccountSet(provider);
       const current = getLoginStatus(provider);
+      const priorities = provider === "command-code"
+        ? config.commandCodeAccountPool?.accountPriorities
+        : undefined;
       return {
         activeAccountId: current.activeAccountId ?? null,
         accounts: (current.accounts ?? []).map(summary => {
@@ -258,7 +261,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               needsReauth: summary.needsReauth === true,
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
-          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health) };
+          return {
+            ...summary,
+            ...(typeof priorities?.[summary.id] === "number" ? { priority: priorities[summary.id] } : {}),
+            ...oauthAccountHealthFields(provider, summary.id, health),
+          };
         }),
       };
     };
@@ -578,6 +585,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearCommandCodeAccountCooldown, clearCommandCodeSessionAffinityForAccount } = await import("../../oauth/command-code-routing");
       clearCommandCodeAccountCooldown(id);
       clearCommandCodeSessionAffinityForAccount(id);
+      if (config.commandCodeAccountPool?.activeAccountPinned === id) {
+        const { activeAccountPinned: _removedPin, ...withoutPin } = config.commandCodeAccountPool;
+        config.commandCodeAccountPool = withoutPin;
+        saveConfigPreservingClaudeCode(config);
+      }
     }
     if (!getAccountSet(provider)) clearLoginState(provider);
     const { clearModelCache } = await import("../../codex/model-cache");

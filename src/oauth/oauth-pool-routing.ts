@@ -61,6 +61,10 @@ export interface OAuthAccountPoolConfig {
   strategy?: OcxAccountPoolRotationStrategy;
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */
   stickyLimit?: number;
+  /** Selection order per account id, higher used earlier. */
+  accountPriorities?: Record<string, number>;
+  /** Account id manually pinned by the operator. */
+  activeAccountPinned?: string;
 }
 
 export interface OAuthPoolProviderHooks {
@@ -162,7 +166,12 @@ export function clearOAuthPoolAccountCooldown(provider: string, accountId: strin
   return stateFor(provider).upstreamHealth.delete(accountId);
 }
 
-export function sweepExpiredOAuthPoolRoutingHealth(provider: string, now = Date.now()): number {
+export function sweepExpiredOAuthPoolRoutingHealth(provider?: string, now = Date.now()): number {
+  if (provider === undefined) {
+    let removed = 0;
+    for (const name of stateByProvider.keys()) removed += sweepExpiredOAuthPoolRoutingHealth(name, now);
+    return removed;
+  }
   let removed = 0;
   const health = stateFor(provider).upstreamHealth;
   for (const [accountId, entry] of health) {

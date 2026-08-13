@@ -375,7 +375,7 @@ describe("command-code account pool", () => {
 describe("command-code account pool priority", () => {
   test("higher-priority account with headroom preempts active under quota strategy", async () => {
     const { aId, bId } = await seedTwoAccounts();
-    // seedTwoAccounts leaves B active; pin A as active so B's higher priority preempts.
+    // Explicitly select A as active so B's higher priority preempts it.
     await setActiveAccount("command-code", aId);
     setCachedProviderAccountQuotaForTests("command-code", aId, { fiveHourPercent: 20 });
     setCachedProviderAccountQuotaForTests("command-code", bId, { fiveHourPercent: 30 });

@@ -82,7 +82,7 @@ export const STATE_STORE_REGISTRATIONS = [
     reconcileGeneration: reconcileComboTargetCooldowns,
   },
   { name: "anthropic-routing-health", sweepExpired: sweepExpiredAnthropicRoutingHealth },
-  { name: "oauth-pool-routing-health", sweepExpired: (now) => sweepExpiredOAuthPoolRoutingHealth("command-code", now) },
+  { name: "oauth-pool-routing-health", sweepExpired: now => sweepExpiredOAuthPoolRoutingHealth(undefined, now) },
   { name: "xai-refresh-verdicts", sweepExpired: sweepExpiredXaiPermanentFailureVerdicts },
   { name: "responses-continuation", sweepExpired: sweepExpiredResponseStates },
   { name: "antigravity-replay", sweepExpired: sweepExpiredAntigravityReplay },

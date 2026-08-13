@@ -463,7 +463,48 @@ describe("command-code per-account quota", () => {
     // 3/10 = 30%, 6/10 = 60%; 0.5/10 = 5%, 1/10 = 10%
     expect(values).toEqual(["30/60", "5/10"]);
     expect(seenTokens.sort()).toEqual(["Bearer cc-token-first", "Bearer cc-token-second"]);
-    for (const row of rows) expect(row.quota?.customWindows).toBeUndefined();
+    for (const row of rows) {
+      expect(row.quota?.customWindows).toBeUndefined();
+      // monthlyCredits is a remaining balance without a total/cap denominator.
+      expect(row.quota?.monthlyPercent).toBeUndefined();
+    }
+  });
+
+  test("credits-only payload is not treated as usable quota", async () => {
+    await saveCredential("command-code", {
+      access: "cc-token-only-credits", refresh: "cc-token-only-credits",
+      expires: Date.now() + 60 * 60_000, accountId: "cc-only", email: "only@example.com",
+    });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      credits: { monthlyCredits: 80, purchasedCredits: 0, freeCredits: 0 },
+      windowLimits: {},
+    }), { status: 200 })) as typeof fetch;
+
+    const rows = await fetchProviderAccountQuotas("command-code");
+    expect(rows).toEqual([expect.objectContaining({ quota: null, unavailable: true })]);
+  });
+
+  test("unknown command-code provider adapter fails closed without probing", async () => {
+    await saveCredential("command-code", {
+      access: "cc-token-unknown", refresh: "cc-token-unknown",
+      expires: Date.now() + 60 * 60_000, accountId: "cc-unknown", email: "unknown@example.com",
+    });
+    let called = false;
+    globalThis.fetch = (async () => { called = true; return new Response("{}", { status: 200 }); }) as typeof fetch;
+    const config: OcxConfig = {
+      port: 1455,
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code-alias",
+          authMode: "oauth",
+          baseUrl: "https://api.commandcode.ai",
+        },
+      },
+    };
+    const response = await fetchProviderQuotaReports(config, true);
+    expect(response.reports).toEqual([]);
+    expect(called).toBe(false);
   });
 
   test("supportsPerAccountQuota includes command-code", async () => {

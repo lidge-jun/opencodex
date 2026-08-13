@@ -236,6 +236,7 @@ interface OAuthAccountDto {
   email?: string;
   active?: boolean;
   needsReauth?: boolean;
+  priority?: number;
 }
 
 export async function fetchOAuthRows(deps: AccountDeps, baseUrl: string, name: string): Promise<FamilyRows> {
@@ -252,6 +253,7 @@ export async function fetchOAuthRows(deps: AccountDeps, baseUrl: string, name: s
     email: a.email,
     active: a.active ?? a.id === activeId,
     needsReauth: a.needsReauth,
+    priority: typeof a.priority === "number" ? a.priority : 0,
   }));
   return { rows, activeId, status: 200 };
 }

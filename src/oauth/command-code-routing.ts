@@ -53,7 +53,7 @@ const hooks: OAuthPoolProviderHooks = {
     if (!priorities) return () => 0;
     return accountId => (
       Object.hasOwn(priorities, accountId)
-        ? Math.max(-100, Math.min(100, priorities[accountId] ?? 0))
+        ? (Number.isFinite(priorities[accountId]) ? Math.max(-100, Math.min(100, priorities[accountId]!)) : 0)
         : 0
     );
   },
