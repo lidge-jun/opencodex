@@ -48,6 +48,30 @@ Routing has its own ordered resolution rules; see [Routing](/reference/configura
 - [Server and runtime](/reference/configuration/server/) — listener and remote access, admission keys,
   timeouts, storage, sidecars, startup behavior, and shadow calls.
 
+## Pending Codex quota-recovery policy
+
+`codexQuotaRecovery` is a dormant policy contract for the remaining work in issue #657. Current
+releases validate and persist it, but do **not** consume reset credits or replay failed requests from
+this setting. Manual reset-credit inspection and consumption remain separate account actions.
+
+The policy is absent and disabled by default. Future automatic redemption may be considered only
+when both opt-ins are exactly `true`; `priority` must be either `"alternate-first"` or
+`"reset-first"`:
+
+```json
+{
+  "codexQuotaRecovery": {
+    "enabled": true,
+    "autoRedeemResetCredit": true,
+    "priority": "alternate-first"
+  }
+}
+```
+
+A malformed hand edit disables only this policy and preserves the rest of `config.json`. Live config
+writes reject malformed values. Setting this block today still spends no credit and triggers no
+replay; runtime integration will remain a separate, explicitly reviewed change.
+
 ## Keep secrets out of the file
 
 Prefer `${ENV_VAR}` references for API keys. Literal `apiKey`, `apiKeyPool[].key`, and `apiKeys[].key`

@@ -1213,6 +1213,64 @@ const agentTaskRecoverySchema = z.object({
   cacheEntries: z.number().int().min(1).max(512).optional(),
 }).strict();
 
+const codexQuotaRecoverySchema = z.object({
+  enabled: z.boolean(),
+  autoRedeemResetCredit: z.boolean(),
+  priority: z.enum(["alternate-first", "reset-first"]),
+}).strict();
+
+const CODEX_QUOTA_RECOVERY_FIELDS = ["enabled", "autoRedeemResetCredit", "priority"] as const;
+
+function ownDataProperty(record: object, key: PropertyKey): PropertyDescriptor | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor && "value" in descriptor ? descriptor : undefined;
+}
+
+type CheckedCodexQuotaRecovery =
+  | { ok: true; value: Record<(typeof CODEX_QUOTA_RECOVERY_FIELDS)[number], unknown> }
+  | { ok: false; error: string };
+
+function checkedCodexQuotaRecovery(value: unknown): CheckedCodexQuotaRecovery {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: false, error: "codexQuotaRecovery must be a plain object" };
+    }
+    const descriptors = {} as Record<(typeof CODEX_QUOTA_RECOVERY_FIELDS)[number], PropertyDescriptor>;
+    for (const field of CODEX_QUOTA_RECOVERY_FIELDS) {
+      const descriptor = ownDataProperty(value, field);
+      if (!descriptor) {
+        return { ok: false, error: `codexQuotaRecovery.${field} must be an own data property` };
+      }
+      descriptors[field] = descriptor;
+    }
+    const allowed = new Set<PropertyKey>(CODEX_QUOTA_RECOVERY_FIELDS);
+    if (Reflect.ownKeys(value).some(key => !allowed.has(key))) {
+      return { ok: false, error: "codexQuotaRecovery contains unknown fields" };
+    }
+    return {
+      ok: true,
+      value: {
+        enabled: descriptors.enabled.value,
+        autoRedeemResetCredit: descriptors.autoRedeemResetCredit.value,
+        priority: descriptors.priority.value,
+      },
+    };
+  } catch {
+    return { ok: false, error: "codexQuotaRecovery could not be inspected safely" };
+  }
+}
+
+function rawCodexQuotaRecovery(value: unknown): { present: false } | { present: true; value: unknown } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { present: false };
+  const descriptor = ownDataProperty(value, "codexQuotaRecovery");
+  if (!descriptor) {
+    return Object.hasOwn(value, "codexQuotaRecovery") || "codexQuotaRecovery" in value
+      ? { present: true, value: null }
+      : { present: false };
+  }
+  return { present: true, value: descriptor.value };
+}
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -1253,6 +1311,9 @@ const configSchema = z.object({
   multiAgentGuidanceEnabled: z.boolean().optional(),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
+  // Malformed hand edits disable only this irreversible-operation opt-in.
+  // Live writes remain strict at validateConfigCandidate().
+  codexQuotaRecovery: codexQuotaRecoverySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -1997,8 +2058,24 @@ function malformedAgentTaskRecoveryWarning(rawParsed: unknown): string | null {
   return `agentTaskRecovery${field ? `.${field}` : ""} ignored: invalid experimental recovery configuration`;
 }
 
+function malformedCodexQuotaRecoveryWarning(rawParsed: unknown): string | null {
+  const raw = rawCodexQuotaRecovery(rawParsed);
+  if (!raw.present) return null;
+  const checked = checkedCodexQuotaRecovery(raw.value);
+  if (!checked.ok) return `${checked.error} — policy disabled`;
+  const result = codexQuotaRecoverySchema.safeParse(checked.value);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `codexQuotaRecovery${field ? `.${field}` : ""} ignored: invalid reset-credit recovery policy`;
+}
+
 function warnDegradedAgentTaskRecovery(rawParsed: unknown): void {
   const warning = malformedAgentTaskRecoveryWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
+function warnDegradedCodexQuotaRecovery(rawParsed: unknown): void {
+  const warning = malformedCodexQuotaRecoveryWarning(rawParsed);
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
@@ -2105,6 +2182,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedAgentTaskRecovery(parsed);
+      warnDegradedCodexQuotaRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2128,6 +2206,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
       warnDegradedAgentTaskRecovery(parsed);
+      warnDegradedCodexQuotaRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
@@ -2189,6 +2268,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (hostCircuitWarning) warnings.push(hostCircuitWarning);
   const recoveryWarning = malformedAgentTaskRecoveryWarning(rawParsed);
   if (recoveryWarning) warnings.push(recoveryWarning);
+  const quotaRecoveryWarning = malformedCodexQuotaRecoveryWarning(rawParsed);
+  if (quotaRecoveryWarning) warnings.push(quotaRecoveryWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2278,6 +2359,71 @@ function agentTaskRecoveryError(value: unknown): string | null {
   const issue = result.error.issues[0];
   const field = issue?.path.join(".");
   return `schema_invalid: agentTaskRecovery${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
+}
+
+type PreparedConfigCandidate =
+  | { ok: true; value: unknown }
+  | { ok: false; error: string };
+
+/**
+ * Snapshot an in-memory candidate without evaluating accessors, and replace the
+ * reset-credit policy with the already-validated plain snapshot before Zod can
+ * read it. This makes one descriptor view authoritative even for Proxy callers.
+ */
+function prepareConfigCandidate(value: unknown): PreparedConfigCandidate {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ok: true, value };
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const policyDescriptor = descriptors.codexQuotaRecovery;
+    if (policyDescriptor) {
+      if (!("value" in policyDescriptor)) {
+        return { ok: false, error: "schema_invalid: codexQuotaRecovery must be an own data property" };
+      }
+      if (policyDescriptor.value !== undefined) {
+        const checked = checkedCodexQuotaRecovery(policyDescriptor.value);
+        if (!checked.ok) return { ok: false, error: `schema_invalid: ${checked.error}` };
+        const parsed = codexQuotaRecoverySchema.safeParse(checked.value);
+        if (!parsed.success) {
+          const issue = parsed.error.issues[0];
+          const field = issue?.path.join(".");
+          return {
+            ok: false,
+            error: `schema_invalid: codexQuotaRecovery${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`,
+          };
+        }
+        const policySnapshot = Object.freeze({ ...parsed.data });
+        descriptors.codexQuotaRecovery = {
+          value: policySnapshot,
+          enumerable: policyDescriptor.enumerable ?? true,
+          writable: false,
+          configurable: false,
+        };
+      } else {
+        descriptors.codexQuotaRecovery = {
+          value: undefined,
+          enumerable: policyDescriptor.enumerable ?? true,
+          writable: false,
+          configurable: false,
+        };
+      }
+    } else {
+      descriptors.codexQuotaRecovery = {
+        value: undefined,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      };
+    }
+    // Preserve inherited-property observability for the existing live-write
+    // guards (for example codexAccountPickerEnabled), while keeping the policy
+    // itself pinned as the immutable own slot installed above.
+    const prototype = Object.getPrototypeOf(value);
+    return { ok: true, value: Object.defineProperties(Object.create(prototype), descriptors) };
+  } catch {
+    return { ok: false, error: "schema_invalid: configuration candidate could not be inspected safely" };
+  }
 }
 
 /**
@@ -2371,17 +2517,20 @@ function loopbackListenerPortError(value: unknown): string | null {
 }
 
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
-  const boundaryError = blankHostnameError(value)
-    ?? claudeSubagentEffortError(value)
-    ?? appOwnedMemoryBudgetError(value)
-    ?? upstreamHostCircuitThresholdError(value)
-    ?? agentTaskRecoveryError(value)
-    ?? googleAntigravityStaticCatalogVersionError(value)
-    ?? codexAccountPrioritiesError(value)
-    ?? codexAccountPickerEnabledError(value)
-    ?? loopbackListenerPortError(value);
+  const prepared = prepareConfigCandidate(value);
+  if (!prepared.ok) return prepared;
+  const candidate = prepared.value;
+  const boundaryError = blankHostnameError(candidate)
+    ?? claudeSubagentEffortError(candidate)
+    ?? appOwnedMemoryBudgetError(candidate)
+    ?? upstreamHostCircuitThresholdError(candidate)
+    ?? agentTaskRecoveryError(candidate)
+    ?? googleAntigravityStaticCatalogVersionError(candidate)
+    ?? codexAccountPrioritiesError(candidate)
+    ?? codexAccountPickerEnabledError(candidate)
+    ?? loopbackListenerPortError(candidate);
   if (boundaryError) return { ok: false, error: boundaryError };
-  const result = configSchema.safeParse(value);
+  const result = configSchema.safeParse(candidate);
   if (result.success) return { ok: true, config: normalizeApiKeyIds(result.data as OcxConfig) };
   return { ok: false, error: schemaDiagnosticsError(result.error) };
 }

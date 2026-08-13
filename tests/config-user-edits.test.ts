@@ -17,6 +17,7 @@ import {
 } from "../src/config";
 import { legacyCustomModelCatalogSlugs } from "../src/codex/custom-model-catalog-migration";
 import { rateLimitRetryPolicyFor } from "../src/providers/key-failover";
+import { effectiveCodexQuotaRecoveryPolicy } from "../src/codex/reset-credit-policy";
 import {
   activeUserCostOverlays,
   refreshUserCostOverlays,
@@ -767,4 +768,242 @@ test("a malformed upstreamHostCircuitThreshold hand edit disables only the circu
     "upstreamHostCircuitThreshold ignored: expected an integer from 0 to 20",
   );
   expect(diagnostics.config.providers.test).toBeDefined();
+});
+
+test("codex quota recovery policy round-trips only explicit valid opt-ins", () => {
+  const policy = {
+    enabled: true,
+    autoRedeemResetCredit: true,
+    priority: "alternate-first" as const,
+  };
+  const candidate = validateConfigCandidate({ ...getDefaultConfig(), codexQuotaRecovery: policy });
+  expect(candidate).toMatchObject({ ok: true, config: { codexQuotaRecovery: policy } });
+  if (!candidate.ok) throw new Error(candidate.error);
+  saveConfig(candidate.config);
+  expect(loadConfig().codexQuotaRecovery).toEqual(policy);
+  expect(effectiveCodexQuotaRecoveryPolicy(loadConfig().codexQuotaRecovery).automaticRedemptionAllowed).toBe(true);
+});
+
+test("a malformed quota recovery hand edit disables only that policy and warns", () => {
+  writeDiskConfig({
+    codexQuotaRecovery: {
+      enabled: true,
+      autoRedeemResetCredit: "yes",
+      priority: "alternate-first",
+    },
+  });
+  const diagnostics = readConfigDiagnostics();
+  expect(diagnostics.source).toBe("file");
+  expect(diagnostics.config.codexQuotaRecovery).toBeUndefined();
+  expect(diagnostics.config.providers.test).toBeDefined();
+  expect(diagnostics.warnings).toContain(
+    "codexQuotaRecovery.autoRedeemResetCredit ignored: invalid reset-credit recovery policy",
+  );
+  expect(effectiveCodexQuotaRecoveryPolicy(diagnostics.config.codexQuotaRecovery).automaticRedemptionAllowed).toBe(false);
+});
+
+test("live writes reject malformed quota recovery policies and defaults stay off", () => {
+  for (const policy of [
+    { enabled: true, autoRedeemResetCredit: true },
+    { enabled: true, autoRedeemResetCredit: true, priority: "first" },
+    { enabled: true, autoRedeemResetCredit: "yes", priority: "alternate-first" },
+    { enabled: true, autoRedeemResetCredit: true, priority: "alternate-first", extra: true },
+  ]) {
+    const result = validateConfigCandidate({ ...getDefaultConfig(), codexQuotaRecovery: policy });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("codexQuotaRecovery");
+  }
+  expect(getDefaultConfig().codexQuotaRecovery).toBeUndefined();
+  expect(effectiveCodexQuotaRecoveryPolicy(getDefaultConfig().codexQuotaRecovery).automaticRedemptionAllowed).toBe(false);
+});
+
+test("live quota recovery validation never materializes inherited values or getters", () => {
+  const base = getDefaultConfig();
+  const inherited = Object.create({
+    enabled: true,
+    autoRedeemResetCredit: true,
+    priority: "alternate-first",
+  });
+  expect(validateConfigCandidate({ ...base, codexQuotaRecovery: inherited })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("own data property"),
+  });
+
+  let nestedGetterCalls = 0;
+  const nestedAccessor = Object.defineProperties({}, {
+    enabled: { get: () => { nestedGetterCalls++; return true; } },
+    autoRedeemResetCredit: { value: true },
+    priority: { value: "alternate-first" },
+  });
+  expect(validateConfigCandidate({ ...base, codexQuotaRecovery: nestedAccessor })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("own data property"),
+  });
+  expect(nestedGetterCalls).toBe(0);
+
+  let unknownGetterCalls = 0;
+  const unknownAccessor = Object.defineProperties({}, {
+    enabled: { value: true },
+    autoRedeemResetCredit: { value: true },
+    priority: { value: "alternate-first" },
+    extra: { get: () => { unknownGetterCalls++; return true; } },
+  });
+  expect(validateConfigCandidate({ ...base, codexQuotaRecovery: unknownAccessor })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("unknown fields"),
+  });
+  expect(unknownGetterCalls).toBe(0);
+
+  let topLevelGetterCalls = 0;
+  const topLevelAccessor = { ...base } as Record<string, unknown>;
+  Object.defineProperty(topLevelAccessor, "codexQuotaRecovery", {
+    enumerable: true,
+    get: () => {
+      topLevelGetterCalls++;
+      return { enabled: true, autoRedeemResetCredit: true, priority: "alternate-first" };
+    },
+  });
+  expect(validateConfigCandidate(topLevelAccessor)).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("own data property"),
+  });
+  expect(topLevelGetterCalls).toBe(0);
+});
+
+test("live quota recovery validation uses one descriptor snapshot for Proxy candidates", () => {
+  const base = getDefaultConfig();
+  let nestedGetCalls = 0;
+  const nestedPolicy = new Proxy({
+    enabled: false,
+    autoRedeemResetCredit: false,
+    priority: "alternate-first",
+  }, {
+    get(target, key, receiver) {
+      nestedGetCalls++;
+      if (key === "enabled" || key === "autoRedeemResetCredit") return true;
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const nestedResult = validateConfigCandidate({ ...base, codexQuotaRecovery: nestedPolicy });
+  expect(nestedResult).toMatchObject({
+    ok: true,
+    config: {
+      codexQuotaRecovery: {
+        enabled: false,
+        autoRedeemResetCredit: false,
+        priority: "alternate-first",
+      },
+    },
+  });
+  expect(nestedGetCalls).toBe(0);
+
+  let topLevelPolicyGets = 0;
+  const topLevelTarget = { ...base } as Record<string, unknown>;
+  const topLevelProxy = new Proxy(topLevelTarget, {
+    get(target, key, receiver) {
+      if (key === "codexQuotaRecovery") {
+        topLevelPolicyGets++;
+        return { enabled: true, autoRedeemResetCredit: true, priority: "alternate-first" };
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  const topLevelResult = validateConfigCandidate(topLevelProxy);
+  expect(topLevelResult).toMatchObject({ ok: true });
+  if (!topLevelResult.ok) throw new Error(topLevelResult.error);
+  expect(topLevelResult.config.codexQuotaRecovery).toBeUndefined();
+  expect(topLevelPolicyGets).toBe(0);
+});
+
+test("live quota recovery validation converts Proxy inspection failures to schema errors", () => {
+  const base = getDefaultConfig();
+  const topLevelTrap = new Proxy({ ...base }, {
+    ownKeys() {
+      throw new Error("must not escape");
+    },
+  });
+  expect(() => validateConfigCandidate(topLevelTrap)).not.toThrow();
+  expect(validateConfigCandidate(topLevelTrap)).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("could not be inspected safely"),
+  });
+
+  const nestedTrap = new Proxy({
+    enabled: true,
+    autoRedeemResetCredit: true,
+    priority: "alternate-first",
+  }, {
+    ownKeys() {
+      throw new Error("must not escape");
+    },
+  });
+  expect(() => validateConfigCandidate({ ...base, codexQuotaRecovery: nestedTrap })).not.toThrow();
+  expect(validateConfigCandidate({ ...base, codexQuotaRecovery: nestedTrap })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("could not be inspected safely"),
+  });
+});
+
+test("unrelated accessors cannot mutate or replace the checked quota policy", () => {
+  const candidate = { ...getDefaultConfig() } as Record<string, unknown>;
+  candidate.codexQuotaRecovery = {
+    enabled: false,
+    autoRedeemResetCredit: false,
+    priority: "alternate-first",
+  };
+  let accessorCalls = 0;
+  Object.defineProperty(candidate, "hostname", {
+    enumerable: true,
+    get(this: Record<string, unknown>) {
+      accessorCalls++;
+      const policy = this.codexQuotaRecovery as Record<string, unknown>;
+      try { policy.enabled = true; } catch { /* immutable snapshot */ }
+      try { policy.autoRedeemResetCredit = true; } catch { /* immutable snapshot */ }
+      try {
+        this.codexQuotaRecovery = {
+          enabled: true,
+          autoRedeemResetCredit: true,
+          priority: "alternate-first",
+        };
+      } catch { /* non-replaceable top-level snapshot */ }
+      return "127.0.0.1";
+    },
+  });
+
+  const result = validateConfigCandidate(candidate);
+  expect(result).toMatchObject({
+    ok: true,
+    config: {
+      codexQuotaRecovery: {
+        enabled: false,
+        autoRedeemResetCredit: false,
+        priority: "alternate-first",
+      },
+    },
+  });
+  expect(accessorCalls).toBeGreaterThan(0);
+  if (!result.ok) throw new Error(result.error);
+  expect(effectiveCodexQuotaRecoveryPolicy(result.config.codexQuotaRecovery).automaticRedemptionAllowed).toBe(false);
+
+  for (const initial of ["absent", "undefined"] as const) {
+    const withoutPolicy = { ...getDefaultConfig() } as Record<string, unknown>;
+    if (initial === "undefined") withoutPolicy.codexQuotaRecovery = undefined;
+    Object.defineProperty(withoutPolicy, "hostname", {
+      enumerable: true,
+      get(this: Record<string, unknown>) {
+        try {
+          this.codexQuotaRecovery = {
+            enabled: true,
+            autoRedeemResetCredit: true,
+            priority: "alternate-first",
+          };
+        } catch { /* fixed absent policy slot */ }
+        return "127.0.0.1";
+      },
+    });
+    const omitted = validateConfigCandidate(withoutPolicy);
+    expect(omitted).toMatchObject({ ok: true });
+    if (!omitted.ok) throw new Error(omitted.error);
+    expect(omitted.config.codexQuotaRecovery).toBeUndefined();
+  }
 });

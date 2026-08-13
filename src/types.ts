@@ -613,6 +613,17 @@ export interface OcxClientIntegrationsConfig {
   "claude-desktop"?: boolean;
 }
 
+/**
+ * Explicit, default-off policy for a future verified reset-credit recovery path.
+ * Both booleans must be exactly true before an irreversible credit spend may be
+ * considered; this type does not itself enable runtime recovery.
+ */
+export interface OcxCodexQuotaRecoveryConfig {
+  enabled: boolean;
+  autoRedeemResetCredit: boolean;
+  priority: "alternate-first" | "reset-first";
+}
+
 export interface OcxConfig {
   port: number;
   /** Maximum usage-log bytes read for one management snapshot. */
@@ -787,6 +798,8 @@ export interface OcxConfig {
     /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
     cacheEntries?: number;
   };
+  /** Default-off policy contract for verified Codex quota recovery. */
+  codexQuotaRecovery?: OcxCodexQuotaRecoveryConfig;
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
