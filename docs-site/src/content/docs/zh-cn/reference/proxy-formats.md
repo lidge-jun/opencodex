@@ -216,7 +216,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-tmp="$(mktemp -- "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
 
 if ! curl -fsS \
     -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
