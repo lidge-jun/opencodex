@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   providerRequestPacingStatus,
+  RequestPacingQueueOverloadError,
   requestPacingIntervalMs,
   resetProviderRequestPacingForTest,
+  setProviderRequestPacingLimitsForTest,
   waitForProviderRequestSlot,
 } from "../src/providers/request-pacing";
 import { providerFetch } from "../src/server/responses/fetch-helpers";
 import { fetchWithHeaderTimeout } from "../src/server/responses/fetch-helpers";
+import { requestPacingOverloadResponse } from "../src/server/responses/pacing-overload";
 import type { OcxProviderConfig } from "../src/types";
 
 afterEach(() => resetProviderRequestPacingForTest());
@@ -71,6 +74,47 @@ describe("provider request pacing queue", () => {
     controller.abort();
     await expect(queued).rejects.toHaveProperty("name", "AbortError");
     expect(providerRequestPacingStatus("demo", configured).queued).toBe(0);
+  });
+
+  test("rejects newest admission when the provider queue is full", async () => {
+    setProviderRequestPacingLimitsForTest({ maxQueueDepth: 2, maxQueueAgeMs: 5_000 });
+    const configured = provider({ enabled: true, minIntervalMs: 1_000 });
+    await waitForProviderRequestSlot("demo", configured, "first");
+    const controller = new AbortController();
+    const queued = [
+      waitForProviderRequestSlot("demo", configured, "second", controller.signal),
+      waitForProviderRequestSlot("demo", configured, "third", controller.signal),
+    ];
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    await expect(waitForProviderRequestSlot("demo", configured, "newest")).rejects.toMatchObject({
+      name: "RequestPacingQueueOverloadError",
+      reason: "queue_full",
+      providerName: "demo",
+    });
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(2);
+    controller.abort();
+    await Promise.allSettled(queued);
+  });
+
+  test("expires a queued request at the bounded queued-age deadline", async () => {
+    setProviderRequestPacingLimitsForTest({ maxQueueAgeMs: 25 });
+    const configured = provider({ enabled: true, minIntervalMs: 1_000 });
+    await waitForProviderRequestSlot("demo", configured, "first");
+    const queued = waitForProviderRequestSlot("demo", configured, "stale");
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(1);
+    await expect(queued).rejects.toMatchObject({
+      name: "RequestPacingQueueOverloadError",
+      reason: "queue_expired",
+      providerName: "demo",
+    });
+    expect(providerRequestPacingStatus("demo", configured).queued).toBe(0);
+  });
+
+  test("maps pacing admission overload to 429 with Retry-After", async () => {
+    const response = requestPacingOverloadResponse(new RequestPacingQueueOverloadError("demo", "queue_full", 3));
+    expect(response?.status).toBe(429);
+    expect(response?.headers.get("Retry-After")).toBe("3");
+    expect(await response?.json()).toMatchObject({ error: { type: "rate_limit_error" } });
   });
 
   test("a slow model override does not slow other models beyond the provider interval", async () => {
