@@ -211,7 +211,7 @@ export function createMimoFreeAdapter(
     name: "mimo-free",
 
     async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): Promise<AdapterRequest> {
-      const jwt = await getJwt(incoming.abortSignal);
+      const jwt = await getJwt(incoming?.abortSignal);
 
       // Let the base adapter build the wire body (handles reasoning, tools, etc.)
       // but override the URL and headers after.
