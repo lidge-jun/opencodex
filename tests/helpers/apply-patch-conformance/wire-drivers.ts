@@ -13,18 +13,11 @@ export interface ToolWireDriver {
 
 async function observeHttpOutbound(adapter: ProviderAdapter, parsed: OcxParsedRequest): Promise<string> {
   const testAdapter = withTestTranslatorBudget(adapter);
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(
-    JSON.stringify({ jwt: "eyJhbGciOiJub25lIn0.eyJleHAiOjQxMDI0NDQ4MDB9." }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  )) as typeof fetch;
+  const request = await testAdapter.buildRequest(parsed);
   try {
-    const request = await testAdapter.buildRequest(parsed);
-    const body = request.body;
-    request.releaseBodyObservation?.();
-    return body;
+    return request.body;
   } finally {
-    globalThis.fetch = originalFetch;
+    request.releaseBodyObservation?.();
   }
 }
 
