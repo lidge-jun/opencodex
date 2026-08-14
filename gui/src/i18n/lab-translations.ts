@@ -7,7 +7,12 @@ export type LabSupplementKey =
   | "artifact.present"
   | "artifact.corrupt"
   | "artifact.purged_unavailable"
-  | "selectVerdict";
+  | "selectVerdict"
+  | "community.title"
+  | "community.notLocalVerdict"
+  | "community.bundles"
+  | "community.activeRecords"
+  | "community.revokedRecords";
 
 const en: Record<LabCatalogKey, string> = {
   "lab.title": "Compatibility Lab",
@@ -427,6 +432,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "Corrupt",
     "artifact.purged_unavailable": "Purged / unavailable",
     selectVerdict: "View verdict for {subject}",
+    "community.title": "Community evidence",
+    "community.notLocalVerdict": "Untrusted read-only context. Not included in this local verdict.",
+    "community.bundles": "Bundles",
+    "community.activeRecords": "Active records",
+    "community.revokedRecords": "Revoked records",
   },
   de: {
     subjectKindUnknown: "Unbekannt",
@@ -434,6 +444,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "Beschädigt",
     "artifact.purged_unavailable": "Gelöscht / nicht verfügbar",
     selectVerdict: "Urteil für {subject} anzeigen",
+    "community.title": "Community-Evidenz",
+    "community.notLocalVerdict": "Nicht vertrauenswürdiger Nur-Lese-Kontext. Nicht Teil dieses lokalen Urteils.",
+    "community.bundles": "Pakete",
+    "community.activeRecords": "Aktive Einträge",
+    "community.revokedRecords": "Widerrufene Einträge",
   },
   ko: {
     subjectKindUnknown: "알 수 없음",
@@ -441,6 +456,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "손상됨",
     "artifact.purged_unavailable": "삭제됨 / 사용할 수 없음",
     selectVerdict: "{subject}의 판정 보기",
+    "community.title": "커뮤니티 증거",
+    "community.notLocalVerdict": "신뢰되지 않는 읽기 전용 컨텍스트입니다. 이 로컬 판정에는 포함되지 않습니다.",
+    "community.bundles": "번들",
+    "community.activeRecords": "활성 레코드",
+    "community.revokedRecords": "폐기된 레코드",
   },
   zh: {
     subjectKindUnknown: "未知",
@@ -448,6 +468,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "已损坏",
     "artifact.purged_unavailable": "已清除 / 不可用",
     selectVerdict: "查看 {subject} 的判定",
+    "community.title": "社区证据",
+    "community.notLocalVerdict": "不受信任的只读上下文。不计入此本地判定。",
+    "community.bundles": "证据包",
+    "community.activeRecords": "有效记录",
+    "community.revokedRecords": "已撤销记录",
   },
   "zh-TW": {
     subjectKindUnknown: "未知",
@@ -455,6 +480,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "已損壞",
     "artifact.purged_unavailable": "已清除 / 不可用",
     selectVerdict: "查看 {subject} 的判定",
+    "community.title": "社群證據",
+    "community.notLocalVerdict": "不受信任的唯讀脈絡。不計入此本地判定。",
+    "community.bundles": "證據包",
+    "community.activeRecords": "有效記錄",
+    "community.revokedRecords": "已撤銷記錄",
   },
   ru: {
     subjectKindUnknown: "Неизвестно",
@@ -462,6 +492,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "Повреждён",
     "artifact.purged_unavailable": "Удалён / недоступен",
     selectVerdict: "Открыть вердикт для {subject}",
+    "community.title": "Данные сообщества",
+    "community.notLocalVerdict": "Недоверенный контекст только для чтения. Не входит в этот локальный вердикт.",
+    "community.bundles": "Пакеты",
+    "community.activeRecords": "Активные записи",
+    "community.revokedRecords": "Отозванные записи",
   },
   ja: {
     subjectKindUnknown: "不明",
@@ -469,6 +504,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "破損",
     "artifact.purged_unavailable": "削除済み / 利用不可",
     selectVerdict: "{subject} の判定を表示",
+    "community.title": "コミュニティ証拠",
+    "community.notLocalVerdict": "信頼されていない読み取り専用コンテキストです。このローカル判定には含まれません。",
+    "community.bundles": "バンドル",
+    "community.activeRecords": "有効なレコード",
+    "community.revokedRecords": "取り消されたレコード",
   },
   tr: {
     subjectKindUnknown: "Bilinmiyor",
@@ -476,6 +516,11 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "Bozuk",
     "artifact.purged_unavailable": "Temizlenmiş / kullanılamıyor",
     selectVerdict: "{subject} için kararı görüntüle",
+    "community.title": "Topluluk kanıtı",
+    "community.notLocalVerdict": "Güvenilmeyen salt okunur bağlam. Bu yerel karara dahil değildir.",
+    "community.bundles": "Paketler",
+    "community.activeRecords": "Etkin kayıtlar",
+    "community.revokedRecords": "Geri çekilen kayıtlar",
   },
 };
 

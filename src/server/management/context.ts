@@ -1,5 +1,6 @@
 import type { OcxConfig } from "../../types";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
+import type { StartupHealth } from "../../codex/autostart-health";
 import type { StartupInstallAction } from "../startup-action-control";
 import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
@@ -12,6 +13,8 @@ export interface ManagementApiDeps {
   toggleCodexMultiAgentV2?: (enabled: boolean) => void;
   toggleDefaultModeRequestUserInput?: (enabled: boolean) => void;
   createManagementConvergeCodex?: (config: Readonly<OcxConfig>) => ConvergeCodex;
+  /** Startup-health seam keeps route tests from launching platform probes. */
+  getCachedStartupHealth?: (config: Pick<OcxConfig, "codexAutoStart">) => Promise<StartupHealth>;
   /**
    * Persistence seam for route-level tests. Production leaves this unset and uses
    * `saveConfigPreservingClaudeCode`; tests that pass an in-memory fixture config

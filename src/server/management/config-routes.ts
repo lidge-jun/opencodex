@@ -134,6 +134,7 @@ function publicVisionSidecarSettings(
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
+  const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(safeConfigDTO(config));
   }
@@ -189,7 +190,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       streamMode: config.streamMode ?? "auto",
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: codexAccountPickerEnabled(config),
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: await readStartupHealth(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -211,7 +212,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/startup-health" && req.method === "GET") {
-    return jsonResponse(await getCachedStartupHealth(config));
+    return jsonResponse(await readStartupHealth(config));
   }
 
   if (url.pathname === "/api/startup-action" && req.method === "POST") {
@@ -368,7 +369,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       appOwnedMemoryBudgetMb: config.appOwnedMemoryBudgetMb ?? 256,
       codexAccountPickerEnabled: pickerIsEnabled,
       catalogRefreshPending,
-      startupHealth: await getCachedStartupHealth(config),
+      startupHealth: await readStartupHealth(config),
     });
   }
 

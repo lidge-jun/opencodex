@@ -29,9 +29,13 @@ import {
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { startupHealthFixture } from "./helpers/startup-health";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
+const readTestStartupHealth: NonNullable<ManagementApiDeps["getCachedStartupHealth"]> = async () => (
+  startupHealthFixture()
+);
 
 function baseConfig(): OcxConfig {
   return {
@@ -58,12 +62,17 @@ function putSettings(
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
-  return handleManagementAPI(req, new URL(req.url), config, deps);
+  return handleManagementAPI(req, new URL(req.url), config, {
+    getCachedStartupHealth: readTestStartupHealth,
+    ...deps,
+  });
 }
 
 function getSettings(config: OcxConfig): Promise<Response | null> {
   const req = new Request("http://127.0.0.1:10100/api/settings");
-  return handleManagementAPI(req, new URL(req.url), config);
+  return handleManagementAPI(req, new URL(req.url), config, {
+    getCachedStartupHealth: readTestStartupHealth,
+  });
 }
 
 beforeEach(() => {
@@ -84,7 +93,7 @@ afterEach(() => {
     try {
       rmSync(TEST_DIR, { recursive: true, force: true });
     } catch {
-      /* Windows may briefly lock while a background startup-health probe exits */
+      /* Windows may briefly retain file handles during test cleanup */
     }
   }
 });
