@@ -73,36 +73,75 @@ async function collectTypeScriptFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-const DIRECT_ADAPTER_IMPLEMENTATION_MODULES = new Set([
-  "anthropic",
-  "azure",
-  "command-code",
-  "cursor",
-  "google",
-  "kiro",
-  "mimo-free",
-  "openai-chat",
-  "openai-responses",
-]);
+const ADAPTER_FACTORY_EXPORTS = {
+  anthropic: "createAnthropicAdapter",
+  azure: "createAzureAdapter",
+  "command-code": "createCommandCodeAdapter",
+  cursor: "createCursorAdapter",
+  google: "createGoogleAdapter",
+  kiro: "createKiroAdapter",
+  "mimo-free": "createMimoFreeAdapter",
+  "openai-chat": "createOpenAIChatAdapter",
+  "openai-responses": "createResponsesPassthroughAdapter",
+} as const;
+
+type DirectAdapterModule = keyof typeof ADAPTER_FACTORY_EXPORTS;
 
 const importScanner = new Bun.Transpiler({ loader: "ts" });
 
-function isDirectAdapterModule(specifier: string): boolean {
+function directAdapterModule(specifier: string): DirectAdapterModule | undefined {
   const normalized = posix.normalize(specifier.replaceAll("\\", "/"));
   const parts = normalized.split("/");
   const adapterIndex = parts.lastIndexOf("adapters");
-  if (adapterIndex < 0 || adapterIndex !== parts.length - 2) return false;
+  if (adapterIndex < 0 || adapterIndex !== parts.length - 2) return undefined;
   const leaf = parts.at(-1)!;
   const extensionIndex = leaf.lastIndexOf(".");
   const moduleName = extensionIndex > 0 ? leaf.slice(0, extensionIndex) : leaf;
-  return DIRECT_ADAPTER_IMPLEMENTATION_MODULES.has(moduleName);
+  return moduleName in ADAPTER_FACTORY_EXPORTS
+    ? moduleName as DirectAdapterModule
+    : undefined;
+}
+
+function containsIdentifier(source: string, target: string): boolean {
+  const isStart = (code: number) =>
+    (code >= 65 && code <= 90)
+    || (code >= 97 && code <= 122)
+    || code === 36
+    || code === 95;
+  const isContinue = (code: number) => isStart(code) || (code >= 48 && code <= 57);
+
+  for (let i = 0; i < source.length;) {
+    const code = source.charCodeAt(i);
+    if (!isStart(code)) {
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    while (end < source.length && isContinue(source.charCodeAt(end))) end += 1;
+    if (source.slice(i, end) === target) return true;
+    i = end;
+  }
+  return false;
 }
 
 async function directAdapterFactoryImports(path: string): Promise<string[]> {
   const source = await readFile(path, "utf8");
-  return importScanner.scan(source).imports
-    .filter(entry => isDirectAdapterModule(entry.path))
-    .map(entry => `${entry.kind} from ${entry.path}`);
+  const runtimeSource = importScanner.transformSync(source);
+  const findings: string[] = [];
+
+  for (const entry of importScanner.scan(source).imports) {
+    const moduleName = directAdapterModule(entry.path);
+    if (!moduleName) continue;
+    if (entry.kind !== "import-statement") {
+      findings.push(`${entry.kind} from ${entry.path}`);
+      continue;
+    }
+    const factory = ADAPTER_FACTORY_EXPORTS[moduleName];
+    if (containsIdentifier(runtimeSource, factory)) {
+      findings.push(`${factory} from ${entry.path}`);
+    }
+  }
+  return findings;
 }
 
 function providerFixture(adapter: string, wire: AdapterWire): OcxProviderConfig {
@@ -282,7 +321,7 @@ function advertisedToolNames(wire: AdapterWire, body: string): string[] {
     };
   } | undefined;
   const tools = state?.currentMessage?.userInputMessage?.userInputMessageContext?.tools ?? [];
-  return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.toolSpecification.name] : []);
+  return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.name] : []);
 }
 
 function toolChoiceNoneDisablesCalls(wire: AdapterWire, body: string): boolean {
