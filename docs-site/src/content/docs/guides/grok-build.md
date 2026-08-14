@@ -61,6 +61,13 @@ in Codex. Models with an empty tier list keep no effort control, matching Codex
 behavior. Native GPT-5.6 entries are separate: they preserve and expose their pinned
 upstream reasoning ladders rather than provider-configured routed metadata.
 
+Grok Build talks to opencodex over Chat Completions and sends `reasoning_effort` when
+the ladder is advertised. The Chat Completions inbound translator defaults the internal
+Responses `reasoning.summary` to `auto` in that case, so thinking traces reach Grok as
+`delta.reasoning_content` instead of being hidden. Set `include_reasoning: false` (or
+`reasoning.summary: "none"`) if a client wants the model to think without returning the
+trace.
+
 ## Authentication note
 
 Grok Build requires a non-empty API key for custom models even on loopback. The injected
