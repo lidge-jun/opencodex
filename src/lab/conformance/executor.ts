@@ -1,5 +1,4 @@
-import { createOpenAIChatAdapter } from "../../adapters/openai-chat";
-import { createResponsesPassthroughAdapter } from "../../adapters/openai-responses";
+import { createRegisteredAdapter } from "../../adapters/registry";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { anthropicToResponsesTranslation } from "../../claude/inbound";
 import { responsesSseToAnthropicSse } from "../../claude/outbound";
@@ -24,6 +23,14 @@ import {
 } from "./observation";
 import { normalizeSseBytes } from "./sse-normalize";
 import type { CaseRecord, NormalizedObservation, ScenarioRunResult, ProtocolExecutionContextV1 } from "./types";
+
+function createOpenAIChatAdapter(provider: OcxProviderConfig) {
+  return createRegisteredAdapter({ ...provider, adapter: "openai-chat" });
+}
+
+function createResponsesPassthroughAdapter(provider: OcxProviderConfig) {
+  return createRegisteredAdapter({ ...provider, adapter: "openai-responses" });
+}
 
 export function resolveProtocolExecutionContext(caseRecord: CaseRecord): ProtocolExecutionContextV1 {
   const inbound = caseRecord.requirements.inboundProtocols[0] ?? "openai-responses";
