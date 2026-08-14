@@ -265,47 +265,67 @@ export function hasEncryptedContentPart(content: unknown): boolean {
 export function sanitizeEncryptedContentInPlace(input: unknown): number {
   if (!Array.isArray(input)) return 0;
   let rewritten = 0;
-  const visit = (node: unknown): number => {
-    const before = rewritten;
-    if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i += 1) {
-        const child = node[i] as unknown;
-        if (
-          child && typeof child === "object"
-          && (child as { type?: unknown }).type === "encrypted_content"
-          && typeof (child as { encrypted_content?: unknown }).encrypted_content === "string"
-        ) {
-          const payload = (child as { encrypted_content: string }).encrypted_content;
-          if (!looksLikeBackendCiphertext(payload)) {
-            const parts = encryptedSlotParts(payload);
-            node.splice(i, 1, ...parts);
-            i += parts.length - 1;
-            rewritten += 1;
-            continue;
-          }
-        }
-        const childRewrites = visit(child);
-        if (
-          childRewrites > 0
-          && child && typeof child === "object"
-          && (child as { type?: unknown }).type === "agent_message"
-          && !hasEncryptedContentPart((child as { content?: unknown }).content)
-        ) {
-          const message = child as { type: string; role?: string; id?: unknown; author?: unknown; recipient?: unknown };
-          message.type = "message";
-          message.role = "user";
-          delete message.id;
-          delete message.author;
-          delete message.recipient;
+  type VisitFrame =
+    | { kind: "visit"; node: unknown }
+    | { kind: "array"; node: unknown[]; index: number }
+    | { kind: "object"; values: unknown[]; index: number }
+    | { kind: "agent"; message: Record<string, unknown>; rewrittenBefore: number };
+  const stack: VisitFrame[] = [{ kind: "visit", node: input }];
+
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    if (frame.kind === "visit") {
+      if (Array.isArray(frame.node)) {
+        stack.push({ kind: "array", node: frame.node, index: 0 });
+      } else if (frame.node && typeof frame.node === "object") {
+        stack.push({ kind: "object", values: Object.values(frame.node), index: 0 });
+      }
+      continue;
+    }
+
+    if (frame.kind === "array") {
+      if (frame.index >= frame.node.length) continue;
+      const child = frame.node[frame.index] as unknown;
+      if (
+        child && typeof child === "object"
+        && (child as { type?: unknown }).type === "encrypted_content"
+        && typeof (child as { encrypted_content?: unknown }).encrypted_content === "string"
+      ) {
+        const payload = (child as { encrypted_content: string }).encrypted_content;
+        if (!looksLikeBackendCiphertext(payload)) {
+          const parts = encryptedSlotParts(payload);
+          frame.node.splice(frame.index, 1, ...parts);
+          rewritten += 1;
+          stack.push({ kind: "array", node: frame.node, index: frame.index + parts.length });
+          continue;
         }
       }
-      return rewritten - before;
+      stack.push({ kind: "array", node: frame.node, index: frame.index + 1 });
+      if (child && typeof child === "object" && (child as { type?: unknown }).type === "agent_message") {
+        stack.push({ kind: "agent", message: child as Record<string, unknown>, rewrittenBefore: rewritten });
+      }
+      stack.push({ kind: "visit", node: child });
+      continue;
     }
-    if (node && typeof node === "object") {
-      for (const value of Object.values(node)) visit(value);
+
+    if (frame.kind === "object") {
+      if (frame.index >= frame.values.length) continue;
+      stack.push({ kind: "object", values: frame.values, index: frame.index + 1 });
+      stack.push({ kind: "visit", node: frame.values[frame.index] });
+      continue;
     }
-    return rewritten - before;
-  };
-  visit(input);
+
+    if (
+      rewritten > frame.rewrittenBefore
+      && frame.message.type === "agent_message"
+      && !hasEncryptedContentPart(frame.message.content)
+    ) {
+      frame.message.type = "message";
+      frame.message.role = "user";
+      delete frame.message.id;
+      delete frame.message.author;
+      delete frame.message.recipient;
+    }
+  }
   return rewritten;
 }

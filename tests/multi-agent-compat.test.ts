@@ -1138,14 +1138,64 @@ describe("sanitizeEncryptedContentInPlace", () => {
     expect(sanitizeEncryptedContentInPlace(undefined)).toBe(0);
   });
 
+  test("deep unknown input does not overflow the call stack", () => {
+    const root: Array<Record<string, unknown>> = [{ type: "unknown" }];
+    let cursor = root[0]!;
+    for (let depth = 0; depth < 30_000; depth += 1) {
+      const child: Record<string, unknown> = {};
+      cursor.child = child;
+      cursor = child;
+    }
+    cursor.content = [{ type: "encrypted_content", encrypted_content: "deep plaintext" }];
+
+    expect(sanitizeEncryptedContentInPlace(root)).toBe(1);
+    expect(cursor.content).toEqual([{ type: "input_text", text: "deep plaintext" }]);
+  });
+
+  test("nested agent messages normalize after child rewrites without changing the rewrite count", () => {
+    const input = [{
+      type: "agent_message",
+      id: "outer",
+      author: "/root",
+      recipient: "/root/outer",
+      content: [{
+        type: "agent_message",
+        id: "inner",
+        author: "/root/outer",
+        recipient: "/root/outer/inner",
+        content: [
+          { type: "encrypted_content", encrypted_content: "first plaintext" },
+          { type: "encrypted_content", encrypted_content: "second plaintext" },
+        ],
+      }],
+    }];
+
+    expect(sanitizeEncryptedContentInPlace(input)).toBe(2);
+    const outer = input[0] as Record<string, unknown>;
+    const inner = (outer.content as Array<Record<string, unknown>>)[0]!;
+    expect(outer).toMatchObject({ type: "message", role: "user" });
+    expect(inner).toMatchObject({ type: "message", role: "user" });
+    for (const message of [outer, inner]) {
+      expect(message).not.toHaveProperty("id");
+      expect(message).not.toHaveProperty("author");
+      expect(message).not.toHaveProperty("recipient");
+    }
+  });
+
   test("mixed slot (hook preamble + embedded Fernet task) splits into text + encrypted parts", () => {
     const fernet = fernetFixture();
     const input = [
-      { type: "message", role: "user", content: [
+      { type: "agent_message", id: "mixed", author: "/root", recipient: "/root/worker", content: [
         { type: "encrypted_content", encrypted_content: `[CXC-LEAF-GUARD] follow the rules.\n\n${fernet}` },
       ] },
     ];
     expect(sanitizeEncryptedContentInPlace(input)).toBe(1);
+    expect(input[0]).toMatchObject({
+      type: "agent_message",
+      id: "mixed",
+      author: "/root",
+      recipient: "/root/worker",
+    });
     const parts = (input[0] as { content: Array<Record<string, unknown>> }).content;
     expect(parts).toHaveLength(2);
     expect(parts[0]).toEqual({ type: "input_text", text: "[CXC-LEAF-GUARD] follow the rules.\n\n" });
