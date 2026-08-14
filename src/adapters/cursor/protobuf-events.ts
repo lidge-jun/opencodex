@@ -466,6 +466,7 @@ export function mapSyntheticMcpExecToToolEvents(
   options: { allowEmptyArgs?: boolean; state?: CursorProtobufEventState } = {},
 ): CursorServerMessage[] {
   if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
+  if (options.state?.terminated) return [];
   if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
   const cursorWireName = mcpWireNameFromArgs(args);
   if (!cursorWireName) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
@@ -686,9 +687,10 @@ export function mapCursorProtobufServerMessage(
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
       // Empty-arg completion handling:
-      //  - already-open named call with no buffered or structured args -> wait for native exec.
-      //  - compact callId-only freeform completion -> wait while its required input wrapper is
-      //    absent or incomplete; a valid buffered wrapper can commit immediately.
+      //  - already-open named ordinary call with no buffered or structured args -> wait for native exec.
+      //  - request-declared freeform completion -> wait while its required input wrapper is absent or
+      //    incomplete, whether the completion repeats the name or is compact callId-only. A valid
+      //    buffered wrapper can commit immediately.
       //    A compact ordinary no-arg call remains legitimate and commits below.
       //  - never started + not advertised -> Cursor prelude noise, drop it.
       //  - advertised client tool, not yet open -> a legitimate no-arg call: commit it (start+end)
@@ -697,9 +699,7 @@ export function mapCursorProtobufServerMessage(
         openBeforeStart && !hasMcpArgBytes(args)
         && (
           (name !== undefined && openBeforeStart.args.length === 0)
-          || (
-            name === undefined
-            && state.freeformToolNames?.has(openBeforeStart.name) === true
+          || (state.freeformToolNames?.has(openBeforeStart.name) === true
             && !cursorFreeformWrapperValid(openBeforeStart.args)
           )
         )
@@ -763,8 +763,10 @@ export function resolvedTurnUsage(state: CursorProtobufEventState): OcxUsage {
 export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServerMessage[] {
   state.terminated = true;
   if (state.openToolCalls.size > 0) {
-    const openIds = [...state.openToolCalls.keys()].join(", ");
+    const openCallIds = [...state.openToolCalls.keys()];
+    const openIds = openCallIds.join(", ");
     // Clear so a second turnEnded (should not happen, but defensive) doesn't re-emit.
+    for (const callId of openCallIds) state.translatorBudget?.closeCall(callId);
     state.openToolCalls.clear();
     return [{ type: "error", message: `Cursor stream ended with incomplete tool call(s): ${openIds}. Arguments may be truncated; the call was not committed.` }];
   }

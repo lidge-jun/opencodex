@@ -20,6 +20,7 @@ import {
   mapCursorProtobufServerMessage,
   mapSyntheticMcpExecToToolEvents,
 } from "../src/adapters/cursor/protobuf-events";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 
 const encoder = new TextEncoder();
 
@@ -338,7 +339,7 @@ describe("Cursor protobuf tool-call events", () => {
     ]);
   });
 
-  test("rejects incomplete wrappers for request-declared freeform tools", () => {
+  test("keeps named incomplete freeform wrappers open for late native arguments", () => {
     const freeformSchema = {
       type: "object",
       properties: { input: { type: "string" } },
@@ -369,12 +370,26 @@ describe("Cursor protobuf tool-call events", () => {
     expect(mapCursorProtobufServerMessage(interaction({
       case: "toolCallCompleted",
       value: create(ToolCallCompletedUpdateSchema, { callId: "call_freeform", modelCallId: "model_1", toolCall }),
-    }), state)).toEqual([
-      { type: "error", message: expect.stringContaining("invalid freeform arguments") },
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_freeform")).toBe(false);
+
+    const lateArgs = create(McpArgsSchema, {
+      name: "apply_patch",
+      toolName: "apply_patch",
+      toolCallId: "call_freeform",
+      providerIdentifier: "opencodex-responses",
+      args: { input: encoder.encode(JSON.stringify("*** Begin Patch\n*** End Patch")) },
+    });
+    expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([
+      { type: "tool_call_start", id: "call_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_freeform" },
     ]);
     expect(state.openToolCalls.has("call_freeform")).toBe(false);
     expect(state.completedToolCalls.has("call_freeform")).toBe(true);
 
+    // A complete wrapper remains authoritative and commits without waiting for native exec.
     const valid = createCursorProtobufEventState({
       clientToolNames: ["apply_patch"],
       freeformToolNames: ["apply_patch"],
@@ -571,23 +586,50 @@ describe("Cursor protobuf tool-call events", () => {
   });
 
   test("turnEnded with an open tool call emits truncation error instead of done (fail-closed)", () => {
-    const state = createCursorProtobufEventState({ clientToolNames: ["mcp__fs__read_file"] });
-    // Start a tool call but never complete it.
-    mapCursorProtobufServerMessage(interaction({
-      case: "toolCallStarted",
-      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall: mcpToolCall("mcp__fs__read_file", {}) }),
-    }), state);
-    // Now the turn ends while the tool call is still open.
-    const turnEnd = create(AgentServerMessageSchema, {
-      message: { case: "interactionUpdate", value: create(InteractionUpdateSchema, {
-        message: { case: "turnEnded", value: {} },
-      }) },
+    const budget = createTranslatorBudget();
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["mcp__fs__read_file"],
+      translatorBudget: budget,
     });
-    const events = mapCursorProtobufServerMessage(turnEnd, state);
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe("error");
-    expect((events[0] as { message: string }).message).toContain("incomplete tool call");
-    expect((events[0] as { message: string }).message).toContain("call_1");
+    const toolCall = mcpToolCall("mcp__fs__read_file", {});
+    try {
+      expect(mapCursorProtobufServerMessage(interaction({
+        case: "toolCallStarted",
+        value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+      }), state)).toEqual([]);
+      expect(mapCursorProtobufServerMessage(interaction({
+        case: "partialToolCall",
+        value: create(PartialToolCallUpdateSchema, {
+          callId: "call_1",
+          modelCallId: "model_1",
+          toolCall,
+          argsTextDelta: '{"path":',
+        }),
+      }), state)).toEqual([]);
+      expect(budget.snapshot().activeCalls).toBe(1);
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+
+      const events = mapCursorProtobufServerMessage(turnEndedFrame(), state);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe("error");
+      expect((events[0] as { message: string }).message).toContain("incomplete tool call");
+      expect((events[0] as { message: string }).message).toContain("call_1");
+      expect(state.openToolCalls.size).toBe(0);
+      expect(state.terminated).toBe(true);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+
+      const lateArgs = create(McpArgsSchema, {
+        name: "mcp__fs__read_file",
+        toolName: "mcp__fs__read_file",
+        toolCallId: "call_1",
+        providerIdentifier: "opencodex-responses",
+        args: { path: encoder.encode(JSON.stringify("late.txt")) },
+      });
+      expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([]);
+      expect(state.openToolCalls.size).toBe(0);
+    } finally {
+      budget.dispose();
+    }
   });
 
   test("turnEnded without open tool calls emits done normally", () => {
