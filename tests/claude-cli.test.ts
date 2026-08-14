@@ -228,6 +228,28 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBeUndefined();
   });
 
+  test("root launch (uid==0) defaults IS_SANDBOX=1 for Claude Code 2.1.205+ permission bypass guard (#1688)", () => {
+    const envRoot = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {}, {}, {
+      getuid: () => 0,
+      ...AUTH_PRESENT,
+    });
+    expect(envRoot.IS_SANDBOX).toBe("1");
+
+    const envNonRoot = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {}, {}, {
+      getuid: () => 1000,
+      ...AUTH_PRESENT,
+    });
+    expect(envNonRoot.IS_SANDBOX).toBeUndefined();
+
+    const envUserOptOut = buildClaudeEnv(cfg({ claudeCode: {} }), 10100, {
+      IS_SANDBOX: "0",
+    }, {}, {
+      getuid: () => 0,
+      ...AUTH_PRESENT,
+    });
+    expect(envUserOptOut.IS_SANDBOX).toBe("0");
+  });
+
 });
 
 describe("ocx claude Windows launch (devlog 260715_cross_platform_audit/020)", () => {

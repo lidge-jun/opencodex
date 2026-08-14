@@ -33,6 +33,8 @@ export type ClaudeEnvDeps = {
   authDetect?: Omit<Partial<AuthDetectDeps>, "env" | "ownTokens">;
   /** Test seam; production uses the authenticated Node-launcher context. */
   preBunAnthropicSlots?: readonly AnthropicParentEnvSlot[] | null;
+  /** Test seam for root detection; production reads process.getuid(). */
+  getuid?: (() => number) | null;
 };
 
 function isClaudeLoopbackHostname(hostname: string): boolean {
@@ -237,6 +239,15 @@ export function buildClaudeEnv(
   // authoritative >=1M window (Claude Code then accounts 1M, compaction preserved).
   for (const [name, value] of Object.entries(effectiveModelEnv(config.claudeCode, contextWindows, auto))) {
     setDefault(name, value);
+  }
+  // Root bypass guard (Claude Code 2.1.205+): the CLI refuses --dangerously-skip-permissions
+  // when uid==0 unless it believes it runs inside a sandbox. Servers are commonly root, so
+  // treat the proxy-launched session as one — opt out by exporting IS_SANDBOX=0 yourself.
+  const getuidFn = deps.getuid !== undefined
+    ? deps.getuid
+    : (typeof process.getuid === "function" ? () => process.getuid!() : null);
+  if (getuidFn && getuidFn() === 0) {
+    setDefault("IS_SANDBOX", "1");
   }
   return env;
 }
