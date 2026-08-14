@@ -1,5 +1,6 @@
 import { readConfigDiagnostics } from "../../config";
 import { registerCurrentServerResourceCleanup } from "../../lib/server-resource-ownership";
+import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import { queryLabStatus } from "../query";
 import { rebuildLabProjection } from "../projection/rebuild";
 import { planLabAutomationRuns } from "./planner";
@@ -90,10 +91,12 @@ export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): () =
 
   let released = false;
   let detachServerCleanup = () => {};
+  let detachShutdownHook = () => {};
   const release = () => {
     if (released) return;
     released = true;
     detachServerCleanup();
+    detachShutdownHook();
     const current = dispatchDepsByConfigDir.get(key);
     if (current?.token !== token) return;
     dispatchDepsByConfigDir.delete(key);
@@ -104,6 +107,13 @@ export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): () =
     }
   };
   detachServerCleanup = registerCurrentServerResourceCleanup(release);
+  // Shutdown teardown is registered here, at activation, so `server/lifecycle.ts` never has
+  // to import Lab in order to stop it. Scoped to this configDir, unlike the previous
+  // unscoped call from the shutdown path.
+  detachShutdownHook = registerOptionalShutdownHook(`lab-automation:${key}`, () => {
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler(deps.configDir);
+  });
   return release;
 }
 
