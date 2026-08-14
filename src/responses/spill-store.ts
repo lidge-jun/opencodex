@@ -36,6 +36,17 @@ export interface ResponseSpillPayload {
   createdAt: number;
   clientThreadId?: string;
   items: unknown[];
+  /**
+   * Index in `items` where the provider output begins, used by replay-overlap detection
+   * in state.ts. Optional so a payload written before this field still loads (it simply
+   * never authorizes a skip).
+   *
+   * Compatibility is FORWARD-ONLY: `validPayload` is a strict key allowlist, so a build
+   * predating this field rejects a payload carrying it as corrupt rather than ignoring
+   * it. Rolling back across this change invalidates spilled entries, which degrades to a
+   * replay miss — an already-handled path — not to corrupted live state.
+   */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
 }
 
@@ -261,12 +272,19 @@ function validPayload(value: unknown, responseId: string): value is ResponseSpil
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
   const keys = Object.keys(payload);
-  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providers"].includes(key))) return false;
+  if (keys.some(key => !["version", "responseId", "createdAt", "clientThreadId", "items", "providerOutputStart", "providers"].includes(key))) return false;
   if (payload.version !== 1 || payload.responseId !== responseId) return false;
   if (typeof payload.createdAt !== "number" || !Number.isFinite(payload.createdAt)) return false;
   if (payload.clientThreadId !== undefined
     && (typeof payload.clientThreadId !== "string" || payload.clientThreadId.trim().length === 0)) return false;
   if (!Array.isArray(payload.items)) return false;
+  // A malformed boundary must degrade to "never skip", never to a bad index: reject the
+  // payload outright so materialization treats it as corrupt rather than trusting it.
+  if (payload.providerOutputStart !== undefined) {
+    const anchor = payload.providerOutputStart;
+    if (typeof anchor !== "number" || !Number.isSafeInteger(anchor)
+      || anchor < 0 || anchor > payload.items.length) return false;
+  }
   if (payload.providers !== undefined) {
     if (!payload.providers || typeof payload.providers !== "object" || Array.isArray(payload.providers)) return false;
     for (const providerState of Object.values(payload.providers)) {
@@ -289,6 +307,7 @@ export function writeResponseSpillDurably(
       createdAt: state.createdAt,
       ...(state.clientThreadId ? { clientThreadId: state.clientThreadId } : {}),
       items: state.items,
+      ...(state.providerOutputStart !== undefined ? { providerOutputStart: state.providerOutputStart } : {}),
       ...(state.providers ? { providers: state.providers } : {}),
     };
     const serialized = JSON.stringify(payload);

@@ -39,6 +39,8 @@ interface ResidentResponseState {
   createdAt: number;
   clientThreadId?: string;
   items: unknown[];
+  /** Index in `items` where provider output begins; see clientCarriedPrefixLength. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   sizeBytes: number;
 }
@@ -47,6 +49,8 @@ interface SpilledResponseState {
   kind: "spill";
   createdAt: number;
   clientThreadId?: string;
+  /** Mirrors the spilled payload boundary so a spilled entry keeps its anchor. */
+  providerOutputStart?: number;
   providers?: OcxProviderContinuationState;
   spill: ResponseSpillRef;
   sizeBytes: number;
@@ -130,6 +134,7 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
     createdAt: entry.createdAt,
     ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
     items: entry.items,
+    ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
     ...(entry.providers ? { providers: entry.providers } : {}),
   });
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
@@ -252,12 +257,14 @@ function replaceSpillEntryAtomically(
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
       spill: ref,
     };
@@ -332,6 +339,7 @@ function admitOversizedCandidate(
       createdAt: candidate.createdAt,
       ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
       items: candidate.items,
+      ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
       ...(candidate.providers ? { providers: candidate.providers } : {}),
     });
     // Enforce the ceiling against the REAL envelope: the spill payload adds
@@ -373,9 +381,11 @@ function admitOversizedCandidate(
   }
 }
 
-// Expansion provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
+// Replay provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
 // newly appended input suffix without adding an unknown field that native passthrough could send
-// upstream. The parser uses this boundary to acknowledge historical compaction markers exactly once.
+// upstream. The parser uses this boundary to acknowledge historical compaction markers exactly
+// once. It records the boundary whether the proxy prepended the history or the client already
+// carried it — the boundary is the same either way, and only its provenance differs.
 const replayedInputPrefixLengths = new WeakMap<object, number>();
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
@@ -419,12 +429,23 @@ function loadSnapshotEntry(id: string, value: unknown): void {
   const clientThreadId = typeof rec.clientThreadId === "string" && rec.clientThreadId.trim().length > 0
     ? rec.clientThreadId.trim()
     : undefined;
+  // A malformed boundary degrades to "never skip" rather than to a bad index: an untrusted
+  // snapshot must not be able to authorize dropping conversation history.
+  const anchorFor = (itemCount: number): number | undefined => {
+    const raw = (rec as { providerOutputStart?: unknown }).providerOutputStart;
+    return Number.isSafeInteger(raw) && (raw as number) >= 0 && (raw as number) <= itemCount
+      ? raw as number
+      : undefined;
+  };
   if (rec.kind === "spill") {
     if (!isSpillRef(rec.spill)) return;
     const base: Omit<SpilledResponseState, "sizeBytes"> = {
       kind: "spill",
       createdAt: rec.createdAt,
       ...(clientThreadId ? { clientThreadId } : {}),
+      // Item count is unknown until materialization, so accept any non-negative integer
+      // here; the spill payload validator re-checks it against the real array.
+      ...(anchorFor(Number.MAX_SAFE_INTEGER) !== undefined ? { providerOutputStart: anchorFor(Number.MAX_SAFE_INTEGER) } : {}),
       ...(rec.providers ? { providers: rec.providers } : {}),
       spill: rec.spill,
     };
@@ -451,6 +472,7 @@ function loadSnapshotEntry(id: string, value: unknown): void {
     createdAt: rec.createdAt,
     ...(clientThreadId ? { clientThreadId } : {}),
     items: rec.items,
+    ...(anchorFor(rec.items.length) !== undefined ? { providerOutputStart: anchorFor(rec.items.length) } : {}),
     ...(providers ? { providers } : {}),
   });
   if (!resident) {
@@ -740,6 +762,94 @@ function inputItems(input: unknown): unknown[] {
   return [input];
 }
 
+/** Hard cap for canonicalizing ANY item. Past it, the item is not comparable. */
+const REPLAY_FINGERPRINT_MAX_BYTES = 8 * 1024;
+/** Depth ceiling so a pathologically nested item cannot blow the canonicalizer. */
+const REPLAY_FINGERPRINT_MAX_DEPTH = 64;
+
+let replayOverlapSkips = 0;
+
+/**
+ * Canonical, order-stable fingerprint for one input item, or null when the item cannot be
+ * compared safely.
+ *
+ * Byte-counted DURING the walk rather than serialize-then-measure: a tool result can be
+ * megabytes and this runs on the request path, so the point of the cap is to stop early,
+ * not to discover afterwards that we should have. Object keys are sorted so two
+ * semantically identical items cannot differ by key order alone.
+ *
+ * The cap applies to EVERY item. An `id`/`call_id` is additional occurrence evidence, never
+ * a substitute for content equality, so an over-cap identified tool item is non-comparable
+ * exactly like an over-cap message.
+ */
+function replayItemFingerprint(item: unknown): string | null {
+  const out: string[] = [];
+  let bytes = 0;
+  const push = (text: string): boolean => {
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes > REPLAY_FINGERPRINT_MAX_BYTES) return false;
+    out.push(text);
+    return true;
+  };
+  const walk = (value: unknown, depth: number): boolean => {
+    if (depth > REPLAY_FINGERPRINT_MAX_DEPTH) return false;
+    if (value === null || typeof value !== "object") return push(JSON.stringify(value) ?? "null");
+    if (Array.isArray(value)) {
+      if (!push("[")) return false;
+      for (const element of value) {
+        if (!walk(element, depth + 1)) return false;
+        if (!push(",")) return false;
+      }
+      return push("]");
+    }
+    if (!push("{")) return false;
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      if (!push(JSON.stringify(key))) return false;
+      if (!walk((value as Record<string, unknown>)[key], depth + 1)) return false;
+      if (!push(",")) return false;
+    }
+    return push("}");
+  };
+  return walk(item, 0) ? out.join("") : null;
+}
+
+/** Non-empty provider-issued `id`/`call_id` on an item, else null. */
+function providerIssuedIdentity(item: unknown): string | null {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+  const record = item as { id?: unknown; call_id?: unknown };
+  for (const candidate of [record.id, record.call_id]) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Number of leading stored items the client already carries verbatim, or 0.
+ *
+ * Requires an exact ordered run: every stored item must match the client input item at the
+ * same index. Any not-comparable item aborts to 0 — skipping just that item could align two
+ * different occurrences and manufacture a false positive, and a false positive here deletes
+ * real conversation history.
+ *
+ * Known gap (FU-2): stored input can contain proxy-injected guidance the client never saw,
+ * and ids repaired after recording. Those sessions do not match here and expand as before.
+ */
+function clientCarriedPrefixLength(stored: readonly unknown[], clientInput: readonly unknown[]): number {
+  if (stored.length === 0 || clientInput.length < stored.length) return 0;
+  for (let index = 0; index < stored.length; index += 1) {
+    const storedPrint = replayItemFingerprint(stored[index]);
+    if (storedPrint === null) return 0;
+    const clientPrint = replayItemFingerprint(clientInput[index]);
+    if (clientPrint === null || storedPrint !== clientPrint) return 0;
+  }
+  return stored.length;
+}
+
+/** Test-only: replay prepends skipped because the client already carried the history. */
+export function replayOverlapSkipsForTests(): number {
+  return replayOverlapSkips;
+}
+
 function pruneResponses(at = now()): void {
   for (const [id, state] of states) {
     if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
@@ -765,6 +875,7 @@ function pruneResponses(at = now()): void {
         createdAt: entry.createdAt,
         ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
         items: entry.items,
+        ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
         ...(entry.providers ? { providers: entry.providers } : {}),
       });
       if (swapResidentForSpill(oldestId, entry, ref)) spillCounters.writes += 1;
@@ -807,6 +918,7 @@ export function evictOldestResponseContinuationForBudget(): number {
       createdAt: entry.createdAt,
       ...(entry.clientThreadId ? { clientThreadId: entry.clientThreadId } : {}),
       items: entry.items,
+      ...(entry.providerOutputStart !== undefined ? { providerOutputStart: entry.providerOutputStart } : {}),
       ...(entry.providers ? { providers: entry.providers } : {}),
     });
     if (swapResidentForSpill(id, entry, ref)) spillCounters.writes += 1;
@@ -848,6 +960,9 @@ function materializeEntry(
     createdAt: result.payload.createdAt,
     ...(result.payload.clientThreadId ? { clientThreadId: result.payload.clientThreadId } : {}),
     items: result.payload.items,
+    ...(result.payload.providerOutputStart !== undefined
+      ? { providerOutputStart: result.payload.providerOutputStart }
+      : {}),
     ...(result.payload.providers ? { providers: result.payload.providers } : {}),
   });
   if (!state) {
@@ -891,6 +1006,39 @@ export function expandPreviousResponseInput(body: unknown, clientThreadId?: stri
     replayScopeMismatches.add(freshRequest);
     replayScopeMismatchDrops += 1;
     return freshRequest;
+  }
+  // The client already replayed this history verbatim. Prepending the stored copy would
+  // double it, and the doubled turn is stored again, so the next turn triples (#1412 saw
+  // 127k of real context reach 1.3M tokens this way).
+  //
+  // Three conditions, all required. The run must cover the whole stored entry; it must reach
+  // the provider-output region; and some matched item in that region must carry a
+  // provider-issued id. The last one is the load-bearing part: content equality alone proves
+  // two items look alike, not that they are the same occurrence, so a client that merely
+  // repeats its own message would otherwise authorize a skip that deletes real history.
+  // There is no invariant that provider output always carries ids, so an entry whose output
+  // has none simply never skips.
+  {
+    const clientInput = inputItems(request.input);
+    const stored = materialized.state.items;
+    const anchor = materialized.state.providerOutputStart;
+    const carried = clientCarriedPrefixLength(stored, clientInput);
+    if (
+      carried === stored.length
+      && anchor !== undefined
+      && carried > anchor
+      && stored.slice(anchor, carried).some(item => providerIssuedIdentity(item) !== null)
+    ) {
+      replayOverlapSkips += 1;
+      // Keep previous_response_id: Kiro and Cursor recover their conversation ids from it
+      // (kiro-wire.ts, cursor/request-builder.ts). Only the concatenation is skipped.
+      const unchanged = { ...request };
+      // Same provenance boundary a real expansion would record, so the replayed prefix does
+      // not re-acknowledge historical compaction markers (parser.ts) and stays visible to
+      // guidance de-duplication (collaboration.ts).
+      replayedInputPrefixLengths.set(unchanged, carried);
+      return unchanged;
+    }
   }
   const expanded = {
     ...request,
@@ -1044,10 +1192,17 @@ export function rememberResponseState(
     });
   }
   const clientThreadId = normalizedClientThreadId(opts?.clientThreadId);
+  // Compute the normalized array once and reuse it for both fields, so the recorded
+  // boundary can never disagree with the items it indexes.
+  const requestItems = inputItems(request.input);
   setResidentEntry(response.id, {
     createdAt: now(),
     ...(clientThreadId ? { clientThreadId } : {}),
-    items: [...inputItems(request.input), ...response.output],
+    items: [...requestItems, ...response.output],
+    // Where response.output begins. A replay skip requires a matched item at or past this
+    // index that also carries a provider-issued id — position alone proves only that an item
+    // sits on the provider side, not that the provider authored it.
+    providerOutputStart: requestItems.length,
     // Always preserve the Cursor conversation id so the next tool-result turn can continue the SAME
     // Cursor conversation (multi-turn continuation). Separately track whether Cursor's own
     // checkpoint/cache is safe to reuse: a turn that ended with a pending client tool call produced an
@@ -1093,6 +1248,7 @@ export function clearResponseStateMemoryForTests(): void {
   spillCounters.writeFailures = 0;
   spillCounters.readFailures = 0;
   replayScopeMismatchDrops = 0;
+  replayOverlapSkips = 0;
   persistAttemptHookForTests = null;
   loaded = false;
 }

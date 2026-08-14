@@ -1046,7 +1046,7 @@ describe("Responses previous_response_id state", () => {
       );
       const items = [{ role: "user", content: "한글🙂" }, ...output];
       const expected = Buffer.byteLength(JSON.stringify({
-        responseId: "resp_다국어", createdAt: at, items, providers,
+        responseId: "resp_다국어", createdAt: at, items, providerOutputStart: 1, providers,
       }), "utf8");
       expect(getStoredResponseBytesForTests()).toBe(expected);
     } finally {
