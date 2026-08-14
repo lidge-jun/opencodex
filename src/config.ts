@@ -3578,8 +3578,6 @@ function readProcessCommandLine(pid: number): string | undefined {
         "-NoProfile",
         "-NoLogo",
         "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
       ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });

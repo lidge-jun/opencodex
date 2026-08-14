@@ -58,8 +58,6 @@ function windowsIdentityPowerShellCommand(expression: string): string[] {
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
-    "-WindowStyle",
-    "Hidden",
     "-Command",
     expression,
   ];
@@ -105,8 +103,9 @@ function powershellValue(expression: string): string {
     // `windowsHide` is the popup fix (#1278): the desktop proxy parent runs
     // without a console, so a console-subsystem child spawned without
     // CREATE_NO_WINDOW gets a fresh visible console window at startup and on
-    // every config write. `-WindowStyle Hidden` alone does not stop the
-    // allocation; the flag behind `windowsHide` does.
+    // every config write. Do not add PowerShell's `-WindowStyle Hidden` here:
+    // Bun 1.3.14 can fail that direct CLI combination before the SID command
+    // executes (#1589); the process-level `windowsHide` flag is sufficient.
     result = Bun.spawnSync(command, windowsIdentityPowerShellSpawnOptions());
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);

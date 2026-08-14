@@ -467,7 +467,7 @@ describe("Windows Win32_Process owner enumeration (#476)", () => {
       const child = spawn(
         "powershell.exe",
         [
-          "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+          "-NoProfile", "-NoLogo", "-NonInteractive",
           "-Command",
           "Start-Sleep -Seconds 45 # codex app-server integration-probe",
         ],

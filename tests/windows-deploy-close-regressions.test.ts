@@ -39,6 +39,8 @@ describe("update-job restart avoids the shell-less .cmd EINVAL (Windows, bun/sou
     expect(src).toContain("Start-Process");
     expect(src).toContain("buildWindowsElevatedArgumentList");
     expect(src).toContain("resolveTrustedWindowsPowerShellExe");
+    expect(src).toContain("windowsHide: true");
+    expect(src).not.toContain('["-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps]');
     expect(src).toContain("spawnWorkerFn: spawnGuiUpdateWorker");
     // Foreign listeners must stay fail-closed; npm rename is covered by ocx identity.
     expect(src).not.toContain("killAnyListenPidOnPort");

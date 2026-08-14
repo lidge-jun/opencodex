@@ -25,7 +25,7 @@ afterEach(() => {
 });
 
 describe("Windows identity lookup popup fix (#1278)", () => {
-  test("builds a hidden non-interactive command from the trusted PowerShell path", () => {
+  test("builds a non-interactive command without the Bun-incompatible PowerShell window flag", () => {
     setTrustedWindowsElevationExecutablesForTests({ powershell: TRUSTED_POWERSHELL });
     const command = windowsIdentityPowerShellCommandForTests(
       "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
@@ -33,9 +33,8 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     expect(command[0]).toBe(TRUSTED_POWERSHELL);
     expect(command).toContain("-NoProfile");
     expect(command).toContain("-NonInteractive");
-    const windowStyle = command.indexOf("-WindowStyle");
-    expect(windowStyle).toBeGreaterThan(0);
-    expect(command[windowStyle + 1]).toBe("Hidden");
+    expect(command).not.toContain("-WindowStyle");
+    expect(command).not.toContain("Hidden");
     expect(command[command.length - 2]).toBe("-Command");
     expect(command[command.length - 1])
       .toBe("[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value");

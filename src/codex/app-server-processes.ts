@@ -350,7 +350,7 @@ export function listWindowsSnapshots(): ProcessSnapshot[] {
   // executable resolves from the trusted System32 directory (never PATH), and
   // windowsHide keeps the enumeration console-less on desktop sessions (#1278).
   const output = execFileSync(resolveTrustedWindowsPowerShellExe(), [
-    "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+    "-NoProfile", "-NoLogo", "-NonInteractive",
     "-Command",
     psCommand,
   ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true });
@@ -461,7 +461,7 @@ function readDarwinProcStartMs(pid: number): number | null {
 function readWindowsProcStartMs(pid: number): number | null {
   try {
     const out = execFileSync(resolveTrustedWindowsPowerShellExe(), [
-      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+      "-NoProfile", "-NoLogo", "-NonInteractive",
       "-Command",
       `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString("o")`,
     ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 8_000, windowsHide: true }).trim();
@@ -517,7 +517,7 @@ export function readProcessStartMsBatch(
     try {
       const filter = pids.map(pid => `ProcessId=${pid}`).join(" OR ");
       const stdout = execFileSync(resolveTrustedWindowsPowerShellExe(), [
-        "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+        "-NoProfile", "-NoLogo", "-NonInteractive",
         "-Command",
         `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`,
       ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true });

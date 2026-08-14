@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 describe("Windows effective ACL principal", () => {
-  test("builds a hidden non-interactive command from the trusted PowerShell path", () => {
+  test("builds a non-interactive command without the Bun-incompatible PowerShell window flag", () => {
     const trusted = "C:\\trusted-system32\\WindowsPowerShell\\v1.0\\powershell.exe";
     setTrustedWindowsElevationExecutablesForTests({ powershell: trusted });
     expect(windowsPrincipalPowerShellCommandForTests()).toEqual([
@@ -37,8 +37,6 @@ describe("Windows effective ACL principal", () => {
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
-      "-WindowStyle",
-      "Hidden",
       "-Command",
       "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
     ]);

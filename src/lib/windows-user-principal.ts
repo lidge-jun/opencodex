@@ -105,8 +105,6 @@ const POWERSHELL_ARGS = [
   "-NoLogo",
   "-NoProfile",
   "-NonInteractive",
-  "-WindowStyle",
-  "Hidden",
   "-Command",
   SID_EXPRESSION,
 ] as const;
