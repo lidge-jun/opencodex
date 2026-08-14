@@ -1,11 +1,22 @@
 import { expect, test } from "bun:test";
 import { ensureStrictCatalogFields, normalizeRoutedCatalogEntry } from "../src/codex/catalog/parsing";
 
-test("routed catalog rows force Codex apply_patch to the freeform tool contract", () => {
+test("routed catalog rows preserve an explicit apply_patch tool type", () => {
   const row = normalizeRoutedCatalogEntry({
     slug: "xai/grok-4.6",
     tool_mode: "legacy",
     apply_patch_tool_type: "function",
+    context_window: 128_000,
+  });
+
+  expect(row.tool_mode).toBe("code_mode_only");
+  expect(row.apply_patch_tool_type).toBe("function");
+});
+
+test("routed catalog rows default a missing apply_patch tool type to freeform", () => {
+  const row = normalizeRoutedCatalogEntry({
+    slug: "xai/grok-4.6",
+    tool_mode: "legacy",
     context_window: 128_000,
   });
 
