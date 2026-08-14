@@ -47,7 +47,7 @@ test("public projection maps JCS-invalid public fields to not_exportable", () =>
       upstreamProtocol: "openai-chat",
       surface: "responses-\uD800",
     },
-  } as ObservationEvent;
+  } as unknown as ObservationEvent;
 
   expect(projectPublicEvidenceRecord({ observation, verdict: "VERIFIED" })).toEqual({
     status: "not_exportable",

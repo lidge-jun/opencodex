@@ -40,7 +40,7 @@ function installFixedPublisherKey(config: string): void {
   if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
-function fixedRecord() {
+function fixedRecord(scenarioId = "responses-core.protocol.request-shape") {
   const subject = {
     subjectKind: "protocol" as const,
     compatibilityVersion: "2.13.0",
@@ -55,7 +55,7 @@ function fixedRecord() {
     evidenceLayer: "protocol_conformance" as const,
     suiteId: "responses-core",
     suiteVersion: "1.0.0",
-    scenarioId: "responses-core.protocol.request-shape",
+    scenarioId,
     scenarioVersion: "1.0.0",
     verdict: "VERIFIED" as const,
     observedDayUtc: "2026-08-12",
@@ -91,11 +91,7 @@ describe("CL-10 public evidence core contract", () => {
 
   test("pins canonical multi-record ordering into the bundle digest", () => {
     const first = fixedRecord();
-    const { recordId: _ignored, ...secondBody } = {
-      ...first,
-      scenarioId: "responses-core.protocol.response-shape",
-    };
-    const second = { recordId: publicEvidenceId("record", secondBody), ...secondBody };
+    const second = fixedRecord("responses-core.protocol.response-shape");
     const publisher = {
       algorithm: "ed25519" as const,
       publicKey: FIXED_PUBLIC_KEY,
