@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createMimoFreeAdapter, MIMO_CHAT_URL } from "../src/adapters/mimo-free";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
+import { ManagementRequest as Request } from "./helpers/management-auth";
 
 const originalFetch = globalThis.fetch;
 
