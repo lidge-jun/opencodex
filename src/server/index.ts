@@ -45,12 +45,6 @@ import {
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
-import {
-  setLabAutomationDispatchDeps,
-  startLabAutomationScheduler,
-} from "../lab/automation/orchestrator";
-import { loadLabAutomationPolicy } from "../lab/automation/persistence";
-import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
@@ -81,6 +75,7 @@ import {
   isDraining,
   registerTurn,
   runListenerShutdown,
+  setLabAutomationShutdownHook,
   setServerRef,
   trackStreamLifetime,
   tryAdmitTurn,
@@ -1735,18 +1730,39 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();
 
-  const labConfigDir = getConfigDir();
-  const productionLabRouteExecutor = createProductionLabRouteExecutor({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-  });
-  setLabAutomationDispatchDeps({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-    routeExecutor: productionLabRouteExecutor,
-  });
-  if (loadLabAutomationPolicy(labConfigDir).enabled) {
-    startLabAutomationScheduler(labConfigDir);
+  // Compatibility Lab runtime integration is explicit opt-in. Keep all Lab
+  // automation modules outside the ordinary server startup graph while
+  // preserving startServer's synchronous API.
+  if (config.labIntegrationEnabled === true) {
+    const {
+      requestLabAutomationShutdown,
+      setLabAutomationDispatchDeps,
+      startLabAutomationScheduler,
+      stopLabAutomationScheduler,
+    } = require("../lab/automation/orchestrator") as typeof import("../lab/automation/orchestrator");
+    const { loadLabAutomationPolicy } = require(
+      "../lab/automation/persistence",
+    ) as typeof import("../lab/automation/persistence");
+    const { createProductionLabRouteExecutor } = require(
+      "../lib/lab-live-route-production",
+    ) as typeof import("../lib/lab-live-route-production");
+    const labConfigDir = getConfigDir();
+    const productionLabRouteExecutor = createProductionLabRouteExecutor({
+      configDir: labConfigDir,
+      loadConfig: () => config,
+    });
+    setLabAutomationDispatchDeps({
+      configDir: labConfigDir,
+      loadConfig: () => config,
+      routeExecutor: productionLabRouteExecutor,
+    });
+    setLabAutomationShutdownHook(() => {
+      requestLabAutomationShutdown();
+      stopLabAutomationScheduler();
+    });
+    if (loadLabAutomationPolicy(labConfigDir).enabled) {
+      startLabAutomationScheduler(labConfigDir);
+    }
   }
 
   return server;

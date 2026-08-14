@@ -1251,6 +1251,9 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // Compatibility Lab integration with the ordinary server runtime is explicit
+  // opt-in. A bad hand edit degrades to OFF instead of invalidating providers.
+  labIntegrationEnabled: z.boolean().optional().catch(false),
   // Invalid optional recovery config must not discard unrelated provider/account state.
   agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as

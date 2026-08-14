@@ -16,6 +16,7 @@ import {
   cancelLabAutomationRun,
   enqueueManualLabRun,
   reconcileLabAutomationQueue,
+  requestLabAutomationShutdown,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../../lab/automation/orchestrator";
@@ -33,6 +34,7 @@ import { listLabAutomationRuns } from "../../lab/automation/runs-query";
 import type { LabAutomationLayer, LabAutomationPolicyV1 } from "../../lab/automation/types";
 import { LabAutomationError } from "../../lab/automation/types";
 import { jsonResponse } from "../auth-cors";
+import { setLabAutomationShutdownHook } from "../lifecycle";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import { isPlainRecord } from "./shared";
@@ -75,6 +77,13 @@ function applySchedulerPolicy(policy: LabAutomationPolicyV1, configDir?: string)
 export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
   if (!url.pathname.startsWith("/api/lab/automation")) return null;
+
+  // This module is loaded only after an explicit Lab automation request. Once
+  // loaded, register cleanup without making lifecycle.ts import Lab code.
+  setLabAutomationShutdownHook(() => {
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler();
+  });
 
   const configDir = getConfigDir();
 

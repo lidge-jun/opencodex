@@ -33,7 +33,6 @@ import {
   type RouteResult,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
-import { resolveProductionRouteSubject } from "../../routing/compatibility/subject";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -1991,11 +1990,18 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
-  // CL-09: attach only the opaque exact route-subject identity to the attempt.
-  // This is best-effort passive metadata: no Lab state is created and failure
-  // must never alter, retry, or delay the upstream request.
-  if (logCtx.activeAttempt && !logCtx.activeAttempt.labRouteSubjectId) {
+  // CL-09 passive linkage is part of the explicit Lab integration only. Keep
+  // both the module load and subject construction out of the ordinary request
+  // path when Lab integration is disabled.
+  if (
+    config.labIntegrationEnabled === true
+    && logCtx.activeAttempt
+    && !logCtx.activeAttempt.labRouteSubjectId
+  ) {
     try {
+      const { resolveProductionRouteSubject } = require(
+        "../../routing/compatibility/subject",
+      ) as typeof import("../../routing/compatibility/subject");
       const passiveSubject = resolveProductionRouteSubject(
         config,
         route.providerName,

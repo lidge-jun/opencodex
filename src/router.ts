@@ -31,7 +31,6 @@ import {
 } from "./routing/trace";
 import { getRoutingProfile, resolvePolicyProfileId } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
-import { assemblePolicyCandidateEvidence } from "./routing/compatibility/assemble";
 
 export class NoEligiblePolicyCandidateError extends Error {
   /** Evaluation trace (with per-candidate exclusions) when nothing qualified. */
@@ -518,6 +517,11 @@ function routeModelInternal(
   const policyId = !bypassCombos ? resolvePolicyProfileId(config, modelId) : null;
   const profile = policyId ? getRoutingProfile(config, policyId) : undefined;
   if (profile && policyId) {
+    // Compatibility evidence is needed only for an explicit policy route.
+    // Keep its Lab-backed implementation out of the normal concrete route path.
+    const { assemblePolicyCandidateEvidence } = require(
+      "./routing/compatibility/assemble",
+    ) as typeof import("./routing/compatibility/assemble");
     // One clock read per decision keeps candidate evidence, exclusions, and
     // scores mutually consistent and reproducible.
     const now = Date.now();

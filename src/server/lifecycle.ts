@@ -7,7 +7,6 @@ import {
 } from "../storage/policy-job";
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
-import { stopLabAutomationScheduler, requestLabAutomationShutdown } from "../lab/automation/orchestrator";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -52,6 +51,17 @@ let _serverRef: ReturnType<typeof Bun.serve> | undefined;
 let serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 let serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
 let releaseServerStartupLifecycleImpl: typeof releaseNativeMainStartupLifecycle = releaseNativeMainStartupLifecycle;
+let labAutomationShutdownHook: (() => void) | null = null;
+
+export function setLabAutomationShutdownHook(hook: (() => void) | null): void {
+  labAutomationShutdownHook = hook;
+}
+
+function runLabAutomationShutdownHook(): void {
+  const hook = labAutomationShutdownHook;
+  labAutomationShutdownHook = null;
+  hook?.();
+}
 
 export function setServerRef(server: ReturnType<typeof Bun.serve> | undefined): void { _serverRef = server; }
 /**
@@ -156,6 +166,7 @@ export function resetLifecycleDrainStateForTests(): void {
   serverStopFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   serverStartupReleaseFlights = new WeakMap<ReturnType<typeof Bun.serve>, Promise<void>>();
   releaseServerStartupLifecycleImpl = releaseNativeMainStartupLifecycle;
+  labAutomationShutdownHook = null;
 }
 export function tryAdmitTurn(): ActiveTurnLease | null {
   if (isDraining()) return null;
@@ -452,8 +463,7 @@ export async function drainAndShutdown(
     // Abort each job independently so one wedged join cannot skip the other,
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
-    requestLabAutomationShutdown();
-    stopLabAutomationScheduler();
+    runLabAutomationShutdownHook();
     stopStateStoreSweeper();
     // The overlay reconciler is owner-scoped: the startServer stop override
     // releases THIS server's lease through runListenerShutdown →

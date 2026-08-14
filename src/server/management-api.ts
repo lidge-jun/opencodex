@@ -61,15 +61,12 @@ import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
 import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
-import { handleRoutingProfileRoutes } from "./management/routing-profile-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
-import { handleLabRoutes } from "./management/lab-routes";
-import { handleLabAutomationRoutes } from "./management/lab-automation-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -90,6 +87,26 @@ export const VERSION = (() => {
     return "0.0.0";
   }
 })();
+
+function pathInManagementNamespace(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+async function handleRoutingProfileRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/routing-profiles")) return null;
+  const { handleRoutingProfileRoutes } = await import("./management/routing-profile-routes");
+  return handleRoutingProfileRoutes(ctx);
+}
+
+async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/lab")) return null;
+  if (pathInManagementNamespace(ctx.url.pathname, "/api/lab/automation")) {
+    const { handleLabAutomationRoutes } = await import("./management/lab-automation-routes");
+    return handleLabAutomationRoutes(ctx);
+  }
+  const { handleLabRoutes } = await import("./management/lab-routes");
+  return handleLabRoutes(ctx);
+}
 
 const managementConvergenceBindings = new WeakMap<object, Readonly<{
   factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
@@ -180,7 +197,7 @@ export async function handleManagementAPI(
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
-    ??     (await handleRoutingProfileRoutes(ctx))
+    ??     (await handleRoutingProfileRoutesOnDemand(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
@@ -189,8 +206,7 @@ export async function handleManagementAPI(
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
-    ??     (await handleLabAutomationRoutes(ctx))
-    ??     (await handleLabRoutes(ctx))
+    ??     (await handleLabRoutesOnDemand(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);

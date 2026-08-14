@@ -926,6 +926,13 @@ export interface OcxConfig {
   /** Virtual `combo/<id>` models spanning concrete provider/model targets (issue #133). */
   combos?: Record<string, OcxComboConfig>;
   /**
+   * Automatic Compatibility Lab integration with the ordinary server runtime.
+   * Default false. When disabled/unset, normal requests and server startup do
+   * not load Lab modules. Explicit Lab commands/APIs and explicit policy routes
+   * may still load their Lab dependencies on demand.
+   */
+  labIntegrationEnabled?: boolean;
+  /**
    * Routing policy profiles (Router Intelligence, RI-04+): explicitly requested
    * `policy/<id>` (or configured alias) models select among an explicit
    * candidate allowlist using hard capability requirements and deterministic
