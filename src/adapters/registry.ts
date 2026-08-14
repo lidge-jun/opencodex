@@ -3,7 +3,7 @@ import { createAzureAdapter } from "./azure";
 import { createCursorAdapter, type CursorAdapterDeps } from "./cursor";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
-import { createMimoFreeAdapter } from "./mimo-free";
+import { createMimoFreeAdapter, type MimoFreeAdapterDeps } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createCommandCodeAdapter } from "./command-code";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -17,10 +17,15 @@ import {
 
 type RegistryFactoryContext = AdapterFactoryContext & {
   cursorDeps?: CursorAdapterDeps;
+  mimoDeps?: MimoFreeAdapterDeps;
 };
 
 function createRegisteredCursorAdapter(provider: OcxProviderConfig, context: AdapterFactoryContext) {
   return createCursorAdapter(provider, (context as RegistryFactoryContext).cursorDeps);
+}
+
+function createRegisteredMimoFreeAdapter(provider: OcxProviderConfig, context: AdapterFactoryContext) {
+  return createMimoFreeAdapter(provider, (context as RegistryFactoryContext).mimoDeps);
 }
 
 export const ADAPTER_REGISTRY = defineAdapterRegistry({
@@ -79,7 +84,7 @@ export const ADAPTER_REGISTRY = defineAdapterRegistry({
   "mimo-free": {
     kind: "wrapper",
     extends: "openai-chat",
-    create: provider => createMimoFreeAdapter(provider),
+    create: createRegisteredMimoFreeAdapter,
   },
 });
 
