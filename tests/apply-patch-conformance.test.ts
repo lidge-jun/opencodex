@@ -321,7 +321,7 @@ function advertisedToolNames(wire: AdapterWire, body: string): string[] {
     };
   } | undefined;
   const tools = state?.currentMessage?.userInputMessage?.userInputMessageContext?.tools ?? [];
-  return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.name] : []);
+  return tools.flatMap(tool => typeof tool.toolSpecification?.name === "string" ? [tool.toolSpecification.name] : []);
 }
 
 function toolChoiceNoneDisablesCalls(wire: AdapterWire, body: string): boolean {
