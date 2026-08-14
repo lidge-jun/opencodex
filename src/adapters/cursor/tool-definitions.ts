@@ -200,6 +200,12 @@ export function cursorRequestHasShellAlias(tools: readonly Pick<OcxTool, "namesp
   return tools?.some(isBareCodexExecCommandTool) ?? false;
 }
 
+function cursorRequestHasExecutionPath(
+  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+): boolean {
+  return tools?.some(isCursorExecutionPathTool) ?? false;
+}
+
 export function cursorRequestAdvertisesApplyPatch(
   tools: readonly Pick<OcxTool, "namespace" | "name" | "freeform">[] | undefined,
   toolChoice?: OcxRequestOptions["toolChoice"],
@@ -421,7 +427,7 @@ export function shouldUseNativeExecOnlyForGenericToolUse(
   text: string,
 ): boolean {
   const trimmed = text.trim();
-  if (trimmed.length === 0 || !cursorRequestHasShellAlias(tools) || !isGenericToolUseCountDemoPrompt(trimmed)) return false;
+  if (trimmed.length === 0 || !cursorRequestHasExecutionPath(tools) || !isGenericToolUseCountDemoPrompt(trimmed)) return false;
   return !/\b(?:mcp|resource|resources|tool_search|plugin|plugins|app connector|github)\b/i.test(trimmed)
     && !/(?:리소스|플러그인|깃허브|github)/i.test(trimmed);
 }
@@ -432,7 +438,7 @@ export function cursorToolsForActivePrompt<T extends Pick<OcxTool, "namespace" |
   toolChoice?: OcxRequestOptions["toolChoice"],
 ): readonly T[] | undefined {
   if (!shouldUseNativeExecOnlyForGenericToolUse(tools, activeText)) return tools;
-  const execTools = tools?.filter(isBareCodexExecCommandTool);
+  const execTools = tools?.filter(isCursorExecutionPathTool);
   const catalog = tools ?? [];
   if (execTools?.length && !execTools.some(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog))) return tools;
   return execTools && execTools.length > 0 ? execTools : tools;
