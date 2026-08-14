@@ -6,11 +6,13 @@ import type { OcxConfig } from "../src/types";
 import { readConfigDiagnostics, saveConfigPreservingClaudeCode } from "../src/config";
 import { handleLabCommand } from "../src/cli/lab";
 import {
+  enqueueManualLabRun,
   requestLabAutomationShutdown,
   resetLabAutomationSchedulerStateForTests,
   stopLabAutomationScheduler,
 } from "../src/lab/automation/orchestrator";
 import { loadLabAutomationConfig } from "../src/lab/automation/config-persistence";
+import { planManualLabRun } from "../src/lab/automation/planner";
 import { readInstallationSalt } from "../src/lab/subject/installation-salt";
 import {
   resetCompatibilityVersionCacheForTests,
@@ -132,5 +134,28 @@ describe("Compatibility Lab runtime integration regressions", () => {
     })).toBe(0);
     expect(savedConfig?.labIntegrationEnabled).toBe(true);
     expect(loadLabAutomationConfig(home).policy.enabled).toBe(true);
+  });
+
+  test("CLI live automation enable installs production dispatch dependencies", async () => {
+    const home = tempHome();
+    persistedLiveConfig(home);
+    expect(await handleLabCommand(["automation", "enable", "--live", "--json"], {
+      configDir: home,
+    })).toBe(0);
+
+    const config = readConfigDiagnostics().config;
+    const planned = planManualLabRun({
+      evidenceLayer: "live_route_compatibility",
+      scenarioId: "responses-core.live.basic-turn",
+      providerName: "fixture-provider",
+      modelId: "fixture-model",
+      config,
+      configDir: home,
+    });
+    const record = await enqueueManualLabRun(planned, home);
+    expect(record).not.toBeNull();
+    expect(record?.state).not.toBe("queued");
+    expect(record?.state).not.toBe("running");
+    expect(record?.terminalCode).not.toBe("route_ineligible");
   });
 });

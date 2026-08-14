@@ -64,6 +64,7 @@ import { planManualLabRun } from "../lab/automation/planner";
 import { listLabAutomationRuns } from "../lab/automation/runs-query";
 import { LabAutomationError, type LabAutomationLayer } from "../lab/automation/types";
 import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
+import { ensureLabAutomationRuntime } from "../server/lab-automation-runtime";
 
 const USAGE = `Usage:
   ocx lab status [--json]
@@ -415,6 +416,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
               persistLabIntegrationOptIn(deps);
               saveLabAutomationPolicyConfig(policy, configDir);
               reconcileLabAutomationQueue(configDir);
+              ensureLabAutomationRuntime(loadCliConfig(deps), configDir);
               startLabAutomationScheduler(configDir);
               const status = buildLabAutomationStatus(configDir);
               printData(automationCliStatus(status), wantsJson, automationStatusLines(status));
