@@ -158,6 +158,8 @@ export interface CursorProtobufEventState {
   /** Set once a terminal `done`/truncation has been emitted, so post-terminal frames stay inert. */
   terminated?: boolean;
   clientToolNames?: Set<string>;
+  /** Responses/Codex names of request-declared freeform tools advertised to Cursor. */
+  freeformToolNames?: ReadonlySet<string>;
   parallelToolCalls?: boolean;
   startedClientToolCalls: number;
   /** Tool wire-name → original JSON Schema parameters object, for arg-key normalization. */
@@ -195,6 +197,7 @@ function structuredEditCallIsOurs(
 
 export function createCursorProtobufEventState(options: {
   clientToolNames?: Iterable<string>;
+  freeformToolNames?: Iterable<string>;
   parallelToolCalls?: boolean;
   toolSchemas?: Map<string, unknown>;
   cursorToolNameMap?: Map<string, string>;
@@ -215,6 +218,7 @@ export function createCursorProtobufEventState(options: {
     openToolCalls: new Map(),
     completedToolCalls: new Set(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
+    ...(options.freeformToolNames ? { freeformToolNames: new Set(options.freeformToolNames) } : {}),
     ...(options.syntheticStructuredEditToolNames
       ? { syntheticStructuredEditToolNames: new Set(options.syntheticStructuredEditToolNames) }
       : {}),
@@ -534,6 +538,25 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
  * recorded in `openToolCalls`. Because each completion emits a whole non-interleaved unit, the bridge
  * (which tracks a single current tool call) serializes parallel Cursor calls correctly.
  */
+function cursorFreeformWrapperValid(args: string): boolean {
+  try {
+    const parsed = JSON.parse(args) as unknown;
+    return !!parsed
+      && typeof parsed === "object"
+      && !Array.isArray(parsed)
+      && typeof (parsed as Record<string, unknown>).input === "string";
+  } catch {
+    return false;
+  }
+}
+
+function dropInvalidFreeformCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
+  state.openToolCalls.delete(callId);
+  state.translatorBudget?.closeCall(callId);
+  state.completedToolCalls.add(callId);
+  return [{ type: "error", message: `${toolName} call had invalid freeform arguments; expected {input:string}` }];
+}
+
 function dropShellBridgeCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
   state.openToolCalls.delete(callId);
   state.translatorBudget?.closeCall(callId);
@@ -551,6 +574,9 @@ function dropStructuredEditCall(state: CursorProtobufEventState, callId: string,
 function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
+  if (state.freeformToolNames?.has(open.name) && !cursorFreeformWrapperValid(finalArgs)) {
+    return dropInvalidFreeformCall(state, callId, open.name);
+  }
   const schema = toolSchemaForWireName(state, open.name);
   if (!cursorShellBridgeArgsValid(finalArgs, open.name, schema)) {
     if (isCodexShellBridgeToolName(open.name)) return dropShellBridgeCall(state, callId, open.name);

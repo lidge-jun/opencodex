@@ -549,6 +549,11 @@ class LiveCursorTransport implements CursorTransport {
         .filter(isCursorSyntheticStructuredEditTool)
         .map(cursorToolWireName),
     );
+    const freeformToolNames = new Set(
+      (cursorVisibleTools ?? [])
+        .filter(tool => tool.freeform)
+        .map(tool => namespacedToolName(tool.namespace, tool.name)),
+    );
     this.execContext = {
       ...this.execContext,
       clientToolDefs,
@@ -578,6 +583,7 @@ class LiveCursorTransport implements CursorTransport {
     try {
       state = createCursorProtobufEventState({
         clientToolNames: clientToolDefs.map(tool => tool.toolName || tool.name),
+        freeformToolNames,
         parallelToolCalls: request.parallelToolCalls,
         toolSchemas,
         cursorToolNameMap,

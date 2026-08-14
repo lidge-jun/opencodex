@@ -337,6 +337,62 @@ describe("Cursor protobuf tool-call events", () => {
     ]);
   });
 
+  test("rejects incomplete wrappers for request-declared freeform tools", () => {
+    const freeformSchema = {
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+    };
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      toolSchemas: new Map([["apply_patch", freeformSchema]]),
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_freeform", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_freeform",
+        modelCallId: "model_1",
+        toolCall,
+        argsTextDelta: '{"input":"DELETE',
+      }),
+    }), state)).toEqual([]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_freeform", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([
+      { type: "error", message: expect.stringContaining("invalid freeform arguments") },
+    ]);
+    expect(state.openToolCalls.has("call_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_freeform")).toBe(true);
+
+    const valid = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      toolSchemas: new Map([["apply_patch", freeformSchema]]),
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const validToolCall = mcpToolCall("apply_patch", { input: "*** Begin Patch\n*** End Patch" });
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_valid_freeform", modelCallId: "model_2", toolCall: validToolCall,
+      }),
+    }), valid)).toEqual([
+      { type: "tool_call_start", id: "call_valid_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_valid_freeform" },
+    ]);
+  });
+
   test("commits an advertised no-arg tool call instead of dropping it", () => {
     // A completed client tool call with no args and no streamed text must still reach Codex when the
     // tool is advertised (e.g. a no-arg list/status tool). The bridge serializes empty args as "{}".

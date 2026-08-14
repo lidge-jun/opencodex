@@ -129,6 +129,26 @@ describe("Responses streaming tool event contract", () => {
     expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
   });
 
+  test("JSON-invalid Unicode prefixes fail instead of being trimmed into valid arguments", async () => {
+    for (const [index, argumentsText] of ["\u00A0{}", "\uFEFF{}"].entries()) {
+      const callId = `call_unicode_${index}`;
+      const frames = await collectSse(bridgeToResponsesSSE(replay([
+        { type: "tool_call_start", id: callId, name: "read_file" },
+        { type: "tool_call_delta", arguments: argumentsText },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ]), "cursor/composer-2.5"));
+
+      expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+      const itemDone = frames.filter(frame => frame.event === "response.output_item.done")
+        .map(frame => frame.data.item as Record<string, unknown>)
+        .find(item => item?.type === "function_call");
+      expect(itemDone).toMatchObject({ call_id: callId, arguments: argumentsText, status: "incomplete" });
+      expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    }
+  });
+
   test("non-streaming whitespace-only arguments fail with an incomplete call", () => {
     const response = buildResponseJSON([
       { type: "tool_call_start", id: "call_space", name: "read_file" },

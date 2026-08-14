@@ -96,7 +96,7 @@ function toolCallArgumentsUsable(args: string): boolean {
   const trimmed = args.trim();
   if (!trimmed) return false;
   try {
-    JSON.parse(trimmed);
+    JSON.parse(args);
     return true;
   } catch {
     return false;
