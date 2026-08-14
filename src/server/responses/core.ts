@@ -1,6 +1,7 @@
 import type { Server } from "bun";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse, type ResponsesTerminalStatus } from "../../bridge";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
+import { checkInputAdmission } from "./input-admission";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import {
   getConfigPath,
@@ -76,7 +77,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
-import { describeImagesInPlace, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
+import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
@@ -1853,6 +1854,24 @@ async function handleResponsesInner(
   }
 
   if (options.abortSignal?.aborted) return clientCancelledResponse();
+  // Refuse an input that cannot plausibly fit the model context window before spending auth,
+  // circuit budget, or upstream bandwidth on a turn the provider will reject anyway (#1412).
+  //
+  // Compaction turns are exempt: Codex sends compaction_trigger BECAUSE context is full, so
+  // refusing the turn that shrinks the context would deadlock the client against the very
+  // limit this gate reports — it would be told to compact and then denied the compaction.
+  if (parsed._compactionRequest !== true) {
+    const inputAdmission = checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId);
+    if (!inputAdmission.admitted) {
+      return formatErrorResponse(
+        413,
+        "request_too_large",
+        `Estimated input (~${inputAdmission.estimatedTokens} tokens) is far past the context window `
+          + `of ${parsed.modelId} (${inputAdmission.ceiling} tokens). Start a new session or choose a `
+          + `model with a larger context window.`,
+      );
+    }
+  }
   const preAuthHostKey = preAuthUpstreamHostCircuitKey(route, config);
   if (preAuthHostKey) {
     const admission = acquireUpstreamHostAdmission(
@@ -2076,7 +2095,7 @@ async function handleResponsesInner(
       recordSidecarOutcome,
       translatorBudget,
     );
-  } else if (modelInList(route.provider.noVisionModels, route.modelId)) {
+  } else if (isModelTextOnly(route.provider, route.modelId)) {
     // Sidecar-covered model but NO plan (no forward provider / missing forwarded auth / sidecar
     // disabled): fail closed — never forward raw images to a text-only upstream.
     stripImagesInPlace(parsed, translatorBudget);

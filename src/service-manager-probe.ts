@@ -264,9 +264,8 @@ function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): Servic
     "--user", "show", TASK,
     "-p", "LoadState", "-p", "ActiveState", "-p", "FragmentPath", "-p", "NeedDaemonReload",
   ]);
-  if (shown.spawnFailed || shown.timedOut) {
-    return unknown(`systemctl could not be asked: ${shown.timedOut ? "timed out" : shown.stderr.trim()}`);
-  }
+  if (shown.spawnFailed) return { kind: "absent" };
+  if (shown.timedOut) return unknown("systemctl could not be asked: timed out");
   if (shown.status !== 0) {
     // A missing unit still exits ZERO and says not-found; a non-zero status means
     // the question never reached the bus.

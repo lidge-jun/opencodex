@@ -386,7 +386,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .stop-toggle:disabled { opacity: 0.5; cursor: default; }
 
 .main { min-width: 0; }
-.main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; }
+.main-inner { max-width: 980px; margin: 0 auto; padding: 32px 36px 64px; container-type: inline-size; }
 .main-inner.main-inner--combos {
   max-width: none;
   margin: 0;
@@ -795,8 +795,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 /* Explicit column counts for balanced rows at every width */
 .stat-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 28px; }
 .stat-row > .stat { min-height: 80px; display: flex; flex-direction: column; justify-content: center; }
-@media (max-width: 1100px) { .stat-row { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 640px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+@container (max-width: 820px) { .stat-row { grid-template-columns: repeat(3, 1fr); } }
+@container (max-width: 480px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; transition: border-color var(--motion-fast); }
 .stat:hover { border-color: var(--faint); }
 .stat .label { font-size: var(--text-label); color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; font-weight: var(--weight-medium); }
@@ -872,8 +872,8 @@ a.btn, a.btn:hover { text-decoration: none; }
 /* Four scalars in the shared 6-column .stat-row left a third of the panel empty
    and squeezed each figure into two lines. Give this row its own track count. */
 .mem-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0; }
-@media (max-width: 900px) { .mem-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 520px) { .mem-stats { grid-template-columns: minmax(0, 1fr); } }
+@container (max-width: 660px) { .mem-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 380px) { .mem-stats { grid-template-columns: minmax(0, 1fr); } }
 .mem-stats .stat-sub {
   font-size: var(--text-caption);
   color: var(--faint);

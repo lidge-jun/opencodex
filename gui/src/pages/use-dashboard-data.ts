@@ -124,8 +124,9 @@ export function useDashboardData(apiBase: string) {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [maMode, setMaMode] = useState<MaMode>(() => cachedMaMode ?? "default");
-  const [maBusy, setMaBusy] = useState(false);
-  const [maHelpOpen, setMaHelpOpen] = useState(false);
+ const [maBusy, setMaBusy] = useState(false);
+  const [maError, setMaError] = useState<string | null>(null);
+ const [maHelpOpen, setMaHelpOpen] = useState(false);
   const [effortCapHelpOpen, setEffortCapHelpOpen] = useState(false);
   const [shadowCallHelpOpen, setShadowCallHelpOpen] = useState(false);
   const [injectionModel, setInjectionModel] = useState<string>("");
@@ -536,22 +537,32 @@ export function useDashboardData(apiBase: string) {
     }
   }
 
-  const switchMaMode = async (mode: "v1" | "default" | "v2") => {
-    if (maBusy || maMode === mode) return;
-    setMaBusy(true);
-    try {
-      const r = await fetch(`${apiBase}/api/v2`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ multiAgentMode: mode }),
-      });
-      if (r.ok) {
-        setMaMode(mode);
-        writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
-      }
-    } catch { /* ignore */ }
-    finally { setMaBusy(false); }
-  };
+ const switchMaMode = async (mode: "v1" | "default" | "v2") => {
+   if (maBusy || maMode === mode) return;
+   setMaBusy(true);
+    setMaError(null);
+   try {
+     const r = await fetch(`${apiBase}/api/v2`, {
+       method: "PUT",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ multiAgentMode: mode }),
+     });
+     if (r.ok) {
+       setMaMode(mode);
+       writeSessionListCache(`${MA_MODE_CACHE_PREFIX}${apiBase}`, mode);
+      } else {
+        let message = `HTTP ${r.status}`;
+        try {
+          const body = await r.json() as { error?: string; message?: string };
+          message = (typeof body.error === "string" && body.error) || (typeof body.message === "string" && body.message) || message;
+        } catch { /* non-JSON error body */ }
+        setMaError(message);
+     }
+    } catch (e) {
+      setMaError(e instanceof Error ? e.message : "Network error");
+    }
+   finally { setMaBusy(false); }
+ };
 
   const saveInjection = async (patch: {
     multiAgentGuidanceEnabled?: boolean;
@@ -758,8 +769,9 @@ export function useDashboardData(apiBase: string) {
     usageLoading: usagePoll.loading && !usage30d,
     healthLoading: overviewPoll.loading && !health,
     sidecarSaving, shadowCallSaving, modelsLoading, settingsSaving, syncing,
-    maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
-    effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
+   maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
+    maError,
+   effortCapHelpOpen, setEffortCapHelpOpen, shadowCallHelpOpen, setShadowCallHelpOpen,
     injectionModel, injectionEffort, injectionEfforts, injectionAvailable, injectionSaving,
     multiAgentGuidanceEnabled, syncCodexSubagentDefaults, saveInjection,
     effortCap, subagentEffortCap, effortCapSaving, setEffortCap, setSubagentEffortCap, setEffortCapSaving,

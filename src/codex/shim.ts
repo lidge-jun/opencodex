@@ -8,16 +8,19 @@ import {
   existsSync,
   fstatSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   readSync,
   renameSync,
   rmSync,
   rmdirSync,
   statSync,
+  symlinkSync,
   type Stats,
   unlinkSync,
   writeFileSync,
@@ -407,6 +410,63 @@ function sameStableShimPathProbe(left: StableShimPathProbe, right: StableShimPat
   return left.prefix === right.prefix && sameFingerprint(left.fingerprint, right.fingerprint);
 }
 
+/**
+ * Identity of whatever sits at `path`, read from metadata alone.
+ *
+ * `stableShimPathProbe` answers a different question: it reads content to decide
+ * whether a launcher looks like a healthy shim, and it deliberately returns null
+ * for a zero-byte file. That makes it the wrong instrument for rollback
+ * bookkeeping. A user can legitimately own an empty `codex` launcher, and a fresh
+ * install moves it aside before writing our wrapper; if the move is recorded
+ * without a fingerprint, rollback cannot prove the backup is still the file it
+ * set aside and refuses to restore it — the launcher stays lost (#1625).
+ *
+ * Content is irrelevant to that proof, so this reads dev/ino/mode/size/times and
+ * re-reads them to reject a path that changed under us, following a symlink to
+ * fingerprint its target as well.
+ */
+function shimPathFingerprint(path: string): ShimPathFingerprint | null {
+  const before = statFingerprint(path, false);
+  if (!before) return null;
+  if (before.kind !== "symlink") {
+    const after = statFingerprint(path, false);
+    return after && sameFingerprint(before, after) ? before : null;
+  }
+  const targetBefore = statFingerprint(path, true);
+  if (!targetBefore) return null;
+  const targetAfter = statFingerprint(path, true);
+  const after = statFingerprint(path, false);
+  if (!targetAfter || !after
+    || !sameFingerprint(targetBefore, targetAfter)
+    || !sameFingerprint(before, after)) return null;
+  return { ...before, target: targetBefore };
+}
+
+/**
+ * Move `from` onto `to` without ever replacing an existing entry.
+ *
+ * `renameSync` silently clobbers the destination on POSIX, which is wrong for a
+ * rollback restore: `sourceOccupied` is sampled before the fingerprint check, so
+ * a concurrent installer can publish its own launcher at the original path in
+ * between, and the restore would delete it. `link` fails EEXIST instead, which
+ * is the no-replace primitive we need and needs no native helper.
+ *
+ * `link` follows a symlink to its target rather than preserving the link, so a
+ * symlink launcher is republished with `symlink`, which is also no-replace: it
+ * fails EEXIST on an occupied destination. Checking existence and then renaming
+ * would reintroduce exactly the race this function exists to close.
+ */
+function restoreWithoutReplacing(from: string, to: string): void {
+  const source = lstatSync(from);
+  if (source.isSymbolicLink()) {
+    symlinkSync(readlinkSync(from), to);
+    unlinkSync(from);
+    return;
+  }
+  linkSync(from, to);
+  unlinkSync(from);
+}
+
 function isHealthyShimProbe(probe: StableShimPathProbe, platform: NodeJS.Platform): boolean {
   if (probe.prefix.length < 180 || !probe.prefix.includes(SHIM_MARKER) || !probe.prefix.includes("ensure")) return false;
   const mode = probe.fingerprint.target?.mode ?? probe.fingerprint.mode;
@@ -644,6 +704,7 @@ let codexShimProbeHookForTests: (() => void) | null = null;
 let codexShimProbeShellForTests: string | null = null;
 let codexShimGuardedWriteHookForTests: (() => void) | null = null;
 let codexShimFreshWriteHookForTests: (() => void) | null = null;
+let codexShimRollbackRestoreHookForTests: ((target: ShimFileState) => void) | null = null;
 let codexShimProbeObservationMs = CODEX_SHIM_INSTALL_PROBE_TIMEOUT_MS;
 
 /** Narrow deterministic seam for transaction rollback tests. */
@@ -669,6 +730,20 @@ export function setCodexShimGuardedWriteHookForTests(hook: (() => void) | null):
 /** Narrow deterministic seam for fresh-install partial-write rollback tests. */
 export function setCodexShimFreshWriteHookForTests(hook: (() => void) | null): void {
   codexShimFreshWriteHookForTests = hook;
+}
+
+/**
+ * @internal Test-only seam for the rollback restore race.
+ *
+ * The window this closes opens after `sourceOccupied` is sampled and closes when
+ * the backup is republished, so no earlier hook can reach it: publishing from
+ * the fresh-write hook makes `sourceOccupied` true and skips the restore
+ * entirely.
+ */
+export function setCodexShimRollbackRestoreHookForTests(
+  hook: ((target: ShimFileState) => void) | null,
+): void {
+  codexShimRollbackRestoreHookForTests = hook;
 }
 
 function readProbeMetadata(path: string, maxBytes: number): string | null {
@@ -830,9 +905,9 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
     }
     try {
       if (entry.originalMovedToBackup && existsSync(target.backupPath)) {
-        const movedOriginal = stableShimPathProbe(target.backupPath);
+        const movedOriginal = shimPathFingerprint(target.backupPath);
         if (!movedOriginal || !entry.movedOriginalFingerprint
-          || !sameFingerprint(movedOriginal.fingerprint, entry.movedOriginalFingerprint)) {
+          || !sameFingerprint(movedOriginal, entry.movedOriginalFingerprint)) {
           throw new Error("Codex shim fresh-install backup changed during rollback");
         }
         if (sourceOccupied) {
@@ -842,7 +917,12 @@ function rollbackFreshShimInstall(journal: readonly FreshShimInstallJournalEntry
           // lose the command entirely. Keep it in that case — a stray
           // `codex.opencodex-real` is recoverable, a deleted launcher is not.
           if (ownsWrapperNow) unlinkSync(target.backupPath);
-        } else renameSync(target.backupPath, target.originalPath);
+        } else {
+          // No-replace: sourceOccupied was sampled earlier, so a concurrent
+          // installer may have published a launcher at the original path since.
+          codexShimRollbackRestoreHookForTests?.(target);
+          restoreWithoutReplacing(target.backupPath, target.originalPath);
+        }
       }
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));
@@ -1832,10 +1912,25 @@ function installCodexShimInternal(options: InstallCodexShimInternalOptions): { i
       if (existsSync(target.originalPath)) {
         renameSync(target.originalPath, target.backupPath);
         entry.originalMovedToBackup = true;
+        // Metadata-only, and before the content probe: an empty or otherwise
+        // unprobeable launcher must still be restorable during rollback.
+        //
+        // Only Unix reaches the rollback path (Windows rethrows freshApplyError
+        // without rolling back), so only Unix may treat a missing fingerprint as
+        // fatal. Throwing here on Windows would abort AFTER the original moved,
+        // stranding the launcher at its backup path with nothing to restore it.
+        const movedOriginalFingerprint = shimPathFingerprint(target.backupPath);
+        if (movedOriginalFingerprint) entry.movedOriginalFingerprint = movedOriginalFingerprint;
         if (process.platform !== "win32") {
+          if (!movedOriginalFingerprint) {
+            throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
+          }
           const movedOriginal = stableShimPathProbe(target.backupPath);
-          if (!movedOriginal) throw new Error("Codex shim fresh install could not fingerprint the staged launcher");
-          entry.movedOriginalFingerprint = movedOriginal.fingerprint;
+          // A content probe still runs where it can, purely as a consistency
+          // check: disagreement means the file moved under us mid-install.
+          if (movedOriginal && !sameFingerprint(movedOriginal.fingerprint, movedOriginalFingerprint)) {
+            throw new Error("Codex shim fresh install staged launcher changed while being fingerprinted");
+          }
         }
       }
       if (!target.preserveOnly) {

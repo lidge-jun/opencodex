@@ -32,11 +32,19 @@ export interface OcxParsedRequest {
   stream: boolean;
   options: OcxRequestOptions;
   _rawBody?: unknown;
-  /** Number of leading raw input items restored from local previous_response_id state. */
+  /**
+   * Boundary between replayed history and this turn's newly appended input. Usually the
+   * items the proxy restored from local previous_response_id state; also set when the
+   * CLIENT already carried that history verbatim and the proxy skipped the prepend.
+   */
   _replayPrefixLen?: number;
   /** Parsed-message index before the first conversational item in a continuation's current delta. */
   _continuationConversationMessageIndex?: number;
-  /** True when the proxy expanded a previous_response_id request into a full input replay. */
+  /**
+   * True when the full history for a previous_response_id request is present in the input —
+   * whether the proxy expanded it or the client already sent it. Consumers read this as
+   * "this request is self-contained", never as "the proxy mutated it".
+   */
   _previousResponseInputExpanded?: boolean;
   /** Provider-private stable Cursor conversation id resolved from the Responses previous_response_id chain. */
   _cursorConversationId?: string;
