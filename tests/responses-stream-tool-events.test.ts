@@ -149,10 +149,13 @@ describe("Responses streaming tool event contract", () => {
     }
   });
 
-  test("non-streaming whitespace-only arguments fail with an incomplete call", () => {
+  test("non-streaming malformed arguments stop before later parallel calls", () => {
     const response = buildResponseJSON([
       { type: "tool_call_start", id: "call_space", name: "read_file" },
       { type: "tool_call_delta", arguments: " \t" },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_late", name: "write_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"safe.txt\"}" },
       { type: "tool_call_end" },
       { type: "done" },
     ], "cursor/composer-2.5");
@@ -164,5 +167,6 @@ describe("Responses streaming tool event contract", () => {
     expect(output[0]).toMatchObject({
       type: "function_call", call_id: "call_space", arguments: " \t", status: "incomplete",
     });
+    expect(output.some(item => item.call_id === "call_late")).toBe(false);
   });
 });

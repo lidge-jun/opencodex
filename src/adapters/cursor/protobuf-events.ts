@@ -686,12 +686,27 @@ export function mapCursorProtobufServerMessage(
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
       // Empty-arg completion handling:
-      //  - already open with empty args  -> wait for the native-exec args path (do not commit yet).
+      //  - already-open named call with no buffered or structured args -> wait for native exec.
+      //  - compact callId-only freeform completion -> wait while its required input wrapper is
+      //    absent or incomplete; a valid buffered wrapper can commit immediately.
+      //    A compact ordinary no-arg call remains legitimate and commits below.
       //  - never started + not advertised -> Cursor prelude noise, drop it.
       //  - advertised client tool, not yet open -> a legitimate no-arg call: commit it (start+end)
       //    so it is not silently dropped; the bridge serializes empty args as "{}".
+      if (
+        openBeforeStart && !hasMcpArgBytes(args)
+        && (
+          (name !== undefined && openBeforeStart.args.length === 0)
+          || (
+            name === undefined
+            && state.freeformToolNames?.has(openBeforeStart.name) === true
+            && !cursorFreeformWrapperValid(openBeforeStart.args)
+          )
+        )
+      ) {
+        return [];
+      }
       if (name && !hasMcpArgBytes(args)) {
-        if (openBeforeStart && openBeforeStart.args.length === 0) return [];
         // Only commit a no-arg call when the tool is *explicitly* advertised. Without an advertised
         // tool list we cannot tell a real no-arg call from a Cursor prelude, so we keep dropping it.
         const advertised = state.clientToolNames?.has(name) ?? false;
