@@ -90,3 +90,69 @@ above is what this cycle stands on.
 | `72aa7fbf4` | phase 1 — reviewer-case tests |
 | `db315a9b6` | phase 1 — keying tests |
 | `8babf7d5c` | phase 2 — request-path slot |
+
+
+---
+
+# WP2 (phase 3) verification — sharded, matching CI
+
+The earlier unsharded run is superseded. CI runs the suite as four fresh-process
+shards (`scripts/ci/run-bun-test-batches.sh`, `test 1/4` … `4/4`), so that is the
+configuration this branch is verified against.
+
+Remote runner `lidge` (Ubuntu, Bun 1.3.14), branch at `41061b241`, GUI deps installed
+as CI does:
+
+| Shard | Exit | Failures |
+|---|---|---|
+| 1/4 | **0** | 0 |
+| 2/4 | **0** | 0 |
+| 3/4 | **0** | 0 |
+| 4/4 | **0** | 0 |
+
+**11,916 tests, 0 failures.** The new boundary suites — `core-lab-boundary`,
+`lab-activation`, `passive-route-linker`, `optional-shutdown-hooks`,
+`compatibility-provider-equivalence` — were picked up by the shards and passed there,
+not only in focused local runs.
+
+This also settles the earlier 127-failure unsharded result: the same tree passes clean
+when run the way CI runs it, confirming that result was cross-file interference rather
+than a defect in this work.
+
+## Boundary achieved
+
+```
+src/router.ts                24 -> 0   reachable src/lab modules
+src/server/lifecycle.ts      69 -> 0
+src/server/responses/core.ts 24 -> 0
+```
+
+`rg` over the four core files returns exactly one match — `router.ts:34` importing
+`routing/compatibility/assemble` — and `assemble.ts` itself now imports only
+`capability`, `cost`, `health`, `quota`, and `provider-slot`. Zero `lab/`.
+
+`src/server/index.ts` retains its Lab imports by design (composition root, `080`), gated
+behind `labActivationRequired`.
+
+## Guards proven non-vacuous
+
+| Guard | Driven red by | Result |
+|---|---|---|
+| direct import | `import { labRoot } from "./lab/paths"` in router.ts | failed, printed `src/router.ts -> src/lab/paths.ts` |
+| side-effect import | `import "./lab/paths"` | failed (3 assertions) |
+| runtime re-export | `export { labRoot } from "./lab/paths"` | failed (3 assertions) |
+| dynamic import | `void import("./lab/paths")` | **passed — a real hole**, fixed, now fails |
+| type-only negative | `import type` from `lab/constants` | correctly ignored |
+
+The dynamic-import case was found by attacking the guard rather than trusting it, and is
+the reason the attack forms are now permanent tests.
+
+## Commits (WP2)
+
+| SHA | Change |
+|---|---|
+| `683233368` | provider slot, relocated Lab evidence provider, synchronous gated activation, boundary guard |
+| `7fb57937b` | guard hole closed, four attack forms pinned |
+| `2e2cb005c` | invalid automation config no longer takes startup down |
+| `41061b241` | lock contention distinguished from invalid config |
+| `0f94c68be` | AGENTS.md boundary invariant |
