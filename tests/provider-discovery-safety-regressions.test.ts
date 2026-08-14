@@ -58,3 +58,32 @@ test("canonical static provider ignores stale liveModels true without network ac
   expect(await res.json()).toEqual({ applicable: false, reason: "static_catalog", latencyMs: 0 });
   expect(fetches).toBe(0);
 });
+
+test("canonical static provider rejects a liveModels true management patch", async () => {
+  const config: OcxConfig = {
+    port: 0,
+    hostname: "127.0.0.1",
+    defaultProvider: "cline-pass",
+    providers: {
+      "cline-pass": {
+        adapter: "openai-chat",
+        baseUrl: "https://api.cline.bot/api/v1",
+        authMode: "key",
+        apiKey: "test-key",
+        liveModels: false,
+        models: ["cline-pass/kimi-k3"],
+      },
+    },
+  };
+  const req = new Request("http://127.0.0.1/api/providers?name=cline-pass", {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ liveModels: true }),
+  });
+  const res = await handleManagementAPI(req, new URL(req.url), config, {});
+  if (!res) throw new Error("handler returned no response");
+
+  expect(res.status).toBe(400);
+  expect(await res.json()).toEqual({ error: "live model discovery is not supported for this provider" });
+  expect(config.providers["cline-pass"]?.liveModels).toBe(false);
+});
