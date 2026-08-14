@@ -27,12 +27,13 @@ test("static-only canonical key provider preserves explicit configured models", 
   expect(route.provider.models).toEqual(["mimo-auto", "preview-model"]);
 });
 
-test("legacy canonical MiMo row without auth mode is repaired to registry catalog", () => {
+test("legacy canonical MiMo row repairs auth without replacing explicit models", () => {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === "mimo-free")!;
   const provider: OcxProviderConfig = {
     adapter: "mimo-free",
-    baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+    baseUrl: entry.baseUrl,
     liveModels: true,
-    models: ["legacy-model"],
+    models: ["mimo-auto", "preview-model"],
   };
 
   enrichProviderFromRegistry("mimo-free", provider);
@@ -40,7 +41,7 @@ test("legacy canonical MiMo row without auth mode is repaired to registry catalo
   expect(provider).toMatchObject({
     authMode: "key",
     liveModels: false,
-    models: ["mimo-auto"],
+    models: ["mimo-auto", "preview-model"],
   });
 
   const config: OcxConfig = {
@@ -48,13 +49,30 @@ test("legacy canonical MiMo row without auth mode is repaired to registry catalo
     defaultProvider: "mimo-free",
     providers: { "mimo-free": {
       adapter: "mimo-free",
-      baseUrl: "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+      baseUrl: entry.baseUrl,
       liveModels: true,
-      models: ["legacy-model"],
+      models: ["mimo-auto", "preview-model"],
     } },
   };
   const route = routeModel(config, "mimo-free/mimo-auto");
   expect(route.provider).toMatchObject({
+    authMode: "key",
+    liveModels: false,
+    models: ["mimo-auto", "preview-model"],
+  });
+});
+
+test("legacy canonical MiMo row without models receives the registry default", () => {
+  const entry = PROVIDER_REGISTRY.find(row => row.id === "mimo-free")!;
+  const provider: OcxProviderConfig = {
+    adapter: "mimo-free",
+    baseUrl: entry.baseUrl,
+    liveModels: true,
+  };
+
+  enrichProviderFromRegistry("mimo-free", provider);
+
+  expect(provider).toMatchObject({
     authMode: "key",
     liveModels: false,
     models: ["mimo-auto"],
