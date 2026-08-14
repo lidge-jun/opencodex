@@ -168,3 +168,40 @@ describe("lab automation scheduler teardown — reviewer-reproduced cases", () =
     }
   });
 });
+
+// Two keys now exist for an activated config -- `lab-automation:` from the deps lease and
+// `lab-automation-scheduler:` from the timer. These pin the interaction so a future change
+// cannot make repeated starts accumulate hooks or leave a restarted timer unhooked.
+describe("scheduler hook keying", () => {
+  test("repeated starts do not accumulate and shutdown still stops the timer", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-idem-"));
+    try {
+      startLabAutomationScheduler(configDir);
+      startLabAutomationScheduler(configDir);
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+
+  // An in-process restart (service restart, test suite) must re-arm the hook.
+  test("a scheduler restarted after shutdown is stoppable again", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-restart-"));
+    try {
+      startLabAutomationScheduler(configDir);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+});
