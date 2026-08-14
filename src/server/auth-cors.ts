@@ -611,12 +611,13 @@ export function safeConfigDTO(config: OcxConfig): unknown {
     // still pointed at the same vendor route, and a usage restriction the user needs to see
     // must not disappear because the row was renamed. Prefer the same-name entry so an
     // unrenamed provider keeps its exact registry note.
-    const registryEntry = providerMatchesRegistryTransport(name, provider)
+    const sameNameRegistryEntry = providerMatchesRegistryTransport(name, provider)
       ? getProviderRegistryEntry(name)
-      : registryEntryForProviderDestination(provider);
+      : undefined;
+    const registryEntry = sameNameRegistryEntry ?? registryEntryForProviderDestination(provider);
     const registryNote = registryEntry?.note;
     if (typeof registryNote === "string" && registryNote.trim()) dto.note = registryNote;
-    if (registryEntry?.liveModelDiscoverySupported === false) dto.liveModelDiscoverySupported = false;
+    if (sameNameRegistryEntry?.liveModelDiscoverySupported === false) dto.liveModelDiscoverySupported = false;
     const codexAccountMode = providerCodexAccountMode(name, provider);
     if (codexAccountMode) dto.codexAccountMode = codexAccountMode;
     providers[name] = dto;

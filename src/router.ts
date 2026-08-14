@@ -348,7 +348,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(registryEntry.liveModelDiscoverySupported === false
       ? {
         liveModels: false,
-        ...(registryEntry.models ? { models: [...registryEntry.models] } : {}),
+        ...(repairLegacyMimoFreeAuth && registryEntry.models ? { models: [...registryEntry.models] } : {}),
       }
       : {}),
     // Backfill the Google wire mode + Vertex project/location from the registry when the user

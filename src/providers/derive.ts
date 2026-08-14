@@ -398,13 +398,14 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // `mimo-free` shipped with an invalid `local` mode before the registry key contract became
   // authoritative. Repair only that exact canonical row; custom destinations fail the transport
   // match above and keep their operator-owned credential mode.
-  if (name === "mimo-free" && prov.authMode === "local" && seed.authMode === "key") prov.authMode = "key";
+  const repairLegacyMimoFreeAuth = name === "mimo-free" && prov.authMode === "local" && seed.authMode === "key";
+  if (repairLegacyMimoFreeAuth) prov.authMode = "key";
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
-  if (entry.liveModelDiscoverySupported === false && seed.models) prov.models = [...seed.models];
+  if (repairLegacyMimoFreeAuth && entry.liveModelDiscoverySupported === false && seed.models) prov.models = [...seed.models];
   else if (!prov.models && seed.models) prov.models = [...seed.models];
   // An exact canonical preset with a static-only registry contract cannot honor a stale saved
   // discovery opt-in: there is no supported endpoint to call. Custom destinations fail the

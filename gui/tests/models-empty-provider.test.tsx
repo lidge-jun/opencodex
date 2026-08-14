@@ -558,7 +558,8 @@ test("OAuth discovery failure tells the user to re-login", () => {
   const html = renderHint(true, { status: "failed", reason: "http", httpStatus: 400 }, "oauth");
   expect(html).toContain("Re-login to restore live model discovery");
   expect(html).toContain("Configured models remain available");
-  expect(html).toContain("Open provider login");
+  expect(html).toContain("Open provider settings");
+  expect(html).not.toContain("Open provider login");
 });
 
 test("failed discovery renders each server-owned reason without provider detail", () => {

@@ -26,7 +26,7 @@ export function EmptyProviderHint({
           ? `${discoveryFailureLabel(t, failed)} ${discoveryRecoveryLabel(t, authMode)} `
           : `${t(liveModels ? "models.emptyDiscovery" : "models.emptyDiscoveryDisabled")} `}
         <button type="button" className="link-btn" onClick={() => navigateHash("providers")}>
-          {t(authMode === "oauth" && failed ? "models.openProviderLogin" : "models.openProviderSettings")}
+          {t("models.openProviderSettings")}
         </button>
       </span>
     </div>
