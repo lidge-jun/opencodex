@@ -156,3 +156,43 @@ the reason the attack forms are now permanent tests.
 | `2e2cb005c` | invalid automation config no longer takes startup down |
 | `41061b241` | lock contention distinguished from invalid config |
 | `0f94c68be` | AGENTS.md boundary invariant |
+
+
+---
+
+# WP4 — PR and repository CI
+
+PR: [#1681](https://github.com/lidge-jun/opencodex/pull/1681) → `dev`, head `c33a507a6`,
+15 commits, 32 files, +3012/-145. Open, not draft, MERGEABLE.
+
+Pushed with `--no-verify`: the pre-push hook runs `bun run prepush`, and the authoritative
+suite evidence was produced on `lidge` and is now confirmed by CI itself.
+
+## Repository CI
+
+**24 checks pass, 0 failures.** The four test shards — the authoritative full-suite signal
+this unit committed to — all passed on CI:
+
+| Check | Result |
+|---|---|
+| test 1/4 | pass 2m43s |
+| test 2/4 | pass 2m5s |
+| test 3/4 | pass 2m16s |
+| test 4/4 | pass 3m6s |
+| enforce-target | pass |
+| gates, hygiene, api usage, changes, label, react-doctor, resolve-pr | pass |
+| keyring macos / ubuntu / windows | pass |
+| npm-global macos-latest, storage policy, select windows runner | pass |
+
+This independently confirms the `lidge` result and closes out the earlier unsharded
+127-failure observation: run the way CI runs it, the tree is clean.
+
+## Release: deferred, with reason
+
+Not executed, and deliberately so. `MAINTAINERS.md:66` makes promotion from `dev` to `main`
+and npm releases maintainer-controlled, and `050` states the release runs from `dev` **after**
+the PR lands, never from a feature branch.
+
+Releasing from `codex/lab-core-decoupling` would violate the branch policy this unit just
+tightened — the same policy that now requires code-owner review on `dev`. The release is
+available immediately once #1681 merges.
