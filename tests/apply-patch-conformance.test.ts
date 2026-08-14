@@ -3,9 +3,8 @@ import { expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
 import {
   ADAPTER_REGISTRY,
   adapterDefinitions,
@@ -74,91 +73,36 @@ async function collectTypeScriptFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-function isDirectAdapterModule(specifier: string): boolean {
-  return /(?:^|\/)adapters\/(?!registry(?:$|\/))/.test(specifier);
-}
+const DIRECT_ADAPTER_IMPLEMENTATION_MODULES = new Set([
+  "anthropic",
+  "azure",
+  "command-code",
+  "cursor",
+  "google",
+  "kiro",
+  "mimo-free",
+  "openai-chat",
+  "openai-responses",
+]);
 
-function isAdapterFactoryName(name: string): boolean {
-  return /^create[A-Za-z0-9_]*Adapter$/.test(name);
+const importScanner = new Bun.Transpiler({ loader: "ts" });
+
+function isDirectAdapterModule(specifier: string): boolean {
+  const normalized = posix.normalize(specifier.replaceAll("\\", "/"));
+  const parts = normalized.split("/");
+  const adapterIndex = parts.lastIndexOf("adapters");
+  if (adapterIndex < 0 || adapterIndex !== parts.length - 2) return false;
+  const leaf = parts.at(-1)!;
+  const extensionIndex = leaf.lastIndexOf(".");
+  const moduleName = extensionIndex > 0 ? leaf.slice(0, extensionIndex) : leaf;
+  return DIRECT_ADAPTER_IMPLEMENTATION_MODULES.has(moduleName);
 }
 
 async function directAdapterFactoryImports(path: string): Promise<string[]> {
   const source = await readFile(path, "utf8");
-  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const findings: string[] = [];
-  const namespaceImports = new Set<string>();
-
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      const specifier = node.moduleSpecifier.text;
-      if (isDirectAdapterModule(specifier)) {
-        const clause = node.importClause;
-        const bindings = clause?.namedBindings;
-        if (clause?.name) findings.push(`default import from direct adapter module ${specifier}`);
-        if (bindings && ts.isNamedImports(bindings)) {
-          for (const element of bindings.elements) {
-            const imported = element.propertyName?.text ?? element.name.text;
-            if (isAdapterFactoryName(imported)) {
-              findings.push(`direct factory import ${imported} from ${specifier}`);
-            }
-          }
-        } else if (bindings && ts.isNamespaceImport(bindings)) {
-          namespaceImports.add(bindings.name.text);
-        }
-      }
-    }
-
-    if (
-      ts.isPropertyAccessExpression(node)
-      && ts.isIdentifier(node.expression)
-      && namespaceImports.has(node.expression.text)
-      && isAdapterFactoryName(node.name.text)
-    ) {
-      findings.push(`namespace factory access ${node.expression.text}.${node.name.text}`);
-    }
-
-    if (
-      ts.isCallExpression(node)
-      && node.expression.kind === ts.SyntaxKind.ImportKeyword
-      && node.arguments.length === 1
-      && ts.isStringLiteral(node.arguments[0]!)
-      && isDirectAdapterModule(node.arguments[0]!.text)
-    ) {
-      findings.push(`dynamic adapter import ${node.arguments[0]!.text}`);
-    }
-
-    if (
-      ts.isCallExpression(node)
-      && ts.isIdentifier(node.expression)
-      && node.expression.text === "require"
-      && node.arguments.length === 1
-      && ts.isStringLiteral(node.arguments[0]!)
-      && isDirectAdapterModule(node.arguments[0]!.text)
-    ) {
-      findings.push(`require adapter import ${node.arguments[0]!.text}`);
-    }
-
-    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      const specifier = node.moduleSpecifier.text;
-      if (isDirectAdapterModule(specifier)) {
-        if (!node.exportClause) {
-          findings.push(`adapter export-star from ${specifier}`);
-        } else if (ts.isNamedExports(node.exportClause)) {
-          for (const element of node.exportClause.elements) {
-            const exported = element.propertyName?.text ?? element.name.text;
-            if (isAdapterFactoryName(exported)) {
-              findings.push(`factory re-export ${exported} from ${specifier}`);
-            }
-          }
-        }
-      }
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-  return findings;
+  return importScanner.scan(source).imports
+    .filter(entry => isDirectAdapterModule(entry.path))
+    .map(entry => `${entry.kind} from ${entry.path}`);
 }
 
 function providerFixture(adapter: string, wire: AdapterWire): OcxProviderConfig {
