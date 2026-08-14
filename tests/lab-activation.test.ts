@@ -9,8 +9,13 @@ import {
   isLabActivated,
   resetLabActivationForTests,
 } from "../src/lib/lab-activation";
-import { resolveCompatibilityEvidenceProvider } from "../src/routing/compatibility/provider-slot";
-import { hasPassiveRouteLinker } from "../src/server/passive-route-linker";
+import {
+  resolveCompatibilityEvidenceProvider,
+  resetCompatibilityEvidenceProviderForTests,
+} from "../src/routing/compatibility/provider-slot";
+import { isLabAutomationSchedulerRunning, stopLabAutomationScheduler } from "../src/lab/automation/orchestrator";
+import { runOptionalShutdownHooks, resetOptionalShutdownHooksForTests } from "../src/lib/optional-shutdown-hooks";
+import { hasPassiveRouteLinker, resetPassiveRouteLinkerForTests } from "../src/server/passive-route-linker";
 import type { OcxConfig } from "../src/types";
 
 function scratch(): string {
@@ -22,7 +27,13 @@ const withProfile = { providers: {}, routingProfiles: { p: { candidates: [] } } 
 const bare = { providers: {} } as unknown as OcxConfig;
 
 describe("lab activation gate", () => {
-  beforeEach(() => resetLabActivationForTests());
+  // Slots are process-global, so a sibling test file that registered one directly would
+  // otherwise leak into the bare-install assertion below.
+  beforeEach(() => {
+    resetLabActivationForTests();
+    resetCompatibilityEvidenceProviderForTests();
+    resetPassiveRouteLinkerForTests();
+  });
 
   // The property the owner asked for: an install with no profile and no automation
   // registers nothing, so the request path has no Lab code to run.
@@ -85,7 +96,13 @@ describe("lab activation gate", () => {
 });
 
 describe("automation detection reads the current authority", () => {
-  beforeEach(() => resetLabActivationForTests());
+  // Slots are process-global, so a sibling test file that registered one directly would
+  // otherwise leak into the bare-install assertion below.
+  beforeEach(() => {
+    resetLabActivationForTests();
+    resetCompatibilityEvidenceProviderForTests();
+    resetPassiveRouteLinkerForTests();
+  });
 
   test("combined automation-config.json wins over the legacy file", () => {
     const dir = scratch();
@@ -118,5 +135,23 @@ describe("automation detection reads the current authority", () => {
 
   test("nothing on disk is not enabled", () => {
     expect(labAutomationEnabledOnDisk(scratch())).toBe(false);
+  });
+});
+
+describe("failed scheduler start leaves nothing dangling", () => {
+  beforeEach(() => { resetLabActivationForTests(); resetOptionalShutdownHooksForTests(); });
+
+  // startLabAutomationScheduler registers its shutdown hook BEFORE it can throw, so a
+  // failed start leaves a hook with no timer behind it. That must be harmless: no running
+  // scheduler, and running the hooks must not surface the config error at shutdown.
+  test("no timer is left running and shutdown stays safe", () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "lab", "automation-config.json"), JSON.stringify({
+      schemaVersion: 1, policy: { schemaVersion: 1, enabled: true }, routes: {},
+    }));
+    activateLab(withProfile, dir);
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(false);
+    expect(() => runOptionalShutdownHooks()).not.toThrow();
+    stopLabAutomationScheduler(dir);
   });
 });

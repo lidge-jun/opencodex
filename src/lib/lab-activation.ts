@@ -15,12 +15,19 @@
  *
  * See devlog/_plan/260814_lab_core_decoupling/080_activation_is_synchronous.md
  *
+ * Startup degrades, explicit operator action reports. This asymmetry is deliberate: an
+ * invalid automation config disables automation with a warning here, but the management
+ * API and CLI paths that start a scheduler leave `LabAutomationError` to surface (the
+ * management route maps it to a 400). Someone who just toggled automation should see the
+ * validation error; someone merely starting the proxy should not lose unrelated traffic.
+ *
  * @internal host integration only
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { labAutomationPolicyPath } from "../lab/paths";
 import type { OcxConfig } from "../types";
+import { LabAutomationError } from "../lab/automation/types";
 import { registerLabPassiveRouteLinker } from "./lab-passive-linker-registration";
 import { setCompatibilityEvidenceProvider } from "../routing/compatibility/provider-slot";
 import { labCompatibilityEvidenceProvider } from "../routing/compatibility/lab-evidence-provider";
@@ -108,13 +115,26 @@ export function activateLab(config: OcxConfig, configDir?: string): void {
     try {
       startLabAutomationScheduler(configDir);
     } catch (err) {
-      // A partially written or invalid automation config must not take the proxy down at
-      // startup. Lab automation stays off; routing, evidence, and every other subsystem
-      // keep working. The operator gets a message naming what to fix.
-      console.warn(
-        "[lab] automation config is invalid; Lab automation is disabled for this run:",
-        err instanceof Error ? err.message : err,
-      );
+      // Neither a malformed automation file nor a busy state lock may take the proxy down
+      // at startup. Lab automation stays off for this run; routing, evidence, and every
+      // other subsystem keep working.
+      //
+      // The two causes get different messages because they need different actions, and a
+      // lock-contention failure reported as "invalid config" sends the operator to fix a
+      // file that is fine. Contention can also stall startup by up to the 5s lock wait.
+      const code = err instanceof LabAutomationError ? err.code : null;
+      if (code === "state_lock_busy" || code === "state_lock_failed") {
+        console.warn(
+          "[lab] Lab automation did not start: another process holds the automation state lock."
+          + " Automation stays off for this run and will be retried on the next start.",
+        );
+      } else {
+        console.warn(
+          "[lab] Lab automation is disabled for this run because its configuration could not be"
+          + " loaded:",
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
   }
 }
