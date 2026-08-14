@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 /**
@@ -23,8 +23,15 @@ const PROTECTED = [
 
 const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
 
-/** Runtime imports only: `import type` is erased and costs nothing at runtime. */
-const IMPORT_RE = /^\s*import\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|^\s*export\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']/gm;
+/**
+ * Runtime imports only: `import type` is erased and costs nothing at runtime.
+ *
+ * Covers static imports, side-effect imports, runtime re-exports, AND dynamic `import()`.
+ * Dynamic import was a real hole: an earlier version of this guard matched only the first
+ * three forms, and `void import("./lab/paths")` in a protected file passed cleanly while
+ * loading Lab at runtime. Found by attacking the guard rather than trusting it.
+ */
+const IMPORT_RE = /^\s*import\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|^\s*import\s+["']([^"']+)["']|^\s*export\s+(?!type\b)[^;]*?from\s+["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gm;
 
 function resolveSpec(spec: string, fromFile: string): string | null {
   if (!spec.startsWith(".")) return null;
@@ -47,7 +54,7 @@ function firstLabPath(entry: string): string[] | null {
     IMPORT_RE.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = IMPORT_RE.exec(source)) !== null) {
-      const spec = match[1] ?? match[2] ?? match[3];
+      const spec = match[1] ?? match[2] ?? match[3] ?? match[4];
       if (!spec) continue;
       const next = resolveSpec(spec, current);
       if (!next || previous.has(next)) continue;
@@ -84,5 +91,46 @@ describe("core / Compatibility Lab boundary", () => {
     // Print the full chain on failure: a bare verdict would send the next maintainer on
     // the same multi-hour hunt this unit required.
     expect(chain === null ? "clean" : chain.join(" -> ")).toBe("clean");
+  });
+});
+
+/**
+ * A guard nobody attacks is a guard nobody can trust. These synthesize each import form
+ * against a temporary file and assert the walker sees it, so the walker cannot silently
+ * regress into matching only the shapes that happen to exist today.
+ *
+ * The dynamic-import case is here because it was a REAL hole: `void import("./lab/paths")`
+ * in a protected file passed the original guard while loading Lab at runtime.
+ */
+describe("boundary guard cannot be defeated", () => {
+  const attacks: Array<[string, string]> = [
+    ["static import", 'import { labRoot } from "../lab/paths";'],
+    ["side-effect import", 'import "../lab/paths";'],
+    ["runtime re-export", 'export { labRoot } from "../lab/paths";'],
+    ["top-level dynamic import", 'void import("../lab/paths");'],
+  ];
+
+  test.each(attacks)("detects a %s", (_label, line) => {
+    const probe = join(repoRoot, "src", "server", `__boundary_probe_${Math.random().toString(36).slice(2)}.ts`);
+    writeFileSync(probe, line + '\nexport const probe = 1;\n');
+    try {
+      const chain = firstLabPath(probe.slice(repoRoot.length + 1));
+      expect(chain).not.toBeNull();
+      expect(chain!.join(" -> ")).toContain("lab/paths.ts");
+    } finally {
+      rmSync(probe, { force: true });
+    }
+  });
+
+  // `import type` is erased at build time, so it must NOT be treated as a runtime edge.
+  test("ignores type-only imports", () => {
+    const probe = join(repoRoot, "src", "server", `__boundary_probe_type_${Math.random().toString(36).slice(2)}.ts`);
+    const line = 'import type { CompatibilityVerdict } from "../lab/constants";';
+    writeFileSync(probe, line + '\nexport type P = CompatibilityVerdict;\n');
+    try {
+      expect(firstLabPath(probe.slice(repoRoot.length + 1))).toBeNull();
+    } finally {
+      rmSync(probe, { force: true });
+    }
   });
 });
