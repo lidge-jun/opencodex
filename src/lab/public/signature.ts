@@ -88,9 +88,9 @@ function createPrivateKeyFile(path: string): string {
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
   publishPrivateFileExclusive(path, Buffer.from(privateKey, "utf8"), {
-    // On Windows, harden the stage before the final key pathname is visible. A
-    // required ACL failure therefore cannot leave a newly-published key exposed.
-    beforePublish: stagePath => requirePublisherKeyAcl(stagePath, path),
+    // On Windows, harden the empty stage before private key bytes are written.
+    // A required ACL failure therefore cannot strand secret bytes in a stage.
+    prepareStage: stagePath => requirePublisherKeyAcl(stagePath, path),
   });
   return readRestrictedPrivateKey(path);
 }
