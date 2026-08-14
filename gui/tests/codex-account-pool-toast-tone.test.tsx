@@ -131,7 +131,7 @@ async function mountPool(controller: CodexAccountPoolController, strictMode = fa
           controller={controller}
           requestOwnerToken={async () => "admin-secret"}
         />
-      </LanguageProvider>,
+      </LanguageProvider>
     );
     root.render(strictMode ? <StrictMode>{element}</StrictMode> : element);
   });
@@ -456,7 +456,63 @@ test("a terminal identity conflict stays recoverable when durable retry cleanup 
     expect(consumedOperationIds).toEqual([staleOperationId]);
     expect(localStorage.getItem(storageKey)).toBe(staleOperationId);
     expect(host.querySelector("dialog")).toBeTruthy();
-    expect(host.textContent).toContain("Failed to redeem reset credit");
+    expect(host.textContent).toContain("The Codex account identity changed");
+    expect(host.textContent).toContain("local retry state could not be cleared");
+  } finally {
+    Object.defineProperty(storage, "removeItem", {
+      configurable: true,
+      value: originalRemoveItem,
+    });
+  }
+});
+
+test("a successful redeem remains visible when durable retry cleanup fails", async () => {
+  const operationId = "00000000-0000-4000-8000-000000000780";
+  const storageKey = "ocx.codexResetCreditOperation.v2.pool-1";
+  localStorage.setItem(storageKey, operationId);
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits/consume") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
+        return Response.json({ code: "reset" });
+      }
+      return baseFetch(input, init);
+    },
+  });
+  const storage = localStorage;
+  const originalRemoveItem = storage.removeItem.bind(storage);
+  Object.defineProperty(storage, "removeItem", {
+    configurable: true,
+    value: (key: string) => {
+      if (key === storageKey) throw new Error("storage unavailable");
+      return originalRemoveItem(key);
+    },
+  });
+  try {
+    await mountPool(makeController());
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    ) as HTMLButtonElement;
+    await act(async () => { useCredit.click(); });
+    const redeem = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").trim() === "Use Credit",
+    ) as HTMLButtonElement;
+    await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+    expect(consumeAttempts).toBe(1);
+    expect(consumedOperationIds).toEqual([operationId]);
+    expect(localStorage.getItem(storageKey)).toBe(operationId);
+    expect(host.querySelector("dialog")).toBeTruthy();
+    expect(host.textContent).toContain("Rate limits reset!");
+    expect(host.textContent).toContain("local retry state could not be cleared");
   } finally {
     Object.defineProperty(storage, "removeItem", {
       configurable: true,

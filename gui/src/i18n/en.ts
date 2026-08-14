@@ -1586,6 +1586,7 @@ export const en = {
   "codexAuth.resetNoCredit": "No reset credits available.",
   "codexAuth.resetError": "Failed to redeem reset credit. Please try again.",
   "codexAuth.resetIdentityChanged": "The Codex account identity changed. Reopen this dialog to confirm a new reset-credit request.",
+  "codexAuth.resetRetryStateStuck": "{outcome} The result is final, but its local retry state could not be cleared. Fix browser storage access before trying again.",
   "codexAuth.fifoNote": "The oldest credit is used first.",
   "codexAuth.confirmWhichCredit": "Credit from {date} will be used.",
   "codexAuth.creditNext": "Next to use",

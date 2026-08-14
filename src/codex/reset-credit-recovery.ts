@@ -21,11 +21,24 @@ export type CodexResetCreditRevalidationResult =
   | { kind: "stale-generation" }
   | { kind: "no-credit" };
 
+export const CODEX_RESET_CREDIT_CONSUME_CODES = Object.freeze([
+  "reset",
+  "already_redeemed",
+  "nothing_to_reset",
+  "no_credit",
+] as const);
+
 export type CodexResetCreditConsumeCode =
-  | "reset"
-  | "already_redeemed"
-  | "nothing_to_reset"
-  | "no_credit";
+  (typeof CODEX_RESET_CREDIT_CONSUME_CODES)[number];
+
+const CODEX_RESET_CREDIT_CONSUME_CODE_SET: ReadonlySet<string> =
+  new Set(CODEX_RESET_CREDIT_CONSUME_CODES);
+
+export function isCodexResetCreditConsumeCode(
+  value: unknown,
+): value is CodexResetCreditConsumeCode {
+  return typeof value === "string" && CODEX_RESET_CREDIT_CONSUME_CODE_SET.has(value);
+}
 
 declare const CODEX_RESERVED_OPERATION_ID_BRAND: unique symbol;
 
@@ -189,13 +202,6 @@ const CANCELLED_BEFORE_DISPATCH = freezeResult({
   kind: "not-dispatched",
   reason: "cancelled-before-dispatch",
 } as const);
-
-const CONSUME_CODES: ReadonlySet<string> = new Set([
-  "reset",
-  "already_redeemed",
-  "nothing_to_reset",
-  "no_credit",
-]);
 
 const RESET_ELIGIBLE_CODES = {
   usage_limit_exceeded: true,
@@ -374,8 +380,8 @@ function consumeCode(
 ): CodexResetCreditConsumeCode | undefined {
   const code = ownStringField(input, "code");
   const operationId = ownStringField(input, "operationId");
-  return code && CONSUME_CODES.has(code) && operationId === expectedOperationId
-    ? code as CodexResetCreditConsumeCode
+  return isCodexResetCreditConsumeCode(code) && operationId === expectedOperationId
+    ? code
     : undefined;
 }
 

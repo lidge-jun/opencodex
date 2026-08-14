@@ -265,7 +265,7 @@ devreder. Rotaları şunlardır:
 | `PUT /api/codex-auth/failover` | Hesap yük devretme eşiğini ayarlayın | 400 geçersiz eşik |
 | `GET /api/codex-auth/quota` | Hesaba göre önbelleğe alınmış kota durumunu okuyun | — |
 | `GET /api/codex-auth/reset-credits` | Bir hesap için sıfırlama kredisi uygunluğunu inceleyin | 400 eksik hesap kimliği; yukarı akış durum doğrudan geçişi; 500 arama hatası |
-| `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin. Yeniden girilmiş sahip yönetici belirteciyle doğrulanan bir GUI oturumu veya CLI'nin tek kullanımlık yerel onay capability'si gerekir; yalnızca yönetici kimlik doğrulaması ya da `confirmed` alanı yeterli değildir. Çağıran, terminal code alana kadar aynı operation ID'yi kalıcı olarak yeniden kullanmalıdır; quota refresh ayrı bir takip okumasıdır | 400 geçersiz kimlik; 403 `agent_consent_required`; yukarı akış durum doğrudan geçişi; 503 `server_busy`; 500 tüketme hatası |
+| `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin. Yeniden girilmiş sahip yönetici belirteciyle doğrulanan bir GUI oturumu veya CLI'nin tek kullanımlık yerel onay capability'si gerekir; yalnızca yönetici kimlik doğrulaması ya da `confirmed` alanı yeterli değildir. Çağıran, terminal code içeren bir response alana kadar aynı operation ID'yi kalıcı olarak yeniden kullanmalıdır; quota refresh ayrı bir takip okumasıdır | 400 eksik/geçersiz `accountId` veya `operationId`; 403 `agent_consent_required`; 409 `reset_credit_operation_identity_changed`; yukarı akış durum doğrudan geçişi; 503 `server_busy`; 500 tüketme hatası |
 | `POST /api/codex-auth/login` | Codex girişini veya yeniden kimlik doğrulamasını başlatın | 400 geçersiz istek; çakışma/meşgul giriş durumları |
 | `POST /api/codex-auth/login/code` | Bir Codex giriş akışı için manuel bir kod gönderin | 400 geçersiz akış/kod |
 | `POST /api/codex-auth/login/cancel` | Bir Codex giriş akışını iptal edin | — |
@@ -300,4 +300,3 @@ rehberli iş akışını sağlar. Başsız ana bilgisayarlar ve otomasyon için 
 olduğunda veya işlem başarısız olduğunda sıfır olmayan bir sonuç döndürürler.
 Doğrudan HTTP, yukarıdaki tam uç nokta sözleşmelerine ihtiyaç duyan
 entegrasyonlar için en yararlıdır.
-

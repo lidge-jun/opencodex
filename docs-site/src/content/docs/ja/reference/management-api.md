@@ -217,7 +217,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
 | `GET /api/codex-auth/quota` |キャッシュされたクォータ状態をアカウントごとに読み取る | — |
 | `GET /api/codex-auth/reset-credits` |アカウントのリセット クレジット資格を検査する | 400 アカウント ID がありません。アップストリームステータスパススルー。 500 検索失敗 |
-| `POST /api/codex-auth/reset-credits/consume` | 対象のリセット クレジットを消費する。管理 token の再入力で所有者を確認した GUI session、または CLI の one-shot ローカル同意 capability が必要。管理認証だけや `confirmed` field では代替不可。terminal code を受け取るまで同じ operation ID を永続的に再利用し、quota refresh は別の後続 read として行う | 400 無効な identity; 403 `agent_consent_required`; upstream status passthrough; 503 `server_busy`; 500 消費失敗 |
+| `POST /api/codex-auth/reset-credits/consume` | 対象のリセット クレジットを消費する。管理 token の再入力で所有者を確認した GUI session、または CLI の one-shot ローカル同意 capability が必要。管理認証だけや `confirmed` field では代替不可。terminal code を含む response を受け取るまで同じ operation ID を永続的に再利用し、quota refresh は別の後続 read として行う | 400 `accountId` または `operationId` の欠落/無効; 403 `agent_consent_required`; 409 `reset_credit_operation_identity_changed`; upstream status passthrough; 503 `server_busy`; 500 消費失敗 |
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
 | `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |

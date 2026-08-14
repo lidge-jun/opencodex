@@ -1078,6 +1078,27 @@ describe("management and data-plane credential separation", () => {
       expect(guiResponse.status).toBe(403);
       expect(await guiResponse.json()).toMatchObject({ code: "agent_consent_required" });
 
+      const wrongOwnerResponse = await fetch(
+        new URL("/api/codex-auth/reset-credits/consume", server.url),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Origin: server.url.origin,
+            "x-opencodex-api-key": session?.token ?? "",
+            "x-opencodex-gui-origin": session?.origin ?? "",
+            "x-opencodex-csrf-token": session?.csrfToken ?? "",
+            [CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER]: "not-the-admin-secret",
+          },
+          body: "{}",
+        },
+      );
+      expect(wrongOwnerResponse.status).toBe(403);
+      expect(await wrongOwnerResponse.json()).toEqual({
+        error: "User consent is required to consume a reset credit",
+        code: "agent_consent_required",
+      });
+
       const ownerProvedResponse = await fetch(
         new URL("/api/codex-auth/reset-credits/consume", server.url),
         {

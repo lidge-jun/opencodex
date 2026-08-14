@@ -1087,7 +1087,7 @@ export function openManualResetCreditOperation(
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
     return withLedger((database, recordCount, manualIdCount) => {
-      const reserve = (replaceCurrent: boolean): OpenManualResetCreditOperationResult => {
+      const admitNewCallerId = () => {
         if (manualIdCount >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
           return Object.freeze({ kind: "capacity" as const });
         }
@@ -1097,6 +1097,12 @@ export function openManualResetCreditOperation(
             kind: existingOwner === owner.accountKey ? "unavailable" as const : "identity-mismatch" as const,
           });
         }
+        return undefined;
+      };
+
+      const reserve = (replaceCurrent: boolean): OpenManualResetCreditOperationResult => {
+        const rejected = admitNewCallerId();
+        if (rejected) return rejected;
 
         const record: ResetCreditOperationRecord = Object.freeze({
           accountKey: owner.accountKey,
@@ -1166,15 +1172,8 @@ export function openManualResetCreditOperation(
           return Object.freeze({ kind: "unavailable" as const });
         }
         if (!isTerminal(current)) {
-          if (manualIdCount >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
-            return Object.freeze({ kind: "capacity" as const });
-          }
-          const existingOwner = operationOwner(database, identity.operationId);
-          if (existingOwner !== undefined) {
-            return Object.freeze({
-              kind: existingOwner === owner.accountKey ? "unavailable" as const : "identity-mismatch" as const,
-            });
-          }
+          const rejected = admitNewCallerId();
+          if (rejected) return rejected;
           insertManualIdRecord(database, Object.freeze({
             operationId: identity.operationId,
             accountKey: owner.accountKey,

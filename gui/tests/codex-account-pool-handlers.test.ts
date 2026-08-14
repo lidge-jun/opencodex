@@ -122,3 +122,53 @@ test("transport and malformed outcomes remain ambiguous for same-id retry", asyn
     toast: "codexAuth.resetError",
   });
 });
+
+test("a stalled reset request aborts to an ambiguous retry after the GUI budget", async () => {
+  const timeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout");
+  const anyDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  const timeoutController = new AbortController();
+  let timeoutMs = 0;
+  Object.defineProperty(AbortSignal, "timeout", {
+    configurable: true,
+    value: (ms: number) => {
+      timeoutMs = ms;
+      queueMicrotask(() => timeoutController.abort(new DOMException("timed out", "TimeoutError")));
+      return timeoutController.signal;
+    },
+  });
+  Object.defineProperty(AbortSignal, "any", {
+    configurable: true,
+    value: (signals: AbortSignal[]) => signals[1],
+  });
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      return await new Promise<Response>((_resolve, reject) => {
+        const rejectAbort = () => reject(signal?.reason ?? new DOMException("aborted", "AbortError"));
+        if (signal?.aborted) rejectAbort();
+        else signal?.addEventListener("abort", rejectAbort, { once: true });
+      });
+    },
+  });
+  try {
+    const result = await redeemResetCredit(
+      "",
+      "acct-1",
+      crypto.randomUUID(),
+      t,
+      async () => true,
+      "owner-proof",
+    );
+    expect(timeoutMs).toBe(15_000);
+    expect(result).toEqual({
+      ok: false,
+      outcome: "ambiguous",
+      toast: "codexAuth.resetError",
+    });
+  } finally {
+    if (timeoutDescriptor) Object.defineProperty(AbortSignal, "timeout", timeoutDescriptor);
+    if (anyDescriptor) Object.defineProperty(AbortSignal, "any", anyDescriptor);
+  }
+});

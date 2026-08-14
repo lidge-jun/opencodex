@@ -1130,6 +1130,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "没有可用的重置额度。",
   "codexAuth.resetError": "重置额度使用失败，请重试。",
   "codexAuth.resetIdentityChanged": "Codex 账户身份已更改。请重新打开此对话框并确认新的重置请求。",
+  "codexAuth.resetRetryStateStuck": "{outcome} 结果已确定，但无法清除本地重试状态。再次尝试前，请修复浏览器存储访问权限。",
   "codexAuth.fifoNote": "最早获得的额度优先使用。",
   "codexAuth.confirmWhichCredit": "将使用 {date} 获得的额度。",
   "codexAuth.creditNext": "即将使用",

@@ -1567,6 +1567,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "Нет доступных кредитов сброса.",
   "codexAuth.resetError": "Не удалось использовать кредит сброса. Попробуйте ещё раз.",
   "codexAuth.resetIdentityChanged": "Идентификатор аккаунта Codex изменился. Снова откройте диалог и подтвердите новый запрос сброса.",
+  "codexAuth.resetRetryStateStuck": "{outcome} Результат окончательный, но локальное состояние повтора не удалось очистить. Перед новой попыткой восстановите доступ к хранилищу браузера.",
   "codexAuth.fifoNote": "Первым используется самый старый кредит.",
   "codexAuth.confirmWhichCredit": "Будет использован кредит от {date}.",
   "codexAuth.creditNext": "Следующий к использованию",

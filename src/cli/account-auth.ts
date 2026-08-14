@@ -6,6 +6,7 @@ import {
   reservePendingResetCreditOperation,
 } from "./reset-credit-pending";
 import { isCodexResetCreditConsentAccountId } from "../lib/codex-reset-credit-consent-contract";
+import { isCodexResetCreditConsumeCode } from "../codex/reset-credit-recovery";
 import type { AccountDeps } from "./account-api";
 import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import {
@@ -288,7 +289,14 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
       ? (body as { code?: unknown }).code
       : undefined;
     if (terminalCode === "reset_credit_operation_identity_changed") {
-      clearOperation();
+      try {
+        clearOperation();
+      } catch {
+        throw new CliUsageError(
+          "Codex account identity changed, but reset-credit retry state could not be cleared; repair the local retry store before confirming a new request",
+          USAGE,
+        );
+      }
       throw new CliUsageError(
         "Codex account identity changed; rerun the command to confirm a new reset-credit request",
         USAGE,
@@ -301,12 +309,7 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
         : `Reset-credit request failed (${consent.response.status})`;
       throw new CliUsageError(detail, USAGE);
     }
-    if (
-      terminalCode === "reset"
-      || terminalCode === "already_redeemed"
-      || terminalCode === "nothing_to_reset"
-      || terminalCode === "no_credit"
-    ) {
+    if (isCodexResetCreditConsumeCode(terminalCode)) {
       clearOperation();
     }
     result = body;

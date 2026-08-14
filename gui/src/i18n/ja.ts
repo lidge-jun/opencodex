@@ -1525,6 +1525,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "利用可能なリセットクレジットはありません。",
   "codexAuth.resetError": "リセットクレジットの引き換えに失敗しました。もう一度お試しください。",
   "codexAuth.resetIdentityChanged": "Codex アカウントの ID が変更されました。このダイアログを開き直し、新しいリセット要求を確認してください。",
+  "codexAuth.resetRetryStateStuck": "{outcome} 結果は確定していますが、ローカルの再試行状態を消去できませんでした。再試行する前にブラウザー ストレージへのアクセスを修正してください。",
   "codexAuth.fifoNote": "最も古いクレジットが先に使用されます。",
   "codexAuth.confirmWhichCredit": "{date} のクレジットが使用されます。",
   "codexAuth.creditNext": "次に使用",

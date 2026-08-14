@@ -1137,6 +1137,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "사용 가능한 리셋 크레딧이 없습니다.",
   "codexAuth.resetError": "리셋 크레딧 사용에 실패했습니다. 다시 시도해 주세요.",
   "codexAuth.resetIdentityChanged": "Codex 계정 식별 정보가 변경되었습니다. 이 대화상자를 다시 열어 새 리셋 요청을 확인하세요.",
+  "codexAuth.resetRetryStateStuck": "{outcome} 결과는 확정되었지만 로컬 재시도 상태를 지우지 못했습니다. 다시 시도하기 전에 브라우저 저장소 접근을 복구하세요.",
   "codexAuth.fifoNote": "가장 오래된 크레딧부터 사용됩니다.",
   "codexAuth.confirmWhichCredit": "{date}에 획득한 크레딧이 사용됩니다.",
   "codexAuth.creditNext": "다음 사용 대상",

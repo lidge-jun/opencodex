@@ -1505,6 +1505,28 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(pendingId).toBeUndefined();
     });
 
+    test("reset-credit identity change remains explicit when stale retry cleanup fails", async () => {
+      const result = await run(
+        ["reset-credits", "main", "--consume", "--yes"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => false,
+          reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174003",
+          clearResetCreditOperationImpl: () => false,
+          requestResetCreditConsentImpl: async () => ({
+            kind: "response",
+            response: json({
+              error: "The Codex account identity changed. Confirm a new reset-credit request.",
+              code: "reset_credit_operation_identity_changed",
+            }, 409),
+          }),
+        },
+      );
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("identity changed");
+      expect(result.stderr).toContain("retry state could not be cleared");
+    });
+
     test("reset-credit terminal result fails closed when its retry id cannot be cleared", async () => {
       const result = await run(
         ["reset-credits", "main", "--consume", "--yes"],
@@ -1543,20 +1565,25 @@ describe("ocx account CLI (issue #180 matrix)", () => {
     });
 
     test("reset-credit consume preserves the invalid-account diagnostic", async () => {
+      let consentCalls = 0;
       const result = await run(
         ["reset-credits", "../bad", "--consume", "--yes"],
         {
           ...defaultDeps(),
           isAgentDrivenImpl: () => false,
-          requestResetCreditConsentImpl: async () => ({
-            kind: "unavailable",
-            reason: "invalid-identity",
-          }),
+          requestResetCreditConsentImpl: async () => {
+            consentCalls += 1;
+            return {
+              kind: "unavailable",
+              reason: "invalid-identity",
+            };
+          },
         },
       );
 
       expect(result.code).toBe(2);
       expect(result.stderr).toContain("Invalid account id format");
+      expect(consentCalls).toBe(0);
     });
 
     test("a silent pipe times out and cleans up its listeners", async () => {

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { BOUNDED_BODY_MAX_BYTES } from "../src/lib/bounded-body";
 import {
   CodexResetCreditConsumeError,
   consumeCodexResetCredit,
 } from "../src/codex/reset-credit-consume";
+import { CODEX_RESET_CREDIT_CONSUME_CODES } from "../src/codex/reset-credit-recovery";
 
 const OPERATION_ID = "00000000-0000-4000-8000-000000000657";
 
@@ -16,7 +18,7 @@ function input(signal = new AbortController().signal) {
 }
 
 describe("Codex reset-credit consume transport", () => {
-  for (const code of ["reset", "already_redeemed", "nothing_to_reset", "no_credit"] as const) {
+  for (const code of CODEX_RESET_CREDIT_CONSUME_CODES) {
     test(`sends and echoes one stable operation id for ${code}`, async () => {
       let seenUrl = "";
       let seenBody: unknown;
@@ -61,7 +63,7 @@ describe("Codex reset-credit consume transport", () => {
     await expect(consumeCodexResetCredit(input(), {
       fetchImpl: async () => new Response(new ReadableStream({
         cancel() { cancelled = true; },
-      }), { headers: { "content-length": "65537" } }),
+      }), { headers: { "content-length": String(BOUNDED_BODY_MAX_BYTES + 1) } }),
     })).rejects.toMatchObject({ reason: "invalid-response" });
     expect(cancelled).toBe(true);
   });
@@ -97,12 +99,14 @@ describe("Codex reset-credit consume transport", () => {
   });
 
   test("preserves non-2xx status without reflecting the body", async () => {
-    await expect(consumeCodexResetCredit(input(), {
+    const error = await consumeCodexResetCredit(input(), {
       fetchImpl: async () => new Response("private upstream text", { status: 429 }),
-    })).rejects.toEqual(expect.objectContaining({
+    }).catch((caught: unknown) => caught) as CodexResetCreditConsumeError;
+    expect(error).toEqual(expect.objectContaining({
       name: "CodexResetCreditConsumeError",
       reason: "upstream",
       upstreamStatus: 429,
     }));
+    expect(error.message).not.toContain("private upstream text");
   });
 });

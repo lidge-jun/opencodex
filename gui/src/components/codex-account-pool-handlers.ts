@@ -1,8 +1,10 @@
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
+import { createBoundedFetch } from "../bounded-fetch";
 
 const RESET_CREDIT_OWNER_TOKEN_HEADER = "x-opencodex-reset-credit-owner-token";
 const RESET_CREDIT_IDENTITY_CHANGED_CODE = "reset_credit_operation_identity_changed";
+const RESET_CREDIT_REQUEST_TIMEOUT_MS = 15_000;
 
 export async function redeemResetCredit(
   apiBase: string,
@@ -16,9 +18,11 @@ export async function redeemResetCredit(
   outcome: "terminal" | "ambiguous";
   toast?: string;
 }> {
+  const bounded = createBoundedFetch(RESET_CREDIT_REQUEST_TIMEOUT_MS);
   try {
     const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits/consume`, {
       method: "POST",
+      signal: bounded.signal,
       headers: {
         "Content-Type": "application/json",
         [RESET_CREDIT_OWNER_TOKEN_HEADER]: ownerToken,
@@ -61,5 +65,7 @@ export async function redeemResetCredit(
     return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
   } catch {
     return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
+  } finally {
+    bounded.clear();
   }
 }

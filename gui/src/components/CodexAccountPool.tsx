@@ -408,7 +408,9 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       );
       if (result.outcome === "terminal") {
         if (!clearPendingResetOperation(operation.accountId, operation.operationId)) {
-          showActionFeedback(t("codexAuth.resetError"), "err");
+          showActionFeedback(t("codexAuth.resetRetryStateStuck", {
+            outcome: result.toast ?? t("codexAuth.resetError"),
+          }), "warn");
           return;
         }
         setPendingResetOperations(current => {

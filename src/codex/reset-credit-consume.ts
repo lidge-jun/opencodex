@@ -1,6 +1,7 @@
 import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBody } from "../lib/bounded-body";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import {
+  isCodexResetCreditConsumeCode,
   isCodexResetCreditOperationId,
   type CodexResetCreditConsumeCode,
 } from "./reset-credit-recovery";
@@ -8,13 +9,6 @@ import {
 const RESET_CREDIT_CONSUME_URL =
   "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 const RESET_CREDIT_CONSUME_TIMEOUT_MS = 10_000;
-const CONSUME_CODES: ReadonlySet<string> = new Set([
-  "reset",
-  "already_redeemed",
-  "nothing_to_reset",
-  "no_credit",
-]);
-
 export type CodexResetCreditConsumeResult = Readonly<{
   code: CodexResetCreditConsumeCode;
   operationId: string;
@@ -52,8 +46,8 @@ function ownConsumeCode(value: unknown): CodexResetCreditConsumeCode | undefined
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   if (!Object.prototype.hasOwnProperty.call(value, "code")) return undefined;
   const code = (value as { code?: unknown }).code;
-  return typeof code === "string" && CONSUME_CODES.has(code)
-    ? code as CodexResetCreditConsumeCode
+  return isCodexResetCreditConsumeCode(code)
+    ? code
     : undefined;
 }
 

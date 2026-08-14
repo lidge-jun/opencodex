@@ -1175,6 +1175,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "沒有可用的重設額度。",
   "codexAuth.resetError": "重設額度使用失敗，請重試。",
   "codexAuth.resetIdentityChanged": "Codex 帳號身分已變更。請重新開啟此對話框並確認新的重設要求。",
+  "codexAuth.resetRetryStateStuck": "{outcome} 結果已確定，但無法清除本機重試狀態。再次嘗試前，請修正瀏覽器儲存空間存取權限。",
   "codexAuth.fifoNote": "最早獲得的額度優先使用。",
   "codexAuth.confirmWhichCredit": "將使用 {date} 獲得的額度。",
   "codexAuth.creditNext": "即將使用",

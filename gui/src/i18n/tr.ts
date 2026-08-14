@@ -1575,6 +1575,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.resetNoCredit": "Kullanılabilir sıfırlama kredisi yok.",
   "codexAuth.resetError": "Sıfırlama kredisi kullanılamadı.",
   "codexAuth.resetIdentityChanged": "Codex hesap kimliği değişti. Yeni bir sıfırlama isteğini onaylamak için bu iletişim kutusunu yeniden açın.",
+  "codexAuth.resetRetryStateStuck": "{outcome} Sonuç kesindir ancak yerel yeniden deneme durumu temizlenemedi. Yeniden denemeden önce tarayıcı depolama erişimini düzeltin.",
   "codexAuth.fifoNote": "En eski kredi ilk önce kullanılır.",
   "codexAuth.confirmWhichCredit": "{date} tarihli kredi kullanılacak.",
   "codexAuth.creditNext": "Sonraki kullanılacak",
