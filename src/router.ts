@@ -254,7 +254,8 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
-  const repairLegacyMimoFreeAuth = providerName === "mimo-free" && provider.authMode === "local";
+  const repairLegacyMimoFreeAuth = providerName === "mimo-free"
+    && (provider.authMode === undefined || provider.authMode === "local");
   const explicitKeyOverride = registryEntry.authKind === "oauth"
     && registryEntry.allowKeyAuthOverride === true
     && provider.authMode === "key"

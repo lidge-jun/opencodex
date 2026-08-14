@@ -395,10 +395,12 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     modelReasoningEffortMap: prov.modelReasoningEffortMap,
   };
   const seed = providerConfigSeed(entry);
-  // `mimo-free` shipped with an invalid `local` mode before the registry key contract became
-  // authoritative. Repair only that exact canonical row; custom destinations fail the transport
-  // match above and keep their operator-owned credential mode.
-  const repairLegacyMimoFreeAuth = name === "mimo-free" && prov.authMode === "local" && seed.authMode === "key";
+  // `mimo-free` shipped in legacy rows with either an omitted auth mode or the invalid `local`
+  // mode before the registry key contract became authoritative. Repair only those canonical
+  // legacy shapes; explicit modern `key` rows keep their operator-owned static catalog.
+  const repairLegacyMimoFreeAuth = name === "mimo-free"
+    && (prov.authMode === undefined || prov.authMode === "local")
+    && seed.authMode === "key";
   if (repairLegacyMimoFreeAuth) prov.authMode = "key";
   if (prov.apiKeyTransport === undefined && seed.apiKeyTransport !== undefined) prov.apiKeyTransport = seed.apiKeyTransport;
   if (!prov.defaultModel && seed.defaultModel) prov.defaultModel = seed.defaultModel;
