@@ -191,10 +191,18 @@ export function injectMimoSystemMarker(body: unknown): unknown {
  *   1. JWT from the bootstrap endpoint (cached, auto-refreshed).
  *   2. Anti-abuse system marker in the request body.
  *   3. Required headers (User-Agent, X-Mimo-Source, x-session-affinity).
- * On 401/403, flushes the JWT cache and retries once via fetchResponse.
+ * On 401, flushes the JWT cache and retries once via fetchResponse.
  */
-export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdapter {
+export interface MimoFreeAdapterDeps {
+  getJwt?: (signal?: AbortSignal) => Promise<string>;
+}
+
+export function createMimoFreeAdapter(
+  provider: OcxProviderConfig,
+  deps: MimoFreeAdapterDeps = {},
+): ProviderAdapter {
   const base = createOpenAIChatAdapter(provider);
+  const getJwt = deps.getJwt ?? getMimoJwt;
   // Per-adapter session-affinity id (random, per process instance).
   const sessionId = `ses_${Math.random().toString(36).slice(2, 26)}`;
 
@@ -203,7 +211,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
     name: "mimo-free",
 
     async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): Promise<AdapterRequest> {
-      const jwt = await getMimoJwt();
+      const jwt = await getJwt(incoming.abortSignal);
 
       // Let the base adapter build the wire body (handles reasoning, tools, etc.)
       // but override the URL and headers after.
@@ -244,7 +252,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
         // Drain the first response body before issuing the retry.
         try { await response.body?.cancel(); } catch { /* already consumed */ }
         resetMimoJwtCache();
-        const freshJwt = await getMimoJwt(ctx?.abortSignal);
+        const freshJwt = await getJwt(ctx?.abortSignal);
         const retryHeaders = {
           ...(request.headers as Record<string, string>),
           "Authorization": `Bearer ${freshJwt}`,
