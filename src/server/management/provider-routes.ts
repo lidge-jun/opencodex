@@ -93,6 +93,14 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
+function providerSupportsLiveModelDiscovery(name: string, provider: OcxProviderConfig): boolean {
+  const entry = getProviderRegistryEntry(name);
+  return !(
+    entry?.liveModelDiscoverySupported === false
+    && providerMatchesRegistryTransport(name, provider)
+  );
+}
+
 /**
  * Apply the recognized PATCH field mask onto a provider copy. The caller runs this once
  * for validation and again inside the config mutation lock against the newest provider,
@@ -174,6 +182,9 @@ function applyProviderPatchFields(
   }
   if (Object.hasOwn(rawBody, "liveModels")) {
     if (typeof rawBody.liveModels !== "boolean") return { error: "liveModels must be a boolean" };
+    if (rawBody.liveModels && !providerSupportsLiveModelDiscovery(name, next)) {
+      return { error: "live model discovery is not supported for this provider" };
+    }
     next.liveModels = rawBody.liveModels;
     touched = true;
   }
@@ -634,7 +645,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
       });
     }
-    if (prov.liveModels === false) {
+    if (prov.liveModels === false || !providerSupportsLiveModelDiscovery(name, prov)) {
       // A static catalog has no live discovery endpoint to test. This is neither
       // positive connectivity evidence nor an outage, and it must stay before
       // credential resolution/network access for providers such as Antigravity.
