@@ -271,9 +271,17 @@ describe("CL-09 no-feedback architecture guards", () => {
 
   test("production request path only links the exact subject and never reads passive history", () => {
     const source = readFileSync("src/server/responses/core.ts", "utf8");
-    expect(source).toContain("resolveProductionRouteSubject");
+    // Inverted by devlog/_plan/260814_lab_core_decoupling: subject construction moved OUT of
+    // the per-request path into a core-owned slot, so an install with no routing profile
+    // executes no Lab code. Core must now name only the slot, never Lab.
+    expect(source).toContain("resolvePassiveRouteSubjectId");
+    expect(source).not.toContain("resolveProductionRouteSubject");
+    expect(source).not.toContain("routing/compatibility");
     expect(source).not.toContain("queryPassiveProductionSignals");
     expect(source).not.toContain("readRecentUsageEntries");
+    // The positive assertion moves to the Lab-side registration that fills the slot.
+    const registration = readFileSync("src/lib/lab-passive-linker-registration.ts", "utf8");
+    expect(registration).toContain("resolveProductionRouteSubject");
     const cliSource = readFileSync("src/cli/lab.ts", "utf8");
     expect(cliSource).toContain("queryPassiveProductionSignals(subjectId, limit, configDir)");
   });

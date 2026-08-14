@@ -33,7 +33,7 @@ import {
   type RouteResult,
 } from "../../router";
 import { evidenceFromBody } from "../../routing/request-evidence";
-import { resolveProductionRouteSubject } from "../../routing/compatibility/subject";
+import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
 import {
   advanceComboAfterFailure,
   comboDefaultEffort,
@@ -1991,22 +1991,19 @@ async function handleResponsesInner(
     (logCtx.attempts ??= []).push(attempt);
   }
   sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, adapter.name, logCtx.accountLogLabel);
-  // CL-09: attach only the opaque exact route-subject identity to the attempt.
-  // This is best-effort passive metadata: no Lab state is created and failure
-  // must never alter, retry, or delay the upstream request.
+  // Optional route-identity linkage for attempt correlation (CL-09 consumes it). The slot
+  // resolves to null unless an opt-in subsystem registered a linker, so an install without
+  // routing profiles does no work here and loads no additional module. The non-throwing
+  // guarantee lives in the slot helper.
   if (logCtx.activeAttempt && !logCtx.activeAttempt.labRouteSubjectId) {
-    try {
-      const passiveSubject = resolveProductionRouteSubject(
-        config,
-        route.providerName,
-        route.modelId,
-        route.provider,
-        inboundWire,
-      );
-      if (passiveSubject) logCtx.activeAttempt.labRouteSubjectId = passiveSubject.subjectId;
-    } catch {
-      // Omit passive linkage when exact subject construction is unavailable.
-    }
+    const passiveSubjectId = resolvePassiveRouteSubjectId(
+      config,
+      route.providerName,
+      route.modelId,
+      route.provider,
+      inboundWire,
+    );
+    if (passiveSubjectId) logCtx.activeAttempt.labRouteSubjectId = passiveSubjectId;
   }
   const isPassthrough = "passthrough" in adapter && !!adapter.passthrough;
 
