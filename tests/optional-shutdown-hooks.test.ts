@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  setLabAutomationDispatchDeps,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
   isLabAutomationSchedulerRunning,
@@ -87,6 +88,80 @@ describe("lab automation scheduler teardown registration", () => {
       startLabAutomationScheduler(configDir);
       expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
       runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+});
+
+// Outcome-level coverage the plan called for (010): assert a REAL Lab scheduler is stopped
+// through the registry, not just an inline closure. These are the exact cases an
+// independent review reproduced, each driven red before the scheduler-side registration.
+describe("lab automation scheduler teardown — reviewer-reproduced cases", () => {
+  // Case D: startup activates, its ownership lease is released, then the management API
+  // (PUT /api/lab/automation) restarts the scheduler with no deps installed. Needs no
+  // unusual setup, which makes it the most likely path in production.
+  test("case D: scheduler restarted by the management API after release is stopped", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-case-d-"));
+    try {
+      const release = setLabAutomationDispatchDeps({
+        configDir,
+        loadConfig: () => ({}) as never,
+        routeExecutor: undefined as never,
+      });
+      release();
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+
+  // Case B: an empty-deps call early-returns a no-op release without registering anything.
+  test("case B: empty-deps no-op still leaves a stoppable scheduler", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-case-b-"));
+    try {
+      setLabAutomationDispatchDeps({} as never);
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+
+  // Case C: the ordinary activation path must keep working.
+  test("case C: normal activation path is stopped by shutdown", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-case-c-"));
+    try {
+      setLabAutomationDispatchDeps({
+        configDir,
+        loadConfig: () => ({}) as never,
+        routeExecutor: undefined as never,
+      });
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+
+  // Shutdown may run twice (drain called again, or a lease release after drain).
+  test("double shutdown is safe and leaves the scheduler stopped", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-double-"));
+    try {
+      startLabAutomationScheduler(configDir);
+      expect(() => { runOptionalShutdownHooks(); runOptionalShutdownHooks(); }).not.toThrow();
       expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
     } finally {
       stopLabAutomationScheduler(configDir);
