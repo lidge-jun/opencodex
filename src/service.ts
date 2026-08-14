@@ -24,6 +24,7 @@ import {
   ELEVATION_REQUEST_TIMEOUT_MS,
   OCX_ELEVATED_PROTOCOL_FAILED,
   raceWithTimeout,
+  resolveTrustedWindowsPowerShellExe,
   resolveTrustedWindowsSchtasksExe,
   startElevatedSchtasksCreateAndRun,
   runWindowsElevated,
@@ -2164,6 +2165,50 @@ export function stopWindows(): void {
 }
 function statusWindows(): string { try { return schtasks(["/query", "/tn", TASK]); } catch { return ""; } }
 function statusWindowsXml(): string { try { return schtasks(["/query", "/tn", TASK, "/xml"]); } catch { return ""; } }
+
+/**
+ * Best-effort termination of surviving Windows scheduler launcher/wrapper processes.
+ * `schtasks /end` ends the task instance but often leaves wscript/cmd running the
+ * `:loop` batch, which brings the proxy back during a stop or restart. Same killer
+ * the update job uses, so both teardown paths share the guarantee.
+ *
+ * Matching is scoped to the CANONICAL paths of THIS installation (opencodex-service.cmd
+ * and opencodex-service-launcher.vbs under the current config dir), never a bare
+ * filename: a wrapper from another OpenCodex home — or an unrelated process whose
+ * command line merely contains the filename — must not be force-terminated.
+ * The path must appear as a COMPLETE command-line token (wscript.exe spawns the
+ * .vbs as an argument; cmd.exe /c runs the .cmd), so a substring-only match is
+ * excluded.
+ */
+function killWindowsServiceWrapperProcesses(): void {
+  if (process.platform !== "win32") return;
+  try {
+    const script = windowsServiceScriptPath();
+    const launcher = windowsLauncherVbsPath();
+    // Quote for PowerShell: single-quote the value and double any embedded quote.
+    const quote = (value: string) => `'${value.replace(/'/g, "''")}'`;
+    const ps = [
+      `$pats = @(${quote(script)}, ${quote(launcher)});`,
+      "Get-CimInstance Win32_Process | Where-Object {",
+      "  if ($_.ProcessId -eq $PID) { return $false };",
+      "  $c = $_.CommandLine; if (-not $c) { return $false };",
+      "  foreach ($p in $pats) {",
+      "    $i = $c.IndexOf($p, [System.StringComparison]::OrdinalIgnoreCase);",
+      "    if ($i -lt 0) { continue };",
+      "    $before = if ($i -gt 0) { $c.Substring($i - 1, 1) } else { ' ' };",
+      "    $end = $i + $p.Length;",
+      "    $after = if ($end -lt $c.Length) { $c.Substring($end, 1) } else { ' ' };",
+      "    if ($before -match '[\\s\"'']' -and $after -match '[\\s\"'']') { return $true };",
+      "  };",
+      "  $false",
+      "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+    ].join(" ");
+    spawnSync(resolveTrustedWindowsPowerShellExe(), [
+      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+      "-Command", ps,
+    ], { stdio: "ignore", timeout: 5000, windowsHide: true });
+  } catch { /* best-effort */ }
+}
 function uninstallWindows(): void {
   const probe = probeWindowsSchedulerTask(TASK);
   if (probe.status === "present") {
@@ -2692,6 +2737,10 @@ export function stopServiceIfInstalled(): boolean {
     if (statusWinswRaw() !== "nonexistent") {
       try { stopWinswService(); stopped = true; } catch { /* best-effort */ }
     }
+    // `schtasks /end` ends the task instance but the cmd `:loop` wrapper survives and
+    // respawns its child seconds later (issue #764), resurrecting the proxy during a
+    // stop or a tray restart. Kill the launcher/wrapper processes outright.
+    killWindowsServiceWrapperProcesses();
     if (stopped) return true;
   } else if (process.platform === "linux" && isSystemd() && existsSync(unitPath())) {
     try { stopSystemd(); return true; } catch { return false; }

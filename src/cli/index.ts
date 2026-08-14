@@ -216,6 +216,17 @@ async function handleStart(options: { block?: boolean } = {}) {
   const requestedPort = parsePortOption();
   const owner = await findProxyOwnerBeforeJournalRecovery();
   if (owner.live) {
+    // Service-wrapper context (opencodex-service.cmd `:loop`): a healthy proxy from
+    // ANY source means the requested port is already served. Exit 0 so the wrapper's
+    // `if %ERRORLEVEL% NEQ 0` retry loop terminates instead of respawning every 5s
+    // against a listener it can never claim (observed as an endless
+    // "Proxy already running" service.log loop).
+    // Only the exact "1" sentinel takes this path — the same check syncCleanup
+    // uses — so an env value like "0" or "false" cannot bypass the conflict error.
+    if (process.env.OCX_SERVICE === "1") {
+      console.log(`Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}); service wrapper staying out of the way.`);
+      process.exit(0);
+    }
     console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
     process.exit(1);
   }
