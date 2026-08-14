@@ -144,6 +144,7 @@ describe("Compatibility Lab runtime integration regressions", () => {
     })).toBe(0);
 
     const config = readConfigDiagnostics().config;
+    expect(config.labIntegrationEnabled).toBe(true);
     const planned = planManualLabRun({
       evidenceLayer: "live_route_compatibility",
       scenarioId: "responses-core.live.basic-turn",
