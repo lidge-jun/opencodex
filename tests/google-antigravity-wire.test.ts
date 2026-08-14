@@ -56,7 +56,11 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.model).toBeUndefined();
     expect(env.request.safetySettings).toBeUndefined();
     expect(req.headers["Authorization"]).toBe("Bearer ya29.token");
-    expect(req.headers["User-Agent"]).toMatch(/^antigravity\/cli\/[\d.]+ \(aidev_client; os_type=\w+; arch=\w+\)$/);
+    // The exact default must not drift: Google gates models by family AND version,
+    // so any change to version/platform could silently re-lock gemini-3.7-flash.
+    expect(req.headers["User-Agent"]).toBe(
+      "antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)",
+    );
     // The literal "antigravity" giveaway UA must no longer be sent.
     expect(req.headers["User-Agent"]).not.toBe("antigravity");
     // x-goog-api-client is NOT sent on runtime requests (CLIProxyAPI only uses it during onboarding).

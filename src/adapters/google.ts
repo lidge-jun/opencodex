@@ -469,7 +469,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         const envelope = {
           model: wireModelId,
           // The envelope's `userAgent` field is a protocol constant ("antigravity"), distinct from
-          // the HTTP `User-Agent` header (the real CLI UA). CLIProxyAPI `geminiToAntigravity` hardcodes
+          // the HTTP `User-Agent` header (the real IDE UA). CLIProxyAPI `geminiToAntigravity` hardcodes
           // the body field; only the header carries the versioned client string.
           userAgent: "antigravity",
           requestType: "agent",

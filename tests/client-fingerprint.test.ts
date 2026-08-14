@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  ANTIGRAVITY_CLI_VERSION,
+  ANTIGRAVITY_IDE_VERSION,
   ANTIGRAVITY_GOOG_API_CLIENT_UA,
   CLAUDE_CODE_HEADERS,
   antigravityUserAgent,
@@ -19,14 +19,14 @@ function parsed(): OcxParsedRequest {
 }
 
 describe("client fingerprint — helpers", () => {
-  test("antigravity UA has the real CLI shape, never the literal giveaway", async () => {
+  test("antigravity UA has the real IDE shape, never the literal giveaway", async () => {
     const ua = antigravityUserAgent();
-    expect(ua).toBe("antigravity/cli/1.1.12 (aidev_client; os_type=darwin; arch=arm64)");
+    expect(ua).toBe(`antigravity/ide/${ANTIGRAVITY_IDE_VERSION} (aidev_client; os_type=windows; arch=amd64)`);
     expect(ua).not.toBe("antigravity");
   });
 
   test("antigravity UA honors an explicit version override", async () => {
-    expect(antigravityUserAgent("9.9.9")).toBe("antigravity/cli/9.9.9 (aidev_client; os_type=darwin; arch=arm64)");
+    expect(antigravityUserAgent("9.9.9")).toBe("antigravity/ide/9.9.9 (aidev_client; os_type=windows; arch=amd64)");
   });
 
   test("GOOGLE_ANTIGRAVITY_USER_AGENT env override wins over the default UA", async () => {

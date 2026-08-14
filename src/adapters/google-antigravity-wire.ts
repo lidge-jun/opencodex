@@ -3,10 +3,11 @@ import type { OcxContentPart, OcxParsedRequest } from "../types";
 import { antigravityUserAgent } from "./client-fingerprint";
 
 /**
- * Antigravity request User-Agent. Mirrors the real Antigravity CLI UA
- * (`antigravity/cli/{ver} (aidev_client; os_type=darwin; arch=arm64)`) so the request fingerprint
+ * Antigravity request User-Agent. Mirrors the real Antigravity IDE UA
+ * (`antigravity/ide/{ver} (aidev_client; os_type=windows; arch=amd64)`) so the request fingerprint
  * matches the OAuth credential — the prior literal `"antigravity"` was a giveaway no real client
- * sends. A `GOOGLE_ANTIGRAVITY_USER_AGENT` override still wins.
+ * sends. The IDE client family is also required to unlock newer agent models (the backend 404s
+ * CLI-shaped UAs for `gemini-3.7-*`). A `GOOGLE_ANTIGRAVITY_USER_AGENT` override still wins.
  */
 export const ANTIGRAVITY_REQUEST_UA = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT || antigravityUserAgent();
 

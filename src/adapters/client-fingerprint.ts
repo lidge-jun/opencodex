@@ -40,20 +40,24 @@ export function claudeCodeSessionId(token: string | undefined): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-// ── Antigravity CLI ──
-/** Pinned fallback Antigravity CLI version (real client fetches a manifest; we pin to avoid the network dependency). */
-export const ANTIGRAVITY_CLI_VERSION = "1.1.12";
-const ANTIGRAVITY_CLI_CLIENT_NAME = "aidev_client";
-const ANTIGRAVITY_CLI_PLATFORM = "darwin/arm64";
+// ── Antigravity IDE ──
+/** Pinned fallback Antigravity IDE language-server version (matches the bundled LS 2.5.5). */
+export const ANTIGRAVITY_IDE_VERSION = "2.5.5";
+const ANTIGRAVITY_IDE_CLIENT_NAME = "aidev_client";
+const ANTIGRAVITY_IDE_PLATFORM = "windows/amd64";
 /** Secondary Google API client UA the Antigravity client library reports. */
 export const ANTIGRAVITY_GOOG_API_CLIENT_UA = "google-api-nodejs-client/10.3.0";
 
 /**
- * The real Antigravity CLI User-Agent, e.g.
- * `antigravity/cli/1.1.12 (aidev_client; os_type=darwin; arch=arm64)`.
+ * The real Antigravity IDE User-Agent, e.g.
+ * `antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)`.
+ *
+ * Must be the IDE client family, NOT `antigravity/cli/...`: the Cloud Code Assist backend gates
+ * newer agent models (e.g. `gemini-3.7-flash`) by User-Agent and answers 404 NOT_FOUND to
+ * CLI-shaped UAs even with a valid OAuth token. Only `antigravity/ide/<ver>` unlocks them.
  * A `GOOGLE_ANTIGRAVITY_USER_AGENT` override (set by the caller) takes precedence upstream.
  */
-export function antigravityUserAgent(version = ANTIGRAVITY_CLI_VERSION): string {
-  const [osType, arch] = ANTIGRAVITY_CLI_PLATFORM.split("/");
-  return `antigravity/cli/${version} (${ANTIGRAVITY_CLI_CLIENT_NAME}; os_type=${osType}; arch=${arch})`;
+export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION): string {
+  const [osType, arch] = ANTIGRAVITY_IDE_PLATFORM.split("/");
+  return `antigravity/ide/${version} (${ANTIGRAVITY_IDE_CLIENT_NAME}; os_type=${osType}; arch=${arch})`;
 }
