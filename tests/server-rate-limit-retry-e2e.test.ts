@@ -3,11 +3,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
-import { clearCommandCodeAccountPoolState } from "../src/oauth/command-code-routing";
+import { clearCommandCodeAccountPoolState, formatCommandCodeProviderForLog } from "../src/oauth/command-code-routing";
 import { getAccountSet, saveCredential, setActiveAccount } from "../src/oauth/store";
 import { clearKeyCooldowns } from "../src/providers/key-failover";
 import { startServer } from "../src/server";
+import { readRecentUsageEntries } from "../src/usage/log";
 import type { OcxConfig } from "../src/types";
+import { fallbackCodexAccountLogLabel } from "../src/codex/account-label";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "./helpers/remove-tree";
 
@@ -97,6 +99,25 @@ describe("server same-target 429 retry (end-to-end)", () => {
       // is rebuilt with the next OAuth bearer, not replayed with the cooled one.
       expect(seenAuth).toEqual(["Bearer access-a", "Bearer access-b", "Bearer access-c"]);
       expect(seenAuth).toHaveLength(3);
+      // Narrow terminal attempt/log identity: final entry is attributed to the
+      // last selected account (account-c), not the original cooled account-a.
+      // For OAuth pools the provider string carries the account ordinal (command-code-pXXXXXX);
+      // Codex-style accountLogLabel is not set for OAuth pools, so assert provider only.
+      {
+        const entries = readRecentUsageEntries(1);
+        expect(entries.length).toBe(1);
+        const last = entries[0]!;
+        const cId = accounts.find(a => a.credential.accountId === "account-c")!.id;
+        const expectedProvider = formatCommandCodeProviderForLog("command-code", cId);
+        const aId = accounts.find(a => a.credential.accountId === "account-a")!.id;
+        const unexpectedProvider = formatCommandCodeProviderForLog("command-code", aId);
+        expect(last.provider).toBe(expectedProvider);
+        expect(last.provider).not.toBe(unexpectedProvider);
+        const terminalAttempt = last.attempts?.at(-1);
+        // Terminal attempt provider matches the last selected account.
+        expect(terminalAttempt?.provider).toBe(expectedProvider);
+        expect(terminalAttempt?.provider).not.toBe(unexpectedProvider);
+      }
     } finally {
       try {
         await server?.stop(true);
