@@ -82,6 +82,12 @@ export function labActivationRequired(config: OcxConfig, configDir?: string): bo
  */
 export function activateLab(config: OcxConfig, configDir?: string): void {
   const key = activationKey(configDir);
+  // INVARIANT: activation is all-or-nothing and reason-independent. Every slot is
+  // registered here regardless of WHY activation was required, which is what makes this
+  // key safe as configDir alone -- an automation-only activation still installs the
+  // compatibility provider a later profile needs. If any registration ever becomes
+  // conditional on the activation reason, this key must include that reason, or the early
+  // return will silently skip it forever.
   if (activated.has(key)) return;
 
   const detach: Array<() => void> = [];
@@ -90,9 +96,27 @@ export function activateLab(config: OcxConfig, configDir?: string): void {
 
   const routeExecutor = createProductionLabRouteExecutor({ configDir, loadConfig: () => config });
   detach.push(setLabAutomationDispatchDeps({ configDir, loadConfig: () => config, routeExecutor }));
-  if (labAutomationEnabledOnDisk(configDir)) startLabAutomationScheduler(configDir);
 
+  // Record the activation BEFORE the scheduler start. startLabAutomationScheduler runs the
+  // full automation normalizer, which throws on any field violation, and this call sits on
+  // the startup path of every install that has a routing profile. Storing the record first
+  // means a throw cannot orphan the detach receipts and leave slots registered with no
+  // activation record -- which would let a later activateLab register them a second time.
   activated.set(key, detach);
+
+  if (labAutomationEnabledOnDisk(configDir)) {
+    try {
+      startLabAutomationScheduler(configDir);
+    } catch (err) {
+      // A partially written or invalid automation config must not take the proxy down at
+      // startup. Lab automation stays off; routing, evidence, and every other subsystem
+      // keep working. The operator gets a message naming what to fix.
+      console.warn(
+        "[lab] automation config is invalid; Lab automation is disabled for this run:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 }
 
 /** True when this configDir has been activated. */

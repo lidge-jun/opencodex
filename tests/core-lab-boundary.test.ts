@@ -27,6 +27,11 @@ const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), "..");
  * Runtime imports only: `import type` is erased and costs nothing at runtime.
  *
  * Covers static imports, side-effect imports, runtime re-exports, AND dynamic `import()`.
+ *
+ * Known limits, stated rather than implied: a static walker cannot resolve a computed
+ * specifier, so `import(someVariable)` and template-literal specifiers are out of scope,
+ * and bare `require()` is unavailable because this package is ESM (`"type": "module"`).
+ * None of those forms is reachable in the protected files today.
  * Dynamic import was a real hole: an earlier version of this guard matched only the first
  * three forms, and `void import("./lab/paths")` in a protected file passed cleanly while
  * loading Lab at runtime. Found by attacking the guard rather than trusting it.
