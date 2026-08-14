@@ -61,7 +61,7 @@ describe("mimo-free provider registry", () => {
     expect(provider.liveModels).toBe(false);
   });
 
-  test("request routing uses the repaired canonical auth and static catalog state", () => {
+  test("request routing repairs canonical auth while preserving configured models", () => {
     const config: OcxConfig = {
       port: 10100,
       defaultProvider: "mimo-free",
@@ -81,7 +81,7 @@ describe("mimo-free provider registry", () => {
     expect(route.provider).toMatchObject({
       authMode: "key",
       liveModels: false,
-      models: ["mimo-auto"],
+      models: ["stale-model"],
     });
   });
 
