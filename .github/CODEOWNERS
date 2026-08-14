@@ -32,3 +32,15 @@
 **/AGENTS.md @lidge-jun @Ingwannu
 /MAINTAINERS.md @lidge-jun @Ingwannu
 /SECURITY.md @lidge-jun @Ingwannu
+
+# Proxy core boundary — owner approval required.
+# These four files carry every user's request path, including users of no optional
+# subsystem. Optional subsystems (Compatibility Lab and anything added later) register
+# into core-owned slots at activation instead of being imported here; the invariant is
+# enforced by tests/core-lab-boundary.test.ts and designed in
+# devlog/_plan/260814_lab_core_decoupling/.
+# Last-match-wins: this block must stay below /src/server/ to take effect.
+/src/router.ts @lidge-jun
+/src/server/index.ts @lidge-jun
+/src/server/lifecycle.ts @lidge-jun
+/src/server/responses/core.ts @lidge-jun
