@@ -45,13 +45,15 @@ export type ResetCreditConsentResult =
 export interface ResetCreditConsentDeps {
   findLive?: typeof findLiveProxy;
   fetchImpl?: typeof fetch;
+  directLocalHttpFetchImpl?: typeof directLocalHttpFetch;
   readRuntime?: (pid: number) => RuntimePortState | null;
   createNonce?: () => string;
   now?: () => number;
   timeoutMs?: number;
 }
 
-const RESET_CREDIT_CONSENT_TIMEOUT_MS = 10_000;
+const RESET_CREDIT_PROOF_TIMEOUT_MS = 10_000;
+const RESET_CREDIT_CONSENT_POST_TIMEOUT_MS = 15_000;
 
 function sameRuntime(left: RuntimePortState, right: RuntimePortState | null): boolean {
   return !!right
@@ -97,16 +99,23 @@ export async function requestBoundCodexResetCreditConsent(
     || runtime.hostname !== target.hostname
   ) return { kind: "unavailable", reason: "runtime-mismatch" };
 
-  const fetchImpl = deps.fetchImpl ?? directLocalHttpFetch;
-  const timeoutMs = deps.timeoutMs ?? RESET_CREDIT_CONSENT_TIMEOUT_MS;
+  const proofTimeoutMs = deps.timeoutMs ?? RESET_CREDIT_PROOF_TIMEOUT_MS;
+  const consentPostTimeoutMs = deps.timeoutMs ?? RESET_CREDIT_CONSENT_POST_TIMEOUT_MS;
+  const fetchImpl = (
+    input: string,
+    init: RequestInit,
+    timeoutMs: number,
+  ): Promise<Response> => deps.fetchImpl
+    ? deps.fetchImpl(input, init)
+    : (deps.directLocalHttpFetchImpl ?? directLocalHttpFetch)(input, init, { timeoutMs });
   const nonce = (deps.createNonce ?? createLocalAttestationChallenge)();
   const baseUrl = `http://${probeHostname(target.hostname)}:${target.port}`;
   let proofResponse: Response;
   try {
     proofResponse = await fetchImpl(`${baseUrl}/healthz`, {
       headers: { [LOCAL_ATTESTATION_CHALLENGE_HEADER]: nonce },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      signal: AbortSignal.timeout(proofTimeoutMs),
+    }, proofTimeoutMs);
   } catch {
     return { kind: "unavailable", reason: "transport" };
   }
@@ -155,8 +164,8 @@ export async function requestBoundCodexResetCreditConsent(
         [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: operationId,
         [CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER]: capability,
       },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+      signal: AbortSignal.timeout(consentPostTimeoutMs),
+    }, consentPostTimeoutMs);
     return { kind: "response", response };
   } catch {
     return { kind: "unavailable", reason: "transport" };

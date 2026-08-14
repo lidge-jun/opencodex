@@ -244,6 +244,7 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     throw new CliUsageError("Invalid account id format", USAGE);
   }
   let result: unknown;
+  let postResultWarning: string | undefined;
   if (consume) {
     if ((deps.isAgentDrivenImpl ?? isAgentDriven)()) {
       throw new CliUsageError(
@@ -257,15 +258,14 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     } catch {
       throw new CliUsageError("reset-credit retry state is unavailable", USAGE);
     }
-    const clearOperation = () => {
+    const clearOperation = (): boolean => {
       try {
-        const cleared = (deps.clearResetCreditOperationImpl ?? clearPendingResetCreditOperation)(
+        return (deps.clearResetCreditOperationImpl ?? clearPendingResetCreditOperation)(
           accountId,
           operationId,
         );
-        if (!cleared) throw new Error("reset-credit retry state remained present");
       } catch {
-        throw new CliUsageError("reset-credit retry state could not be cleared", USAGE);
+        return false;
       }
     };
     const consent = await (deps.requestResetCreditConsentImpl ?? requestBoundCodexResetCreditConsent)(
@@ -289,9 +289,7 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
       ? (body as { code?: unknown }).code
       : undefined;
     if (terminalCode === "reset_credit_operation_identity_changed") {
-      try {
-        clearOperation();
-      } catch {
+      if (!clearOperation()) {
         throw new CliUsageError(
           "Codex account identity changed, but reset-credit retry state could not be cleared; repair the local retry store before confirming a new request",
           USAGE,
@@ -310,7 +308,9 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
       throw new CliUsageError(detail, USAGE);
     }
     if (isCodexResetCreditConsumeCode(terminalCode)) {
-      clearOperation();
+      if (!clearOperation()) {
+        postResultWarning = "Warning: the reset-credit terminal result is authoritative, but local retry state could not be cleared; repair the local retry store before confirming a new request.";
+      }
     }
     result = body;
   } else {
@@ -321,6 +321,7 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     );
   }
   printData(result, wantsJson);
+  if (postResultWarning) console.error(postResultWarning);
 }
 
 export async function handleAccountAuthCommand(sub: string, argv: string[], deps: AccountDeps = {}): Promise<number | null> {

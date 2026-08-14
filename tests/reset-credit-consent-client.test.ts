@@ -121,6 +121,35 @@ describe("reset-credit consent client", () => {
     )).toBe(true);
   });
 
+  test("allows the consent POST more time than the server consume budget", async () => {
+    const timeoutCalls: number[] = [];
+    const ioTimeoutCalls: number[] = [];
+    const originalTimeout = AbortSignal.timeout;
+    AbortSignal.timeout = ((ms: number) => {
+      const signal = originalTimeout(ms);
+      timeoutCalls.push(ms);
+      return signal;
+    }) as typeof AbortSignal.timeout;
+    try {
+      let calls = 0;
+      const result = await requestBoundCodexResetCreditConsent(accountId, operationId, {
+        findLive: async () => target,
+        readRuntime: () => ({ ...target, attestationSecret: secret }),
+        createNonce: () => nonce,
+        directLocalHttpFetchImpl: async (_input, init, io) => {
+          calls += 1;
+          ioTimeoutCalls.push(io.timeoutMs ?? -1);
+          return calls === 1 ? proofResponse(init) : Response.json({ code: "reset" });
+        },
+      });
+      expect(result.kind).toBe("response");
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
+    expect(timeoutCalls).toEqual([10_000, 15_000]);
+    expect(ioTimeoutCalls).toEqual([10_000, 15_000]);
+  });
+
   test("stops when the protected runtime record changes after proof", async () => {
     let reads = 0;
     let calls = 0;

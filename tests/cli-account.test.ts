@@ -1527,22 +1527,34 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.stderr).toContain("retry state could not be cleared");
     });
 
-    test("reset-credit terminal result fails closed when its retry id cannot be cleared", async () => {
-      const result = await run(
-        ["reset-credits", "main", "--consume", "--yes"],
-        {
-          ...defaultDeps(),
-          isAgentDrivenImpl: () => false,
-          reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174002",
-          clearResetCreditOperationImpl: () => false,
-          requestResetCreditConsentImpl: async () => ({
-            kind: "response",
-            response: json({ code: "reset" }),
-          }),
-        },
-      );
-      expect(result.code).toBe(2);
-      expect(result.stderr).toContain("retry state could not be cleared");
+    test("reset-credit terminal results remain authoritative when retry cleanup fails", async () => {
+      const terminalCodes = ["reset", "already_redeemed", "nothing_to_reset", "no_credit"] as const;
+      const cleanupFailures = [
+        () => false,
+        () => { throw new Error("retry store unavailable"); },
+      ];
+
+      for (const code of terminalCodes) {
+        for (const clearResetCreditOperationImpl of cleanupFailures) {
+          const result = await run(
+            ["reset-credits", "main", "--consume", "--yes", "--json"],
+            {
+              ...defaultDeps(),
+              isAgentDrivenImpl: () => false,
+              reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174002",
+              clearResetCreditOperationImpl,
+              requestResetCreditConsentImpl: async () => ({
+                kind: "response",
+                response: json({ code }),
+              }),
+            },
+          );
+          expect(result.code).toBe(0);
+          expect(JSON.parse(result.stdout)).toEqual({ code });
+          expect(result.stderr).toContain("terminal result is authoritative");
+          expect(result.stderr).toContain("retry state could not be cleared");
+        }
+      }
     });
 
     test("agent-driven reset-credit consumption stops before minting consent", async () => {
