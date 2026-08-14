@@ -10,13 +10,12 @@
  * Read endpoints never trigger scheduler ticks or evidence collection.
  */
 
-import { readConfigDiagnostics, getConfigDir } from "../../config";
+import { readConfigDiagnostics, getConfigDir, saveConfigPreservingClaudeCode } from "../../config";
 import {
   buildLabAutomationStatus,
   cancelLabAutomationRun,
   enqueueManualLabRun,
   reconcileLabAutomationQueue,
-  requestLabAutomationShutdown,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../../lab/automation/orchestrator";
@@ -34,7 +33,7 @@ import { listLabAutomationRuns } from "../../lab/automation/runs-query";
 import type { LabAutomationLayer, LabAutomationPolicyV1 } from "../../lab/automation/types";
 import { LabAutomationError } from "../../lab/automation/types";
 import { jsonResponse } from "../auth-cors";
-import { setLabAutomationShutdownHook } from "../lifecycle";
+import { ensureLabAutomationRuntime } from "../lab-automation-runtime";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
 import { isPlainRecord } from "./shared";
@@ -65,7 +64,23 @@ function parseLimit(raw: string | null, ctx: ManagementContext): number | Respon
   return value;
 }
 
-function applySchedulerPolicy(policy: LabAutomationPolicyV1, configDir?: string): void {
+function persistLabIntegrationOptIn(ctx: ManagementContext): void {
+  if (ctx.config.labIntegrationEnabled === true) return;
+  const persistConfig = ctx.deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+  let current = ctx.config;
+  if (!ctx.deps.saveConfigPreservingClaudeCode) {
+    try {
+      current = readConfigDiagnostics().config;
+    } catch {
+      // The server already has a validated runtime config; use it as the safe fallback.
+    }
+  }
+  if (current.labIntegrationEnabled === true) return;
+  persistConfig({ ...current, labIntegrationEnabled: true });
+}
+
+function applySchedulerPolicy(policy: LabAutomationPolicyV1, config: import("../../types").OcxConfig, configDir?: string): void {
+  if (policy.enabled) ensureLabAutomationRuntime(config, configDir);
   reconcileLabAutomationQueue(configDir);
   if (policy.enabled) {
     startLabAutomationScheduler(configDir);
@@ -77,13 +92,6 @@ function applySchedulerPolicy(policy: LabAutomationPolicyV1, configDir?: string)
 export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { url, req, config } = ctx;
   if (!url.pathname.startsWith("/api/lab/automation")) return null;
-
-  // This module is loaded only after an explicit Lab automation request. Once
-  // loaded, register cleanup without making lifecycle.ts import Lab code.
-  setLabAutomationShutdownHook(() => {
-    requestLabAutomationShutdown();
-    stopLabAutomationScheduler();
-  });
 
   const configDir = getConfigDir();
 
@@ -146,6 +154,9 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
       } catch {
         ocxConfig = config;
       }
+      if (evidenceLayer === "live_route_compatibility") {
+        ensureLabAutomationRuntime(ocxConfig, configDir);
+      }
       const planned = planManualLabRun({
         evidenceLayer: evidenceLayer as LabAutomationLayer,
         scenarioId,
@@ -195,12 +206,16 @@ export async function handleLabAutomationRoutes(ctx: ManagementContext): Promise
         routes = normalizeLabAutomationRoutesV1(body.routes);
       }
 
+      // Runtime integration is a separate core-config gate. Enabling automation
+      // through this explicit operator surface must survive the next server restart.
+      if (policy.enabled) persistLabIntegrationOptIn(ctx);
+
       // One atomic rename publishes policy and routes as a coherent generation. A failed write
       // leaves the previous generation authoritative and scheduler reconciliation is not applied.
       if (body.policy !== undefined || body.routes !== undefined) {
         saveLabAutomationConfig(policy, routes, configDir);
       }
-      applySchedulerPolicy(policy, configDir);
+      applySchedulerPolicy(policy, config, configDir);
       return jsonResponse(buildLabAutomationStatus(configDir), 200, req, config);
     } catch (error) {
       rethrowManagementBodyTooLarge(error);

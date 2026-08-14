@@ -4,7 +4,8 @@
  * Read commands use the local SQLite projection. Automation mutations and manual runs are
  * explicit operator actions; read commands never start probes or scheduler ticks.
  */
-import { getConfigDir, readConfigDiagnostics } from "../config";
+import { getConfigDir, readConfigDiagnostics, saveConfigPreservingClaudeCode } from "../config";
+import type { OcxConfig } from "../types";
 import {
   ARTIFACT_CLASSES,
   EVIDENCE_LAYERS,
@@ -87,6 +88,8 @@ type ArtifactStatus = (typeof ARTIFACT_STATUSES)[number];
 
 export interface LabCliDeps {
   configDir?: string;
+  loadConfig?: () => OcxConfig;
+  saveConfig?: (config: OcxConfig) => void;
 }
 
 class LabStateError extends RuntimeApiError {
@@ -102,6 +105,19 @@ function labErrorMessage(err: unknown): string {
   if (err instanceof InvalidCursorError) return "invalid cursor";
   if (err instanceof LabAutomationError && err.code === "invalid_cursor") return "invalid cursor";
   return "lab read failed";
+}
+
+function loadCliConfig(deps: LabCliDeps): OcxConfig {
+  return deps.loadConfig?.() ?? readConfigDiagnostics().config;
+}
+
+function persistLabIntegrationOptIn(deps: LabCliDeps): void {
+  const config = loadCliConfig(deps);
+  if (config.labIntegrationEnabled === true) return;
+  (deps.saveConfig ?? saveConfigPreservingClaudeCode)({
+    ...config,
+    labIntegrationEnabled: true,
+  });
 }
 
 function takeEnumOption<T extends string>(
@@ -394,6 +410,9 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
                 },
                 taskEffectivenessBackgroundEnabled: false,
               };
+              // `automation enable` is the explicit operator opt-in. Persist the
+              // core runtime gate too so server restart cannot silently disable it.
+              persistLabIntegrationOptIn(deps);
               saveLabAutomationPolicyConfig(policy, configDir);
               reconcileLabAutomationQueue(configDir);
               startLabAutomationScheduler(configDir);
@@ -435,7 +454,7 @@ export async function handleLabCommand(argv: string[], deps: LabCliDeps = {}): P
           const modelId = takeOption(rest, "--model");
           rejectArgs(rest, USAGE);
           if (!layer || !scenarioId) throw new CliUsageError("--layer and --scenario are required", USAGE);
-          const configSnapshot = readConfigDiagnostics().config;
+          const configSnapshot = loadCliConfig(deps);
           if (layer === "live_route_compatibility") {
             const loadConfig = () => configSnapshot;
             setLabAutomationDispatchDeps({
