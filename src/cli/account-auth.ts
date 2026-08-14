@@ -256,6 +256,17 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     } catch {
       throw new CliUsageError("reset-credit retry state is unavailable", USAGE);
     }
+    const clearOperation = () => {
+      try {
+        const cleared = (deps.clearResetCreditOperationImpl ?? clearPendingResetCreditOperation)(
+          accountId,
+          operationId,
+        );
+        if (!cleared) throw new Error("reset-credit retry state remained present");
+      } catch {
+        throw new CliUsageError("reset-credit retry state could not be cleared", USAGE);
+      }
+    };
     const consent = await (deps.requestResetCreditConsentImpl ?? requestBoundCodexResetCreditConsent)(
       accountId,
       operationId,
@@ -273,6 +284,16 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     if (text) {
       try { body = JSON.parse(text); } catch { body = text; }
     }
+    const terminalCode = body && typeof body === "object"
+      ? (body as { code?: unknown }).code
+      : undefined;
+    if (terminalCode === "reset_credit_operation_identity_changed") {
+      clearOperation();
+      throw new CliUsageError(
+        "Codex account identity changed; rerun the command to confirm a new reset-credit request",
+        USAGE,
+      );
+    }
     if (!consent.response.ok) {
       const detail = body && typeof body === "object"
         && typeof (body as { error?: unknown }).error === "string"
@@ -280,20 +301,13 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
         : `Reset-credit request failed (${consent.response.status})`;
       throw new CliUsageError(detail, USAGE);
     }
-    const terminalCode = body && typeof body === "object"
-      ? (body as { code?: unknown }).code
-      : undefined;
     if (
       terminalCode === "reset"
       || terminalCode === "already_redeemed"
       || terminalCode === "nothing_to_reset"
       || terminalCode === "no_credit"
     ) {
-      try {
-        (deps.clearResetCreditOperationImpl ?? clearPendingResetCreditOperation)(accountId, operationId);
-      } catch {
-        throw new CliUsageError("reset-credit retry state could not be cleared", USAGE);
-      }
+      clearOperation();
     }
     result = body;
   } else {

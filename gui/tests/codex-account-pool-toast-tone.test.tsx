@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, StrictMode } from "react";
 import type { Root } from "react-dom/client";
 import { formatAccountPriority } from "../src/account-priority";
 import CodexAccountPool from "../src/components/CodexAccountPool";
@@ -85,7 +85,7 @@ beforeEach(() => {
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
       if (url.pathname === "/api/codex-auth/reset-credits" && !url.pathname.endsWith("/consume")) {
-        return Response.json({ credits: [] });
+        return Response.json({ credits: [], guiConsumeAllowed: true });
       }
       if (url.pathname === "/api/codex-auth/reset-credits/consume" && (init?.method ?? "GET") === "POST") {
         consumeAttempts += 1;
@@ -120,18 +120,52 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mountPool(controller: CodexAccountPoolController) {
+async function mountPool(controller: CodexAccountPoolController, strictMode = false) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    root.render(
+    const element = (
       <LanguageProvider>
-        <CodexAccountPool apiBase="" controller={controller} />
+        <CodexAccountPool
+          apiBase=""
+          controller={controller}
+          requestOwnerToken={async () => "admin-secret"}
+        />
       </LanguageProvider>,
     );
+    root.render(strictMode ? <StrictMode>{element}</StrictMode> : element);
   });
   await act(async () => { await new Promise((r) => setTimeout(r, 40)); });
 }
+
+test("a remote dashboard disables reset-credit consumption and points to the local CLI", async () => {
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits" && !url.pathname.endsWith("/consume")) {
+        return Response.json({ credits: [], guiConsumeAllowed: false });
+      }
+      return baseFetch(input, init);
+    },
+  });
+
+  await mountPool(makeController());
+  const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+  await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+  const useCredit = [...host.querySelectorAll("button")].find(button =>
+    (button.textContent ?? "").includes("Use 1 Credit"),
+  ) as HTMLButtonElement | undefined;
+  expect(useCredit).toBeTruthy();
+  expect(useCredit?.disabled).toBe(true);
+  expect(host.textContent).toContain("Reset-credit consumption is available only from the loopback dashboard");
+  expect(consumeAttempts).toBe(0);
+  expect([...host.querySelectorAll("button")].some(button =>
+    (button.textContent ?? "").trim() === "Use Credit",
+  )).toBe(false);
+});
 
 async function chooseOrder(selectId: string, value: string): Promise<void> {
   const trigger = host.querySelector(`#${selectId}`) as HTMLButtonElement | null;
@@ -355,6 +389,7 @@ test("an ambiguous redeem survives modal close and remount with the same operati
   await mountPool(makeController());
   await redeemOnce();
   expect(consumeAttempts).toBe(1);
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1")).not.toBeNull();
   const backdrop = host.querySelector(".modal-backdrop-dismiss") as HTMLButtonElement;
   await act(async () => { backdrop.click(); });
   expect(host.querySelector("dialog")).toBeNull();
@@ -362,6 +397,7 @@ test("an ambiguous redeem survives modal close and remount with the same operati
   const current = root!;
   await act(async () => { current.unmount(); });
   root = null;
+  sessionStorage.clear();
   host.remove();
   host = win.document.createElement("div") as unknown as HTMLElement;
   win.document.body.appendChild(host as never);
@@ -370,5 +406,167 @@ test("an ambiguous redeem survives modal close and remount with the same operati
 
   expect(consumeAttempts).toBe(2);
   expect(new Set(consumedOperationIds).size).toBe(1);
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1")).toBeNull();
+});
+
+test("a terminal identity conflict stays recoverable when durable retry cleanup fails", async () => {
+  const staleOperationId = "00000000-0000-4000-8000-000000000779";
+  const storageKey = "ocx.codexResetCreditOperation.v2.pool-1";
+  localStorage.setItem(storageKey, staleOperationId);
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits/consume") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
+        return Response.json({
+          error: "The Codex account identity changed. Confirm a new reset-credit request.",
+          code: "reset_credit_operation_identity_changed",
+        }, { status: 409 });
+      }
+      return baseFetch(input, init);
+    },
+  });
+  const storage = localStorage;
+  const originalRemoveItem = storage.removeItem.bind(storage);
+  Object.defineProperty(storage, "removeItem", {
+    configurable: true,
+    value: (key: string) => {
+      if (key === storageKey) throw new Error("storage unavailable");
+      return originalRemoveItem(key);
+    },
+  });
+  try {
+    await mountPool(makeController());
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    ) as HTMLButtonElement;
+    await act(async () => { useCredit.click(); });
+    const redeem = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").trim() === "Use Credit",
+    ) as HTMLButtonElement;
+    await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+    expect(consumedOperationIds).toEqual([staleOperationId]);
+    expect(localStorage.getItem(storageKey)).toBe(staleOperationId);
+    expect(host.querySelector("dialog")).toBeTruthy();
+    expect(host.textContent).toContain("Failed to redeem reset credit");
+  } finally {
+    Object.defineProperty(storage, "removeItem", {
+      configurable: true,
+      value: originalRemoveItem,
+    });
+  }
+});
+
+test("a pre-upgrade session retry id is durably migrated before redemption", async () => {
+  const legacyOperationId = "00000000-0000-4000-8000-000000000777";
+  sessionStorage.setItem(
+    "ocx.codexResetCreditOperation.v1",
+    JSON.stringify({ "pool-1": legacyOperationId }),
+  );
+
+  await mountPool(makeController());
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1"))
+    .toBe(legacyOperationId);
   expect(sessionStorage.getItem("ocx.codexResetCreditOperation.v1")).toBeNull();
+
+  const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+  await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+  const useCredit = [...host.querySelectorAll("button")].find(button =>
+    (button.textContent ?? "").includes("Use 1 Credit"),
+  )!;
+  await act(async () => { useCredit.click(); });
+  const redeem = [...host.querySelectorAll("button")].find(button =>
+    (button.textContent ?? "").trim() === "Use Credit",
+  )!;
+  await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+  expect(consumeAttempts).toBe(1);
+  expect(consumedOperationIds).toEqual([legacyOperationId]);
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1")).toBeNull();
+});
+
+test("an identity-changed retry is cleared and the next confirmation mints a fresh id", async () => {
+  const staleOperationId = "00000000-0000-4000-8000-000000000778";
+  localStorage.setItem("ocx.codexResetCreditOperation.v2.pool-1", staleOperationId);
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits/consume") {
+        consumeAttempts += 1;
+        consumedOperationIds.push(
+          (JSON.parse(String(init?.body)) as { operationId: string }).operationId,
+        );
+        return consumeAttempts === 1
+          ? Response.json({
+              error: "The Codex account identity changed. Confirm a new reset-credit request.",
+              code: "reset_credit_operation_identity_changed",
+            }, { status: 409 })
+          : Response.json({ code: "no_credit" });
+      }
+      return baseFetch(input, init);
+    },
+  });
+  const redeemOnce = async () => {
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    ) as HTMLButtonElement;
+    await act(async () => { useCredit.click(); });
+    const redeem = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").trim() === "Use Credit",
+    ) as HTMLButtonElement;
+    await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+  };
+
+  await mountPool(makeController(), true);
+  await redeemOnce();
+  expect(consumedOperationIds).toEqual([staleOperationId]);
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1")).toBeNull();
+  expect(host.textContent).toContain("Codex account identity changed");
+
+  await redeemOnce();
+  expect(consumeAttempts).toBe(2);
+  expect(consumedOperationIds[1]).not.toBe(staleOperationId);
+  expect(localStorage.getItem("ocx.codexResetCreditOperation.v2.pool-1")).toBeNull();
+});
+
+test("a reset-credit consume is refused when its retry identity cannot be stored durably", async () => {
+  const storage = localStorage;
+  const originalSetItem = storage.setItem.bind(storage);
+  Object.defineProperty(storage, "setItem", {
+    configurable: true,
+    value: () => { throw new Error("storage unavailable"); },
+  });
+  try {
+    await mountPool(makeController());
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+    const useCredit = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").includes("Use 1 Credit"),
+    )!;
+    await act(async () => { useCredit.click(); });
+    const redeem = [...host.querySelectorAll("button")].find(button =>
+      (button.textContent ?? "").trim() === "Use Credit",
+    )!;
+    await act(async () => { redeem.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+    expect(consumeAttempts).toBe(0);
+    expect(host.textContent).toContain("Failed to redeem reset credit");
+  } finally {
+    Object.defineProperty(storage, "setItem", {
+      configurable: true,
+      value: originalSetItem,
+    });
+  }
 });

@@ -70,6 +70,8 @@ const LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT = 256;
 const consumedLocalProviderReloadCapabilities = new Map<string, number>();
 const admittedLocalProviderReloadRequests = new WeakSet<Request>();
 const RESET_CREDIT_CONSENT_REPLAY_LIMIT = 256;
+export const CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER =
+  "x-opencodex-reset-credit-owner-token";
 const consumedResetCreditConsentCapabilities = new Map<string, number>();
 const admittedResetCreditConsentRequests = new WeakSet<Request>();
 
@@ -289,8 +291,10 @@ export function issueGuiSession(
  * `admin-token` is the raw token from disk/env: anything running as the user can
  * read it, including a coding agent. `gui-session` is a session token this process
  * minted for a browser, and it only authorizes a mutation after the origin and the
- * per-session CSRF token match. Consent-bearing routes must key off this value
- * rather than off request headers, which the token holder can forge freely.
+ * per-session CSRF token match. `gui-reset-credit-session` additionally proves the
+ * browser re-entered the owner-only admin token; neither credential alone authorizes
+ * that irreversible action. Consent-bearing routes must key off this value rather
+ * than off request headers, which a raw-token caller can otherwise forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
  * PID and listening port. Local reads are accepted only for two exact GET paths;
  * restart, provider reload, and reset-credit consent remain separate wire contracts
@@ -299,6 +303,7 @@ export function issueGuiSession(
 export type ManagementPrincipal =
   | "admin-token"
   | "gui-session"
+  | "gui-reset-credit-session"
   | "local-read-capability"
   | "local-provider-reload-capability"
   | "local-reset-credit-capability"
@@ -504,7 +509,11 @@ export function managementPrincipal(
   if (equalSecret(actual, state.token)) return "admin-token";
   if (!config) return null;
   removeExpiredSessions(state);
-  return state.sessions.has(actual) ? "gui-session" : null;
+  if (!state.sessions.has(actual)) return null;
+  const ownerToken = req.headers.get(CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER)?.trim();
+  return ownerToken && equalSecret(ownerToken, state.token)
+    ? "gui-reset-credit-session"
+    : "gui-session";
 }
 
 export function requireManagementAuth(

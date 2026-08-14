@@ -58,7 +58,9 @@ only after an explicit yes; an explicit no settles it permanently and is never r
 Inspecting reset credits is read-only. Never run `ocx account reset-credits <id|main> --consume --yes`
 or call the consume endpoint on the user's behalf. Agent-driven attempts are refused with
 `agent_consent_required`; do not bypass the refusal with an admin token or a client `confirmed`
-field. Only a hand-typed user-confirmed CLI run or the dashboard's GUI session may consume a credit.
+field. Only a hand-typed user-confirmed CLI run or a loopback dashboard action that combines its
+GUI session with a separately re-entered owner admin token may consume a credit. A remote
+dashboard cannot mint that GUI session; the user must run the local CLI consent flow on the host.
 These checks remove the casual automation path but do not prove human presence to a determined
 same-user process; the agent consent rule remains the actual boundary.
 :::

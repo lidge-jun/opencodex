@@ -24,6 +24,8 @@ bun run dev:gui
 
 通过 `localhost`、`127.0.0.1` 等 loopback 地址打开仪表盘时，它会自动获得一个短期 GUI session，因此通常无需输入 token。在非 loopback 主机上公开仪表盘时，必须使用 `OPENCODEX_ADMIN_AUTH_TOKEN` 或自动生成的 `~/.opencodex/admin-api-token` 文件中的管理员 token。
 
+消耗 Codex reset credit 是例外。这项不可逆操作除 loopback GUI session 外，还要求所有者重新输入管理员 token。远程仪表盘无法获得 GUI session，因此请通过本地 CLI 同意流程消耗 reset credit。
+
 远程仪表盘会显示标准密码表单，浏览器密码管理器可以提示保存并自动填充 token。仪表盘本身只在内存中保存 token，不会写入 `localStorage` 或 `sessionStorage`；是否持久保存完全由浏览器或密码管理器决定。
 
 ## 可以完成哪些操作

@@ -11,16 +11,19 @@ let originalFetch: typeof globalThis.fetch;
 let consumeBody: { code: string; remaining?: number } | null = null;
 let loadCalls = 0;
 let requestBody: unknown;
+let requestHeaders: Headers;
 
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   consumeBody = null;
   loadCalls = 0;
   requestBody = null;
+  requestHeaders = new Headers();
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (_input: RequestInfo | URL, init?: RequestInit) => {
       requestBody = JSON.parse(String(init?.body));
+      requestHeaders = new Headers(init?.headers);
       return Response.json(consumeBody ?? { code: "error" });
     },
   });
@@ -30,61 +33,77 @@ afterEach(() => {
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
 });
 
-test("balance changed after modal opened: toast uses authoritative remaining, not a stale snapshot", async () => {
-  // Modal opened when balance was 3; concurrent activity left 1 — server reports 1.
+test("reset success refreshes account data and ignores an untrusted remaining field", async () => {
   consumeBody = { code: "reset", remaining: 1 };
   const operationId = crypto.randomUUID();
   const result = await redeemResetCredit("", "acct-1", operationId, t, async () => {
     loadCalls += 1;
     return true;
-  });
+  }, "owner-proof");
 
   expect(loadCalls).toBe(1);
   expect(result.ok).toBe(true);
   expect(result.outcome).toBe("terminal");
-  expect(result.toast).toBe("codexAuth.resetSuccess:remaining=1");
-  expect(result.toast).not.toContain("remaining=2");
-  expect(result.toast).not.toContain("remaining=3");
+  expect(result.toast).toBe("codexAuth.resetSuccessGeneric");
   expect(requestBody).toMatchObject({
     accountId: "acct-1",
     operationId,
   });
+  expect(requestHeaders.get("x-opencodex-reset-credit-owner-token")).toBe("owner-proof");
 });
 
-test("already_redeemed does not decrement and uses the returned remaining count", async () => {
+test("already_redeemed reports an idempotent terminal outcome without inventing a count", async () => {
   consumeBody = { code: "already_redeemed", remaining: 3 };
   const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => {
     loadCalls += 1;
     return true;
-  });
+  }, "owner-proof");
 
   expect(loadCalls).toBe(1);
   expect(result.ok).toBe(true);
   expect(result.outcome).toBe("terminal");
-  expect(result.toast).toBe("codexAuth.resetSuccess:remaining=3");
-  expect(result.toast).not.toContain("remaining=2");
+  expect(result.toast).toBe("codexAuth.resetAlreadyRedeemed");
 });
 
 test("missing refreshed count uses the generic success toast", async () => {
   consumeBody = { code: "reset" };
-  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true, "owner-proof");
 
   expect(result.ok).toBe(true);
   expect(result.toast).toBe("codexAuth.resetSuccessGeneric");
 });
 
-test("already_redeemed without remaining also uses the generic success toast", async () => {
+test("already_redeemed without remaining still uses the idempotent terminal toast", async () => {
   consumeBody = { code: "already_redeemed" };
-  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true, "owner-proof");
 
   expect(result.ok).toBe(true);
-  expect(result.toast).toBe("codexAuth.resetSuccessGeneric");
-  expect(result.toast).not.toBe("codexAuth.resetAlreadyRedeemed");
+  expect(result.toast).toBe("codexAuth.resetAlreadyRedeemed");
+});
+
+test("an account identity conflict is terminal for the stale client id and requires a fresh intent", async () => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => Response.json({
+      error: "The Codex account identity changed. Confirm a new reset-credit request.",
+      code: "reset_credit_operation_identity_changed",
+    }, { status: 409 }),
+  });
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => {
+    loadCalls += 1;
+    return true;
+  }, "owner-proof");
+  expect(result).toEqual({
+    ok: false,
+    outcome: "terminal",
+    toast: "codexAuth.resetIdentityChanged",
+  });
+  expect(loadCalls).toBe(0);
 });
 
 test("failure paths return ok:false so callers can set toastError from result.ok", async () => {
   consumeBody = { code: "no_credit" };
-  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true, "owner-proof");
 
   expect(result.ok).toBe(false);
   expect(result.outcome).toBe("terminal");
@@ -96,7 +115,7 @@ test("transport and malformed outcomes remain ambiguous for same-id retry", asyn
     configurable: true,
     value: async () => { throw new Error("response lost"); },
   });
-  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true);
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true, "owner-proof");
   expect(result).toEqual({
     ok: false,
     outcome: "ambiguous",

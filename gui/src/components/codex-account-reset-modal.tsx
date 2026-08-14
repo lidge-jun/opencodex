@@ -10,6 +10,7 @@ export function CodexAccountResetModal({
   resetConfirm,
   creditDetails,
   creditDetailsLoading,
+  guiConsumeAllowed,
   redeeming,
   onClose,
   onShowConfirm,
@@ -20,6 +21,7 @@ export function CodexAccountResetModal({
   resetConfirm: boolean;
   creditDetails: { granted_at: string; expires_at: string }[] | null;
   creditDetailsLoading: boolean;
+  guiConsumeAllowed: boolean | null;
   redeeming: boolean;
   onClose: () => void;
   onShowConfirm: () => void;
@@ -68,9 +70,14 @@ export function CodexAccountResetModal({
                     </div>
                   )}
                   <button type="button" className="btn btn-primary" style={{ marginTop: 12, width: "100%" }}
-                    onClick={onShowConfirm} disabled={redeeming}>
+                    onClick={onShowConfirm} disabled={redeeming || guiConsumeAllowed !== true}>
                     {t("codexAuth.useOneCredit")}
                   </button>
+                  {guiConsumeAllowed === false && (
+                    <p className="faint text-label" style={{ marginTop: 8, textAlign: "center" }}>
+                      {t("codexAuth.resetCliOnly")}
+                    </p>
+                  )}
                   <p className="card-sub text-caption" style={{ marginTop: 8, textAlign: "center" }}>{t("codexAuth.fifoNote")}</p>
                 </>
               ) : (

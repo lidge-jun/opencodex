@@ -39,6 +39,15 @@ ocx init
 `.star-prompted`，而管理 API 回傳 `403 agent_consent_required` — 請勿繞過任一防護。詢問使用者一次，僅在明確同意後加星，若他們說否或不回答，則什麼都不做且不再詢問。
 :::
 
+:::caution[Codex 重設額度同意]
+查看重設額度是唯讀操作。絕不要代表使用者執行
+`ocx account reset-credits <id|main> --consume --yes` 或呼叫額度使用端點。Agent
+驅動的嘗試會以 `agent_consent_required` 遭拒；請勿以管理員 token 或用戶端
+`confirmed` 欄位繞過拒絕。只有使用者手動輸入並確認的 CLI 執行，或同時提供短期 GUI
+工作階段與另行重新輸入之擁有者管理員 token 的回送儀表板操作，才能使用額度。遠端儀表板
+無法簽發該 GUI 工作階段，因此使用者必須在 OpenCodex 主機上執行本機 CLI 同意流程。
+:::
+
 ## 檢查無頭安裝
 
 在腳本與 agent 執行中使用這些唯讀檢查：

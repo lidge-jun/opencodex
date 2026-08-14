@@ -32,6 +32,11 @@ yeniler. Yalnızca geri döngü olmayan bir ana bilgisayar adına bağlı bir ko
 paneli yönetici belirtecini (`OPENCODEX_ADMIN_AUTH_TOKEN` veya otomatik olarak
 oluşturulan `~/.opencodex/admin-api-token` dosyası) gerektirir.
 
+Codex sıfırlama kredisi tüketmek bir istisnadır. Bu geri döndürülemez işlem,
+geri döngü GUI oturumuna ek olarak sahibin yönetici belirtecini yeniden
+girmesini gerektirir. Uzak kontrol paneli GUI oturumu alamaz; sıfırlama kredisi
+tüketmek için yerel CLI onay akışını kullanın.
+
 Uzak bir kontrol panelinin bu kimlik bilgisine ihtiyacı olduğunda, bir tarayıcı
 şifre yöneticisinin onu kaydetmeyi ve otomatik doldurmayı teklif edebilmesi için
 standart bir şifre formu sunar. Kontrol panelinin kendisi belirteci yine de
@@ -253,5 +258,4 @@ metin ve vizyon sınıflandırmasını kaydedilen sağlayıcı yapılandırması
 kopyalar, böylece [vizyon sidecar'ı](/tr/guides/sidecars/) manuel sınıflandırma
 olmadan doğru şekilde geçişlenir.
 :::
-
 

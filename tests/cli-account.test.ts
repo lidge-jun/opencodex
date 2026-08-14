@@ -1463,6 +1463,66 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(clearCalls).toBe(1);
     });
 
+    test("reset-credit identity change clears the stale id and requires a fresh confirmed run", async () => {
+      const staleId = "123e4567-e89b-42d3-a456-426614174000";
+      const freshId = "123e4567-e89b-42d3-a456-426614174001";
+      let pendingId: string | undefined = staleId;
+      const requested: string[] = [];
+      const deps: AccountDeps = {
+        ...defaultDeps(),
+        isAgentDrivenImpl: () => false,
+        reserveResetCreditOperationImpl: () => {
+          pendingId ??= freshId;
+          return pendingId;
+        },
+        clearResetCreditOperationImpl: (_accountId, operationId) => {
+          if (pendingId !== operationId) return false;
+          pendingId = undefined;
+          return true;
+        },
+        requestResetCreditConsentImpl: async (_accountId, operationId) => {
+          requested.push(operationId);
+          return requested.length === 1
+            ? {
+                kind: "response",
+                response: json({
+                  error: "The Codex account identity changed. Confirm a new reset-credit request.",
+                  code: "reset_credit_operation_identity_changed",
+                }, 409),
+              }
+            : { kind: "response", response: json({ code: "no_credit" }) };
+        },
+      };
+
+      const first = await run(["reset-credits", "main", "--consume", "--yes"], deps);
+      expect(first.code).toBe(2);
+      expect(first.stderr).toContain("identity changed");
+      expect(pendingId).toBeUndefined();
+
+      const second = await run(["reset-credits", "main", "--consume", "--yes"], deps);
+      expect(second.code).toBe(0);
+      expect(requested).toEqual([staleId, freshId]);
+      expect(pendingId).toBeUndefined();
+    });
+
+    test("reset-credit terminal result fails closed when its retry id cannot be cleared", async () => {
+      const result = await run(
+        ["reset-credits", "main", "--consume", "--yes"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => false,
+          reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174002",
+          clearResetCreditOperationImpl: () => false,
+          requestResetCreditConsentImpl: async () => ({
+            kind: "response",
+            response: json({ code: "reset" }),
+          }),
+        },
+      );
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("retry state could not be cleared");
+    });
+
     test("agent-driven reset-credit consumption stops before minting consent", async () => {
       let consentCalls = 0;
       const result = await run(

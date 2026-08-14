@@ -62,6 +62,16 @@ verin; açık bir hayır bunu kalıcı olarak çözer ve bir daha asla gündeme
 getirilmez.
 :::
 
+:::caution[Codex sıfırlama kredisi onayı]
+Sıfırlama kredilerini incelemek salt okunurdur. Kullanıcı adına
+`ocx account reset-credits <id|main> --consume --yes` çalıştırmayın veya tüketim uç noktasını
+çağırmayın. Ajan güdümlü denemeler `agent_consent_required` ile reddedilir; bu reddi yönetici
+belirteci ya da istemci `confirmed` alanıyla aşmayın. Bir kredi yalnızca kullanıcının elle yazıp
+onayladığı CLI çalıştırmasıyla veya kısa ömürlü GUI oturumunu ayrıca yeniden girilen sahip yönetici
+belirteciyle birleştiren loopback kontrol paneli işlemiyle tüketilebilir. Uzak kontrol paneli bu GUI
+oturumunu oluşturamaz; kullanıcı OpenCodex ana bilgisayarında yerel CLI onay akışını çalıştırmalıdır.
+:::
+
 ## Başsız (Headless) Kurulumu Kontrol Etme
 
 Betiklerde ve ajan çalıştırmalarında bu salt okunur kontrolleri kullanın:
@@ -130,5 +140,4 @@ ocx service install
 opencodex'i yerel makinenin ötesine açmadan önce
 [Yapılandırma](/tr/reference/configuration/) içindeki uzaktan erişim kurallarını
 okuyun.
-
 

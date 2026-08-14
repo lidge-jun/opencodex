@@ -4,8 +4,11 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { withConfigMutationLockSync } from "../src/config";
 import {
+  MAX_MANUAL_RESET_CREDIT_OPERATION_IDS,
   MAX_RESET_CREDIT_OPERATION_ACCOUNTS,
+  RESET_CREDIT_MANUAL_OPERATION_ID_SCHEMA_SQL_FOR_TESTS,
   RESET_CREDIT_OPERATION_LEGACY_SCHEMA_SQL_FOR_TESTS,
+  RESET_CREDIT_OPERATION_PRIOR_SCHEMA_SQL_FOR_TESTS,
   RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS,
   markManualResetCreditOperationAmbiguous,
   markResetCreditOperationAmbiguous,
@@ -75,7 +78,12 @@ function createLaxDuplicateLedger(): void {
 beforeEach(async () => {
   await resetCodexResetCreditRecoveryProcessStateForTests();
   const database = new Database(databasePath(), { create: true });
-  try { database.exec("DROP TABLE IF EXISTS reset_credit_operations"); }
+  try {
+    database.exec(`
+      DROP TABLE IF EXISTS reset_credit_manual_operation_ids;
+      DROP TABLE IF EXISTS reset_credit_operations;
+    `);
+  }
   finally { database.close(); }
 });
 
@@ -126,6 +134,61 @@ describe("Codex reset-credit operation ledger", () => {
         created_at: 100,
         updated_at: 200,
       });
+    } finally {
+      migrated.close();
+    }
+  });
+
+  test("migrates the prior manual schema before persisting a joined retry id", () => {
+    const original = fixtureOperationId(690);
+    const joined = fixtureOperationId(691);
+    const physicalAccount = "chatgpt-prior-manual";
+    const key = createHash("sha256")
+      .update(`codex-reset-credit-manual-physical\0${physicalAccount}`)
+      .digest("hex");
+    const database = new Database(databasePath(), { create: true });
+    try {
+      database.exec(RESET_CREDIT_OPERATION_PRIOR_SCHEMA_SQL_FOR_TESTS);
+      database.prepare(`
+        INSERT INTO reset_credit_operations VALUES (
+          ?, 'manual', NULL, NULL, ?, 'ambiguous', NULL, 100, 200
+        )
+      `).run(key, original);
+    } finally {
+      database.close();
+    }
+
+    expect(openManualResetCreditOperation({
+      accountId: "pool-prior-manual",
+      chatgptAccountId: physicalAccount,
+      operationId: joined,
+    }, 300)).toEqual({ kind: "execute", operationId: original, resumed: true });
+
+    const migrated = new Database(databasePath(), { readonly: true });
+    try {
+      expect(migrated.query<{ sql: string }, []>(`
+        SELECT sql FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_operations'
+      `).get()?.sql).toBe(RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS);
+      expect(migrated.query<{ name: string }, []>(`
+        SELECT name FROM main.sqlite_schema
+         WHERE name = 'reset_credit_operations_legacy_v2'
+      `).get()).toBeNull();
+      expect(migrated.query<{ operation_id: string; joined_operation_id: string }, []>(`
+        SELECT operation_id, joined_operation_id FROM reset_credit_operations
+      `).get()).toEqual({ operation_id: original, joined_operation_id: joined });
+      expect(migrated.query<{
+        operation_id: string;
+        canonical_operation_id: string;
+        terminal_code: string | null;
+      }, []>(`
+        SELECT operation_id, canonical_operation_id, terminal_code
+          FROM reset_credit_manual_operation_ids
+         ORDER BY operation_id
+      `).all()).toEqual([
+        { operation_id: original, canonical_operation_id: original, terminal_code: null },
+        { operation_id: joined, canonical_operation_id: original, terminal_code: null },
+      ]);
     } finally {
       migrated.close();
     }
@@ -210,20 +273,90 @@ describe("Codex reset-credit operation ledger", () => {
     }
   });
 
-  test("manual operations share one physical-account intent across local aliases", () => {
+  test("fails closed when a manual id loses its canonical history mapping", () => {
+    const identity = {
+      accountId: "pool-manual-history-corrupt",
+      chatgptAccountId: "chatgpt-manual-history-corrupt",
+      operationId: fixtureOperationId(710),
+    };
+    expect(openManualResetCreditOperation(identity, 100)).toMatchObject({ kind: "execute" });
+    const missingCanonical = fixtureOperationId(711);
+    const database = new Database(databasePath());
+    try {
+      database.prepare(`
+        UPDATE reset_credit_manual_operation_ids
+           SET canonical_operation_id = ?
+         WHERE operation_id = ?
+      `).run(missingCanonical, identity.operationId);
+    } finally {
+      database.close();
+    }
+
+    expect(openManualResetCreditOperation(identity, 200)).toEqual({ kind: "unavailable" });
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ canonical_operation_id: string }, [string]>(`
+        SELECT canonical_operation_id
+          FROM reset_credit_manual_operation_ids
+         WHERE operation_id = ?
+      `).get(identity.operationId)?.canonical_operation_id).toBe(missingCanonical);
+    } finally {
+      verifier.close();
+    }
+  });
+
+  test("manual operations preserve every joined caller id across later terminal intents", () => {
     const first = {
       accountId: "pool-manual-fence",
       chatgptAccountId: "chatgpt-a",
       operationId: fixtureOperationId(701),
     };
+    const joined = { ...first, operationId: fixtureOperationId(702) };
     expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
-    expect(openManualResetCreditOperation({ ...first, operationId: fixtureOperationId(702) }, 200))
+    expect(openManualResetCreditOperation(joined, 200))
       .toEqual({ kind: "execute", operationId: first.operationId, resumed: true });
-    expect(openManualResetCreditOperation({
+    const secondJoined = {
       ...first,
       accountId: "pool-manual-alias",
       operationId: fixtureOperationId(703),
-    }, 300)).toEqual({ kind: "execute", operationId: first.operationId, resumed: true });
+    };
+    expect(openManualResetCreditOperation(secondJoined, 300))
+      .toEqual({ kind: "execute", operationId: first.operationId, resumed: true });
+    // A third alias advanced durable time to 300. Settlement remains valid if
+    // the wall clock then moves backwards.
+    expect(settleManualResetCreditOperation(first, "reset", 250)).toEqual({ kind: "updated" });
+    expect(openManualResetCreditOperation(first, 360)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    expect(openManualResetCreditOperation(joined, 370)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    expect(openManualResetCreditOperation(secondJoined, 375)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    const next = { ...first, operationId: fixtureOperationId(709) };
+    expect(openManualResetCreditOperation(next, 380)).toEqual({
+      kind: "execute",
+      operationId: next.operationId,
+      resumed: false,
+    });
+    expect(settleManualResetCreditOperation(next, "no_credit", 390)).toEqual({ kind: "updated" });
+    expect(openManualResetCreditOperation(joined, 395)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    expect(openManualResetCreditOperation(secondJoined, 396)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
     const otherPhysical = {
       ...first,
       chatgptAccountId: "chatgpt-b",
@@ -246,7 +379,7 @@ describe("Codex reset-credit operation ledger", () => {
       operationId,
     };
     expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
-    expect(openManualResetCreditOperation(second, 200)).toEqual({ kind: "unavailable" });
+    expect(openManualResetCreditOperation(second, 200)).toEqual({ kind: "identity-mismatch" });
     expect(openManualResetCreditOperation(first, 300)).toEqual({
       kind: "execute",
       operationId,
@@ -263,6 +396,10 @@ describe("Codex reset-credit operation ledger", () => {
         SELECT sql FROM main.sqlite_schema
          WHERE type = 'table' AND name = 'reset_credit_operations'
       `).get()?.sql).toBe(RESET_CREDIT_OPERATION_SCHEMA_SQL_FOR_TESTS);
+      expect(database.query<{ sql: string }, []>(`
+        SELECT sql FROM main.sqlite_schema
+         WHERE type = 'table' AND name = 'reset_credit_manual_operation_ids'
+      `).get()?.sql).toBe(RESET_CREDIT_MANUAL_OPERATION_ID_SCHEMA_SQL_FOR_TESTS);
     } finally {
       database.close();
     }
@@ -540,6 +677,58 @@ describe("Codex reset-credit operation ledger", () => {
     })).toThrow("roll back outer config transaction");
     expect(openResetCreditOperation(GENERATION))
       .toMatchObject({ kind: "execute", resumed: false });
+  });
+
+  test("keeps terminal manual ids immutable and fails closed when identity history is full", () => {
+    const first = {
+      accountId: "pool-manual-history-cap",
+      chatgptAccountId: "chatgpt-manual-history-cap",
+      operationId: fixtureOperationId(9000),
+    };
+    expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(first, "reset", 200)).toEqual({ kind: "updated" });
+
+    const database = new Database(databasePath());
+    try {
+      const insert = database.prepare(`
+        INSERT INTO reset_credit_manual_operation_ids (
+          operation_id, account_key, canonical_operation_id,
+          terminal_code, created_at, updated_at
+        ) VALUES (?, ?, ?, 'no_credit', 1, 1)
+      `);
+      database.exec("BEGIN IMMEDIATE");
+      for (let index = 1; index < MAX_MANUAL_RESET_CREDIT_OPERATION_IDS; index += 1) {
+        const operationId = fixtureOperationId(9000 + index);
+        const key = createHash("sha256")
+          .update(`manual-history-cap-${index}`)
+          .digest("hex");
+        insert.run(operationId, key, operationId);
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch { /* preserve fixture error */ }
+      throw error;
+    } finally {
+      database.close();
+    }
+
+    expect(openManualResetCreditOperation(first, 300)).toEqual({
+      kind: "terminal",
+      operationId: first.operationId,
+      code: "reset",
+    });
+    expect(openManualResetCreditOperation({
+      ...first,
+      operationId: fixtureOperationId(15000),
+    }, 400)).toEqual({ kind: "capacity" });
+    const verifier = new Database(databasePath(), { readonly: true });
+    try {
+      expect(verifier.query<{ count: number }, []>(
+        "SELECT COUNT(*) AS count FROM reset_credit_manual_operation_ids",
+      ).get()?.count).toBe(MAX_MANUAL_RESET_CREDIT_OPERATION_IDS);
+    } finally {
+      verifier.close();
+    }
   });
 
   test("admits existing accounts but refuses a new account at capacity", () => {

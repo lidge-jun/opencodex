@@ -286,6 +286,13 @@ function manualResetCreditBusyResponse(): Response {
   return response;
 }
 
+function manualResetCreditIdentityChangedResponse(): Response {
+  return jsonResponse({
+    error: "The Codex account identity changed. Confirm a new reset-credit request.",
+    code: "reset_credit_operation_identity_changed",
+  }, 409);
+}
+
 async function runManualResetCreditFlight(
   chatgptAccountId: string,
   start: () => Promise<Response>,
@@ -1721,7 +1728,10 @@ export async function handleCodexAuthAPI(
           if (!parsed.ok) {
             return jsonResponse({ error: "Invalid upstream reset-credit response" }, 502);
           }
-          return jsonResponse(safeResetCreditsDto(parsed.value));
+          return jsonResponse({
+            ...safeResetCreditsDto(parsed.value),
+            guiConsumeAllowed: principal === "gui-session",
+          });
         } finally {
           detachBodyAbort();
           linkedSignal.cleanup();
@@ -1734,7 +1744,7 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/reset-credits/consume" && req.method === "POST") {
-    if (principal !== "gui-session" && principal !== "local-reset-credit-capability") {
+    if (principal !== "gui-reset-credit-session" && principal !== "local-reset-credit-capability") {
       return jsonResponse({
         error: "User consent is required to consume a reset credit",
         code: "agent_consent_required",
@@ -1757,24 +1767,27 @@ export async function handleCodexAuthAPI(
     const accountId = body.accountId;
 
     try {
-      const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, auth =>
-        runManualResetCreditFlight(auth.chatgptAccountId, async () => {
-          const identity: ManualResetCreditOperationIdentity = {
-            accountId,
-            chatgptAccountId: auth.chatgptAccountId,
-            operationId: requestedOperationId,
-          };
-          const opened = openManualResetCreditOperation(identity);
-          if (opened.kind === "capacity" || opened.kind === "unavailable") {
-            return manualResetCreditBusyResponse();
-          }
+      const operation = await withResetCreditAuth(getRuntimeConfig(config), accountId, async auth => {
+        const identity: ManualResetCreditOperationIdentity = {
+          accountId,
+          chatgptAccountId: auth.chatgptAccountId,
+          operationId: requestedOperationId,
+        };
+        const opened = openManualResetCreditOperation(identity);
+        if (opened.kind === "identity-mismatch") {
+          return manualResetCreditIdentityChangedResponse();
+        }
+        if (opened.kind === "capacity" || opened.kind === "unavailable") {
+          return manualResetCreditBusyResponse();
+        }
+        if (opened.kind === "terminal") {
+          return jsonResponse({ code: opened.code });
+        }
+        if (opened.kind !== "execute") {
+          return manualResetCreditBusyResponse();
+        }
+        return runManualResetCreditFlight(auth.chatgptAccountId, async () => {
           let code: CodexResetCreditConsumeCode;
-          if (opened.kind === "terminal") {
-            code = opened.code;
-          } else {
-            if (opened.kind !== "execute") {
-              return manualResetCreditBusyResponse();
-            }
             const effectiveIdentity: ManualResetCreditOperationIdentity = {
               ...identity,
               operationId: opened.operationId,
@@ -1795,11 +1808,11 @@ export async function handleCodexAuthAPI(
             if (settled.kind !== "updated") {
               return manualResetCreditBusyResponse();
             }
-          }
           // Settlement is the authoritative result. Return it before any follow-up
           // quota read so an already-terminal same-id retry cannot time out again.
           return jsonResponse({ code });
-        }));
+        });
+      });
       return operation.ok ? operation.value : operation.response;
     } catch (e) {
       if (e instanceof PoolQuotaProbeBusyError) {

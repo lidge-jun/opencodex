@@ -269,6 +269,8 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 Проверить reset-credit'ы Codex для аккаунта. Расходование кредита необратимо и требует `--consume`
 и `--yes` в запуске, который пользователь ввёл и подтвердил сам. Запуск агентом отклоняется до
 создания одноразового локального consent capability; многоразовый admin token его не заменяет.
+CLI надёжно повторно использует тот же operation ID до получения terminal response, поэтому после
+timeout повторите ту же команду, а не начинайте новое расходование.
 
 ### `ocx account main <subcommand>`
 

@@ -324,7 +324,12 @@ anahtarı içermez.
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
 Bir hesap için Codex sıfırlama kredilerini inceleyin. Bir krediyi tüketmek
-yıkıcıdır ve hem `--consume` hem de `--yes` gerektirir.
+yıkıcıdır ve kullanıcının elle yazıp onayladığı bir çalıştırmada hem `--consume`
+hem de `--yes` gerektirir. Ajan tarafından yürütülen çalıştırmalar tek kullanımlık
+yerel onay capability'si verilmeden önce reddedilir; yeniden kullanılabilir yönetici
+belirteci bunun yerini tutmaz. CLI terminal response alınana kadar aynı operation ID'yi
+kalıcı olarak yeniden kullanır; timeout sonrasında yeni bir tüketim başlatmak yerine
+aynı komutu yeniden çalıştırın.
 
 ### `ocx account main <alt-komut>`
 
@@ -449,5 +454,4 @@ kapalı bir enum olarak ayrıştırır ve başka herhangi bir değer içeren tü
 kataloğu reddeder, bu nedenle `add`, `edit` ve yönetim API'si katalog
 yazıcısının daha sonra çıkarması gereken bir şeyi saklamak yerine hatalı değeri
 reddeder (#759).
-
 

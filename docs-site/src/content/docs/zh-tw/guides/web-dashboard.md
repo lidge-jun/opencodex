@@ -27,6 +27,8 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 儀表板才需要 admin token（`OPENCODEX_ADMIN_AUTH_TOKEN`，或自動產生的
 `~/.opencodex/admin-api-token` 檔案）。
 
+消耗 Codex reset credit 是例外。這項不可逆操作除了 loopback GUI session，還要求擁有者重新輸入 admin token。遠端儀表板無法取得 GUI session，因此請透過本機 CLI 同意流程消耗 reset credit。
+
 當遠端儀表板需要該憑證時，它會顯示標準的密碼表單，讓瀏覽器密碼管理員可以提議儲存與自動填入。
 儀表板本身仍然只在記憶體中保留 token，不會寫入 `localStorage` 或 `sessionStorage`；是否儲存完全
 由瀏覽器或密碼管理員決定。

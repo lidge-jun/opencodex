@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { installApiAuthFetch, resetApiAuthFetchForTests } from "../src/api";
+import {
+  installApiAuthFetch,
+  requestResetCreditOwnerToken,
+  resetApiAuthFetchForTests,
+} from "../src/api";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
 const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
@@ -112,6 +116,27 @@ test("validates prompted tokens with a safe read before retrying the failed requ
   expect(seenRequests).toContainEqual(["/api/settings", "wrong-token"]);
   expect(seenRequests).toContainEqual(["/api/settings", "fresh-token"]);
   expect(seenRequests).not.toContainEqual(["/api/config", "wrong-token"]);
+  expect(sessionStorage.length).toBe(0);
+});
+
+test("reset-credit owner proof validates a token without replacing or storing session auth", async () => {
+  const seen: Array<[string, string | null]> = [];
+  resetApiAuthFetchForTests(async (verifyToken) => {
+    expect(await verifyToken("owner-token")).toBe("accepted");
+    return "owner-token";
+  });
+  const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : String(input), "http://localhost/");
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    seen.push([url.pathname, key]);
+    return url.pathname === "/api/settings" && key === "owner-token"
+      ? new Response("{}", { status: 200 })
+      : new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  expect(await requestResetCreditOwnerToken()).toBe("owner-token");
+  expect(seen).toEqual([["/api/settings", "owner-token"]]);
   expect(sessionStorage.length).toBe(0);
 });
 

@@ -40,8 +40,10 @@ The current consent-bound actions are **starring the repository on GitHub** and
   `POST /api/codex-auth/reset-credits/consume` on the user's behalf. Inspecting
   reset credits is read-only and allowed; consuming one is not. Agent-driven
   CLI runs are refused, and the API returns `403 agent_consent_required` unless
-  the request carries a dashboard GUI session or the CLI's short-lived,
-  one-shot local consent capability. A reusable admin token or a client
+  the request carries both a loopback-dashboard GUI session and a separately
+  re-entered owner admin token, or the CLI's short-lived one-shot local consent
+  capability. Remote dashboards cannot mint that GUI session; the user must run
+  the local CLI consent flow on the OpenCodex host. A reusable admin token by itself or a client
   `confirmed` field is not consent; do not route around either refusal.
 
 ### Do

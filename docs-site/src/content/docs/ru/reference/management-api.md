@@ -241,7 +241,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Прочитать кэшированное состояние квоты по аккаунтам | — |
 | `GET /api/codex-auth/reset-credits` | Проверить право аккаунта на reset credit | 400 missing account id; upstream status passthrough; 500 lookup failure |
-| `POST /api/codex-auth/reset-credits/consume` | Израсходовать reset credit; требуется GUI session или одноразовый локальный consent capability CLI, а не многоразовая admin auth или поле `confirmed` | 400 invalid identity; 403 `agent_consent_required`; upstream status passthrough; 503 `server_busy`; 500 consume failure |
+| `POST /api/codex-auth/reset-credits/consume` | Израсходовать reset credit; требуется GUI session с повторно введённым owner admin token или одноразовый локальный consent capability CLI. Одной admin auth или поля `confirmed` недостаточно. До получения terminal code вызывающая сторона должна надёжно повторно использовать тот же operation ID; quota refresh выполняется отдельным последующим чтением | 400 invalid identity; 403 `agent_consent_required`; upstream status passthrough; 503 `server_busy`; 500 consume failure |
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
 | `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |

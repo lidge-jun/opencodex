@@ -34,6 +34,13 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
+Most loopback dashboard actions need no token entry. Consuming a Codex reset credit is the
+exception: because it is irreversible, the confirmation flow asks for the owner admin token and
+the server requires that proof together with the short-lived GUI session. Either credential alone
+is refused. The token is verified and used for that request without being written to web storage.
+Remote dashboards cannot mint the required GUI session, so reset-credit consumption is disabled
+there; run the local CLI consent flow on the OpenCodex host instead.
+
 ## What you can do
 
 | Area | What it does |

@@ -21,13 +21,16 @@ import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
 import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../account-pool-strategy";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
-import { newBrowserUuid } from "../lib/uuid";
+import { isBrowserUuid, newBrowserUuid } from "../lib/uuid";
+import { requestResetCreditOwnerToken } from "../api";
 
 // Single definition lives with the controller that owns this data (WP3).
 export type { CodexAccountEntry } from "../hooks/useCodexAccountPool";
 
 const DOCTOR_CMD = "ocx doctor";
-const RESET_OPERATION_STORAGE_KEY = "ocx.codexResetCreditOperation.v1";
+const LEGACY_RESET_OPERATION_STORAGE_KEY = "ocx.codexResetCreditOperation.v1";
+const RESET_OPERATION_STORAGE_PREFIX = "ocx.codexResetCreditOperation.v2.";
+const MAX_PENDING_RESET_OPERATIONS = 128;
 
 interface PendingResetOperation {
   accountId: string;
@@ -36,23 +39,91 @@ interface PendingResetOperation {
 
 type PendingResetOperations = Record<string, string>;
 
-function readPendingResetOperations(): PendingResetOperations {
+function parsePendingResetOperations(raw: string | null): PendingResetOperations {
   try {
-    const value = JSON.parse(sessionStorage.getItem(RESET_OPERATION_STORAGE_KEY) ?? "{}") as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] =>
-      typeof entry[1] === "string"));
+    const value = JSON.parse(raw ?? "{}") as Record<string, unknown>;
+    return Object.fromEntries(Object.entries(value).slice(0, MAX_PENDING_RESET_OPERATIONS)
+      .filter((entry): entry is [string, string] =>
+      entry[0].length > 0 && entry[0].length <= 256 && isBrowserUuid(entry[1])));
   } catch {
     return {};
   }
 }
 
-function writePendingResetOperations(operations: PendingResetOperations): void {
+function resetOperationStorageKey(accountId: string): string {
+  return `${RESET_OPERATION_STORAGE_PREFIX}${encodeURIComponent(accountId)}`;
+}
+
+function readPerAccountResetOperations(): PendingResetOperations {
+  const operations: PendingResetOperations = {};
   try {
-    if (Object.keys(operations).length > 0) {
-      sessionStorage.setItem(RESET_OPERATION_STORAGE_KEY, JSON.stringify(operations));
+    for (let index = 0; index < localStorage.length
+      && Object.keys(operations).length < MAX_PENDING_RESET_OPERATIONS; index += 1) {
+      const key = localStorage.key(index);
+      if (!key?.startsWith(RESET_OPERATION_STORAGE_PREFIX)) continue;
+      const accountId = decodeURIComponent(key.slice(RESET_OPERATION_STORAGE_PREFIX.length));
+      const operationId = localStorage.getItem(key);
+      if (accountId.length > 0 && accountId.length <= 256 && isBrowserUuid(operationId)) {
+        operations[accountId] = operationId;
+      }
     }
-    else sessionStorage.removeItem(RESET_OPERATION_STORAGE_KEY);
-  } catch { /* storage may be unavailable; component state still preserves the retry */ }
+  } catch {
+    // A later per-account write must still succeed before any request is sent.
+  }
+  return operations;
+}
+
+function readPendingResetOperations(): PendingResetOperations {
+  const current = readPerAccountResetOperations();
+  let legacyLocal: PendingResetOperations = {};
+  let legacySession: PendingResetOperations = {};
+  try {
+    legacyLocal = parsePendingResetOperations(localStorage.getItem(LEGACY_RESET_OPERATION_STORAGE_KEY));
+  } catch { /* a write will fail closed before dispatch */ }
+  try {
+    legacySession = parsePendingResetOperations(sessionStorage.getItem(LEGACY_RESET_OPERATION_STORAGE_KEY));
+  } catch { /* preserve any readable local operations */ }
+  const merged = { ...legacySession, ...legacyLocal, ...current };
+  if (Object.keys(legacyLocal).length === 0 && Object.keys(legacySession).length === 0) return merged;
+
+  try {
+    for (const [accountId, operationId] of Object.entries(merged)) {
+      localStorage.setItem(resetOperationStorageKey(accountId), operationId);
+    }
+    for (const [accountId, operationId] of Object.entries(merged)) {
+      if (localStorage.getItem(resetOperationStorageKey(accountId)) !== operationId) {
+        throw new Error("reset-credit retry identity verification failed");
+      }
+    }
+    localStorage.removeItem(LEGACY_RESET_OPERATION_STORAGE_KEY);
+    sessionStorage.removeItem(LEGACY_RESET_OPERATION_STORAGE_KEY);
+  } catch {
+    // Keep legacy state intact unless every migrated id is durably readable.
+  }
+  return merged;
+}
+
+function writePendingResetOperation(accountId: string, operationId: string): boolean {
+  try {
+    const key = resetOperationStorageKey(accountId);
+    localStorage.setItem(key, operationId);
+    return localStorage.getItem(key) === operationId;
+  } catch {
+    return false;
+  }
+}
+
+function clearPendingResetOperation(accountId: string, operationId: string): boolean {
+  try {
+    const key = resetOperationStorageKey(accountId);
+    const current = localStorage.getItem(key);
+    if (current === null) return true;
+    if (current !== operationId) return false;
+    localStorage.removeItem(key);
+    return localStorage.getItem(key) === null;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -62,7 +133,7 @@ function writePendingResetOperations(operations: PendingResetOperations): void {
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * title chrome while retaining the shared account actions in the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null }: {
+export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null, requestOwnerToken = requestResetCreditOwnerToken }: {
   apiBase: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
@@ -76,6 +147,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
    * Codex Auth page passes nothing and gets its own.
    */
   controller?: CodexAccountPoolController;
+  /** Test seam; production asks for a verified owner-only management token. */
+  requestOwnerToken?: () => Promise<string | null>;
 }) {
   const t = useT();
   const autoSwitch = useCodexAutoSwitch(apiBase, {
@@ -106,6 +179,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const [redeeming, setRedeeming] = useState(false);
   const [creditDetails, setCreditDetails] = useState<{ granted_at: string; expires_at: string }[] | null>(null);
   const [creditDetailsLoading, setCreditDetailsLoading] = useState(false);
+  const [guiResetConsumeAllowed, setGuiResetConsumeAllowed] = useState<boolean | null>(null);
   const resetDetailEpochRef = useRef(0);
   const redeemingRef = useRef(false);
   const doctorCopy = useCopyFeedback<string>();
@@ -275,16 +349,26 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setResetConfirm(false);
     setCreditDetails(null);
     setCreditDetailsLoading(true);
+    setGuiResetConsumeAllowed(null);
     try {
       const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`);
-      const data = await readJsonIfOk<{ credits?: { granted_at: string; expires_at: string }[] }>(resp);
-      if (data && resetDetailEpochRef.current === epoch) {
-        const sorted = (data.credits ?? []).sort((a, b) =>
-          new Date(a.granted_at).getTime() - new Date(b.granted_at).getTime()
-        );
-        setCreditDetails(sorted);
+      const data = await readJsonIfOk<{
+        credits?: { granted_at: string; expires_at: string }[];
+        guiConsumeAllowed?: boolean;
+      }>(resp);
+      if (resetDetailEpochRef.current !== epoch) return;
+      if (!data) {
+        setGuiResetConsumeAllowed(false);
+        return;
       }
-    } catch { /* detail fetch is non-blocking */ }
+      const sorted = (data.credits ?? []).sort((a, b) =>
+        new Date(a.granted_at).getTime() - new Date(b.granted_at).getTime()
+      );
+      setCreditDetails(sorted);
+      setGuiResetConsumeAllowed(data.guiConsumeAllowed === true);
+    } catch {
+      if (resetDetailEpochRef.current === epoch) setGuiResetConsumeAllowed(false);
+    }
     finally {
       if (resetDetailEpochRef.current === epoch) setCreditDetailsLoading(false);
     }
@@ -293,24 +377,44 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const handleRedeem = async (accountId: string) => {
     if (redeemingRef.current) return;
     redeemingRef.current = true;
-    const operation: PendingResetOperation = {
-      accountId,
-      operationId: pendingResetOperations[accountId] ?? newBrowserUuid(),
-    };
-    setPendingResetOperations(current => {
-      const next = { ...current, [operation.accountId]: operation.operationId };
-      writePendingResetOperations(next);
-      return next;
-    });
     setRedeeming(true);
     try {
-      const result = await redeemResetCredit(apiBase, accountId, operation.operationId, t, load);
+      const ownerToken = await requestOwnerToken();
+      if (!ownerToken) return;
+      const durableOperations = readPendingResetOperations();
+      const operation: PendingResetOperation = {
+        accountId,
+        operationId: durableOperations[accountId]
+          ?? pendingResetOperations[accountId]
+          ?? newBrowserUuid(),
+      };
+      const reservedOperations = {
+        ...pendingResetOperations,
+        ...durableOperations,
+        [operation.accountId]: operation.operationId,
+      };
+      if (!writePendingResetOperation(operation.accountId, operation.operationId)) {
+        showActionFeedback(t("codexAuth.resetError"), "err");
+        return;
+      }
+      setPendingResetOperations(reservedOperations);
+      const result = await redeemResetCredit(
+        apiBase,
+        accountId,
+        operation.operationId,
+        t,
+        load,
+        ownerToken,
+      );
       if (result.outcome === "terminal") {
+        if (!clearPendingResetOperation(operation.accountId, operation.operationId)) {
+          showActionFeedback(t("codexAuth.resetError"), "err");
+          return;
+        }
         setPendingResetOperations(current => {
           if (current[operation.accountId] !== operation.operationId) return current;
           const next = { ...current };
           delete next[operation.accountId];
-          writePendingResetOperations(next);
           return next;
         });
         setResetPopup(null);
@@ -473,6 +577,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
           resetConfirm={resetConfirm}
           creditDetails={creditDetails}
           creditDetailsLoading={creditDetailsLoading}
+          guiConsumeAllowed={guiResetConsumeAllowed}
           redeeming={redeeming}
           onClose={() => {
             if (redeeming) return;
@@ -480,6 +585,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             setResetPopup(null);
             setResetConfirm(false);
             setCreditDetails(null);
+            setGuiResetConsumeAllowed(null);
           }}
           onShowConfirm={() => setResetConfirm(true)}
           onCancelConfirm={() => setResetConfirm(false)}

@@ -85,7 +85,7 @@ function resetCreditConsumeBody(accountId: string): string {
 function handleResetCreditConsume(
   req: Request,
   config: OcxConfig,
-  principal: ManagementPrincipal | undefined = "gui-session",
+  principal: ManagementPrincipal | undefined = "gui-reset-credit-session",
 ): Promise<Response | null> {
   return handleCodexAuthAPI(req, new URL(req.url), config, undefined, principal);
 }
@@ -2110,7 +2110,7 @@ describe("codex-auth API", () => {
     expect(await resp?.json()).toEqual({ error: "Invalid upstream reset-credit response" });
   });
 
-  test("reset-credit lookup returns only validated fields from a bounded response", async () => {
+  test("reset-credit lookup returns only validated fields and the caller GUI capability", async () => {
     const config = makeConfig();
     seedPoolAccount(config, { id: "credit-fields", email: "fields@example.test" });
     globalThis.fetch = (async () => Response.json({
@@ -2129,6 +2129,22 @@ describe("codex-auth API", () => {
     expect(await resp?.json()).toEqual({
       credits: [{ granted_at: "2026-01-01T00:00:00Z", expires_at: "2026-02-01T00:00:00Z" }],
       available_count: 1,
+      guiConsumeAllowed: false,
+    });
+
+    const guiReq = new Request("http://localhost/api/codex-auth/reset-credits?accountId=credit-fields");
+    const guiResp = await handleCodexAuthAPI(
+      guiReq,
+      new URL(guiReq.url),
+      config,
+      undefined,
+      "gui-session",
+    );
+    expect(guiResp?.status).toBe(200);
+    expect(await guiResp?.json()).toEqual({
+      credits: [{ granted_at: "2026-01-01T00:00:00Z", expires_at: "2026-02-01T00:00:00Z" }],
+      available_count: 1,
+      guiConsumeAllowed: true,
     });
   });
 
@@ -2143,7 +2159,7 @@ describe("codex-auth API", () => {
     expect(await resp!.json()).toMatchObject({ error: "Invalid account id format" });
   });
 
-  for (const principal of [undefined, "admin-token"] as const) {
+  for (const principal of [undefined, "admin-token", "gui-session"] as const) {
     test(`reset-credit consume refuses ${principal ?? "missing"} consent authority before upstream work`, async () => {
       let fetchCalls = 0;
       globalThis.fetch = (async () => {
@@ -2319,7 +2335,8 @@ describe("codex-auth API", () => {
           seenOperationIds.push(
             (JSON.parse(String(init?.body)) as { redeem_request_id: string }).redeem_request_id,
           );
-          throw new Error("response lost after dispatch");
+          if (consumeCalls === 1) throw new Error("response lost after dispatch");
+          return Response.json({ code: "reset" });
         }
         return originalFetch(input);
       }) as typeof fetch;
@@ -2331,10 +2348,66 @@ describe("codex-auth API", () => {
         });
         return await handleResetCreditConsume(req, config);
       };
-      expect((await call(randomUUID()))?.status).toBe(502);
-      expect((await call(randomUUID()))?.status).toBe(502);
+      const firstId = randomUUID();
+      const joinedId = randomUUID();
+      expect((await call(firstId))?.status).toBe(502);
+      const joinedResponse = await call(joinedId);
+      expect(joinedResponse?.status).toBe(200);
+      expect(await joinedResponse?.json()).toEqual({ code: "reset" });
+      const joinedRetry = await call(joinedId);
+      expect(joinedRetry?.status).toBe(200);
+      expect(await joinedRetry?.json()).toEqual({ code: "reset" });
+      const originalRetry = await call(firstId);
+      expect(originalRetry?.status).toBe(200);
+      expect(await originalRetry?.json()).toEqual({ code: "reset" });
       expect(consumeCalls).toBe(2);
-      expect(new Set(seenOperationIds).size).toBe(1);
+      expect(seenOperationIds).toEqual([firstId, firstId]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a stale retry id reports an identity change without dispatching for a replacement credential", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, {
+      id: "pool-identity-change",
+      email: "identity@example.test",
+      chatgptAccountId: "chatgpt-before",
+    });
+    const operationId = randomUUID();
+    let consumeCalls = 0;
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        if (String(input).includes("/backend-api/wham/rate-limit-reset-credits/consume")) {
+          consumeCalls += 1;
+          throw new Error("response lost after dispatch");
+        }
+        return originalFetch(input);
+      }) as typeof fetch;
+      const call = async () => {
+        const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accountId: "pool-identity-change", operationId }),
+        });
+        return await handleResetCreditConsume(req, config);
+      };
+
+      expect((await call())?.status).toBe(502);
+      saveCodexAccountCredential("pool-identity-change", {
+        accessToken: "replacement-access",
+        refreshToken: "replacement-refresh",
+        expiresAt: Date.now() + 5 * 60_000,
+        chatgptAccountId: "chatgpt-after",
+      });
+      const conflict = await call();
+      expect(conflict?.status).toBe(409);
+      expect(await conflict?.json()).toEqual({
+        error: "The Codex account identity changed. Confirm a new reset-credit request.",
+        code: "reset_credit_operation_identity_changed",
+      });
+      expect(consumeCalls).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -2384,6 +2457,72 @@ describe("codex-auth API", () => {
       expect(await firstResponse?.json()).toEqual({ code: "nothing_to_reset" });
       expect(await secondResponse?.json()).toEqual({ error: "server_busy", code: "server_busy" });
       expect(consumeCalls).toBe(1);
+    } finally {
+      releaseConsume?.();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a distinct concurrent retry id is recorded before the consume flight rejects it", async () => {
+    const config = makeConfig();
+    seedPoolAccount(config, { id: "pool-flight-alias", email: "flight-alias@example.test" });
+    const firstId = randomUUID();
+    const joinedId = randomUUID();
+    const nextId = randomUUID();
+    const seenOperationIds: string[] = [];
+    let releaseConsume!: () => void;
+    const consumeReleased = new Promise<void>(resolve => { releaseConsume = resolve; });
+    let consumeStarted!: () => void;
+    const started = new Promise<void>(resolve => { consumeStarted = resolve; });
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/backend-api/wham/rate-limit-reset-credits/consume")) {
+          const operationId = (JSON.parse(String(init?.body)) as { redeem_request_id: string })
+            .redeem_request_id;
+          seenOperationIds.push(operationId);
+          if (seenOperationIds.length === 1) {
+            consumeStarted();
+            await consumeReleased;
+            return Response.json({ code: "nothing_to_reset" });
+          }
+          return Response.json({ code: "reset" });
+        }
+        return originalFetch(input, init);
+      }) as typeof fetch;
+      const request = (operationId: string) => {
+        const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ accountId: "pool-flight-alias", operationId }),
+        });
+        return handleResetCreditConsume(req, config);
+      };
+
+      const first = request(firstId);
+      await started;
+      const joinedBusy = await request(joinedId);
+      expect(joinedBusy?.status).toBe(503);
+      expect(await joinedBusy?.json()).toEqual({ error: "server_busy", code: "server_busy" });
+      expect(seenOperationIds).toEqual([firstId]);
+
+      releaseConsume();
+      const firstResponse = await first;
+      expect(firstResponse?.status).toBe(200);
+      expect(await firstResponse?.json()).toEqual({ code: "nothing_to_reset" });
+      const joinedRetry = await request(joinedId);
+      expect(joinedRetry?.status).toBe(200);
+      expect(await joinedRetry?.json()).toEqual({ code: "nothing_to_reset" });
+      expect(seenOperationIds).toEqual([firstId]);
+
+      const next = await request(nextId);
+      expect(next?.status).toBe(200);
+      expect(await next?.json()).toEqual({ code: "reset" });
+      const staleJoinedRetry = await request(joinedId);
+      expect(staleJoinedRetry?.status).toBe(200);
+      expect(await staleJoinedRetry?.json()).toEqual({ code: "nothing_to_reset" });
+      expect(seenOperationIds).toEqual([firstId, nextId]);
     } finally {
       releaseConsume?.();
       globalThis.fetch = originalFetch;

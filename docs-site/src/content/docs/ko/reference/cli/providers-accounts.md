@@ -206,7 +206,7 @@ security find-generic-password -w openrouter | ocx account add-key openrouter --
 
 ### `ocx account reset-credits <id|main> [--consume --yes]`
 
-계정의 Codex reset credits를 확인합니다. credit 소비는 파괴적이므로 사용자가 직접 입력해 확인한 실행에서 `--consume`와 `--yes`를 둘 다 요구합니다. 에이전트가 실행한 호출은 one-shot 로컬 동의 capability를 만들기 전에 거부되며, 재사용 가능한 관리 토큰으로 대체할 수 없습니다.
+계정의 Codex reset credits를 확인합니다. credit 소비는 파괴적이므로 사용자가 직접 입력해 확인한 실행에서 `--consume`와 `--yes`를 둘 다 요구합니다. 에이전트가 실행한 호출은 one-shot 로컬 동의 capability를 만들기 전에 거부되며, 재사용 가능한 관리 토큰으로 대체할 수 없습니다. CLI는 terminal 응답을 받을 때까지 동일한 operation ID를 영구 재사용하므로 timeout 뒤에는 새 소비를 시작하지 말고 같은 명령을 다시 실행하세요.
 
 ### `ocx account main <subcommand>`
 

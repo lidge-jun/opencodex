@@ -134,6 +134,11 @@ async function verifyAdminToken(token: string): ReturnType<AdminTokenVerifier> {
   }
 }
 
+/** One-use owner proof for an irreversible dashboard action; never stores the token. */
+export async function requestResetCreditOwnerToken(): Promise<string | null> {
+  return await requestAdminToken(verifyAdminToken);
+}
+
 function clearLegacySessionToken(): void {
   try {
     sessionStorage.removeItem(LEGACY_TOKEN_KEY);

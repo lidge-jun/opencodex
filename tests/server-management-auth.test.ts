@@ -5,10 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
+import { requestBoundCodexResetCreditConsent } from "../src/cli/reset-credit-consent-client";
 import type { OcxConfig } from "../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../src/server/auth-cors";
 import {
+  CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER,
   initializeManagementAuthState,
   issueGuiSession,
   managementPrincipal,
@@ -546,6 +548,34 @@ describe("management and data-plane credential separation", () => {
     expect(requireManagementAuth(chunked, unavailable, remoteConfig(), local)?.status).toBe(503);
   });
 
+  test("the CLI consent client reaches the live bodyless consume route through management auth", async () => {
+    const secret = "R".repeat(43);
+    const server = startServer(0, { localAttestationSecret: secret });
+    const target = {
+      pid: process.pid,
+      port: server.port,
+      hostname: "127.0.0.1",
+      source: "runtime" as const,
+    };
+    try {
+      const result = await requestBoundCodexResetCreditConsent(
+        "pool-live-consent",
+        "123e4567-e89b-42d3-a456-426614174000",
+        {
+          findLive: async () => target,
+          readRuntime: () => ({ ...target, attestationSecret: secret }),
+        },
+      );
+
+      expect(result.kind).toBe("response");
+      if (result.kind !== "response") throw new Error(`unexpected ${result.reason}`);
+      expect(result.response.status).toBe(404);
+      expect(await result.response.json()).toEqual({ error: "Unknown Codex account" });
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
   test("reset-credit consent capability binds method path identity process endpoint and TTL", () => {
     const secret = "A".repeat(43);
     const nonce = "M".repeat(43);
@@ -995,7 +1025,7 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
-  test("live server refuses admin-token reset-credit consume and admits GUI-session validation", async () => {
+  test("live server requires GUI-session and owner-token proof for reset-credit consume", async () => {
     const config = remoteConfig();
     config.hostname = "127.0.0.1";
     saveConfig(config);
@@ -1010,6 +1040,7 @@ describe("management and data-plane credential separation", () => {
           headers: {
             "content-type": "application/json",
             "x-opencodex-api-key": "admin-secret",
+            [CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER]: "admin-secret",
           },
           body: JSON.stringify({
             accountId: "pool-account",
@@ -1044,8 +1075,26 @@ describe("management and data-plane credential separation", () => {
           body: "{}",
         },
       );
-      expect(guiResponse.status).toBe(400);
-      expect(await guiResponse.json()).toEqual({ error: "accountId required" });
+      expect(guiResponse.status).toBe(403);
+      expect(await guiResponse.json()).toMatchObject({ code: "agent_consent_required" });
+
+      const ownerProvedResponse = await fetch(
+        new URL("/api/codex-auth/reset-credits/consume", server.url),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            Origin: server.url.origin,
+            "x-opencodex-api-key": session?.token ?? "",
+            "x-opencodex-gui-origin": session?.origin ?? "",
+            "x-opencodex-csrf-token": session?.csrfToken ?? "",
+            [CODEX_RESET_CREDIT_GUI_OWNER_TOKEN_HEADER]: "admin-secret",
+          },
+          body: "{}",
+        },
+      );
+      expect(ownerProvedResponse.status).toBe(400);
+      expect(await ownerProvedResponse.json()).toEqual({ error: "accountId required" });
     } finally {
       await server.stop(true);
     }
