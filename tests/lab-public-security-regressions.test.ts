@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jcsStringify } from "../src/lab/conformance/jcs";
 import { labPublicPublisherKeyPath } from "../src/lab/paths";
+import { publishPrivateFileExclusive } from "../src/lab/public/private-file";
 import { getOrCreatePublicPublisher } from "../src/lab/public/signature";
 import {
   resetHardenedStateForTests,
@@ -31,6 +32,17 @@ function configDir(prefix: string): string {
 test("JCS rejects sparse JavaScript arrays instead of collapsing holes", () => {
   const sparse = new Array<unknown>(1);
   expect(() => jcsStringify(sparse)).toThrow(/sparse|array hole/i);
+});
+
+test("private publication prepares an empty stage before writing secret bytes", () => {
+  const root = configDir("ocx-cl10-private-stage-prepare-");
+  const finalPath = join(root, "secret.bin");
+  const observedSizes: number[] = [];
+
+  expect(publishPrivateFileExclusive(finalPath, Buffer.from("secret", "utf8"), {
+    prepareStage: stagePath => observedSizes.push(statSync(stagePath).size),
+  })).toEqual({ created: true });
+  expect(observedSizes).toEqual([0]);
 });
 
 test("publisher key creation applies required Windows secret ACL hardening to the final key path", () => {
