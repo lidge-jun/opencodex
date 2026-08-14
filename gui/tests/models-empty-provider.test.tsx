@@ -8,6 +8,7 @@ import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { LanguageProvider } from "../src/i18n/provider";
 import Models from "../src/pages/Models";
 import { EmptyProviderHint } from "../src/pages/models-provider-hints";
+import { normalizeHashPath } from "../src/hash-routing";
 import type { ProviderDiscoverySummary } from "../src/models-groups";
 import { gatherRoutedModels as gatherRoutedModelsDirect } from "../../src/codex/catalog";
 import { withStubbedProviderFetch } from "../../tests/helpers/catalog-provider-fetch";
@@ -560,6 +561,47 @@ test("OAuth discovery failure tells the user to re-login", () => {
   expect(html).toContain("Configured models remain available");
   expect(html).toContain("Open provider settings");
   expect(html).not.toContain("Open provider login");
+});
+
+test("Open provider settings navigates to the Providers route", async () => {
+  const domGlobals = ["document", "window", "IS_REACT_ACT_ENVIRONMENT"] as const;
+  const previousDescriptors = Object.fromEntries(
+    domGlobals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  ) as Record<(typeof domGlobals)[number], PropertyDescriptor | undefined>;
+  const win = new Window({ url: "http://localhost/#models" });
+  const container = win.document.createElement("div");
+  win.document.body.append(container);
+  let root: Root | undefined;
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: win.document },
+    window: { configurable: true, value: win },
+    IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
+  });
+
+  try {
+    const { createRoot } = await import("react-dom/client");
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <LanguageProvider>
+          <EmptyProviderHint liveModels discovery={{ status: "failed", reason: "http", httpStatus: 401 }} />
+        </LanguageProvider>,
+      );
+    });
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 0)); await Promise.resolve(); });
+    const cta = container.querySelector<HTMLButtonElement>("button.link-btn")!;
+    expect(cta.textContent).toContain("Open provider settings");
+    await act(async () => cta.click());
+    expect(normalizeHashPath(win.location.hash)).toBe("providers");
+  } finally {
+    await act(async () => root?.unmount());
+    win.close();
+    for (const key of domGlobals) {
+      const descriptor = previousDescriptors[key];
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
 });
 
 test("failed discovery renders each server-owned reason without provider detail", () => {
