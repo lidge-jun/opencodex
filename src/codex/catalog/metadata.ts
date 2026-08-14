@@ -99,7 +99,7 @@ export function isUnsupportedOpenAiNativeSlug(slug: string): boolean {
   return /^(?:gpt|codex)-/.test(slug);
 }
 
-export const NATIVE_GPT56_CONTEXT_WINDOW = 372_000;
+export const NATIVE_GPT56_CONTEXT_WINDOW = 272_000;
 
 export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: number; maxContextWindow?: number }> = {
   "gpt-5.5": { contextWindow: 272_000, maxContextWindow: 272_000 },

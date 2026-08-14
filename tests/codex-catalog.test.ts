@@ -1081,8 +1081,8 @@ describe("combo catalog capability intersection", () => {
     expect(rows.find(row => row.provider === "combo" && row.id === "nova-sol")).toMatchObject({
       alias: "gpt-5.6-sol",
       nativeAlias: true,
-      contextWindow: 372_000,
-      maxInputTokens: 372_000,
+      contextWindow: 272_000,
+      maxInputTokens: 272_000,
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultReasoningEffort: "low",
@@ -1258,7 +1258,7 @@ describe("combo catalog capability intersection", () => {
     const rows = await gatherRoutedModels(config);
     const comboRow = rows.find(r => r.provider === "combo" && r.id === "auto");
     expect(comboRow).toBeDefined();
-    expect(comboRow!.contextWindow).toBe(372_000);
+    expect(comboRow!.contextWindow).toBe(272_000);
     expect(comboRow!.inputModalities).toEqual(["text", "image"]);
     // Reasoning efforts should be the intersection of the two members.
     expect(comboRow!.reasoningEfforts).toContain("low");
@@ -2345,9 +2345,9 @@ describe("Codex catalog routed normalization", () => {
     expect((gpt56?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
-    expect(gpt56?.context_window).toBe(372_000);
-    expect(gpt56?.max_context_window).toBe(372_000);
-    expect(gpt56?.auto_compact_token_limit).toBe(334_800);
+    expect(gpt56?.context_window).toBe(272_000);
+    expect(gpt56?.max_context_window).toBe(272_000);
+    expect(gpt56?.auto_compact_token_limit).toBe(244_800);
     expect((gpt55?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort)).toEqual([
       "low", "medium", "high", "xhigh", "max", "ultra",
     ]);
@@ -2389,7 +2389,7 @@ describe("Codex catalog routed normalization", () => {
       expect(e).not.toHaveProperty("minimal_client_version");
       expect(e).not.toHaveProperty("prefer_websockets");
       expect(e).not.toHaveProperty("supports_websockets");
-      expect(e?.context_window).toBe(372_000);
+      expect(e?.context_window).toBe(272_000);
       expect(e?.tool_mode).toBe("code_mode_only");
       expect(e?.use_responses_lite).toBe(true);
     }
@@ -2511,10 +2511,10 @@ describe("Codex catalog routed normalization", () => {
   });
 
   test("nativeOpenAiContextWindow applies the openai cap as a ceiling only when provided", () => {
-    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(372_000);
-    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 272_000)).toBe(272_000);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol")).toBe(272_000);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 200_000)).toBe(200_000);
     // A cap above the native value is a ceiling, not a floor.
-    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(372_000);
+    expect(nativeOpenAiContextWindow("gpt-5.6-sol", 500_000)).toBe(272_000);
     // Non-5.6 natives are capped the same way.
     expect(nativeOpenAiContextWindow("gpt-5.4", 272_000)).toBe(272_000);
   });
@@ -2522,7 +2522,7 @@ describe("Codex catalog routed normalization", () => {
   test("account-scoped Daybreak Blue inherits Sol capabilities without expanding the bare allowlist", () => {
     expect(NATIVE_DAYBREAK_BLUE_MODEL).toBe("gpt-daybreak-blue-latest");
     expect(nativeOpenAiCapabilitySourceSlug(NATIVE_DAYBREAK_BLUE_MODEL)).toBe("gpt-5.6-sol");
-    expect(nativeOpenAiContextWindow(NATIVE_DAYBREAK_BLUE_MODEL)).toBe(372_000);
+    expect(nativeOpenAiContextWindow(NATIVE_DAYBREAK_BLUE_MODEL)).toBe(272_000);
     expect(nativeInputModalities(NATIVE_DAYBREAK_BLUE_MODEL)).toEqual(["text", "image"]);
     expect(nativeReasoningEfforts(NATIVE_DAYBREAK_BLUE_MODEL))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -2565,7 +2565,7 @@ describe("Codex catalog routed normalization", () => {
     const daybreak = projected.find(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`);
     const sol = projected.find(entry => entry.slug === "gpt-5.6-sol");
     expect(daybreak).toBeDefined();
-    expect(daybreak?.auto_compact_token_limit).toBe(334_800);
+    expect(daybreak?.auto_compact_token_limit).toBe(244_800);
     expect(daybreak).toMatchObject({
       context_window: sol?.context_window,
       max_context_window: sol?.max_context_window,
@@ -2612,7 +2612,7 @@ describe("Codex catalog routed normalization", () => {
       displayName: "Daybreak Blue",
       catalogKind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
       codexForwardNativeCapabilityAlias: true,
-      contextWindow: 372_000,
+      contextWindow: 272_000,
       inputModalities: ["text", "image"],
       reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
       defaultReasoningEffort: "low",
@@ -2624,9 +2624,9 @@ describe("Codex catalog routed normalization", () => {
     expect(daybreak).toMatchObject({
       slug: `openai/${NATIVE_DAYBREAK_BLUE_MODEL}`,
       display_name: "Daybreak Blue",
-      context_window: 372_000,
-      max_context_window: 372_000,
-      auto_compact_token_limit: 334_800,
+      context_window: 272_000,
+      max_context_window: 272_000,
+      auto_compact_token_limit: 244_800,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
