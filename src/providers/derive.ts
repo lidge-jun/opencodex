@@ -396,8 +396,8 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   };
   const seed = providerConfigSeed(entry);
   // `mimo-free` shipped in legacy rows with either an omitted auth mode or the invalid `local`
-  // mode before the registry key contract became authoritative. Repair only those canonical
-  // legacy shapes; explicit modern `key` rows keep their operator-owned static catalog.
+  // mode before the registry key contract became authoritative. Repair authentication only;
+  // an explicit model list remains operator-owned for every canonical legacy shape.
   const repairLegacyMimoFreeAuth = name === "mimo-free"
     && (prov.authMode === undefined || prov.authMode === "local")
     && seed.authMode === "key";
@@ -407,8 +407,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.responsesPath === undefined && seed.responsesPath !== undefined) prov.responsesPath = seed.responsesPath;
   // Fill mode only when absent: an explicit persisted `direct` must never be overwritten.
   if (prov.codexAccountMode === undefined && seed.codexAccountMode !== undefined) prov.codexAccountMode = seed.codexAccountMode;
-  if (repairLegacyMimoFreeAuth && entry.liveModelDiscoverySupported === false && seed.models) prov.models = [...seed.models];
-  else if (!prov.models && seed.models) prov.models = [...seed.models];
+  if (!prov.models && seed.models) prov.models = [...seed.models];
   // An exact canonical preset with a static-only registry contract cannot honor a stale saved
   // discovery opt-in: there is no supported endpoint to call. Custom destinations fail the
   // transport match above and keep their explicit operator setting.
