@@ -1,38 +1,8 @@
 import { expect, test } from "bun:test";
 import type { AdapterRequest } from "../src/adapters/base";
-import {
-  defineAdapterRegistry,
-  type AdapterFactory,
-  type AdapterWrapperFactory,
-} from "../src/adapters/contracts";
 import { createMimoFreeAdapter } from "../src/adapters/mimo-free";
 import { adapterDefinitions } from "../src/adapters/registry";
 import type { OcxProviderConfig } from "../src/types";
-
-function compileTimeRegistryParentConstraint(): void {
-  const create: AdapterFactory = () => {
-    throw new Error("type-only fixture");
-  };
-  const wrap: AdapterWrapperFactory = () => {
-    throw new Error("type-only fixture");
-  };
-
-  defineAdapterRegistry({
-    base: {
-      kind: "direct",
-      wire: "openai-chat",
-      mutation: "mutation.codex-owned",
-      create,
-    },
-    // @ts-expect-error wrapper parents must be keys in the same registry
-    broken: {
-      kind: "wrapper",
-      extends: "not-registered",
-      wrap,
-    },
-  });
-}
-void compileTimeRegistryParentConstraint;
 
 test("wrapper registry entries cannot construct an independent adapter", () => {
   const wrappers = adapterDefinitions().filter(([, definition]) => definition.kind === "wrapper");

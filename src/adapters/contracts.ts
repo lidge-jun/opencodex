@@ -67,6 +67,19 @@ type ValidAdapterRegistry<T extends Record<string, AdapterDefinitionInput>> = {
     : T[K];
 };
 
+type AssertNever<T extends never> = T;
+type _UnknownWrapperParentIsRejected = AssertNever<
+  ValidAdapterRegistry<{
+    base: DirectAdapterDefinitionInput;
+    broken: WrappedAdapterDefinitionInput & { extends: "not-registered" };
+  }>["broken"]
+>;
+type _SelfWrapperParentIsRejected = AssertNever<
+  ValidAdapterRegistry<{
+    self: WrappedAdapterDefinitionInput & { extends: "self" };
+  }>["self"]
+>;
+
 export function defineAdapterRegistry<const T extends Record<string, AdapterDefinitionInput>>(
   definitions: T & ValidAdapterRegistry<T>,
 ): { readonly [K in keyof T]: AdapterDefinition<T[K]> } {
