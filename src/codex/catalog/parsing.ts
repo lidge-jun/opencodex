@@ -303,7 +303,7 @@ export function ensureStrictCatalogFields(
   if (typeof entry.default_reasoning_summary !== "string") entry.default_reasoning_summary = "none";
   if (typeof entry.support_verbosity !== "boolean") entry.support_verbosity = true;
   if (typeof entry.default_verbosity !== "string") entry.default_verbosity = "low";
-  if (options.isRouted === true || typeof entry.apply_patch_tool_type !== "string") entry.apply_patch_tool_type = "freeform";
+  if (typeof entry.apply_patch_tool_type !== "string") entry.apply_patch_tool_type = "freeform";
   if (!entry.truncation_policy || typeof entry.truncation_policy !== "object" || Array.isArray(entry.truncation_policy)) {
     entry.truncation_policy = { mode: "tokens", limit: 10000 };
   }
