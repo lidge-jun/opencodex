@@ -513,7 +513,7 @@ describe("server local API auth", () => {
       keyOptional: true,
       liveModelDiscoverySupported: false,
       liveModels: false,
-      models: ["mimo-auto"],
+      models: ["stale-model"],
       hasApiKey: false,
     });
   });
