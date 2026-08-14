@@ -1053,10 +1053,12 @@ describe("request log metadata", () => {
     const text = await response.text();
     expect(text).toContain("\"input_tokens\":9");
     expect(entries).toHaveLength(1);
+    // The 240k estimate exceeds claude-sonnet-4.5's 200k window; a request the provider
+    // answered cannot have exceeded the window, so the estimate is capped (codex-router PR #140).
     expect(entries[0]).toMatchObject({
       usageStatus: "estimated",
-      totalTokens: 240_004,
-      usage: { inputTokens: 240_000, outputTokens: 4, estimated: true },
+      totalTokens: 200_004,
+      usage: { inputTokens: 200_000, outputTokens: 4, estimated: true },
     });
   });
 

@@ -38,6 +38,10 @@ import {
 } from "../usage/debug";
 import { matchesLogConversationId } from "./request-log-conversation";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { capEstimateAtContextWindow } from "../lib/token-estimate";
+import { inferCursorContextWindow } from "../adapters/cursor/discovery";
+import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../providers/kiro-models";
+import { modelRecordValue } from "../reasoning-effort";
 
 export interface RequestLogContext {
   model: string;
@@ -839,6 +843,7 @@ export function addFinalRequestLog(
     logCtx.providerAdapter ?? logCtx.provider,
     logCtx.usage,
     logCtx.usageLogInputTokens,
+    contextWindowForModel(logCtx.providerAdapter ?? logCtx.provider, logCtx.model),
   );
   const attempts = logCtx.attempts?.map(attempt => ({
     ...attempt,
@@ -960,15 +965,40 @@ interface FinalizedUsageResult {
   totalTokens?: number;
 }
 
+/**
+ * Context window for the routed model, used to cap the token estimate (codex-router PR #140):
+ * a request the provider answered cannot have exceeded the window, so the estimate must never
+ * claim it did. The family is picked by the route ADAPTER, not the model id alone, because
+ * claude-family ids are shared between Kiro and Cursor with different windows. Kiro "auto" is
+ * a router with no fixed window and is never guessed; unknown adapters/models stay uncapped.
+ */
+function contextWindowForModel(adapter: string, modelId: string | undefined): number | undefined {
+  if (!modelId) return undefined;
+  if (adapter === "kiro" || adapter.startsWith("kiro-")) {
+    const normalized = normalizeKiroModelId(modelId);
+    if (normalized === "auto") return undefined;
+    return modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, modelId)
+      ?? modelRecordValue(KIRO_MODEL_CONTEXT_WINDOWS, normalized);
+  }
+  if (adapter === "cursor" || adapter.startsWith("cursor-")) {
+    return inferCursorContextWindow(modelId);
+  }
+  return undefined;
+}
+
 function finalizedUsage(
   adapter: string,
   usage: OcxUsage | undefined,
   inputTokenEstimate: number | undefined,
+  contextWindow: number | undefined,
 ): FinalizedUsageResult {
+  // The ESTIMATE itself is capped at the model's context window (codex-router PR #140). The
+  // combined value below keeps its max(inputTokens, estimate) behavior — a provider-reported
+  // positive count is never reduced by this cap, only the estimate that could substitute it.
   const estimate = typeof inputTokenEstimate === "number"
     && Number.isFinite(inputTokenEstimate)
     && inputTokenEstimate >= 0
-    ? inputTokenEstimate
+    ? capEstimateAtContextWindow(inputTokenEstimate, contextWindow)
     : undefined;
   const finalUsage = usageForFinalLog(adapter, usage);
   const usageFallback = !finalUsage && estimate !== undefined
@@ -1030,7 +1060,12 @@ export function noteAttemptSend(
   if (typeof inputTokenEstimate === "number"
     && Number.isFinite(inputTokenEstimate)
     && inputTokenEstimate >= 0) {
-    attempt.inputTokenEstimate = inputTokenEstimate;
+    // Store the ESTIMATE field already capped at the model's window (codex-router PR #140):
+    // what gets persisted, and later merged into usage, never claims a count above the window.
+    attempt.inputTokenEstimate = capEstimateAtContextWindow(
+      inputTokenEstimate,
+      contextWindowForModel(attempt.adapter, attempt.model),
+    );
   }
   if (recovery && !attempt.recoveryKinds.includes(recovery)) {
     attempt.recoveryKinds.push(recovery);
@@ -1047,6 +1082,7 @@ export function finishRequestAttempt(
     attempt.adapter,
     usage ?? attempt.usage,
     attempt.inputTokenEstimate,
+    contextWindowForModel(attempt.adapter, attempt.model),
   );
   attempt.status = status;
   attempt.durationMs = Math.max(0, durationMs);

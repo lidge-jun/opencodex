@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { charsPerToken, estimateTokens } from "../src/lib/token-estimate";
+import { capEstimateAtContextWindow, charsPerToken, estimateTokens } from "../src/lib/token-estimate";
 
 describe("CJK-aware ratio (devlog 260712 B3)", () => {
   const korean = "한국어 텍스트는 토큰 밀도가 높아서 영어 기준 추정이 과소계산됩니다 ".repeat(10);
@@ -59,5 +59,44 @@ describe("token-estimate sidecar", () => {
       expect(t).toBeGreaterThanOrEqual(prev);
       prev = t;
     }
+  });
+});
+
+describe("context-window cap (codex-router PR #140)", () => {
+  const GPT56_SOL_WINDOW = 272_000;
+  const DEEPSEEK_WINDOW = 128_000;
+  // gpt-5.6-sol uses the generic 4-char ratio: 1.2M chars ~= 300k tokens, far over 272k.
+  const OVER_WINDOW_TEXT = "x".repeat(1_200_000);
+
+  test("estimate is capped at the model's context window", () => {
+    expect(estimateTokens(OVER_WINDOW_TEXT, "gpt-5.6-sol", GPT56_SOL_WINDOW)).toBe(GPT56_SOL_WINDOW);
+    expect(estimateTokens(OVER_WINDOW_TEXT, "gpt-5.6-sol", DEEPSEEK_WINDOW)).toBe(DEEPSEEK_WINDOW);
+  });
+
+  test("below-window estimates are unchanged", () => {
+    const text = "x".repeat(100_000); // ~28.5k tokens at the kiro ratio
+    const plain = estimateTokens(text, "gpt-5.6-sol");
+    expect(plain).toBeLessThan(GPT56_SOL_WINDOW);
+    expect(estimateTokens(text, "gpt-5.6-sol", GPT56_SOL_WINDOW)).toBe(plain);
+  });
+
+  test("only a positive integer window caps (unknown window leaves the estimate untouched)", () => {
+    const text = "x".repeat(100_000);
+    const plain = estimateTokens(text, "gpt-5.6-sol");
+    for (const window of [undefined, 0, -1, 1.5, Number.NaN]) {
+      expect(estimateTokens(text, "gpt-5.6-sol", window)).toBe(plain);
+    }
+  });
+
+  test("the min-1 floor survives the cap for tiny inputs", () => {
+    expect(estimateTokens("a", "claude-opus-4.8", 1)).toBe(1);
+    expect(estimateTokens("a", "claude-opus-4.8", GPT56_SOL_WINDOW)).toBe(1);
+  });
+
+  test("capEstimateAtContextWindow caps only at positive integer windows", () => {
+    expect(capEstimateAtContextWindow(300_000, GPT56_SOL_WINDOW)).toBe(GPT56_SOL_WINDOW);
+    expect(capEstimateAtContextWindow(100_000, GPT56_SOL_WINDOW)).toBe(100_000);
+    expect(capEstimateAtContextWindow(300_000, undefined)).toBe(300_000);
+    expect(capEstimateAtContextWindow(300_000, 0)).toBe(300_000);
   });
 });
