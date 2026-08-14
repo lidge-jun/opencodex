@@ -85,6 +85,7 @@ export default defineConfig({
           translations: { ko: "가이드", "zh-CN": "指南", "zh-TW": "指南", ru: "Руководства", ja: "ガイド", tr: "Kılavuzlar" },
           items: [
             { label: "Providers", translations: { ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "guides/providers" },
+            { label: "Factory Droid Bridge", translations: { ko: "Factory Droid 브리지" }, slug: "guides/factory-droid" },
             { label: "Model Routing", translations: { ko: "모델 라우팅", "zh-CN": "模型路由", "zh-TW": "模型路由", ru: "Маршрутизация моделей", ja: "モデルルーティング", tr: "Model Yönlendirme" }, slug: "guides/model-routing" },
             { label: "Codex Integration", translations: { ko: "Codex 통합", "zh-CN": "Codex 集成", "zh-TW": "Codex 整合", ru: "Интеграция с Codex", ja: "Codex 連携", tr: "Codex Entegrasyonu" }, slug: "guides/codex-integration" },
             { label: "Codex App Model Picker", translations: { ko: "Codex App 모델 선택기", "zh-CN": "Codex App 模型选择器", "zh-TW": "Codex App 模型選擇器", ru: "Выбор модели в Codex App", ja: "Codex App モデルピッカー", tr: "Codex App Model Seçici" }, slug: "guides/codex-app-models" },
