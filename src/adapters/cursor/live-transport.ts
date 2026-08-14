@@ -1097,7 +1097,12 @@ class LiveCursorTransport implements CursorTransport {
     const update = message.message.case === "interactionUpdate" ? message.message.value.message : undefined;
     const completesOpenClientTool = update?.case === "toolCallCompleted"
       && state.openToolCalls.has(update.value.callId);
+    const awaitedNativeArgsBeforeMapping = update?.case === "toolCallCompleted"
+      && state.openToolCalls.get(update.value.callId)?.awaitingNativeArgs === true;
     const mapped = mapCursorProtobufServerMessage(message, state);
+    const beganAwaitingNativeClientToolArgs = update?.case === "toolCallCompleted"
+      && !awaitedNativeArgsBeforeMapping
+      && state.openToolCalls.get(update.value.callId)?.awaitingNativeArgs === true;
     if (mapped.length > 0) {
       // A client tool call announced/committed via interactionUpdate (toolCallStarted/partialToolCall/
       // toolCallCompleted) changes the call set, so revoke any finalize armed by an earlier drain.
@@ -1114,13 +1119,14 @@ class LiveCursorTransport implements CursorTransport {
       return;
     }
     // The frame produced no outward Responses event (e.g. toolCallStarted / partialToolCall args
-    // buffering, toolCallDelta, tokenDelta, or a checkpoint update). Tool-call protocol events are
-    // deferred to completion for atomic, parallel-safe emission, so a turn that silently assembles
-    // several tool calls can otherwise exceed the bridge's stall watchdog (upstream_stall_timeout).
+    // buffering, a completion waiting for native args, toolCallDelta, tokenDelta, or a checkpoint
+    // update). Tool-call protocol events are deferred to completion for atomic, parallel-safe
+    // emission, so a turn that silently assembles several tool calls can otherwise exceed the
+    // bridge's stall watchdog (upstream_stall_timeout).
     // Emit a liveness heartbeat for these progress frames so the watchdog sees the upstream is alive.
     // Never after a terminal (done/truncation): a stray post-terminal frame must stay fully inert.
-    if (!state.terminated && isCursorProgressFrame(message)) {
-      if (isClientToolFrame(message)) this.noteClientToolActivity();
+    if (!state.terminated && (isCursorProgressFrame(message) || beganAwaitingNativeClientToolArgs)) {
+      if (isClientToolFrame(message) || beganAwaitingNativeClientToolArgs) this.noteClientToolActivity();
       push({ type: "heartbeat" });
     }
   }

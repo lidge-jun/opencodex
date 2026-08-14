@@ -103,7 +103,11 @@ interface Harness {
   cancelled(): boolean;
 }
 
-function makeHarness(graceMs: number, clientToolNames: string[]): Harness {
+function makeHarness(
+  graceMs: number,
+  clientToolNames: string[],
+  freeformToolNames: string[] = [],
+): Harness {
   const transport = createLiveCursorTransport({
     provider: { adapter: "cursor", baseUrl: "https://api2.cursor.sh", apiKey: "test-token" },
     translatorBudget: createTestTranslatorBudget(),
@@ -123,7 +127,7 @@ function makeHarness(graceMs: number, clientToolNames: string[]): Harness {
     closed: false,
     destroyed: false,
   };
-  const state = createCursorProtobufEventState({ clientToolNames });
+  const state = createCursorProtobufEventState({ clientToolNames, freeformToolNames });
   const push = (e: CursorServerMessage) => { events.push(e); };
   return {
     feed: (frame) => transport.handleServerMessage(frame, state, push),
@@ -168,6 +172,17 @@ describe("client-tool finalize grace selection", () => {
 });
 
 describe("transport finalize race (hidden parallel sibling)", () => {
+  test("completion-only freeform wait emits liveness while native arguments are pending", async () => {
+    const h = makeHarness(20, ["apply_patch"], ["apply_patch"]);
+
+    await h.feed(completedFrame("call_completion_only", "apply_patch"));
+    await h.feed(completedFrame("call_completion_only", "apply_patch"));
+
+    // Repeated completion frames for the same pending call cannot refresh the watchdog forever.
+    expect(h.events).toEqual([{ type: "heartbeat" }]);
+    expect(h.cancelled()).toBe(false);
+  });
+
   test("single client tool: grace timer fires once, emits done, cancels with RST_STREAM CANCEL", async () => {
     const h = makeHarness(20, ["echo_a"]);
     await h.feed(startedFrame("call_a", "echo_a"));

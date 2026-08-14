@@ -20,6 +20,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 
 const DEFAULT_CONTEXT_USAGE_MAX_ENTRIES = 200;
 const DEFAULT_CONTEXT_USAGE_TTL_MS = 60 * 60 * 1_000;
+const DEFAULT_MAX_CLIENT_TOOL_CALLS = 330;
 
 export interface CursorContextUsageControls {
   /**
@@ -153,7 +154,7 @@ export interface CursorProtobufEventState {
    */
   contextCarryForwardTokens?: number;
   recordContextTokens?: (tokens: number) => void;
-  openToolCalls: Map<string, { name: string; args: string }>;
+  openToolCalls: Map<string, { name: string; args: string; awaitingNativeArgs?: boolean }>;
   completedToolCalls: Set<string>;
   /** Set once a terminal `done`/truncation has been emitted, so post-terminal frames stay inert. */
   terminated?: boolean;
@@ -162,6 +163,8 @@ export interface CursorProtobufEventState {
   freeformToolNames?: ReadonlySet<string>;
   parallelToolCalls?: boolean;
   startedClientToolCalls: number;
+  /** Hard cap on client tool-call records retained during one upstream turn. */
+  maxClientToolCalls: number;
   /** Tool wire-name → original JSON Schema parameters object, for arg-key normalization. */
   toolSchemas?: Map<string, unknown>;
   /** Cursor wire-name → original Responses/Codex tool name for this request. */
@@ -199,6 +202,7 @@ export function createCursorProtobufEventState(options: {
   clientToolNames?: Iterable<string>;
   freeformToolNames?: Iterable<string>;
   parallelToolCalls?: boolean;
+  maxClientToolCalls?: number;
   toolSchemas?: Map<string, unknown>;
   cursorToolNameMap?: Map<string, string>;
   syntheticStructuredEditToolNames?: Iterable<string>;
@@ -224,6 +228,11 @@ export function createCursorProtobufEventState(options: {
       : {}),
     ...(options.parallelToolCalls !== undefined ? { parallelToolCalls: options.parallelToolCalls } : {}),
     startedClientToolCalls: 0,
+    maxClientToolCalls: typeof options.maxClientToolCalls === "number"
+      && Number.isFinite(options.maxClientToolCalls)
+      && options.maxClientToolCalls > 0
+      ? Math.floor(options.maxClientToolCalls)
+      : DEFAULT_MAX_CLIENT_TOOL_CALLS,
     ...(options.toolSchemas ? { toolSchemas: options.toolSchemas } : {}),
     ...(options.cursorToolNameMap ? { cursorToolNameMap: options.cursorToolNameMap } : {}),
     ...(options.translatorBudget ? { translatorBudget: options.translatorBudget } : {}),
@@ -524,6 +533,9 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
   if (state.clientToolNames && !advertisedName) {
     return [{ type: "error", message: `Cursor requested unknown Responses tool: ${cursorWireName}` }];
   }
+  if (state.startedClientToolCalls >= state.maxClientToolCalls) {
+    return [{ type: "error", message: `Cursor exceeded client tool-call limit (${state.maxClientToolCalls})` }];
+  }
   // Prefer the advertised catalog name for Responses mapping so shell_command/exec_command aliases
   // land on the tool Codex actually exposed this turn (#399).
   const mapKey = advertisedName ?? normalizeCursorWireName(cursorWireName);
@@ -704,6 +716,7 @@ export function mapCursorProtobufServerMessage(
           )
         )
       ) {
+        openBeforeStart.awaitingNativeArgs = true;
         return [];
       }
       if (name && !hasMcpArgBytes(args)) {
@@ -717,6 +730,17 @@ export function mapCursorProtobufServerMessage(
       if (name) out.push(...recordToolCall(state, update.value.callId, name));
       if (out.some(event => event.type === "error")) return out;
       const open = state.openToolCalls.get(update.value.callId);
+      // A request-declared freeform call may first appear only in its completion frame. Record it so
+      // later same-ID native mcpArgs can supply the authoritative wrapper, but do not broaden the
+      // wait to ordinary advertised no-arg tools: those still commit immediately below.
+      if (
+        !openBeforeStart && open && !hasMcpArgBytes(args)
+        && state.freeformToolNames?.has(open.name) === true
+        && !cursorFreeformWrapperValid(open.args)
+      ) {
+        open.awaitingNativeArgs = true;
+        return [];
+      }
       if (open) {
         const finalArgs = resolveCompletedArgs(open.args, args, state);
         out.push(...commitToolCall(state, update.value.callId, finalArgs));
