@@ -140,9 +140,11 @@ async function handleChatCompletionsWithBudget(
       logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
     }
     if (internalBody.reasoning !== undefined) {
-      const { supportedLadderFor } = await import("./effort-policy");
+      const { stripEmptyLadderEffort, supportedLadderFor } = await import("./effort-policy");
       const ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
-      if (ladder !== undefined && ladder.length === 0) delete internalBody.reasoning;
+      const next = stripEmptyLadderEffort(internalBody.reasoning, ladder);
+      if (next === undefined) delete internalBody.reasoning;
+      else internalBody.reasoning = next;
     }
   } catch (err) {
     if (err instanceof NoEligiblePolicyCandidateError) {

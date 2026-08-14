@@ -98,6 +98,24 @@ export function effortCapAppliesTo(
  * validates against that backend. A custom responses provider (key mode) serving a
  * native-looking bare id must NOT inherit the unrelated native ladder.
  */
+/**
+ * Empty ladders mean "no effort control", not "this model cannot emit reasoning".
+ * Drop only `effort` so a Chat Completions `include_reasoning` / `reasoning.summary`
+ * request still reaches parseRequest and is not hidden by hideThinkingSummary.
+ */
+export function stripEmptyLadderEffort(
+  reasoning: unknown,
+  ladder: readonly string[] | undefined,
+): unknown {
+  if (ladder === undefined || ladder.length > 0) return reasoning;
+  if (reasoning === undefined || reasoning === null || typeof reasoning !== "object" || Array.isArray(reasoning)) {
+    return reasoning;
+  }
+  const next = { ...(reasoning as Record<string, unknown>) };
+  delete next.effort;
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
 export function supportedLadderFor(route: { provider: OcxProviderConfig; modelId: string }): string[] | undefined {
   const { provider, modelId } = route;
   if (modelInList(provider.noReasoningModels, modelId)) return [];

@@ -66,7 +66,7 @@ the ladder is advertised. The Chat Completions inbound translator defaults the i
 Responses `reasoning.summary` to `auto` in that case, so thinking traces reach Grok as
 `delta.reasoning_content` instead of being hidden. Set `include_reasoning: false` (or
 `reasoning.summary: "none"`) if a client wants the model to think without returning the
-trace.
+trace. An explicit `reasoning.summary` wins when both knobs are present.
 
 ## Authentication note
 

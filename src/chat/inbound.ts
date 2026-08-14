@@ -214,11 +214,11 @@ function resolveReasoningEffort(raw: Rec): string | undefined {
  * sent an effort, default the summary to `"auto"` so traces are not swallowed.
  */
 function resolveReasoningSummary(raw: Rec): string | undefined {
-  if (raw.include_reasoning === false) return "none";
-  if (raw.include_reasoning === true) return "auto";
   if (isRec(raw.reasoning) && typeof raw.reasoning.summary === "string" && OUTPUT_CONFIG_SUMMARIES.has(raw.reasoning.summary)) {
     return raw.reasoning.summary;
   }
+  if (raw.include_reasoning === false) return "none";
+  if (raw.include_reasoning === true) return "auto";
   return undefined;
 }
 

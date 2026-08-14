@@ -272,6 +272,28 @@ describe("chatCompletionsToResponsesBody reasoning summary", () => {
     expect(parseRequest(body).options.hideThinkingSummary).not.toBe(true);
   });
 
+  test("explicit reasoning.summary wins over include_reasoning true", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      include_reasoning: true,
+      reasoning: { summary: "none" },
+    });
+    expect(body.reasoning).toEqual({ summary: "none" });
+    expect(parseRequest(body).options.hideThinkingSummary).toBe(true);
+  });
+
+  test("explicit reasoning.summary wins over include_reasoning false", () => {
+    const body = chatCompletionsToResponsesBody({
+      model: "mock/test-model",
+      messages: [{ role: "user", content: "hi" }],
+      include_reasoning: false,
+      reasoning: { effort: "high", summary: "auto" },
+    });
+    expect(body.reasoning).toEqual({ effort: "high", summary: "auto" });
+    expect(parseRequest(body).options.hideThinkingSummary).not.toBe(true);
+  });
+
   test("omits reasoning when the client sent no reasoning knobs", () => {
     const body = chatCompletionsToResponsesBody({
       model: "mock/test-model",

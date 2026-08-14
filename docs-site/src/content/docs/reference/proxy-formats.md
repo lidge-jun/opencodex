@@ -150,8 +150,8 @@ internal `reasoning.effort`. Because the Responses parser hides thinking unless
 `reasoning.summary` is set and is not `none`, Chat Completions requests that ask for an
 effort default to `reasoning.summary: "auto"` so thinking streams back as
 `delta.reasoning_content`. Clients can still hide traces with `include_reasoning: false` or
-`reasoning.summary: "none"`, and an explicit `reasoning.summary` of `auto`, `concise`,
-`detailed`, or `none` is preserved.
+`reasoning.summary: "none"`. An explicit `reasoning.summary` of `auto`, `concise`,
+`detailed`, or `none` wins over `include_reasoning`.
 
 Structured output is part of that translation: `response_format` with `json_object` or
 `json_schema` is forwarded to routed `openai-chat` models. On `POST /v1/responses` the
