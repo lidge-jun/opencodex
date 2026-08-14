@@ -50,3 +50,20 @@ test("publisher key creation applies required Windows secret ACL hardening to th
   expect(calls.some((args) => args[0] === keyPath && args.includes("/grant:r"))).toBe(true);
   expect(calls.some((args) => args[0] === keyPath && args.includes("/inheritance:r"))).toBe(true);
 });
+
+test("publisher key creation never publishes the final path when required Windows ACL hardening fails", () => {
+  const home = configDir("ocx-cl10-windows-publisher-acl-fail-");
+  const keyPath = labPublicPublisherKeyPath(home);
+
+  resetHardenedStateForTests();
+  setPlatformForTests("win32");
+  setIcaclsRunnerForTests(() => ({
+    success: false,
+    exitCode: 5,
+    timedOut: false,
+    stdout: "",
+  }));
+
+  expect(() => getOrCreatePublicPublisher(home)).toThrow(/ACL hardening/i);
+  expect(existsSync(keyPath)).toBe(false);
+});
