@@ -52,15 +52,11 @@ function publisherForPrivateKey(privateKeyPem: string): PublicPublisherV1 {
   };
 }
 
-function readRestrictedPrivateKey(path: string): string {
-  cleanupStalePrivateFileStages(path);
-  // Prove the pathname is the expected private regular file before applying any
-  // platform ACL operation, then fail closed if Windows per-user ACL hardening
-  // cannot be established. The helper is a no-op success on non-Windows.
+function requirePublisherKeyAcl(path: string, timeoutMemoKey = path): void {
   privateRegularFileSize(path, PRIVATE_KEY_FILE_OPTIONS);
   let hardened: { ok: boolean };
   try {
-    hardened = hardenSecretPath(path, { required: true });
+    hardened = hardenSecretPath(path, { required: true, timeoutMemoKey });
   } catch {
     hardened = { ok: false };
   }
@@ -70,6 +66,14 @@ function readRestrictedPrivateKey(path: string): string {
       "public publisher key ACL hardening did not complete",
     );
   }
+}
+
+function readRestrictedPrivateKey(path: string): string {
+  cleanupStalePrivateFileStages(path);
+  // Prove the pathname is the expected private regular file before applying any
+  // platform ACL operation, then fail closed if Windows per-user ACL hardening
+  // cannot be established. The helper is a no-op success on non-Windows.
+  requirePublisherKeyAcl(path);
   const pem = readPrivateRegularFile(path, PRIVATE_KEY_FILE_OPTIONS).toString("utf8");
   const key = createPrivateKey(pem);
   if (key.asymmetricKeyType !== "ed25519") {
@@ -83,7 +87,11 @@ function createPrivateKeyFile(path: string): string {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
-  publishPrivateFileExclusive(path, Buffer.from(privateKey, "utf8"));
+  publishPrivateFileExclusive(path, Buffer.from(privateKey, "utf8"), {
+    // On Windows, harden the stage before the final key pathname is visible. A
+    // required ACL failure therefore cannot leave a newly-published key exposed.
+    beforePublish: stagePath => requirePublisherKeyAcl(stagePath, path),
+  });
   return readRestrictedPrivateKey(path);
 }
 
