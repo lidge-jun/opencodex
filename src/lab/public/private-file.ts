@@ -18,6 +18,11 @@ let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
 const PRIVATE_STAGE_RE = /^\..+\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
 export const PRIVATE_FILE_STAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+export interface PrivateFilePublishOptions {
+  /** Validate or harden the fully-written stage before the final pathname becomes visible. */
+  beforePublish?: (stagePath: string) => void;
+}
+
 function cleanup(path: string): void {
   try { unlinkSync(path); } catch { /* absent/already removed */ }
 }
@@ -176,6 +181,7 @@ function writeAll(fd: number, bytes: Uint8Array): void {
 export function publishPrivateFileExclusive(
   finalPath: string,
   bytes: Uint8Array,
+  options: PrivateFilePublishOptions = {},
 ): { created: boolean } {
   cleanupStalePrivateFileStages(finalPath);
   const tempPath = join(
@@ -194,6 +200,10 @@ export function publishPrivateFileExclusive(
     if (privateFileCommitFaultForTests === "before_publish") {
       throw new Error("synthetic private-file commit failure before publish");
     }
+
+    // Secret callers can harden the stage while it is still unreachable through
+    // the final pathname. A failure here leaves no published object behind.
+    options.beforePublish?.(tempPath);
 
     try {
       linkSync(tempPath, finalPath);
