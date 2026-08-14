@@ -95,22 +95,113 @@ describe("usage log", () => {
       provider: "blsc",
       model: "blsc/DeepSeek-V4-Flash",
       status: 429,
-      durationMs: 4,
-      usageStatus: "reported",
+      durationMs: 1,
+      usageStatus: "unreported",
       attempts: [{
         ordinal: 1,
         provider: "blsc",
         model: "blsc/DeepSeek-V4-Flash",
         adapter: "openai-chat",
         status: 429,
-        durationMs: 4,
-        sendCount: 2,
-        recoveryKinds: ["rate-limit-429", "rate-limit-429"],
-        usageStatus: "reported",
+        durationMs: 1,
+        sendCount: 1,
+        recoveryKinds: ["rate-limit-429"],
+        usageStatus: "unreported",
       }],
     };
     appendUsageEntry(entry);
     expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429"]);
+  });
+
+  test("persists the streamAborted marker on truncated-stream attempts", () => {
+    appendUsageEntry({
+      requestId: "ocx-stream-aborted",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 502,
+      durationMs: 3,
+      usageStatus: "unreported",
+      terminalStatus: "failed",
+      closeReason: "terminal",
+      attempts: [{
+        ordinal: 1,
+        provider: "openai",
+        model: "gpt-test",
+        adapter: "openai-responses",
+        status: 502,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "unreported",
+        streamAborted: true,
+      }],
+    });
+    const raw = readFileSync(usageLogPath(), "utf-8");
+    expect(raw).toContain('"streamAborted":true');
+    expect(readUsageEntries()[0]?.attempts?.[0]?.streamAborted).toBe(true);
+  });
+
+  test("ordinary attempts omit the streamAborted marker (backward compatible)", () => {
+    const attempt: PersistedUsageAttempt = {
+      ordinal: 1,
+      provider: "openai",
+      model: "gpt-test",
+      adapter: "openai-responses",
+      status: 200,
+      durationMs: 3,
+      sendCount: 1,
+      recoveryKinds: [],
+      usageStatus: "reported",
+    };
+    const base: PersistedUsageEntry = {
+      requestId: "ocx-stream-aborted-absent",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 3,
+      usageStatus: "reported",
+      attempts: [attempt],
+    };
+    for (const marker of [undefined, false]) {
+      const normalized = normalizeUsageEntryForTest({
+        ...base,
+        attempts: [{ ...attempt, ...(marker === undefined ? {} : { streamAborted: marker }) }],
+      });
+      expect(normalized.attempts?.[0]).not.toHaveProperty("streamAborted");
+    }
+    const marked = normalizeUsageEntryForTest({
+      ...base,
+      attempts: [{ ...attempt, streamAborted: true }],
+    });
+    expect(marked.attempts?.[0]?.streamAborted).toBe(true);
+  });
+
+  test("legacy attempts without streamAborted stay readable and unset", () => {
+    writeFileSync(usageLogPath(), `${JSON.stringify({
+      requestId: "legacy-no-marker",
+      timestamp: 1,
+      provider: "openai",
+      model: "gpt-test",
+      status: 200,
+      durationMs: 3,
+      usageStatus: "reported",
+      attempts: [{
+        ordinal: 1,
+        provider: "openai",
+        model: "gpt-test",
+        adapter: "openai-responses",
+        status: 200,
+        durationMs: 3,
+        sendCount: 1,
+        recoveryKinds: [],
+        usageStatus: "reported",
+      }],
+    })}\n`);
+    const attempt = readUsageEntries()[0]?.attempts?.[0];
+    expect(attempt?.ordinal).toBe(1);
+    expect(attempt).not.toHaveProperty("streamAborted");
   });
 
   /** Build one minimal persisted-usage JSONL line for the given request id. */

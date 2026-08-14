@@ -36,6 +36,12 @@ export interface PersistedUsageAttempt {
   adapter: string;
   status: number;
   durationMs: number;
+  /**
+   * True only when the upstream stream died after its 200 head was committed,
+   * so the row must not meter as a success the client never received.
+   * Absent on ordinary attempts so old rows keep their exact shape.
+   */
+  streamAborted?: boolean;
   /** TTFT relative to THIS attempt's start (WP4); unset for non-streaming/tool-only. */
   firstOutputMs?: number;
   sendCount: number;
@@ -277,6 +283,8 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
     adapter: attempt.adapter,
     status: attempt.status,
     durationMs: attempt.durationMs,
+    // Absent by default; only the literal `true` marker survives the round trip.
+    ...(attempt.streamAborted === true ? { streamAborted: true } : {}),
     ...(isNonNegativeFiniteNumber(attempt.firstOutputMs)
       ? { firstOutputMs: attempt.firstOutputMs }
       : {}),
