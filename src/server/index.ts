@@ -45,12 +45,7 @@ import {
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
-import {
-  setLabAutomationDispatchDeps,
-  startLabAutomationScheduler,
-} from "../lab/automation/orchestrator";
-import { loadLabAutomationPolicy } from "../lab/automation/persistence";
-import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
+import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
 import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
@@ -1735,18 +1730,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();
 
+  // Compatibility Lab is optional: wire it only for installs that actually use it -- any
+  // routing profile, or automation enabled on disk. This runs synchronously before
+  // startServer returns, in the same turn as Bun.serve, so a policy route can never be
+  // evaluated before its evidence provider is registered. That ordering is load-bearing:
+  // the subagent-fallback chain routes synchronously and has nowhere to await.
   const labConfigDir = getConfigDir();
-  const productionLabRouteExecutor = createProductionLabRouteExecutor({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-  });
-  setLabAutomationDispatchDeps({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-    routeExecutor: productionLabRouteExecutor,
-  });
-  if (loadLabAutomationPolicy(labConfigDir).enabled) {
-    startLabAutomationScheduler(labConfigDir);
+  if (labActivationRequired(config, labConfigDir)) {
+    activateLab(config, labConfigDir);
   }
 
   return server;

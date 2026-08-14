@@ -17,9 +17,10 @@ import {
 } from "../../routing/profile";
 import { evaluatePolicyProfile, type PolicyCandidateEvidence, type PolicyRequestEvidence } from "../../routing/evaluator";
 import { assemblePolicyCandidateEvidence } from "../../routing/compatibility/assemble";
+import { activateLab, labActivationRequired } from "../../lib/lab-activation";
 import { quotaEvidenceForCandidate } from "../../routing/quota";
 import { routedProviderConfig } from "../../router";
-import { saveConfigPreservingClaudeCode } from "../../config";
+import { saveConfigPreservingClaudeCode, getConfigDir } from "../../config";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { isPlainRecord } from "./shared";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
@@ -289,6 +290,9 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     const nextProfiles = { ...(config.routingProfiles ?? {}) };
     nextProfiles[id] = storedProfile(id, body.profile as OcxRoutingProfileConfig);
     config.routingProfiles = nextProfiles;
+    // Creating the first profile on a process started profile-less must install the
+    // compatibility provider now; activation is synchronous and idempotent per configDir.
+    if (labActivationRequired(config, getConfigDir())) activateLab(config, getConfigDir());
     // An alias change on update renames the public model id; rewrite config
     // references (disabledModels, subagentModels, injectionModel,
     // shadowCallIntercept, claudeCode) so they follow the new alias.
@@ -358,6 +362,10 @@ export async function handleRoutingProfileRoutes(ctx: ManagementContext): Promis
     // One clock read for both assembly and evaluation keeps freshness, health,
     // and trace timestamps mutually consistent with the production router.
     const now = Date.now();
+    // R3-1: dry-run assembles candidate evidence independently of the startup gate, so an
+    // operator preview on a process started without profiles would silently omit
+    // compatibility evidence and disagree with production. Activate first.
+    if (labActivationRequired(config, getConfigDir())) activateLab(config, getConfigDir());
     const candidateEvidence = body.candidates === undefined
       ? assembleCandidateEvidence(config, resolvedProfile, now)
       : parseCandidateEvidence(body.candidates);
