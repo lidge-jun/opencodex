@@ -195,14 +195,16 @@ export function injectMimoSystemMarker(body: unknown): unknown {
  */
 export interface MimoFreeAdapterDeps {
   getJwt?: (signal?: AbortSignal) => Promise<string>;
+  resetJwt?: () => void;
 }
 
 export function createMimoFreeAdapter(
   provider: OcxProviderConfig,
   deps: MimoFreeAdapterDeps = {},
+  base: ProviderAdapter = createOpenAIChatAdapter(provider),
 ): ProviderAdapter {
-  const base = createOpenAIChatAdapter(provider);
   const getJwt = deps.getJwt ?? getMimoJwt;
+  const resetJwt = deps.resetJwt ?? resetMimoJwtCache;
   // Per-adapter session-affinity id (random, per process instance).
   const sessionId = `ses_${Math.random().toString(36).slice(2, 26)}`;
 
@@ -251,7 +253,7 @@ export function createMimoFreeAdapter(
       if (response.status === 401) {
         // Drain the first response body before issuing the retry.
         try { await response.body?.cancel(); } catch { /* already consumed */ }
-        resetMimoJwtCache();
+        resetJwt();
         const freshJwt = await getJwt(ctx?.abortSignal);
         const retryHeaders = {
           ...(request.headers as Record<string, string>),

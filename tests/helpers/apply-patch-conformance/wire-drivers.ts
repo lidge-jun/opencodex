@@ -9,6 +9,7 @@ export interface ToolWireDriver {
   observeOutbound(adapter: ProviderAdapter, parsed: OcxParsedRequest): Promise<string>;
   extractWireToolName?(body: string, canonicalName: string): string;
   streamingToolCall?(wireName: string, wrappedArguments: string): Response;
+  streamingToolCallFragments?(wireName: string, argumentFragments: readonly string[]): Response;
 }
 
 async function observeHttpOutbound(adapter: ProviderAdapter, parsed: OcxParsedRequest): Promise<string> {
@@ -26,58 +27,50 @@ function splitInTwo(input: string): [string, string] {
   return [input.slice(0, split), input.slice(split)];
 }
 
-function openAiChatToolCall(wireName: string, wrappedArguments: string): Response {
-  const [first, second] = splitInTwo(wrappedArguments);
-  const frames = [
-    {
-      choices: [{
-        delta: {
-          tool_calls: [{
-            index: 0,
-            id: "call_patch",
-            type: "function",
-            function: { name: wireName, arguments: first },
-          }],
-        },
-        finish_reason: null,
-      }],
-    },
-    {
-      choices: [{
-        delta: {
-          tool_calls: [{
-            index: 0,
-            function: { arguments: second },
-          }],
-        },
-        finish_reason: "tool_calls",
-      }],
-    },
-  ];
+function openAiChatToolCallFragments(wireName: string, argumentFragments: readonly string[]): Response {
+  const fragments = argumentFragments.length > 0 ? argumentFragments : [""];
+  const frames = fragments.map((argumentsFragment, index) => ({
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          ...(index === 0 ? { id: "call_patch", type: "function" } : {}),
+          function: {
+            ...(index === 0 ? { name: wireName } : {}),
+            arguments: argumentsFragment,
+          },
+        }],
+      },
+      finish_reason: index === fragments.length - 1 ? "tool_calls" : null,
+    }],
+  }));
   return new Response(`${frames.map(frame => `data: ${JSON.stringify(frame)}`).join("\n\n")}\n\ndata: [DONE]\n\n`, {
     headers: { "content-type": "text/event-stream" },
   });
 }
 
-function anthropicToolCall(wireName: string, wrappedArguments: string): Response {
-  const [first, second] = splitInTwo(wrappedArguments);
+function openAiChatToolCall(wireName: string, wrappedArguments: string): Response {
+  return openAiChatToolCallFragments(wireName, splitInTwo(wrappedArguments));
+}
+
+function anthropicToolCallFragments(wireName: string, argumentFragments: readonly string[]): Response {
   const frame = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   return new Response([
     frame("content_block_start", {
       type: "content_block_start",
       content_block: { type: "tool_use", id: "toolu_patch", name: wireName },
     }),
-    frame("content_block_delta", {
+    ...argumentFragments.map(partialJson => frame("content_block_delta", {
       type: "content_block_delta",
-      delta: { type: "input_json_delta", partial_json: first },
-    }),
-    frame("content_block_delta", {
-      type: "content_block_delta",
-      delta: { type: "input_json_delta", partial_json: second },
-    }),
+      delta: { type: "input_json_delta", partial_json: partialJson },
+    })),
     frame("content_block_stop", { type: "content_block_stop" }),
     frame("message_stop", { type: "message_stop" }),
   ].join(""), { headers: { "content-type": "text/event-stream" } });
+}
+
+function anthropicToolCall(wireName: string, wrappedArguments: string): Response {
+  return anthropicToolCallFragments(wireName, splitInTwo(wrappedArguments));
 }
 
 function googleToolCall(wireName: string, wrappedArguments: string): Response {
@@ -112,12 +105,10 @@ function kiroFrame(payload: unknown): Uint8Array {
   );
 }
 
-function kiroToolCall(wireName: string, wrappedArguments: string): Response {
-  const [first, second] = splitInTwo(wrappedArguments);
+function kiroToolCallFragments(wireName: string, argumentFragments: readonly string[]): Response {
   const frames = [
     kiroFrame({ name: wireName, toolUseId: "call_patch" }),
-    kiroFrame({ input: first, name: wireName, toolUseId: "call_patch" }),
-    kiroFrame({ input: second, name: wireName, toolUseId: "call_patch" }),
+    ...argumentFragments.map(input => kiroFrame({ input, name: wireName, toolUseId: "call_patch" })),
     kiroFrame({ name: wireName, stop: true, toolUseId: "call_patch" }),
   ];
   let index = 0;
@@ -129,6 +120,10 @@ function kiroToolCall(wireName: string, wrappedArguments: string): Response {
   }));
 }
 
+function kiroToolCall(wireName: string, wrappedArguments: string): Response {
+  return kiroToolCallFragments(wireName, splitInTwo(wrappedArguments));
+}
+
 const openAiChatDriver: ToolWireDriver = {
   observeOutbound: observeHttpOutbound,
   extractWireToolName(body, canonicalName) {
@@ -136,6 +131,7 @@ const openAiChatDriver: ToolWireDriver = {
     return parsed.tools?.find(tool => tool.function?.name?.includes(canonicalName))?.function?.name ?? canonicalName;
   },
   streamingToolCall: openAiChatToolCall,
+  streamingToolCallFragments: openAiChatToolCallFragments,
 };
 
 const anthropicDriver: ToolWireDriver = {
@@ -145,6 +141,7 @@ const anthropicDriver: ToolWireDriver = {
     return parsed.tools?.find(tool => tool.name?.includes(canonicalName))?.name ?? canonicalName;
   },
   streamingToolCall: anthropicToolCall,
+  streamingToolCallFragments: anthropicToolCallFragments,
 };
 
 const googleDriver: ToolWireDriver = {
@@ -189,6 +186,7 @@ const kiroDriver: ToolWireDriver = {
     return tools.find(tool => tool.toolSpecification?.name?.includes(canonicalName))?.toolSpecification?.name ?? canonicalName;
   },
   streamingToolCall: kiroToolCall,
+  streamingToolCallFragments: kiroToolCallFragments,
 };
 
 const responsesDriver: ToolWireDriver = {

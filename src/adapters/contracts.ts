@@ -34,6 +34,12 @@ export type AdapterFactory = (
   context: AdapterFactoryContext,
 ) => ProviderAdapter;
 
+export type AdapterWrapperFactory = (
+  parent: ProviderAdapter,
+  provider: OcxProviderConfig,
+  context: AdapterFactoryContext,
+) => ProviderAdapter;
+
 export interface DirectAdapterDefinitionInput {
   kind: "direct";
   wire: AdapterWire;
@@ -44,7 +50,7 @@ export interface DirectAdapterDefinitionInput {
 export interface WrappedAdapterDefinitionInput {
   kind: "wrapper";
   extends: string;
-  create: AdapterFactory;
+  wrap: AdapterWrapperFactory;
 }
 
 export type AdapterDefinitionInput = DirectAdapterDefinitionInput | WrappedAdapterDefinitionInput;
@@ -53,8 +59,16 @@ export type AdapterDefinition<T extends AdapterDefinitionInput = AdapterDefiniti
   T & { requiredToolContracts: typeof REQUIRED_ROUTED_TOOL_CONTRACTS }
 >;
 
+type ValidAdapterRegistry<T extends Record<string, AdapterDefinitionInput>> = {
+  [K in keyof T]: T[K] extends WrappedAdapterDefinitionInput
+    ? T[K]["extends"] extends Exclude<keyof T, K>
+      ? T[K]
+      : never
+    : T[K];
+};
+
 export function defineAdapterRegistry<const T extends Record<string, AdapterDefinitionInput>>(
-  definitions: T,
+  definitions: T & ValidAdapterRegistry<T>,
 ): { readonly [K in keyof T]: AdapterDefinition<T[K]> } {
   const registered = Object.fromEntries(
     Object.entries(definitions).map(([id, definition]) => [

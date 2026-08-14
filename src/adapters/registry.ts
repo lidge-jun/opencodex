@@ -1,5 +1,6 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
+import type { ProviderAdapter } from "./base";
 import { createCursorAdapter, type CursorAdapterDeps } from "./cursor";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
@@ -24,8 +25,16 @@ function createRegisteredCursorAdapter(provider: OcxProviderConfig, context: Ada
   return createCursorAdapter(provider, (context as RegistryFactoryContext).cursorDeps);
 }
 
-function createRegisteredMimoFreeAdapter(provider: OcxProviderConfig, context: AdapterFactoryContext) {
-  return createMimoFreeAdapter(provider, (context as RegistryFactoryContext).mimoDeps);
+function wrapRegisteredMimoFreeAdapter(
+  parent: ProviderAdapter,
+  provider: OcxProviderConfig,
+  context: AdapterFactoryContext,
+) {
+  return createMimoFreeAdapter(
+    provider,
+    (context as RegistryFactoryContext).mimoDeps,
+    parent,
+  );
 }
 
 export const ADAPTER_REGISTRY = defineAdapterRegistry({
@@ -68,12 +77,12 @@ export const ADAPTER_REGISTRY = defineAdapterRegistry({
   azure: {
     kind: "wrapper",
     extends: "openai-responses",
-    create: provider => createAzureAdapter(provider),
+    wrap: (parent, provider) => createAzureAdapter(provider, parent),
   },
   "azure-openai": {
     kind: "wrapper",
     extends: "openai-responses",
-    create: provider => createAzureAdapter(provider),
+    wrap: (parent, provider) => createAzureAdapter(provider, parent),
   },
   cursor: {
     kind: "direct",
@@ -84,7 +93,7 @@ export const ADAPTER_REGISTRY = defineAdapterRegistry({
   "mimo-free": {
     kind: "wrapper",
     extends: "openai-chat",
-    create: createRegisteredMimoFreeAdapter,
+    wrap: wrapRegisteredMimoFreeAdapter,
   },
 });
 
@@ -117,11 +126,41 @@ export function effectiveAdapterContract(adapterId: string): EffectiveAdapterCon
   }
 }
 
+function createRegisteredAdapterById(
+  adapterId: string,
+  provider: OcxProviderConfig,
+  context: RegistryFactoryContext,
+  visited: ReadonlySet<string>,
+): ProviderAdapter {
+  if (visited.has(adapterId)) {
+    throw new Error(`Adapter wrapper cycle detected at ${adapterId}`);
+  }
+
+  const definition = getAdapterDefinition(adapterId);
+  if (!definition) throw new Error(`Unknown adapter: ${adapterId}`);
+
+  const adapterProvider = provider.adapter === adapterId
+    ? provider
+    : { ...provider, adapter: adapterId };
+
+  if (definition.kind === "direct") {
+    return definition.create(adapterProvider, context);
+  }
+
+  const nextVisited = new Set(visited);
+  nextVisited.add(adapterId);
+  const parent = createRegisteredAdapterById(
+    definition.extends,
+    adapterProvider,
+    context,
+    nextVisited,
+  );
+  return definition.wrap(parent, adapterProvider, context);
+}
+
 export function createRegisteredAdapter(
   provider: OcxProviderConfig,
   context: RegistryFactoryContext = {},
-) {
-  const definition = getAdapterDefinition(provider.adapter);
-  if (!definition) throw new Error(`Unknown adapter: ${provider.adapter}`);
-  return definition.create(provider, context);
+): ProviderAdapter {
+  return createRegisteredAdapterById(provider.adapter, provider, context, new Set());
 }

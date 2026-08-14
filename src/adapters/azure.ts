@@ -2,15 +2,17 @@ import type { IncomingMeta, ProviderAdapter } from "./base";
 import type { OcxParsedRequest, OcxProviderConfig } from "../types";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
 
-export function createAzureAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
-  const inner = createResponsesPassthroughAdapter({
+export function createAzureAdapter(
+  provider: OcxProviderConfig,
+  inner: ProviderAdapter = createResponsesPassthroughAdapter({
     ...provider,
     baseUrl: provider.baseUrl,
-  });
-
+  }),
+): ProviderAdapter & { passthrough: true } {
   return {
     ...inner,
     name: "azure-openai",
+    passthrough: true,
 
     async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       if (provider.authMode === "forward") {
