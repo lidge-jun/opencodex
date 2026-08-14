@@ -5,10 +5,11 @@ import { readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import {
   ADAPTER_REGISTRY,
   adapterDefinitions,
-  createRegisteredAdapter,
+  createRegisteredAdapter as createProductionRegisteredAdapter,
   effectiveAdapterContract,
 } from "../src/adapters/registry";
 import { REQUIRED_ROUTED_TOOL_CONTRACTS } from "../src/adapters/contracts";
@@ -43,6 +44,7 @@ import { createTestTranslatorBudget } from "./helpers/translator-budget";
 const serverDir = fileURLToPath(new URL("../src/server/", import.meta.url));
 const adapterResolvePath = fileURLToPath(new URL("../src/server/adapter-resolve.ts", import.meta.url));
 const routerPath = fileURLToPath(new URL("../src/router.ts", import.meta.url));
+const labExecutorPath = fileURLToPath(new URL("../src/lab/conformance/executor.ts", import.meta.url));
 const execDescription =
   "Run JavaScript. declare const tools: { apply_patch(input: string): Promise<unknown>; };";
 
@@ -56,6 +58,11 @@ const WIRE_MODELS: Record<AdapterWire, string> = {
   cursor: "cursor/auto",
 };
 
+const EXTERNAL_EXACT_ROUNDTRIP_COVERAGE = new Set<AdapterWire>([
+  "openai-responses",
+  "cursor",
+]);
+
 async function collectTypeScriptFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -67,11 +74,91 @@ async function collectTypeScriptFiles(dir: string): Promise<string[]> {
   return files;
 }
 
+function isDirectAdapterModule(specifier: string): boolean {
+  return /(?:^|\/)adapters\/(?!registry(?:$|\/))/.test(specifier);
+}
+
+function isAdapterFactoryName(name: string): boolean {
+  return /^create[A-Za-z0-9_]*Adapter$/.test(name);
+}
+
 async function directAdapterFactoryImports(path: string): Promise<string[]> {
   const source = await readFile(path, "utf8");
-  return [...source.matchAll(
-    /import\s+\{[^}]*\bcreate\w+Adapter\b[^}]*\}\s+from\s+["'][^"']*adapters\/(?!registry(?:["']))[^"']+["']/gs,
-  )].map(match => match[0]!);
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const findings: string[] = [];
+  const namespaceImports = new Set<string>();
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      const specifier = node.moduleSpecifier.text;
+      if (isDirectAdapterModule(specifier)) {
+        const clause = node.importClause;
+        const bindings = clause?.namedBindings;
+        if (clause?.name) findings.push(`default import from direct adapter module ${specifier}`);
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) {
+            const imported = element.propertyName?.text ?? element.name.text;
+            if (isAdapterFactoryName(imported)) {
+              findings.push(`direct factory import ${imported} from ${specifier}`);
+            }
+          }
+        } else if (bindings && ts.isNamespaceImport(bindings)) {
+          namespaceImports.add(bindings.name.text);
+        }
+      }
+    }
+
+    if (
+      ts.isPropertyAccessExpression(node)
+      && ts.isIdentifier(node.expression)
+      && namespaceImports.has(node.expression.text)
+      && isAdapterFactoryName(node.name.text)
+    ) {
+      findings.push(`namespace factory access ${node.expression.text}.${node.name.text}`);
+    }
+
+    if (
+      ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length === 1
+      && ts.isStringLiteral(node.arguments[0]!)
+      && isDirectAdapterModule(node.arguments[0]!.text)
+    ) {
+      findings.push(`dynamic adapter import ${node.arguments[0]!.text}`);
+    }
+
+    if (
+      ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === "require"
+      && node.arguments.length === 1
+      && ts.isStringLiteral(node.arguments[0]!)
+      && isDirectAdapterModule(node.arguments[0]!.text)
+    ) {
+      findings.push(`require adapter import ${node.arguments[0]!.text}`);
+    }
+
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
+      const specifier = node.moduleSpecifier.text;
+      if (isDirectAdapterModule(specifier)) {
+        if (!node.exportClause) {
+          findings.push(`adapter export-star from ${specifier}`);
+        } else if (ts.isNamedExports(node.exportClause)) {
+          for (const element of node.exportClause.elements) {
+            const exported = element.propertyName?.text ?? element.name.text;
+            if (isAdapterFactoryName(exported)) {
+              findings.push(`factory re-export ${exported} from ${specifier}`);
+            }
+          }
+        }
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  return findings;
 }
 
 function providerFixture(adapter: string, wire: AdapterWire): OcxProviderConfig {
@@ -93,6 +180,18 @@ function providerFixture(adapter: string, wire: AdapterWire): OcxProviderConfig 
     googleMode: "ai-studio",
     ...(wire === "openai-responses" ? { responsesPath: "/responses" } : {}),
   } as OcxProviderConfig;
+}
+
+function createRegisteredAdapter(
+  provider: OcxProviderConfig,
+  context: Parameters<typeof createProductionRegisteredAdapter>[1] = {},
+) {
+  return createProductionRegisteredAdapter(
+    provider,
+    provider.adapter === "mimo-free"
+      ? { ...context, mimoDeps: { getJwt: async () => "conformance-test-jwt" } }
+      : context,
+  );
 }
 
 function prepareWireParsed(parsed: OcxParsedRequest, wire: AdapterWire): OcxParsedRequest {
@@ -456,7 +555,7 @@ function decodeCursorExec(bytes: Uint8Array) {
   return message.message.value;
 }
 
-test("global apply_patch precondition forces routed catalog rows to freeform", () => {
+test("global apply_patch precondition preserves explicit tool representation and defaults missing values", () => {
   const routed = normalizeRoutedCatalogEntry({
     slug: "xai/grok-4.6",
     tool_mode: "legacy",
@@ -464,7 +563,13 @@ test("global apply_patch precondition forces routed catalog rows to freeform", (
     context_window: 128_000,
   });
   expect(routed.tool_mode).toBe("code_mode_only");
-  expect(routed.apply_patch_tool_type).toBe("freeform");
+  expect(routed.apply_patch_tool_type).toBe("function");
+
+  const routedDefault = normalizeRoutedCatalogEntry({
+    slug: "xai/grok-4.6",
+    context_window: 128_000,
+  });
+  expect(routedDefault.apply_patch_tool_type).toBe("freeform");
 
   const native = ensureStrictCatalogFields({
     slug: "gpt-5.6-sol",
@@ -536,7 +641,13 @@ test("tool_choice:none removes every registered adapter's callable tool surface"
 test("every parsed response wire restores the hostile freeform apply_patch input exactly", async () => {
   for (const [adapterId] of adapterDefinitions()) {
     const contract = effectiveAdapterContract(adapterId);
-    if (!TOOL_WIRE_DRIVERS[contract.wire].streamingToolCall) continue;
+    const driver = TOOL_WIRE_DRIVERS[contract.wire];
+    if (!driver.streamingToolCall) {
+      // Responses passthrough and Cursor runTurn have focused byte-exact coverage. Any future
+      // wire without a streaming driver must add equally explicit coverage instead of being skipped.
+      expect(EXTERNAL_EXACT_ROUNDTRIP_COVERAGE.has(contract.wire), adapterId).toBe(true);
+      continue;
+    }
     const restoredInput = await restoredFreeformInput(adapterId, contract.wire);
     expect(restoredInput, adapterId).toBe(APPLY_PATCH_FIXTURE);
     expect(applyPatchContractFailures({ restoredInput }), adapterId).toEqual([]);
@@ -663,12 +774,12 @@ test("the conformance oracle catches representative broken implementations", () 
   }
 });
 
-test("production server routing cannot bypass the adapter registry", async () => {
+test("production and conformance routing cannot bypass the adapter registry", async () => {
   const resolver = await readFile(adapterResolvePath, "utf8");
   expect(resolver).toContain("createRegisteredAdapter");
   expect(resolver).not.toMatch(/create(?:Anthropic|Azure|Cursor|Google|Kiro|MimoFree|OpenAIChat|CommandCode|ResponsesPassthrough)Adapter/);
 
-  const files = [...await collectTypeScriptFiles(serverDir), routerPath];
+  const files = [...await collectTypeScriptFiles(serverDir), routerPath, labExecutorPath];
   for (const path of files) {
     expect(await directAdapterFactoryImports(path), path).toEqual([]);
   }
