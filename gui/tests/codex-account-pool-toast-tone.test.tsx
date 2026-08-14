@@ -120,7 +120,11 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mountPool(controller: CodexAccountPoolController, strictMode = false) {
+async function mountPool(
+  controller: CodexAccountPoolController,
+  strictMode = false,
+  requestOwnerToken: () => Promise<string | null> = async () => "admin-secret",
+) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
@@ -129,7 +133,7 @@ async function mountPool(controller: CodexAccountPoolController, strictMode = fa
         <CodexAccountPool
           apiBase=""
           controller={controller}
-          requestOwnerToken={async () => "admin-secret"}
+          requestOwnerToken={requestOwnerToken}
         />
       </LanguageProvider>
     );
@@ -356,6 +360,45 @@ test("successful redeem clears a stale error toast tone", async () => {
 
   expect(host.querySelector(".codex-auth-page-head__feedback.is-err")).toBeNull();
   expect(host.querySelector(".codex-auth-page-head__feedback.is-ok")).toBeTruthy();
+});
+
+test("an owner-token failure reports an error and preserves the retry identity", async () => {
+  const operationId = "00000000-0000-4000-8000-000000000901";
+  const storageKey = "ocx.codexResetCreditOperation.v2.pool-1";
+  localStorage.setItem(storageKey, operationId);
+  let ownerTokenCalls = 0;
+
+  await mountPool(makeController(), false, async () => {
+    ownerTokenCalls += 1;
+    if (ownerTokenCalls === 1) throw new Error("owner token unavailable");
+    return "admin-secret";
+  });
+
+  const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+  await act(async () => { reset.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+  const useCredit = [...host.querySelectorAll("button")].find(button =>
+    (button.textContent ?? "").includes("Use 1 Credit"),
+  ) as HTMLButtonElement;
+  await act(async () => { useCredit.click(); });
+  const redeem = () => [...host.querySelectorAll("button")].find(button =>
+    (button.textContent ?? "").trim() === "Use Credit",
+  ) as HTMLButtonElement;
+
+  await act(async () => { redeem().click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+  expect(host.querySelector(".codex-auth-page-head__feedback.is-err")?.textContent)
+    .toContain("Failed to redeem reset credit");
+  expect(consumeAttempts).toBe(0);
+  expect(localStorage.getItem(storageKey)).toBe(operationId);
+  expect(host.querySelector("dialog")).toBeTruthy();
+  expect(redeem().disabled).toBe(false);
+
+  await act(async () => { redeem().click(); await new Promise(resolve => setTimeout(resolve, 40)); });
+
+  expect(ownerTokenCalls).toBe(2);
+  expect(consumedOperationIds).toEqual([operationId]);
+  expect(localStorage.getItem(storageKey)).toBeNull();
+  expect(host.querySelector("dialog")).toBeNull();
 });
 
 test("LAN fallback UUID remains stable across a failed redeem retry", async () => {

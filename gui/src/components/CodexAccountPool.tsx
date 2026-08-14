@@ -431,6 +431,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       if (result.toast) {
         showActionFeedback(result.toast, result.ok ? "ok" : "err");
       }
+    } catch {
+      showActionFeedback(t("codexAuth.resetError"), "err");
     } finally {
       redeemingRef.current = false;
       setRedeeming(false);
