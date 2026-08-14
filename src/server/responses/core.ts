@@ -719,6 +719,8 @@ export interface ConsumedComboFailure {
 
 export interface HandleResponsesOptions {
   turnAdmissionLease?: AdmissionLease;
+  /** Called at most once after the complete client body is read and accepted for dispatch. */
+  onRequestBodyRead?: () => void;
   forceEmptyResponseId?: boolean;
   abortSignal?: AbortSignal;
   /** One-shot TTFT callback: first non-empty model output observed (WP4). */
@@ -1495,11 +1497,20 @@ async function handleResponsesInner(
   try {
     body = await readJsonRequestBody(req, translatorBudget);
   } catch (err) {
+    if (options.abortSignal?.aborted || req.signal.aborted) {
+      return clientCancelledResponse();
+    }
     return decodeRequestErrorResponse(err, "responses");
   }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
-    return handleComboResponses(req, body, comboId, config, logCtx, options);
+    options.onRequestBodyRead?.();
+    return handleComboResponses(req, body, comboId, config, logCtx, {
+      ...options,
+      // The original request body was accepted above. Combo children are synthetic
+      // replays and must not repeat the caller-owned timeout transition.
+      onRequestBodyRead: undefined,
+    });
   }
   let unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
     (body as { input?: unknown } | undefined)?.input,
@@ -1555,6 +1566,7 @@ async function handleResponsesInner(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  options.onRequestBodyRead?.();
   const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
     ...(force ? { force: true } : {}),
     ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),

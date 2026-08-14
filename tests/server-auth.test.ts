@@ -36,6 +36,7 @@ import {
 } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
+import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -350,6 +351,132 @@ describe("server local API auth", () => {
         throw new Error("unsupported");
       },
     })).toBe(false);
+  });
+
+  test("responses handler keeps the request timeout until the body is fully accepted", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const cfg = config();
+    cfg.defaultProvider = "fixture";
+    cfg.providers = {
+      fixture: { ...cfg.providers.openai!, disabled: true },
+    };
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, cfg, {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    controller.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    controller.enqueue(new TextEncoder().encode("}"));
+    controller.close();
+    const response = await responsePromise;
+    expect(accepted).toBe(true);
+    expect(response.status).toBe(404);
+  });
+
+  test("responses handler classifies an aborted pending body as client cancellation", async () => {
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        bodyController = value;
+      },
+    });
+    const abortController = new AbortController();
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: abortController.signal,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, config(), {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      abortSignal: abortController.signal,
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    bodyController.enqueue(new TextEncoder().encode('{"model":"openai/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    abortController.abort();
+    const response = await responsePromise;
+    expect(response.status).toBe(499);
+    expect(accepted).toBe(false);
+  });
+
+  test("responses handler accepts a combo body exactly once across failover children", async () => {
+    const upstreamModels: string[] = [];
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.json() as { model?: string };
+        upstreamModels.push(body.model ?? "missing");
+        return Response.json({ error: { message: "rate limited; try the next combo target" } }, {
+          status: 429,
+          headers: { "retry-after": "1" },
+        });
+      },
+    });
+    const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "first",
+      providers: {
+        first: { adapter: "openai-responses", baseUrl, apiKey: "first-key", allowPrivateNetwork: true },
+        second: { adapter: "openai-responses", baseUrl, apiKey: "second-key", allowPrivateNetwork: true },
+      },
+      combos: {
+        request_timeout: {
+          strategy: "failover",
+          targets: [
+            { provider: "first", model: "first-model" },
+            { provider: "second", model: "second-model" },
+          ],
+        },
+      },
+    };
+    let acceptedCount = 0;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/request_timeout", input: "hello", stream: false }),
+      }), cfg, { model: "unknown", provider: "unknown" }, {
+        onRequestBodyRead: () => {
+          acceptedCount += 1;
+        },
+      });
+
+      expect(response.status).toBe(429);
+      expect(acceptedCount).toBe(1);
+      expect(upstreamModels).toEqual(["first-model", "second-model"]);
+    } finally {
+      await upstream.stop(true);
+    }
   });
 
   test("loopback hostnames do not require opencodex API auth", () => {
