@@ -335,13 +335,14 @@ function normalizeJsonText(text: string, toolName: string | undefined, state: Cu
  * streamed onward), and/or as a structured protobuf map on `toolCallCompleted`. We emit the args
  * exactly once, at completion, so they can always be schema-normalized regardless of which form
  * arrived. The completed map wins when present (canonical); otherwise the buffered streamed text is
- * used. Returns an empty string when there are no args (the bridge serializes that as `{}`).
+ * preserved verbatim so the bridge can reject malformed or truncated JSON instead of silently
+ * converting it to `{}`. A genuinely empty buffer remains the no-argument case.
  */
 function resolveCompletedArgs(buffered: string, args: McpArgs | undefined, state: CursorProtobufEventState): string {
   if (hasMcpArgBytes(args)) return decodeMcpArgsNormalized(args, state);
   const name = mcpWireNameFromArgs(args);
   if (isCompleteJson(buffered)) return normalizeJsonText(buffered, name, state);
-  return "";
+  return buffered;
 }
 
 const PATCH_BEGIN = "*** Begin Patch";

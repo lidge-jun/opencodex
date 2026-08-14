@@ -92,8 +92,9 @@ function responseError(status: number, type: string, message: string): OcxErrorP
  * non-stream adapters degrade a bad payload to `{}`.
  */
 function toolCallArgumentsUsable(args: string): boolean {
+  if (args.length === 0) return true;
   const trimmed = args.trim();
-  if (!trimmed) return true;
+  if (!trimmed) return false;
   try {
     JSON.parse(trimmed);
     return true;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bridgeToResponsesSSE } from "../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -110,5 +110,39 @@ describe("Responses streaming tool event contract", () => {
       .map(frame => frame.data.item as Record<string, unknown>)
       .find(item => item?.type === "function_call");
     expect(itemDone).toMatchObject({ status: "incomplete" });
+  });
+
+  test("whitespace-only assembled arguments fail instead of completing invalid JSON", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_space", name: "read_file" },
+      { type: "tool_call_delta", arguments: " \t" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "cursor/composer-2.5"));
+
+    expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    const itemDone = frames.filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .find(item => item?.type === "function_call");
+    expect(itemDone).toMatchObject({ call_id: "call_space", status: "incomplete" });
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+  });
+
+  test("non-streaming whitespace-only arguments fail with an incomplete call", () => {
+    const response = buildResponseJSON([
+      { type: "tool_call_start", id: "call_space", name: "read_file" },
+      { type: "tool_call_delta", arguments: " \t" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "cursor/composer-2.5");
+
+    expect(response.status).toBe("failed");
+    expect(response.error).toMatchObject({ type: "upstream_error" });
+    const output = response.output as Record<string, unknown>[];
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      type: "function_call", call_id: "call_space", arguments: " \t", status: "incomplete",
+    });
   });
 });

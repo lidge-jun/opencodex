@@ -309,6 +309,34 @@ describe("Cursor protobuf tool-call events", () => {
     expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ path: "a.txt" });
   });
 
+  test("preserves incomplete streamed args when completion has no argument map", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["mcp__fs__read_file"] });
+    const toolCall = mcpToolCall("mcp__fs__read_file", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_1",
+        modelCallId: "model_1",
+        toolCall,
+        argsTextDelta: "{\"path\":",
+      }),
+    }), state)).toEqual([]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([
+      { type: "tool_call_start", id: "call_1", name: "mcp__fs__read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":" },
+      { type: "tool_call_end", id: "call_1" },
+    ]);
+  });
+
   test("commits an advertised no-arg tool call instead of dropping it", () => {
     // A completed client tool call with no args and no streamed text must still reach Codex when the
     // tool is advertised (e.g. a no-arg list/status tool). The bridge serializes empty args as "{}".
