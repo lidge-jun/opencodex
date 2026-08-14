@@ -53,7 +53,7 @@ test("publisher key recovers after a same-process parent-directory sync failure"
   if (process.platform === "win32") return;
   const configDir = root();
   setPrivateFileCommitFaultForTests("parent_directory_sync");
-  expect(() => getOrCreatePublicPublisher(configDir)).toThrow();
+  expect(() => getOrCreatePublicPublisher(configDir)).toThrow(/directory.*sync|durab/i);
   setPrivateFileCommitFaultForTests(null);
   expect(getOrCreatePublicPublisher(configDir).publisher.algorithm).toBe("ed25519");
   expect(readdirSync(join(configDir, "lab")).filter(isPrivateFileStageName)).toEqual([]);
@@ -64,7 +64,7 @@ test("public bundle storage recovers after a same-process parent-directory sync 
   const configDir = root();
   const bundle = signPublicEvidenceBundle({ records: [record()], artifacts: [], createdDayUtc: "2026-08-12", configDir });
   setPrivateFileCommitFaultForTests("parent_directory_sync");
-  expect(() => storePublicEvidenceBundle(bundle, configDir)).toThrow();
+  expect(() => storePublicEvidenceBundle(bundle, configDir)).toThrow(/directory.*sync|durab/i);
   setPrivateFileCommitFaultForTests(null);
   expect(storePublicEvidenceBundle(bundle, configDir).created).toBe(false);
 });

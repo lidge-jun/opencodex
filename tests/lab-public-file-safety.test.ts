@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readPrivateRegularFile } from "../src/lab/public/file-safety";
@@ -29,6 +29,21 @@ test("descriptor-bound private reads reject a symlink even when O_NOFOLLOW is un
   }
 
   expect(() => readPrivateRegularFile(link, {
+    maxBytes: 1024,
+    errorCode: "unsafe_test_file",
+    errorMessage: "unsafe test file",
+  })).toThrow(PublicEvidenceValidationError);
+});
+
+test("descriptor-bound private reads reject a file with an unrelated hard link", () => {
+  if (process.platform === "win32") return;
+  const root = tempRoot();
+  const target = join(root, "target.txt");
+  const alias = join(root, "alias.txt");
+  writeFileSync(target, "safe-bytes", { mode: 0o600 });
+  linkSync(target, alias);
+
+  expect(() => readPrivateRegularFile(target, {
     maxBytes: 1024,
     errorCode: "unsafe_test_file",
     errorMessage: "unsafe test file",

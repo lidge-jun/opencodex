@@ -9,6 +9,7 @@ import { validatePublicEvidencePrivacy } from "../src/lab/public/privacy";
 import { PUBLIC_ROUTE_REGISTRY_V1 } from "../src/lab/public/registry";
 import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "../src/lab/public/signature";
 import { parseStrictPublicJson } from "../src/lab/public/strict-json";
+import { publicUtcDay } from "../src/lab/public/time";
 import type { PublicEvidenceBundleUnsignedV1 } from "../src/lab/public/types";
 import { validatePublicRouteRegistryManifest } from "../src/lab/public/validate";
 
@@ -88,6 +89,33 @@ describe("CL-10 public evidence core contract", () => {
     expect(verifyPublicEvidenceBundle(bundle)).toEqual({ status: "cryptographically_valid" });
   });
 
+  test("pins canonical multi-record ordering into the bundle digest", () => {
+    const first = fixedRecord();
+    const { recordId: _ignored, ...secondBody } = {
+      ...first,
+      scenarioId: "responses-core.protocol.response-shape",
+    };
+    const second = { recordId: publicEvidenceId("record", secondBody), ...secondBody };
+    const publisher = {
+      algorithm: "ed25519" as const,
+      publicKey: FIXED_PUBLIC_KEY,
+      keyId: publicEvidenceId("publisher_key", { algorithm: "ed25519", publicKey: FIXED_PUBLIC_KEY }),
+    };
+
+    const bundle = buildPublicEvidenceBundle({
+      records: [first, second],
+      artifacts: [],
+      createdDayUtc: "2026-08-12",
+      publisher,
+    });
+
+    expect(bundle.records.map((record) => record.recordId)).toEqual([
+      "2a2a2e8406e6ccac915b21e96558a7b89e49e52effe474bd2c861ad2f7459437",
+      "5bec20821bbf01f831e74ba469e7f18481c1209fdef209c76f482105de3e406d",
+    ]);
+    expect(bundle.bundleDigest).toBe("63fef67418ec196b480bba3865fba287cc92aa94a760e2e3648b0759c0be046e");
+  });
+
   test("rejects non-canonical publisher Base64", () => {
     const publicKey = `${FIXED_PUBLIC_KEY}\n`;
     const publisher = {
@@ -114,6 +142,10 @@ describe("CL-10 public evidence core contract", () => {
     expect(() => parseStrictPublicJson(Buffer.from(wide, "utf8"))).toThrow(/object exceeds 64/i);
     expect(() => parseStrictPublicJson(Buffer.alloc((2 * 1024 * 1024) + 1, 0x20)))
       .toThrow(/exceeds 2097152 bytes/i);
+  });
+
+  test("public UTC day rejects expanded-year timestamps", () => {
+    expect(() => publicUtcDay(Date.UTC(10_000, 0, 1))).toThrow(/completion timestamp/i);
   });
 
   test("local signing rejects artifact bytes before creating publisher state", () => {

@@ -11,7 +11,6 @@ import {
 } from "../src/lab/public/private-file";
 
 const roots: string[] = [];
-const setCommitFault = setPrivateFileCommitFaultForTests as unknown as (fault: string | null) => void;
 
 afterEach(() => {
   setPrivateFileCommitFaultForTests(null);
@@ -31,7 +30,7 @@ describe("CL-10 private-file durability", () => {
     const finalPath = join(root, "bundle.json");
     const bytes = Buffer.from("durable-public-evidence", "utf8");
 
-    setCommitFault("parent_directory_sync");
+    setPrivateFileCommitFaultForTests("parent_directory_sync");
     expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/directory.*sync|durab/i);
     expect(existsSync(finalPath)).toBe(true);
     expect(readdirSync(root).filter(isPrivateFileStageName)).toHaveLength(1);
@@ -47,7 +46,7 @@ describe("CL-10 private-file durability", () => {
     const finalPath = join(root, "bundle.json");
     const bytes = Buffer.from("durable-public-evidence", "utf8");
 
-    setCommitFault("before_publish");
+    setPrivateFileCommitFaultForTests("before_publish");
     expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/before publish/i);
     expect(existsSync(finalPath)).toBe(false);
     expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
@@ -64,7 +63,7 @@ describe("CL-10 private-file durability", () => {
     const finalPath = join(root, "bundle.json");
     const bytes = Buffer.from("durable-public-evidence", "utf8");
 
-    setCommitFault("parent_directory_sync");
+    setPrivateFileCommitFaultForTests("parent_directory_sync");
     expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/directory.*sync|durab/i);
     setPrivateFileCommitFaultForTests(null);
 
@@ -86,7 +85,7 @@ describe("CL-10 private-file durability", () => {
     const finalPath = join(root, "bundle.json");
     const bytes = Buffer.from("durable-public-evidence", "utf8");
 
-    setCommitFault("parent_directory_sync");
+    setPrivateFileCommitFaultForTests("parent_directory_sync");
     expect(publishPrivateFileExclusive(finalPath, bytes)).toEqual({ created: true });
     expect(readFileSync(finalPath).equals(bytes)).toBe(true);
     expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);

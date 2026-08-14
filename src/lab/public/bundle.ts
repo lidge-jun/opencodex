@@ -26,6 +26,13 @@ export interface BuildPublicEvidenceBundleInput extends PublicEvidenceContentInp
   publisher: PublicPublisherV1;
 }
 
+/** Deterministic, locale-independent code-unit ordering for canonical identity. */
+function compareCanonicalId(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function utcDay(value: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new PublicEvidenceValidationError("invalid_day", "createdDayUtc must be YYYY-MM-DD");
@@ -130,11 +137,14 @@ export function normalizePublicEvidenceContent(input: PublicEvidenceContentInput
   if (!Array.isArray(input.records) || input.records.length > MAX_PUBLIC_BUNDLE_RECORDS) {
     throw new PublicEvidenceValidationError("array_too_large", `records exceeds ${MAX_PUBLIC_BUNDLE_RECORDS}`);
   }
-  const records = input.records.map(validatePublicEvidenceRecord).sort((a, b) => a.recordId.localeCompare(b.recordId));
+  const records = input.records
+    .map(validatePublicEvidenceRecord)
+    .sort((a, b) => compareCanonicalId(a.recordId, b.recordId));
   if (new Set(records.map((record) => record.recordId)).size !== records.length) {
     throw new PublicEvidenceValidationError("duplicate_id", "records contains duplicate ids");
   }
-  const artifacts = validateArtifacts(input.artifacts).sort((a, b) => a.artifactId.localeCompare(b.artifactId));
+  const artifacts = validateArtifacts(input.artifacts)
+    .sort((a, b) => compareCanonicalId(a.artifactId, b.artifactId));
   const artifactIds = new Set(artifacts.map((artifact) => artifact.artifactId));
   for (const record of records) {
     for (const artifactId of record.artifactRefs ?? []) {

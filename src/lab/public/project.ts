@@ -117,6 +117,9 @@ export function projectPublicEvidenceRecord(
       if (PROJECTOR_INVARIANT_ERROR_CODES.has(error.code)) throw error;
       return { status: "not_exportable", reason: "unsafe_public_field" };
     }
+    if (error instanceof TypeError && error.message.startsWith("jcsStringify:")) {
+      return { status: "not_exportable", reason: "unsafe_public_field" };
+    }
     throw error;
   }
 }

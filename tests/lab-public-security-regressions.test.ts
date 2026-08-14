@@ -3,8 +3,10 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jcsStringify } from "../src/lab/conformance/jcs";
+import type { ObservationEvent } from "../src/lab/events/types";
 import { labPublicPublisherKeyPath } from "../src/lab/paths";
 import { publishPrivateFileExclusive } from "../src/lab/public/private-file";
+import { projectPublicEvidenceRecord } from "../src/lab/public/project";
 import { getOrCreatePublicPublisher } from "../src/lab/public/signature";
 import {
   resetHardenedStateForTests,
@@ -32,6 +34,25 @@ function configDir(prefix: string): string {
 test("JCS rejects sparse JavaScript arrays instead of collapsing holes", () => {
   const sparse = new Array<unknown>(1);
   expect(() => jcsStringify(sparse)).toThrow(/sparse|array hole/i);
+});
+
+test("public projection maps JCS-invalid public fields to not_exportable", () => {
+  const observation = {
+    evidenceLayer: "protocol_conformance",
+    subject: {
+      subjectKind: "protocol",
+      effectiveAdapter: "openai-chat",
+      opencodexCompatibilityVersion: "2.13.0",
+      inboundProtocol: "openai-responses",
+      upstreamProtocol: "openai-chat",
+      surface: "responses-\uD800",
+    },
+  } as ObservationEvent;
+
+  expect(projectPublicEvidenceRecord({ observation, verdict: "VERIFIED" })).toEqual({
+    status: "not_exportable",
+    reason: "unsafe_public_field",
+  });
 });
 
 test("private publication prepares an empty stage before writing secret bytes", () => {
