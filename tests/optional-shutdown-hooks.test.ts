@@ -1,4 +1,12 @@
 import { describe, expect, test, beforeEach } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  startLabAutomationScheduler,
+  stopLabAutomationScheduler,
+  isLabAutomationSchedulerRunning,
+} from "../src/lab/automation/orchestrator";
 import {
   registerOptionalShutdownHook,
   runOptionalShutdownHooks,
@@ -63,5 +71,25 @@ describe("optional shutdown hooks", () => {
     staleDetach();
     runOptionalShutdownHooks();
     expect(live).toBe(1);
+  });
+});
+
+// Regression: the management API (lab-automation-routes.ts applySchedulerPolicy) and the
+// CLI can start a scheduler WITHOUT ever calling setLabAutomationDispatchDeps. Registering
+// teardown only in setLabAutomationDispatchDeps left such a scheduler running past
+// drainAndShutdown, because core no longer imports the orchestrator to stop it. Proven by
+// driving this test red before the fix.
+describe("lab automation scheduler teardown registration", () => {
+  test("a scheduler started without dispatch deps is still stopped by shutdown", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-hook-"));
+    try {
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
+      runOptionalShutdownHooks();
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
   });
 });

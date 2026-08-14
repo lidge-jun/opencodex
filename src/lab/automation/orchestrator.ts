@@ -409,6 +409,15 @@ export function startLabAutomationScheduler(configDir?: string): void {
     if (currentOwner) existing.ownerToken = currentOwner;
     return;
   }
+  // The scheduler owns a live interval, so its teardown must be registered here rather
+  // than only in setLabAutomationDispatchDeps: the management API and the CLI can start a
+  // scheduler without ever installing dispatch deps (lab-automation-routes.ts
+  // applySchedulerPolicy, cli/lab.ts), and core no longer imports this module to stop it.
+  // Without this registration such a scheduler survives drainAndShutdown.
+  registerOptionalShutdownHook(`lab-automation-scheduler:${key}`, () => {
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler(configDir);
+  });
   shutdownRequested = false;
   const { policy, routes } = loadLabAutomationConfig(configDir);
   const now = Date.now();
