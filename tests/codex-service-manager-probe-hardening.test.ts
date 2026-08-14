@@ -46,6 +46,16 @@ function raw(
   };
 }
 
+function cp949KoreanFixture(value: string): Buffer {
+  const parts = value.split("한글");
+  if (parts.length !== 2) throw new Error("fixture must contain exactly one Korean marker");
+  return Buffer.concat([
+    Buffer.from(parts[0]!, "ascii"),
+    Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]),
+    Buffer.from(parts[1]!, "ascii"),
+  ]);
+}
+
 function schedulerXml(launcherPath: string): string {
   const escaped = launcherPath.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
   return [
@@ -128,6 +138,35 @@ function taskAbsentRunner(calls: Array<{ file: string; args: readonly string[] }
 }
 
 describe("Windows ownership probe hardening regressions", () => {
+  test("registered CP949 task XML preserves a Korean profile path", () => {
+    const koreanConfigDir = join(home, "한글", ".opencodex");
+    const codexHome = join(home, "한글", ".codex");
+    const chain = writeSchedulerChain(koreanConfigDir, codexHome, koreanConfigDir);
+    const runRaw: RawProbeRunner = (file, args) => {
+      if (file.toLowerCase().endsWith("sc.exe")) return raw(1, "", "1060");
+      if (args.includes("/xml")) {
+        return {
+          ...raw(0),
+          stdout: cp949KoreanFixture(schedulerXml(chain.launcher)),
+        };
+      }
+      return raw(1, "", "unexpected query");
+    };
+
+    const result = inspectServiceManagerInstallation({
+      platform: "win32",
+      home,
+      configDir: koreanConfigDir,
+      runRaw,
+      windowsLocale: "ko-KR",
+    });
+
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") return;
+    expect(result.claims[0].registration).toBe("present");
+    expect(result.claims[0].homes).toEqual({ codexHome, opencodexHome: koreanConfigDir });
+  });
+
   test("ownership inspects the effective current OPENCODEX_HOME without an injected configDir", () => {
     const currentCodexHome = "C:\\current\\.codex";
     const foreignCodexHome = "C:\\foreign\\.codex";
