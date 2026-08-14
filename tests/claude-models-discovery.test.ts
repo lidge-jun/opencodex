@@ -3,9 +3,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../src/config";
+import { handleManagementAPI } from "../src/server/management-api";
 import { startServer } from "../src/server";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
+import { ManagementRequest } from "./helpers/management-auth";
 
 // Full-suite Windows load: startServer + discovery GETs exceed the default 5s budget
 // (same flake class as 810fa115 / claude-management-api).
@@ -329,6 +331,80 @@ test("Codex discovery restores account rows for supported natives hidden on disk
       .toBe("hide");
     expect(catalog.models.find(model => model.slug === "team/gpt-5.4-mini")?.visibility)
       .toBe("list");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("Codex discovery preserves an observed account-only native id exactly", async () => {
+  const config = configWithStaticModels();
+  config.providers.openai = {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    liveModels: false,
+  };
+  config.codexAccountNamespaces = { team: "@main" };
+  saveConfig(config);
+
+  const catalogPath = join(isolatedCodexHome!.path, "observed-native-catalog.json");
+  writeFileSync(
+    join(isolatedCodexHome!.path, "config.toml"),
+    'model_catalog_json = "observed-native-catalog.json"\n',
+    "utf8",
+  );
+  writeFileSync(catalogPath, JSON.stringify({
+    models: [
+      { slug: "gpt-5.5", visibility: "list", supported_in_api: true },
+    ],
+  }), "utf8");
+  writeFileSync(join(isolatedCodexHome!.path, "models_cache.json"), JSON.stringify({
+    models: [{
+      slug: "gpt-daybreak-blue-latest",
+      visibility: "hide",
+      supported_in_api: true,
+      shell_type: "shell_command",
+      comp_hash: "native-comp-hash",
+      model_messages: { instructions_template: "You are Codex." },
+      base_instructions: "You are Codex.",
+      supported_reasoning_levels: [{ effort: "medium", description: "Medium" }],
+      opencodex_account_observed_native: true,
+    }],
+  }), "utf8");
+
+  const { resetCatalogRuntimeStateForTests } = await import("../src/codex/catalog");
+  resetCatalogRuntimeStateForTests();
+  const server = startServer(0);
+  try {
+    const plain = await fetch(new URL("/v1/models", server.url))
+      .then(response => response.json()) as { data: Array<{ id: string }> };
+    expect(plain.data).toContainEqual(expect.objectContaining({ id: "team/gpt-daybreak-blue-latest" }));
+    expect(plain.data.some(model => model.id === "gpt-daybreak-blue-latest")).toBe(false);
+
+    const managementUrl = new URL("http://localhost/api/models");
+    const managementResponse = await handleManagementAPI(
+      new ManagementRequest(managementUrl),
+      managementUrl,
+      config,
+    );
+    const management = await managementResponse!.json() as Array<{ id: string; native?: boolean }>;
+    expect(management).toContainEqual(expect.objectContaining({
+      id: "team/gpt-daybreak-blue-latest",
+      native: true,
+    }));
+    expect(management.some(model => model.id === "gpt-daybreak-blue-latest")).toBe(false);
+
+    const catalog = await fetch(new URL("/v1/models?client_version=1.0.0", server.url))
+      .then(response => response.json()) as { models: Array<{ slug: string; visibility?: string }> };
+    expect(catalog.models.find(model => model.slug === "team/gpt-daybreak-blue-latest"))
+      .toMatchObject({ visibility: "list" });
+    expect(catalog.models.find(model => model.slug === "gpt-daybreak-blue-latest")?.visibility).toBe("hide");
+
+    const { claudeCodeNativeAlias } = await import("../src/claude/alias");
+    const anthropic = await fetch(new URL("/v1/models?flavor=anthropic&ids=cli", server.url), {
+      headers: { "anthropic-version": "2023-06-01" },
+    }).then(response => response.json()) as { data: Array<{ id: string }> };
+    expect(anthropic.data.some(model => model.id === claudeCodeNativeAlias("team/gpt-daybreak-blue-latest"))).toBe(true);
+    expect(anthropic.data.some(model => model.id === claudeCodeNativeAlias("gpt-daybreak-blue-latest"))).toBe(false);
   } finally {
     await server.stop(true);
   }

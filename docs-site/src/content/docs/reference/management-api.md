@@ -239,7 +239,7 @@ manager. Its routes are:
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh, optionally import, or delete Codex accounts. Successful POST/DELETE responses include `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | List/refresh or delete Codex accounts. POST is retained as a disabled compatibility endpoint; successful DELETE responses include `catalogRefreshPending`. | POST always returns 403 `manual_import_disabled`; 400 invalid DELETE input |
 | `PUT /api/codex-auth/accounts/alias` | Set or clear an account alias | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Pause or resume one account | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Pause accounts whose quota is exhausted | Mutation-lock failures become 503 |
@@ -256,8 +256,8 @@ manager. Its routes are:
 | `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
 | `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
 
-If a new account config row is saved but credential setup cannot finish, the manual POST returns
-HTTP 500 and OAuth `login-status` reports `status: "error"`. Both use
+If a new account config row is saved but credential setup cannot finish, OAuth `login-status` reports
+`status: "error"` with
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, and optional
 `catalogRefreshPending: true`; storage-error details are not exposed. The account row remains saved:
 reauthenticate or delete it before retrying account creation.

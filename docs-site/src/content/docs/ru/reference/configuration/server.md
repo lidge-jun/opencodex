@@ -16,7 +16,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `stallTimeoutSec?` | `number` | `300` | Секунды без upstream-данных до `response.incomplete`. Минимум 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Дедлайн одной попытки DNS/TCP/TLS/final-header; он завершается до генерации тела ответа. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Дедлайн graceful-drain до принудительного прерывания активных turn'ов. |
-| `websockets?` | `boolean` | `false` | Объявлять `supports_websockets` для WebSocket-пути Responses. Значение false удерживает HTTP/SSE. |
+| `websockets?` | `boolean` | `false` | Объявляет и разрешает клиентский WebSocket-путь Responses. При false клиенты используют HTTP/SSE; это не отключает подходящую upstream WS-оптимизацию canonical ChatGPT. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Дополнительные точные origin, разрешённые CORS. Loopback-origin разрешены всегда. Поддерживаются authority-based origin браузерных расширений, например `chrome-extension://<extension-id>`; `*` не является маской. Firefox и Safari пересоздают UUID расширения (при каждой установке/запуске браузера), поэтому обновляйте запись при смене origin. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Сгенерированные credentials `ocx_…`, принимаемые для management и data-plane auth на не-loopback bind'ах. Управляются через дашборд. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in policy очистки архивированных сессий. Никогда не включается неявно. |
@@ -56,11 +56,17 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
+| `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
 Responses и Chat Completions резервируют `Authorization` под возможный passthrough Codex Direct,
 поэтому там принимается только dedicated admission-header. Сгенерированные в дашборде `apiKeys`
 могут после старта заменить env-token; сравнение кандидатов выполняется constant-time.
+
+Messages и `count_tokens` ради совместимости routed-клиентов по-прежнему принимают все три формы admission. Но на
+non-loopback bind нативный passthrough Anthropic принимает proxy admission только через
+`x-opencodex-api-key`, а `Authorization` и `x-api-key` резервирует под credentials Anthropic.
+Proxy admission secret в этих provider-заголовках удаляется перед пересылкой.
 
 :::caution[Экспозиция в LAN]
 Bind на `0.0.0.0` открывает прокси и доступ к настроенным провайдерам всей локальной сети.
@@ -106,7 +112,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-Эти настройки управляют `/v1/messages`, launcher'ом `ocx claude` и страницей Claude в дашборде.
+Эти настройки управляют `/v1/messages`, `/v1/messages/count_tokens`, launcher'ом `ocx claude` и страницей Claude в дашборде.
 
 | Ключ | Тип | По умолчанию | Описание |
 | --- | --- | --- | --- |
@@ -181,7 +187,7 @@ routed-model и hosted-search timeout. Эффективный watchdog мост�
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` для OpenAI или `claude-sonnet-5` для Anthropic. |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | Уровень рассуждений OpenAI Responses. Anthropic его игнорирует. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | Максимум новых промахов description-cache за один main turn. `0` отключает вызовы; некорректные значения возвращают дефолт. |
-| `timeoutMs?` | `number` | `45000` | Таймаут запроса sidecar'а. |
+| `timeoutMs?` | `number` | `45000` | Таймаут запроса sidecar'а. Целое число 1–2147483647. |
 
 Поддерживаемые уровни зависят от возможностей вышестоящего провайдера и заявленной лестницы
 рассуждений выбранной модели. Vision включается только для изображений, отправленных в модель, входящую в `noVisionModels` её

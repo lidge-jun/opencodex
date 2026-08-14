@@ -32,23 +32,15 @@ export function isShadowSourceModel(modelId: string, configured?: unknown): bool
 /**
  * Decide whether a matching source model should use the opt-in intercept.
  *
- * Codex 0.145.0+ identifies normal user turns and maintenance requests in
- * x-codex-turn-metadata. Only an explicit normal turn bypasses interception;
- * missing or unrecognized metadata retains the legacy opt-in prefix behavior.
+ * Before Codex 0.147.0 this checked x-codex-turn-metadata and exempted
+ * request_kind "turn". Codex 0.147.0 can label background helper calls as
+ * "turn", causing them to bypass the intercept (#1684). The fix is to
+ * intercept every configured shadow source model unconditionally — the model
+ * slug alone is a sufficient signal.
  */
 export function shouldInterceptShadowCall(
   modelId: string,
   configured: unknown,
-  headers: Headers,
 ): boolean {
-  if (!isShadowSourceModel(modelId, configured)) return false;
-  const rawMetadata = headers.get("x-codex-turn-metadata");
-  if (rawMetadata === null) return true;
-
-  try {
-    const parsed = JSON.parse(rawMetadata) as { request_kind?: unknown };
-    return parsed?.request_kind !== "turn";
-  } catch {
-    return true;
-  }
+  return isShadowSourceModel(modelId, configured);
 }

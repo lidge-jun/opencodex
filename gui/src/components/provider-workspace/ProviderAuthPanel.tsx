@@ -135,7 +135,7 @@ export default function ProviderAuthPanel({
   // suppressed here rather than refactored away.
   useEffect(() => {
     if (accounts.length === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
       setReserveQuotaSlots(false);
       return;
     }

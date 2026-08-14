@@ -158,7 +158,9 @@ test("image response byte reader enforces the stream cap when Content-Length is 
 test("POST /v1/images/generations relays to the ChatGPT forward provider with forwarded auth", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
-  saveConfig(forwardConfig(upstream.url.toString().replace(/\/$/, "")));
+  const config = forwardConfig();
+  config.providers.openai!.baseUrl = "https://chatgpt.com/backend-api/codex///";
+  saveConfig(config);
 
   const server = startServer(0);
   try {

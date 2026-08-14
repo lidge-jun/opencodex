@@ -136,6 +136,101 @@ describe("OAuth account-scoped reauth", () => {
     expect(getAccountCredential("kiro", set.activeAccountId)?.access).toBe("identified-access");
   });
 
+  test("forced Kimi add-account preserves a legacy identity-less account", async () => {
+    await saveCredential("kimi", {
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: Date.now() + 60_000,
+    });
+    const legacySlotId = getAccountSet("kimi")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.kimi.login;
+    OAUTH_PROVIDERS.kimi.login = async () => ({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "new-kimi-user",
+    });
+    try {
+      await runLogin("kimi", {} as OAuthController, { forceLogin: true });
+    } finally {
+      OAUTH_PROVIDERS.kimi.login = original;
+    }
+
+    const set = getAccountSet("kimi")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(set.activeAccountId).not.toBe(legacySlotId);
+    expect(getAccountCredential("kimi", legacySlotId)).toMatchObject({
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+    });
+    expect(getAccountCredential("kimi", set.activeAccountId)).toMatchObject({
+      access: "identified-access",
+      accountId: "new-kimi-user",
+    });
+  });
+
+  test("forced Kimi add-account also preserves the legacy slot for opaque tokens", async () => {
+    await saveCredential("kimi", {
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: Date.now() + 60_000,
+    });
+    const legacySlotId = getAccountSet("kimi")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.kimi.login;
+    OAUTH_PROVIDERS.kimi.login = async () => ({
+      access: "opaque-new-access",
+      refresh: "opaque-new-refresh",
+      expires: Date.now() + 60_000,
+    });
+    try {
+      await runLogin("kimi", {} as OAuthController, { forceLogin: true });
+    } finally {
+      OAUTH_PROVIDERS.kimi.login = original;
+    }
+
+    const set = getAccountSet("kimi")!;
+    expect(set.accounts).toHaveLength(2);
+    expect(set.activeAccountId).not.toBe(legacySlotId);
+    expect(getAccountCredential("kimi", legacySlotId)).toMatchObject({
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+    });
+    expect(getAccountCredential("kimi", set.activeAccountId)).toMatchObject({
+      access: "opaque-new-access",
+      refresh: "opaque-new-refresh",
+    });
+  });
+
+  test("non-force Kimi login upgrades the legacy identity-less slot in place", async () => {
+    await saveCredential("kimi", {
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+      expires: Date.now() + 60_000,
+    });
+    const legacySlotId = getAccountSet("kimi")!.activeAccountId;
+    const original = OAUTH_PROVIDERS.kimi.login;
+    OAUTH_PROVIDERS.kimi.login = async () => ({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "existing-kimi-user",
+    });
+    try {
+      await runLogin("kimi", {} as OAuthController);
+    } finally {
+      OAUTH_PROVIDERS.kimi.login = original;
+    }
+
+    const set = getAccountSet("kimi")!;
+    expect(set.accounts).toHaveLength(1);
+    expect(set.activeAccountId).toBe(legacySlotId);
+    expect(getAccountCredential("kimi", legacySlotId)).toMatchObject({
+      access: "identified-access",
+      refresh: "identified-refresh",
+      accountId: "existing-kimi-user",
+    });
+  });
+
   test("non-force Kiro login upgrades a legacy identity-less slot in place", async () => {
     await saveCredential("kiro", {
       access: "legacy-access",

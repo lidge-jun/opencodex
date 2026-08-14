@@ -4,7 +4,7 @@
  * Cursor model ids encode the reasoning effort as a suffix (`claude-4.6-opus-high`), and the available
  * tiers differ per model — `claude-4.6-opus` tops out at `-max`, `claude-opus-4-8` at `-xhigh`,
  * `claude-4.6-sonnet` only has `-medium`, and most `composer`/`gemini` models take no suffix at all.
- * Grok Fast puts its mode marker after the effort (`grok-4.5-high-fast`). A bare id for a model that
+ * Grok Fast puts its mode marker after the effort (`grok-4.6-xhigh-fast`). A bare id for a model that
  * requires a suffix is rejected `ERROR_BAD_MODEL_NAME` (devlog 350.105).
  *
  * Canonical effort order is always low < medium < high < xhigh < max (max is the top tier, confirmed
@@ -28,6 +28,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   "claude-opus-5": ["low", "medium", "high", "xhigh", "max"],
   "claude-sonnet-5": ["low", "medium", "high", "xhigh", "max"],
   "glm-5.2": ["high", "max"],
+  // 260814 preemptive: glm-5.3 seeded ahead of Cursor's lineup update. Unlike 5.2, Z.AI folds
+  // 5.3 efforts into low/high/max (docs.z.ai/devpack/latest-model), so `low` is a real tier.
+  "glm-5.3": ["low", "high", "max"],
   // GetUsableModels (2026-07-28) lists kimi-k3 only as effort-suffixed kimi-k3-{low,high,max};
   // the bare id returns not_found. Tiers mirror the native Kimi provider's K3 ladder.
   "kimi-k3": ["low", "high", "max"],
@@ -35,6 +38,9 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // cursor-grok-4.5-{low,medium,high}-fast. The bare Fast id returns not_found.
   "grok-4.5": ["low", "medium", "high"],
   "grok-4.5-fast": ["low", "medium", "high"],
+  // Cursor's 260813 lineup exposes Grok 4.6 Extra High in both regular and Fast forms.
+  "grok-4.6": ["low", "medium", "high", "xhigh"],
+  "grok-4.6-fast": ["low", "medium", "high", "xhigh"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],
@@ -135,5 +141,5 @@ export function cursorWireModelIdWithEffort(baseModelId: string, effortSuffix: s
  */
 export function cursorRequestWireModelIdWithEffort(baseModelId: string, effortSuffix: string): string {
   const flattened = cursorWireModelIdWithEffort(baseModelId, effortSuffix);
-  return baseModelId === "grok-4.5" ? `cursor-${flattened}` : flattened;
+  return baseModelId === "grok-4.5" || baseModelId === "grok-4.6" ? `cursor-${flattened}` : flattened;
 }

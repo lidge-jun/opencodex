@@ -114,6 +114,17 @@ export async function handleResponsesWithPolicyFallback(
   deps: PolicyFallbackDeps = {},
 ): Promise<Response> {
   const runCore = deps.runCore ?? handleResponsesCore;
+  let requestBodyReadNotified = false;
+  const coreOptions: CoreOptions = options.onRequestBodyRead
+    ? {
+      ...options,
+      onRequestBodyRead: () => {
+        if (requestBodyReadNotified) return;
+        requestBodyReadNotified = true;
+        options.onRequestBodyRead?.();
+      },
+    }
+    : options;
   let rawBody: Record<string, unknown> | null = null;
   try {
     const parsed = await readJsonRequestBody(req.clone());
@@ -122,7 +133,7 @@ export async function handleResponsesWithPolicyFallback(
     // Core owns the client-facing parse/decompression error.
   }
 
-  let response = await runCore(req, config, logCtx, options);
+  let response = await runCore(req, config, logCtx, coreOptions);
   const initialTrace = logCtx.routeDecision;
   const initialRequestedModel = logCtx.requestedModel;
   if (!rawBody || !isPolicyDecision(initialTrace)) return response;
@@ -140,7 +151,7 @@ export async function handleResponsesWithPolicyFallback(
     finishFailedPolicyAttempt(logCtx, response.status);
     const retryRequest = requestWithCandidate(req, rawBody, next);
     try {
-      response = await runCore(retryRequest, config, logCtx, options);
+      response = await runCore(retryRequest, config, logCtx, coreOptions);
     } finally {
       logCtx.requestedModel = initialRequestedModel;
       logCtx.routeDecision = initialTrace;

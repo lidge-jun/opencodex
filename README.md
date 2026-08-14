@@ -57,6 +57,33 @@ npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled auto
 ocx start                            # or `ocx service` to run it in the background
 ```
 
+<details>
+<summary>Install from source (latest dev, Bun canary)</summary>
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://bun.sh/install | bash && ~/.bun/bin/bun upgrade --canary
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run src/cli/index.ts start
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm bun.sh/install.ps1 | iex; bun upgrade --canary
+git clone https://github.com/lidge-jun/opencodex.git
+cd opencodex; bun install
+bun run src/cli/index.ts start
+```
+
+Source install runs the latest `dev` branch with Bun canary. Memory ownership
+patches, runtime GC improvements, and unreleased fixes are available here before
+they reach the npm package.
+
+</details>
+
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
@@ -116,6 +143,34 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 - **See what's happening** — the dashboard shows providers, OAuth status, model selection, and a
   live request log with cache token counts.
 - **Clean exit, zero residue** — `ocx stop` restores Codex to its original configuration.
+- **Bounded memory ownership** — every long-lived cache, ring buffer, and protocol-translation
+  store has a finite cap, byte budget, or active reconciliation. No unbounded `Map` or `Set`
+  survives a config reload.
+
+<details>
+<summary>Memory ownership details</summary>
+
+OpenCodex tracks 36 categories of process-retained state. Each has a documented bound:
+
+- **12 retained stores** (request log, debug rings, image cache, model cache, vision
+  descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
+  evicted by the app-owned memory budget (default 256 MiB).
+- **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
+  monitored for in-flight byte pressure without eviction.
+- **24 state-store registrations** handle expiry sweeps (60 s interval) and
+  config-generation reconciliation so stale provider/account keys are removed.
+- **Path and fingerprint memos** (workspace metadata, hardened identities, installation
+  salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
+- **Model-cache generation tombstones** are deleted after reconciliation; a global
+  generation increment prevents stale in-flight discoveries from repopulating removed
+  providers.
+- **Lab event-id deduplication** runs under a ledger lock from disk, with no
+  process-level RAM index.
+
+Run `GET /api/system/memory` (with the admin token) to inspect live retained bytes,
+eviction counters, and watchdog samples.
+
+</details>
 
 ## Model routing
 

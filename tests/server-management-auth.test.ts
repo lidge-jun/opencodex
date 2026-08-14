@@ -46,6 +46,18 @@ import {
   SYSTEM_RESTART_PATH,
   createSystemRestartCapability,
 } from "../src/lib/system-restart-contract";
+import {
+  LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER,
+  LOCAL_PROVIDER_RELOAD_CAPABILITY_TTL_MS,
+  LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER,
+  LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER,
+  LOCAL_PROVIDER_RELOAD_METHOD,
+  LOCAL_PROVIDER_RELOAD_NAME_HEADER,
+  LOCAL_PROVIDER_RELOAD_NONCE_HEADER,
+  LOCAL_PROVIDER_RELOAD_PATH,
+  createLocalProviderReloadCapability,
+  verifyLocalProviderReloadCapability,
+} from "../src/lib/local-provider-reload-contract";
 import { setSystemRestartIoForTests } from "../src/server/management/system-restart";
 
 const previousHome = process.env.OPENCODEX_HOME;
@@ -335,6 +347,124 @@ describe("management and data-plane credential separation", () => {
     } finally {
       await server.stop(true);
     }
+  });
+
+  test("a provider-reload capability is one-shot and exact to its operation", () => {
+    const secret = "A".repeat(43);
+    const nonce = "J".repeat(43);
+    const expiresAt = Date.now() + LOCAL_PROVIDER_RELOAD_CAPABILITY_TTL_MS;
+    const unavailable = { available: false, reason: "injected unavailable state" } as const;
+    const local = { attestationSecret: secret, pid: process.pid, port: 10100 };
+    const headers = {
+      [LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER]: String(process.pid),
+      [LOCAL_PROVIDER_RELOAD_NONCE_HEADER]: nonce,
+      [LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER]: String(expiresAt),
+      [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai",
+      "content-length": "0",
+      [LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER]: createLocalProviderReloadCapability(
+        secret,
+        nonce,
+        LOCAL_PROVIDER_RELOAD_METHOD,
+        LOCAL_PROVIDER_RELOAD_PATH,
+        "xai",
+        process.pid,
+        local.port,
+        expiresAt,
+      )!,
+    };
+
+    const request = new Request(`http://127.0.0.1:${local.port}${LOCAL_PROVIDER_RELOAD_PATH}`, {
+      method: LOCAL_PROVIDER_RELOAD_METHOD,
+      headers,
+    });
+    expect(requireManagementAuth(request, unavailable, remoteConfig(), local)).toBeNull();
+    expect(managementPrincipal(request, unavailable, remoteConfig(), local))
+      .toBe("local-provider-reload-capability");
+
+    const replay = new Request(request.url, { method: LOCAL_PROVIDER_RELOAD_METHOD, headers });
+    expect(requireManagementAuth(replay, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const wrongName = new Request(request.url, {
+      method: LOCAL_PROVIDER_RELOAD_METHOD,
+      headers: { ...headers, [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "openai" },
+    });
+    expect(requireManagementAuth(wrongName, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const query = new Request(`${request.url}?name=xai`, { method: LOCAL_PROVIDER_RELOAD_METHOD, headers });
+    expect(requireManagementAuth(query, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const body = new Request(request.url, {
+      method: LOCAL_PROVIDER_RELOAD_METHOD,
+      headers: { ...headers, "content-length": "2" },
+      body: "{}",
+    });
+    expect(requireManagementAuth(body, unavailable, remoteConfig(), local)?.status).toBe(503);
+  });
+
+  test("provider-reload capability binds method path process endpoint and TTL", () => {
+    const secret = "A".repeat(43);
+    const nonce = "K".repeat(43);
+    const now = 1_800_000_000_000;
+    const pid = 4242;
+    const port = 10100;
+    const name = "xai";
+    const validExpiry = now + LOCAL_PROVIDER_RELOAD_CAPABILITY_TTL_MS;
+    const capability = createLocalProviderReloadCapability(
+      secret,
+      nonce,
+      LOCAL_PROVIDER_RELOAD_METHOD,
+      LOCAL_PROVIDER_RELOAD_PATH,
+      name,
+      pid,
+      port,
+      validExpiry,
+    )!;
+    const verify = (
+      method = LOCAL_PROVIDER_RELOAD_METHOD,
+      path = LOCAL_PROVIDER_RELOAD_PATH,
+      selectedName = name,
+      selectedPid = pid,
+      selectedPort = port,
+      expiresAt = validExpiry,
+      candidate = capability,
+    ) => verifyLocalProviderReloadCapability(
+      secret,
+      nonce,
+      method,
+      path,
+      selectedName,
+      selectedPid,
+      selectedPort,
+      expiresAt,
+      candidate,
+      now,
+    );
+
+    expect(verify()).toBe(true);
+    expect(verify("GET")).toBe(false);
+    expect(verify(LOCAL_PROVIDER_RELOAD_METHOD, "/api/providers")).toBe(false);
+    expect(verify(LOCAL_PROVIDER_RELOAD_METHOD, LOCAL_PROVIDER_RELOAD_PATH, "openai")).toBe(false);
+    expect(verify(LOCAL_PROVIDER_RELOAD_METHOD, LOCAL_PROVIDER_RELOAD_PATH, name, pid + 1)).toBe(false);
+    expect(verify(LOCAL_PROVIDER_RELOAD_METHOD, LOCAL_PROVIDER_RELOAD_PATH, name, pid, port + 1)).toBe(false);
+    expect(verify(LOCAL_PROVIDER_RELOAD_METHOD, LOCAL_PROVIDER_RELOAD_PATH, name, pid, port, now, capability)).toBe(false);
+
+    const tooLate = now + LOCAL_PROVIDER_RELOAD_CAPABILITY_TTL_MS + 1;
+    const tooLateCapability = createLocalProviderReloadCapability(
+      secret,
+      nonce,
+      LOCAL_PROVIDER_RELOAD_METHOD,
+      LOCAL_PROVIDER_RELOAD_PATH,
+      name,
+      pid,
+      port,
+      tooLate,
+    )!;
+    expect(verify(
+      LOCAL_PROVIDER_RELOAD_METHOD,
+      LOCAL_PROVIDER_RELOAD_PATH,
+      name,
+      pid,
+      port,
+      tooLate,
+      tooLateCapability,
+    )).toBe(false);
   });
 
   test("management-token temp cleanup forgets successful ACL memos and retains failed removals", () => {

@@ -117,8 +117,9 @@ provider 仍保持 deny-by-default。
 ### 多个 OAuth 账号
 
 OAuth 凭据中带有稳定账号 id 或邮箱的提供商可以保存多个登录。Providers 页面会在下拉列表中显示这些
-账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。只有没有身份信息的 Kimi 凭据会替换
-当前 active slot；Kiro 账户以配置文件 ARN 为键。`chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
+账号，允许继续添加，并在不登出其他账号的情况下切换当前账号。普通登录时，没有身份信息的 Kimi 凭据会替换
+当前 active slot；显式 **添加账号** 会保留原有 slot 并激活一个独立的新 slot。Kiro 账户以配置文件 ARN 为键。
+`chatgpt` 始终只有一个 slot，因为 Codex 账号池使用独立存储。令牌仍保存在
 `~/.opencodex/auth.json` 中；`/api/oauth/accounts` 只返回脱敏后的 metadata。
 
 ### Cockpit Tools Antigravity 导入
@@ -158,8 +159,8 @@ ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提
 [Cline 条款](https://cline.bot/tos)所列的 Cline Bot Inc.。
 `cline-pass/cline-pass/kimi-k3` 这样的路由 ID 是预期格式：第一段选择 opencodex 提供商，
 其余的 `cline-pass/kimi-k3` 是发送到上游的完整模型 slug。用量由账户的滚动 5 小时、每周和
-每月限额共同管理。当前 opencodex 仅公开经过实测的 `low` reasoning 档位；在网关公布或验证更宽
-档位之前，更高请求会被限制为 `low`。
+每月限额共同管理。2026-08-13 的实测确认，所有静态 ClinePass 模型在网关输入端都接受
+`low`、`medium`、`high`、`xhigh` 和 `max`。opencodex 会保留请求的档位；后端特定的规范化由 ClinePass 负责。
 
 **Cline** 使用相同的 API 密钥和端点，按用量计费，可访问 100 多个模型
 (OpenRouter 风格 ID，如 `anthropic/claude-sonnet-4-6`)。Cline 的促销免费模型仅在
@@ -206,6 +207,7 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | 火山方舟 · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -362,8 +364,11 @@ adapter。若要将没有内置默认值的模型（例如 `gpt-5.4-nano`）接�
 Cursor 作为单独的实验性 adapter 进行跟踪。`adapter: "cursor"` 会作为实验性本地配置出现在
 `ocx init` 和 dashboard Add Provider picker 中，并保存 Cursor 的静态回退模型目录 metadata。配置
 Cursor access token 后，opencodex 会使用 Cursor live HTTP/2 transport。内置回退列表包含上下文为
-1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 `grok-4.5` / `grok-4.5-fast`，以及上下文为
-262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Cursor 只以带 effort 后缀的 wire id
+1M 的 `gpt-5.6-sol` / `terra` / `luna`、上下文为 500K 的 Grok 4.5/4.6 普通与 Fast 条目，以及上下文为
+262K 的 `kimi-k3`；最终显示哪些模型由账号的实时发现结果决定。Grok 4.6 的两种形式均提供
+`low` / `medium` / `high` / `xhigh`，而 4.5 最高为 `high`。Fast 请求会发送对应的 Grok 基础模型，
+并通过独立的 `effort` 与 `fast=true` `requested_model` 参数指定模式；扁平化的
+`cursor-grok-{version}-{effort}-fast` id 仅用于发现和 picker 标识。Cursor 只以带 effort 后缀的 wire id
 提供 Kimi K3，因此 `cursor/kimi-k3` 暴露 `low` / `high` / `max` 阶梯，默认值为 `max`，与该模型
 文档中的 API 默认值一致。Cursor 服务器直接发起的
 native read/write/delete/ls/grep/shell/fetch 执行默认禁用，因为它会绕过 Codex 的 approval 和

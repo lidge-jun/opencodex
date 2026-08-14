@@ -2,7 +2,7 @@
  * One row model for every client the Integrations page can reach.
  *
  * The overview used to read a single route, `/api/client-integrations`, which
- * answers only for the seven file-toggle clients. A user with Claude Code
+ * answers only for the eight file-toggle clients. A user with Claude Code
  * connected and a Grok fence written was told "applied: 0" while three
  * integrations were live one tab away. Five more sources join the grid here,
  * each with its own payload shape, mapped to the badge vocabulary the file
@@ -141,6 +141,7 @@ const FILE_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   openclaw: "integrations.tab.openclaw",
   kimi: "integrations.tab.kimi",
   gajae: "integrations.tab.gajae",
+  dsh: "integrations.tab.dsh",
 };
 
 /** A file client's block is in the file for both `current` and `stale`. */

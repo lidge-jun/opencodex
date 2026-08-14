@@ -1,3 +1,4 @@
+import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
@@ -110,15 +111,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     },
   );
   useKeyedClientResource(
-    `add-provider-usage:${apiBase}`,
+    usageSummary30dResourceKey(apiBase),
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
-      if (!res.ok) return {} as Record<string, number>;
-      const data = await res.json() as { providers?: Array<{ provider: string; requests: number }> };
-      const rank: Record<string, number> = {};
-      for (const row of data.providers ?? []) rank[row.provider] = row.requests;
-      return rank;
+      if (!res.ok) throw new Error(String(res.status));
+      return await res.json() as { providers?: Array<{ provider: string; requests: number }> };
     },
   );
   /*

@@ -1338,9 +1338,9 @@ dialog.modal-overlay::backdrop {
 .sep-line { flex: 1; height: 1px; background: var(--border); }
 .quota-compact { padding: 0 16px 10px; display: grid; gap: 4px; }
 /* Fixed slot so pending skeleton and real bars occupy the same vertical space.
-   Sized for two compact rows — a 1-bar plan must not shrink the card under settings. */
+   Sized for one compact meter row — extra windows grow the card only after fill. */
 .codex-account-quota-slot {
-  min-height: 48px;
+  min-height: 22px;
   box-sizing: border-box;
 }
 /* Display:contents so main/section/empty keep the same margins as the ready tree. */
@@ -1402,11 +1402,11 @@ dialog.modal-overlay::backdrop {
   min-width: 2.25rem;
   justify-content: center;
 }
-/* Pending skeletons must fit the same 48px slot as ready bars — otherwise main shrinks. */
+/* Pending skeletons must fit the same one-row slot as ready bars — otherwise main jumps. */
 .quota-compact--pending {
-  height: 48px;
-  min-height: 48px;
-  max-height: 48px;
+  height: 22px;
+  min-height: 22px;
+  max-height: 22px;
   overflow: hidden;
   box-sizing: border-box;
 }
@@ -1428,7 +1428,7 @@ dialog.modal-overlay::backdrop {
 .quota-skel--time { width: 34px; }
 .quota-skel--bar { width: 100%; height: 5px; align-self: center; }
 .quota-skel--val { width: 28px; justify-self: end; }
-.quota-row { display: grid; grid-template-columns: minmax(34px, max-content) 34px minmax(34px, 44px) minmax(38px, 42px) minmax(58px, 1fr) minmax(30px, max-content); align-items: center; gap: 8px; min-width: 0; }
+.quota-row { display: grid; grid-template-columns: minmax(34px, max-content) minmax(58px, 1fr) minmax(30px, max-content); align-items: center; gap: 8px; min-width: 0; }
 .quota-label { font-size: var(--text-caption); color: var(--muted); font-weight: var(--weight-semibold); }
 .quota-val { font-size: var(--text-caption); font-family: var(--font-code); color: var(--text); text-align: right; }
 .quota-reset-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-caption); color: var(--faint); }
@@ -1482,6 +1482,26 @@ dialog.modal-overlay::backdrop {
 .codex-request-user-input-feedback { flex: 1 0 100%; margin-top: -8px; color: var(--muted); font-size: var(--text-label); line-height: var(--leading-body); text-align: right; }
 .codex-request-user-input-feedback.is-error { color: var(--red); }
 .codex-account-picker-card { gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+.codex-auth-advanced { margin-top: 8px; }
+.codex-auth-advanced__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  text-align: left;
+}
+.codex-auth-advanced__toggle:hover { color: var(--text); }
+.codex-auth-advanced__chevron { transition: transform var(--motion-fast, .12s); }
+.codex-auth-advanced__chevron.is-open { transform: rotate(90deg); }
+.codex-auth-advanced__boxes { display: grid; gap: 0; }
+
 .codex-account-picker-copy { flex: 1 1 34rem; min-width: 0; }
 .codex-account-picker-copy .card-sub { padding: 4px 0 0; }
 .codex-account-picker-controls { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; margin-left: auto; }
@@ -1742,7 +1762,9 @@ dialog.modal-overlay::backdrop {
 .codex-pool-strategy-card .card-sub { padding: 0; }
 /* Inline selection-order row on an account card: label and trigger share one line, and the
    trigger is scaled down to the card's hint text so it reads as part of the card, not a form. */
-.codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0 16px 10px; min-width: 0; }
+.codex-account-identity { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 6px; min-width: 0; }
+.codex-account-identity-copy { font-size: var(--text-label); line-height: var(--leading-body); color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.codex-account-priority { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; min-width: 0; flex: 0 0 auto; }
 .codex-account-priority-label { font-size: var(--text-label); color: var(--muted); font-weight: var(--weight-medium); white-space: nowrap; }
 .codex-account-priority .select-trigger { max-width: 100%; padding: 4px 9px; font-size: var(--text-label); }
 

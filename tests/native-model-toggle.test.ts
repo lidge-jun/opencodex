@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  accountBoundNativeOpenAiSlugs,
   accountBoundNativeDisplayName,
   accountBoundNativeModelSlugs,
   applyNativeVisibility,
@@ -10,6 +11,8 @@ import {
   mergeCatalogEntriesForSync,
   NATIVE_OPENAI_MODELS,
   nativeModelRows,
+  observedAccountBoundNativeEntries,
+  observedAccountBoundNativeOpenAiSlugs,
   shouldIncludeAccountBoundNativeOpenAi,
   shouldIncludeNativeOpenAi,
   trustedAccountBoundNativeCatalogSlug,
@@ -37,6 +40,8 @@ function nativeTemplate(): Record<string, unknown> {
       { effort: "low", description: "native low" },
       { effort: "high", description: "native high" },
     ],
+    shell_type: "shell_command",
+    comp_hash: "native-comp-hash",
   };
 }
 
@@ -135,6 +140,76 @@ describe("native GPT model toggles (bare slugs in disabledModels)", () => {
     expect(side?.model_messages).toEqual(bare?.model_messages);
     expect(routed?.priority).toBeGreaterThan(side?.priority as number);
     expect(entries.every(entry => Number.isInteger(entry.priority))).toBe(true);
+  });
+
+  test("observed account-only native ids stay qualified and do not expand the bare set", () => {
+    const observedEntries = [
+      { ...nativeTemplate(), slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-hidden-daybreak", visibility: "hide", supported_in_api: true },
+      { ...nativeTemplate(), slug: "gpt-not-an-api-model", visibility: "list", supported_in_api: false },
+      { ...nativeTemplate(), slug: "provider/gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true },
+    ];
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).toContain("gpt-daybreak-blue-latest");
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).not.toContain("gpt-hidden-daybreak");
+    expect(accountBoundNativeOpenAiSlugs(observedEntries)).not.toContain("gpt-not-an-api-model");
+
+    const entries = buildCatalogEntries(
+      nativeTemplate(),
+      ["gpt-5.5"],
+      [],
+      [],
+      false,
+      "default",
+      new Set(),
+      ["team"],
+      new Set(),
+      new Set(),
+      undefined,
+      accountBoundNativeOpenAiSlugs(observedEntries),
+    );
+    expect(entries.find(entry => entry.slug === "gpt-daybreak-blue-latest")).toBeUndefined();
+    expect(entries.find(entry => entry.slug === "team/gpt-daybreak-blue-latest")).toMatchObject({
+      opencodex_catalog_kind: CODEX_ACCOUNT_BOUND_CATALOG_KIND,
+      visibility: "list",
+    });
+
+    expect(observedAccountBoundNativeEntries([{
+      ...nativeTemplate(),
+      slug: "gpt-daybreak-blue-latest",
+      visibility: "hide",
+      supported_in_api: true,
+      opencodex_account_observed_native: true,
+    }])).toHaveLength(1);
+    expect(observedAccountBoundNativeOpenAiSlugs(observedEntries)).toEqual(["gpt-daybreak-blue-latest"]);
+  });
+
+  test("a minimal hand-edited cache row is ignored", () => {
+    const handEdited = [{ slug: "gpt-daybreak-blue-latest", visibility: "list", supported_in_api: true }];
+    expect(accountBoundNativeOpenAiSlugs(handEdited)).not.toContain("gpt-daybreak-blue-latest");
+    expect(observedAccountBoundNativeEntries(handEdited)).toEqual([]);
+  });
+
+  // The shape check is NOT a trust control, and this pins that so the next reader does not
+  // assume it is one. `models_cache.json` is a user-owned file with no signature or source
+  // identity to verify, so a complete hand-written row is indistinguishable from a real
+  // observation and is accepted. That is acceptable here only because it grants nothing new:
+  // `router.ts` already routes any bare `gpt-*` id under an account selector regardless of the
+  // catalog, so the effect is advertisement in discovery, not a newly reachable route. If this
+  // test ever needs to flip to rejection, the fix is a real provenance signal, not a longer
+  // list of fields to match.
+  test("a full-shape hand-written row IS accepted — the check is plausibility, not provenance", () => {
+    const forged = [{
+      slug: "gpt-not-a-real-model",
+      visibility: "list",
+      supported_in_api: true,
+      base_instructions: "anything non-empty",
+      comp_hash: null,
+      shell_type: "shell_command",
+      supported_reasoning_levels: [{ effort: "high" }],
+      model_messages: {},
+    }];
+
+    expect(accountBoundNativeOpenAiSlugs(forged)).toContain("gpt-not-a-real-model");
   });
 
   test("exact account disables hide only the matching generated picker row", () => {

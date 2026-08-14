@@ -1,0 +1,24 @@
+# Schema fixture adapted from the installed @deepseek-ai/dsh-llm-pi-ai
+# 0.1.0-rc.6 README Config example. This is not an official default file.
+llm-pi-ai:
+  providers:
+    acme-gateway:
+      displayName: Acme Gateway
+      apiKeyEnv: ACME_GATEWAY_API_KEY
+      api: openai-completions
+      baseURL: https://gateway.acme.example/v1
+      compat:
+        thinkingFormat: deepseek
+      models:
+        - id: acme-large
+          name: Acme Large
+          contextWindow: 65536
+          maxTokens: 4096
+        - id: acme-think
+          name: Acme Think
+          contextWindow: 262144
+          maxTokens: 32768
+          reasoningEfforts:
+            off: null
+            high: high
+            max: ultra

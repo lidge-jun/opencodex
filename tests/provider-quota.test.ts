@@ -1016,7 +1016,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports[0]?.source).toBe("moonshot:balance");
     // Balance-only: no fabricated utilization percentage.
     expect(result.reports[0]?.quota.customWindows?.[0]).toMatchObject({
-      label: "Balance ($8.00 available, $2.00 voucher)",
+      label: "Balance ($8.00 USD available, $2.00 voucher)",
       percent: 0,
     });
     expect(seen).toHaveLength(1);
@@ -1038,6 +1038,11 @@ describe("fetchProviderQuotaReports", () => {
 
     expect(result.reports).toHaveLength(1);
     expect(seen[0]).toBe("https://api.moonshot.cn/v1/users/me/balance");
+    // China platform balance is CNY, not USD — do not mislabel ¥ amounts with $.
+    expect(result.reports[0]?.quota.customWindows?.[0]).toMatchObject({
+      label: "Balance (¥5.00 CNY available, ¥0.00 voucher)",
+      percent: 0,
+    });
   });
 
   test("Moonshot quota never sends the key to a non-canonical base URL", async () => {

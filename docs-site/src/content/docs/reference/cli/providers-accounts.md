@@ -74,6 +74,18 @@ ocx login xai
 ocx login anthropic
 ```
 
+A proxy that is already running picks up the new credential without a restart: the CLI asks it to
+reload that one provider from disk, and the request carries no credential of its own. If the
+running proxy cannot accept that request — most often because it started from a build that predates
+attested reload — the login still succeeds and the credential is still written to disk, but the
+live process keeps serving the previous one. The CLI says so and asks you to restart:
+
+```
+⚠️  A proxy is running but could not reload this provider (unattested-target).
+   The credential is saved to disk; the running proxy keeps using the previous one.
+   Restart it to pick this up: ocx restart
+```
+
 ### `ocx logout <provider>`
 
 Remove the stored OAuth credential for a provider.

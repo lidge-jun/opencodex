@@ -128,9 +128,9 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.4-mini` を�
 
 ## ダッシュボード設定とオフ
 
-<!-- TODO(WP5 GUI): GUI コントロールが完成したらサイドカー設定画面の案内を追加してください。 -->
+ダッシュボードのビジョンサイドカーカードでは、既存のモデル・バックエンド・推論コントロールに加えて、サイドカーのオン/オフ、`maxDescriptionsPerTurn`、`timeoutMs` を設定できます。オフにしても他の設定は削除されず、再びオンにすると以前のモデル、バックエンド、推論、タイムアウト、上限が残ります。
 
-設定ファイルキーは今すぐ使えます。機能をオフにするには `config.json` で該当サイドカーの
-`enabled` を `false` に設定してください。Anthropic OAuth 検索と画像説明は既存の Claude Code OAuth
-fingerprint 先例に従いますが、実際のアカウントと作業量で十分 soak test するのが無難です。全
+`PUT /api/sidecar-settings` は同じフィールドを受け付けます。部分更新では省略したキーをそのまま残します。`timeoutMs` はランタイムの整数範囲（1–2147483647 ms）を使います。
+
+ファイルを直接編集したい場合は、これまでどおり `config.json` で `enabled` を `false` にできます。Anthropic OAuth 検索と画像説明は既存の Claude Code OAuth fingerprint 先例に従いますが、実際のアカウントと作業量で十分 soak test するのが無難です。全
 フィールドは[設定リファレンス](/ja/reference/configuration/#sidecars)を参照してください。

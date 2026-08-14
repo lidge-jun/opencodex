@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "../src/config";
+import { loadConfig, saveConfig, writePid, writeRuntimePort } from "../src/config";
 import { commitKeyLoginProvider, providerConfigFromKeyLoginProvider } from "../src/oauth/login-cli";
 import { KEY_LOGIN_PROVIDERS } from "../src/oauth/key-providers";
 import { startServer } from "../src/server";
+import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
 import type { OcxConfig } from "../src/types";
 import { refreshUserCostOverlays } from "../src/usage/user-cost-overlays";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
@@ -57,9 +58,17 @@ afterEach(() => {
 
 describe("CLI key-login live-update overlay preservation", () => {
   test("notify after key login pushes the merged row and keeps modelCosts on live and disk", async () => {
-    const server = startServer(0);
+    const localAttestationSecret = createLocalAttestationSecret();
+    const server = startServer(0, { localAttestationSecret });
     try {
       const port = server.port!;
+      writeRuntimePort({
+        pid: process.pid,
+        port,
+        hostname: "127.0.0.1",
+        attestationSecret: localAttestationSecret,
+      });
+      writePid(process.pid);
       const boot = loadConfig();
       boot.port = port;
       saveConfig(boot);
@@ -77,16 +86,13 @@ describe("CLI key-login live-update overlay preservation", () => {
       const merged = await commitKeyLoginProvider(config, "umans", replacement);
       expect(merged.modelCosts).toEqual(edited.providers.umans!.modelCosts);
 
-      // The proxy's POST /api/providers handler saves its config; it must keep
-      // the overlay (the merged row was notified), not strip it and undo the
-      // just-written disk state.
+      // Reload treats disk as authoritative and never re-saves it.
       const disk = JSON.parse(readFileSync(join(testDir, "config.json"), "utf-8")) as OcxConfig;
       expect(disk.providers.umans!.modelCosts).toEqual(edited.providers.umans!.modelCosts);
       expect(disk.providers.umans!.apiKey).toBe("sk-rotated");
 
       // The running proxy must also carry the overlay in its live config:
-      // notifyRunningProxy posted the merged row to POST /api/providers, so a
-      // silent early return or failed POST would leave the in-memory DTO stale
+      // A silent early return or failed reload would leave the in-memory DTO stale
       // even though disk is correct.
       const live = (await fetch(new URL("/api/config", server.url)).then(r => r.json())) as {
         providers: Record<string, { modelCosts?: Record<string, unknown> }>;

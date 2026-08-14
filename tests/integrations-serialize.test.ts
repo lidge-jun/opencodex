@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   FORMAT_MEDIA_TYPE,
+  UnserializableValueError,
   quoteTomlKey,
   renderToml,
   renderYaml,
@@ -153,6 +154,57 @@ describe("serializeDocument", () => {
 
   test("a TOML root must be a table", () => {
     expect(() => serializeDocument([1, 2], "toml")).toThrow(/TOML root must be a table/);
+  });
+
+  test("json refuses numbers that would not survive the rewrite", () => {
+    expect(() => serializeDocument({ q: Infinity }, "json")).toThrow(UnserializableValueError);
+    expect(() => serializeDocument({ q: Number.NaN }, "json")).toThrow(UnserializableValueError);
+    expect(() => serializeDocument({ q: -0 }, "json")).toThrow(UnserializableValueError);
+    // The failure names where the value sits — including through arrays and
+    // for a bare root scalar.
+    expect(() => serializeDocument({ a: { b: [1, -Infinity] } }, "json")).toThrow(/a\.b\[1\]/);
+    expect(() => serializeDocument({ a: [{ b: -0 }] }, "json")).toThrow(/a\[0\]\.b/);
+    expect(() => serializeDocument(-0, "json")).toThrow(/at \$/);
+    // Empty containers pass the walk untouched.
+    expect(serializeDocument({}, "json")).toBe("{}\n");
+    expect(serializeDocument([], "json")).toBe("[]\n");
+  });
+
+  test("json keeps every finite non-negative-zero double, however large", () => {
+    // A finite double round-trips value-exactly; refusing 2^54 here while the
+    // parse-time scanner admits it turned a classifier-promised 'stale' into
+    // a permanent 'unsafe' refusal.
+    expect(JSON.parse(serializeDocument({ q: 2 ** 54 }, "json"))).toEqual({ q: 2 ** 54 });
+    expect(JSON.parse(serializeDocument({ q: 1e21 }, "json"))).toEqual({ q: 1e21 });
+  });
+
+  test("hostile nesting depth is a structured refusal, not a RangeError", () => {
+    // The walk itself is iterative, and past MAX_SERIALIZED_JSON_NESTING it
+    // refuses — JSON.stringify recurses, so letting a 50k-deep document
+    // through would trade the refusal for a multi-GB spike and a raw
+    // RangeError. The refusal message stays readable (clamped path).
+    let deep: unknown = -Infinity;
+    for (let i = 0; i < 100_000; i += 1) deep = [deep];
+    try {
+      serializeDocument({ q: deep }, "json");
+      throw new Error("expected a refusal");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnserializableValueError);
+      expect((error as Error).message).toContain("nests deeper");
+      expect((error as Error).message.length).toBeLessThan(500);
+      // The clamp keeps head and tail of the path, joined by an ellipsis.
+      expect((error as Error).message).toMatch(/q\[0\].*….*\[0\]/);
+    }
+  });
+
+  test("nesting within the ceiling still serializes, up to the exact boundary", () => {
+    // The ceiling admits exactly MAX_JSON_NESTING container levels — the same
+    // count the parse-time scanner admits. Pinning both edges catches an
+    // off-by-one drift in either layer.
+    let atCeiling: unknown = 1;
+    for (let i = 0; i < 1000; i += 1) atCeiling = [atCeiling];
+    expect(() => serializeDocument(atCeiling, "json")).not.toThrow();
+    expect(() => serializeDocument([atCeiling], "json")).toThrow(/nests deeper/);
   });
 
   test("media types are declared for every format", () => {

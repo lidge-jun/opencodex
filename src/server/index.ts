@@ -45,18 +45,15 @@ import {
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
-import {
-  setLabAutomationDispatchDeps,
-  startLabAutomationScheduler,
-} from "../lab/automation/orchestrator";
-import { loadLabAutomationPolicy } from "../lab/automation/persistence";
-import { createProductionLabRouteExecutor } from "../lib/lab-live-route-production";
+import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
+import { runModelRenameStartupMigration } from "../providers/model-rename-startup";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { providerContextCap } from "../providers/context-cap";
 import { providerCodexAccountMode } from "../providers/registry";
 import type { StorageCleanupPolicy } from "../types";
+import { MAX_DECOMPRESSED_BODY_BYTES } from "./request-decompress";
 import {
   CodexAccountCooldownError,
   cooldownErrorMessage,
@@ -195,6 +192,7 @@ import {
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../lib/system-restart-contract";
+import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../lib/local-provider-reload-contract";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
 
 export const MAX_WS_FRAME_BYTES = 50 * 1024 * 1024;
@@ -415,6 +413,8 @@ function attachLiveSidebandUpstream(
 // upstream cannot hold Codex open after response.completed; darwin no-rewrite traffic
 // requires explicit config-eager opt-in (`auto` always stays tee on darwin).
 // selectEagerPath(process.platform, needsClientRewrite, config.streamMode ?? "auto")
+// Codex upstream WS runtime gating and the forced bounded single-reader branch
+// are owned by responses/ws-upstream.ts and responses/core.ts respectively.
 // relaySseEagerBounded(upstreamResponse.body, turnAc,
 // new Response(eagerBody,
 // Default shape (tee + background inspection):
@@ -478,9 +478,19 @@ export function consumeStartupCacheInvalidationWrite(): boolean {
   return wrote;
 }
 
+export function warnAgentTaskRecoveryStartup(config: {
+  agentTaskRecovery?: { enabled?: boolean };
+}): void {
+  if (config.agentTaskRecovery?.enabled !== true) return;
+  console.warn("⚠️  Experimental encrypted V2 task recovery is enabled.");
+  console.warn("   A scoped cache miss may send an additional authenticated request to ChatGPT and may consume quota or add latency; concurrent misses can share one request.");
+  console.warn("   Recovered plaintext assignment data is retained only in a bounded, process-local in-memory cache; exact fidelity is not guaranteed and the path depends on undocumented backend behavior.");
+}
+
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const localAttestationSecret = deps.localAttestationSecret ?? createLocalAttestationSecret();
-  const config = runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig()));
+  const config = runModelRenameStartupMigration(runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())));
+  warnAgentTaskRecoveryStartup(config);
   setLiveStateStoreConfig(config);
   applyProxyEnv(config);
   assertServerAuthConfig(config);
@@ -617,6 +627,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     }
     if (path === "/v1/responses/compact") return req.method === "POST";
     if (path === "/v1/models") return req.method === "GET";
+    // Standalone realtime voice sessions (codex-rs thread/realtime/start, WebSocket
+    // transport) — a directly-spawned `codex app-server` needs these for desktop
+    // voice the same way it needs /v1/responses. WebSocket upgrades only; plain
+    // HTTP on these paths stays rejected.
+    if (path === "/v1/realtime" || path === "/v1/live") {
+      return req.headers.get("upgrade")?.toLowerCase() === "websocket";
+    }
     return false;
   }
 
@@ -707,6 +724,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
     userCostOverlayReconciler = startUserCostOverlayReconciler({ liveConfig: config });
     const serveOptions = {
       idleTimeout: 255,
+      maxRequestBodySize: MAX_DECOMPRESSED_BODY_BYTES,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
       // else. Rejecting here, before any handler runs, is what keeps the surface from growing
@@ -804,6 +822,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           pid: process.pid,
           port: healthPort,
           restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
+          providerReloadCapability: LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION,
         }, 200, req, policy);
         const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
         if (challenge) {
@@ -887,10 +906,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           }
           throw error;
         }
-        const { applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
+        const { accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, buildCatalogEntries, configuredNativeAliasSlugs, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, exactComboCatalogSlugs, loadCatalogTemplate, NATIVE_OPENAI_MODELS, nativeOpenAiSlugs, nativeReasoningEfforts, nativeDefaultReasoningEffort, orderForSubagents, filterCatalogVisibleModels, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, uniqueCatalogModelsForRawPublicList, visibleCodexAccountSelectors, visibleNativeSlugs, desktopVisibleNativeSlugs } = await import("../codex/catalog");
         const includeNativeOpenAi = shouldIncludeNativeOpenAi(config);
         const includeAccountBoundNativeOpenAi = shouldIncludeAccountBoundNativeOpenAi(config);
-        const nativeSlugs = includeNativeOpenAi ? nativeOpenAiSlugs() : [];
+        const nativeSlugs = includeNativeOpenAi
+          ? nativeOpenAiSlugs()
+          : [];
         const disabledNatives = disabledNativeSlugs(config);
         const disabledModels = new Set(config.disabledModels ?? []);
         const shadowedNativeSlugs = configuredNativeAliasSlugs(config);
@@ -898,6 +919,12 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const accountSelectors = includeAccountBoundNativeOpenAi
           ? visibleCodexAccountSelectors(config)
           : [];
+        const accountNativeSlugsBySelector = includeAccountBoundNativeOpenAi
+          ? accountBoundNativeOpenAiSlugsBySelector(config)
+          : new Map<string, readonly string[]>();
+        const accountNativeSlugs = [...new Set(
+          [...accountNativeSlugsBySelector.values()].flatMap(slugs => [...slugs]),
+        )];
         const goEnabled = filterCatalogVisibleModels(goModels, config);
         const featured = getFeaturedModels(config);
         const goOrdered = orderForSubagents(goEnabled, featured);
@@ -946,7 +973,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           // newly re-enabled native reappear under each selector before the next sync, while the
           // no-selector path keeps nativeOpenAiSlugs()'s existing visibility-sensitive behavior.
           const catalogNativeSlugs = accountSelectors.length > 0
-            ? NATIVE_OPENAI_MODELS
+            ? [...new Set([...NATIVE_OPENAI_MODELS, ...accountNativeSlugs])]
             : nativeSlugs;
           const entries = buildCatalogEntries(
             loadCatalogTemplate(),
@@ -960,12 +987,15 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             suppressedBareNativeSlugs,
             new Set(),
             providerContextCap(config, OPENAI_CODEX_PROVIDER_ID),
+            accountNativeSlugs,
+            accountNativeSlugsBySelector,
           );
           return jsonResponse({
             models: applyNativeVisibility(
               entries,
               disabledModels,
               accountSelectors.length > 0,
+              new Set(accountNativeSlugs),
             ),
           }, 200, req, policy);
         }
@@ -1011,13 +1041,16 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         const selectorNativeSlugs = accountSelectors.length > 0
           ? NATIVE_OPENAI_MODELS.filter(slug => !disabledNatives.has(slug))
           : [];
+        const bareSelectorNativeSlugs = accountSelectors.length > 0
+          ? selectorNativeSlugs
+          : [];
         const visibleNatives = includeNativeOpenAi
           ? accountSelectors.length > 0
-            ? selectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
+            ? bareSelectorNativeSlugs.filter(slug => !shadowedNativeSlugs.has(slug))
             : visibleNativeSlugs(config)
           : [];
         const visibleAccountNatives = accountSelectors.flatMap(selector =>
-          selectorNativeSlugs.flatMap(metadataId => {
+          (accountNativeSlugsBySelector.get(selector) ?? []).filter(metadataId => !disabledNatives.has(metadataId)).flatMap(metadataId => {
             const id = `${selector}/${metadataId}`;
             return disabledModels.has(id) ? [] : [{ id, metadataId }];
           })
@@ -1153,7 +1186,6 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
       }
 
       if (url.pathname === "/v1/responses" && req.method === "POST") {
-        disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) {
           return drainingResponse(req, policy);
         }
@@ -1182,6 +1214,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => {
           const response = await handleResponses(req, config, logCtx, {
             turnAdmissionLease,
+            onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
             abortSignal: req.signal,
             onFirstOutput: () => recordFirstOutput(logCtx, start),
             onNativePassthroughTerminal: status => {
@@ -1211,7 +1244,11 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
-        return runAdmittedHttpTurn(req, policy, async () => withCors(await handleClaudeCountTokens(req, config), req, policy));
+        return runAdmittedHttpTurn(req, policy, async () => withCors(
+          await handleClaudeCountTokens(req, config, policy),
+          req,
+          policy,
+        ));
       }
 
       if (url.pathname === "/v1/messages" && req.method === "POST") {
@@ -1238,9 +1275,9 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }),
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease }, policy),
           req,
-          config,
+          policy,
         ));
       }
 
@@ -1307,10 +1344,13 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
         });
       }
 
-      // Voice / Realtime sideband WebSocket: Frameless joins /v1/live/{callId}; Realtime v1 joins
-      // /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Transparent bidirectional relay.
+      // Voice / Realtime WebSocket relay. Sideband joins: Frameless /v1/live/{callId};
+      // Realtime v1 /v1/realtime?call_id= (or /v1/realtime/calls/{callId}). Standalone
+      // sessions (codex-rs thread/realtime/start, WebSocket transport — the desktop voice
+      // path): /v1/realtime?intent=quicksilver&model= and /v1/live?model=.
+      // Transparent bidirectional relay.
       const liveSidebandTarget = req.headers.get("upgrade")?.toLowerCase() === "websocket"
-        ? parseLiveSidebandTarget(url.pathname, url.searchParams)
+        ? parseLiveSidebandTarget(url.pathname, url.searchParams, url.search.replace(/^\?/, ""))
         : null;
       if (liveSidebandTarget) {
         if (isDraining()) {
@@ -1695,18 +1735,14 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();
 
+  // Compatibility Lab is optional: wire it only for installs that actually use it -- any
+  // routing profile, or automation enabled on disk. This runs synchronously before
+  // startServer returns, in the same turn as Bun.serve, so a policy route can never be
+  // evaluated before its evidence provider is registered. That ordering is load-bearing:
+  // the subagent-fallback chain routes synchronously and has nowhere to await.
   const labConfigDir = getConfigDir();
-  const productionLabRouteExecutor = createProductionLabRouteExecutor({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-  });
-  setLabAutomationDispatchDeps({
-    configDir: labConfigDir,
-    loadConfig: () => config,
-    routeExecutor: productionLabRouteExecutor,
-  });
-  if (loadLabAutomationPolicy(labConfigDir).enabled) {
-    startLabAutomationScheduler(labConfigDir);
+  if (labActivationRequired(config, labConfigDir)) {
+    activateLab(config, labConfigDir);
   }
 
   return server;

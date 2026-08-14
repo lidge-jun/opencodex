@@ -125,13 +125,15 @@ macOS；在其他平臺上，請使用 `ocx claude`。
 **原樣**轉發到 `api.anthropic.com`——beta、思考簽名、提示快取和計費身份都保持完全原生，
 而已路由模型仍可在同一會話中透過選擇器別名使用。
 
-**標頭處理：**轉發前會移除逐跳標頭以及 `host`、`content-length`、`accept-encoding`、
-`x-opencodex-api-key` 和 `origin`。其他所有標頭（包括 `anthropic-beta` 和
-`anthropic-version`）都會透傳。
+**標頭處理：**轉發前一律移除逐跳標頭以及 `host`、`content-length`、
+`accept-encoding`、`x-opencodex-api-key` 和 `origin`。在非回環綁定上，原生透傳還要求透過
+`x-opencodex-api-key` 提供有效的代理許可憑證；此時 `Authorization` 與 `x-api-key` 僅屬於
+Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被移除，而另一標頭中的真正供應商
+憑證會保留。以逗號合併的模糊憑證標頭不會被轉發。
 
-只有同時滿足以下**四個**條件時才會觸發透傳：`nativePassthrough` 不為 `false`；模型以
-`claude` 或 `anthropic` 開頭；bearer 或 `x-api-key` 以 `sk-ant-` 開頭；並且別名/模型對映
-解析後回傳的模型保持不變。這也意味著使用 `ocx claude` 時不再出現
+只有同時滿足以下所有條件時才會觸發透傳：`nativePassthrough` 不為 `false`；模型以
+`claude` 或 `anthropic` 開頭；bearer token 或 `x-api-key` 以 `sk-ant-` 開頭；並且別名/模型對映
+解析後回傳的模型保持不變；且在非回環綁定上，專用代理許可標頭有效。這也意味著使用 `ocx claude` 時不再出現
 “claude.ai connectors are disabled”警告。
 
 可以設定 `claudeCode.nativePassthrough: false` 來停用；也可以透過

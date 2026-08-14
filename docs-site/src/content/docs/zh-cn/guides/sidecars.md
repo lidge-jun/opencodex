@@ -118,9 +118,10 @@ Dashboard 和管理 API 都使用 `gpt-5.4-mini` 作为回退。启动时仍会�
 
 ## 仪表盘设置与禁用
 
-<!-- TODO(WP5 GUI): GUI 控件完成后补充 sidecar 设置页面操作说明。 -->
+仪表盘的视觉附属服务卡片可以启用或停用 sidecar，并设置 `maxDescriptionsPerTurn` 和
+`timeoutMs`，同时保留已有的模型、后端和推理强度控件。停用不会删除这些设置；重新启用后仍会保留原来的模型、后端、推理强度、超时和次数上限。
 
-配置文件字段现在即可使用。如需禁用某个 sidecar，请在 `config.json` 中把对应的 `enabled` 设为
-`false`。Anthropic OAuth 搜索和图像描述沿用现有 Claude Code OAuth fingerprint 先例，但仍应使用
-目标账户和实际负载充分 soak test。所有字段见
+`PUT /api/sidecar-settings` 接受相同字段。部分更新会保留未提交的键。`timeoutMs` 使用运行时整数边界（1–2147483647 毫秒）。
+
+如果更想直接改文件，仍可在 `config.json` 中把 `enabled` 设为 `false`。Anthropic OAuth 搜索和图像描述沿用现有 Claude Code OAuth fingerprint 先例，但仍应使用目标账户和实际负载充分 soak test。所有字段见
 [配置参考](/zh-cn/reference/configuration/#sidecars)。

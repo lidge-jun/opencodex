@@ -1,4 +1,4 @@
-import { useI18n, useT } from "../i18n/shared";
+import { useT } from "../i18n/shared";
 import { IconAlert, IconPause, IconPlay, IconX } from "../icons";
 import { displayAccountId } from "../lib/privacy";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
@@ -15,7 +15,6 @@ import {
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../oauth-health-display";
-import { formatCostUsd, formatTokenCount } from "../provider-workspace/usage";
 
 export function CodexAccountPoolCards({
   pool,
@@ -66,7 +65,6 @@ export function CodexAccountPoolCards({
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
   const t = useT();
-  const { locale } = useI18n();
   const isNext = (account: CodexAccountEntry) => !account.paused && activeId === account.id;
 
   return (
@@ -145,33 +143,26 @@ export function CodexAccountPoolCards({
               <IconX width={14} />
             </button>
           </div>
-          <div className="card-sub">{a.email}{a.plan ? ` · ${a.plan}` : ""} · {t("prov.accountId")}: {displayAccountId(a.id)}</div>
-          {a.logLabel && (
-            <div className="card-sub faint">{t("codexAuth.logLabel")}: <code>{a.logLabel}</code></div>
-          )}
-          {a.usage30d && (
-            <div className="card-sub faint" title={t("logs.metric.estimatedCostTitle")}>
-              {t("usage.card.totalTokens")}: {formatTokenCount(a.usage30d.totalTokens, locale)} · {t("pws.estimatedCost")}: {formatCostUsd(a.usage30d.estimatedCostUsd, locale)} · {t("usage.coverage.measured")}: {Math.round(a.usage30d.usageCoverageRatio * 100)}%
-            </div>
-          )}
+          <div className="codex-account-identity">
+            <div className="codex-account-identity-copy">{a.email}{a.plan ? ` · ${a.plan}` : ""} · {t("prov.accountId")}: {displayAccountId(a.id)}</div>
+            <AccountPriorityControl
+              value={a.priority}
+              selectId={`codex-account-priority-${a.id}`}
+              // Every row, not just the one being written: the controller serializes order
+              // writes behind one mutation ref, so a second row's pick would come back "busy"
+              // and be dropped with no toast. Same global lock the pause button uses.
+              // A pending switch counts too — it writes the same pin this clears, so the
+              // controller refuses to overlap them, and that refusal is equally silent.
+              disabled={priorityUpdatingId !== null || switchingId !== null}
+              onChange={(priority) => onPriorityChange(a, priority)}
+            />
+          </div>
           {healthSummary && (
             <div className="card-sub faint">{healthSummary}</div>
           )}
           {inCooldown && (
             <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
           )}
-          {a.id === pinnedId && !a.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
-          <AccountPriorityControl
-            value={a.priority}
-            selectId={`codex-account-priority-${a.id}`}
-            // Every row, not just the one being written: the controller serializes order
-            // writes behind one mutation ref, so a second row's pick would come back "busy"
-            // and be dropped with no toast. Same global lock the pause button uses.
-            // A pending switch counts too — it writes the same pin this clears, so the
-            // controller refuses to overlap them, and that refusal is equally silent.
-            disabled={priorityUpdatingId !== null || switchingId !== null}
-            onChange={(priority) => onPriorityChange(a, priority)}
-          />
           {showReauth
             ? <div className="card-sub faint">{t("codexAuth.tokenExpired")}</div>
             : !inCooldown && (

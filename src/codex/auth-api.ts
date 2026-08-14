@@ -82,7 +82,7 @@ export {
   setAccountQuotaFromParsed,
   updateAccountQuota,
 } from "./quota";
-import { extractAccountId, decodeJwtPayload } from "../oauth/chatgpt";
+import { extractAccountId } from "../oauth/chatgpt";
 import { getMainAccountPlan, MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "./main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../lib/state-store-sweeper";
 import { reconcileLiveStateStores } from "../lib/state-store-registrations";
@@ -147,7 +147,6 @@ function nativeMainProfileBusyResponse(): Response {
   return response;
 }
 
-const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 const CODEX_CREDENTIAL_PERSISTENCE_ERROR = "Account was saved, but credential setup did not complete. Reauthenticate or remove the account.";
 const CODEX_CREDENTIAL_PERSISTENCE_CODE = "codex_credential_persistence_failed";
 
@@ -373,10 +372,6 @@ async function readResetCreditJson(
   } catch {
     return { ok: false };
   }
-}
-
-export function isUnverifiedCodexImportEnabled(): boolean {
-  return process.env[MANUAL_IMPORT_ENV] === "1";
 }
 
 function manualImportDisabledResponse(): Response {
@@ -1368,74 +1363,7 @@ export async function handleCodexAuthAPI(
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "POST") {
-    if (!isUnverifiedCodexImportEnabled()) return manualImportDisabledResponse();
-
-    let body: { id: string; email: string; plan?: unknown; accessToken: string; refreshToken: string; chatgptAccountId: string };
-    try { body = (await req.json()) as typeof body; } catch { return jsonResponse({ error: "Invalid JSON" }, 400); }
-    if (!body.id || !body.email || !body.accessToken || !body.refreshToken || !body.chatgptAccountId) {
-      return jsonResponse({ error: "Missing required fields" }, 400);
-    }
-    if (!isValidCodexAccountId(body.id)) {
-      return jsonResponse({ error: "Invalid account id format" }, 400);
-    }
-    if (body.accessToken.length > 10_000 || body.refreshToken.length > 10_000) {
-      return jsonResponse({ error: "Input too large" }, 400);
-    }
-    const runtimeConfig = getRuntimeConfig(config);
-    const preflightConflict = codexAccountPersistenceConflict(runtimeConfig, body.id, "create");
-    if (preflightConflict) return jsonResponse({ error: preflightConflict }, 400);
-    // 1.1: Duplicate check is scoped by personal vs workspace plan bucket.
-    const plan = codexPlanValue(body.plan);
-    const derivedAccountId = extractAccountId(undefined, body.accessToken) ?? body.chatgptAccountId;
-    const collision = checkAccountIdCollision(derivedAccountId, body.email, plan);
-    if (collision.collision) {
-      return jsonResponse({ error: collision.reason }, 400);
-    }
-    // 4.2: use JWT exp for expiresAt instead of hardcoded 1 hour
-    const payload = decodeJwtPayload(body.accessToken);
-    const exp = typeof payload?.exp === "number" ? payload.exp * 1000 : Date.now() + 3600_000;
-    const warmup = await verifyCodexAccountWarmup(body.id, body.accessToken, derivedAccountId);
-    if (!warmup.ok) return warmup.response;
-    const latestConfig = getRuntimeConfig(config);
-    const commitConflict = codexAccountPersistenceConflict(latestConfig, body.id, "create");
-    if (commitConflict) return jsonResponse({ error: commitConflict }, 400);
-    const addedAccount = withCodexAccountLogLabel(
-      {
-        id: body.id,
-        email: body.email,
-        ...(plan !== undefined ? { plan } : {}),
-        isMain: false,
-      },
-      latestConfig.codexAccounts ?? [],
-    );
-    const persistence = persistNewCodexAccount(
-      config,
-      latestConfig,
-      addedAccount,
-      {
-        credential: {
-          accessToken: body.accessToken,
-          refreshToken: body.refreshToken,
-          expiresAt: exp,
-          chatgptAccountId: derivedAccountId,
-        },
-        validatedAt: warmup.validatedAt,
-      },
-    );
-    reconcileLiveStateStores();
-    if (persistence.status === "publication-failed") markAccountNeedsReauth(body.id);
-    const catalogRefresh = await convergeAccountNamespaceCatalog(
-      latestConfig,
-      persistence.pickerVisibilityChanged,
-      convergeCodexCatalog,
-    );
-    if (persistence.status === "publication-failed") {
-      return jsonResponse({
-        ok: false,
-        ...codexCredentialPersistenceFailure(body.id, catalogRefresh.catalogRefreshPending === true),
-      }, 500);
-    }
-    return jsonResponse({ ok: true, ...catalogRefresh });
+    return manualImportDisabledResponse();
   }
 
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "DELETE") {

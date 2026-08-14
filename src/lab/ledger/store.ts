@@ -25,7 +25,6 @@ export interface LedgerStore {
   replay(): ReplayResult;
 }
 
-const eventIdIndexByLedger = new Map<string, Set<string>>();
 const LEDGER_LOCK_STALE_MS = 60_000;
 const LEDGER_LOCK_WAIT_MS = 5_000;
 
@@ -157,21 +156,6 @@ function withLedgerLock<T>(ledgerPath: string, fn: () => T): T {
   }
 }
 
-/** Load or build the in-memory event-id index for a ledger path. */
-function loadEventIdIndex(ledgerPath: string): Set<string> {
-  let index = eventIdIndexByLedger.get(ledgerPath);
-  if (!index) {
-    index = new Set();
-    if (existsSync(ledgerPath)) {
-      for (const event of replayLabLedger(ledgerPath).events) {
-        index.add(event.eventId);
-      }
-    }
-    eventIdIndexByLedger.set(ledgerPath, index);
-  }
-  return index;
-}
-
 /** Durable append of one validated event as a single JSONL line + fsync. */
 export function appendLabEvent(ledgerPath: string, event: LabEvent): void {
   const validated = validateLabEvent(event);
@@ -192,7 +176,6 @@ export function appendLabEvent(ledgerPath: string, event: LabEvent): void {
   } finally {
     closeSync(fd);
   }
-  loadEventIdIndex(ledgerPath).add(validated.eventId);
 }
 
 /**
@@ -209,7 +192,6 @@ export function appendLabEventIfAbsent(ledgerPath: string, event: LabEvent): boo
         fresh.add(row.eventId);
       }
     }
-    eventIdIndexByLedger.set(ledgerPath, fresh);
     if (fresh.has(validated.eventId)) return false;
     appendLabEvent(ledgerPath, validated);
     return true;

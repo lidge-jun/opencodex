@@ -72,6 +72,40 @@ export interface TranslatorBudget {
 const retainedEventOwnership = new WeakMap<object, { budget: TranslatorBudget; bytes: number }>();
 
 /**
+ * Charge one event appended to an incrementally materialized adapter-event batch.
+ * The newest event owns the closing array bracket; moving that byte from the old
+ * tail keeps in-order release accounting equal to the still-retained JSON array.
+ */
+export function retainTranslatedEvent<T extends object>(
+  event: T,
+  budget: TranslatorBudget,
+  previousTail?: object,
+): void {
+  if (retainedEventOwnership.has(event)) {
+    throw new Error("translated event is already retained");
+  }
+  if (previousTail === event) {
+    throw new Error("incremental translated event tail must be a distinct object");
+  }
+  const previousOwnership = previousTail === undefined
+    ? undefined
+    : retainedEventOwnership.get(previousTail);
+  if (
+    previousTail !== undefined
+    && (!previousOwnership || previousOwnership.budget !== budget || previousOwnership.bytes < 2)
+  ) {
+    throw new Error("incremental translated event tail is not retained by this budget");
+  }
+
+  const serializedBytes = Buffer.byteLength(JSON.stringify(event));
+  budget.chargeRetained(serializedBytes + (previousTail === undefined ? 2 : 1), {
+    kind: "retained_collectors",
+  });
+  if (previousOwnership) previousOwnership.bytes -= 1;
+  retainedEventOwnership.set(event, { budget, bytes: serializedBytes + 2 });
+}
+
+/**
  * Charge a materialized adapter-event batch and attach its lease to the events themselves.
  * A copied event array (for example terminal-guard collection) preserves the event objects, so
  * the response builder can consume each source lease immediately after its replacement lands.

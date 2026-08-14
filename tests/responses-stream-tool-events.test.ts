@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bridgeToResponsesSSE } from "../src/bridge";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../src/bridge";
 import type { AdapterEvent } from "../src/types";
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
@@ -27,6 +27,23 @@ async function collectSse(stream: ReadableStream<Uint8Array>): Promise<{ event?:
 }
 
 describe("Responses streaming tool event contract", () => {
+  test("undeclared upstream tool names fail closed with a compatibility error", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_bad", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: '{"input":"*** Begin Patch"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "deepseek/deepseek-v4-flash", undefined, undefined, undefined, undefined, undefined, {
+      declaredToolNames: new Set(["exec"]),
+    }));
+
+    expect(frames.some(frame => frame.event === "response.output_item.added")).toBe(false);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    const failed = frames.find(frame => frame.event === "response.failed")?.data.response as Record<string, unknown>;
+    expect((failed.error as Record<string, unknown>).message).toContain("undeclared client tool");
+    expect((failed.error as Record<string, unknown>).message).toContain("apply_patch");
+  });
+
   test("adapter tool events produce OpenAI-compatible streamed function-call frames", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "tool_call_start", id: "call_1", name: "read_file" },
@@ -93,5 +110,63 @@ describe("Responses streaming tool event contract", () => {
       .map(frame => frame.data.item as Record<string, unknown>)
       .find(item => item?.type === "function_call");
     expect(itemDone).toMatchObject({ status: "incomplete" });
+  });
+
+  test("whitespace-only assembled arguments fail instead of completing invalid JSON", async () => {
+    const frames = await collectSse(bridgeToResponsesSSE(replay([
+      { type: "tool_call_start", id: "call_space", name: "read_file" },
+      { type: "tool_call_delta", arguments: " \t" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ]), "cursor/composer-2.5"));
+
+    expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
+    expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+    const itemDone = frames.filter(frame => frame.event === "response.output_item.done")
+      .map(frame => frame.data.item as Record<string, unknown>)
+      .find(item => item?.type === "function_call");
+    expect(itemDone).toMatchObject({ call_id: "call_space", status: "incomplete" });
+    expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+  });
+
+  test("JSON-invalid Unicode prefixes fail instead of being trimmed into valid arguments", async () => {
+    for (const [index, argumentsText] of ["\u00A0{}", "\uFEFF{}"].entries()) {
+      const callId = `call_unicode_${index}`;
+      const frames = await collectSse(bridgeToResponsesSSE(replay([
+        { type: "tool_call_start", id: callId, name: "read_file" },
+        { type: "tool_call_delta", arguments: argumentsText },
+        { type: "tool_call_end" },
+        { type: "done" },
+      ]), "cursor/composer-2.5"));
+
+      expect(frames.some(frame => frame.event === "response.function_call_arguments.done")).toBe(false);
+      expect(frames.some(frame => frame.event === "response.completed")).toBe(false);
+      const itemDone = frames.filter(frame => frame.event === "response.output_item.done")
+        .map(frame => frame.data.item as Record<string, unknown>)
+        .find(item => item?.type === "function_call");
+      expect(itemDone).toMatchObject({ call_id: callId, arguments: argumentsText, status: "incomplete" });
+      expect(frames.some(frame => frame.event === "response.failed")).toBe(true);
+    }
+  });
+
+  test("non-streaming malformed arguments stop before later parallel calls", () => {
+    const response = buildResponseJSON([
+      { type: "tool_call_start", id: "call_space", name: "read_file" },
+      { type: "tool_call_delta", arguments: " \t" },
+      { type: "tool_call_end" },
+      { type: "tool_call_start", id: "call_late", name: "write_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":\"safe.txt\"}" },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "cursor/composer-2.5");
+
+    expect(response.status).toBe("failed");
+    expect(response.error).toMatchObject({ type: "upstream_error" });
+    const output = response.output as Record<string, unknown>[];
+    expect(output).toHaveLength(1);
+    expect(output[0]).toMatchObject({
+      type: "function_call", call_id: "call_space", arguments: " \t", status: "incomplete",
+    });
+    expect(output.some(item => item.call_id === "call_late")).toBe(false);
   });
 });

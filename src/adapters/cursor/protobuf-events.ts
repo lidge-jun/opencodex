@@ -20,6 +20,7 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 
 const DEFAULT_CONTEXT_USAGE_MAX_ENTRIES = 200;
 const DEFAULT_CONTEXT_USAGE_TTL_MS = 60 * 60 * 1_000;
+const DEFAULT_MAX_CLIENT_TOOL_CALLS = 330;
 
 export interface CursorContextUsageControls {
   /**
@@ -153,13 +154,17 @@ export interface CursorProtobufEventState {
    */
   contextCarryForwardTokens?: number;
   recordContextTokens?: (tokens: number) => void;
-  openToolCalls: Map<string, { name: string; args: string }>;
+  openToolCalls: Map<string, { name: string; args: string; awaitingNativeArgs?: boolean }>;
   completedToolCalls: Set<string>;
   /** Set once a terminal `done`/truncation has been emitted, so post-terminal frames stay inert. */
   terminated?: boolean;
   clientToolNames?: Set<string>;
+  /** Responses/Codex names of request-declared freeform tools advertised to Cursor. */
+  freeformToolNames?: ReadonlySet<string>;
   parallelToolCalls?: boolean;
   startedClientToolCalls: number;
+  /** Hard cap on client tool-call records retained during one upstream turn. */
+  maxClientToolCalls: number;
   /** Tool wire-name → original JSON Schema parameters object, for arg-key normalization. */
   toolSchemas?: Map<string, unknown>;
   /** Cursor wire-name → original Responses/Codex tool name for this request. */
@@ -195,7 +200,9 @@ function structuredEditCallIsOurs(
 
 export function createCursorProtobufEventState(options: {
   clientToolNames?: Iterable<string>;
+  freeformToolNames?: Iterable<string>;
   parallelToolCalls?: boolean;
+  maxClientToolCalls?: number;
   toolSchemas?: Map<string, unknown>;
   cursorToolNameMap?: Map<string, string>;
   syntheticStructuredEditToolNames?: Iterable<string>;
@@ -215,11 +222,17 @@ export function createCursorProtobufEventState(options: {
     openToolCalls: new Map(),
     completedToolCalls: new Set(),
     ...(options.clientToolNames ? { clientToolNames: new Set(options.clientToolNames) } : {}),
+    ...(options.freeformToolNames ? { freeformToolNames: new Set(options.freeformToolNames) } : {}),
     ...(options.syntheticStructuredEditToolNames
       ? { syntheticStructuredEditToolNames: new Set(options.syntheticStructuredEditToolNames) }
       : {}),
     ...(options.parallelToolCalls !== undefined ? { parallelToolCalls: options.parallelToolCalls } : {}),
     startedClientToolCalls: 0,
+    maxClientToolCalls: typeof options.maxClientToolCalls === "number"
+      && Number.isFinite(options.maxClientToolCalls)
+      && options.maxClientToolCalls > 0
+      ? Math.floor(options.maxClientToolCalls)
+      : DEFAULT_MAX_CLIENT_TOOL_CALLS,
     ...(options.toolSchemas ? { toolSchemas: options.toolSchemas } : {}),
     ...(options.cursorToolNameMap ? { cursorToolNameMap: options.cursorToolNameMap } : {}),
     ...(options.translatorBudget ? { translatorBudget: options.translatorBudget } : {}),
@@ -335,22 +348,474 @@ function normalizeJsonText(text: string, toolName: string | undefined, state: Cu
  * streamed onward), and/or as a structured protobuf map on `toolCallCompleted`. We emit the args
  * exactly once, at completion, so they can always be schema-normalized regardless of which form
  * arrived. The completed map wins when present (canonical); otherwise the buffered streamed text is
- * used. Returns an empty string when there are no args (the bridge serializes that as `{}`).
+ * preserved verbatim so the bridge can reject malformed or truncated JSON instead of silently
+ * converting it to `{}`. A genuinely empty buffer remains the no-argument case.
  */
 function resolveCompletedArgs(buffered: string, args: McpArgs | undefined, state: CursorProtobufEventState): string {
   if (hasMcpArgBytes(args)) return decodeMcpArgsNormalized(args, state);
   const name = mcpWireNameFromArgs(args);
   if (isCompleteJson(buffered)) return normalizeJsonText(buffered, name, state);
-  return "";
+  return buffered;
 }
 
 const PATCH_BEGIN = "*** Begin Patch";
 const PATCH_END = "*** End Patch";
+const GIT_HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)?(?: @@.*)?$/;
+const MARKDOWN_FENCE = /^```[\w+-]*\s*$/;
+const PATH_ARG_KEYS = ["file_path", "filePath", "path", "filepath", "filename", "file", "target_file", "targetFile", "target_path", "targetPath"] as const;
+const OLD_STRING_KEYS = ["old_string", "oldString", "oldtext", "old_text", "old_content", "oldContent", "before", "search"] as const;
+const NEW_STRING_KEYS = ["new_string", "newString", "newtext", "new_text", "contents", "content", "new_contents", "newContents", "after", "replace"] as const;
+
+export type StructuredEditPair = { old_string: string; new_string: string };
+
+/** First index where `needle` appears as consecutive whole lines in `haystack`, or -1. */
+function lineBlockIndex(haystack: string, needle: string): number {
+  if (needle.length === 0) return -1;
+  const hay = patchLines(haystack);
+  const ned = patchLines(needle);
+  if (ned.length === 0 || ned.length > hay.length) return -1;
+  for (let i = 0; i <= hay.length - ned.length; i++) {
+    if (ned.every((line, j) => hay[i + j] === line)) return i;
+  }
+  return -1;
+}
+
+function replaceLineBlock(haystack: string, needle: string, replacement: string): string {
+  const at = lineBlockIndex(haystack, needle);
+  if (at < 0) return haystack;
+  const hay = patchLines(haystack);
+  const ned = patchLines(needle);
+  const next = [...hay.slice(0, at), ...patchLines(replacement), ...hay.slice(at + ned.length)];
+  return next.join("\n");
+}
+
+/**
+ * Codex apply_patch matches every hunk against the original file (atomic). Cursor models
+ * emit sequential multi_edit (later old_string is the text after an earlier replacement).
+ * Fold only when one side contains the other as whole lines — raw substring includes()
+ * merged independent edits (B8: `hello world` inside `x = hello world`).
+ */
+export function foldSequentialStructuredEdits(edits: StructuredEditPair[]): StructuredEditPair[] {
+  const folded: StructuredEditPair[] = [];
+  for (const edit of edits) {
+    let absorbed = false;
+    for (let i = folded.length - 1; i >= 0; i--) {
+      const prior = folded[i];
+      if (lineBlockIndex(prior.new_string, edit.old_string) >= 0) {
+        folded[i] = {
+          old_string: prior.old_string,
+          new_string: replaceLineBlock(prior.new_string, edit.old_string, edit.new_string),
+        };
+        absorbed = true;
+        break;
+      }
+      if (lineBlockIndex(edit.old_string, prior.new_string) >= 0) {
+        folded[i] = {
+          old_string: replaceLineBlock(edit.old_string, prior.new_string, prior.old_string),
+          new_string: edit.new_string,
+        };
+        absorbed = true;
+        break;
+      }
+    }
+    if (!absorbed) folded.push({ old_string: edit.old_string, new_string: edit.new_string });
+  }
+  return folded;
+}
+
+const GIT_NO_NEWLINE = /^\\ No newline at end of file\s*$/;
+const GIT_META_PREFIX = /^(diff --git |index |new file mode |deleted file mode |old mode |new mode |similarity index |dissimilarity index |rename from |rename to |copy from |copy to )/;
+const GIT_FILE_HEADER = /^(---|\+\+\+) (?:\/dev\/null|"[ab]\/|[ab]\/)/;
+
+function isCodexFileOpLine(line: string): boolean {
+  return line.startsWith("*** Update File:")
+    || line.startsWith("*** Add File:")
+    || line.startsWith("*** Delete File:");
+}
+
+function canonicalizeCodexLine(line: string): string {
+  const trimmed = line.replace(/^\uFEFF/, "");
+  const lower = trimmed.toLowerCase();
+  if (lower === "*** begin patch" || lower.startsWith("*** begin patch ")) return PATCH_BEGIN;
+  if (lower === "*** end patch" || lower.startsWith("*** end patch ")) return PATCH_END;
+  const colonOps = [
+    ["*** update file:", "*** Update File:"],
+    ["*** add file:", "*** Add File:"],
+    ["*** delete file:", "*** Delete File:"],
+    ["*** move to:", "*** Move to:"],
+  ] as const;
+  for (const [needle, canon] of colonOps) {
+    if (lower.startsWith(needle)) return `${canon}${trimmed.slice(needle.length)}`;
+  }
+  const spaceOps = [
+    ["*** update file ", "*** Update File: "],
+    ["*** add file ", "*** Add File: "],
+    ["*** delete file ", "*** Delete File: "],
+  ] as const;
+  for (const [needle, canon] of spaceOps) {
+    if (lower.startsWith(needle)) return `${canon}${trimmed.slice(needle.length)}`;
+  }
+  return trimmed;
+}
+
+function isGitPreambleLine(line: string): boolean {
+  return line === "---"
+    || GIT_NO_NEWLINE.test(line)
+    || GIT_META_PREFIX.test(line)
+    || GIT_FILE_HEADER.test(line);
+}
+
+function unquoteGitPath(path: string): string {
+  const trimmed = path.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\""))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return normalizePatchPath(trimmed.slice(1, -1));
+  }
+  return normalizePatchPath(trimmed);
+}
+
+/** Grammar-only path cleanup: trim, POSIX slashes, drop a leading `./`. */
+function normalizePatchPath(path: string): string {
+  let next = path.trim().replace(/\\/g, "/");
+  while (next.startsWith("./")) next = next.slice(2);
+  return next;
+}
+
+function parseDiffGitPaths(line: string): { a: string; b: string } | undefined {
+  const quoted = /^diff --git "a\/(.+)" "b\/(.+)"$/.exec(line);
+  if (quoted) return { a: unquoteGitPath(quoted[1]), b: unquoteGitPath(quoted[2]) };
+  const plain = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+  if (plain) return { a: unquoteGitPath(plain[1]), b: unquoteGitPath(plain[2]) };
+  return undefined;
+}
+
+function parseGitSidePath(line: string, side: "a" | "b"): string | undefined {
+  const quoted = new RegExp(`^(?:---|[+][+][+]) "${side}\\/(.+)"$`).exec(line);
+  if (quoted) return unquoteGitPath(quoted[1]);
+  const plain = new RegExp(`^(?:---|[+][+][+]) ${side}\\/(.+)$`).exec(line);
+  if (plain) return unquoteGitPath(plain[1]);
+  return undefined;
+}
+
+function isDevNull(line: string): boolean {
+  return /^(---|\+\+\+) \/dev\/null$/.test(line);
+}
+
+function rewriteHunkHeader(line: string): string {
+  return GIT_HUNK_HEADER.test(line) ? "@@" : line;
+}
+
+function isFenceLine(line: string): boolean {
+  return MARKDOWN_FENCE.test(line);
+}
+
+function isHunkBodyLine(line: string): boolean {
+  return line === "@@"
+    || line.startsWith("@@ ")
+    || GIT_HUNK_HEADER.test(line)
+    || line.startsWith("+")
+    || line.startsWith("-")
+    || line.startsWith(" ")
+    || line === "";
+}
+
+function rewriteCodexFileOpLine(line: string): string {
+  for (const prefix of ["*** Update File:", "*** Add File:", "*** Delete File:", "*** Move to:"] as const) {
+    if (!line.startsWith(prefix)) continue;
+    const path = normalizePatchPath(line.slice(prefix.length).replace(/^\s+/, ""));
+    return path ? `${prefix} ${path}` : line;
+  }
+  return line;
+}
+
+function normalizeAddFileBody(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  let inAdd = false;
+  for (const line of lines) {
+    if (line.startsWith("*** Add File:")) {
+      inAdd = true;
+      out.push(line);
+      continue;
+    }
+    if (isCodexFileOpLine(line)) {
+      inAdd = false;
+      out.push(line);
+      continue;
+    }
+    if (inAdd && (line === "@@" || line.startsWith("@@ ") || GIT_HUNK_HEADER.test(line))) continue;
+    if (inAdd && line.length > 0 && !line.startsWith("+")) {
+      out.push(`+${line}`);
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function hasNonEmptyCodexOp(lines: readonly string[]): boolean {
+  let kind: "add" | "update" | "delete" | undefined;
+  let hunk = false;
+  let any = false;
+  const flush = () => {
+    if (kind === "delete" || ((kind === "add" || kind === "update") && hunk)) any = true;
+  };
+  for (const line of lines) {
+    if (line.startsWith("*** Update File:")) {
+      flush();
+      kind = "update";
+      hunk = false;
+      continue;
+    }
+    if (line.startsWith("*** Add File:")) {
+      flush();
+      kind = "add";
+      hunk = false;
+      continue;
+    }
+    if (line.startsWith("*** Delete File:")) {
+      flush();
+      kind = "delete";
+      hunk = false;
+      continue;
+    }
+    if (line.startsWith("+") || line.startsWith("-") || line === "@@" || line.startsWith("@@ ")) hunk = true;
+  }
+  flush();
+  return any;
+}
+
+function trimEmptyEdges(lines: readonly string[]): string[] {
+  let start = 0;
+  let end = lines.length;
+  while (start < end && lines[start] === "") start++;
+  while (end > start && lines[end - 1] === "") end--;
+  return lines.slice(start, end);
+}
+
+function cleanHunkLines(lines: readonly string[]): string[] {
+  return trimEmptyEdges(
+    lines
+      .filter(line =>
+        !isGitPreambleLine(line)
+        && !isFenceLine(line)
+        && line !== PATCH_BEGIN
+        && line !== PATCH_END
+        && !isCodexFileOpLine(line)
+        && !line.startsWith("*** Move to:")
+      )
+      .map(rewriteHunkHeader)
+      .filter(line => isHunkBodyLine(line)),
+  );
+}
+
+function isGitSectionStart(line: string, splitOnDiffGit: boolean): boolean {
+  if (splitOnDiffGit) return line.startsWith("diff --git ");
+  return /^(--- )(?:\/dev\/null|"a\/|a\/)/.test(line);
+}
+
+function splitGitSections(lines: readonly string[]): string[][] {
+  const splitOnDiffGit = lines.some(line => line.startsWith("diff --git "));
+  const sections: string[][] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (isGitSectionStart(line, splitOnDiffGit) && current.length > 0) {
+      sections.push(current);
+      current = [line];
+      continue;
+    }
+    current.push(line);
+  }
+  if (current.length > 0) sections.push(current);
+  return sections;
+}
+
+function isGitBinarySection(lines: readonly string[]): boolean {
+  return lines.some(line => /^Binary files /.test(line) || line.startsWith("GIT binary patch"));
+}
+
+function isGitCopySection(lines: readonly string[]): boolean {
+  return lines.some(line => line.startsWith("copy from ") || line.startsWith("copy to "));
+}
+
+function isGitEmptyRenameSection(lines: readonly string[]): boolean {
+  const hasRenameMeta = lines.some(line => line.startsWith("rename from ") || line.startsWith("rename to "));
+  const diff = lines.map(parseDiffGitPaths).find(path => path !== undefined);
+  if (!hasRenameMeta && !(diff && diff.a !== diff.b)) return false;
+  const body = cleanHunkLines(lines);
+  return !body.some(line => line === "@@" || line.startsWith("@@ ") || line.startsWith("+") || line.startsWith("-"));
+}
+
+function isGitUntranslatableSection(lines: readonly string[]): boolean {
+  return isGitBinarySection(lines) || isGitCopySection(lines) || isGitEmptyRenameSection(lines);
+}
+
+function convertGitSection(lines: readonly string[]): string[] | undefined {
+  if (isGitBinarySection(lines)) return undefined;
+  const existingOp = lines.find(isCodexFileOpLine);
+  if (existingOp) {
+    const move = lines.filter(line => line.startsWith("*** Move to:"));
+    return [existingOp, ...move, ...cleanHunkLines(lines)];
+  }
+  const diffPaths = lines.map(parseDiffGitPaths).find(path => path !== undefined);
+  const plusPath = lines.map(line => parseGitSidePath(line, "b")).find(path => path !== undefined);
+  const minusPath = lines.map(line => parseGitSidePath(line, "a")).find(path => path !== undefined);
+  const renameFrom = lines.find(line => line.startsWith("rename from "))?.slice("rename from ".length);
+  const renameTo = lines.find(line => line.startsWith("rename to "))?.slice("rename to ".length);
+  const plusIsNull = lines.some(line => line.startsWith("+++ ") && isDevNull(line));
+  const minusIsNull = lines.some(line => line.startsWith("--- ") && isDevNull(line));
+  const isNewFile = lines.some(line => line.startsWith("new file mode ")) || minusIsNull;
+  const isDeleted = lines.some(line => line.startsWith("deleted file mode ")) || plusIsNull;
+  const pathA = minusPath ?? (renameFrom ? unquoteGitPath(renameFrom) : undefined) ?? diffPaths?.a;
+  const pathB = plusPath ?? (renameTo ? unquoteGitPath(renameTo) : undefined) ?? diffPaths?.b;
+  const body = cleanHunkLines(lines);
+  if (isDeleted) {
+    const path = pathA ?? pathB;
+    return path ? [`*** Delete File: ${path}`] : undefined;
+  }
+  if (isNewFile) {
+    const path = pathB ?? pathA;
+    if (!path) return undefined;
+    return [`*** Add File: ${path}`, ...body.filter(line => line.startsWith("+"))];
+  }
+  const hasMinus = body.some(line => line.startsWith("-"));
+  if (plusPath && !minusPath && !diffPaths && !hasMinus) {
+    return [`*** Add File: ${plusPath}`, ...body.filter(line => line.startsWith("+"))];
+  }
+  const from = (renameFrom ? unquoteGitPath(renameFrom) : undefined) ?? pathA ?? pathB;
+  const to = (renameTo ? unquoteGitPath(renameTo) : undefined) ?? pathB;
+  if (!from) return undefined;
+  const hasHunk = body.some(line => line === "@@" || line.startsWith("@@ ") || line.startsWith("+") || line.startsWith("-"));
+  // Codex 0.147 rejects "Update file hunk ... is empty" (mode-only diffs, 100% renames).
+  if (!hasHunk) return undefined;
+  const header = [`*** Update File: ${from}`];
+  if (to && to !== from) header.push(`*** Move to: ${to}`);
+  return [...header, ...body];
+}
+
+function hasCodexFileOp(lines: readonly string[]): boolean {
+  return lines.some(isCodexFileOpLine);
+}
+
+/** Grammar-only repair for Cursor-emitted freeform apply_patch. Not a fuzzy filesystem apply. */
+export function sanitizeCodexApplyPatch(patch: string): string {
+  const trimmed = patch.replace(/^\uFEFF/, "").replace(/\n+$/, "");
+  const rawLines = trimmed.split("\n").map(line => canonicalizeCodexLine(line.endsWith("\r") ? line.slice(0, -1) : line));
+  const hasCodex = rawLines.some(isCodexFileOpLine);
+  const hasGitHeaders = rawLines.some(line => line.startsWith("diff --git ") || GIT_FILE_HEADER.test(line));
+  if (hasGitHeaders && !hasCodex) {
+    const sections = splitGitSections(rawLines);
+    // A binary hunk cannot be expressed in Codex apply_patch. Leave the original
+    // text alone rather than wrapping the text files and dropping the binary one.
+    if (sections.some(isGitUntranslatableSection)) return patch.replace(/^\uFEFF/, "");
+    const ops = sections
+      .map(convertGitSection)
+      .filter((section): section is string[] => section !== undefined && hasCodexFileOp(section))
+      .map(normalizeAddFileBody);
+    if (ops.length > 0) return [PATCH_BEGIN, ...ops.flat(), PATCH_END].join("\n");
+  }
+  const selected: string[] = [];
+  let inAdd = false;
+  for (const raw of rawLines) {
+    if (isGitPreambleLine(raw) || isFenceLine(raw) || raw === PATCH_BEGIN || raw === PATCH_END) continue;
+    const line = rewriteCodexFileOpLine(rewriteHunkHeader(raw));
+    if (line.startsWith("*** Add File:")) {
+      inAdd = true;
+      selected.push(line);
+      continue;
+    }
+    if (isCodexFileOpLine(line)) {
+      inAdd = false;
+      selected.push(line);
+      continue;
+    }
+    if (line.startsWith("*** Move to:") || isHunkBodyLine(line) || (inAdd && line.length > 0)) {
+      selected.push(line);
+    }
+  }
+  const lines = normalizeAddFileBody(trimEmptyEdges(selected));
+  const looksLikePatch = lines.some(line =>
+    line === "@@"
+    || line.startsWith("@@ ")
+    || isCodexFileOpLine(line)
+  );
+  if (!looksLikePatch) return patch.replace(/^\uFEFF/, "");
+  // A hunk with no file op is not a valid Codex patch. Do not invent Begin/End around it.
+  if (!hasCodexFileOp(lines)) return lines.join("\n");
+  if (!hasNonEmptyCodexOp(lines)) return patch.replace(/^\uFEFF/, "");
+  return [PATCH_BEGIN, ...lines, PATCH_END].join("\n");
+}
+
+function coercePatchInput(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        const inner: unknown = JSON.parse(trimmed);
+        if (inner && typeof inner === "object" && !Array.isArray(inner)) {
+          const record = inner as Record<string, unknown>;
+          if (typeof record.input === "string") return record.input;
+          if (Array.isArray(record.input) && record.input.every(item => typeof item === "string")) {
+            return record.input.join("\n");
+          }
+        }
+      } catch {
+        // The string is the patch, not nested JSON.
+      }
+    }
+    return value;
+  }
+  if (Array.isArray(value) && value.every(item => typeof item === "string")) return value.join("\n");
+  return undefined;
+}
+
+export function sanitizeEmittedApplyPatchArgs(argsText: string): string {
+  try {
+    const parsed: unknown = JSON.parse(argsText);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      const raw = coercePatchInput(record.input) ?? coercePatchInput(record.patch) ?? coercePatchInput(record.content);
+      if (raw !== undefined) {
+        const input = sanitizeCodexApplyPatch(raw);
+        if (input !== record.input) {
+          const next: Record<string, unknown> = { ...record, input };
+          delete next.patch;
+          delete next.content;
+          return JSON.stringify(next);
+        }
+      }
+    }
+  } catch {
+    if (
+      argsText.includes("@@")
+      || argsText.includes("***")
+      || argsText.includes("diff --git")
+      || argsText.includes("--- a/")
+      || argsText.includes("+++ b/")
+      || argsText.includes("--- /dev/null")
+    ) {
+      return JSON.stringify({ input: sanitizeCodexApplyPatch(argsText) });
+    }
+  }
+  return argsText;
+}
 
 function firstStringArg(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = args[key];
     if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+function firstStringOrLines(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string") return value;
+    if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === "string")) {
+      return value.join("\n");
+    }
   }
   return undefined;
 }
@@ -362,6 +827,41 @@ function patchLines(text: string): string[] {
   return lines;
 }
 
+/**
+ * Models often copy indent in old_string and omit it in new_string. Codex trim-matches the
+ * old line and writes new_string verbatim, which strips indent. Copy old leading whitespace
+ * onto a flush-left new line of the same line count. Do not change a new line that already
+ * has indent (intentional dedent stays possible).
+ */
+function restoreFlushLeftIndent(oldString: string, newString: string): string {
+  const oldLines = patchLines(oldString);
+  const newLines = patchLines(newString);
+  if (oldLines.length !== newLines.length || oldLines.length === 0) return newString;
+  // If the only difference is leading whitespace, the edit IS a deliberate
+  // indent change — restoring old indent would erase the user's intent.
+  const contentSame = oldLines.every((ol, i) => ol.trimStart() === newLines[i].trimStart());
+  const whitespaceDiffers = oldLines.some((ol, i) => {
+    const oldLead = /^[ \t]*/.exec(ol)?.[0] ?? "";
+    const newLead = /^[ \t]*/.exec(newLines[i])?.[0] ?? "";
+    return oldLead !== newLead;
+  });
+  if (contentSame && whitespaceDiffers) return newString;
+  return newLines.map((line, i) => {
+    const oldLead = /^[ \t]*/.exec(oldLines[i])?.[0] ?? "";
+    const newLead = /^[ \t]*/.exec(line)?.[0] ?? "";
+    if (oldLead.length > 0 && newLead.length === 0 && line.length > 0) return oldLead + line;
+    return line;
+  }).join("\n");
+}
+
+function addFilePatch(path: string, newString: string): StructuredEditTranslation {
+  const newLines = patchLines(newString);
+  if (newLines.length === 0) {
+    return { error: "structured edit requires a non-empty old_string; an empty replacement is not a valid edit" };
+  }
+  return { patch: [PATCH_BEGIN, `*** Add File: ${path}`, ...newLines.map(line => `+${line}`), PATCH_END].join("\n") };
+}
+
 /** One `@@` hunk replacing `oldString` with `newString`. */
 function replacementHunk(oldString: string, newString: string): { hunk: string } | { error: string } {
   if (oldString.length === 0) {
@@ -371,16 +871,20 @@ function replacementHunk(oldString: string, newString: string): { hunk: string }
     };
   }
   const oldLines = patchLines(oldString);
-  const newLines = patchLines(newString);
+  const rawNewLines = patchLines(newString);
   // Line-based patch semantics cannot express an edit that only adds or removes the file's
   // final newline, and an old/new pair that normalizes to the same lines is a silent no-op —
   // reject it rather than emitting an empty hunk that apply_patch would drop.
-  if (oldLines.length === 0 && newLines.length === 0) {
+  if (oldLines.length === 0 && rawNewLines.length === 0) {
     return { error: "structured edit requires a non-empty old_string; an empty replacement is not a valid edit" };
   }
-  if (oldLines.length === newLines.length && oldLines.every((line, i) => line === newLines[i])) {
+  // Check for no-op against the RAW new_string (before indent restoration) so that
+  // intentional dedent edits are not falsely classified as identical.
+  if (oldLines.length === rawNewLines.length && oldLines.every((line, i) => line === rawNewLines[i])) {
     return { error: "structured edit old_string and new_string are identical after line normalization; the replacement is a no-op and was dropped" };
   }
+  const restoredNew = restoreFlushLeftIndent(oldString, newString);
+  const newLines = patchLines(restoredNew);
   const removed = oldLines.map(line => `-${line}`);
   const added = newLines.map(line => `+${line}`);
   return { hunk: ["@@", ...removed, ...added].join("\n") };
@@ -406,6 +910,7 @@ export function translateStructuredEditCall(
   let parsed: unknown;
   try {
     parsed = JSON.parse(argsText);
+    if (typeof parsed === "string") parsed = JSON.parse(parsed);
   } catch {
     return {
       error: `${toolName} arguments were not valid JSON; the call was dropped. ${
@@ -419,35 +924,115 @@ export function translateStructuredEditCall(
     return { error: `${toolName} arguments must be a JSON object; the call was dropped.` };
   }
   const args = parsed as Record<string, unknown>;
-  const path = firstStringArg(args, ["file_path", "filePath", "path", "filepath", "filename"]);
-  if (!path || path.trim().length === 0) {
+  const rawPath = firstStringArg(args, PATH_ARG_KEYS);
+  const path = rawPath ? normalizePatchPath(rawPath) : undefined;
+  if (!path) {
     return { error: `${toolName} is missing a non-empty file_path; the call was dropped.` };
+  }
+  if (/[\n\r\0]/.test(path)) {
+    return { error: `${toolName} file_path must not contain a newline, CR, or NUL; the call was dropped.` };
+  }
+  if (args.replace_all === true || args.replaceAll === true) {
+    return {
+      error:
+        `${toolName} replace_all is not supported; Codex apply_patch first-matches only. Split into unique old_string hunks or include more surrounding lines.`,
+    };
+  }
+  if (args.delete_file === true || args.deleteFile === true) {
+    return { patch: [PATCH_BEGIN, `*** Delete File: ${path}`, PATCH_END].join("\n") };
   }
   const hunks: string[] = [];
   const addReplacement = (record: Record<string, unknown>): StructuredEditTranslation => {
-    const oldString = firstStringArg(record, ["old_string", "oldString", "oldtext", "old_text"]);
-    const newString = firstStringArg(record, ["new_string", "newString", "newtext", "new_text"]);
+    const oldString = firstStringOrLines(record, OLD_STRING_KEYS);
+    const newString = firstStringOrLines(record, NEW_STRING_KEYS);
     if (oldString === undefined || newString === undefined) {
       return { error: `${toolName} requires old_string and new_string; the call was dropped.` };
     }
     const hunk = replacementHunk(oldString, newString);
     if ("error" in hunk) return { error: hunk.error };
-    return { patch: hunk.hunk as string };
+    return { patch: hunk.hunk };
   };
   if (toolName === CURSOR_MULTI_EDIT_TOOL) {
-    const edits = args.edits;
+    let edits: unknown = args.edits;
+    if (typeof edits === "string") {
+      try {
+        edits = JSON.parse(edits);
+      } catch {
+        return { error: "multi_edit edits were not valid JSON; the call was dropped." };
+      }
+    }
     if (!Array.isArray(edits) || edits.length === 0) {
       return { error: "multi_edit requires a non-empty edits array; the call was dropped." };
     }
+    // Cap edit count to prevent quadratic CPU exhaustion in the fold and overlap scans.
+    if (edits.length > 500) {
+      return { error: "multi_edit exceeds the 500-edit limit; split into smaller batches." };
+    }
+    const pairs: StructuredEditPair[] = [];
     for (const edit of edits) {
       if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
         return { error: "multi_edit edits entries must be objects with old_string and new_string; the call was dropped." };
       }
-      const editResult = addReplacement(edit as Record<string, unknown>);
-      if (editResult.error !== undefined) return editResult;
-      hunks.push(editResult.patch);
+      const record = edit as Record<string, unknown>;
+      if (record.replace_all === true || record.replaceAll === true) {
+        return {
+          error:
+            "multi_edit replace_all is not supported; Codex apply_patch first-matches only. Split into unique old_string hunks or include more surrounding lines.",
+        };
+      }
+      const oldString = firstStringOrLines(record, OLD_STRING_KEYS);
+      const newString = firstStringOrLines(record, NEW_STRING_KEYS);
+      if (oldString === undefined || newString === undefined) {
+        return { error: `${toolName} requires old_string and new_string; the call was dropped.` };
+      }
+      pairs.push({ old_string: oldString, new_string: newString });
+    }
+    const folded = foldSequentialStructuredEdits(pairs);
+    const seenOld = new Set<string>();
+    for (const edit of folded) {
+      const oldKey = patchLines(edit.old_string).join("\n");
+      if (seenOld.has(oldKey)) {
+        return {
+          error:
+            "multi_edit has two edits with the same old_string after line normalization; Codex apply_patch first-matches, so both hunks would hit the same location. Include more surrounding lines to disambiguate.",
+        };
+      }
+      seenOld.add(oldKey);
+    }
+    for (let i = 0; i < folded.length; i++) {
+      for (let j = 0; j < folded.length; j++) {
+        if (i === j || folded[j].old_string.length === 0) continue;
+        if (lineBlockIndex(folded[i].old_string, folded[j].old_string) >= 0) {
+          return {
+            error:
+              "multi_edit hunks overlap: one old_string is a whole-line subset of another. Codex apply_patch matches every hunk against the original file, so both would first-match the same region. Include more surrounding lines to disambiguate.",
+          };
+        }
+      }
+    }
+    if (folded.length === 1 && folded[0].old_string.length === 0) {
+      return addFilePatch(path, folded[0].new_string);
+    }
+    if (folded.some(edit => edit.old_string.length === 0)) {
+      return {
+        error:
+          "multi_edit cannot mix an Add File (empty old_string) with an independent Update hunk on the same path; put the full new-file contents in one empty-old_string edit, or create the file first.",
+      };
+    }
+    for (const edit of folded) {
+      const hunk = replacementHunk(edit.old_string, edit.new_string);
+      if ("error" in hunk) return { error: hunk.error };
+      hunks.push(hunk.hunk);
     }
   } else {
+    const oldString = firstStringOrLines(args, OLD_STRING_KEYS);
+    const newString = firstStringOrLines(args, NEW_STRING_KEYS);
+    if (oldString === "") {
+      if (newString === undefined) {
+        return { error: `${toolName} requires old_string and new_string; the call was dropped.` };
+      }
+      return addFilePatch(path, newString);
+    }
     const editResult = addReplacement(args);
     if (editResult.error !== undefined) return editResult;
     hunks.push(editResult.patch);
@@ -461,6 +1046,7 @@ export function mapSyntheticMcpExecToToolEvents(
   options: { allowEmptyArgs?: boolean; state?: CursorProtobufEventState } = {},
 ): CursorServerMessage[] {
   if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
+  if (options.state?.terminated) return [];
   if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
   const cursorWireName = mcpWireNameFromArgs(args);
   if (!cursorWireName) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
@@ -518,6 +1104,9 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
   if (state.clientToolNames && !advertisedName) {
     return [{ type: "error", message: `Cursor requested unknown Responses tool: ${cursorWireName}` }];
   }
+  if (state.startedClientToolCalls >= state.maxClientToolCalls) {
+    return [{ type: "error", message: `Cursor exceeded client tool-call limit (${state.maxClientToolCalls})` }];
+  }
   // Prefer the advertised catalog name for Responses mapping so shell_command/exec_command aliases
   // land on the tool Codex actually exposed this turn (#399).
   const mapKey = advertisedName ?? normalizeCursorWireName(cursorWireName);
@@ -533,6 +1122,25 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
  * recorded in `openToolCalls`. Because each completion emits a whole non-interleaved unit, the bridge
  * (which tracks a single current tool call) serializes parallel Cursor calls correctly.
  */
+function cursorFreeformWrapperValid(args: string): boolean {
+  try {
+    const parsed = JSON.parse(args) as unknown;
+    return !!parsed
+      && typeof parsed === "object"
+      && !Array.isArray(parsed)
+      && typeof (parsed as Record<string, unknown>).input === "string";
+  } catch {
+    return false;
+  }
+}
+
+function dropInvalidFreeformCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
+  state.openToolCalls.delete(callId);
+  state.translatorBudget?.closeCall(callId);
+  state.completedToolCalls.add(callId);
+  return [{ type: "error", message: `${toolName} call had invalid freeform arguments; expected {input:string}` }];
+}
+
 function dropShellBridgeCall(state: CursorProtobufEventState, callId: string, toolName: string): CursorServerMessage[] {
   state.openToolCalls.delete(callId);
   state.translatorBudget?.closeCall(callId);
@@ -544,12 +1152,17 @@ function dropStructuredEditCall(state: CursorProtobufEventState, callId: string,
   state.openToolCalls.delete(callId);
   state.translatorBudget?.closeCall(callId);
   state.completedToolCalls.add(callId);
-  return [{ type: "error", message: `${toolName} call was not converted to apply_patch: ${reason}` }];
+  // Recoverable: a fatal adapter error becomes response.failed / upstream_server_error and
+  // the model never sees the reason. Completing with text keeps the turn alive (#1388).
+  return [{ type: "text", text: `\n${toolName} call was not converted to apply_patch: ${reason}` }];
 }
 
 function commitToolCall(state: CursorProtobufEventState, callId: string, finalArgs: string): CursorServerMessage[] {
   const open = state.openToolCalls.get(callId);
   if (!open) return [];
+  if (state.freeformToolNames?.has(open.name) && !cursorFreeformWrapperValid(finalArgs)) {
+    return dropInvalidFreeformCall(state, callId, open.name);
+  }
   const schema = toolSchemaForWireName(state, open.name);
   if (!cursorShellBridgeArgsValid(finalArgs, open.name, schema)) {
     if (isCodexShellBridgeToolName(open.name)) return dropShellBridgeCall(state, callId, open.name);
@@ -573,7 +1186,8 @@ function commitToolCall(state: CursorProtobufEventState, callId: string, finalAr
     state.translatorBudget?.releaseRetained(previousBytes, { kind: "tool_args", callId });
   }
   const emittedName = translation ? CODEX_APPLY_PATCH_TOOL : open.name;
-  const emittedArgs = translation ? JSON.stringify({ input: translation.patch }) : finalArgs;
+  const rawArgs = translation ? JSON.stringify({ input: translation.patch }) : finalArgs;
+  const emittedArgs = emittedName === CODEX_APPLY_PATCH_TOOL ? sanitizeEmittedApplyPatchArgs(rawArgs) : rawArgs;
   const out: CursorServerMessage[] = [{ type: "tool_call_start", id: callId, name: emittedName }];
   if (emittedArgs.length > 0) out.push({ type: "tool_call_delta", arguments: emittedArgs });
   out.push(...endToolCall(state, callId));
@@ -659,12 +1273,27 @@ export function mapCursorProtobufServerMessage(
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
       // Empty-arg completion handling:
-      //  - already open with empty args  -> wait for the native-exec args path (do not commit yet).
+      //  - already-open named ordinary call with no buffered or structured args -> wait for native exec.
+      //  - request-declared freeform completion -> wait while its required input wrapper is absent or
+      //    incomplete, whether the completion repeats the name or is compact callId-only. A valid
+      //    buffered wrapper can commit immediately.
+      //    A compact ordinary no-arg call remains legitimate and commits below.
       //  - never started + not advertised -> Cursor prelude noise, drop it.
       //  - advertised client tool, not yet open -> a legitimate no-arg call: commit it (start+end)
       //    so it is not silently dropped; the bridge serializes empty args as "{}".
+      if (
+        openBeforeStart && !hasMcpArgBytes(args)
+        && (
+          (name !== undefined && openBeforeStart.args.length === 0)
+          || (state.freeformToolNames?.has(openBeforeStart.name) === true
+            && !cursorFreeformWrapperValid(openBeforeStart.args)
+          )
+        )
+      ) {
+        openBeforeStart.awaitingNativeArgs = true;
+        return [];
+      }
       if (name && !hasMcpArgBytes(args)) {
-        if (openBeforeStart && openBeforeStart.args.length === 0) return [];
         // Only commit a no-arg call when the tool is *explicitly* advertised. Without an advertised
         // tool list we cannot tell a real no-arg call from a Cursor prelude, so we keep dropping it.
         const advertised = state.clientToolNames?.has(name) ?? false;
@@ -675,6 +1304,17 @@ export function mapCursorProtobufServerMessage(
       if (name) out.push(...recordToolCall(state, update.value.callId, name));
       if (out.some(event => event.type === "error")) return out;
       const open = state.openToolCalls.get(update.value.callId);
+      // A request-declared freeform call may first appear only in its completion frame. Record it so
+      // later same-ID native mcpArgs can supply the authoritative wrapper, but do not broaden the
+      // wait to ordinary advertised no-arg tools: those still commit immediately below.
+      if (
+        !openBeforeStart && open && !hasMcpArgBytes(args)
+        && state.freeformToolNames?.has(open.name) === true
+        && !cursorFreeformWrapperValid(open.args)
+      ) {
+        open.awaitingNativeArgs = true;
+        return [];
+      }
       if (open) {
         const finalArgs = resolveCompletedArgs(open.args, args, state);
         out.push(...commitToolCall(state, update.value.callId, finalArgs));
@@ -721,8 +1361,10 @@ export function resolvedTurnUsage(state: CursorProtobufEventState): OcxUsage {
 export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServerMessage[] {
   state.terminated = true;
   if (state.openToolCalls.size > 0) {
-    const openIds = [...state.openToolCalls.keys()].join(", ");
+    const openCallIds = [...state.openToolCalls.keys()];
+    const openIds = openCallIds.join(", ");
     // Clear so a second turnEnded (should not happen, but defensive) doesn't re-emit.
+    for (const callId of openCallIds) state.translatorBudget?.closeCall(callId);
     state.openToolCalls.clear();
     return [{ type: "error", message: `Cursor stream ended with incomplete tool call(s): ${openIds}. Arguments may be truncated; the call was not committed.` }];
   }

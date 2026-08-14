@@ -10,6 +10,7 @@ import { truncateRetainedUtf8 } from "../lib/admission";
 
 const CACHE_TTL_MS = 30_000;
 const PROBE_TIMEOUT_MS = 5_000;
+const INITIAL_PROBE_WAIT_MS = 5_500;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
 let cached: { timestamp: number; value: StartupHealth } | null = null;
 let inflight: Promise<StartupHealth> | null = null;
@@ -109,6 +110,17 @@ function refreshInBackground(config: Pick<OcxConfig, "codexAutoStart">): void {
 export async function getCachedStartupHealth(config: Pick<OcxConfig, "codexAutoStart">): Promise<StartupHealth> {
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) return cached.value;
   refreshInBackground(config);
+  // An expired or empty read is an explicit protection check. Wait for the
+  // isolated probe instead of presenting a synthetic failure while that probe
+  // is still running. The probe remains child-process isolated and hard-capped
+  // at 5s; stale state is returned only if that bounded probe cannot settle.
+  if (inflight) {
+    const settled = await Promise.race([
+      inflight,
+      new Promise<null>(resolve => setTimeout(() => resolve(null), INITIAL_PROBE_WAIT_MS)),
+    ]);
+    if (settled) return settled;
+  }
   return cached ? markStartupHealthDiagnosticStale(cached.value) : conservativeFallback(config);
 }
 

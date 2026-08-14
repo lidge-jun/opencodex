@@ -82,7 +82,7 @@ import {
 } from "../../codex/upstream-host-health";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../auth-cors";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
-import { isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider, supportsNativeResponsesCompactEndpoint } from "../../providers/openai-tiers";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -392,7 +392,9 @@ export async function handleResponsesCompact(
       }
       throw err;
     }
-    const base = (compactProvider.baseUrl ?? "").replace(/\/$/, "");
+    const base = isCanonicalOpenAiForwardProvider(compactProvider)
+      ? CODEX_FORWARD_BASE_URL
+      : (compactProvider.baseUrl ?? "").replace(/\/+$/, "");
     if (compactProvider.authMode !== "forward" && compactProvider.apiKey) {
       headers.set("authorization", `Bearer ${resolveEnvValue(compactProvider.apiKey)}`);
     }

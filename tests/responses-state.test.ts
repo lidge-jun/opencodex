@@ -28,10 +28,12 @@ import {
   evictOldestResponseContinuationForBudget,
   expandPreviousResponseInput,
   flushResponseState,
+  markBodyNonPersistable,
   previousResponseConversationId,
   previousResponseProviderState,
   previousResponseReplayFailure,
   previousResponseReplayPrefixLength,
+  previousResponseScopeMismatch,
   recoverStaleResponseStateTemps,
   rememberResponseState,
   responseAdmissionCountersForTests,
@@ -148,6 +150,51 @@ describe("Responses previous_response_id state", () => {
       (first.output as unknown[])[0],
       { type: "function_call_output", call_id: "call_1", output: "ok" },
     ]);
+  });
+
+  test("replays continuation only inside the originating client task", () => {
+    const firstBody = { model: "cursor/auto", input: "private task A history", store: true };
+    const first = fixedResponse("resp_task_scoped", [
+      { type: "message", role: "assistant", content: "task A answer" },
+    ]);
+    rememberResponseState(firstBody, first, undefined, { clientThreadId: "task-a" });
+
+    const sameTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "continue task A",
+    }, "task-a") as { previous_response_id?: string; input: unknown[] };
+    expect(sameTask.previous_response_id).toBe(first.id);
+    expect(sameTask.input).toEqual([
+      { role: "user", content: "private task A history" },
+      first.output[0],
+      { role: "user", content: "continue task A" },
+    ]);
+    expect(previousResponseScopeMismatch(sameTask)).toBe(false);
+
+    const foreignTask = expandPreviousResponseInput({
+      model: "cursor/auto",
+      previous_response_id: first.id,
+      input: "brand-new task B",
+    }, "task-b") as { previous_response_id?: string; input: string };
+    expect(foreignTask).toEqual({ model: "cursor/auto", input: "brand-new task B" });
+    expect(previousResponseScopeMismatch(foreignTask)).toBe(true);
+    expect(previousResponseReplayPrefixLength(foreignTask)).toBe(0);
+    expect(responseStateMetrics().replayScopeMismatchDrops).toBe(1);
+  });
+
+  test("scoped tasks reject legacy unscoped continuation state", () => {
+    const first = fixedResponse("resp_legacy_unscoped", [
+      { type: "message", role: "assistant", content: "legacy answer" },
+    ]);
+    rememberResponseState({ input: "legacy history" }, first);
+
+    const freshTask = expandPreviousResponseInput({
+      previous_response_id: first.id,
+      input: "new task",
+    }, "task-new");
+    expect(freshTask).toEqual({ input: "new task" });
+    expect(previousResponseScopeMismatch(freshTask)).toBe(true);
   });
 
   test("stores incomplete partial output for previous_response_id replay", () => {
@@ -709,13 +756,27 @@ describe("Responses previous_response_id state", () => {
 
   test("replays a durable spill after simulated process restart", async () => {
     setResponseStateByteCapForTests(1_024);
-    rememberLarge("resp_spill_restart", "r".repeat(8_000));
+    rememberResponseState(
+      { model: "test/model", input: "r".repeat(8_000), store: false },
+      fixedResponse("resp_spill_restart", [{ type: "message", role: "assistant", content: "stored" }]),
+      undefined,
+      { force: true, clientThreadId: "task-spill" },
+    );
     await flushResponseState();
     clearResponseStateMemoryForTests();
     setResponseStateByteCapForTests(1_024);
-    const expanded = expandPreviousResponseInput({ previous_response_id: "resp_spill_restart", input: "next" });
+    const expanded = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "next" },
+      "task-spill",
+    );
     expect((expanded as { input: unknown[] }).input).toHaveLength(3);
     expect(responseStateMetrics().spillStubCount).toBe(1);
+
+    const foreign = expandPreviousResponseInput(
+      { previous_response_id: "resp_spill_restart", input: "foreign" },
+      "task-other",
+    );
+    expect(foreign).toEqual({ input: "foreign" });
   });
 
   test("spill references bind the expected response id and use the locked digest basename", () => {
@@ -1756,6 +1817,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
     });
 
@@ -1813,6 +1875,7 @@ describe("Responses previous_response_id state", () => {
         spillWrites: 0,
         spillWriteFailures: 0,
         spillReadFailures: 0,
+        replayScopeMismatchDrops: 0,
       });
 
       // The real request path DOES load; the probe then reflects the loaded entry.
@@ -2061,5 +2124,65 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
     await flushResponseState();
     const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
     expect(raw).not.toContain("resp_multibyte");
+  });
+
+  /**
+   * Encrypted-agent-task recovery decrypts task text into the request body and promises
+   * in-memory retention bounded by a 15-minute TTL. The continuation cache persists request
+   * input to `responses-state.json`, so recording a recovered body would put that plaintext on
+   * disk with no TTL at all. The guard lives in `rememberResponseState` so every recording path
+   * inherits it.
+   */
+  describe("bodies marked non-persistable never reach the continuation cache", () => {
+    test("a marked body is not stored and its text never reaches the snapshot", async () => {
+      const recovered = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "RECOVERED-PLAINTEXT-SENTINEL" }],
+      };
+      markBodyNonPersistable(recovered);
+
+      rememberResponseState(recovered, completedResponse("resp_recovered", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      // Not in memory: a later turn replaying that id gets its request back UNEXPANDED,
+      // i.e. with no `input` grafted on from stored history.
+      const replay = expandPreviousResponseInput({ previous_response_id: "resp_recovered" }) as {
+        input?: unknown;
+      };
+      expect(replay.input).toBeUndefined();
+      // Not on disk, and neither is the response id that would have carried it.
+      const raw = existsSync(join(home, "responses-state.json"))
+        ? readFileSync(join(home, "responses-state.json"), "utf-8")
+        : "";
+      expect(raw).not.toContain("RECOVERED-PLAINTEXT-SENTINEL");
+      expect(raw).not.toContain("resp_recovered");
+    });
+
+    test("an unmarked body with identical shape IS stored — the guard is the marker, not the shape", async () => {
+      const ordinary = {
+        model: "m",
+        input: [{ type: "message", role: "user", content: "ORDINARY-INPUT-SENTINEL" }],
+      };
+
+      rememberResponseState(ordinary, completedResponse("resp_ordinary", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).toContain("resp_ordinary");
+    });
+
+    test("marking is per-object, so an unrelated body is unaffected", async () => {
+      const marked = { model: "m", input: "marked", store: true };
+      const sibling = { model: "m", input: "sibling", store: true };
+      markBodyNonPersistable(marked);
+
+      rememberResponseState(marked, completedResponse("resp_marked", "ok"), undefined, { force: true });
+      rememberResponseState(sibling, completedResponse("resp_sibling", "ok"), undefined, { force: true });
+      await flushResponseState();
+
+      const raw = readFileSync(join(home, "responses-state.json"), "utf-8");
+      expect(raw).not.toContain("resp_marked");
+      expect(raw).toContain("resp_sibling");
+    });
   });
 });

@@ -65,6 +65,12 @@ deltas, 그리고 정확히 하나의 종료 `response.completed`, `response.fai
 
 클라이언트로 전달되는 Responses SSE 프레임은 SSE 블록 구분자 앞의 원시 바이트 기준으로 프레임당 4 MiB로 제한됩니다. HTTP에서는 구분자 없이 이 한도를 초과한 업스트림 프레임을 합성 `response.failed` 이벤트와 이어지는 `data: [DONE]`으로 fail closed 처리합니다. Responses WebSocket 브리지에서는 같은 조건에서 502 `websocket_protocol_error`를 보내고 업스트림 reader를 취소합니다. 완전한 Responses 종료 프레임이 이미 수신된 경우에는 그 종료가 우선하며, 이후의 과도한 크기 또는 잘못된 바이트는 완료된 턴을 전송 오류로 바꾸지 않고 버립니다.
 
+canonical ChatGPT forward streaming은 stable Bun 1.4.0 이상에서 Codex 업스트림 WebSocket을
+투명하게 사용할 수 있습니다. 번들 Bun 1.3.14, prerelease, 또는 검증 불가능한 런타임 identity는
+HTTP/SSE를 사용합니다. 업스트림 WS adapter는 같은 downstream SSE 계약을 유지하며, 원시 JSON
+프레임과 SSE envelope를 각각 4 MiB로 제한하고 8 MiB byte queue가 넘치기 전에 업스트림을 닫습니다.
+queue overflow 시 downstream에는 terminal `response.failed` 이벤트와 `[DONE]`을 내보냅니다.
+
 모든 종료 Responses usage 객체에는 제공자가 해당 세부 정보를 보고하지 않았더라도 두 상세 객체가 모두
 포함됩니다.
 
@@ -87,6 +93,9 @@ deltas, 그리고 정확히 하나의 종료 `response.completed`, `response.fai
 `websockets`가 활성화되어 있으면 클라이언트는 HTTP POST를 여는 대신 `/v1/responses`로 업그레이드할 수
 있습니다. 인증과 origin admission은 WebSocket 핸드셰이크 동안 처리됩니다. 각 프레임 안에서 다시 반복되지는
 않습니다.
+
+이 클라이언트 업그레이드는 위의 투명한 업스트림 ChatGPT WebSocket 선택과 별개이며,
+`websockets` 설정은 클라이언트 엔드포인트만 제어합니다.
 
 클라이언트는 JSON 텍스트 프레임을 보냅니다.
 
@@ -153,10 +162,15 @@ Responses로 변환되어 일반적으로 라우팅된 뒤, Anthropic JSON 또�
 - Claude Code 설정에서 native passthrough가 비활성화되어 있지 않습니다.
 - 요청한 모델이 `claude` 또는 `anthropic`으로 시작합니다.
 - 요청에 네이티브 Anthropic bearer 또는 `x-api-key` 자격 증명이 들어 있습니다.
+- 비루프백 listener에서는 `x-opencodex-api-key`에만 유효한 프록시 admission이 들어 있습니다.
 - 설정된 alias 또는 model map이 해당 model id를 라우팅 대상으로 점유하고 있지 않습니다.
 
 적합한 요청은 Anthropic 방언으로 전달되므로 네이티브 beta 헤더, thinking 서명, 구독 식별 정보가 끝까지
 유지됩니다. 그렇지 않으면 Responses 왕복을 탑니다.
+
+전용 admission 헤더는 upstream으로 전달되지 않습니다. `Authorization` 또는 `x-api-key`에서
+프록시 admission secret이 발견되어도 제거하며, 별도의 실제 Anthropic 자격 증명은 유지합니다.
+쉼표로 결합된 모호한 자격 증명 헤더는 전달하지 않고 fail closed합니다.
 
 `POST /v1/messages/count_tokens`도 같은 model resolution과 passthrough 판단을 따릅니다. 네이티브로 적합한
 요청은 Anthropic의 count endpoint로 전달됩니다. 그 외 요청은 system content, messages, tools에 대한 로컬

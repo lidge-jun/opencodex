@@ -650,6 +650,25 @@ describe("Cursor AgentRunRequest.mcp_tools channel", () => {
     expect(mcpToolNames(bytes)).toEqual(["exec_command"]);
   });
 
+  test("mcp_tools keeps unified Desktop exec for a generic tool-use prompt", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "gpt-5.6-luna-high",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "use any 3 tools" }],
+      tools: [
+        {
+          name: "exec",
+          description: "Run a command",
+          parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
+        },
+        { name: "wait", description: "Wait for a yielded cell", parameters: {} },
+        { name: "js", namespace: "mcp__node_repl", description: "Run JS", parameters: {} },
+      ],
+    });
+    expect(mcpToolNames(bytes)).toEqual(["exec"]);
+  });
+
   test("leaves mcp_tools unset when tools are empty", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "gpt-5.6-luna-high",

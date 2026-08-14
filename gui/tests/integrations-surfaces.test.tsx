@@ -164,7 +164,10 @@ afterEach(async () => {
   }
 });
 
-async function mountClient(active = true): Promise<void> {
+async function mountClient(
+  active = true,
+  client: "hermes" | "dsh" = "hermes",
+): Promise<void> {
   const [{ createRoot }, { LanguageProvider }, { default: FileIntegrationPage }] = await Promise.all([
     import("react-dom/client"),
     import("../src/i18n/provider"),
@@ -174,12 +177,29 @@ async function mountClient(active = true): Promise<void> {
     root = createRoot(container);
     root.render(
       <LanguageProvider>
-        <FileIntegrationPage apiBase={apiBase} client="hermes" active={active} />
+        <FileIntegrationPage apiBase={apiBase} client={client} active={active} />
       </LanguageProvider>,
     );
   });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
 }
+
+test("the DSH surface uses localized ownership semantics and its own API route", async () => {
+  stateResponse = () => json(status({
+    clientId: "dsh",
+    configPath: "/tmp/home/.dsh/settings.yaml",
+  }));
+  await mountClient(true, "dsh");
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("DeepSeek Harness (DSH)");
+  expect(text).toContain("llm-pi-ai.providers.opencodex");
+  expect(text).toContain("hot reload");
+  expect(text).toContain("default model");
+  expect(text).toContain("deepseek-official");
+  expect(text).toContain("loopback");
+  expect(requests.some(request => request.url.endsWith("/api/client-integrations/dsh"))).toBe(true);
+});
 
 function buttons(): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll("button")) as unknown as HTMLButtonElement[];

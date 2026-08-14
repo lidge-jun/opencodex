@@ -42,6 +42,24 @@ describe("parallel tool calls provider opt-in (request body)", () => {
     const body = JSON.parse(adapter.buildRequest(parsedRequest({ parallelToolCalls: true })).body) as Record<string, unknown>;
     expect(body).not.toHaveProperty("parallel_tool_calls");
   });
+
+  test("pinParallelToolCallsFalse pins the wire bit for an opted-out non-NVIDIA provider", () => {
+    const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://llm.example.internal/v1", apiKey: "k", parallelToolCalls: false, pinParallelToolCallsFalse: true });
+    const body = JSON.parse(adapter.buildRequest(parsedRequest()).body) as Record<string, unknown>;
+    expect(body.parallel_tool_calls).toBe(false);
+  });
+
+  test("pinParallelToolCallsFalse keeps sending false even under a permissive request bit", () => {
+    const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://llm.example.internal/v1", apiKey: "k", parallelToolCalls: false, pinParallelToolCallsFalse: true });
+    const body = JSON.parse(adapter.buildRequest(parsedRequest({ parallelToolCalls: true })).body) as Record<string, unknown>;
+    expect(body.parallel_tool_calls).toBe(false);
+  });
+
+  test("pinParallelToolCallsFalse has no effect without parallelToolCalls:false", () => {
+    const adapter = createOpenAIChatAdapter({ adapter: "openai-chat", baseUrl: "https://llm.example.internal/v1", apiKey: "k", pinParallelToolCallsFalse: true });
+    const body = JSON.parse(adapter.buildRequest(parsedRequest()).body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("parallel_tool_calls");
+  });
 });
 
 describe("stale persisted config backfill (router)", () => {

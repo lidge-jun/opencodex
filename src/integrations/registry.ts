@@ -12,6 +12,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   EXPORT_CLIENTS,
+  dshConfigPath,
+  dshHomeDir,
   gajaeConfigPath,
   gajaeHomeDir,
   hermesConfigPath,
@@ -38,6 +40,10 @@ export interface IntegrationClientSpec {
   configPath: (env?: NodeJS.ProcessEnv, home?: string) => string;
   /** Directory whose existence is the cheap "is it installed?" signal. */
   detectDir: (env?: NodeJS.ProcessEnv, home?: string) => string;
+  /** Patch only this block-map YAML leaf; never re-render the shared file. */
+  sourcePreservingYaml?: { path: readonly string[] };
+  /** Coordinate the complete mutation through a sibling config lock. */
+  writerLock?: { suffix: ".lock" };
 }
 
 /**
@@ -74,6 +80,7 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "omp",
     configPath: (env = process.env, home = homedir()) => ompModelsConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => ompAgentDir(env, home),
+    sourcePreservingYaml: { path: ["providers", "opencodex"] },
   },
   hermes: {
     id: "hermes",
@@ -97,6 +104,13 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     id: "gajae",
     configPath: (env = process.env, home = homedir()) => gajaeConfigPath(env, home),
     detectDir: (env = process.env, home = homedir()) => gajaeHomeDir(env, home),
+  },
+  dsh: {
+    id: "dsh",
+    configPath: (env = process.env, home = homedir()) => dshConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => dshHomeDir(env, home),
+    sourcePreservingYaml: { path: ["llm-pi-ai", "providers", "opencodex"] },
+    writerLock: { suffix: ".lock" },
   },
 };
 

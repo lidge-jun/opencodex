@@ -7,7 +7,6 @@ import type { CodexAccountEntry } from "./codex-account-pool-types";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import type { TFn } from "../i18n/shared";
 import type { NoticeTone } from "../ui";
-import { useI18n } from "../i18n/shared";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -17,7 +16,6 @@ import {
   oauthHealthShowsDoctor,
   oauthHealthShowsReauth,
 } from "../oauth-health-display";
-import { formatCostUsd, formatTokenCount } from "../provider-workspace/usage";
 
 export function CodexAccountPoolMainCard({
   t,
@@ -62,7 +60,6 @@ export function CodexAccountPoolMainCard({
   onCopyDoctor?: (accountId: string) => void;
   doctorCopyOutcomeFor?: (accountId: string) => "copied" | "unavailable" | null;
 }) {
-  const { locale } = useI18n();
   const mainFallbackLabel = t("codexAuth.codexApp");
   const mainId = main?.id ?? "__main__";
   const mainSwitchEntry: CodexAccountEntry = {
@@ -137,35 +134,29 @@ export function CodexAccountPoolMainCard({
         )}
         <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
       </div>
-      <div className="card-sub">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
-      <div className="card-sub faint">{t("codexAuth.logLabel")}: <code>{main?.logLabel ?? "main"}</code></div>
-      {main?.usage30d && (
-        <div className="card-sub faint" title={t("logs.metric.estimatedCostTitle")}>
-          {t("usage.card.totalTokens")}: {formatTokenCount(main.usage30d.totalTokens, locale)} · {t("pws.estimatedCost")}: {formatCostUsd(main.usage30d.estimatedCostUsd, locale)} · {t("usage.coverage.measured")}: {Math.round(main.usage30d.usageCoverageRatio * 100)}%
-        </div>
-      )}
+      <div className="codex-account-identity">
+        <div className="codex-account-identity-copy">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
+        {main && (
+          <AccountPriorityControl
+            value={mainSwitchEntry.priority}
+            // Derived from the synthesized id rather than hardcoded as "-main": a pool account
+            // may legitimately be named `main` (the id pattern allows it), and that account's
+            // control would then claim the same DOM id, pointing this label at its dropdown.
+            selectId={`codex-account-priority-${mainSwitchEntry.id}`}
+            // Any in-flight order write, not just this card's: order writes share one mutation
+            // ref, so a pick made during another card's write returns "busy" and is dropped
+            // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
+            // pin this clears, so the controller refuses to overlap them, just as silently.
+            disabled={priorityUpdatingId !== null || switchingId !== null}
+            onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
+          />
+        )}
+      </div>
       {healthSummary && (
         <div className="card-sub faint">{healthSummary}</div>
       )}
       {inCooldown && (
         <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
-      )}
-      {pinnedId === "__main__" && !main?.paused && <div className="card-sub faint">{t("codexAuth.pinnedHint")}</div>}
-      {/* Same rule as the pause button: without an app login there is no row to re-order. */}
-      {main && (
-        <AccountPriorityControl
-          value={mainSwitchEntry.priority}
-          // Derived from the synthesized id rather than hardcoded as "-main": a pool account
-          // may legitimately be named `main` (the id pattern allows it), and that account's
-          // control would then claim the same DOM id, pointing this label at its dropdown.
-          selectId={`codex-account-priority-${mainSwitchEntry.id}`}
-          // Any in-flight order write, not just this card's: order writes share one mutation
-          // ref, so a pick made during another card's write returns "busy" and is dropped
-          // silently. Mirrors pauseBusy. A pending switch counts too — it writes the same
-          // pin this clears, so the controller refuses to overlap them, just as silently.
-          disabled={priorityUpdatingId !== null || switchingId !== null}
-          onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
-        />
       )}
       {showReauth
         ? <div className="card-sub faint">{t("codexAuth.mainTokenExpired")}</div>

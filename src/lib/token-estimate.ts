@@ -56,14 +56,31 @@ function cjkRatio(text: string): number {
 }
 
 /**
+ * Cap an estimated token count at a model's context window (codex-router PR #140).
+ *
+ * A request the provider answered cannot have exceeded the window, so the estimate is never
+ * allowed to claim it did: the estimate only ever substitutes a reported-zero (or missing)
+ * input count, and a value above the window would be provably false. Positive or missing
+ * reported counts are never rewritten here — this bounds the heuristic estimate itself.
+ * Non-positive or non-integer windows (unknown model) leave the estimate untouched.
+ */
+export function capEstimateAtContextWindow(estimate: number, contextWindow: number | undefined): number {
+  return typeof contextWindow === "number" && Number.isInteger(contextWindow) && contextWindow > 0
+    ? Math.min(estimate, contextWindow)
+    : estimate;
+}
+
+/**
  * Estimate the token count of a text blob. Pure and deterministic.
  * Returns 0 for empty/whitespace-free-empty input; otherwise ceil(length / ratio), min 1.
+ * When `contextWindow` is a positive integer the estimate is capped at it: a request the
+ * provider answered cannot have exceeded the window, so the estimate must not claim it did.
  */
-export function estimateTokens(text: string, modelId?: string): number {
+export function estimateTokens(text: string, modelId?: string, contextWindow?: number): number {
   if (!text) return 0;
   const len = text.length;
   if (len === 0) return 0;
   let ratio = charsPerToken(modelId);
   if (cjkRatio(text) > CJK_RATIO_THRESHOLD) ratio = Math.min(ratio, CJK_CHARS_PER_TOKEN);
-  return Math.max(1, Math.ceil(len / ratio));
+  return capEstimateAtContextWindow(Math.max(1, Math.ceil(len / ratio)), contextWindow);
 }

@@ -84,6 +84,15 @@ describe("registered nested hashes", () => {
     expect(resolveAppHashChange("integrations/claude/desktop").replaceTo).toBeNull();
   });
 
+  test("the DSH deep link is registered and survives normalization", () => {
+    expect(INTEGRATION_TAB_HASHES).toContain("integrations/dsh");
+    expect(readPageFromHash("integrations/dsh")).toBe("integrations");
+    expect(resolveAppHashChange("integrations/dsh")).toEqual({
+      page: "integrations",
+      replaceTo: null,
+    });
+  });
+
   test("bare #integrations is Overview and has no suffix of its own", () => {
     expect(readPageFromHash("integrations")).toBe("integrations");
     expect(hashBelongsToPage("integrations", "integrations")).toBe(true);

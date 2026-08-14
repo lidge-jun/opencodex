@@ -73,7 +73,7 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | Path | Owner | Notes |
 | --- | --- | --- |
 | `~/.opencodex/config.json` | opencodex | Main config written by `ocx init` and the dashboard. Atomic temp-then-rename. |
-| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store; identity-less providers (kimi/kiro/cursor) replace their active slot. |
+| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
 | `~/.opencodex/codex-accounts.json` | opencodex | Hardened main-plus-added credential store used by `openai` in Pool mode. |
 | `~/.opencodex/catalog-backup.json` | opencodex | One-time pristine Codex catalog backup for restore; per-catalog copies are hashed variants (see [`03_catalog-and-subagents.md`](03_catalog-and-subagents.md)). |
 | `~/.opencodex/usage.jsonl` | opencodex | Append-only request usage log (0o600); request metadata + token counts only, never prompts or auth. |

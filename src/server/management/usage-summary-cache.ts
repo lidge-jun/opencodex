@@ -8,11 +8,17 @@ export type CachedUsageSummary = UsageSummary & {
   entriesDropped: number;
 };
 
-interface UsageSummaryCacheEntry {
+export interface UsageSummaryCacheEntry {
   revisionKey: string;
+  /** path/dev/ino/birthtime only; appends keep this stable. */
+  identityKey: string;
+  maxReadBytes: number;
   /** userCostOverlayVersion() when the summary was computed; overlay edits invalidate the entry. */
   overlayVersion: number;
   expiresAt: number;
+  /** Generation freshness: ignore size/mtime until this instant. */
+  freshUntil: number;
+  lastSeenSize: number;
   summary: CachedUsageSummary;
   revisionReadAt: number;
   sizeBytes: number;

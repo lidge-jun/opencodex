@@ -1,5 +1,10 @@
 import type { RefObject } from "react";
 import { useEffect, useRef } from "react";
+import {
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+} from "../../../src/vision/timeout-bounds";
 import { readJsonOrThrow } from "../fetch-json";
 import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
@@ -56,7 +61,15 @@ export interface SettingsData {
 }
 export type SidecarBackend = "openai" | "anthropic";
 export type VisionReasoning = "low" | "medium" | "high" | "xhigh" | "max";
-export interface SidecarSetting { backend?: SidecarBackend; model: string; reasoning?: VisionReasoning }
+export interface SidecarSetting {
+  backend?: SidecarBackend;
+  model: string;
+  reasoning?: VisionReasoning;
+  streamRoutedModelOutput?: boolean;
+  enabled?: boolean;
+  maxDescriptionsPerTurn?: number;
+  timeoutMs?: number;
+}
 export interface VisionModelOption { value: string; label: string; backend: SidecarBackend; baseline?: boolean }
 export interface SidecarData {
   webSearch: SidecarSetting;
@@ -67,8 +80,15 @@ export interface SidecarData {
   visionModels?: VisionModelOption[];
 }
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string };
-  vision?: { backend?: SidecarBackend | null; model?: string; reasoning?: VisionReasoning };
+  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
+  vision?: {
+    backend?: SidecarBackend | null;
+    model?: string;
+    reasoning?: VisionReasoning;
+    enabled?: boolean;
+    maxDescriptionsPerTurn?: number;
+    timeoutMs?: number;
+  };
 }
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export interface UsageSummary30d { summary: { requests: number; totalTokens: number; coverageRatio: number } }
@@ -151,19 +171,67 @@ export function updateJobLabel(status: UpdateJobStatus, t: (key: TKey) => string
 
 export function mergeSidecarSetting(
   current: SidecarSetting,
-  update?: { backend?: SidecarBackend | null; model?: string; reasoning?: VisionReasoning },
+  update?: {
+    backend?: SidecarBackend | null;
+    model?: string;
+    reasoning?: VisionReasoning;
+    streamRoutedModelOutput?: boolean;
+    enabled?: boolean;
+    maxDescriptionsPerTurn?: number;
+    timeoutMs?: number;
+  },
 ): SidecarSetting {
   const merged = { ...current };
   if (update?.model !== undefined) merged.model = update.model;
   if (update?.backend === null) delete merged.backend;
   else if (update?.backend !== undefined) merged.backend = update.backend;
   if (update?.reasoning !== undefined) merged.reasoning = update.reasoning;
+  if (update?.streamRoutedModelOutput !== undefined) merged.streamRoutedModelOutput = update.streamRoutedModelOutput;
+  if (update?.enabled !== undefined) merged.enabled = update.enabled;
+  if (update?.maxDescriptionsPerTurn !== undefined) merged.maxDescriptionsPerTurn = update.maxDescriptionsPerTurn;
+  if (update?.timeoutMs !== undefined) merged.timeoutMs = update.timeoutMs;
   return merged;
 }
 
 /** Effort-only edits must not rewrite a custom model or its explicitly selected backend. */
 export function visionReasoningPatch(reasoning: VisionReasoning): SidecarPatch {
   return { vision: { reasoning } };
+}
+
+export function visionEnabledPatch(enabled: boolean): SidecarPatch {
+  return { vision: { enabled } };
+}
+
+export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {
+  return { vision: { maxDescriptionsPerTurn } };
+}
+
+export function visionTimeoutPatch(timeoutMs: number): SidecarPatch {
+  return { vision: { timeoutMs } };
+}
+
+/**
+ * Dashboard names for the runtime timeout contract in `src/vision/timeout-bounds.ts`.
+ * Pinned by `tests/vision-sidecar-timeout-bounds.test.ts`.
+ */
+export const VISION_TIMEOUT_MS_DEFAULT = DEFAULT_VISION_TIMEOUT_MS;
+export const VISION_TIMEOUT_MS_MAX = MAX_VISION_TIMEOUT_MS;
+export const VISION_TIMEOUT_MS_MIN = MIN_VISION_TIMEOUT_MS;
+/** Mirrors `DEFAULT_MAX_DESCRIPTIONS_PER_TURN` and is pinned by the timeout-bounds contract test. */
+export const VISION_MAX_DESCRIPTIONS_DEFAULT = 8;
+
+export function parsePositiveInteger(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^[0-9]+$/.test(trimmed)) return undefined;
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0) return undefined;
+  return value;
+}
+
+export function parseVisionTimeoutMs(raw: string): number | undefined {
+  const value = parsePositiveInteger(raw);
+  if (value === undefined || value < VISION_TIMEOUT_MS_MIN || value > VISION_TIMEOUT_MS_MAX) return undefined;
+  return value;
 }
 
 export const VISION_REASONING_LEVELS: VisionReasoning[] = ["low", "medium", "high", "xhigh", "max"];

@@ -9,6 +9,7 @@
  *
  * Design of record: devlog/_fin/260802_client_toggle_api/030 and 031.
  */
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 import { EXPORT_CLIENTS, type ExportModel, type ManagedContribution } from "../clients/config-export";
 import { isLoopbackHostname } from "../codex/inject";
@@ -23,7 +24,8 @@ import { serializeDocument, UnserializableValueError } from "./serialize";
 import { ClientPathError } from "../clients/config-export";
 import { matchesOperationResult, newOpId, type JournalEntry } from "./journal";
 import { createIntegrationStateStore, type IntegrationStateStore } from "./store";
-import { patchOmpYamlSource } from "./omp-yaml-source";
+import { patchYamlFragmentSource, sourcePrunableYamlContainers } from "./omp-yaml-source";
+import { withIntegrationWriterLock, type IntegrationWriterLockSeams } from "./writer-lock";
 
 export type RefusalReason =
   | "not_installed"
@@ -66,6 +68,8 @@ export interface IntegrationWriteInput {
   home?: string;
   store?: IntegrationStateStore;
   io?: IntegrationIO;
+  /** Frozen once by the async coordinator; synchronous callers may omit it. */
+  resolvedPaths?: { configPath: string; detectDir: string };
 }
 
 export interface IntegrationRestoreInput extends IntegrationWriteInput {
@@ -169,11 +173,13 @@ function snapshotAbsPath(store: IntegrationStateStore, entry: JournalEntry): str
   return snapshot.kind === "stored" ? snapshot.path : undefined;
 }
 
-function ompFragmentValue(contribution: ManagedContribution): unknown | undefined {
+function sourcePreservingFragmentValue(
+  contribution: ManagedContribution,
+  path: readonly string[],
+): unknown | undefined {
   const fragment = contribution.fragments.find(item => (
-    item.path.length === 2
-    && item.path[0] === "providers"
-    && item.path[1] === "opencodex"
+    item.path.length === path.length
+    && item.path.every((key, index) => key === path[index])
   ));
   return fragment?.value;
 }
@@ -194,7 +200,7 @@ function preflight(input: IntegrationWriteInput) {
    */
   let configPath: string;
   try {
-    configPath = spec.configPath(input.env, input.home);
+    configPath = input.resolvedPaths?.configPath ?? spec.configPath(input.env, input.home);
   } catch (error) {
     if (!(error instanceof ClientPathError)) throw error;
     return { failed: refuse(clientId, "unsafe", "unsafe", error.message) } as const;
@@ -213,7 +219,8 @@ function preflight(input: IntegrationWriteInput) {
   const before = target.before;
   const parsed = parseConfig(before, exportSpec.format);
   if (parsed === PARSE_FAILED) {
-    return { failed: refuse(clientId, "unsafe", "unsafe", `${configPath} could not be parsed`) } as const;
+    return { failed: refuse(clientId, "unsafe", "unsafe",
+      `${configPath} could not be parsed, or holds something opencodex cannot rewrite without changing it (a non-finite number, a large integer or a tiny one a rewrite would round, -0, a duplicate member, or nesting deeper than 1000 levels)`) } as const;
   }
   const contribution = exportSpec.buildContribution(exportContextOf(input));
   // A record proves ownership of the file it was written FOR. Matching only by
@@ -238,7 +245,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   if (pre.failed) return pre.failed;
   const { store, io, clientId, spec, exportSpec, configPath, before, parsed, contribution, record, classified } = pre;
 
-  if (io.statKind(spec.detectDir(input.env, input.home)) !== "dir") {
+  if (io.statKind(input.resolvedPaths?.detectDir ?? spec.detectDir(input.env, input.home)) !== "dir") {
     return refuse(clientId, "not_installed", "absent", `${clientId} is not installed`);
   }
   if (isLoopbackOnly(clientId) && !isLoopbackHostname(input.config.hostname)) {
@@ -293,11 +300,16 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
   const nextDocument = mergeContribution(base, contribution);
   let text: string;
   try {
-    if (clientId === "omp" && before !== null) {
-      const value = ompFragmentValue(contribution);
+    if (spec.sourcePreservingYaml && before !== null) {
+      const value = sourcePreservingFragmentValue(contribution, spec.sourcePreservingYaml.path);
       const patched = value === undefined
         ? null
-        : patchOmpYamlSource(before, { kind: "upsert", value }, nextDocument);
+        : patchYamlFragmentSource(
+            before,
+            spec.sourcePreservingYaml.path,
+            { kind: "upsert", value },
+            nextDocument,
+          );
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
           `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so it was left alone`);
@@ -343,7 +355,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
 export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
   const pre = preflight(input);
   if (pre.failed) return pre.failed;
-  const { store, io, clientId, exportSpec, configPath, before, parsed, record, classified } = pre;
+  const { store, io, clientId, spec, exportSpec, configPath, before, parsed, record, classified } = pre;
 
   if (classified.state === "absent") {
     return { ok: true, changed: false, state: "absent", clientId, message: "not applied" };
@@ -368,22 +380,40 @@ export function disableIntegration(input: IntegrationWriteInput): WriteOutcome {
         : `${configPath} cannot be changed safely`);
   }
 
-  // current | stale only: the file fingerprint still matches our record, so the
-  // recorded paths are exactly what we put there.
+  /*
+   * current | stale only. What makes the removal safe is the BLOCK
+   * fingerprint, not the file fingerprint: the classifier verified the values
+   * at the recorded paths are byte-for-byte what we wrote, so removing them
+   * cannot take a user edit with them. The file itself may have drifted — a
+   * json client classifies a sibling edit as stale (#1631) — which is why the
+   * removal runs against the document as parsed NOW, and the re-serialize is
+   * value-safe because non-round-tripping numbers were refused at parse time.
+   * Source-preserving YAML clients additionally compute which recorded
+   * containers are still source-empty before pruning, so a later sibling or
+   * comment makes its ancestor user-owned without protecting our leaf.
+   */
+  const recordedCreated = record!.createdContainers ?? [];
+  const prunableCreated = spec.sourcePreservingYaml && before !== null
+    ? sourcePrunableYamlContainers(before, spec.sourcePreservingYaml.path, recordedCreated)
+    : recordedCreated;
+  if (prunableCreated === null) {
+    return refuse(clientId, "unsafe", "unsafe",
+      `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so nothing was removed`);
+  }
   const { doc, removed } = removeFragments(
     parsed,
     record!.fragmentPaths,
-    new Set(record!.createdContainers ?? []),
+    new Set(prunableCreated),
   );
   if (!removed) {
     return { ok: true, changed: false, state: "absent", clientId, message: "nothing to remove" };
   }
   let text: string;
   try {
-    if (clientId === "omp" && before !== null) {
-      const patched = patchOmpYamlSource(before, {
+    if (spec.sourcePreservingYaml && before !== null) {
+      const patched = patchYamlFragmentSource(before, spec.sourcePreservingYaml.path, {
         kind: "remove",
-        removeEmptyProviders: record!.createdContainers?.includes("providers") === true,
+        createdContainers: prunableCreated,
       }, doc);
       if (patched === null) {
         return refuse(clientId, "unsafe", "unsafe",
@@ -427,7 +457,8 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
   if (entry.clientId !== input.clientId) throw new Error("restore input names a different client than the operation");
 
   const clientId = entry.clientId;
-  const resolvedPath = INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
+  const resolvedPath = input.resolvedPaths?.configPath
+    ?? INTEGRATION_CLIENTS[clientId].configPath(input.env, input.home);
   // Restore acts on the path the operation was journaled against. Resolving a
   // different path here would let an operation recorded for one home delete a
   // file in another.
@@ -524,4 +555,106 @@ export function restoreIntegration(input: IntegrationRestoreInput): WriteOutcome
     entry: restoreEntry,
     snapshotPath: snapshotAbsPath(store, restoreEntry),
   });
+}
+
+export interface CoordinatedIntegrationOptions {
+  lockSeams?: IntegrationWriterLockSeams;
+}
+
+/** Freeze all mutable resolution seams before the first lock await. */
+type FrozenIntegrationInput = IntegrationWriteInput & {
+  store: IntegrationStateStore;
+  io: IntegrationIO;
+  env: NodeJS.ProcessEnv;
+  home: string;
+  resolvedPaths: { configPath: string; detectDir: string };
+};
+
+function freezeIntegrationInput(input: IntegrationWriteInput): FrozenIntegrationInput {
+  const env = { ...(input.env ?? process.env) };
+  const home = input.home ?? homedir();
+  const store = input.store ?? createIntegrationStateStore();
+  const io = input.io ?? defaultIntegrationIO(store);
+  const spec = INTEGRATION_CLIENTS[input.clientId];
+  const resolvedPaths = {
+    configPath: spec.configPath(env, home),
+    detectDir: spec.detectDir(env, home),
+  };
+  return { ...input, env, home, store, io, resolvedPaths };
+}
+
+function tryFreezeIntegrationInput(input: IntegrationWriteInput):
+  | { ok: true; value: FrozenIntegrationInput }
+  | { ok: false; refusal: WriteRefused } {
+  try {
+    return { ok: true, value: freezeIntegrationInput(input) };
+  } catch (error) {
+    if (!(error instanceof ClientPathError)) throw error;
+    return {
+      ok: false,
+      refusal: refuse(input.clientId, "unsafe", "unsafe", error.message),
+    };
+  }
+}
+
+async function coordinatedWrite(
+  input: IntegrationWriteInput,
+  operation: (frozen: IntegrationWriteInput) => WriteOutcome,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  const prepared = tryFreezeIntegrationInput(input);
+  if (!prepared.ok) return prepared.refusal;
+  const frozen = prepared.value;
+  const spec = INTEGRATION_CLIENTS[frozen.clientId];
+  if (!spec.writerLock) return operation(frozen);
+
+  // An absent client home is not created merely to acquire a sibling lock.
+  if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
+    return operation(frozen);
+  }
+  return withIntegrationWriterLock(
+    frozen.resolvedPaths.configPath,
+    async () => operation(frozen),
+    options?.lockSeams,
+    spec.writerLock.suffix,
+  );
+}
+
+export function applyIntegrationCoordinated(
+  input: IntegrationWriteInput,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  return coordinatedWrite(input, applyIntegration, options);
+}
+
+export function disableIntegrationCoordinated(
+  input: IntegrationWriteInput,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  return coordinatedWrite(input, disableIntegration, options);
+}
+
+export async function restoreIntegrationCoordinated(
+  input: IntegrationRestoreInput,
+  options?: CoordinatedIntegrationOptions,
+): Promise<WriteOutcome> {
+  const prepared = tryFreezeIntegrationInput(input);
+  if (!prepared.ok) return prepared.refusal;
+  const frozen = prepared.value;
+  const spec = INTEGRATION_CLIENTS[frozen.clientId];
+  if (!spec.writerLock) return restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
+  if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
+    return refuse(
+      frozen.clientId,
+      "unsafe",
+      "unsafe",
+      `${frozen.resolvedPaths.detectDir} is missing; restore will not create the client home`,
+    );
+  }
+  return withIntegrationWriterLock(
+    frozen.resolvedPaths.configPath,
+    async () => restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift }),
+    options?.lockSeams,
+    spec.writerLock.suffix,
+  );
 }

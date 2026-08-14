@@ -15,7 +15,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | `stallTimeoutSec?` | `number` | `300` | 在 `response.incomplete` 前無上游資料的秒數。最小 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次嘗試的 DNS/TCP/TLS/final-header 截止時間；它在 body 生成前結束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 在中止活躍回合前的優雅排空截止時間。 |
-| `websockets?` | `boolean` | `false` | 為 Responses WebSocket 路徑廣告 `supports_websockets`。False 保持 HTTP/SSE。 |
+| `websockets?` | `boolean` | `false` | 廣告並允許面向 client 的 Responses WebSocket 路徑。False 時 client 使用 HTTP/SSE；不會停用符合條件的 canonical ChatGPT upstream WS 最佳化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 額外的精確 CORS 來源。回送來源恆被允許。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` 憑證，在非回送綁定上被管理與 data-plane 認證接受。由儀表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | 停用 | 選擇加入的已封存 session 清理政策。永不隱含啟用。 |
@@ -50,9 +50,14 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | 不接受 | **必填** | 不接受 |
 | `/v1/chat/completions` | 不接受 | **必填** | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
+| `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
 Responses 與 Chat Completions 為可能的 Codex Direct passthrough 保留 `Authorization`，因此那裡僅接受專屬的許可標頭。儀表板生成的 `apiKeys` 可在啟動後取代環境 token；候選值以常數時間比對。
+
+Messages 與 `count_tokens` 為相容路由客戶端仍接受三種許可形式。但在非回環綁定上，原生 Anthropic 透傳只透過
+`x-opencodex-api-key` 接受代理許可，並將 `Authorization` 與 `x-api-key` 保留給 Anthropic
+憑證。放在這些供應商標頭中的代理許可密鑰會在轉發前移除。
 
 :::caution[LAN 暴露]
 `0.0.0.0` 綁定將代理與設定的供應商存取暴露給 LAN。僅在受信任的網路上搭配強 token 使用。
@@ -119,7 +124,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code（`claudeCode`）
 
-這些設定治理 `/v1/messages`、`ocx claude` 啟動器與 Claude 儀表板頁面。
+這些設定治理 `/v1/messages`、`/v1/messages/count_tokens`、`ocx claude` 啟動器與 Claude 儀表板頁面。
 
 | Key | 型別 | 預設值 | 說明 |
 | --- | --- | --- | --- |
@@ -180,7 +185,7 @@ OpenAI backend 需要 ChatGPT 登入與啟用的 ChatGPT `forward` 供應商。C
 | `backend?` | `"openai" \| "anthropic"` | 自動 | 與網頁搜尋相同的明確優先、Anthropic 憑證感知選擇。 |
 | `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.4-mini` 或 Anthropic 為 `claude-sonnet-5`。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每個主回合允許的新描述快取未命中。`0` 停用呼叫；無效值使用預設。 |
-| `timeoutMs?` | `number` | `45000` | Sidecar 擷取逾時。 |
+| `timeoutMs?` | `number` | `45000` | Sidecar 擷取逾時。整數 1–2147483647。 |
 
 視覺僅對發送到其供應商 `noVisionModels` 中模型的圖片啟用。OpenAI 的登入／forward 需求與搜尋相同；明確選擇的 Anthropic 在無可用憑證時 fail closed。成功的 `data:` 描述使用以 backend、模型、細節、圖片位元組與正規化訊息 context 為 key 的有界快取。命中與同回合重複不消耗限制。遠端 `https:` 圖片與失敗或空的描述不被快取。
 

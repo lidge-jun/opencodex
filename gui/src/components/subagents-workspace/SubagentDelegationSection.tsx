@@ -78,6 +78,7 @@ export default function SubagentDelegationSection({
             onChange={v => onSave({ model: v || null, effort: effort || null })}
             disabled={saving}
             label={t("dash.injectionLabel")}
+            align="right"
           />
           {model && efforts.length > 0 && (
             <Select
@@ -89,6 +90,7 @@ export default function SubagentDelegationSection({
               onChange={v => onSave({ model: model || null, effort: v || null })}
               disabled={saving}
               label={t("dash.injectionEffortLabel")}
+              align="right"
             />
           )}
         </div>

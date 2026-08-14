@@ -19,13 +19,14 @@ import {
 import { readIntegrationState } from "../../integrations/state";
 import { createIntegrationStateStore, type IntegrationStateStore } from "../../integrations/store";
 import {
-  applyIntegration,
-  disableIntegration,
-  restoreIntegration,
+  applyIntegrationCoordinated,
+  disableIntegrationCoordinated,
+  restoreIntegrationCoordinated,
   type IntegrationRestoreInput,
   type IntegrationWriteInput,
   type WriteRefused,
 } from "../../integrations/writer";
+import { IntegrationWriterLockBusyError, type IntegrationWriterLockSeams } from "../../integrations/writer-lock";
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
@@ -37,9 +38,9 @@ const INTEGRATION_MUTATION_JOIN_MS = 120_000;
 export const INTEGRATION_MUTATION_TERMINAL_MS = 10 * 60_000;
 
 type IntegrationStateRecord = Awaited<ReturnType<typeof readIntegrationState>>;
-type ApplyResult = Awaited<ReturnType<typeof applyIntegration>>;
-type DisableResult = Awaited<ReturnType<typeof disableIntegration>>;
-type RestoreResult = Awaited<ReturnType<typeof restoreIntegration>>;
+type ApplyResult = Awaited<ReturnType<typeof applyIntegrationCoordinated>>;
+type DisableResult = Awaited<ReturnType<typeof disableIntegrationCoordinated>>;
+type RestoreResult = Awaited<ReturnType<typeof restoreIntegrationCoordinated>>;
 
 export type IntegrationStateEnvelope = {
   clientId: IntegrationClientId;
@@ -95,6 +96,7 @@ class IntegrationMutationBusyError extends Error {
 const integrationMutationFlights = new Map<IntegrationClientId, IntegrationMutationFlight>();
 let integrationMutationTestHooks: {
   io?: IntegrationIO;
+  lockSeams?: IntegrationWriterLockSeams;
   /**
    * Bind every read and write in the request to one store. Without this a
    * route test could isolate the writer but not the journal listing or the
@@ -185,6 +187,7 @@ function runIntegrationMutationFlight<T>(
 export function setIntegrationMutationFlightTestHooks(
   hooks: {
     io?: IntegrationIO;
+    lockSeams?: IntegrationWriterLockSeams;
     /** Binds the WHOLE request — reads, writes and journal — to one store. */
     store?: IntegrationStateStore;
     run?: (operation: () => Promise<unknown>) => Promise<unknown>;
@@ -433,6 +436,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
 
     const opId = parsed.opId.trim();
     const confirmDrift = parsed.confirmDrift ?? false;
+    let restoreClientId: IntegrationClientId | undefined;
     try {
       const store = integrationStore();
       const operation = store.findOperation(opId);
@@ -443,6 +447,7 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
           opId,
         }, 404, req, ctx.config);
       }
+      restoreClientId = operation.clientId;
       const snapshot = store.readSnapshot(operation);
       if (snapshot.kind === "expired") {
         return jsonResponse({
@@ -462,7 +467,9 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         operation.clientId,
         `restore:${opId}:${confirmDrift}`,
         writeInput.io?.now ?? Date.now,
-        () => Promise.resolve(restoreIntegration(restoreInput)),
+        () => restoreIntegrationCoordinated(restoreInput, {
+          lockSeams: integrationMutationTestHooks?.lockSeams,
+        }),
       );
       if (!result.ok) {
         /*
@@ -478,11 +485,11 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       }
       return jsonResponse(result satisfies IntegrationRestoreEnvelope, 200, req, ctx.config);
     } catch (error) {
-      if (error instanceof IntegrationMutationBusyError) {
+      if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
         return jsonResponse({
           error: "integration mutation busy",
           code: "integration_mutation_busy",
-          clientId: error.clientId,
+          clientId: restoreClientId ?? (error instanceof IntegrationMutationBusyError ? error.clientId : undefined),
         }, 409, req, ctx.config);
       }
       return internalErrorResponse(error, ctx);
@@ -519,18 +526,18 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
       requestedClient,
       parsed.enabled ? "apply" : "disable",
       input.io?.now ?? Date.now,
-      () => Promise.resolve(parsed.enabled
-        ? applyIntegration(input)
-        : disableIntegration(input)),
+      () => parsed.enabled
+        ? applyIntegrationCoordinated(input, { lockSeams: integrationMutationTestHooks?.lockSeams })
+        : disableIntegrationCoordinated(input, { lockSeams: integrationMutationTestHooks?.lockSeams }),
     );
     if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
     return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
   } catch (error) {
-    if (error instanceof IntegrationMutationBusyError) {
+    if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
       return jsonResponse({
         error: "integration mutation busy",
         code: "integration_mutation_busy",
-        clientId: error.clientId,
+        clientId: requestedClient,
       }, 409, req, ctx.config);
     }
     return internalErrorResponse(error, ctx);

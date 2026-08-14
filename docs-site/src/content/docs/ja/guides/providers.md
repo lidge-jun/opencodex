@@ -129,7 +129,7 @@ opt-in した上流がこのフィールドを拒否しても、opencodex はフ
 
 認証情報に固定アカウント ID やメールがある OAuth プロバイダーはログインを複数保持できます。
 Providers ページでアカウントを追加し、別アカウントをログアウトせずにアクティブアカウントだけを切り替えられます。
-アカウント識別情報がない Kimi 認証情報だけがアクティブスロットを差し替え、Kiro アカウントはプロファイル ARN をキーに保存されます。
+アカウント識別情報がない Kimi 認証情報は通常のログインではアクティブスロットを差し替えますが、明示的な **アカウントを追加** では既存スロットを保持し、別の新しいスロットをアクティブにします。Kiro アカウントはプロファイル ARN をキーに保存されます。
 `chatgpt` は Codex アカウントプールに別の保存場所があり、常に単一スロットのみ書き込みます。トークンは `~/.opencodex/auth.json` に保存され、
 `/api/oauth/accounts` はマスク済みメタデータのみを返します。
 
@@ -170,8 +170,8 @@ opencodex には組み込みプリセットが 79 個含まれています。キ
 [Cline の利用規約](https://cline.bot/tos)に記載された Cline Bot Inc. です。`cline-pass/cline-pass/kimi-k3` のようなルーティング ID は
 意図した形式です。先頭は opencodex のプロバイダー、残りの `cline-pass/kimi-k3` は upstream に送信する
 完全なモデル slug です。使用量はアカウントのローリング 5 時間、週次、月次の各上限で共有されます。
-現在 opencodex が公開する reasoning tier は実機検証済みの `low` のみで、より高い要求は公式範囲が
-公開または検証されるまで `low` にクランプされます。
+2026-08-13 の実機検証で、すべての静的 ClinePass モデルが gateway input で `low`、`medium`、`high`、`xhigh`、`max` を受け付けることを確認しました。
+opencodex は要求された tier をそのまま保持し、バックエンド固有の正規化は ClinePass 側に委ねます。
 
 **Cline** は同じ API キー・エンドポイントを従量課金で使い、100 以上のモデルにアクセスできます
 (OpenRouter 形式の ID、例: `anthropic/claude-sonnet-4-6`)。Cline の期間限定無料モデルは
@@ -218,6 +218,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -390,8 +391,11 @@ Cursor は別の実験的アダプターとして追跡します。`adapter: "cu
 Provider ピッカーに実験的 local config 項目として表示され、Cursor の静的フォールバックモデルカタログ
 メタデータを保存します。Cursor アクセストークンを設定すると opencodex は Cursor ライブ HTTP/2 トランスポートを
 使います。バンドル済みフォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
-`grok-4.5` / `grok-4.5-fast`、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
-アカウントに表示するモデルを決定します。Cursor は Kimi K3 を effort サフィックス付きの wire id
+Grok 4.5 / 4.6 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
+アカウントに表示するモデルを決定します。Grok 4.6 は両形式で `low` / `medium` / `high` / `xhigh` を公開し、
+4.5 は `high` までです。Fast リクエストは対応する Grok ベースモデルを、独立した `effort` と `fast=true` の
+`requested_model` パラメータとともに送信します。平坦化された `cursor-grok-{version}-{effort}-fast` id は
+探索と picker の識別子としてのみ使われます。Cursor は Kimi K3 を effort サフィックス付きの wire id
 としてのみ提供するため、`cursor/kimi-k3` は `low` / `high` / `max` のラダーを公開し、既定値はモデル
 ドキュメントの API 既定値と同じ `max` です。Cursor サーバーが直接送るネイティブ read/write/delete/ls/grep/shell/fetch 実行は Codex
 承認とサンドボックス経路をバイパスするためデフォルトで無効です。信頼できるローカル実験でのみ

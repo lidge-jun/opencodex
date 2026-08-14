@@ -143,6 +143,162 @@
   min-width: 0;
 }
 
+.dash-vision-sidecar-card {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+/* The shared sidecar copy rule is `flex: 1 1 0` so a one-row control group can
+   keep its intrinsic width. Vision's control column is two rows, and the number
+   fields alone are ~24rem; with a 0 basis the title collapses to a one-glyph
+   column and the card grows to over 1000px tall. Give copy a readable basis so
+   the card wraps to a stacked layout instead of shrinking the hint. */
+.dash-vision-sidecar-card .dash-sidecar-copy {
+  flex: 1 1 16rem;
+  min-width: min(100%, 14rem);
+}
+
+.dash-vision-sidecar-card .dash-delegation-controls {
+  flex: 1 1 20rem;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+
+.dash-vision-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+  width: 100%;
+}
+
+.dash-vision-select-row .custom-select:first-child {
+  flex: 1 1 70%;
+  min-width: 9rem;
+  max-width: 16rem;
+}
+
+.dash-vision-select-row .custom-select:nth-child(2) {
+  flex: 1 1 30%;
+  min-width: 6rem;
+  max-width: 9rem;
+}
+
+.dash-vision-select-row .custom-select .select-trigger {
+  width: 100%;
+  max-width: 100%;
+}
+
+.dash-vision-advanced-row {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.dash-vision-advanced-trigger {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: var(--text-control);
+  cursor: pointer;
+}
+.dash-vision-advanced-trigger:hover:not(:disabled) {
+  color: var(--text);
+}
+.dash-vision-advanced-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.dash-vision-advanced-trigger:focus-visible {
+  outline: 2px solid var(--accent-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-2xs);
+}
+
+.dash-vision-number {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dash-vision-number .codex-auto-switch-input-wrap {
+  width: min(11.5rem, 100%);
+}
+
+.dash-vision-number .codex-auto-switch-input {
+  min-width: 0;
+}
+
+/* Floating popover for the advanced vision settings. Portaled to body and
+   positioned via computeSelectMenuStyle (same pattern as the Select dropdown):
+   fixed position, never consumes page flow or shifts the dashboard layout. */
+.dash-vision-advanced-popover {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 16rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 24px rgb(0 0 0 / 0.14);
+  overflow-y: auto;
+}
+.dash-vision-advanced-popover-title {
+  font-weight: var(--weight-semibold);
+}
+.dash-vision-advanced-popover .dash-vision-number .codex-auto-switch-input-wrap {
+  width: 100%;
+}
+.dash-vision-advanced-popover .dash-vision-number .codex-auto-switch-input {
+  flex: 1 1 0;
+}
+.dash-vision-advanced-popover .dash-vision-number {
+  gap: 4px;
+}
+
+@media (max-width: 36rem) {
+  .dash-vision-sidecar-card {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dash-vision-sidecar-card .dash-sidecar-copy,
+  .dash-vision-sidecar-card .dash-delegation-controls {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .dash-vision-sidecar-card .dash-delegation-controls {
+    align-items: stretch;
+  }
+
+  .dash-vision-select-row {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 30rem) {
+  .dash-vision-number .codex-auto-switch-input-wrap {
+    width: 100%;
+  }
+}
+
 /* Below the width where a row can hold copy + two selects, stack instead of
    overflowing. Measured: the row is clean down to ~320px viewport; under that the
    controls would push past the panel edge. */

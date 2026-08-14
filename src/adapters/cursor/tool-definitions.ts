@@ -7,6 +7,9 @@ import { McpToolDefinitionSchema, McpToolsSchema, type McpToolDefinition } from 
 export const OCX_RESPONSES_TOOL_PROVIDER = "opencodex-responses";
 export const CODEX_EXEC_COMMAND_TOOL = "exec_command";
 export const CODEX_SHELL_COMMAND_TOOL = "shell_command";
+/** Codex Desktop unified-exec client tool. Companion of `wait`; not an `exec_command` schema alias. */
+export const CODEX_UNIFIED_EXEC_TOOL = "exec";
+export const CODEX_WAIT_TOOL = "wait";
 export const CODEX_APPLY_PATCH_TOOL = "apply_patch";
 export const CURSOR_EDIT_FILE_TOOL = "edit_file";
 export const CURSOR_MULTI_EDIT_TOOL = "multi_edit";
@@ -167,6 +170,27 @@ export function isBareCodexShellBridgeTool(tool: Pick<OcxTool, "namespace" | "na
   return !tool.namespace && isCodexShellBridgeToolName(tool.name);
 }
 
+function isCursorResponsesProvider(namespace: string | undefined): boolean {
+  return !namespace || namespace === OCX_RESPONSES_TOOL_PROVIDER;
+}
+
+const CURSOR_EXECUTION_PATH_TOOL_NAMES = [
+  CODEX_UNIFIED_EXEC_TOOL,
+  CODEX_EXEC_COMMAND_TOOL,
+  CODEX_SHELL_COMMAND_TOOL,
+] as const;
+
+/** True for the Codex execution path that must survive Cursor transport truncation. */
+export function isCursorExecutionPathTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+  return isCursorResponsesProvider(tool.namespace)
+    && (CURSOR_EXECUTION_PATH_TOOL_NAMES as readonly string[]).includes(tool.name);
+}
+
+/** `wait` only resumes a yielded exec cell; it is unusable without an execution-path tool. */
+export function isCursorWaitTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
+  return isCursorResponsesProvider(tool.namespace) && tool.name === CODEX_WAIT_TOOL;
+}
+
 /** @deprecated Prefer isBareCodexShellBridgeTool; kept for older call sites/tests. */
 function isBareCodexExecCommandTool(tool: Pick<OcxTool, "namespace" | "name">): boolean {
   return isBareCodexShellBridgeTool(tool);
@@ -174,6 +198,12 @@ function isBareCodexExecCommandTool(tool: Pick<OcxTool, "namespace" | "name">): 
 
 export function cursorRequestHasShellAlias(tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined): boolean {
   return tools?.some(isBareCodexExecCommandTool) ?? false;
+}
+
+function cursorRequestHasExecutionPath(
+  tools: readonly Pick<OcxTool, "namespace" | "name">[] | undefined,
+): boolean {
+  return tools?.some(isCursorExecutionPathTool) ?? false;
 }
 
 export function cursorRequestAdvertisesApplyPatch(
@@ -225,14 +255,14 @@ export function cursorStructuredEditTools(
       name: CURSOR_EDIT_FILE_TOOL,
       cursorStructuredEdit: true,
       description:
-        "Replace one block of exact text in a file. OpenCodex converts the replacement into a Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
+        "Replace one block of text in a file. OpenCodex converts the replacement into a Codex apply_patch change. Copy old_string and new_string with their exact leading whitespace — Codex may locate a line after trimming indent, but it writes new_string verbatim, so stripped indent silently corrupts the file. An empty old_string with a non-empty new_string creates a new file (Add File). If the same text appears more than once, the first match is updated. Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
       parameters: { ...CURSOR_EDIT_FILE_INPUT_SCHEMA },
     },
     {
       name: CURSOR_MULTI_EDIT_TOOL,
       cursorStructuredEdit: true,
       description:
-        "Apply several exact-text replacements to one file. OpenCodex converts the edits into a single Codex apply_patch change, which the Codex client applies with its normal approval and sandbox policy. Each old_string must match the current file content exactly at exactly one location (apply_patch rejects ambiguous hunks). Edits are independent: every old_string is matched against the ORIGINAL file content, so a later edit must not rely on text introduced by an earlier one. Matching is line-based, so an edit cannot add or remove only the file's final newline, and old_string/new_string that are identical after line normalization are rejected as a no-op.",
+        "Apply several text replacements to one file. OpenCodex converts them into one Codex apply_patch change. Copy each old_string/new_string with exact leading whitespace. If a later edit's old_string is the text after an earlier replacement, OpenCodex folds those edits into one original-file hunk. Independent edits stay separate hunks. An empty old_string with a non-empty new_string creates a new file (Add File); do not mix that with an independent Update on the same path. If the same text appears more than once, the first match is updated. Matching is line-based, so an edit cannot add or remove only the file's final newline, and identical old/new after line normalization are rejected as a no-op.",
       parameters: { ...CURSOR_MULTI_EDIT_INPUT_SCHEMA },
     },
   ];
@@ -397,7 +427,7 @@ export function shouldUseNativeExecOnlyForGenericToolUse(
   text: string,
 ): boolean {
   const trimmed = text.trim();
-  if (trimmed.length === 0 || !cursorRequestHasShellAlias(tools) || !isGenericToolUseCountDemoPrompt(trimmed)) return false;
+  if (trimmed.length === 0 || !cursorRequestHasExecutionPath(tools) || !isGenericToolUseCountDemoPrompt(trimmed)) return false;
   return !/\b(?:mcp|resource|resources|tool_search|plugin|plugins|app connector|github)\b/i.test(trimmed)
     && !/(?:리소스|플러그인|깃허브|github)/i.test(trimmed);
 }
@@ -408,7 +438,7 @@ export function cursorToolsForActivePrompt<T extends Pick<OcxTool, "namespace" |
   toolChoice?: OcxRequestOptions["toolChoice"],
 ): readonly T[] | undefined {
   if (!shouldUseNativeExecOnlyForGenericToolUse(tools, activeText)) return tools;
-  const execTools = tools?.filter(isBareCodexExecCommandTool);
+  const execTools = tools?.filter(isCursorExecutionPathTool);
   const catalog = tools ?? [];
   if (execTools?.length && !execTools.some(tool => cursorToolAllowedByChoice(tool, toolChoice, catalog))) return tools;
   return execTools && execTools.length > 0 ? execTools : tools;
@@ -534,7 +564,7 @@ export function buildCursorToolGuidanceSystemNote(
   // Host-shell-neutral: the Codex client executes bridge commands, and may differ from
   // the OpenCodex proxy OS (LAN/SSH remote-proxy). Always cover PowerShell 5.1 pitfalls.
   const hostShellNote = hasBareExec
-    ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); `&&`/`||` are unsupported parser errors — prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` for success-gated follow-up steps; do not treat `;` as a substitute for `&&`. POSIX: use portable commands. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
+    ? "Match shell syntax to the Codex client host that runs the bridge (not only the proxy OS). Windows PowerShell 5.1: no CMD `cd /d`, no bash heredocs (`<<EOF`); `&&`/`||` are unsupported parser errors — prefer the bridge working-directory argument for directory changes, and use `if ($?) { ... }` for success-gated follow-up steps; do not treat `;` as a substitute for `&&`. POSIX: use portable commands (`cat`/`ls`/`rg`); never emit Get-Content or Get-ChildItem unless the host shell is PowerShell. After a shell failure, make at most one corrected bridge attempt, then report the error and stop — do not repeat equivalent failing commands."
     : undefined;
   const notes = [
     `Cursor tool calls: available tool names are exactly ${listedNames}.`,
@@ -558,7 +588,7 @@ export function buildCursorToolGuidanceSystemNote(
       : undefined,
     hasApplyPatch
       ? structuredEditNames.length > 0
-        ? `For file edits, prefer the structured edit tools ${quotedNames(structuredEditNames)} — they take exact-match replacements that OpenCodex converts into Codex \`apply_patch\` changes for approval. Use \`apply_patch\` directly only when you can emit its exact freeform syntax (\`*** Begin Patch\` envelope with \`@@\` hunks and \`-\`/\`+\` line prefixes); never emit patch-like plain text as tool arguments.`
+        ? `For file edits, prefer the structured edit tools ${quotedNames(structuredEditNames)} — they take replacements that OpenCodex converts into Codex \`apply_patch\` changes. Include exact leading whitespace in old_string/new_string. Use \`apply_patch\` directly only with a \`*** Begin Patch\` envelope and bare \`@@\` hunks (never git-style \`@@ -n,m +n,m @@\`); never emit patch-like plain text as tool arguments.`
         : "For file edits, use the `apply_patch` tool, not built-in file write/delete tools."
       : undefined,
     hasBareExec

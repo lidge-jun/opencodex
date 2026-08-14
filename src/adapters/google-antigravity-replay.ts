@@ -522,7 +522,15 @@ function refreshReplaySessionCandidate(key: string, entry: ReplayEntry): void {
 }
 
 function deleteExpiredReplaySessions(now: number): void {
-  for (const [key, entry] of replayCache) if (entry.expiresAtMs <= now) deleteReplaySession(key);
+  let deleted = false;
+  for (const [key, entry] of replayCache) {
+    if (entry.expiresAtMs > now) continue;
+    deleteReplaySession(key);
+    deleted = true;
+  }
+  // Expiry is a durable mutation too: rewrite the snapshot so opaque thought
+  // signatures do not remain at rest after their in-memory TTL has elapsed.
+  if (deleted) markReplayDirty();
 }
 
 /**

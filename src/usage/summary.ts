@@ -136,9 +136,23 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
   return "all";
 }
 
-function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
-  if (range === "7d") return { since: now - 7 * DAY_MS, days: 7 };
-  if (range === "30d") return { since: now - 30 * DAY_MS, days: 30 };
+function startOfLocalDay(ts: number): number {
+  const d = new Date(ts);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
+  if (range === "7d") {
+    const start = new Date(startOfLocalDay(now));
+    start.setDate(start.getDate() - 6);
+    return { since: start.getTime(), days: 7 };
+  }
+  if (range === "30d") {
+    const start = new Date(startOfLocalDay(now));
+    start.setDate(start.getDate() - 29);
+    return { since: start.getTime(), days: 30 };
+  }
   return { since: null, days: 0 };
 }
 
@@ -347,8 +361,11 @@ function buildDayGrid(range: UsageRange, since: number | null, now: number, entr
     m.attemptCount += 1;
     m.totalTokens += usageDisplayTotalTokens(attribution.usage, attribution.totalTokens) ?? 0;
   };
+  const startOfToday = startOfLocalDay(now);
   for (let i = days - 1; i >= 0; i--) {
-    const key = localDateKey(now - i * DAY_MS);
+    const d = new Date(startOfToday);
+    d.setDate(d.getDate() - i);
+    const key = localDateKey(d.getTime());
     grid.set(key, { date: key, requests: 0, measuredRequests: 0, reportedRequests: 0, totalTokens: 0, models: [] });
   }
   for (const entry of entries) {

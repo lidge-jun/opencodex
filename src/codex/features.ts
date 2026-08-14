@@ -1036,7 +1036,18 @@ export function setMultiAgentModeHintText(value: string | null, configPath?: str
   return setV2StringField("multi_agent_mode_hint_text", value, configPath);
 }
 
-const modeHintCapabilityCache = new Map<string, boolean | null>();
+export const MODE_HINT_CAPABILITY_CACHE_MAX_ENTRIES = 8;
+export const modeHintCapabilityCache = new Map<string, boolean | null>();
+
+export function rememberModeHintCapability(cacheKey: string, capability: boolean | null): void {
+  modeHintCapabilityCache.delete(cacheKey);
+  modeHintCapabilityCache.set(cacheKey, capability);
+  while (modeHintCapabilityCache.size > MODE_HINT_CAPABILITY_CACHE_MAX_ENTRIES) {
+    const oldest = modeHintCapabilityCache.keys().next().value;
+    if (oldest === undefined) break;
+    modeHintCapabilityCache.delete(oldest);
+  }
+}
 
 /**
  * True when the installed Codex runtime binary contains the
@@ -1069,7 +1080,7 @@ export function probeCodexSupportsModeHint(): boolean | null {
         if (!isNativeExecutable(buf)) continue;
         sawBinary = true;
         if (buf.includes(Buffer.from("multi_agent_mode_hint_text", "utf8"))) {
-          modeHintCapabilityCache.set(cacheKey, true);
+          rememberModeHintCapability(cacheKey, true);
           return true;
         }
       } catch {
@@ -1078,7 +1089,7 @@ export function probeCodexSupportsModeHint(): boolean | null {
     }
     // At least one real binary was inspected and none contained the key.
     const result = sawBinary ? false : null;
-    modeHintCapabilityCache.set(cacheKey, result);
+    rememberModeHintCapability(cacheKey, result);
     return result;
   } catch {
     return null;

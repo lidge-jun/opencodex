@@ -113,9 +113,10 @@ Anthropic OAuth provider。Sidecar 錯誤會轉換成長度受限的工具結果
 
 ## 儀表板設定與停用
 
-<!-- TODO(WP5 GUI): GUI 控制元件完成後補充 sidecar 設定頁面操作說明。 -->
+儀表板的視覺附屬服務卡片可以啟用或停用 sidecar，並設定 `maxDescriptionsPerTurn` 和
+`timeoutMs`，同時保留既有的模型、後端和推理強度控制。停用不會刪除這些設定；重新啟用後仍會保留原來的模型、後端、推理強度、逾時和次數上限。
 
-設定檔欄位現在即可使用。如需停用某個 sidecar，請在 `config.json` 中把對應的 `enabled` 設為
-`false`。Anthropic OAuth 搜尋和圖像描述沿用現有 Claude Code OAuth fingerprint 先例，但仍應使用
-目標帳號和實際負載充分 soak test。所有欄位見
+`PUT /api/sidecar-settings` 接受相同欄位。部分更新會保留未提交的鍵。`timeoutMs` 使用執行時整數邊界（1–2147483647 毫秒）。
+
+如果更想直接改檔案，仍可在 `config.json` 中把 `enabled` 設為 `false`。Anthropic OAuth 搜尋和圖像描述沿用現有 Claude Code OAuth fingerprint 先例，但仍應使用目標帳號和實際負載充分 soak test。所有欄位見
 [設定參考](/zh-tw/reference/configuration/#sidecars)。

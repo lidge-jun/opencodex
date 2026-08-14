@@ -751,13 +751,25 @@ describe("summarizeUsage", () => {
     const sum = summarizeUsage(entries, "30d", FIXED_NOW);
     const byModel = Object.fromEntries(sum.models.map(m => [`${m.provider}/${m.model}`, m]));
 
-    expect(byModel["google-antigravity/gemini-3.6-flash"]).toMatchObject({
-      provider: "google-antigravity",
-      model: "gemini-3.6-flash",
-      requests: 3,
-      totalTokens: 1760,
+    // Retired Flash ids keep their own usage identity. Routing now sends these ids to
+    // 3.7, but a historical row records the model the user actually called — collapsing
+    // them into the successor would move past spend onto a model that did not exist yet.
+    expect(byModel["google-antigravity/gemini-3.5-flash-high"]).toMatchObject({
+      model: "gemini-3.5-flash-high",
+      requests: 1,
+      totalTokens: 1100,
     });
-    expect(byModel["google-antigravity/gemini-3.6-flash"]?.resolvedModel).toBeUndefined();
+    expect(byModel["google-antigravity/gemini-3.5-flash-low"]).toMatchObject({
+      model: "gemini-3.5-flash-low",
+      requests: 1,
+      totalTokens: 550,
+    });
+    expect(byModel["google-antigravity/gemini-3-flash-agent"]).toMatchObject({
+      model: "gemini-3-flash-agent",
+      requests: 1,
+      totalTokens: 110,
+    });
+    expect(byModel["google-antigravity/gemini-3.7-flash"]).toBeUndefined();
 
     expect(byModel["google-antigravity/gemini-3.1-pro"]).toMatchObject({
       provider: "google-antigravity",
@@ -782,11 +794,11 @@ describe("summarizeUsage", () => {
 
     const day = sum.days.find(d => d.requests > 0)!;
     const dayModels = Object.fromEntries(day.models.map(m => [`${m.provider}/${m.model}`, m]));
-    expect(dayModels["google-antigravity/gemini-3.6-flash"]?.requests).toBe(3);
+    expect(dayModels["google-antigravity/gemini-3.5-flash-high"]?.requests).toBe(1);
     expect(dayModels["google-antigravity/gemini-3.1-pro"]?.requests).toBe(2);
   });
 
-  test("collapses antigravity base model + wire resolvedModel into one picker row", () => {
+  test("keeps a retired antigravity model's history under its own id", () => {
     const entries: PersistedUsageEntry[] = [
       entry({
         ts: FIXED_NOW - 1,
@@ -809,14 +821,18 @@ describe("summarizeUsage", () => {
       }),
     ];
     const sum = summarizeUsage(entries, "30d", FIXED_NOW);
-    expect(sum.models).toHaveLength(1);
-    expect(sum.models[0]).toMatchObject({
+    const byModel = Object.fromEntries(sum.models.map(m => [m.model, m]));
+    expect(byModel["gemini-3.6-flash"]).toMatchObject({
       provider: "google-antigravity",
       model: "gemini-3.6-flash",
-      requests: 2,
-      totalTokens: 165,
+      requests: 1,
+      totalTokens: 110,
     });
-    expect(sum.models[0]?.resolvedModel).toBeUndefined();
+    expect(byModel["gemini-3.6-flash-high"]).toMatchObject({
+      model: "gemini-3.6-flash-high",
+      requests: 1,
+      totalTokens: 55,
+    });
   });
 
   test("caps top-level and per-day model breakdowns with a lossless other bucket", () => {
@@ -850,6 +866,75 @@ describe("summarizeUsage", () => {
       attemptCount: 5,
       totalTokens: 10,
     });
+  });
+
+  test("7d and 30d range windows align to calendar day boundaries (00:00:00) so completed days remain stable (#1580)", () => {
+    // Construct local midnight for 2026-08-13
+    const todayMidnight = new Date(2026, 7, 13, 0, 0, 0, 0).getTime();
+    const dayMs = 86_400_000;
+
+    // Day -29 (2026-07-15) at 04:00 AM (for 30d boundary)
+    const dayMinus29Date = new Date(todayMidnight);
+    dayMinus29Date.setDate(dayMinus29Date.getDate() - 29);
+    dayMinus29Date.setHours(4, 0, 0, 0);
+    const dayMinus29Ts = dayMinus29Date.getTime();
+
+    // Day -6 (2026-08-07) at 02:30 AM (for 7d boundary)
+    const dayMinus6Early = todayMidnight - 6 * dayMs + 2.5 * 3600_000;
+    // Yesterday (2026-08-12) at 03:00 AM
+    const yesterdayEarly = todayMidnight - 1 * dayMs + 3 * 3600_000;
+    // Yesterday (2026-08-12) at 19:00 PM
+    const yesterdayLate = todayMidnight - 1 * dayMs + 19 * 3600_000;
+    // Today (2026-08-13) at 08:00 AM
+    const todayMorning = todayMidnight + 8 * 3600_000;
+
+    const entries: PersistedUsageEntry[] = [
+      entry({ ts: dayMinus29Ts, usageStatus: "reported", usage: { inputTokens: 600, outputTokens: 600 }, totalTokens: 1200 }),
+      entry({ ts: dayMinus6Early, usageStatus: "reported", usage: { inputTokens: 250, outputTokens: 250 }, totalTokens: 500 }),
+      entry({ ts: yesterdayEarly, usageStatus: "reported", usage: { inputTokens: 400, outputTokens: 400 }, totalTokens: 800 }),
+      entry({ ts: yesterdayLate, usageStatus: "reported", usage: { inputTokens: 100, outputTokens: 100 }, totalTokens: 200 }),
+      entry({ ts: todayMorning, usageStatus: "reported", usage: { inputTokens: 150, outputTokens: 150 }, totalTokens: 300 }),
+    ];
+
+    // Summary at 09:00 AM today (7d)
+    const sumMorning7d = summarizeUsage(entries, "7d", todayMidnight + 9 * 3600_000);
+    const day6Morning = sumMorning7d.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayMorningTotal = sumMorning7d.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+
+    expect(day6Morning).toBe(500);
+    expect(yesterdayMorningTotal).toBe(1000);
+
+    // Summary at 09:00 AM today (30d)
+    const sumMorning30d = summarizeUsage(entries, "30d", todayMidnight + 9 * 3600_000);
+    const day29Morning = sumMorning30d.days.find(d => d.date.endsWith("07-15"))?.totalTokens;
+    expect(sumMorning30d.days).toHaveLength(30);
+    expect(day29Morning).toBe(1200);
+
+    // Summary at 23:30 PM today (later in the day) with an additional turn today
+    const todayEvening = todayMidnight + 20 * 3600_000;
+    const entriesLater = [
+      ...entries,
+      entry({ ts: todayEvening, usageStatus: "reported", usage: { inputTokens: 50, outputTokens: 50 }, totalTokens: 100 }),
+    ];
+
+    // 7d evening
+    const sumEvening7d = summarizeUsage(entriesLater, "7d", todayMidnight + 23.5 * 3600_000);
+    const day6Evening = sumEvening7d.days.find(d => d.date.endsWith("08-07"))?.totalTokens;
+    const yesterdayEveningTotal = sumEvening7d.days.find(d => d.date.endsWith("08-12"))?.totalTokens;
+    const todayEveningTotal = sumEvening7d.days.find(d => d.date.endsWith("08-13"))?.totalTokens;
+
+    // Critical assertion: completed days NEVER lose tokens as hours progress in 7d
+    expect(day6Evening).toBe(500);
+    expect(yesterdayEveningTotal).toBe(1000);
+    expect(todayEveningTotal).toBe(400); // 300 + 100
+    expect(sumMorning7d.since).toBe(sumEvening7d.since);
+
+    // 30d evening
+    const sumEvening30d = summarizeUsage(entriesLater, "30d", todayMidnight + 23.5 * 3600_000);
+    const day29Evening = sumEvening30d.days.find(d => d.date.endsWith("07-15"))?.totalTokens;
+    expect(sumEvening30d.days).toHaveLength(30);
+    expect(day29Evening).toBe(1200);
+    expect(sumMorning30d.since).toBe(sumEvening30d.since);
   });
 
 });

@@ -10,6 +10,10 @@ import {
   evictOldestVisionDescriptionForBudget,
   resetVisionDescriptionCache,
   resolveMaxDescriptionsPerTurn,
+  resolveVisionTimeoutMs,
+  DEFAULT_VISION_TIMEOUT_MS,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
   setVisionDescriptionCache,
   setVisionDescriptionCacheLimitsForTests,
   shouldResolveOpenAiVisionSidecar,
@@ -132,6 +136,17 @@ describe("vision description cache and per-turn cap", () => {
     expect(resolveMaxDescriptionsPerTurn(-1)).toBe(8);
     expect(resolveMaxDescriptionsPerTurn(1.5)).toBe(8);
     expect(resolveMaxDescriptionsPerTurn(Number.NaN)).toBe(8);
+  });
+
+  test("normalizes vision timeoutMs to the runtime bounds", () => {
+    expect(resolveVisionTimeoutMs(undefined)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(12_000)).toBe(12_000);
+    expect(resolveVisionTimeoutMs(MIN_VISION_TIMEOUT_MS)).toBe(MIN_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(MAX_VISION_TIMEOUT_MS)).toBe(MAX_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(0)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(-1)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(1.5)).toBe(DEFAULT_VISION_TIMEOUT_MS);
+    expect(resolveVisionTimeoutMs(MAX_VISION_TIMEOUT_MS + 1)).toBe(DEFAULT_VISION_TIMEOUT_MS);
   });
 
   test("maxDescriptionsPerTurn=0 emits a cap marker without calling an executor", async () => {

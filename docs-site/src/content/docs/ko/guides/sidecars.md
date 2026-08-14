@@ -129,9 +129,10 @@ OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.4-mini`를 폴백으로 �
 
 ## 대시보드 설정과 끄기
 
-<!-- TODO(WP5 GUI): GUI 컨트롤이 완성되면 사이드카 설정 화면 안내를 추가하세요. -->
+대시보드 비전 사이드카 카드에서는 기존 모델·백엔드·추론 컨트롤과 함께 사이드카를 켜거나 끄고, `maxDescriptionsPerTurn`과 `timeoutMs`를 설정할 수 있습니다. 꺼도 다른 설정은 삭제되지 않으며, 다시 켜면 이전 모델, 백엔드, 추론, 제한 시간, 한도가 그대로 남습니다.
 
-설정 파일 키는 지금 바로 사용할 수 있습니다. 기능을 끄려면 `config.json`에서 해당 사이드카의
-`enabled`를 `false`로 설정하세요. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
+`PUT /api/sidecar-settings`는 같은 필드를 받습니다. 부분 업데이트는 보내지 않은 키를 유지합니다. `timeoutMs`는 런타임 정수 범위(1–2147483647 ms)를 사용합니다.
+
+파일을 직접 고치고 싶다면 이전처럼 `config.json`에서 `enabled`를 `false`로 두면 됩니다. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
 fingerprint 선례를 따르지만, 실제 계정과 작업량으로 충분히 soak test하는 편이 좋습니다. 전체
 필드는 [설정 레퍼런스](/ko/reference/configuration/#sidecars)를 참고하세요.

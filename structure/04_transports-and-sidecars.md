@@ -22,6 +22,15 @@ executor contract. Main-request migration must not treat that branch as fixed-tr
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output.
 
+[Decision Log]
+- 목적과 의도: Prevent routed models from turning invented or neighboring-agent tool names into client-executable Responses calls.
+- 기존 구현 및 제약 조건: The request catalog already controlled custom-tool restoration and the non-OpenAI prompt nudge, but an undeclared upstream name still fell through as an ordinary `function_call`; Codex then reduced the mismatch to a bare `aborted` result.
+- 검토한 주요 대안: Rely only on prompt guidance; automatically translate undeclared `apply_patch` into Code Mode; validate returned names against the request-visible catalog at the final bridge.
+- 선택한 방식: Retain the allowed wire-name set with the existing bridge maps and fail the turn with an explicit compatibility error before emitting any undeclared tool item.
+- 보완된 경계: Key-auth Responses passthrough restores a routed custom call only when the adapter actually lowered that name after request normalization and the caller's `tool_choice` still authorizes it. Native `apply_patch` and tools replaced by hosted-provider policy stay in their upstream function-call form.
+- 다른 대안 대신 이 방식을 선택한 이유: Model guidance is not an enforcement boundary, while automatic translation would invent executable caller intent and arguments after generation.
+- 장점, 단점 및 영향: Streaming and non-streaming routed responses now fail closed with an actionable provider-contract error; providers that emit aliases they never advertised must correct their adapter mapping instead of relying on client abort behavior.
+
 The option-aware `openai` provider uses `openai-responses` with `authMode: "forward"`. Pool mode
 resolves main plus added accounts through affinity/quota/cooldown ownership; Direct forwards only
 the allowed Codex/OpenAI auth/session headers from the current request and short-circuits pool
@@ -83,6 +92,17 @@ The two-shape contract is mirror-commented in `src/server/index.ts`; the real
 `core.ts` gate is source-invariant-tested by `tests/passthrough-abort.test.ts`,
 and the platform matrix lives in `tests/bun-stream-caps.test.ts`. Keep all three
 in lockstep with any passthrough-policy change.
+
+Canonical ChatGPT forward streaming has one transport-specific exception. A
+stable Bun runtime at or above 1.4.0 may use Codex's upstream
+`responses_websockets` transport; bundled Bun 1.3.14, prereleases, and
+unverifiable runtime identities stay on HTTP/SSE. A successful upstream WS
+response is re-encoded to the same SSE surface and forced through the bounded
+eager single-reader relay instead of `tee()`: raw and enveloped frames are capped
+at 4 MiB and the WS producer queue at 8 MiB. Overflow closes the upstream and
+the downstream relay emits its terminal `response.failed` event plus `[DONE]`.
+Pre-open HTTP fallback remains unmarked and follows the ordinary configured
+stream path.
 
 Translated response request-log tracking and the heartbeat relay also reuse
 `createSseInspector`. This keeps every client-facing SSE observation path on
@@ -219,6 +239,20 @@ MCP, screen recording, and computer-use stay on their separate explicit executor
 - 다른 대안 대신 이 방식을 선택한 이유: opencodex has no trustworthy per-request sandbox attestation in request text or headers, so any prompt-carried marker is spoofable by data-plane callers.
 - 장점, 단점 및 영향: this closes prompt-to-native-exec escalation while preserving an explicit operator escape hatch; existing configs that relied on `codex-sandbox` must switch to `nativeLocalExec: "on"` for trusted local experiments.
 
+Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
+that survives the transport budget: unified Desktop `exec` as well as the legacy
+`exec_command`/`shell_command` aliases. The legacy aliases receive Cursor-specific shell guidance;
+unified `exec` keeps its own schema and is surfaced back to Codex as a client tool. It must never
+fall through to the separate native-local-exec dispatcher.
+
+[Decision Log]
+- 목적과 의도: keep fresh Cursor-routed Codex Desktop subagents able to invoke the actual unified `exec` tool exposed by their client catalog.
+- 기존 구현 및 제약 조건: catalog truncation already pinned `exec`, but the later generic-tool filter recognized only bare `exec_command`/`shell_command` and could erase the sole executable client tool while also naming aliases that were absent.
+- 검토한 주요 대안: synthesize a legacy alias, execute `exec` through Cursor native-local-exec, disable generic filtering, or treat every Responses-owned execution-path tool as eligible.
+- 선택한 방식: preserve the existing client tool and schema by filtering with `isCursorExecutionPathTool`; keep alias-specific prompt guidance gated on an alias actually being present.
+- 다른 대안 대신 이 방식을 선택한 이유: Codex Desktop remains the execution and approval authority, no unavailable tool name is invented, and the existing Responses MCP suspension path can relay the call without widening native execution privileges.
+- 장점, 단점 및 영향: unified `exec` survives the filter and returns to Desktop for execution; legacy aliases behave as before; `wait` and unrelated tools remain excluded from generic tool-count prompts.
+
 ## WebSocket
 
 The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
@@ -234,6 +268,10 @@ The WebSocket endpoint exists at `/v1/responses`, but discovery is opt-in:
 HTTP/SSE. When true, Codex may use Responses WebSocket frames handled by `src/server/ws-bridge.ts`.
 If Codex still attempts a WebSocket upgrade while the feature is disabled, `/v1/responses` rejects
 the upgrade with 426 so Codex falls back to HTTP cleanly.
+
+That setting controls the client-facing upgrade only. The transparent upstream
+ChatGPT WS optimization described above is selected independently and still
+returns the same downstream SSE contract.
 
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
@@ -408,11 +446,13 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
 
-`cursor/grok-4.5-fast` is also a stable Codex-facing row, but current Cursor clients do not request
-it as a flat model slug. OpenCodex sends `grok-4.5` through `requested_model` with separate `effort`
-and `fast=true` parameters, leaving legacy `model_details` unset for that parameterized external
-selection. Live discovery still recognizes Cursor's flattened `cursor-grok-4.5-{effort}-fast`
-variants, plus the older `grok-4.5-fast-{effort}` ordering, as availability evidence only.
+`cursor/grok-4.5-fast` and `cursor/grok-4.6-fast` are stable Codex-facing rows, but current Cursor
+clients do not request them as flat model slugs. OpenCodex sends the matching Grok base id through
+`requested_model` with separate `effort` and `fast=true` parameters, leaving legacy `model_details`
+unset for that parameterized external selection. Grok 4.5 stops at `high`; Grok 4.6 additionally
+advertises and sends `xhigh`. Live discovery recognizes Cursor's flattened
+`cursor-grok-{version}-{effort}-fast` variants, plus the older
+`grok-{version}-fast-{effort}` ordering, as availability evidence only.
 
 ## Cursor active-context usage
 
@@ -436,6 +476,23 @@ pre-compaction checkpoint is not persisted for later carry-forward.
 - 다른 대안 대신 이 방식을 선택한 이유: It fixes the UI regression without delaying tool turns, fabricating token growth, storing prompt/tool content, or repeatedly clearing valid post-compaction usage when historical markers replay; one-time compaction resets still prevent stale over-report when history is replaced.
 - 장점, 단점 및 영향: Active-context reporting stays monotonic within an uncompacted Cursor conversation; no-checkpoint turns remain estimated; a process restart loses the numeric cache, and when neither a checkpoint nor a carry-forward is available the turn reports a request-local estimate derived from the same pruned payload sent to Cursor (#373 — reporting output-only usage made Codex read the context as nearly empty). Estimates are never persisted or promoted into checkpoint carry-forward; only live checkpoint frames update the cache.
 ```
+
+## Google thought-text visibility boundary
+
+Google-family responses may represent model-internal reasoning as a text-bearing part with
+`thought: true`. The Google adapter maps that text to the internal `reasoning_raw_delta` event;
+only text without the marker becomes visible `text_delta`. Streaming SSE and buffered JSON share
+one classifier so transport selection cannot change whether provider-declared reasoning is shown
+as assistant output. Thought-signature observation still runs on the original parts before text
+classification, preserving the opaque continuation state independently of display semantics.
+
+[Decision Log]
+- 목적과 의도: Prevent provider-marked internal reasoning from appearing as ordinary assistant text while preserving reasoning and tool-call continuation.
+- 기존 구현 및 제약 조건: Both Google response paths emitted every non-empty `Part.text` as visible text; function calls, inline images, and Antigravity/Vertex thought-signature replay already depended on the original part ordering.
+- 검토한 주요 대안: Drop thought text; classify it separately in each parser; remove the marker and keep visible text; use one shared classifier without mutating the provider parts.
+- 선택한 방식: Map `thought: true` text to `reasoning_raw_delta` through one helper used by streaming and buffered parsing, leaving part order and signature observation unchanged.
+- 다른 대안 대신 이 방식을 선택한 이유: Dropping the text loses reasoning replay/display policy input, while duplicated parser rules can drift and exposing marked thoughts violates the provider's visibility boundary.
+- 장점, 단점 및 영향: Internal reasoning no longer leaks into normal answers and both transports stay consistent; downstream reasoning policy still decides whether raw reasoning is rendered or only preserved, and malformed non-boolean markers remain ordinary text rather than broadening hidden-content inference.
 
 ## Google tool-call thought-signature replay
 
@@ -569,6 +626,22 @@ opt-out (registry-seeded, router-backfilled; an explicit user value always wins)
 adapters advertise the catalog bit only on explicit `true`; cursor keeps its own special-casing.
 Providers with flaky parallel streaming can be opted out individually. Evidence and provider
 ledger: `devlog/_fin/260709_parallel_tool_calls/`.
+
+## Volcengine Ark assistant continuation shapes
+
+The `openai-chat` adapter keeps Volcengine's pay-as-you-go Chat endpoint and Coding Plan endpoint
+on separate empty-assistant contracts. The pay-as-you-go `/api/v3` route retains the structured
+`[{ "type": "text", "text": "" }]` placeholder inferred for #796, while `/api/coding/v3` uses the
+ordinary empty string accepted by its live tool-call continuation contract (#1571). Matching only
+the shared Ark hostname is too broad because the two endpoint families reject opposite shapes.
+
+[Decision Log]
+- 목적과 의도: Preserve multi-turn tool-call continuations across both Ark Chat endpoint families.
+- 기존 구현 및 제약 조건: The #796 workaround was host-wide and unverified; live Coding Plan evidence shows its structured placeholder returns HTTP 400 while an empty string succeeds.
+- 검토한 주요 대안: Remove the workaround globally, select by model ID, or scope it by endpoint path.
+- 선택한 방식: Apply the structured placeholder only to recognized Ark hosts whose normalized base path is exactly `/api/v3`.
+- 다른 대안 대신 이 방식을 선택한 이유: Global removal would reopen #796, while model IDs can appear behind multiple Ark products and therefore do not identify the wire contract.
+- 장점, 단점 및 영향: Coding Plan regains its accepted continuation shape without changing generic providers; any future Ark endpoint family must provide evidence before inheriting the pay-as-you-go quirk.
 
 ## Chat structured-output compatibility
 

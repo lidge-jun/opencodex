@@ -702,10 +702,253 @@ describe("routed Responses custom-tool compatibility", () => {
     }
   });
 
+  test("handleResponses does not restore routed custom calls excluded by request policy", async () => {
+    const savedFetch = globalThis.fetch;
+    const upstreamItem = {
+      type: "function_call",
+      id: "fc_exec",
+      call_id: "call_exec",
+      name: "exec",
+      arguments: "{\"input\":\"ignored policy\"}",
+      status: "completed",
+    };
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://fixture.test/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+        },
+      },
+    } as OcxConfig;
+    const execTool = {
+      type: "custom",
+      name: "exec",
+      description: "Run JavaScript",
+      format: { type: "grammar", syntax: "lark" },
+    };
+    const ordinaryTool = {
+      type: "function",
+      name: "ordinary",
+      description: "Ordinary function",
+      parameters: { type: "object" },
+    };
+    const cases: Array<{
+      name: string;
+      stream: boolean;
+      tools: Array<Record<string, unknown>>;
+      toolChoice?: unknown;
+      metadata?: unknown;
+    }> = [
+      {
+        name: "streaming none",
+        stream: true,
+        tools: [execTool],
+        toolChoice: "none",
+      },
+      {
+        name: "streaming allowlist",
+        stream: true,
+        tools: [execTool, ordinaryTool],
+        toolChoice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [{ type: "function", name: "ordinary" }],
+        },
+      },
+      {
+        name: "named ordinary function",
+        stream: false,
+        tools: [execTool, ordinaryTool],
+        toolChoice: { type: "function", name: "ordinary" },
+      },
+      {
+        name: "custom-looking metadata without a declared tool",
+        stream: false,
+        tools: [ordinaryTool],
+        metadata: { nested: { type: "custom", name: "exec" } },
+      },
+    ];
+
+    globalThis.fetch = (async (_input, init) => {
+      const outboundBody = JSON.parse(String(init?.body)) as { stream?: boolean };
+      if (outboundBody.stream === true) {
+        const upstream = [
+          frame("response.output_item.added", {
+            output_index: 0,
+            item: { ...upstreamItem, arguments: "", status: "in_progress" },
+          }),
+          frame("response.function_call_arguments.done", {
+            output_index: 0,
+            item_id: "fc_exec",
+            arguments: upstreamItem.arguments,
+          }),
+          frame("response.output_item.done", { output_index: 0, item: upstreamItem }),
+          frame("response.completed", {
+            response: { id: "resp_policy", status: "completed", output: [upstreamItem] },
+          }),
+          "data: [DONE]",
+        ].join("\n\n") + "\n\n";
+        return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({
+        id: "resp_policy",
+        status: "completed",
+        output: [upstreamItem],
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      for (const policyCase of cases) {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "fixture/deepseek-v4-flash",
+            stream: policyCase.stream,
+            input: [{ role: "user", content: [{ type: "input_text", text: policyCase.name }] }],
+            tools: policyCase.tools,
+            ...(policyCase.toolChoice !== undefined ? { tool_choice: policyCase.toolChoice } : {}),
+            ...(policyCase.metadata !== undefined ? { metadata: policyCase.metadata } : {}),
+          }),
+        }), config, { model: "", provider: "" });
+
+        if (policyCase.stream) {
+          const clientSse = await response.text();
+          expect(clientSse).toContain('"type":"function_call"');
+          expect(clientSse).toContain('"id":"fc_exec"');
+          expect(clientSse).toContain("response.function_call_arguments.done");
+          expect(clientSse).not.toContain("custom_tool_call");
+          expect(clientSse).not.toContain("ctc_exec");
+        } else {
+          const body = await response.json() as { output: Array<Record<string, unknown>> };
+          expect(body.output[0]).toEqual(upstreamItem);
+        }
+      }
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("handleResponses preserves native apply_patch calls that were never converted", async () => {
+    const savedFetch = globalThis.fetch;
+    const upstreamItem = {
+      type: "function_call",
+      id: "fc_patch",
+      call_id: "call_patch",
+      name: "apply_patch",
+      arguments: "{\"patch\":\"*** Begin Patch\"}",
+      status: "completed",
+    };
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      id: "resp_patch",
+      status: "completed",
+      output: [upstreamItem],
+    }), { headers: { "content-type": "application/json" } })) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://fixture.test/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/deepseek-v4-flash",
+          stream: false,
+          input: [{ role: "user", content: [{ type: "input_text", text: "patch" }] }],
+          tools: [{
+            type: "custom",
+            name: "apply_patch",
+            description: "Apply a patch",
+            format: { type: "grammar", syntax: "lark" },
+          }],
+        }),
+      }), config, { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+
+      expect(body.output[0]).toEqual(upstreamItem);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
+  test("handleResponses does not restore a custom image tool replaced by hosted preference", async () => {
+    const savedFetch = globalThis.fetch;
+    let outboundBody: Record<string, unknown> | undefined;
+    const upstreamItem = {
+      type: "function_call",
+      id: "fc_image",
+      call_id: "call_image",
+      name: "image_gen.generate",
+      arguments: "{}",
+      status: "completed",
+    };
+    globalThis.fetch = (async (_input, init) => {
+      outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        id: "resp_image",
+        status: "completed",
+        output: [upstreamItem],
+      }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const config = {
+      port: 0,
+      defaultProvider: "fixture",
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://fixture.test/v1",
+          authMode: "key",
+          apiKey: "fixture-key",
+          modelPreferHostedTools: { "deepseek-v4-flash": ["image_generation"] },
+        },
+      },
+    } as OcxConfig;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/deepseek-v4-flash",
+          stream: false,
+          input: [{ role: "user", content: [{ type: "input_text", text: "draw" }] }],
+          tools: [{
+            type: "custom",
+            name: "image_gen.generate",
+            description: "Generate an image",
+            format: { type: "grammar", syntax: "lark" },
+          }],
+        }),
+      }), config, { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+      const outboundTools = outboundBody?.tools as Array<Record<string, unknown>> | undefined;
+
+      expect(outboundTools).toEqual([{ type: "image_generation" }]);
+      expect(body.output[0]).toEqual(upstreamItem);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
+
   test("handleResponses leaves custom tools native for forward-auth passthrough", async () => {
     const savedFetch = globalThis.fetch;
     let outboundBody: Record<string, unknown> | undefined;
     let outboundAuthorization: string | null = null;
+    let outboundUrl = "";
     const upstreamItem = {
       type: "function_call",
       id: "fc_exec",
@@ -714,7 +957,8 @@ describe("routed Responses custom-tool compatibility", () => {
       arguments: "{\"input\":\"native\"}",
       status: "completed",
     };
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (input, init) => {
+      outboundUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       outboundBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       outboundAuthorization = new Headers(init?.headers).get("authorization");
       return new Response(JSON.stringify({ id: "resp_forward", status: "completed", output: [upstreamItem] }), {
@@ -727,7 +971,7 @@ describe("routed Responses custom-tool compatibility", () => {
       providers: {
         fixture: {
           adapter: "openai-responses",
-          baseUrl: "https://forward.fixture.test",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
           authMode: "forward",
         },
       },
@@ -747,6 +991,7 @@ describe("routed Responses custom-tool compatibility", () => {
       const clientBody = await response.json() as { output: Array<Record<string, unknown>> };
       const outboundTools = outboundBody?.tools as Array<Record<string, unknown>> | undefined;
 
+      expect(outboundUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
       expect(outboundAuthorization).toBe("Bearer caller-token");
       expect(outboundTools?.[0]).toMatchObject({ type: "custom", name: "exec" });
       expect(clientBody.output[0]).toMatchObject({ type: "function_call", name: "exec" });

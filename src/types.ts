@@ -757,11 +757,11 @@ export interface OcxConfig {
    */
   customModelCatalogMigration?: unknown;
   /**
-   * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
-   * commit messages, skill orchestration) to a user-chosen model. Default intercepted
-   * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
-   * Opt-in; disabled by default. Matching maintenance/helper requests are forced to low.
-   * Normal Codex turns identified by request_kind=turn are never rewritten.
+  * Shadow call intercept: redirect Codex's hard-coded helper calls (title generation,
+  * commit messages, skill orchestration) to a user-chosen model. Default intercepted
+  * source models: gpt-5.4-mini (older clients) and gpt-5.6-luna (Codex 0.145.0+).
+  * Opt-in; disabled by default. Matching maintenance/helper requests are forced to low.
+   * All requests for configured shadow source models are intercepted unconditionally.
    */
   shadowCallIntercept?: {
     /** When true, requests for known shadow/helper source models are rewritten to the configured model. */
@@ -778,6 +778,16 @@ export interface OcxConfig {
    * - "v2": force ALL models to v2 surface (override upstream pins)
    */
   multiAgentMode?: "v1" | "default" | "v2";
+  /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
+  agentTaskRecovery?: {
+    enabled?: boolean;
+    /** ChatGPT model used by the recovery request. Default: gpt-5.6-sol. */
+    model?: string;
+    /** Recovery request timeout in milliseconds. Default: 45000. */
+    timeoutMs?: number;
+    /** Maximum in-memory ciphertext-to-assignment entries. Default: 200. */
+    cacheEntries?: number;
+  };
   /** Provider-level Codex-visible context caps. Values only lower known model context windows. */
   providerContextCaps?: Record<string, number>;
   /** Global Codex-visible context cap value (tokens). Falls back to DEFAULT_PROVIDER_CONTEXT_CAP. */
@@ -1152,6 +1162,14 @@ export interface OcxWebSearchSidecarConfig {
    * during a web-search turn. Default 200000. Must be an integer from 1 through 2147483647.
    */
   routedModelStallTimeoutMs?: number;
+  /**
+   * Stream the routed model's leading output (text/thinking deltas) live instead of buffering the
+   * whole iteration. Live delivery stops at the first tool-call boundary so web_search interception
+   * stays atomic. Tradeoff: text the model emits BEFORE deciding to search — which buffered mode
+   * silently drops — becomes visible to the client and may partially repeat in the post-search
+   * answer. Default: false (buffered, previous behavior).
+   */
+  streamRoutedModelOutput?: boolean;
 }
 
 export interface OpenRouterProviderRouting {
@@ -1434,11 +1452,30 @@ export interface OcxProviderConfig {
    */
   parallelToolCalls?: boolean;
   /**
+   * Opt-in: when `parallelToolCalls` is `false`, actually send `parallel_tool_calls: false`
+   * on the `/chat/completions` wire for this provider. By default an opted-out provider only
+   * OMITS the field (strict OpenAI-compatible hosts reject unknown knobs), and the NVIDIA NIM
+   * baseUrl is the sole built-in exception that pins the wire bit. Some self-hosted gateways
+   * (Kimi/GLM-family, vLLM, etc.) do honor `parallel_tool_calls` and keep emitting concurrent
+   * tool calls unless it is present; enable this to pin the bit without hardcoding their URL.
+   * No effect unless `parallelToolCalls === false`; ignored by non-`openai-chat` adapters.
+   */
+  pinParallelToolCallsFalse?: boolean;
+  /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown
    * fields. Default off; only enable for providers that document this parameter.
    */
   promptCacheKey?: boolean;
+  /**
+   * Opt-in: forward `service_tier` to the upstream `/chat/completions` body.
+   * OpenAI-specific extension with the same hazard as `promptCacheKey` — strict backends
+   * reject unknown fields, and 66 registry providers share the `openai-chat` adapter, so a
+   * caller-supplied `service_tier` would otherwise turn working requests into upstream 400s.
+   * `supportsServiceTier` is the Responses-wire flag and does not apply here.
+   * Default off; only enable for providers that document this parameter on the chat wire.
+   */
+  chatServiceTier?: boolean;
   /**
    * Provider-local passthrough SSE repair for broken openai-responses gateways that reuse exact
    * placeholder message/reasoning ids or omit the terminal id after a stable added event.

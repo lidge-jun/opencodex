@@ -54,7 +54,16 @@ import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { VISION_REASONING_EFFORTS, isVisionReasoningEffort } from "../../reasoning-effort";
 import { normalizeVisionReasoningForModel } from "../../vision/reasoning";
-import { findAnthropicVisionProvider, resolveEffectiveVisionModel, resolveVisionBackend } from "../../vision";
+import {
+  findAnthropicVisionProvider,
+  isValidVisionTimeoutMs,
+  MAX_VISION_TIMEOUT_MS,
+  MIN_VISION_TIMEOUT_MS,
+  resolveEffectiveVisionModel,
+  resolveMaxDescriptionsPerTurn,
+  resolveVisionBackend,
+  resolveVisionTimeoutMs,
+} from "../../vision";
 import {
   visionCandidateRows,
   visionDescriberIsProvablyBlind,
@@ -106,6 +115,21 @@ async function sidecarVisionResponseSettings(config: OcxConfig): Promise<{
     models.unshift({ value: model, label: model, backend });
   }
   return { model, reasoning, models };
+}
+
+function publicVisionSidecarSettings(
+  config: OcxConfig,
+  vision: Awaited<ReturnType<typeof sidecarVisionResponseSettings>>,
+) {
+  const vs = config.visionSidecar ?? {};
+  return {
+    enabled: vs.enabled !== false,
+    model: vision.model,
+    backend: vs.backend,
+    reasoning: vision.reasoning,
+    maxDescriptionsPerTurn: resolveMaxDescriptionsPerTurn(vs.maxDescriptionsPerTurn),
+    timeoutMs: resolveVisionTimeoutMs(vs.timeoutMs),
+  };
 }
 
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -407,16 +431,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
 
   if (url.pathname === "/api/sidecar-settings" && req.method === "GET") {
     const ws = config.webSearchSidecar ?? {};
-    const vs = config.visionSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     return jsonResponse({
-      webSearch: { model: ws.model ?? "gpt-5.6-luna", backend: ws.backend },
-      vision: {
-        model: vision.model,
-        backend: vs.backend,
-        reasoning: vision.reasoning,
-        maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
+      webSearch: {
+        model: ws.model ?? "gpt-5.6-luna",
+        backend: ws.backend,
+        streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
       },
+      vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
     });
   }
@@ -430,12 +452,23 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown };
-      vision?: { model?: unknown; backend?: unknown; reasoning?: unknown; maxDescriptionsPerTurn?: unknown };
+      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown };
+      vision?: {
+        model?: unknown;
+        backend?: unknown;
+        reasoning?: unknown;
+        maxDescriptionsPerTurn?: unknown;
+        enabled?: unknown;
+        timeoutMs?: unknown;
+      };
     };
     if (body.webSearch && body.webSearch.backend !== undefined && body.webSearch.backend !== null
       && body.webSearch.backend !== "openai" && body.webSearch.backend !== "anthropic") {
       return jsonResponse({ error: "webSearch.backend must be openai, anthropic, or null" }, 400);
+    }
+    if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
+      && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
+      return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
       && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic") {
@@ -446,6 +479,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         || !Number.isInteger(body.vision.maxDescriptionsPerTurn)
         || body.vision.maxDescriptionsPerTurn <= 0)) {
       return jsonResponse({ error: "vision.maxDescriptionsPerTurn must be a positive integer" }, 400);
+    }
+    if (body.vision && body.vision.enabled !== undefined && typeof body.vision.enabled !== "boolean") {
+      return jsonResponse({ error: "vision.enabled must be a boolean" }, 400);
+    }
+    if (body.vision && body.vision.timeoutMs !== undefined && !isValidVisionTimeoutMs(body.vision.timeoutMs)) {
+      return jsonResponse({
+        error: `vision.timeoutMs must be an integer from ${MIN_VISION_TIMEOUT_MS} to ${MAX_VISION_TIMEOUT_MS}`,
+      }, 400);
     }
     if (body.vision?.reasoning !== undefined && !isVisionReasoningEffort(body.vision.reasoning)) {
       return jsonResponse({ error: `vision.reasoning must be ${VISION_REASONING_EFFORTS.join(", ")}` }, 400);
@@ -490,6 +531,11 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         config.webSearchSidecar.backend = body.webSearch.backend;
       }
       if (typeof body.webSearch.reasoning === "string") config.webSearchSidecar.reasoning = body.webSearch.reasoning;
+      if (typeof body.webSearch.streamRoutedModelOutput === "boolean") {
+        // `false` is the default — drop the key so config files stay minimal.
+        if (body.webSearch.streamRoutedModelOutput) config.webSearchSidecar.streamRoutedModelOutput = true;
+        else delete config.webSearchSidecar.streamRoutedModelOutput;
+      }
     }
     if (body.vision) {
       config.visionSidecar = { ...config.visionSidecar };
@@ -504,6 +550,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (typeof body.vision.maxDescriptionsPerTurn === "number") {
         config.visionSidecar.maxDescriptionsPerTurn = body.vision.maxDescriptionsPerTurn;
       }
+      if (typeof body.vision.enabled === "boolean") {
+        // `true` is the default — drop the key so disable/re-enable does not rewrite the file.
+        if (body.vision.enabled) delete config.visionSidecar.enabled;
+        else config.visionSidecar.enabled = false;
+      }
+      if (typeof body.vision.timeoutMs === "number") {
+        config.visionSidecar.timeoutMs = body.vision.timeoutMs;
+      }
       if (visionReasoningTouched) {
         if (normalizedVisionReasoning === undefined) delete config.visionSidecar.reasoning;
         else config.visionSidecar.reasoning = normalizedVisionReasoning;
@@ -511,17 +565,15 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     saveConfigPreservingClaudeCode(config);
     const ws = config.webSearchSidecar ?? {};
-    const vs = config.visionSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     return jsonResponse({
       ok: true,
-      webSearch: { model: ws.model ?? "gpt-5.6-luna", backend: ws.backend },
-      vision: {
-        model: vision.model,
-        backend: vs.backend,
-        reasoning: vision.reasoning,
-        maxDescriptionsPerTurn: vs.maxDescriptionsPerTurn,
+      webSearch: {
+        model: ws.model ?? "gpt-5.6-luna",
+        backend: ws.backend,
+        streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
       },
+      vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
     });
   }

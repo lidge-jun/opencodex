@@ -62,7 +62,11 @@ export interface ExportCommandDeps extends RuntimeApiDeps {
  * `/api/models` row plus the modality list Pi consumes. The launcher's row type predates
  * the Pi exporter and stops at the fields OpenCode needs.
  */
-type ExportProxyModelRow = OpencodeProxyModelRow & { inputModalities?: string[] };
+type ExportProxyModelRow = OpencodeProxyModelRow & {
+  inputModalities?: string[];
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
+};
 
 /** Same authoritativeness rule the serializers apply, for the degraded-count line. */
 function hasContextLimit(model: ExportModel): boolean {
@@ -83,12 +87,21 @@ export function exportModelsFromProxyRows(
   rows: readonly ExportProxyModelRow[],
   config: OcxConfig,
 ): ExportModel[] {
-  const modalities = new Map<string, string[]>();
+  const metadata = new Map<string, Pick<ExportModel, "inputModalities" | "reasoningEfforts" | "defaultReasoningEffort">>();
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
-    if (namespaced && Array.isArray(row.inputModalities) && row.inputModalities.length > 0) {
-      if (!modalities.has(namespaced)) modalities.set(namespaced, [...row.inputModalities]);
-    }
+    if (!namespaced || metadata.has(namespaced)) continue;
+    metadata.set(namespaced, {
+      ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
+        ? { inputModalities: [...row.inputModalities] }
+        : {}),
+      ...(Array.isArray(row.reasoningEfforts) && row.reasoningEfforts.length > 0
+        ? { reasoningEfforts: [...row.reasoningEfforts] }
+        : {}),
+      ...(typeof row.defaultReasoningEffort === "string" && row.defaultReasoningEffort.length > 0
+        ? { defaultReasoningEffort: row.defaultReasoningEffort }
+        : {}),
+    });
   }
   return opencodeCatalogFromProxyRows(rows, config).map(entry => {
     const model: ExportModel = {
@@ -99,8 +112,7 @@ export function exportModelsFromProxyRows(
     if (entry.native) model.native = true;
     if (entry.displayName) model.displayName = entry.displayName;
     if (entry.contextWindow !== undefined) model.contextWindow = entry.contextWindow;
-    const input = modalities.get(entry.namespaced);
-    if (input) model.inputModalities = input;
+    Object.assign(model, metadata.get(entry.namespaced));
     return model;
   });
 }

@@ -58,9 +58,15 @@ describe("policy candidate fallback", () => {
     const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
     const seenModels: string[] = [];
     const seenTerminalCodes: Array<string | undefined> = [];
+    let bodyAcceptedCount = 0;
 
-    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
-      runCore: async (req, _config, childLog) => {
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {
+      onRequestBodyRead: () => {
+        bodyAcceptedCount += 1;
+      },
+    }, {
+      runCore: async (req, _config, childLog, options) => {
+        options.onRequestBodyRead?.();
         const body = await req.json() as { model: string };
         seenModels.push(body.model);
         seenTerminalCodes.push(childLog.terminalErrorCode);
@@ -82,6 +88,7 @@ describe("policy candidate fallback", () => {
     });
 
     expect(response.status).toBe(200);
+    expect(bodyAcceptedCount).toBe(1);
     expect(seenModels).toEqual(["policy/daily", "provider-b/model-b"]);
     expect(seenTerminalCodes).toEqual([undefined, undefined]);
     expect(logCtx.requestedModel).toBe("policy/daily");

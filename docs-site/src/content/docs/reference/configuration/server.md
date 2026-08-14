@@ -16,7 +16,7 @@ runs helper features around provider requests.
 | `stallTimeoutSec?` | `number` | `300` | Seconds without upstream data before `response.incomplete`. Minimum 1. |
 | `connectTimeoutMs?` | `number` | `200000` | Per-attempt DNS/TCP/TLS/final-header deadline; it ends before body generation. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
-| `websockets?` | `boolean` | `false` | Advertise `supports_websockets` for the Responses WebSocket path. False keeps HTTP/SSE. |
+| `websockets?` | `boolean` | `false` | Advertise and admit the client-facing Responses WebSocket path. False keeps clients on HTTP/SSE; it does not disable an eligible canonical ChatGPT upstream WS optimization. |
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` credentials accepted by management and data-plane auth on non-loopback binds. Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
@@ -54,11 +54,17 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | not accepted | **required** | not accepted |
 | `/v1/chat/completions` | not accepted | **required** | not accepted |
 | `/v1/messages` | accepted | accepted | accepted |
+| `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
 Responses and Chat Completions reserve `Authorization` for possible Codex Direct passthrough, so only
 the dedicated admission header is accepted there. Dashboard-generated `apiKeys` may replace the
 environment token after startup; candidates are compared in constant time.
+
+Messages and `count_tokens` keep accepting all three admission forms for routed-client compatibility. Native
+Anthropic passthrough is stricter on a non-loopback bind: proxy admission must use
+`x-opencodex-api-key`, while `Authorization` and `x-api-key` are reserved for Anthropic credentials.
+Any proxy admission secret placed in those provider headers is removed before forwarding.
 
 :::caution[LAN exposure]
 A `0.0.0.0` bind exposes the proxy and configured provider access to the LAN. Use it only on trusted
@@ -145,7 +151,7 @@ with `POST /api/storage/cleanup-policy/run`.
 
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -221,7 +227,7 @@ an inactivity guard, not a total generation deadline.
 | `backend?` | `"openai" \| "anthropic"` | auto | Same explicit-first, Anthropic-credential-aware selection as web search. |
 | `model?` | `string` | backend-dependent | `gpt-5.4-mini` for OpenAI or `claude-sonnet-5` for Anthropic. |
 | `maxDescriptionsPerTurn?` | `number` | `8` | New description cache misses admitted per main turn. `0` disables calls; invalid values use default. |
-| `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. |
+| `timeoutMs?` | `number` | `45000` | Sidecar fetch timeout. Integer 1–2147483647. |
 
 Vision activates only for images sent to a model in its provider's `noVisionModels`. OpenAI has the
 same login/forward requirements as search; explicitly selected Anthropic fails closed without a usable

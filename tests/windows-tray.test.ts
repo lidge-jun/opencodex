@@ -89,7 +89,7 @@ describe("Windows tray packaging and command safety", () => {
     }
   });
 
-  test("uses fixed argv for the hidden PowerShell host", () => {
+  test("uses fixed argv and leaves window suppression to the process launcher", () => {
     const args = windowsTrayProcessArgs(entry);
     expect(args).toContain("-NoProfile");
     expect(args).toContain("-NonInteractive");
@@ -98,6 +98,8 @@ describe("Windows tray packaging and command safety", () => {
     expect(args).toContain(entry.bun);
     expect(args).toContain(entry.cli);
     expect(args).not.toContain("-Command");
+    expect(args).not.toContain("-WindowStyle");
+    expect(args).not.toContain("Hidden");
     expect(windowsTrayProcessArgs(entry, "Run", 4242)).toContain("4242");
   });
 
@@ -121,6 +123,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(powershellCommand).toContain(`-OpenCodexHome "${entry.opencodexHome}"`);
     expect(powershellCommand).not.toContain("cmd /c");
     expect(powershellCommand).not.toContain("-Command");
+    expect(powershellCommand).not.toContain("-WindowStyle");
     const runCommand = buildWindowsTrayRunCommand({
       ...entry,
       launcherPath: `${entry.opencodexHome}\\opencodex-tray.vbs`,

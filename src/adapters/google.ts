@@ -45,6 +45,25 @@ const GOOGLE_BREVITY_INSTRUCTION = [
   "- This applies only to intermediate progress text. Your final answer after the work is done is exempt: write it in full and at whatever length the task requires.",
 ].join("\n");
 
+/**
+ * Google renamed the current Gemini Flash generations on the Generative Language API,
+ * appending a `-tiered` suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). The
+ * old `gemini-3.7-flash` path 404s, so a saved config or registry entry naming the base
+ * id must be resolved here before it reaches the URL. The user-facing id is deliberately
+ * left alone: the picker, the catalog, the usage log and the price overlays all stay
+ * keyed on the base id, and only the wire path learns the new spelling.
+ */
+const GEMINI_DIRECT_WIRE_RENAMES: Record<string, string> = {
+  "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+  "gemini-3.6-flash": "gemini-3.6-flash-tiered",
+};
+
+function resolveDirectGeminiWireModelId(modelId: string): string {
+  return Object.hasOwn(GEMINI_DIRECT_WIRE_RENAMES, modelId)
+    ? GEMINI_DIRECT_WIRE_RENAMES[modelId]!
+    : modelId;
+}
+
 /** Vertex API key: provider.apiKey if it looks real (not a sentinel), else GOOGLE_CLOUD_API_KEY env. */
 function resolveVertexApiKey(optKey?: string): string | undefined {
   const realKey = optKey && !optKey.startsWith("<") && optKey !== "N/A" ? optKey : undefined;
@@ -304,6 +323,24 @@ function artifactMarkdownUrl(filePath: string): string {
   return artifactHttpUrl(filePath).replace(/([()])/g, "\\$1");
 }
 
+interface GoogleResponsePart {
+  text?: string;
+  thought?: boolean;
+  functionCall?: { name: string; args: unknown };
+}
+
+/**
+ * Google marks model-internal reasoning as a normal text-bearing part plus `thought: true`.
+ * Keep that provider visibility bit authoritative here so the streaming and buffered parsers
+ * cannot accidentally expose the same hidden reasoning through different event types.
+ */
+function googlePartTextEvent(part: GoogleResponsePart): AdapterEvent | undefined {
+  if (!part.text) return undefined;
+  return part.thought === true
+    ? { type: "reasoning_raw_delta", text: part.text }
+    : { type: "text_delta", text: part.text };
+}
+
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
@@ -335,7 +372,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             parsed.modelId,
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
           ).wireModelId
-        : parsed.modelId;
+        : resolveDirectGeminiWireModelId(parsed.modelId);
       const { systemInstruction, contents } = messagesToGeminiFormat(parsed, routedModelId);
       const tools = toolsToGeminiFormat(parsed);
 
@@ -483,7 +520,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       // ai-studio (default): Generative Language API + x-goog-api-key.
-      const url = `${provider.baseUrl}/v1beta/models/${parsed.modelId}:${method}${streamParam}`;
+      const url = `${provider.baseUrl}/v1beta/models/${routedModelId}:${method}${streamParam}`;
       const apiKey = provider.apiKey?.trim();
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
@@ -602,7 +639,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           sawTerminalSignal = true;
         }
 
-        const parts = candidate.content?.parts as { text?: string; functionCall?: { name: string; args: unknown } }[] | undefined;
+        const parts = candidate.content?.parts as GoogleResponsePart[] | undefined;
         // Record Gemini thought signatures for the next stateless tool-result turn. Vertex and
         // Antigravity use separate model namespaces so opaque provider state cannot cross routes.
         const replayModel = provider.googleMode === "cloud-code-assist" ? antigravityModel : vertexReplayModel;
@@ -613,9 +650,10 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         }
         if (parts) {
           for (const part of parts) {
-            if (part.text) {
+            const textEvent = googlePartTextEvent(part);
+            if (textEvent) {
               emittedContentEvent = true;
-              yield { type: "text_delta", text: part.text };
+              yield textEvent;
             }
             const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
             if (inline && typeof inline.data === "string") {
@@ -817,7 +855,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
       const events: AdapterEvent[] = [];
 
-      const candidates = json.candidates as { content?: { parts?: { text?: string; functionCall?: { name: string; args: unknown } }[] }; finishReason?: string }[] | undefined;
+      const candidates = json.candidates as { content?: { parts?: GoogleResponsePart[] }; finishReason?: string }[] | undefined;
       if (!candidates?.length) {
         return finish([{ type: "error", message: "google response contained no candidates" }]);
       }
@@ -833,7 +871,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           observeAntigravityReplay(replayModel, replaySession, candidates[0].content.parts as unknown[]);
         }
         for (const part of candidates[0].content.parts) {
-          if (part.text) events.push({ type: "text_delta", text: part.text });
+          const textEvent = googlePartTextEvent(part);
+          if (textEvent) events.push(textEvent);
           const inline = (part as { inlineData?: { mimeType?: string; data?: string } }).inlineData;
           if (inline && typeof inline.data === "string") {
             if (inline.data.length > MAX_ENCODED_BYTES_PER_IMAGE) {

@@ -650,7 +650,7 @@ function commit(
   try {
     // 1. recovery first: a journal on disk means an earlier attempt never
     //    committed, and we must not stack a second transaction on top of it.
-    const recovered = recoverJournal(journalPath);
+    const recovered = recoverJournal(journalPath, { configPath, storePath });
     if (!recovered.ok) return { ok: false, error: "recovery_required", detail: recovered.detail };
 
     // 2. re-read and compare against the caller's edit base.

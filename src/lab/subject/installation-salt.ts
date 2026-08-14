@@ -4,8 +4,19 @@ import { dirname } from "node:path";
 import { labInstallationSaltPath, labRoot } from "../paths";
 
 const SALT_BYTES = 32;
-const installationSaltCache = new Map<string, Uint8Array>();
+export const INSTALLATION_SALT_CACHE_MAX_ENTRIES = 16;
+export const installationSaltCache = new Map<string, Uint8Array>();
 const UNSUPPORTED_DIRECTORY_FSYNC_CODES = new Set(["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"]);
+
+export function rememberInstallationSalt(path: string, salt: Uint8Array): void {
+  installationSaltCache.delete(path);
+  installationSaltCache.set(path, salt);
+  while (installationSaltCache.size > INSTALLATION_SALT_CACHE_MAX_ENTRIES) {
+    const oldest = installationSaltCache.keys().next().value;
+    if (oldest === undefined) break;
+    installationSaltCache.delete(oldest);
+  }
+}
 
 function readSaltFile(path: string): Uint8Array {
   const bytes = readFileSync(path);
@@ -17,7 +28,7 @@ function readSaltFile(path: string): Uint8Array {
 
 function cacheSalt(path: string, salt: Uint8Array): Uint8Array {
   const cached = new Uint8Array(salt);
-  installationSaltCache.set(path, cached);
+  rememberInstallationSalt(path, cached);
   return new Uint8Array(cached);
 }
 

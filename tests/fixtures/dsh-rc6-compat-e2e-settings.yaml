@@ -1,0 +1,23 @@
+# Optional local compatibility fixture for @deepseek-ai/dsh 0.1.0-rc.6.
+# The runner replaces the loopback placeholder inside an isolated DSH_HOME.
+agent-default-model:
+  provider: opencodex
+  model: dsh-e2e-reasoner
+  reasoningEffort: high
+
+llm-pi-ai:
+  providers:
+    opencodex:
+      displayName: OpenCodex E2E
+      api: openai-responses
+      baseURL: __OCX_BASE_URL__
+      headers:
+        Authorization: Bearer ocx_data_dsh
+      models:
+        - id: dsh-e2e-reasoner
+          name: DSH E2E Reasoner
+          contextWindow: 32768
+          input:
+            - text
+          reasoningEfforts:
+            high: high

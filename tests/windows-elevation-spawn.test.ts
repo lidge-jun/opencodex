@@ -14,6 +14,7 @@ import {
   raceWithTimeout,
   runElevatedSchtasksCreateAndRun,
   runWindowsElevated,
+  runWindowsElevatedScheduledTaskRegistration,
   setWindowsElevationSpawnForTests,
   setTrustedWindowsElevationExecutablesForTests,
   startElevatedSchtasksCreateAndRun,
@@ -117,6 +118,38 @@ describe("runWindowsElevated spawn contract", () => {
   test("returns non-zero exit codes from completed elevated processes", async () => {
     fakeChild({ code: 1, stderr: "failed" });
     await expect(runWindowsElevated("schtasks.exe", ["/create"])).resolves.toBe(1);
+  });
+
+  test("scheduled-task registration embeds immutable XML bytes instead of a file path", async () => {
+    let commandScript = "";
+    setWindowsElevationSpawnForTests(((
+      _cmd: string,
+      args: ReadonlyArray<string>,
+    ) => {
+      commandScript = String(args[args.length - 1] ?? "");
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter & { setEncoding?: (enc: string) => void };
+        stderr: EventEmitter & { setEncoding?: (enc: string) => void };
+        kill: ReturnType<typeof mock>;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdout.setEncoding = () => undefined;
+      child.stderr.setEncoding = () => undefined;
+      child.kill = mock(() => true);
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child as never;
+    }) as never);
+
+    const xml = "<Task><Description>fixed-definition</Description></Task>";
+    await expect(runWindowsElevatedScheduledTaskRegistration("opencodex-proxy", xml)).resolves.toBe(0);
+    const match = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(commandScript);
+    expect(match).not.toBeNull();
+    const elevatedScript = Buffer.from(match![1]!, "base64").toString("utf16le");
+    expect(elevatedScript).toContain("Register-ScheduledTask -TaskName $taskName -Xml $xml -Force");
+    expect(elevatedScript).toContain(Buffer.from(xml, "utf16le").toString("base64"));
+    expect(commandScript).not.toContain("/xml");
+    expect(commandScript).not.toContain("task.xml");
   });
 
   test("maps exit 1223 to cancelled", async () => {

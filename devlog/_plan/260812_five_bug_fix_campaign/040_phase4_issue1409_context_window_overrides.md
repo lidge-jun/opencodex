@@ -271,8 +271,11 @@ the untouched user key survives.
 
 ```bash
 bun x tsc --noEmit
-bun test tests/provider-routes*.test.ts tests/management*.test.ts tests/config*.test.ts
+bun test tests/management-provider-validation.test.ts tests/management*.test.ts tests/config*.test.ts
 ```
+
+(There is no `tests/provider-routes*.test.ts`; an unmatched glob aborts the run under zsh.
+The management-provider validation suite is where this path's coverage lives.)
 
 ## Delivery
 

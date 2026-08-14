@@ -21,7 +21,7 @@ function parsed(): OcxParsedRequest {
 describe("client fingerprint — helpers", () => {
   test("antigravity UA has the real CLI shape, never the literal giveaway", async () => {
     const ua = antigravityUserAgent();
-    expect(ua).toBe(`antigravity/cli/${ANTIGRAVITY_CLI_VERSION} (aidev_client; os_type=darwin; arch=arm64)`);
+    expect(ua).toBe("antigravity/cli/1.1.12 (aidev_client; os_type=darwin; arch=arm64)");
     expect(ua).not.toBe("antigravity");
   });
 

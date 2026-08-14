@@ -5,6 +5,7 @@ import type {
   OcxReasoningReplayScopeRef,
   OcxUsage,
 } from "./types";
+import { coerceIntegerToolArguments } from "./lib/tool-argument-integers";
 import { adapterFailureFromMessage, classifyError, CYBER_POLICY_ERROR_CODE, isCyberPolicyCode, type OcxErrorPayload } from "./lib/errors";
 import { encodeCompactionSummary } from "./responses/compaction";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "./responses/reasoning-envelope";
@@ -91,10 +92,11 @@ function responseError(status: number, type: string, message: string): OcxErrorP
  * non-stream adapters degrade a bad payload to `{}`.
  */
 function toolCallArgumentsUsable(args: string): boolean {
+  if (args.length === 0) return true;
   const trimmed = args.trim();
-  if (!trimmed) return true;
+  if (!trimmed) return false;
   try {
-    JSON.parse(trimmed);
+    JSON.parse(args);
     return true;
   } catch {
     return false;
@@ -186,6 +188,10 @@ export function bridgeToResponsesSSE(
      * from this callback instead of re-parsing the bridged SSE.
      */
     onUsage?: (usage: OcxUsage | undefined) => void;
+    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    declaredToolNames?: ReadonlySet<string>;
+    /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     translatorBudget?: TranslatorBudget;
     /**
      * Conversation identity for the reasoning replay cache (issue #950).
@@ -579,7 +585,13 @@ export function bridgeToResponsesSSE(
         // Empty input (no-arg tools like computer_use get_app_state / list_apps) must serialize as
         // "{}", never "" — Codex echoes the call back as a function_call next turn, and JSON.parse("")
         // would 400 the whole session ("invalid JSON arguments"), poisoning all later turns.
-        const argsStr = currentToolCall.args || "{}";
+        // #1611: Grok serializes integer arguments through a float, so `120000.0`
+        // reaches Codex and is REJECTED before the tool runs. Repair integral floats
+        // against the declared schema; a non-integral value stays an error.
+        const argsStr = coerceIntegerToolArguments(
+          currentToolCall.args || "{}",
+          options?.toolParameterSchemas?.get(currentToolCall.name),
+        );
         // Finalize streamed function-call arguments so Codex commits the call (incl. MCP / computer_use).
         if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
           emit("response.function_call_arguments.done", {
@@ -974,6 +986,23 @@ export function bridgeToResponsesSSE(
               if (currentToolCall) closeCurrentToolCall();
               const mapped = toolNsMap?.get(event.name);
               const realName = mapped?.name ?? event.name;
+              if (options?.declaredToolNames && !options.declaredToolNames.has(event.name)) {
+                const failure = responseError(
+                  502,
+                  "upstream_error",
+                  `routed provider emitted undeclared client tool "${event.name}"; only request-declared tools may be called`,
+                );
+                emit("response.failed", {
+                  response: {
+                    ...responseSnapshot("failed", finishedItems),
+                    error: failure,
+                    last_error: failure,
+                  },
+                });
+                reportTerminal("failed");
+                terminalEvent = true;
+                break;
+              }
               const ns = mapped?.namespace;
               const toolSearch = toolSearchToolNames?.has(realName) ?? false;
               const freeform = !toolSearch && (freeformToolNames?.has(realName) ?? false);
@@ -1359,6 +1388,10 @@ function buildResponseJSONWithBudget(
   options?: {
     hideThinkingSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string }>;
+    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    declaredToolNames?: ReadonlySet<string>;
+    /** Declared parameter schema per tool name; repairs integral-float integer args (#1611). */
+    toolParameterSchemas?: ReadonlyMap<string, Record<string, unknown>>;
     freeformToolNames?: Set<string>;
     toolSearchToolNames?: Set<string>;
     /** Remote compaction v2 turn — append one synthetic compaction output item (see bridgeToResponsesSSE). */
@@ -1527,11 +1560,17 @@ function buildResponseJSONWithBudget(
     const ns = mapped?.namespace;
     const toolSearch = options?.toolSearchToolNames?.has(realName) ?? false;
     const freeform = !toolSearch && (options?.freeformToolNames?.has(realName) ?? false);
+    // #1611: same integral-float repair as the streaming path. Keyed by the wire name
+    // the request declared, which is the pre-namespace-mapping `currentToolCallName`.
+    const coercedArgs = coerceIntegerToolArguments(
+      currentToolCallArgs,
+      options?.toolParameterSchemas?.get(currentToolCallName),
+    );
     if (toolSearch) {
       pushOutput({
         type: "tool_search_call", id: `tsc_${uuid()}`,
         call_id: currentToolCallId, execution: "client",
-        arguments: parseArgsObj(currentToolCallArgs), status,
+        arguments: parseArgsObj(coercedArgs), status,
       });
     } else if (freeform) {
       pushOutput({
@@ -1543,7 +1582,7 @@ function buildResponseJSONWithBudget(
       pushOutput({
         type: "function_call", id: `fc_${uuid()}`,
         call_id: currentToolCallId, name: realName,
-        arguments: currentToolCallArgs || "{}", status,
+        arguments: coercedArgs || "{}", status,
         ...(ns ? { namespace: ns } : {}),
       });
     }
@@ -1555,6 +1594,15 @@ function buildResponseJSONWithBudget(
   };
 
   for (const e of events) {
+    if (errorEvent) {
+      // Match streaming: once the turn fails, later parallel calls must not become executable
+      // completed output. Still release every retained event in order and preserve terminal usage.
+      if (e.type === "error" || e.type === "incomplete" || e.type === "done") {
+        usage = e.usage ?? usage;
+      }
+      if (budget) releaseTranslatedEvent(e, budget);
+      continue;
+    }
     switch (e.type) {
       case "assistant_boundary":
         flushText("commentary");
@@ -1641,6 +1689,15 @@ function buildResponseJSONWithBudget(
           rememberReasoningForCall(e.id, rawReasoningForNextToolCall, replayCacheScope);
         }
         flushToolCall();
+        if (options?.declaredToolNames && !options.declaredToolNames.has(e.name)) {
+          errorEvent = {
+            type: "error",
+            message: `routed provider emitted undeclared client tool "${e.name}"; only request-declared tools may be called`,
+            status: 502,
+            errorType: "upstream_error",
+          };
+          break;
+        }
         currentToolCallId = e.id;
         budget?.openCall(e.id);
         currentToolCallName = e.name;

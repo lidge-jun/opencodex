@@ -26,6 +26,7 @@ import {
   resolveTrustedWindowsSchtasksExe,
   resolveTrustedWindowsSystemDirectory,
 } from "./lib/windows-elevation";
+import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
 
 /** Short: this runs inside admission, and a slow answer is the same as none. */
@@ -119,6 +120,8 @@ export interface ProbeDeps {
   readonly configDir?: string;
   /** Test seam for WinSW SCM status. Production uses bounded trusted `sc.exe query`. */
   readonly winswStatus?: () => "started" | "stopped" | "nonexistent" | "unknown";
+  /** Test seam for redirected Windows legacy-codepage output. */
+  readonly windowsLocale?: string;
 }
 
 const LABEL = "com.opencodex.proxy";
@@ -338,29 +341,6 @@ function windowsConfigDirPath(deps: { home: string; configDir?: string }): strin
   return join(deps.home, ".opencodex");
 }
 
-/** Decode an on-disk Windows text asset (task XML, VBS), which is UTF-16LE (often BOM-prefixed). */
-function decodeWindowsText(buffer: Buffer): string {
-  if (buffer.length === 0) return "";
-  const bomUtf16Le = buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe;
-  const bomUtf16Be = buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff;
-  const looksUtf16Le = buffer.length >= 4
-    && buffer[1] === 0x00
-    && buffer[3] === 0x00
-    && buffer[0] !== 0x00;
-  if (bomUtf16Le || looksUtf16Le) {
-    return buffer.toString("utf16le").replace(/^\uFEFF/, "").trim();
-  }
-  if (bomUtf16Be) {
-    const swapped = Buffer.alloc(buffer.length - 2);
-    for (let i = 2; i + 1 < buffer.length; i += 2) {
-      swapped[i - 2] = buffer[i + 1]!;
-      swapped[i - 1] = buffer[i]!;
-    }
-    return swapped.toString("utf16le").trim();
-  }
-  return buffer.toString("utf8").replace(/^\uFEFF/, "").trim();
-}
-
 /** Decode the XML entities emitted by the service-definition writers. */
 function decodeXmlEntities(value: string): string {
   return value
@@ -478,7 +458,9 @@ const SCHTASKS_TASK_NOT_FOUND_EN = /cannot find the file specified/i;
  * other nonzero responses use a bounded full listing as the locale-neutral
  * fallback, and only a successful list without our task proves absence.
  */
-function probeWindowsTaskRegistration(deps: Required<Pick<ProbeDeps, "runRaw">>): {
+function probeWindowsTaskRegistration(
+  deps: Required<Pick<ProbeDeps, "runRaw">> & Pick<ProbeDeps, "windowsLocale">,
+): {
   registered: "present" | "absent" | "unknown";
   registeredXml: string;
 } {
@@ -492,13 +474,14 @@ function probeWindowsTaskRegistration(deps: Required<Pick<ProbeDeps, "runRaw">>)
   const queried = deps.runRaw(schtasks, ["/query", "/tn", windowsTaskName(), "/xml"]);
   if (queried.spawnFailed || queried.timedOut) return { registered: "unknown", registeredXml: "" };
   if (queried.status === 0) {
-    const registeredXml = decodeWindowsText(queried.stdout) || decodeWindowsText(queried.stderr);
+    const registeredXml = decodeWindowsTextBytes(queried.stdout, { locale: deps.windowsLocale })
+      || decodeWindowsTextBytes(queried.stderr, { locale: deps.windowsLocale });
     return registeredXml
       ? { registered: "present", registeredXml }
       : { registered: "unknown", registeredXml: "" };
   }
 
-  const queryText = `${decodeWindowsText(queried.stdout)}\n${decodeWindowsText(queried.stderr)}`;
+  const queryText = `${decodeWindowsTextBytes(queried.stdout, { locale: deps.windowsLocale })}\n${decodeWindowsTextBytes(queried.stderr, { locale: deps.windowsLocale })}`;
   if (queried.status !== null && SCHTASKS_TASK_NOT_FOUND_EN.test(queryText)) {
     return { registered: "absent", registeredXml: "" };
   }
@@ -507,7 +490,8 @@ function probeWindowsTaskRegistration(deps: Required<Pick<ProbeDeps, "runRaw">>)
   if (listed.spawnFailed || listed.timedOut || listed.status !== 0) {
     return { registered: "unknown", registeredXml: "" };
   }
-  const listing = decodeWindowsText(listed.stdout) || decodeWindowsText(listed.stderr);
+  const listing = decodeWindowsTextBytes(listed.stdout, { locale: deps.windowsLocale })
+    || decodeWindowsTextBytes(listed.stderr, { locale: deps.windowsLocale });
   return windowsTaskListContains(listing, windowsTaskName())
     ? { registered: "unknown", registeredXml: "" }
     : { registered: "absent", registeredXml: "" };
@@ -545,7 +529,8 @@ function probeWinswRegistration(
 }
 
 function inspectWindows(
-  deps: Required<Pick<ProbeDeps, "runRaw" | "home">> & Pick<ProbeDeps, "configDir" | "winswStatus">,
+  deps: Required<Pick<ProbeDeps, "runRaw" | "home">>
+    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale">,
 ): ServiceManagerInstallation {
   const configDir = windowsConfigDirPath(deps);
   const taskXmlPath = join(configDir, "opencodex-service-task.xml");
@@ -557,7 +542,7 @@ function inspectWindows(
   let xml = "";
   if (task !== "absent") {
     try {
-      xml = decodeWindowsText(readFileSync(taskXmlPath));
+      xml = decodeWindowsTextBytes(readFileSync(taskXmlPath), { locale: deps.windowsLocale });
     } catch (error) {
       return unknown(`the scheduled-task XML exists but could not be read: ${String(error)}`);
     }
@@ -659,7 +644,7 @@ function homesEqual(
  * generated service-asset directory.
  */
 function walkWindowsChain(
-  deps: Required<Pick<ProbeDeps, "home">> & Pick<ProbeDeps, "configDir">,
+  deps: Required<Pick<ProbeDeps, "home">> & Pick<ProbeDeps, "configDir" | "windowsLocale">,
   xml: string,
   definitionPath: string,
 ): ServiceManagerInstallation {
@@ -683,7 +668,7 @@ function walkWindowsChain(
   }
   let launcherBody: string;
   try {
-    launcherBody = decodeWindowsText(readFileSync(launcherPath));
+    launcherBody = decodeWindowsTextBytes(readFileSync(launcherPath), { locale: deps.windowsLocale });
   } catch (error) {
     return unknown(`the scheduled-task launcher could not be read: ${String(error)}`);
   }
@@ -702,7 +687,7 @@ function walkWindowsChain(
   }
   let wrapperBody: string;
   try {
-    wrapperBody = decodeWindowsText(readFileSync(wrapperPath));
+    wrapperBody = decodeWindowsTextBytes(readFileSync(wrapperPath), { locale: deps.windowsLocale });
   } catch (error) {
     return unknown(`the launcher wrapper could not be read: ${String(error)}`);
   }
@@ -734,7 +719,8 @@ function walkWindowsChain(
  * this read-only ownership probe.
  */
 function walkWinswChain(
-  deps: Required<Pick<ProbeDeps, "runRaw" | "home">> & Pick<ProbeDeps, "configDir" | "winswStatus">,
+  deps: Required<Pick<ProbeDeps, "runRaw" | "home">>
+    & Pick<ProbeDeps, "configDir" | "winswStatus" | "windowsLocale">,
 ): ServiceManagerInstallation {
   const configDir = windowsConfigDirPath(deps);
   const exePath = join(configDir, "winsw", `${WINSW_SERVICE_ID}.exe`);
@@ -753,7 +739,7 @@ function walkWinswChain(
 
   let body: string;
   try {
-    body = decodeWindowsText(readFileSync(xmlPath));
+    body = decodeWindowsTextBytes(readFileSync(xmlPath), { locale: deps.windowsLocale });
   } catch (error) {
     return unknown(`the WinSW XML could not be read: ${String(error)}`);
   }
@@ -801,6 +787,7 @@ export function inspectServiceManagerInstallation(deps: ProbeDeps = {}): Service
       home,
       configDir: deps.configDir,
       winswStatus: deps.winswStatus,
+      windowsLocale: deps.windowsLocale,
     });
   }
   return unknown(`no service manager probe for platform ${platform}`);

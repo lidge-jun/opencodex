@@ -35,6 +35,10 @@ import {
   usageSummaryRetainedStoreSnapshot,
 } from "../server/management/usage-summary-cache";
 import {
+  discardRetainedUsageSnapshot,
+  retainedUsageSnapshotStats,
+} from "../usage/log";
+import {
   cursorBlobRetainedStoreSnapshot,
   evictOldestCursorBlobForBudget,
 } from "../adapters/cursor/native-exec";
@@ -54,6 +58,18 @@ function ringSnapshot(metrics: { entries: number; bytes: number; oldestAt: numbe
     evictableBytes: metrics.bytes,
     pinnedBytes: 0,
     oldestAt: metrics.oldestAt,
+  };
+}
+
+/** The retained usage tail is a single all-or-nothing entry: evicting it drops the whole tail. */
+function usageSnapshotRetainedStoreSnapshot(): RetainedStoreSnapshot {
+  const stats = retainedUsageSnapshotStats();
+  return {
+    count: stats.count,
+    bytes: stats.bytes,
+    evictableBytes: stats.bytes,
+    pinnedBytes: 0,
+    oldestAt: stats.oldestAt,
   };
 }
 
@@ -133,6 +149,12 @@ export const APP_OWNED_RETAINED_STORE_REGISTRATIONS = [
     category: "caches",
     snapshot: usageSummaryRetainedStoreSnapshot,
     evictOldest: evictOldestUsageSummaryForBudget,
+  },
+  {
+    id: "usage_snapshot",
+    category: "caches",
+    snapshot: usageSnapshotRetainedStoreSnapshot,
+    evictOldest: discardRetainedUsageSnapshot,
   },
   {
     id: "cursor_blobs",

@@ -29,6 +29,16 @@ import {
   parseExpectedSystemRestartPid,
   verifySystemRestartCapability,
 } from "../lib/system-restart-contract";
+import {
+  LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER,
+  LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER,
+  LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER,
+  LOCAL_PROVIDER_RELOAD_NAME_HEADER,
+  LOCAL_PROVIDER_RELOAD_NONCE_HEADER,
+  LOCAL_PROVIDER_RELOAD_PATH,
+  parseExpectedLocalProviderReloadPid,
+  verifyLocalProviderReloadCapability,
+} from "../lib/local-provider-reload-contract";
 import { forgetEphemeralSecretPath, forgetHardenedSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import {
@@ -45,6 +55,9 @@ const GUI_SESSION_LIMIT = 128;
 const LOCAL_READ_REPLAY_LIMIT = 256;
 const consumedLocalReadCapabilities = new Map<string, number>();
 const admittedLocalReadRequests = new WeakSet<Request>();
+const LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT = 256;
+const consumedLocalProviderReloadCapabilities = new Map<string, number>();
+const admittedLocalProviderReloadRequests = new WeakSet<Request>();
 
 interface GuiSessionRecord {
   csrfToken: string;
@@ -266,12 +279,13 @@ export function issueGuiSession(
  * rather than off request headers, which the token holder can forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
  * PID and listening port. Local reads are accepted only for two exact GET paths;
- * restart remains a separate wire contract for its exact POST.
+ * restart and provider reload remain separate wire contracts for their exact POSTs.
  */
 export type ManagementPrincipal =
   | "admin-token"
   | "gui-session"
   | "local-read-capability"
+  | "local-provider-reload-capability"
   | "system-restart-capability";
 
 export interface LocalManagementAuthContext {
@@ -354,6 +368,54 @@ function hasLocalReadCapability(
   return true;
 }
 
+function hasLocalProviderReloadCapability(
+  req: Request,
+  local: LocalManagementAuthContext | undefined,
+): boolean {
+  if (admittedLocalProviderReloadRequests.has(req)) return true;
+  if (!local || req.method !== "POST") return false;
+  let url: URL;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return false;
+  }
+  if (url.pathname !== LOCAL_PROVIDER_RELOAD_PATH || url.search !== "") return false;
+  const contentLength = req.headers.get("content-length");
+  if (contentLength !== "0" || req.headers.has("transfer-encoding")) return false;
+  const expectedPid = parseExpectedLocalProviderReloadPid(
+    req.headers.get(LOCAL_PROVIDER_RELOAD_EXPECTED_PID_HEADER),
+  );
+  if (expectedPid.kind !== "present" || expectedPid.pid !== local.pid) return false;
+  const expiresAtRaw = req.headers.get(LOCAL_PROVIDER_RELOAD_EXPIRES_AT_HEADER);
+  if (!expiresAtRaw || !/^[1-9]\d*$/.test(expiresAtRaw)) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt)) return false;
+  const name = req.headers.get(LOCAL_PROVIDER_RELOAD_NAME_HEADER);
+  const capability = req.headers.get(LOCAL_PROVIDER_RELOAD_CAPABILITY_HEADER);
+  const now = Date.now();
+  if (!verifyLocalProviderReloadCapability(
+    local.attestationSecret,
+    req.headers.get(LOCAL_PROVIDER_RELOAD_NONCE_HEADER),
+    req.method,
+    url.pathname,
+    name,
+    local.pid,
+    local.port,
+    expiresAt,
+    capability,
+    now,
+  )) return false;
+  for (const [consumed, retainedUntil] of consumedLocalProviderReloadCapabilities) {
+    if (retainedUntil <= now) consumedLocalProviderReloadCapabilities.delete(consumed);
+  }
+  if (!capability || consumedLocalProviderReloadCapabilities.has(capability)) return false;
+  if (consumedLocalProviderReloadCapabilities.size >= LOCAL_PROVIDER_RELOAD_REPLAY_LIMIT) return false;
+  consumedLocalProviderReloadCapabilities.set(capability, expiresAt);
+  admittedLocalProviderReloadRequests.add(req);
+  return true;
+}
+
 /**
  * The principal for a request that already passed `requireManagementAuth`. Kept as a
  * separate resolution (rather than a changed return type) so every existing caller
@@ -368,6 +430,7 @@ export function managementPrincipal(
   local?: LocalManagementAuthContext,
 ): ManagementPrincipal | null {
   if (hasSystemRestartCapability(req, local)) return "system-restart-capability";
+  if (hasLocalProviderReloadCapability(req, local)) return "local-provider-reload-capability";
   if (hasLocalReadCapability(req, local)) return "local-read-capability";
   if (!state.available) return null;
   const actual = req.headers.get("x-opencodex-api-key")?.trim()
@@ -386,6 +449,7 @@ export function requireManagementAuth(
   local?: LocalManagementAuthContext,
 ): Response | null {
   if (hasSystemRestartCapability(req, local)) return null;
+  if (hasLocalProviderReloadCapability(req, local)) return null;
   if (hasLocalReadCapability(req, local)) return null;
   if (!state.available) {
     return Response.json({

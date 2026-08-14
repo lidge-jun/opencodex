@@ -106,7 +106,7 @@ describe("DigitalOcean and Scaleway providers", () => {
       },
     });
     const digitaloceanModels = discoveryAllowlist(registryEntry("digitalocean"));
-    expect(digitaloceanModels).toHaveLength(26);
+    expect(digitaloceanModels).toHaveLength(27);
     expect(digitaloceanModels).toContain("openai-gpt-5.6-sol");
     expect(digitaloceanModels).toContain("meta-llama/Meta-Llama-3.1-8B-Instruct");
     expect(digitaloceanModels).not.toContain("openai-gpt-5.5");
@@ -135,7 +135,7 @@ describe("DigitalOcean and Scaleway providers", () => {
       },
     });
     const scalewayModels = discoveryAllowlist(registryEntry("scaleway"));
-    expect(scalewayModels).toHaveLength(10);
+    expect(scalewayModels).toHaveLength(11);
     expect(scalewayModels).toContain("qwen3.6-35b-a3b");
     expect(scalewayModels).toContain("pixtral-12b-2409");
     expect(scalewayModels).not.toContain("gpt-oss-120b");

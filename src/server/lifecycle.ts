@@ -7,7 +7,7 @@ import {
 } from "../storage/policy-job";
 import { abortRestoreTrashJobAsync } from "../storage/restore-job";
 import { stopStorageCleanupScheduler } from "../storage/policy-scheduler";
-import { stopLabAutomationScheduler, requestLabAutomationShutdown } from "../lab/automation/orchestrator";
+import { runOptionalShutdownHooks } from "../lib/optional-shutdown-hooks";
 import { stopStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   cancelQueuedStorageWorkerSpawns,
@@ -452,8 +452,10 @@ export async function drainAndShutdown(
     // Abort each job independently so one wedged join cannot skip the other,
     // then drain leftovers; failures must not prevent `server.stop`.
     stopStorageCleanupScheduler();
-    requestLabAutomationShutdown();
-    stopLabAutomationScheduler();
+    // Optional subsystems (Compatibility Lab today, anything added later) tear themselves
+    // down through hooks registered at activation. A process that never activated one runs
+    // nothing here and never loads its module graph.
+    runOptionalShutdownHooks();
     stopStateStoreSweeper();
     // The overlay reconciler is owner-scoped: the startServer stop override
     // releases THIS server's lease through runListenerShutdown →

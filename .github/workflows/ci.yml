@@ -404,6 +404,12 @@ jobs:
           cd gui
           bun install --frozen-lockfile
 
+      - name: GUI lint
+        if: needs.changes.outputs.gui == 'true'
+        run: |
+          cd gui
+          bun run lint
+
       - name: Typecheck
         run: |
           bun x tsc --noEmit
@@ -417,12 +423,6 @@ jobs:
 
       - name: Check release helper syntax
         run: bun build scripts/release.ts --target=bun --outdir=.tmp/ci-release-script-check
-
-      - name: GUI lint
-        if: needs.changes.outputs.gui == 'true'
-        run: |
-          cd gui
-          bun run lint
 
       - name: GUI build
         if: needs.changes.outputs.gui == 'true'
@@ -493,9 +493,9 @@ jobs:
       # (`is_bun_runtime_crash`). The unsharded macOS control had no equivalent,
       # so the same crash that Linux absorbs failed the whole promotion here.
       #
-      # Keep the signature list in sync with `is_bun_runtime_crash` in
-      # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
-      # the first attempt — only the crash signature is retried, exactly once.
+    # Keep the signature list in sync with `is_bun_runtime_crash` in
+    # scripts/ci/run-bun-test-batches.sh. An assertion failure still fails on
+    # the first attempt — only the crash signature is retried, exactly once.
       - name: Test
         run: |
           # GitHub Actions starts bash `run:` blocks with `-e`. Disable
@@ -504,7 +504,14 @@ jobs:
           set -uo pipefail
           suite_log="$(mktemp -t ocx-macos-suite.XXXXXX)"
           for attempt in 1 2; do
-            bun test --isolate tests 2>&1 | tee "$suite_log"
+            # --timeout: Bun's default 5s per-test ceiling is the recurring flake
+            # class on this loaded shared runner (real retry windows + server
+            # round-trips exceed 5s under contention; a 10s-floor in-test
+            # watchdog fired at 10.16s there). 60s keeps hangs bounded (the 30m
+            # job timeout is the outer backstop) while removing the timing
+            # flakes — assertions are untouched. Pairs with the 30s CI floor in
+            # tests/helpers/ci-watchdog.ts.
+            bun test --isolate --timeout 60000 tests 2>&1 | tee "$suite_log"
             suite_status="${PIPESTATUS[0]}"
             if [ "$suite_status" -eq 0 ]; then
               exit 0

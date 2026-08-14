@@ -1,5 +1,5 @@
 /**
- * Run GUI eslint when this push includes gui/ changes.
+ * Run GUI Oxlint when this push includes gui/ changes.
  * Used by `bun run prepush`. Skip with: git push --no-verify
  *
  * Mirrors `scripts/doctor-gui-if-changed.ts` so the local pre-push gate and
@@ -77,7 +77,7 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  console.log("lint:gui: gui/ changed — running eslint (scope=changed)");
+  console.log("lint:gui: gui/ changed — running oxlint (trigger=gui-changed, scope=full-gui)");
   const [cmd, ...args] = process.env.LINT_CMD
     ? process.env.LINT_CMD.split(" ")
     : ["bun", "run", "lint"];
@@ -91,7 +91,7 @@ if (import.meta.main) {
   // Lint is local and deterministic: findings fail the push, and a failed
   // spawn is a real error, not an infrastructure soft-skip.
   if (result.error) {
-    console.error(`lint:gui: could not run eslint: ${result.error.message}`);
+    console.error(`lint:gui: could not run lint command: ${result.error.message}`);
     process.exit(1);
   }
 

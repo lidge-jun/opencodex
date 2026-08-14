@@ -8,6 +8,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "openclaw",
   "kimi",
   "gajae",
+  "dsh",
 ] as const;
 
 export type FileIntegrationClientId = (typeof FILE_INTEGRATION_CLIENTS)[number];

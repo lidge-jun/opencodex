@@ -49,6 +49,8 @@ import {
   import { exactComboCatalogSlugs } from "./catalog/aggregation";
   import {
   isNativeAliasCatalogEntry,
+  accountBoundNativeOpenAiSlugs,
+  accountBoundNativeOpenAiSlugsBySelector,
   disabledNativeSlugs,
   desktopAllowlistSuppressedNativeSlugs,
   NATIVE_OPENAI_MODELS,
@@ -216,6 +218,7 @@ function prepareCatalog(
   baselineCatalogModels: readonly Readonly<Record<string, unknown>>[],
   degradedProviderNames: ReadonlySet<string>,
   nativeRecoverySources: readonly (readonly RawEntry[])[] = [],
+  observedAccountNativeEntries: readonly RawEntry[] = [],
 ): RawCatalog {
   const catalog = JSON.parse(JSON.stringify(source.catalog)) as RawCatalog;
   const template = findNativeTemplate(catalog);
@@ -232,6 +235,15 @@ function prepareCatalog(
   const accountSelectors = shouldIncludeAccountBoundNativeOpenAi(config)
     ? visibleCodexAccountSelectors(config)
     : [];
+  const accountNativeSlugs = accountSelectors.length > 0
+    ? accountBoundNativeOpenAiSlugs(observedAccountNativeEntries)
+    : [];
+  const accountNativeSlugsBySelector = accountSelectors.length > 0
+    ? accountBoundNativeOpenAiSlugsBySelector(config, observedAccountNativeEntries)
+    : new Map<string, readonly string[]>();
+  // Unknown account-native ids have no safe bare/global identity. They are only projected through
+  // selector-qualified rows when a live selector is configured.
+  const observedNativeSlugs: string[] = [];
   const disabledNative = disabledNativeSlugs(config);
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
@@ -265,6 +277,8 @@ function prepareCatalog(
       suppressedBareNativeSlugs,
       disabledNativeAccountSlugs: new Set([...disabledNative].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
+      accountNativeSlugs,
+      accountNativeSlugsBySelector,
     }).filter(entry => trustedAccountBoundNativeCatalogSlug(entry) !== undefined);
   const gatheredProviderNames = new Set(enabledProviders.map(([name]) => name));
   const selectedModelsByProvider = new Map<string, ReadonlySet<string>>(
@@ -296,6 +310,7 @@ function prepareCatalog(
     suppressedBareNativeSlugs,
     policy: {
       ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+      nativeBackfillSlugs: [...NATIVE_OPENAI_MODELS, ...observedNativeSlugs],
       warningPolicy: "suppress",
     },
   });
@@ -383,6 +398,11 @@ export async function gatherCodexCatalogCandidate(
       [
         catalogFrom(keyedBackupBytes)?.models ?? [],
         catalogFrom(legacyBackupBytes)?.models ?? [],
+      ],
+      [
+        ...(catalogFrom(cacheBytes)?.models ?? []),
+        ...(catalogFrom(activeBytes)?.models ?? []).filter(entry =>
+          trustedAccountBoundNativeCatalogSlug(entry) !== undefined),
       ],
     );
     const preparedCatalogBytes = catalogBytes(preparedCatalog);

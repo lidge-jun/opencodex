@@ -12,6 +12,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import { readProcessStartMsBatch } from "../src/codex/app-server-processes";
 import {
+  decodeWindowsIdentityPowerShellOutputForTests,
   resolveEffectiveUserIdentity,
   windowsIdentityPowerShellCommandForTests,
   windowsIdentityPowerShellSpawnOptionsForTests,
@@ -25,7 +26,7 @@ afterEach(() => {
 });
 
 describe("Windows identity lookup popup fix (#1278)", () => {
-  test("builds a hidden non-interactive command from the trusted PowerShell path", () => {
+  test("builds a non-interactive command without the Bun-incompatible PowerShell window flag", () => {
     setTrustedWindowsElevationExecutablesForTests({ powershell: TRUSTED_POWERSHELL });
     const command = windowsIdentityPowerShellCommandForTests(
       "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
@@ -33,12 +34,13 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     expect(command[0]).toBe(TRUSTED_POWERSHELL);
     expect(command).toContain("-NoProfile");
     expect(command).toContain("-NonInteractive");
-    const windowStyle = command.indexOf("-WindowStyle");
-    expect(windowStyle).toBeGreaterThan(0);
-    expect(command[windowStyle + 1]).toBe("Hidden");
+    expect(command).not.toContain("-WindowStyle");
+    expect(command).not.toContain("Hidden");
     expect(command[command.length - 2]).toBe("-Command");
     expect(command[command.length - 1])
-      .toBe("[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value");
+      .toContain("[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value");
+    expect(command[command.length - 1]).toContain("ToBase64String");
+    expect(command[command.length - 1]).toContain("Encoding]::Unicode");
   });
 
   test("spawn options are hidden and bounded", () => {
@@ -48,6 +50,13 @@ describe("Windows identity lookup popup fix (#1278)", () => {
     // Assert the exact budget: the identity lookup contract is an 8-second
     // bound, and a looser assertion would let a silent re-tune through.
     expect(options.timeout).toBe(8_000);
+  });
+
+  test("decodes non-ASCII known-folder values from the ASCII-safe envelope", () => {
+    const path = "C:\\Users\\한글\\AppData\\Local";
+    const envelope = Buffer.from(path, "utf16le").toString("base64");
+    expect(decodeWindowsIdentityPowerShellOutputForTests(Buffer.from(`${envelope}\r\n`, "ascii")))
+      .toBe(path);
   });
 
   test("the hidden trusted lookup resolves the real token on Windows", () => {

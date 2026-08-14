@@ -37,6 +37,16 @@ capability, and an unexpected management response so a reachable `401` cannot be
 their detailed CLI health remains unavailable until restarted with an attested runtime record and
 capability-aware server.
 
+OAuth and API-key login use the same process-bound pattern for live provider
+convergence without transporting provider credentials. After the CLI durably saves
+`config.json`, it challenges the exact runtime listener and sends one bodyless
+`POST /api/providers/reload` capability bound to the provider name, method, path,
+nonce, PID, port, and short expiry. The server consumes it once, re-reads that named
+provider from the protected disk config, and updates only live state; the request
+contains no provider object, API key, OAuth value, custom header, reusable management
+credential, or config digest. Both the proof and reload request use the direct local
+transport so environment HTTP proxies cannot observe or fabricate the exchange.
+
 [Decision Log]
 - 목적과 의도: Keep a lower-privileged local process from collecting the management bearer by impersonating `/healthz` on an unused port.
 - 기존 구현 및 제약 조건: Liveness must remain public and backward-compatible, but its service string and reported PID are assertions made by the listener itself.
@@ -98,7 +108,7 @@ this document owns is which module holds which area and what invariant that area
 | System | `POST /api/system/restart` restarts the proxy in place. Local CLI/tray callers first attest the exact runtime PID and port, then send a process-scoped HMAC capability bound to that method, path, PID, and port; the capability authorizes no other management route and is invalid after replacement. The caller observes one absolute deadline and accepts success only after a different runtime PID is healthy on the same port. `GET /api/system/memory` — service-process runtime/memory identity (pid, Bun version/revision, optional `bunRuntimeSource` provenance, platform, RSS/heap/external/ArrayBuffers scalars, observed memory = max(RSS, external, ArrayBuffers), `bun:jsc` heap context, streamMode + eager-relay gate decision, watchdog snapshot sliced to the last 60 samples) plus privacy-safe `appOwnedBytes` retained-store totals/counters under static store ids. Scalar-only payload; dashboard/admin callers use the standard management gate, while `ocx doctor` may use only the exact process-scoped local-read capability. It must never move to unauthenticated `/healthz`. |
 | Stop | `POST /api/stop` — restore native Codex, stop any installed service, and exit the proxy. |
 | Diagnostics/sync | `src/server/management/config-routes.ts` — `GET /api/diagnostics/project-config` reports project-level Codex config that bypasses managed routing; `POST /api/sync` re-runs catalog/config sync. The diagnostic reports the bypass; it does not rewrite the project file. |
-| Sidecar/shadow-call settings | `src/server/management/config-routes.ts` — `GET/PUT /api/sidecar-settings` and `GET/PUT /api/shadow-call-settings`. PUT accepts model and backend plus optional `webSearch.reasoning` and `vision.maxDescriptionsPerTurn`; the read and PUT-response payload reports model, backend, and the vision per-turn limit. Credentials live in the provider and OAuth stores instead. Both shadow-call responses also report the resolved `sourceModels` — the prefixes the runtime actually intercepts (`src/lib/shadow-call.ts`, default `gpt-5.4-mini` + `gpt-5.6-luna`), so no client hard-codes a helper slug that a Codex release can invalidate. |
+| Sidecar/shadow-call settings | `src/server/management/config-routes.ts` — `GET/PUT /api/sidecar-settings` and `GET/PUT /api/shadow-call-settings`. PUT accepts model and backend plus optional `webSearch.reasoning`, `vision.reasoning`, `vision.enabled`, `vision.maxDescriptionsPerTurn`, and `vision.timeoutMs`; the read and PUT-response payload reports model, backend, reasoning, enabled, the vision per-turn limit, and timeout. `timeoutMs` is validated against the runtime integer bounds in `src/vision/timeout-bounds.ts`. Credentials live in the provider and OAuth stores instead. Both shadow-call responses also report the resolved `sourceModels` — the prefixes the runtime actually intercepts (`src/lib/shadow-call.ts`, default `gpt-5.4-mini` + `gpt-5.6-luna`), so no client hard-codes a helper slug that a Codex release can invalidate. |
 | Storage | `src/server/management/logs-usage-routes.ts` — `GET /api/storage`, `POST /api/storage/cleanup/preview` and `/api/storage/cleanup`, `GET /api/storage/trash`, `POST /api/storage/trash/restore`, and `GET/PUT /api/storage/cleanup-policy` plus `POST /api/storage/cleanup-policy/run`. `GET /api/storage/cleanup-policy/test-stream` and `GET /api/storage/trash/restore/test-stream` exist for progress-stream testing. Cleanup takes an explicit `mode`: `quarantine` moves to trash and is restorable, `permanent` is not. The caller must name the mode — there is no default that silently deletes. |
 | Provider quotas and tests | `src/server/management/provider-routes.ts` — `GET /api/provider-quotas`, `POST /api/providers/test`, `GET/PUT /api/provider-context-caps`, `GET /api/provider-presets`. A quota read may be served from cache or force-refreshed; absent quota data is reported as unknown rather than as a measured zero. |
 | Models and visibility | `src/server/management/model-routes.ts` — `GET /api/models`, `PUT /api/disabled-models`, `PUT /api/model-visibility`, `PUT /api/selected-models`, `GET/POST /api/custom-models`. Visibility writes trigger catalog sync through the owning server path. |
@@ -201,9 +211,15 @@ to be non-elevated. An unavailable probe remains `other` and cannot trigger UAC.
 native-service, file-write, and foreign task failures never use this fallback.
 
 For a fresh scheduler install whose task is proven absent, registration is the non-destructive
-first phase. OpenCodex writes a unique temporary XML definition and asks Task Scheduler to create
-the owned task without running it. Only after that succeeds may service-manager cleanup stop the
-existing proxy, publish the canonical scheduler assets, run the task, and write install state.
+first phase. OpenCodex writes a unique temporary XML definition in an ACL-hardened private directory
+outside its config root and asks Task Scheduler to create the owned task without running it. Only
+after that succeeds may it discard
+the consumed staging XML, require scheduler ownership for a config root that was absent at entry,
+stop existing service managers and the proxy, remove and boundedly re-verify any native WinSW
+registration, publish the canonical scheduler assets, run the task, and write install state. A
+legacy non-empty unowned root remains conservatively unclaimed. This prevents the fresh path from
+leaving either an unowned new installation or two registered managers that can both respawn the
+proxy.
 UAC cancellation or create failure removes the temporary XML before any manager/proxy stop, so the
 working proxy's shutdown cleanup cannot strip Codex routing merely because elevation was refused.
 The Dashboard does not apply its ordinary 60-second child timeout to this Windows service command:

@@ -8,6 +8,7 @@ import {
   buildClientConfig,
   normalizeExportModels,
   opencodeGlobalConfigPath,
+  type DshGeneratedConfig,
   type ExportModel,
   type OpencodeGeneratedConfig,
   type PiGeneratedConfig,
@@ -43,6 +44,8 @@ interface ModelRow {
   displayName?: string;
   contextWindow?: number;
   inputModalities?: string[];
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 }
 
 /**
@@ -109,6 +112,8 @@ function toExportModel(row: ModelRow): ExportModel {
     ...(row.displayName ? { displayName: row.displayName } : {}),
     ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
     ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
+    ...(row.reasoningEfforts ? { reasoningEfforts: row.reasoningEfforts } : {}),
+    ...(row.defaultReasoningEffort ? { defaultReasoningEffort: row.defaultReasoningEffort } : {}),
   };
 }
 
@@ -179,6 +184,25 @@ describe("GET /api/client-config", () => {
     expect(provider.apiKey).toBe(LOOPBACK_API_KEY_PLACEHOLDER);
     expect(body.text).not.toContain(REAL_LOOKING_KEY);
     expect(JSON.stringify(body.config)).not.toContain(REAL_LOOKING_KEY);
+  }, 15_000);
+
+  test("DSH response keeps management reasoning metadata in the rc.6 model map", async () => {
+    const response = await clientConfigApi(baseConfig(), "?client=dsh");
+    expect(response.status).toBe(200);
+    const body = await response.json() as ClientConfigEnvelope;
+    expect(body.filename).toBe("settings.yaml");
+    expect(body.format).toBe("yaml");
+    expect(Bun.YAML.parse(body.text)).toEqual(body.config as Record<string, unknown>);
+
+    const provider = (body.config as DshGeneratedConfig)["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]!;
+    const native = provider.models.find(model => model.id === "gpt-5.6-luna")!;
+    expect(native.reasoningEfforts).toEqual({
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
   }, 15_000);
 
   test("counts describe the emitted document, including models without limits", async () => {

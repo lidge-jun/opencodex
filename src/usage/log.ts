@@ -1,6 +1,8 @@
+import { createHash, type Hash } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir } from "../config";
+import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { usageDisplayTotalTokens } from "./totals";
 import type { OcxUsage } from "../types";
@@ -448,7 +450,16 @@ let usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
 const MANAGEMENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
 const RECENT_USAGE_MAX_READ_BYTES = 64 * 1024 * 1024;
 const MANAGEMENT_USAGE_READ_CHUNK_BYTES = 1024 * 1024;
-const MANAGEMENT_USAGE_MAX_ENTRIES = 500_000;
+const MANAGEMENT_USAGE_MAX_ENTRIES_DEFAULT = 500_000;
+/**
+ * Row cap for a management snapshot. Overridable only so tests can reach the cap without
+ * building a half-million-row fixture; production always uses the default.
+ */
+let MANAGEMENT_USAGE_MAX_ENTRIES = MANAGEMENT_USAGE_MAX_ENTRIES_DEFAULT;
+
+export function setManagementUsageMaxEntriesForTests(value: number | null): void {
+  MANAGEMENT_USAGE_MAX_ENTRIES = value ?? MANAGEMENT_USAGE_MAX_ENTRIES_DEFAULT;
+}
 const MANAGEMENT_USAGE_FLIGHT_STALE_MS = 30_000;
 export interface ManagementUsageSnapshot {
   entries: PersistedUsageEntry[];
@@ -456,13 +467,155 @@ export interface ManagementUsageSnapshot {
   truncatedPrefixBytes: number;
   entriesTruncated: boolean;
   entriesDropped: number;
+  /** Digest of the covered prefix, used to detect an in-place rewrite before reuse. */
+  prefixDigest: string;
+  /**
+   * Byte offset where the RETAINED ROWS begin.
+   *
+   * Distinct from `truncatedPrefixBytes`, which is the API-visible "bytes skipped by the
+   * byte window" signal and must stay independent of entry-count truncation. When the
+   * entry cap drops rows, those bytes are not window truncation, but the retained rows do
+   * start later -- this field tracks that so the byte accounting stays exact.
+   */
+  rowsBeginAtBytes: number;
+  /**
+   * Byte length of each returned row, in order, including its newline.
+   *
+   * Lets a later read trim rows that have fallen out of the bounded window without
+   * re-reading or re-parsing them, which is what keeps the returned set equal to the
+   * window the caller asked for.
+   */
+  entryLengths: number[];
+  /** Unparseable bytes after the last returned row; the next read folds them forward. */
+  trailingSkippedBytes: number;
 }
 let managementUsageReadInflight: {
   key: string;
+  openedSize: number;
   promise: Promise<ManagementUsageSnapshot>;
   startedAt: number;
   abort: AbortController;
 } | null = null;
+
+/**
+ * Append-tolerant snapshot of the last management read.
+ *
+ * The management reader parses a 64 MiB tail into ~53k objects, which costs roughly
+ * 640 MB of transient RSS per cold call. The JS objects are collected promptly, but
+ * the allocator does not return those pages, so every cold miss ratchets process RSS
+ * upward and never comes back down (observed: 7.9 GiB RSS against a 130 MB JS heap).
+ *
+ * Reparsing an unchanged prefix is what makes that transient recur. `usage.jsonl` is
+ * append-only under a stable identity, so when the file has only grown we keep the
+ * previously parsed rows and parse just the appended bytes. This is retained state, so
+ * it is registered with the app-owned memory budget and is evictable under pressure.
+ */
+interface RetainedUsageSnapshot {
+  identityKey: string;
+  maxReadBytes: number;
+  /** Absolute end offset in the file that `entries` already covers. */
+  coveredThroughBytes: number;
+  /**
+   * Digest of the last bytes of the covered prefix, re-verified before extending.
+   *
+   * Identity (path/dev/ino/birthtime) intentionally ignores size and mtime so appends
+   * can share work, which also means an in-place rewrite that keeps the inode is
+   * invisible to it. A hand-edit or external compaction can therefore replace history
+   * under a stable identity without shrinking the file. Re-reading this trailing window
+   * catches that: if the bytes behind `coveredThroughBytes` changed, the retained rows
+   * no longer describe the file and must not be extended.
+   */
+  prefixDigest: string;
+  /** Bytes of the file skipped ahead of the retained window. */
+  truncatedPrefixBytes: number;
+  /** Byte length of each retained row, so out-of-window rows can be trimmed exactly. */
+  entryLengths: number[];
+  /** Unparseable bytes after the last retained row; folded into the next row's span. */
+  trailingSkippedBytes: number;
+  /** Byte offset where the retained rows begin; see ManagementUsageSnapshot. */
+  rowsBeginAtBytes: number;
+  entries: PersistedUsageEntry[];
+  entriesTruncated: boolean;
+  entriesDropped: number;
+  revision: UsageLogRevision;
+  retainedAt: number;
+  approxBytes: number;
+}
+let retainedUsageSnapshot: RetainedUsageSnapshot | null = null;
+
+/** Rough per-row retained cost; exact sizing would cost another full serialization pass. */
+const RETAINED_USAGE_ENTRY_BYTES = 512;
+
+/** Chunk size used when digesting a retained region. */
+const RETAINED_USAGE_DIGEST_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Digest a byte range into `hash`; false when it cannot be read.
+ *
+ * Deliberately not sampled. A sampled digest covers a vanishing fraction of a large
+ * prefix (32 KiB of 64 MiB is 0.05%), so an ordinary fixed-width in-place edit -- a
+ * redaction script fixing one field, a compaction rewriting a middle region -- lands in
+ * a gap by default and the stale rows are served.
+ *
+ * Hashing from byte 0 on every call is also wrong: that is O(file) per poll while the
+ * read it protects is capped at maxReadBytes, so the ratio degrades as the ledger grows
+ * and becomes SLOWER than a full read past roughly 1-2 GB. Only the retained REGION
+ * (truncatedPrefixBytes..coveredThroughBytes) is hashed. It is never wider than the
+ * window, and bytes below the retained start describe no retained row, so reading them
+ * would prove nothing.
+ */
+function updateUsageDigest(hash: Hash, fd: number, from: number, to: number): boolean {
+  if (to <= from) return true;
+  const buffer = Buffer.allocUnsafe(Math.min(RETAINED_USAGE_DIGEST_CHUNK_BYTES, to - from));
+  for (let position = from; position < to;) {
+    const length = Math.min(buffer.byteLength, to - position);
+    let offset = 0;
+    while (offset < length) {
+      const read = readSync(fd, buffer, offset, length - offset, position + offset);
+      if (read === 0) return false;
+      offset += read;
+    }
+    hash.update(buffer.subarray(0, length));
+    position += length;
+  }
+  return true;
+}
+
+/**
+ * Digest of `from`..`to`; null when it cannot be read.
+ *
+ * The range is bound into the digest so a region cannot be confused with an equal-length
+ * region at a different offset.
+ */
+function usageRegionDigest(fd: number, from: number, to: number): string | null {
+  if (to <= from) return `${from}:${to}:empty`;
+  const hash = createHash("sha256");
+  if (!updateUsageDigest(hash, fd, from, to)) return null;
+  return `${from}:${to}:${hash.digest("hex")}`;
+}
+
+function retainedUsageSnapshotBytes(entries: PersistedUsageEntry[]): number {
+  return entries.length * RETAINED_USAGE_ENTRY_BYTES;
+}
+
+export function discardRetainedUsageSnapshot(): number {
+  const released = retainedUsageSnapshot?.approxBytes ?? 0;
+  retainedUsageSnapshot = null;
+  return released;
+}
+
+export function retainedUsageSnapshotStats(): {
+  count: number;
+  bytes: number;
+  oldestAt: number | null;
+} {
+  if (!retainedUsageSnapshot) return { count: 0, bytes: 0, oldestAt: null };
+  return {
+    count: 1,
+    bytes: retainedUsageSnapshot.approxBytes,
+    oldestAt: retainedUsageSnapshot.retainedAt,
+  };
+}
 
 /** Test-only observability for proving that unchanged prefixes are not reparsed. */
 export function usageReadCacheStatsForTests(): Readonly<typeof usageReadCacheStats> {
@@ -473,6 +626,7 @@ export function resetUsageReadCacheForTests(): void {
   usageReadCacheStats = { fullReads: 0, tailReads: 0, parsedLines: 0 };
   managementUsageReadInflight?.abort.abort();
   managementUsageReadInflight = null;
+  retainedUsageSnapshot = null;
 }
 
 function readExactly(fd: number, length: number, position: number): Buffer | null {
@@ -512,6 +666,12 @@ export function usageLogRevisionKey(revision: UsageLogRevision | null): string {
   ].join("\0");
 }
 
+/** Identity of the usage ledger file, excluding size/mtime/ctime so appends can share work. */
+export function usageLogIdentityKey(revision: UsageLogRevision | null): string {
+  if (!revision) return "missing";
+  return [revision.path, revision.dev, revision.ino, revision.birthtimeMs].join("\0");
+}
+
 export function currentUsageLogRevision(): UsageLogRevision | null {
   const path = usageLogPath();
   if (!existsSync(path)) return null;
@@ -527,23 +687,71 @@ export function currentUsageLogRevision(): UsageLogRevision | null {
 async function parseUsageTextCooperatively(text: string, signal: AbortSignal): Promise<{
   entries: PersistedUsageEntry[];
   entriesDropped: number;
+  entryLengths: number[];
+  /** Bytes of unparseable lines after the final accepted row. */
+  trailingSkippedBytes: number;
+  /** Bytes of rows removed by the entry cap, which move into the skipped prefix. */
+  cappedPrefixBytes: number;
 }> {
-  const lines = text.split(/\r?\n/);
+  // Split on "\n" only, so a CRLF line keeps its "\r" and its byte length stays exact.
+  // Splitting on /\r?\n/ consumes two bytes but leaves no way to tell that it did, which
+  // made the recorded lengths short by one byte per line on a CRLF ledger and failed the
+  // accounting self-check. JSON.parse tolerates the trailing "\r".
+  const lines = text.split("\n");
   usageReadCacheStats.parsedLines += lines.filter(line => line.trim()).length;
   const entries: PersistedUsageEntry[] = [];
+  // Byte length of each accepted row including its newline, so a later read can trim
+  // rows that fall out of the bounded window without re-reading the file.
+  const entryLengths: number[] = [];
   const batchSize = 1_000;
+  // Bytes of lines that did not yield an entry (malformed JSON, missing requestId, a
+  // torn final write). They still occupy space in the file, so they are folded into the
+  // next accepted row's recorded length. Dropping them would make the recorded lengths
+  // sum to less than the real byte span, and the window trim -- which walks forward by
+  // summing those lengths -- would consume extra rows to reach the window start,
+  // silently hiding history and desynchronizing truncatedPrefixBytes.
+  let pendingSkippedBytes = 0;
   for (let offset = 0; offset < lines.length; offset += batchSize) {
     if (signal.aborted) throw signal.reason;
-    entries.push(...parseUsageLines(lines.slice(offset, offset + batchSize)));
+    const batch = lines.slice(offset, offset + batchSize);
+    for (let index = 0; index < batch.length; index++) {
+      const line = batch[index]!;
+      // The split leaves a trailing "" after the final newline; it occupies no bytes.
+      const isLastLine = offset + index === lines.length - 1;
+      const lineBytes = Buffer.byteLength(line, "utf-8") + (isLastLine && line === "" ? 0 : 1);
+      const parsed = parseUsageLines([line]);
+      if (parsed.length === 0) {
+        pendingSkippedBytes += lineBytes;
+        continue;
+      }
+      entries.push(parsed[0]!);
+      entryLengths.push(lineBytes + pendingSkippedBytes);
+      pendingSkippedBytes = 0;
+    }
     if (offset + batchSize < lines.length) {
       // JSON parsing dominates large-log startup. Yield between bounded batches so
       // Bun can continue serving health and settings requests on the same thread.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
     }
   }
-  if (entries.length <= MANAGEMENT_USAGE_MAX_ENTRIES) return { entries, entriesDropped: 0 };
+  // Skipped bytes AFTER the last accepted row belong to no entry length, so report them
+  // separately; the trim arithmetic adds them back to keep lengths summing to the span.
+  const trailingSkippedBytes = pendingSkippedBytes;
+  if (entries.length <= MANAGEMENT_USAGE_MAX_ENTRIES) {
+    return { entries, entriesDropped: 0, entryLengths, trailingSkippedBytes, cappedPrefixBytes: 0 };
+  }
   const entriesDropped = entries.length - MANAGEMENT_USAGE_MAX_ENTRIES;
-  return { entries: entries.slice(-MANAGEMENT_USAGE_MAX_ENTRIES), entriesDropped };
+  return {
+    entries: entries.slice(-MANAGEMENT_USAGE_MAX_ENTRIES),
+    entriesDropped,
+    entryLengths: entryLengths.slice(-MANAGEMENT_USAGE_MAX_ENTRIES),
+    trailingSkippedBytes,
+    // Bytes of the rows the cap removed. The caller adds them to its skipped prefix so
+    // the recorded lengths keep summing to the byte span they describe.
+    cappedPrefixBytes: entryLengths
+      .slice(0, entryLengths.length - MANAGEMENT_USAGE_MAX_ENTRIES)
+      .reduce((total, length) => total + length, 0),
+  };
 }
 
 async function readUsageEntriesFullCooperatively(
@@ -584,12 +792,181 @@ async function readUsageEntriesFullCooperatively(
     }
     const parsed = await parseUsageTextCooperatively(bytes.toString("utf-8"), signal);
     usageReadCacheStats.fullReads += 1;
+    // Rows removed by the entry cap start the retained rows later in the file. That is
+    // NOT byte-window truncation, so it must not move truncatedPrefixBytes -- the two
+    // signals are independent in the API. It is tracked separately for the byte
+    // accounting the incremental reader relies on.
+    const rowsBeginAtBytes = truncatedPrefixBytes + parsed.cappedPrefixBytes;
+    // Digest the exact prefix these rows describe, so a later incremental read can
+    // prove the file was appended to rather than rewritten under the same inode.
+    const prefixDigest = usageRegionDigest(fd, rowsBeginAtBytes, Number(stat.size));
+    if (prefixDigest === null) throw new Error("usage log changed while it was being read");
     return {
       entries: parsed.entries,
       revision: usageLogRevision(path, stat),
       truncatedPrefixBytes,
       entriesTruncated: parsed.entriesDropped > 0,
       entriesDropped: parsed.entriesDropped,
+      prefixDigest,
+      entryLengths: parsed.entryLengths,
+      trailingSkippedBytes: parsed.trailingSkippedBytes,
+      rowsBeginAtBytes,
+    };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * Parse only the bytes appended since the retained snapshot's covered offset.
+ *
+ * Returns null when the retained snapshot cannot be extended safely — a different
+ * identity or read window, a file that shrank (replacement/truncation), or a covered
+ * offset that no longer sits on a record boundary. Callers then fall back to a full
+ * bounded read.
+ */
+async function readUsageEntriesIncrementally(
+  path: string,
+  signal: AbortSignal,
+  maxReadBytes: number,
+  retained: RetainedUsageSnapshot,
+): Promise<ManagementUsageSnapshot | null> {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const stat = fstatSync(fd);
+    const revision = usageLogRevision(path, stat);
+    if (usageLogIdentityKey(revision) !== retained.identityKey) return null;
+    const size = Number(stat.size);
+    // A shrink means truncation or replacement-in-place; the retained rows may no
+    // longer correspond to file contents, so refuse to extend them.
+    if (size < retained.coveredThroughBytes) return null;
+    // Verify the retained REGION is unchanged before anything is reused. Identity keeps
+    // dev/ino/birthtime, and an append and an in-place rewrite both move mtime/ctime
+    // forward, so only the bytes themselves settle it.
+    //
+    // Only `truncatedPrefixBytes..coveredThroughBytes` is hashed: that is exactly the
+    // span the retained rows were parsed from, and after trimming it is never wider than
+    // maxReadBytes. Hashing from byte 0 instead would make every poll O(file) -- cheaper
+    // than a reparse on a 245 MB ledger but MORE expensive past roughly 1-2 GB, turning
+    // this optimization into a pessimization on exactly the growth curve an append-only
+    // ledger follows. Bytes before the retained start are not described by any retained
+    // row, so re-reading them proves nothing.
+    const covered = usageRegionDigest(fd, retained.rowsBeginAtBytes, retained.coveredThroughBytes);
+    if (covered === null || covered !== retained.prefixDigest) return null;
+    // Read and parse ONLY the appended bytes.
+    let appendedEntries: PersistedUsageEntry[] = [];
+    let appendedLengths: number[] = [];
+    let appendedDropped = 0;
+    let appendedTrailingSkipped = retained.trailingSkippedBytes;
+    if (size > retained.coveredThroughBytes) {
+      // The covered offset must land immediately after a newline, or the retained rows
+      // and the appended text do not join on a record boundary.
+      if (retained.coveredThroughBytes > 0) {
+        const preceding = readExactly(fd, 1, retained.coveredThroughBytes - 1);
+        if (preceding === null || preceding[0] !== 0x0a) return null;
+      }
+      const chunks: Buffer[] = [];
+      for (let position = retained.coveredThroughBytes; position < size;) {
+        if (signal.aborted) throw signal.reason;
+        const length = Math.min(MANAGEMENT_USAGE_READ_CHUNK_BYTES, size - position);
+        const chunk = readExactly(fd, length, position);
+        if (chunk === null) throw new Error("usage log changed while it was being read");
+        chunks.push(chunk);
+        position += length;
+      }
+      const appended = await parseUsageTextCooperatively(Buffer.concat(chunks).toString("utf-8"), signal);
+      appendedEntries = appended.entries;
+      appendedLengths = appended.entryLengths;
+      appendedDropped = appended.entriesDropped;
+      // A capped appended chunk is not joinable: its dropped rows sit between the
+      // retained rows and the kept ones, so the lengths no longer describe a contiguous
+      // span. Fall back to a full read.
+      if (appended.cappedPrefixBytes > 0) return null;
+      // If the appended chunk produced rows, its own trailing skipped bytes become the
+      // new trailing remainder; otherwise the earlier remainder still stands and the new
+      // skipped bytes add to it.
+      appendedTrailingSkipped = appended.entries.length > 0
+        ? appended.trailingSkippedBytes
+        : retained.trailingSkippedBytes + appended.trailingSkippedBytes;
+    }
+    // Re-anchor the window in place. Rows that have fallen outside `size - maxReadBytes`
+    // are dropped using their recorded byte lengths, so the result is exactly the rows a
+    // fresh bounded read would load -- no superset, and truncatedPrefixBytes and
+    // snapshotWindow keep describing the read honestly. Refusing here instead would make
+    // this path dead code on any ledger past the window, which is precisely the case it
+    // exists for.
+    const windowStart = Math.max(0, size - maxReadBytes);
+    let entries = retained.entries.concat(appendedEntries);
+    // Skipped bytes trailing the retained rows sit BETWEEN them and the appended rows, so
+    // they belong to the first appended row's span. Folding them in keeps the recorded
+    // lengths summing to the true byte distance, which is what the trim walk relies on.
+    const joinedLengths = appendedLengths.slice();
+    if (retained.trailingSkippedBytes > 0 && joinedLengths.length > 0) {
+      joinedLengths[0] = joinedLengths[0]! + retained.trailingSkippedBytes;
+    }
+    let lengths = retained.entryLengths.concat(joinedLengths);
+    let rowsBeginAtBytes = retained.rowsBeginAtBytes;
+    // Byte-window truncation advances ONLY here, so it stays exactly what a cold read of
+    // this window reports. The entry cap below is entry-count truncation and must not
+    // move it -- the two are independent signals in the API.
+    let windowTruncatedBytes = retained.truncatedPrefixBytes;
+    let dropIndex = 0;
+    while (dropIndex < lengths.length && rowsBeginAtBytes < windowStart) {
+      rowsBeginAtBytes += lengths[dropIndex]!;
+      windowTruncatedBytes += lengths[dropIndex]!;
+      dropIndex += 1;
+    }
+    // If every row is gone and a trailing unparseable remainder still sits before the
+    // window start, nothing is left to advance the offset with: the retained span would
+    // keep growing past maxReadBytes on each malformed-only append while the accounting
+    // still balanced. Re-anchor with a full read instead.
+    if (rowsBeginAtBytes < windowStart) return null;
+    if (dropIndex > 0) {
+      entries = entries.slice(dropIndex);
+      lengths = lengths.slice(dropIndex);
+    }
+    let entriesDropped = retained.entriesDropped + appendedDropped;
+    if (entries.length > MANAGEMENT_USAGE_MAX_ENTRIES) {
+      // A cold read applies the entry cap to the whole window and reports byte
+      // truncation for the window boundary alone. An incremental read arrives at the cap
+      // by a different route and cannot reconstruct that ordering from retained state, so
+      // continuing here would report a truncatedPrefixBytes that disagrees with a fresh
+      // read of the same window. Re-anchor instead.
+      //
+      // This is reachable in production, not a theoretical branch: rows average ~118
+      // bytes on a real ledger, so 500,000 of them occupy ~56 MiB and fit inside the
+      // 64 MiB window. Both truncations can therefore apply at once.
+      return null;
+    }
+    // The recorded lengths plus the trailing remainder must account for every byte from
+    // the retained rows' start to EOF; if they do not, the lengths and the file have
+    // diverged and the retained rows cannot be trusted.
+    let accounted = appendedTrailingSkipped;
+    for (const length of lengths) accounted += length;
+    if (rowsBeginAtBytes + accounted !== size) return null;
+    usageReadCacheStats.tailReads += 1;
+    // Byte-window truncation is what the API reports, and it stays independent of
+    // entry-count truncation. A cold read reports the record boundary it actually landed
+    // on, which is where the rows begin MINUS whatever the entry cap removed -- the cap
+    // is not window truncation. When nothing was skipped by the window at all, a cold
+    // read reports 0.
+    const truncatedPrefixBytes = windowTruncatedBytes;
+    return {
+      entries,
+      revision,
+      truncatedPrefixBytes,
+      // ENTRY-count truncation only. Byte-window truncation is reported by
+      // truncatedPrefixBytes, and the route ORs the two itself; folding bytes in here
+      // would make a byte-truncated read claim rows were dropped when none were.
+      entriesTruncated: entriesDropped > 0,
+      entriesDropped,
+      // The digest must describe exactly the region the returned rows came from, which
+      // is the post-trim window, not the pre-trim one.
+      prefixDigest: usageRegionDigest(fd, rowsBeginAtBytes, size) ?? "",
+      entryLengths: lengths,
+      trailingSkippedBytes: appendedTrailingSkipped,
+      rowsBeginAtBytes,
     };
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -598,8 +975,10 @@ async function readUsageEntriesFullCooperatively(
 
 /**
  * Management API reader: full parses yield between bounded batches and concurrent
- * callers share work only when they observed the same exact file revision. Parsed rows
- * are returned to the request and never retained in module state.
+ * callers share work when they observe the same ledger identity and byte window.
+ * Appends keep that identity; replacements (inode/birthtime change) start a new flight.
+ * The parsed tail is retained under the app-owned memory budget so an append reparses
+ * only the appended bytes; the retained rows are evictable and are copied per caller.
  */
 export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES): Promise<{
   entries: PersistedUsageEntry[];
@@ -612,18 +991,57 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   const path = usageLogPath();
   if (!existsSync(path)) return { entries: [], revision: null, truncatedPrefixBytes: 0, entriesTruncated: false, entriesDropped: 0 };
   const observed = currentUsageLogRevision();
-  const key = `${usageLogRevisionKey(observed)}\0${maxReadBytes}`;
+  const key = `${usageLogIdentityKey(observed)}\0${maxReadBytes}`;
+  const observedSize = observed?.size ?? 0;
   const existing = managementUsageReadInflight;
-  if (existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
+  const replacement = Boolean(existing && observedSize < existing.openedSize);
+  if (!replacement && existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
     const shared = await existing.promise;
     return { ...shared, entries: shared.entries.slice() };
   }
-  existing?.abort.abort(new Error("management usage read superseded"));
+  if (existing && (existing.key !== key || replacement || Date.now() - existing.startedAt > MANAGEMENT_USAGE_FLIGHT_STALE_MS)) {
+    existing.abort.abort(new Error("management usage read superseded"));
+  } else if (existing) {
+    const shared = await existing.promise;
+    return { ...shared, entries: shared.entries.slice() };
+  }
   const abort = new AbortController();
-  const promise = readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes);
-  managementUsageReadInflight = { key, promise, startedAt: Date.now(), abort };
+  const retained = retainedUsageSnapshot;
+  const reusable = retained
+    && retained.identityKey === usageLogIdentityKey(observed)
+    && retained.maxReadBytes === maxReadBytes
+      ? retained
+      : null;
+  const promise = (async (): Promise<ManagementUsageSnapshot> => {
+    if (reusable) {
+      const incremental = await readUsageEntriesIncrementally(path, abort.signal, maxReadBytes, reusable);
+      if (incremental) return incremental;
+      // The retained rows could not be extended safely; drop them before the full read
+      // so a stale window is never combined with freshly parsed bytes.
+      discardRetainedUsageSnapshot();
+    }
+    return readUsageEntriesFullCooperatively(path, abort.signal, maxReadBytes);
+  })();
+  managementUsageReadInflight = { key, openedSize: observedSize, promise, startedAt: Date.now(), abort };
   try {
     const snapshot = await promise;
+    retainedUsageSnapshot = {
+      identityKey: usageLogIdentityKey(snapshot.revision),
+      maxReadBytes,
+      coveredThroughBytes: snapshot.revision.size,
+      prefixDigest: snapshot.prefixDigest,
+      truncatedPrefixBytes: snapshot.truncatedPrefixBytes,
+      entryLengths: snapshot.entryLengths,
+      trailingSkippedBytes: snapshot.trailingSkippedBytes,
+      rowsBeginAtBytes: snapshot.rowsBeginAtBytes,
+      entries: snapshot.entries,
+      entriesTruncated: snapshot.entriesTruncated,
+      entriesDropped: snapshot.entriesDropped,
+      revision: snapshot.revision,
+      retainedAt: Date.now(),
+      approxBytes: retainedUsageSnapshotBytes(snapshot.entries),
+    };
+    enforceAppOwnedMemoryBudget();
     return { ...snapshot, entries: snapshot.entries.slice() };
   } finally {
     if (managementUsageReadInflight?.promise === promise) managementUsageReadInflight = null;

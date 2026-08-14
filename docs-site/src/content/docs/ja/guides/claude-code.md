@@ -50,12 +50,16 @@ ocx claude
 ネイティブ状態で維持され、同じセッションでピッカーエイリアスを使ってルーティングモデルも引き続き使えます。
 
 **ヘッダー処理:** hop-by-hop ヘッダーと `host`、`content-length`、`accept-encoding`、
-`x-opencodex-api-key`、`origin` は転送前に削除します。それ以外のヘッダー(`anthropic-beta`、
-`anthropic-version` を含む)はそのまま転送します。
+`x-opencodex-api-key`、`origin` は常に転送前に削除します。非ループバック bind のネイティブ
+パススルーでは、有効なプロキシ認証情報を `x-opencodex-api-key` でも要求し、
+`Authorization` と `x-api-key` は Anthropic 専用になります。いずれかの provider ヘッダーに
+プロキシ admission secret があれば削除し、もう一方の実際の provider 認証情報は維持します。
+カンマで結合された曖昧な認証ヘッダーは転送しません。
 
-次の 4 つの条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
-モデル名が `claude` または `anthropic` で始まり、bearer または `x-api-key` が `sk-ant-` で
-始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであること。そのため `ocx claude` を
+次の条件を**すべて**満たすとパススルーが動作します。`nativePassthrough` が `false` でなく、
+モデル名が `claude` または `anthropic` で始まり、bearer トークンまたは `x-api-key` が `sk-ant-` で
+始まり、エイリアス/モデルマップ解決結果が変更されていない同じモデルであり、非ループバック bind
+では専用プロキシ admission ヘッダーも有効であること。そのため `ocx claude` を
 使うとき "claude.ai connectors are disabled" 警告ももう表示されません。
 
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを

@@ -439,6 +439,61 @@ describe("opencodex config defaults", () => {
     }
   });
 
+  test("agentTaskRecovery is explicit, bounded, and degrades invalid hand edits", () => {
+    const base = {
+      port: 12345,
+      providers: {
+        custom: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.test/v1",
+        },
+      },
+      defaultProvider: "custom",
+    };
+    expect(getDefaultConfig().agentTaskRecovery).toBeUndefined();
+
+    const recovery = {
+      enabled: true,
+      model: "gpt-5.6-sol",
+      timeoutMs: 45_000,
+      cacheEntries: 200,
+    };
+    writeConfig({ ...base, agentTaskRecovery: recovery });
+    expect(loadConfig()).toMatchObject({ ...base, agentTaskRecovery: recovery });
+    expect(validateConfigCandidate({ ...base, agentTaskRecovery: recovery })).toMatchObject({
+      ok: true,
+      config: { agentTaskRecovery: recovery },
+    });
+
+    for (const invalid of [
+      true,
+      { enabled: "true" },
+      { enabled: true, model: " " },
+      { enabled: true, timeoutMs: 999 },
+      { enabled: true, timeoutMs: 120_001 },
+      { enabled: true, cacheEntries: 0 },
+      { enabled: true, cacheEntries: 513 },
+      { enabled: true, url: "https://attacker.example/responses" },
+    ]) {
+      writeConfig({ ...base, agentTaskRecovery: invalid });
+      const diagnostics = readConfigDiagnostics();
+      expect(diagnostics).toMatchObject({
+        source: "file",
+        error: null,
+        config: base,
+      });
+      expect(diagnostics.config.agentTaskRecovery).toBeUndefined();
+      expect(diagnostics.warnings?.some(warning => warning.startsWith("agentTaskRecovery"))).toBe(true);
+      expect(loadConfig()).toMatchObject(base);
+      expect(loadConfig().agentTaskRecovery).toBeUndefined();
+      expect(validateConfigCandidate({ ...base, agentTaskRecovery: invalid })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("agentTaskRecovery"),
+      });
+      expect(backupNames()).toEqual([]);
+    }
+  });
+
   test("native subagent-default sync is opt-in and ignores malformed opt-ins without falling back", () => {
     const base = {
       port: 12345,

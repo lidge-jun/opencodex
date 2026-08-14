@@ -26,10 +26,10 @@ export function inferCursorContextWindow(modelId: string): number {
   const id = modelId.trim().toLowerCase();
   if (id.includes("1m")) return CONTEXT_1M;
   if (id.startsWith("gemini-")) return CONTEXT_1M;
-  if (id === "glm-5.2") return CONTEXT_1M;
+  if (id === "glm-5.3" || id === "glm-5.2") return CONTEXT_1M;
   if (id.startsWith("gpt-5.6-")) return CONTEXT_1M;
   if (id.startsWith("gpt-5") || id === "gpt-5-codex") return CONTEXT_272K;
-  if (id.startsWith("grok-4.5")) return 500_000;
+  if (id.startsWith("grok-4.5") || id.startsWith("grok-4.6")) return 500_000;
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
@@ -233,6 +233,8 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
   // Conflict resolution (260709): keep the refreshed 1M context + kimi-k2.7-code from de12fc8,
   // take PR #73's supportsReasoningEffort for glm-5.2 (its effort-map tiers landed with the PR).
   { id: "glm-5.2", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
+  // 260814 preemptive: glm-5.3 seeded ahead of Cursor's lineup update (mirrors glm-5.2).
+  { id: "glm-5.3", contextWindow: CONTEXT_1M, supportsReasoningEffort: true },
   { id: "kimi-k2.7-code", contextWindow: CONTEXT_262K },
   // kimi-k3: cursor.com/docs/models/kimi-k3; account-verified via GetUsableModels (2026-07-28) —
   // ships only as effort-suffixed kimi-k3-{low,high,max}, so the tier picker is exposed.
@@ -240,6 +242,9 @@ export const CURSOR_STATIC_MODELS: readonly CursorModelInfo[] = normalizeCursorM
 
   { id: "grok-4.5", contextWindow: 500_000, supportsReasoningEffort: true },
   { id: "grok-4.5-fast", contextWindow: 500_000, supportsReasoningEffort: true },
+  // 260813 preemptive: grok-4.6 seeded ahead of Cursor's lineup update (mirrors grok-4.5).
+  { id: "grok-4.6", contextWindow: 500_000, supportsReasoningEffort: true },
+  { id: "grok-4.6-fast", contextWindow: 500_000, supportsReasoningEffort: true },
 ]);
 
 export function cursorModelIds(models: readonly CursorModelInfo[] = CURSOR_STATIC_MODELS): string[] {

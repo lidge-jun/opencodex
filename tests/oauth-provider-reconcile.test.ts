@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadConfig } from "../src/config";
 import { OAUTH_PROVIDERS, reconcileOAuthProviders, upsertOAuthProvider } from "../src/oauth";
 import { getCredential, saveCredential } from "../src/oauth/store";
+import { routeModel } from "../src/router";
 import type { OcxConfig } from "../src/types";
 
 const originalHome = process.env.OPENCODEX_HOME;
@@ -48,9 +49,9 @@ describe("OAuth provider reconciliation", () => {
 
     expect(reconcileOAuthProviders(config)).toBe(true);
     const provider = config.providers["google-antigravity"];
-    expect(provider.defaultModel).toBe("gemini-3.6-flash");
+    expect(provider.defaultModel).toBe("gemini-3.7-flash");
     expect(provider.models).toEqual([
-      "gemini-3.6-flash",
+      "gemini-3.7-flash",
       "gemini-3.1-pro",
       "gemini-3.1-flash-image",
       "claude-sonnet-4-6",
@@ -58,10 +59,11 @@ describe("OAuth provider reconciliation", () => {
       "gpt-oss-120b-medium",
     ]);
     expect(provider.models).not.toContain("gemini-3.5-flash-low");
+    expect(provider.models).not.toContain("gemini-3.6-flash");
     expect(provider.models).not.toContain("gemini-3.6-flash-low");
     expect(provider.models).not.toContain("gemini-3.6-flash-medium");
     expect(provider.models).not.toContain("gemini-3.6-flash-high");
-    expect(provider.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+    expect(provider.modelContextWindows?.["gemini-3.7-flash"]).toBe(1_048_576);
     expect(provider.liveModels).toBe(true);
     expect(provider.project).toBe("config-project-sentinel");
     expect(provider.note).toBe("user-owned-note");
@@ -72,7 +74,7 @@ describe("OAuth provider reconciliation", () => {
     });
 
     const persisted = loadConfig();
-    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.6-flash");
+    expect(persisted.providers["google-antigravity"]?.defaultModel).toBe("gemini-3.7-flash");
     expect(persisted.providers["google-antigravity"]?.liveModels).toBe(true);
     expect(reconcileOAuthProviders(config)).toBe(false);
   });
@@ -84,7 +86,18 @@ describe("OAuth provider reconciliation", () => {
       googleAntigravityStaticCatalogVersion: 1,
       providers: {
         "google-antigravity": {
+          // The literal v1 seed, not today's preset: the migration fingerprints the shape
+          // that actually shipped in version 1, which is now a retired model list.
           ...structuredClone(OAUTH_PROVIDERS["google-antigravity"].providerConfig),
+          defaultModel: "gemini-3.6-flash",
+          models: [
+            "gemini-3.6-flash",
+            "gemini-3.1-pro",
+            "gemini-3.1-flash-image",
+            "claude-sonnet-4-6",
+            "claude-opus-4-6-thinking",
+            "gpt-oss-120b-medium",
+          ],
           liveModels: false,
         },
       },
@@ -188,5 +201,41 @@ describe("OAuth provider reconciliation", () => {
 
     reconcileOAuthProviders(config);
     expect(config.providers.kimi.requiresReasoningPlaceholderModels).toEqual([]);
+  });
+
+  test("refreshes Grok 4.6 levels while runtime fills the default without overwriting user intent", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-grok-46-reconcile-"));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+    const staleXai = structuredClone(OAUTH_PROVIDERS.xai.providerConfig);
+    staleXai.modelReasoningEfforts = {
+      "grok-4.6": ["low", "medium", "high"],
+      "grok-4.5": ["low", "medium", "high"],
+    };
+    delete staleXai.modelDefaultReasoningEfforts;
+    const config = {
+      port: 10100,
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          ...staleXai,
+          note: "user-owned-note",
+        },
+      },
+    } satisfies OcxConfig;
+
+    expect(reconcileOAuthProviders(config)).toBe(true);
+    expect(config.providers.xai.modelReasoningEfforts?.["grok-4.6"])
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(config.providers.xai.modelDefaultReasoningEfforts).toBeUndefined();
+    expect(routeModel(config, "xai/grok-4.6").provider.modelDefaultReasoningEfforts?.["grok-4.6"])
+      .toBe("high");
+    expect(config.providers.xai.note).toBe("user-owned-note");
+    expect(reconcileOAuthProviders(config)).toBe(false);
+
+    config.providers.xai.modelDefaultReasoningEfforts = { "grok-4.6": "medium" };
+    expect(reconcileOAuthProviders(config)).toBe(false);
+    expect(routeModel(config, "xai/grok-4.6").provider.modelDefaultReasoningEfforts?.["grok-4.6"])
+      .toBe("medium");
   });
 });

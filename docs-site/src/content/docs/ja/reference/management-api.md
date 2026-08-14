@@ -206,7 +206,7 @@ Authorization: Bearer <admin-token>
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新、必要に応じてインポート、削除。成功した POST/DELETE は `catalogRefreshPending` を返します。 | 400 無効な入力。手動インポートは無効にすることができます。 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex アカウントの一覧表示/更新または削除。POST は無効化された互換エンドポイントとしてのみ残り、成功した DELETE は `catalogRefreshPending` を返します。 | POST は常に 403 `manual_import_disabled`。DELETE の入力が無効な場合は 400。 |
 | `PUT /api/codex-auth/accounts/alias` |アカウント エイリアスの設定またはクリア | 400 無効なアカウント/エイリアス |
 | `PUT /api/codex-auth/accounts/pause` | 1 つのアカウントを一時停止または再開する | 400 無効なアカウント/状態。 404 アカウントが見つかりません |
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
@@ -223,8 +223,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |
 | `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。新規アカウント完了時は回復が必要な場合だけ `catalogRefreshPending: true` を含みます。 |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
 
-新規 account の config row は保存されたものの credential setup を完了できない場合、manual POST は
-HTTP 500 を返し、OAuth の `login-status` は `status: "error"` を報告します。どちらも
+新規 account の config row は保存されたものの credential setup を完了できない場合、OAuth の
+`login-status` は `status: "error"` と
 `code: "codex_credential_persistence_failed"`、`accountId`、`needsReauth: true`、必要に応じて
 `catalogRefreshPending: true` を含み、storage error の詳細は公開しません。account row は保存済みなので、
 account 作成を再試行する前に再認証するか削除してください。

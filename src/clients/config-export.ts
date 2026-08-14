@@ -21,9 +21,10 @@
  */
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
+import { providerCodexAccountMode } from "../providers/registry";
 import { probeHostname } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 
@@ -376,6 +377,28 @@ export function gajaeConfigPath(env: OpencodeLaunchEnv = process.env, home: stri
   return join(gajaeHomeDir(env, home), "agent", "models.yml");
 }
 
+/** DSH_HOME uses the raw nonblank value; trimming it would name a different path. */
+export function dshHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const raw = env.DSH_HOME;
+  if (raw === undefined || raw.trim().length === 0) return join(home, ".dsh");
+  if (raw === "~") return home;
+  if (raw.startsWith("~/") || raw.startsWith("~\\")) return join(home, raw.slice(2));
+  if (!isAbsolute(raw)) {
+    throw new ClientPathError(
+      `DSH_HOME must be an absolute path or start with ~; "${raw}" depends on the working directory, `
+      + "so opencodex and DSH would disagree about which settings file it names.",
+    );
+  }
+  // DSH calls node:path.resolve after tilde expansion. Preserve the raw value
+  // for the decision above, then normalize the absolute spelling the same way
+  // so both processes bind ownership and locks to one path string.
+  return resolve(raw);
+}
+
+export function dshConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(dshHomeDir(env, home), "settings.yaml");
+}
+
 /**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
@@ -414,7 +437,8 @@ export type ExportClientId =
   | "hermes"
   | "openclaw"
   | "kimi"
-  | "gajae";
+  | "gajae"
+  | "dsh";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -463,7 +487,8 @@ export interface ExportClientSpec {
  */
 function authoritativeContextWindow(contextWindow: number | undefined): number | undefined {
   if (typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0) {
-    return Math.floor(contextWindow);
+    const integer = Math.floor(contextWindow);
+    return integer > 0 ? integer : undefined;
   }
   return undefined;
 }
@@ -520,6 +545,18 @@ function inputModalitiesForClient(
     if (accepted.has(value) && !kept.includes(value)) kept.push(value);
   }
   return kept.length > 0 ? kept : null;
+}
+
+/** DSH rc.6 accepts text/image; unknown values degrade to text, while audio-only cannot be represented. */
+function dshInputModalities(modalities: readonly string[] | undefined): string[] | null {
+  const declared = modalities ?? [];
+  if (declared.length === 0) return ["text"];
+  const kept: string[] = [];
+  for (const value of declared) {
+    if ((value === "text" || value === "image") && !kept.includes(value)) kept.push(value);
+  }
+  if (kept.length > 0) return kept;
+  return declared.every(value => value === "audio") ? null : ["text"];
 }
 
 /**
@@ -770,6 +807,31 @@ export interface GajaeGeneratedConfig {
   providers: Record<string, GajaeProviderBlock>;
 }
 
+export type DshReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type DshWireReasoningEffort = DshReasoningEffort | "ultra";
+
+export interface DshModelEntry {
+  id: string;
+  name: string;
+  input: string[];
+  contextWindow?: number;
+  reasoningEfforts?: Partial<Record<DshReasoningEffort, DshWireReasoningEffort>>;
+}
+
+export interface DshProviderBlock {
+  displayName: "OpenCodex";
+  api: "openai-responses";
+  baseURL: string;
+  headers: { Authorization: "Bearer ocx_data_dsh" };
+  models: DshModelEntry[];
+}
+
+export interface DshGeneratedConfig {
+  "llm-pi-ai": {
+    providers: Record<string, DshProviderBlock>;
+  };
+}
+
 /**
  * Pi's `~/.pi/agent/models.json` shape. `models` is an ARRAY (identity lives in `id`),
  * unlike OpenCode's keyed object.
@@ -975,6 +1037,84 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
   };
 }
 
+const DSH_EFFORT_ORDER: readonly DshReasoningEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+function dshReasoningEfforts(model: ExportModel): DshModelEntry["reasoningEfforts"] {
+  const offered = new Set<string>();
+  for (const raw of model.reasoningEfforts ?? []) {
+    const effort = raw.trim().toLowerCase();
+    if (effort === "ultra" || DSH_EFFORT_ORDER.includes(effort as DshReasoningEffort)) offered.add(effort);
+  }
+  if (offered.size === 0) return undefined;
+  const entries: Array<[DshReasoningEffort, DshWireReasoningEffort]> = [];
+  for (const effort of DSH_EFFORT_ORDER) {
+    if (effort !== "max") {
+      if (offered.has(effort)) entries.push([effort, effort]);
+      continue;
+    }
+    // DSH's key is the selectable level; the value is what it sends on the
+    // wire. Preserve OpenCodex's `ultra` spelling when that is the only
+    // highest effort, exactly like the rc.6 `max: ultra` contract.
+    if (offered.has("max")) entries.push(["max", "max"]);
+    else if (offered.has("ultra")) entries.push(["max", "ultra"]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function isKnownSafeDshCombo(model: ExportModel, config: OcxConfig): boolean {
+  const combos = (config as { combos?: unknown }).combos;
+  if (typeof combos !== "object" || combos === null || Array.isArray(combos)) return false;
+  const combo = (combos as Record<string, unknown>)[model.id];
+  if (typeof combo !== "object" || combo === null || Array.isArray(combo)) return false;
+  const targets = (combo as { targets?: unknown }).targets;
+  if (!Array.isArray(targets) || targets.length === 0) return false;
+  return targets.every(target => {
+    if (typeof target !== "object" || target === null || Array.isArray(target)) return false;
+    const provider = (target as { provider?: unknown }).provider;
+    const modelId = (target as { model?: unknown }).model;
+    return typeof provider === "string"
+      && provider.length > 0
+      && provider === provider.trim()
+      && provider !== "openai"
+      && typeof modelId === "string"
+      && modelId.length > 0
+      && modelId === modelId.trim();
+  });
+}
+
+function buildDshClientConfig(ctx: ExportContext): DshGeneratedConfig {
+  const direct = providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
+  const models: DshModelEntry[] = [];
+  for (const model of normalizeExportModels(ctx.models)) {
+    if (direct && (model.native === true || model.provider === "openai")) continue;
+    if (direct && model.provider === "combo" && (!ctx.config || !isKnownSafeDshCombo(model, ctx.config))) continue;
+    const input = dshInputModalities(model.inputModalities);
+    if (input === null) continue;
+    const contextWindow = authoritativeContextWindow(model.contextWindow);
+    const reasoningEfforts = dshReasoningEfforts(model);
+    models.push({
+      id: model.namespaced,
+      name: exportModelLabel(model),
+      input,
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(reasoningEfforts ? { reasoningEfforts } : {}),
+    });
+  }
+  return {
+    "llm-pi-ai": {
+      providers: {
+        [OPENCODE_PROVIDER_ID]: {
+          displayName: "OpenCodex",
+          api: "openai-responses",
+          baseURL: ctx.baseUrl,
+          headers: { Authorization: "Bearer ocx_data_dsh" },
+          models,
+        },
+      },
+    },
+  };
+}
+
 /**
  * Per-client model counts, read back off the SERIALIZED document rather than
  * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
@@ -1016,6 +1156,11 @@ function summarizeKimi(document: unknown): { modelCount: number; modelsWithoutLi
 
 function summarizeGajae(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as GajaeGeneratedConfig | undefined)?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
+  return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+function summarizeDsh(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = (document as DshGeneratedConfig | undefined)?.["llm-pi-ai"]?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
 }
 
@@ -1068,6 +1213,11 @@ function buildKimiContribution(ctx: ExportContext): ManagedContribution {
 function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildGajaeClientConfig(ctx);
   return singleFragment("gajae", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildDshContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildDshClientConfig(ctx);
+  return singleFragment("dsh", ["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], doc["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]);
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
@@ -1165,6 +1315,18 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     summarize: summarizeGajae,
     buildContribution: buildGajaeContribution,
     // strict schema with no header field, so the dedicated header has nowhere to go
+    loopbackOnly: true,
+  },
+  dsh: {
+    id: "dsh",
+    filename: "settings.yaml",
+    destination: env => dshConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "DSH uses a non-secret loopback bearer placeholder in settings.yaml; loopback needs no key.",
+    build: buildDshClientConfig,
+    format: "yaml",
+    summarize: summarizeDsh,
+    buildContribution: buildDshContribution,
     loopbackOnly: true,
   },
 };

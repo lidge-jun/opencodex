@@ -130,7 +130,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | --- | --- | --- |
 | `GET /api/catalog` | 回傳已安裝的 Codex 目錄檔案 | 404 目錄未找到 |
 | `GET /api/models` | 回傳儀表板／CLI 模型列 | 收集飽和時 `catalog_busy` |
-| `GET /api/client-config?client=...` | 建構唯讀的 OpenCode 或 Pi 客戶端設定檔案 | 400 不支援客戶端；503 目錄不可用 |
+| `GET /api/client-config?client=...` | 為 `opencode`、`pi`、`omp`、`hermes`、`openclaw`、`kimi`、`gajae` 或 `dsh` 建構唯讀客戶端設定 | 400 不支援客戶端；503 目錄不可用 |
 | `PUT /api/disabled-models` | 取代共享的 disabled-model 清單 | 400 無效 JSON |
 | `PUT /api/model-visibility` | 原子地變更供應商或模型層級可見性 | 400 無效供應商、scope、目標或 body |
 | `GET, POST /api/custom-models` | 列出自訂模型或新增一個 | 400 無效欄位；404 供應商缺失；409 重複模型 |
@@ -201,7 +201,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 | 方法與路徑 | 用途 | Notable errors |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | 列出／重新整理、可選擇匯入或刪除 Codex 帳號 | 400 無效輸入；手動匯入可被停用 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | 列出／重新整理或刪除 Codex 帳號。POST 僅保留為已停用的相容 endpoint；成功的 DELETE 回應包含 `catalogRefreshPending`。 | POST 一律回傳 403 `manual_import_disabled`；DELETE 輸入無效時回傳 400 |
 | `PUT /api/codex-auth/accounts/alias` | 設定或清除帳號別名 | 400 無效帳號／別名 |
 | `PUT /api/codex-auth/accounts/pause` | 暫停或恢復一個帳號 | 400 無效帳號／狀態；404 缺失帳號 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暫停配額耗盡的帳號 | 變更鎖失敗變為 503 |

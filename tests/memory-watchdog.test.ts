@@ -212,8 +212,10 @@ describe("GET /api/system/memory", () => {
 	    expect(body.jscHeap?.heapSize).toBeGreaterThan(0);
     // responseState is a scalar-only continuation-store attribution block: every field is a
     // finite number (no paths, tokens, or account identifiers), so it is safe on this surface.
+    // The exact count is pinned on purpose: a new field must be reviewed for privacy safety
+    // before it reaches this surface. 12 since #1597 added `replayScopeMismatchDrops`.
     const responseStateValues = Object.values(body.responseState);
-    expect(responseStateValues).toHaveLength(11);
+    expect(responseStateValues).toHaveLength(12);
     expect(responseStateValues.every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
     expect(body.appOwnedBytes).toEqual({
@@ -309,7 +311,7 @@ describe("GET /api/system/memory", () => {
     expect(Object.keys(body.appOwnedBytes.stores).sort()).toEqual([
       "antigravity_replay", "claude_debug", "crash_ring", "cursor_blobs", "image_normalize",
       "injection_debug", "model_cache", "provider_debug", "request_log", "responses_continuation",
-      "usage_summary", "vision_descriptions",
+      "usage_snapshot", "usage_summary", "vision_descriptions",
     ]);
     expect(Object.values(body.appOwnedBytes.stores).flatMap(snapshot => Object.values(snapshot))
       .every(value => value === null || typeof value === "number")).toBe(true);

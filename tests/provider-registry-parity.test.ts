@@ -35,7 +35,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "huggingface", "nvidia", "venice", "zai", "zhipu-bigmodel", "zhipu-bigmodel-coding", "nanogpt", "synthetic", "siliconflow", "qwen-cloud", "tencent-coding-plan",
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway",
-  "opencode-free", "xiaomi", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
+  "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
 ];
 
 describe("provider registry parity", () => {
@@ -59,6 +59,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
     // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT be listed.
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
+      "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
       "deepseek-v4-flash", "deepseek-v4-pro",
       "mimo-v2-pro", "mimo-v2.5-pro",
@@ -127,10 +128,10 @@ describe("provider registry parity", () => {
     // differently (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
     // `xhigh` is an alias, so it stays in the wire map but is not advertised. Pro
     // does not honor `low` (the vendor maps it to `high`), so Pro must not offer it.
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["high", "max"]);
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-pro"]).toEqual(["low", "high", "max"]);
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEfforts?.["deepseek-v4-flash"]).toEqual(["low", "high", "max"]);
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("high");
-    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("max");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.low).toBe("low");
+    expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-pro"]?.max).toBe("max");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
@@ -298,7 +299,7 @@ describe("provider registry parity", () => {
       liveModels: false,
       models: [
         "qwen3.8-max", "qwen3.7-max", "qwen3.7-plus", "qwen3.6-flash",
-        "glm-5.2", "deepseek-v4-pro",
+        "glm-5.3", "glm-5.2", "deepseek-v4-pro",
       ],
       modelInputModalities: {
         "qwen3.8-max": ["text", "image"],
@@ -313,7 +314,7 @@ describe("provider registry parity", () => {
         "qwen3.7-max": 1_000_000,
         "deepseek-v4-pro": 1_000_000,
       },
-      noVisionModels: ["glm-5.2", "deepseek-v4-pro"],
+      noVisionModels: ["glm-5.3", "glm-5.2", "deepseek-v4-pro"],
       preserveReasoningContentModels: expect.arrayContaining(["qwen3.8-max", "qwen3.7-max", "qwen3.7-plus"]),
     });
     expect(PROVIDER_REGISTRY.find(entry => entry.id === "alibaba-token-plan")?.directReasoningEffortModels)
@@ -330,6 +331,7 @@ describe("provider registry parity", () => {
 
     const neuralwatt = PROVIDER_REGISTRY.find(entry => entry.id === "neuralwatt");
     expect(neuralwatt?.models).toEqual([
+      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
       "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
       "kimi-k2.6", "kimi-k2.6-fast", "kimi-k2.7-code",
       "qwen3.5-397b", "qwen3.5-397b-fast", "qwen3.6-35b", "qwen3.6-35b-fast",
@@ -344,6 +346,7 @@ describe("provider registry parity", () => {
     expect(neuralwatt?.noReasoningModels).toContain("glm-5.2-short-fast");
     expect(neuralwatt?.noReasoningModels).not.toContain("kimi-k2.5-fast");
     expect(neuralwatt?.noVisionModels).toEqual([
+      "glm-5.3", "glm-5.3-fast", "glm-5.3-short", "glm-5.3-short-fast",
       "glm-5.2", "glm-5.2-fast", "glm-5.2-short", "glm-5.2-short-fast",
       "qwen3.5-397b", "qwen3.5-397b-fast",
     ]);
@@ -356,7 +359,7 @@ describe("provider registry parity", () => {
     const optedInProviders = PROVIDER_REGISTRY
       .filter(entry => entry.modelSuffixBracketStrip)
       .map(entry => entry.id);
-    expect(zai?.modelContextWindows).toEqual({ "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
+    expect(zai?.modelContextWindows).toEqual({ "glm-5.3": 1_000_000, "glm-5.3[1m]": 1_000_000, "glm-5.2": 1_000_000, "glm-5.2[1m]": 1_000_000 });
     expect(providerConfigSeed(zai!).modelSuffixBracketStrip).toBe(true);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
     // bracketed GLM ids, and that vendor's OpenAI path returns 400 code 1211 for them.
@@ -458,6 +461,10 @@ describe("provider registry parity", () => {
     expect(kimiEntry?.default_reasoning_level).toBe("max");
 
     const moonshot = PROVIDER_REGISTRY.find(provider => provider.id === "moonshot");
+    expect(moonshot?.baseUrl).toBe("https://api.moonshot.ai/v1");
+    expect(moonshot?.allowBaseUrlOverride).toBe(true);
+    expect(moonshot?.baseUrlChoices?.map(c => c.id)).toEqual(["international", "china", "custom"]);
+    expect(moonshot?.baseUrlChoices?.find(c => c.id === "china")?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(moonshot?.models).toContain("kimi-k3");
     expect(moonshot?.models).not.toContain("k3");
     expect(moonshot?.models).not.toContain("kimi-for-coding");
@@ -539,7 +546,7 @@ describe("provider registry parity", () => {
   test("base URL override permission is registry-only and limited to opted-in providers", () => {
     const optedIn = PROVIDER_REGISTRY.filter(entry => entry.allowBaseUrlOverride);
 
-    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
+    expect(optedIn.map(entry => entry.id)).toEqual(["ollama", "vllm", "lm-studio", "moonshot", "qwen-cloud", "alibaba", "alibaba-token-plan-intl", "litellm"]);
     for (const entry of optedIn) {
       expect(providerConfigSeed(entry)).not.toHaveProperty("allowBaseUrlOverride");
     }
@@ -549,7 +556,7 @@ describe("provider registry parity", () => {
     const ollamaCloud = PROVIDER_REGISTRY.find(entry => entry.id === "ollama-cloud");
 
     expect(ollamaCloud?.models).toEqual([
-      "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b",
+      "glm-5.3", "glm-5.2", "deepseek-v4-pro", "qwen3-coder:480b", "gpt-oss:120b",
       "kimi-k2.6", "minimax-m3", "qwen3.5:397b", "gemma4:31b",
     ]);
     expect(ollamaCloud?.models).not.toContain("qwen3-coder");
@@ -670,17 +677,22 @@ describe("provider registry parity", () => {
     }
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.6");
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.6"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.6": "high" });
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEffortMap).toBeUndefined();
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
     expect(antigravityRegistry?.liveModels).toBe(true);
     expect(providerConfigSeed(antigravityRegistry!).liveModels).toBe(true);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.liveModels).toBe(true);
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.6-flash");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.defaultModel).toBe("gemini-3.7-flash");
     // Collapsed picker: base models only, no effort-suffix variants.
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.6-flash");
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.7-flash");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-pro");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-sonnet-4-6");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("claude-opus-4-6-thinking");
@@ -688,15 +700,16 @@ describe("provider registry parity", () => {
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toContain("gemini-3.1-flash-image");
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.models).toHaveLength(6);
     // Effort ladders on collapsed base models.
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.6-flash"]).toEqual(["low", "medium", "high"]);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.7-flash"]).toEqual(["low", "medium", "high"]);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["gemini-3.1-pro"]).toEqual(["low", "high"]);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["claude-opus-4-6-thinking"]).toEqual(["low", "medium", "high", "max"]);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelReasoningEfforts?.["claude-sonnet-4-6"]).toEqual(["low", "medium", "high", "max"]);
     // Context windows on collapsed base models.
-    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+    expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.7-flash"]).toBe(1_048_576);
     expect(OAUTH_PROVIDERS["google-antigravity"].providerConfig.modelContextWindows?.["gemini-3.1-pro"]).toBe(1_048_576);
     // Suffix and compat IDs are NOT in the picker list.
     for (const hidden of [
+      "gemini-3.6-flash",
       "gemini-3.6-flash-low",
       "gemini-3.6-flash-medium",
       "gemini-3.6-flash-high",
@@ -845,6 +858,22 @@ describe("provider registry parity", () => {
     expect(entry?.context_window).toBe(500_000);
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "max", "ultra"]);
+  });
+
+  test("grok-4.6 advertises the documented xhigh rung from the xai registry seed", () => {
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
+    const seed = providerConfigSeed(xai!);
+    const model = applyProviderConfigHints("xai", seed, { id: "grok-4.6", provider: "xai" });
+    expect(model.contextWindow).toBe(500_000);
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    const entry = entries.find(e => e.slug === "xai/grok-4.6");
+    expect(entry).toBeTruthy();
+    expect(entry?.context_window).toBe(500_000);
+    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("high");
   });
 
   // The id-list assertion above only proves the preset exists. Pin the contract a user actually
@@ -1025,14 +1054,14 @@ describe("free-provider directory isolation", () => {
    * that actually receives the shared metadata, so a misclassification cannot land
    * silently — it fails here with the offending id named.
    *
-   * Ladders: Flash gets low/high/max; Pro gets high/max, because DeepSeek upgrades a
-   * requested `low` to `high` on Pro and advertising it would sell a tier the vendor
-   * does not deliver. Neither advertises `xhigh` — it is an alias, kept in the wire
-   * map only (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-06).
+   * Ladders: since the V4 Pro GA (DeepSeek-V4-Pro-0813) both models get low/high/max —
+   * the vendor's updated thinking-mode table is now identical for Flash and Pro.
+   * Neither advertises `xhigh` — it is an alias, kept in the wire map only
+   * (api-docs.deepseek.com/guides/thinking_mode, verified 2026-08-13).
    */
   test("every DeepSeek V4 entry advertises its own ladder and alias mapping", () => {
     const flashLadder = ["low", "high", "max"];
-    const proLadder = ["high", "max"];
+    const proLadder = ["low", "high", "max"];
     const cases: Array<{ provider: string; model: string; flash: boolean }> = [
       { provider: "deepseek", model: "deepseek-v4-pro", flash: false },
       { provider: "deepseek", model: "deepseek-v4-flash", flash: true },
@@ -1059,8 +1088,8 @@ describe("free-provider directory isolation", () => {
 
       const map = entry?.modelReasoningEffortMap?.[model];
       expect(map, `${provider}/${model} has no effort map`).toBeTruthy();
-      expect(map?.xhigh, `${provider}/${model} xhigh alias`).toBe(flash ? "high" : "max");
-      expect(map?.low, `${provider}/${model} low resolution`).toBe(flash ? "low" : "high");
+      expect(map?.xhigh, `${provider}/${model} xhigh alias`).toBe("high");
+      expect(map?.low, `${provider}/${model} low resolution`).toBe("low");
       expect(map?.max, `${provider}/${model} max`).toBe("max");
     }
   });

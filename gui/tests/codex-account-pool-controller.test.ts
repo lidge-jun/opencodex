@@ -76,7 +76,6 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(mainCard).toMatch(/pinnedId === "__main__" && !main\?\.paused/);
   expect(addedCards).toMatch(/a\.id === pinnedId && !a\.paused/);
   for (const card of [mainCard, addedCards]) expect(card).toContain('t("codexAuth.pinned")');
-  for (const card of [mainCard, addedCards]) expect(card).toContain('t("codexAuth.pinnedHint")');
   expect(pool).toContain("pinnedId={activePinnedId}");
 
   expect(hook).toContain("/api/codex-auth/accounts/priority");

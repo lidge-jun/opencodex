@@ -47,7 +47,7 @@ export type ModelCacheClearReason = "authority" | "eviction";
 
 const cache = new Map<string, CacheEntry>();
 let globalCacheGeneration = 0;
-const providerCacheGenerations = new Map<string, number>();
+export const providerCacheGenerations = new Map<string, number>();
 let cacheBytes = 0;
 let oldestCachedProvider: string | undefined;
 let oldestCachedAt: number | null = null;
@@ -235,9 +235,15 @@ export function reconcileModelCacheProviders(
     ...liveModelCounts.keys(),
     ...cache.keys(),
   ]);
+  let revokedRemovedProviderAuthority = false;
   for (const provider of trackedProviders) {
     if (validProviders.has(provider)) continue;
+    if (!revokedRemovedProviderAuthority) {
+      globalCacheGeneration += 1;
+      revokedRemovedProviderAuthority = true;
+    }
     providerCacheGenerations.set(provider, (providerCacheGenerations.get(provider) ?? 0) + 1);
+    providerCacheGenerations.delete(provider);
     deleteCachedProvider(provider);
     failureAt.delete(provider);
     discoveryStatus.delete(provider);

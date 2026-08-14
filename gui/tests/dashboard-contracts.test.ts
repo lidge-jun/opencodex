@@ -47,13 +47,13 @@ test("Dashboard usage polling cannot delay core health and settings", async () =
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/sidecar-settings");
   expect(core.slice(overviewFnStart, core.indexOf("export async function fetchDashboardMultiAgent"))).not.toContain("/api/shadow-call-settings");
   expect(core.slice(sidecarsFnStart)).toContain("/api/sidecar-settings");
-  expect(hook).toContain("dashboard-usage:${apiBase}");
+  expect(hook).toContain("usageSummary30dResourceKey(apiBase)");
   expect(hook).toContain("dashboard-sidecars:${apiBase}");
   expect(hook).toContain("dashboard-overview:${apiBase}");
   expect(hook).toContain("fetchDashboardUsage(apiBase, signal)");
   expect(hook).toContain("fetchDashboardSidecars");
   expect(hook).toContain("fetchDashboardOverview");
-  expect(hook).toMatch(/dashboard-usage:\$\{apiBase\}[\s\S]*pollMs: 60_000/);
+  expect(hook).not.toMatch(/usageSummary30dResourceKey\(apiBase\)[\s\S]*pollMs: 60_000/);
 });
 
 test("Dashboard interactive controls load independently of health/providers", async () => {

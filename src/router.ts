@@ -267,6 +267,14 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
   const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
+  // Key-login used to persist this exact low-only ClinePass capability seed. Once the gateway's
+  // wider input ladder was live-verified, leaving that generated row untouched would keep old
+  // installs clamped forever. This branch is reached only after canonical transport matching, so
+  // same-named custom destinations and every other explicit ladder still retain user precedence.
+  const repairLegacyClinePassReasoningEfforts = providerName === "cline-pass"
+    && provider.reasoningWireFormat === "gateway-object"
+    && provider.reasoningEfforts?.length === 1
+    && provider.reasoningEfforts[0] === "low";
   const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
     ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
     : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
@@ -342,7 +350,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.project === undefined && registryEntry.project !== undefined ? { project: registryEntry.project } : {}),
     ...(provider.location === undefined && registryEntry.location !== undefined ? { location: registryEntry.location } : {}),
     ...(provider.contextWindow === undefined && registryEntry.contextWindow !== undefined ? { contextWindow: registryEntry.contextWindow } : {}),
-    ...(provider.reasoningEfforts === undefined && registryEntry.reasoningEfforts !== undefined ? { reasoningEfforts: registryEntry.reasoningEfforts } : {}),
+    ...((provider.reasoningEfforts === undefined || repairLegacyClinePassReasoningEfforts)
+      && registryEntry.reasoningEfforts !== undefined
+      ? { reasoningEfforts: [...registryEntry.reasoningEfforts] }
+      : {}),
     ...(provider.escapeBuiltinToolNames === undefined && registryEntry.escapeBuiltinToolNames !== undefined ? { escapeBuiltinToolNames: registryEntry.escapeBuiltinToolNames } : {}),
     ...(provider.keyOptional === undefined && registryEntry.keyOptional !== undefined ? { keyOptional: registryEntry.keyOptional } : {}),
     ...(provider.modelSuffixBracketStrip === undefined && registryEntry.modelSuffixBracketStrip !== undefined ? { modelSuffixBracketStrip: registryEntry.modelSuffixBracketStrip } : {}),
@@ -350,6 +361,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     // opt-in, while an explicit user `false` keeps overriding registry `true`.
     ...(provider.parallelToolCalls === undefined && registryEntry.parallelToolCalls !== undefined ? { parallelToolCalls: registryEntry.parallelToolCalls } : {}),
     ...(provider.promptCacheKey === undefined && registryEntry.promptCacheKey !== undefined ? { promptCacheKey: registryEntry.promptCacheKey } : {}),
+    ...(provider.chatServiceTier === undefined && registryEntry.chatServiceTier !== undefined ? { chatServiceTier: registryEntry.chatServiceTier } : {}),
     ...(provider.reasoningWireFormat === undefined && registryEntry.reasoningWireFormat !== undefined
       ? { reasoningWireFormat: registryEntry.reasoningWireFormat }
       : {}),

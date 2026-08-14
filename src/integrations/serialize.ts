@@ -221,10 +221,89 @@ export function renderToml(document: Record<string, unknown>, prefix = ""): stri
   return `${[scalars.join("\n"), tables.join("\n\n")].filter(Boolean).join("\n\n")}\n`;
 }
 
+/**
+ * Ceiling on container nesting for json documents, shared by the parse-time
+ * scanner (config-io.ts) and the serializer walk below. One constant on
+ * purpose: the walk must accept every document the scanner admits, or a file
+ * the classifier reported as recoverable would refuse at rewrite time. Real
+ * configs nest a handful of levels.
+ */
+export const MAX_JSON_NESTING = 1000;
+
+/** Error messages carry the path to the offending value; keep them readable. */
+function clampPath(path: string): string {
+  return path.length > 200 ? `${path.slice(0, 100)}…${path.slice(-100)}` : path;
+}
+
+/**
+ * JSON.stringify writes a non-finite number as `null` and -0 as `0`; any
+ * other finite double round-trips value-exactly (literal-level rounding is
+ * the parse-time scanner's concern), so those two are exactly what this walk
+ * refuses — refusing more turned a state the classifier had promised as
+ * recoverable into a permanent refusal. Documents read from disk are already
+ * guarded at parse time, and the writer's merge layer JSON-clones documents —
+ * normalizing these values — before serializing, so on the apply/disable path
+ * this walk is unreachable for them: it guards the direct serializers
+ * (preview/export builders), same posture as the YAML and TOML renderers
+ * above, and enforces the nesting ceiling for every json caller before the
+ * recursive JSON.stringify can turn depth into a RangeError.
+ *
+ * Iterative frames instead of recursion or a node stack: depth AND size of
+ * the document are inputs under the writer of the config file. Recursion made
+ * a deep file a RangeError-500; materializing every node with its path made a
+ * wide file allocate a large multiple of its size. Frames keep memory
+ * proportional to nesting depth, and path strings exist only for the
+ * containers on the current path plus the failing value itself.
+ */
+function assertJsonNumbersRoundTrip(document: unknown, rootPath: string): void {
+  const refuse = (value: number, path: string): never => {
+    throw new UnserializableValueError(Object.is(value, -0)
+      ? `JSON cannot rewrite -0 at ${clampPath(path)} without changing it to 0`
+      : `JSON cannot rewrite the number at ${clampPath(path)} without changing it to null`);
+  };
+  if (typeof document === "number" && (!Number.isFinite(document) || Object.is(document, -0))) {
+    refuse(document, rootPath);
+  }
+  type Frame = { container: unknown; keys: string[] | null; index: number; prefix: string };
+  const frames: Frame[] = [];
+  const pushContainer = (value: unknown, prefix: string) => {
+    if (Array.isArray(value)) frames.push({ container: value, keys: null, index: 0, prefix });
+    else if (isPlainRecord(value)) frames.push({ container: value, keys: Object.keys(value), index: 0, prefix });
+  };
+  pushContainer(document, rootPath);
+  while (frames.length > 0) {
+    const frame = frames[frames.length - 1]!;
+    const length = frame.keys ? frame.keys.length : (frame.container as unknown[]).length;
+    if (frame.index >= length) { frames.pop(); continue; }
+    const i = frame.index;
+    frame.index += 1;
+    const child = frame.keys
+      ? (frame.container as Record<string, unknown>)[frame.keys[i]!]
+      : (frame.container as unknown[])[i];
+    const childPath = () => frame.keys
+      ? (frame.prefix === "$" ? frame.keys[i]! : `${frame.prefix}.${frame.keys[i]!}`)
+      : `${frame.prefix}[${i}]`;
+    if (typeof child === "number") {
+      if (!Number.isFinite(child) || Object.is(child, -0)) refuse(child, childPath());
+      continue;
+    }
+    if (typeof child === "object" && child !== null) {
+      if (frames.length >= MAX_JSON_NESTING) {
+        throw new UnserializableValueError(
+          `the document nests deeper than ${MAX_JSON_NESTING} levels at ${clampPath(childPath())}, which JSON serialization cannot rewrite safely`);
+      }
+      pushContainer(child, childPath());
+    }
+  }
+}
+
 /** Every serializer returns text ending in exactly one newline. */
 export function serializeDocument(document: unknown, format: ConfigFormat): string {
   switch (format) {
-    case "json": return `${JSON.stringify(document, null, 2)}\n`;
+    case "json": {
+      assertJsonNumbersRoundTrip(document, "$");
+      return `${JSON.stringify(document, null, 2)}\n`;
+    }
     case "json5": return `${Bun.JSON5.stringify(document, null, 2)}\n`;
     case "yaml": return renderYaml(document);
     case "toml": {

@@ -1,7 +1,7 @@
 import {
   currentUsageLogRevision,
   readUsageSnapshotForManagement,
-  usageLogRevisionKey,
+  usageLogIdentityKey,
   type PersistedUsageEntry,
 } from "../../usage/log";
 
@@ -110,7 +110,7 @@ export function rollupApiKeyUsage(
  * create/rename/delete. The compact rollup is a handful of counters per key, so
  * caching it costs nothing; a new row changes the revision and invalidates it.
  */
-let rollupCache: { revisionKey: string; expiresAt: number; snapshot: ApiKeyUsageSnapshot } | null = null;
+let rollupCache: { revisionKey: string; expiresAt: number; lastSeenSize?: number; snapshot: ApiKeyUsageSnapshot } | null = null;
 
 /**
  * The rollup is a function of the log AND of the clock: a request ages out of
@@ -136,6 +136,29 @@ export function clearApiKeyUsageCacheForTests(): void {
  * `attributionSince`. Key management working matters more than usage numbers
  * being present, and the GUI already treats an absent field as "no data".
  */
+export function cacheApiKeyUsageFromSnapshot(
+  entries: PersistedUsageEntry[],
+  configuredIds: string[],
+  identityKey: string,
+  lastSeenSize: number,
+  truncated: boolean,
+  maxReadBytes: number | undefined,
+  now: number = Date.now(),
+): ApiKeyUsageSnapshot {
+  const idsKey = JSON.stringify([configuredIds, maxReadBytes]);
+  const rolled = {
+    ...rollupApiKeyUsage(entries, configuredIds, now),
+    ...(truncated ? { historyTruncated: true as const } : {}),
+  };
+  rollupCache = {
+    revisionKey: `${identityKey}|${idsKey}`,
+    expiresAt: now + ROLLUP_CACHE_TTL_MS,
+    lastSeenSize,
+    snapshot: rolled,
+  };
+  return rolled;
+}
+
 export async function readApiKeyUsageRollup(configuredIds: string[], maxReadBytes?: number): Promise<ApiKeyUsageSnapshot> {
   // JSON rather than a joined string: ids are only validated as non-empty
   // strings, so `["a\0b","c"]` and `["a","b\0c"]` join to the same value and one
@@ -143,8 +166,10 @@ export async function readApiKeyUsageRollup(configuredIds: string[], maxReadByte
   const idsKey = JSON.stringify([configuredIds, maxReadBytes]);
   const now = Date.now();
   try {
-    const observedKey = `${usageLogRevisionKey(currentUsageLogRevision())}|${idsKey}`;
-    if (rollupCache?.revisionKey === observedKey && now < rollupCache.expiresAt) {
+    const observed = currentUsageLogRevision();
+    const observedKey = `${usageLogIdentityKey(observed)}|${idsKey}`;
+    const observedSize = observed?.size ?? 0;
+    if (rollupCache?.revisionKey === observedKey && now < rollupCache.expiresAt && observedSize >= (rollupCache.lastSeenSize ?? 0)) {
       return rollupCache.snapshot;
     }
 
@@ -154,8 +179,9 @@ export async function readApiKeyUsageRollup(configuredIds: string[], maxReadByte
       ...(snapshot.truncatedPrefixBytes > 0 || snapshot.entriesTruncated ? { historyTruncated: true as const } : {}),
     };
     rollupCache = {
-      revisionKey: `${usageLogRevisionKey(snapshot.revision)}|${idsKey}`,
+      revisionKey: `${usageLogIdentityKey(snapshot.revision)}|${idsKey}`,
       expiresAt: now + ROLLUP_CACHE_TTL_MS,
+      lastSeenSize: snapshot.revision?.size ?? 0,
       snapshot: rolled,
     };
     return rolled;

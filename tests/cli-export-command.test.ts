@@ -33,7 +33,16 @@ function config(extra?: Partial<OcxConfig>): OcxConfig {
 
 /** Rows in the shape GET /api/models actually returns, including a disabled one. */
 const ROWS = [
-  { provider: "openai", id: "gpt-5.6-luna", namespaced: "gpt-5.6-luna", native: true, disabled: false, contextWindow: 272_000 },
+  {
+    provider: "openai",
+    id: "gpt-5.6-luna",
+    namespaced: "gpt-5.6-luna",
+    native: true,
+    disabled: false,
+    contextWindow: 272_000,
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "high",
+  },
   { provider: "anthropic", id: "claude-opus-5", namespaced: "anthropic/claude-opus-5", disabled: false, contextWindow: 200_000, displayName: "Claude Opus 5" },
   { provider: "custom", id: "no-context", namespaced: "custom/no-context", disabled: false },
   { provider: "banned", id: "hidden", namespaced: "banned/hidden", disabled: true, contextWindow: 100_000 },
@@ -206,7 +215,7 @@ describe("ocx export argument validation (accept criterion 4)", () => {
     const proxy = fakeProxy();
     const result = await run(["--client", "cursor"], { baseUrl: proxy.baseUrl });
     expect(result.code).toBe(2);
-    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae"]) {
+    for (const id of ["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh"]) {
       expect(result.stderr).toContain(id);
     }
     expect(result.stdout).toBe("");
@@ -327,5 +336,11 @@ describe("export row filtering", () => {
     expect(models).toHaveLength(1);
     expect(models[0]!.namespaced).toBe("a/two");
     expect(models[0]!.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("preserves reasoning metadata with management-loader parity", () => {
+    const [model] = exportModelsFromProxyRows([ROWS[0]!], config());
+    expect(model?.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(model?.defaultReasoningEffort).toBe("high");
   });
 });

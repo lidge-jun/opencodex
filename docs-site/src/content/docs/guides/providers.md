@@ -134,8 +134,9 @@ You can also start OAuth from the [web dashboard](/guides/web-dashboard/).
 
 OAuth providers whose credentials include a stable account id or email can keep more than one
 login. The Providers page shows those accounts in a dropdown, lets you add another, and switches the
-active account without logging the others out. Only identity-less Kimi credentials replace the
-active slot; Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
+active account without logging the others out. A normal login with an identity-less Kimi credential
+replaces the active slot, while an explicit **Add account** preserves that slot and activates a new,
+distinct one. Kiro accounts are keyed by profile ARN. `chatgpt` is always single-slot because Codex
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
@@ -216,7 +217,6 @@ also needs the local CLI binary: opencodex first uses `PATH`, then falls back to
 
 After a successful import, opencodex persists the imported credential to
 `~/.opencodex/auth.json`.
-
 Keep these variables and the selected database private. Do not attach database files or raw login
 diagnostics to bug reports.
 
@@ -243,8 +243,9 @@ and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), op
 [Cline's terms](https://cline.bot/tos). A routed id such as `cline-pass/cline-pass/kimi-k3` is
 intentional: the first segment selects the opencodex provider, while `cline-pass/kimi-k3` is the
 full model slug sent upstream. ClinePass quota is shared by the account across rolling 5-hour,
-weekly, and monthly limits. opencodex currently advertises the live-verified `low` reasoning tier;
-higher requested tiers clamp to `low` until the gateway publishes or verifies a wider ladder.
+weekly, and monthly limits. A 2026-08-13 live probe verified that every static ClinePass model
+accepts `low`, `medium`, `high`, `xhigh`, and `max` at the gateway input boundary. opencodex
+preserves those requested tiers; any backend-specific normalization remains ClinePass's responsibility.
 
 **Cline** is the same API key and endpoint on pay-as-you-go usage billing across 100+ models
 (OpenRouter-style ids like `anthropic/claude-sonnet-4-6`). Cline's promotional free models are only
@@ -291,6 +292,7 @@ free-experimentation model.
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -502,8 +504,11 @@ Cursor is tracked separately as an experimental adapter. `adapter: "cursor"` app
 and the dashboard Add Provider picker as an experimental local config entry with Cursor's static
 fallback model catalog metadata. When a Cursor access token is configured, opencodex uses Cursor's
 live HTTP/2 transport. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
-`grok-4.5` / `grok-4.5-fast` (500K), and `kimi-k3` (262K); live discovery decides which remain
-visible for the account. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
+regular/Fast rows for Grok 4.5 and 4.6 (500K), and `kimi-k3` (262K); live discovery decides which
+remain visible for the account. Grok 4.6 exposes `low` / `medium` / `high` / `xhigh` in both forms,
+while 4.5 stops at `high`. Fast requests send the matching base Grok model with separate `effort`
+and `fast=true` `requested_model` parameters; flattened `cursor-grok-{version}-{effort}-fast` ids
+are discovery and picker identities only. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
 model's documented API default. Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution
 is disabled by default because it bypasses Codex's approval and sandbox path; set

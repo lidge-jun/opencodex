@@ -24,6 +24,7 @@ import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 /** These cases sandbox CODEX_HOME/OPENCODEX_HOME, so the installed service is not their evidence. */
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("native-profile drain server test");
 
@@ -96,7 +97,7 @@ describe("native main profile scoped server admission", () => {
       autoSwitchThreshold: 0,
     } as OcxConfig);
     const waitForFrame = (ws: WebSocket, needle: string) => new Promise<string>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`websocket timeout waiting for ${needle}`)), 2_000);
+      const timer = setTimeout(() => reject(new Error(`websocket timeout waiting for ${needle}`)), watchdogMs(2_000));
       const onMessage = (event: MessageEvent) => {
         const text = typeof event.data === "string" ? event.data : "";
         if (!text.includes(needle)) return;
@@ -217,7 +218,7 @@ describe("native main profile scoped server admission", () => {
       url.protocol = "ws:";
       const ws = new WebSocket(url, { headers } as unknown as string[]);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("sideband echo timeout")), 5_000);
+        const timer = setTimeout(() => reject(new Error("sideband echo timeout")), watchdogMs(5_000));
         ws.addEventListener("open", () => ws.send("ping"), { once: true });
         ws.addEventListener("message", event => {
           if (String(event.data) !== "echo:ping") return;
@@ -417,7 +418,7 @@ describe("native main profile scoped server admission", () => {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("sideband websocket open timeout")), 2_000);
+        const timer = setTimeout(() => reject(new Error("sideband websocket open timeout")), watchdogMs(2_000));
         client.addEventListener("open", () => {
           clearTimeout(timer);
           resolve();

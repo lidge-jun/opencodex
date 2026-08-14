@@ -152,7 +152,9 @@ function multipartLiveBody(
 test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeLiveUpstream(captured);
-  saveConfig(forwardConfig());
+  const config = forwardConfig();
+  config.providers.openai!.baseUrl = "https://chatgpt.com/backend-api/codex///";
+  saveConfig(config);
 
   const server = startServer(0);
   try {
@@ -187,9 +189,9 @@ test("POST /v1/live rewrites ChatGPT multipart into backend realtime/calls JSON"
   }
 });
 
-test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls", async () => {
+test("POST /v1/live relays to an OpenAI API-key provider at /v1/live without AVAS", async () => {
   const captured: CapturedRequest[] = [];
-  const upstream = fakeLiveUpstream(captured, 201, "/v1/realtime/calls/rtc_api");
+  const upstream = fakeLiveUpstream(captured, 201, "/v1/live/rtc_api");
   saveConfig({
     port: 0,
     defaultProvider: "openai-apikey",
@@ -212,12 +214,14 @@ test("POST /v1/live relays to an OpenAI API-key provider at /v1/realtime/calls",
       body,
     });
     expect(response.status).toBe(201);
-    expect(response.headers.get("location")).toBe("/v1/realtime/calls/rtc_api");
+    expect(response.headers.get("location")).toBe("/v1/live/rtc_api");
 
     expect(captured).toHaveLength(1);
-    expect(captured[0].path).toBe("/v1/realtime/calls");
-    expect(captured[0].url).toContain("intent=quicksilver");
-    expect(captured[0].url).toContain("architecture=avas");
+    // Frameless API shape posts to {base}/live without the AVAS query
+    // (openai/codex RealtimeCallClient, realtime_call.rs).
+    expect(captured[0].path).toBe("/v1/live");
+    expect(captured[0].url).not.toContain("intent=");
+    expect(captured[0].url).not.toContain("architecture=");
     expect(captured[0].headers.get("authorization")).toBe("Bearer sk-test-live");
     expect(captured[0].headers.get("content-type")).toContain("multipart/form-data");
     expect(captured[0].bodyText).toContain('name="sdp"');
@@ -571,6 +575,193 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
   }
 }, { timeout: 20_000 });
 
+test("standalone GET /v1/realtime?intent=quicksilver&model= upgrades and relays bidirectionally", async () => {
+  const seen: { path: string; headers: Headers }[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        seen.push({ path: `${url.pathname}${url.search}`, headers: req.headers });
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      message(ws, message) {
+        ws.send(typeof message === "string" ? `echo:${message}` : "bytes");
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  // Redirect the canonical standalone upstream (api.openai.com/v1/realtime) to the mock.
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname === "/v1/realtime"
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/realtime?intent=quicksilver&model=gpt-realtime-1.5&access_token=dropme`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+        "x-session-id": "rts_standalone",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("standalone realtime timeout")), 15_000);
+      client.addEventListener("open", () => {
+        client.send("ping-standalone");
+      });
+      client.addEventListener("message", (event) => {
+        try {
+          expect(String(event.data)).toBe("echo:ping-standalone");
+          expect(seen).toHaveLength(1);
+          // Query preserved verbatim, credential-shaped param dropped.
+          expect(seen[0].path).toBe("/v1/realtime?intent=quicksilver&model=gpt-realtime-1.5");
+          expect(seen[0].headers.get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
+          expect(seen[0].headers.get("x-session-id")).toBe("rts_standalone");
+          clearTimeout(timer);
+          resolve();
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+}, { timeout: 20_000 });
+
+test("standalone GET /v1/live?model= upgrades and relays bidirectionally", async () => {
+  const seenPaths: string[] = [];
+  const upstream = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      const url = new URL(req.url);
+      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        seenPaths.push(`${url.pathname}${url.search}`);
+        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
+        return new Response("upgrade failed", { status: 500 });
+      }
+      return new Response("not found", { status: 404 });
+    },
+    websocket: {
+      message(ws, message) {
+        ws.send(`echo:${String(message)}`);
+      },
+    },
+  });
+
+  saveConfig(forwardConfig());
+
+  const RealWebSocket = globalThis.WebSocket;
+  const upstreamPort = upstream.port;
+  globalThis.WebSocket = class extends RealWebSocket {
+    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
+      const parsed = new URL(String(url));
+      const target =
+        parsed.hostname === "api.openai.com" && parsed.pathname === "/v1/live"
+          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
+          : String(url);
+      super(target, protocols as string[]);
+    }
+  } as typeof WebSocket;
+
+  const server = startServer(0);
+  try {
+    const wsUrl = new URL(`/v1/live?model=gpt-realtime-1.5`, server.url);
+    wsUrl.protocol = "ws:";
+    const client = new RealWebSocket(wsUrl.toString(), {
+      headers: {
+        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
+        "chatgpt-account-id": "acct-123",
+      },
+    } as unknown as string[]);
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("standalone frameless timeout")), 15_000);
+      client.addEventListener("open", () => {
+        client.send("ping-frameless");
+      });
+      client.addEventListener("message", (event) => {
+        try {
+          expect(String(event.data)).toBe("echo:ping-frameless");
+          expect(seenPaths).toEqual(["/v1/live?model=gpt-realtime-1.5"]);
+          clearTimeout(timer);
+          resolve();
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      });
+      client.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("client websocket error"));
+      });
+    });
+    client.close();
+  } finally {
+    globalThis.WebSocket = RealWebSocket;
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+}, { timeout: 20_000 });
+
+test("standalone realtime upgrade keeps the auth and origin guards", async () => {
+  saveConfig(forwardConfig());
+  process.env.OPENCODEX_API_AUTH_TOKEN = "required-secret";
+
+  const server = startServer(0);
+  try {
+    const upgradeHeaders = {
+      connection: "upgrade",
+      upgrade: "websocket",
+      "sec-websocket-version": "13",
+      "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+    };
+    // No credential at all → 401 before any upgrade.
+    const unauthenticated = await fetch(new URL("/v1/realtime?model=m", server.url), {
+      headers: upgradeHeaders,
+    });
+    expect(unauthenticated.status).toBe(401);
+    // Non-local Origin → 403 even with a credential.
+    const crossOrigin = await fetch(new URL("/v1/realtime?model=m", server.url), {
+      headers: {
+        ...upgradeHeaders,
+        authorization: "Bearer required-secret",
+        origin: "https://evil.example",
+      },
+    });
+    expect(crossOrigin.status).toBe(403);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("sideband byte predicates accept exact limits and reject one byte over", () => {
   expect(exceedsLiveSidebandFrameByteLimit(50 * 1024 * 1024)).toBe(false);
   expect(exceedsLiveSidebandFrameByteLimit(50 * 1024 * 1024 + 1)).toBe(true);
@@ -610,6 +801,9 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
     await import("../src/server/live");
 
   expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex", true)).toBe(
+    "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+  );
+  expect(forwardLiveUrl("https://chatgpt.com/backend-api/codex///", true)).toBe(
     "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
   );
   expect(keyedLiveUrl("https://api.openai.com/v1")).toBe(
@@ -655,6 +849,113 @@ test("buildLiveSidebandUpstreamWsUrl maps Frameless and Realtime join shapes", a
       callId: "rtc_2",
     }),
   ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=rtc_2");
+});
+
+test("parseLiveSidebandTarget recognizes standalone realtime sessions", async () => {
+  const { parseLiveSidebandTarget } = await import("../src/server/live");
+
+  // Desktop voice since codex 0.147.x: standalone WebSocket transport, no call_id.
+  expect(
+    parseLiveSidebandTarget(
+      "/v1/realtime",
+      new URLSearchParams("intent=quicksilver&model=gpt-realtime-1.5"),
+      "intent=quicksilver&model=gpt-realtime-1.5",
+    ),
+  ).toEqual({ style: "realtime-standalone", query: "intent=quicksilver&model=gpt-realtime-1.5" });
+  // RealtimeV2 standalone carries no intent.
+  expect(
+    parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("model=gpt-realtime-1.5"), "model=gpt-realtime-1.5"),
+  ).toEqual({ style: "realtime-standalone", query: "model=gpt-realtime-1.5" });
+  expect(parseLiveSidebandTarget("/v1/realtime", new URLSearchParams(), "")).toEqual({
+    style: "realtime-standalone",
+    query: "",
+  });
+  // Trailing slash forms.
+  expect(
+    parseLiveSidebandTarget("/v1/realtime/", new URLSearchParams("model=m"), "model=m"),
+  ).toEqual({ style: "realtime-standalone", query: "model=m" });
+  expect(parseLiveSidebandTarget("/v1/live", new URLSearchParams("model=m"), "model=m")).toEqual({
+    style: "frameless-standalone",
+    query: "model=m",
+  });
+  expect(parseLiveSidebandTarget("/v1/live/", new URLSearchParams(), "")).toEqual({
+    style: "frameless-standalone",
+    query: "",
+  });
+
+  // A present-but-invalid call_id is a malformed join, never a standalone session.
+  expect(parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id="), "call_id=")).toBeNull();
+  expect(
+    parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id=bad id!"), "call_id=bad%20id!"),
+  ).toBeNull();
+  // Bare /v1/realtime/calls is the call-create HTTP path, not a WS target.
+  expect(parseLiveSidebandTarget("/v1/realtime/calls", new URLSearchParams(), "")).toBeNull();
+  // Valid join shapes keep working.
+  expect(
+    parseLiveSidebandTarget("/v1/realtime", new URLSearchParams("call_id=rtc_2"), "call_id=rtc_2"),
+  ).toEqual({ style: "realtime-query", callId: "rtc_2" });
+});
+
+test("standalone realtime query relay drops credential-shaped keys and keeps raw bytes", async () => {
+  const { parseLiveSidebandTarget, sanitizeStandaloneRealtimeQuery } = await import("../src/server/live");
+
+  // Noncanonical encodings and bare keys survive byte-for-byte.
+  expect(sanitizeStandaloneRealtimeQuery("model=a%2fb&flag&x=%20~")).toBe("model=a%2fb&flag&x=%20~");
+  // Credential-shaped params never reach the upstream (case-folded, raw + decoded).
+  expect(sanitizeStandaloneRealtimeQuery("access_token=abc&model=m")).toBe("model=m");
+  expect(sanitizeStandaloneRealtimeQuery("API_KEY=abc&model=m")).toBe("model=m");
+  expect(sanitizeStandaloneRealtimeQuery("model=m&token=abc")).toBe("model=m");
+  expect(sanitizeStandaloneRealtimeQuery("key=abc&auth=def&sig=ghi&model=m")).toBe("model=m");
+  expect(sanitizeStandaloneRealtimeQuery("%61ccess_token=abc&model=m")).toBe("model=m");
+  // Bare credential key is dropped too.
+  expect(sanitizeStandaloneRealtimeQuery("api_key&model=m")).toBe("model=m");
+  // Duplicates and protocol params pass through.
+  expect(sanitizeStandaloneRealtimeQuery("model=a&model=b&intent=quicksilver")).toBe(
+    "model=a&model=b&intent=quicksilver",
+  );
+  expect(sanitizeStandaloneRealtimeQuery("")).toBe("");
+
+  // Parser applies the same policy.
+  expect(
+    parseLiveSidebandTarget(
+      "/v1/realtime",
+      new URLSearchParams("access_token=abc&intent=quicksilver&model=m"),
+      "access_token=abc&intent=quicksilver&model=m",
+    ),
+  ).toEqual({ style: "realtime-standalone", query: "intent=quicksilver&model=m" });
+});
+
+test("buildLiveSidebandUpstreamWsUrl maps standalone realtime session shapes", async () => {
+  const { buildLiveSidebandUpstreamWsUrl } = await import("../src/server/live");
+
+  expect(
+    buildLiveSidebandUpstreamWsUrl({
+      style: "realtime-standalone",
+      query: "intent=quicksilver&model=gpt-realtime-1.5",
+    }),
+  ).toBe("wss://api.openai.com/v1/realtime?intent=quicksilver&model=gpt-realtime-1.5");
+  expect(buildLiveSidebandUpstreamWsUrl({ style: "realtime-standalone", query: "" })).toBe(
+    "wss://api.openai.com/v1/realtime",
+  );
+  expect(buildLiveSidebandUpstreamWsUrl({ style: "frameless-standalone", query: "model=m" })).toBe(
+    "wss://api.openai.com/v1/live?model=m",
+  );
+  expect(buildLiveSidebandUpstreamWsUrl({ style: "frameless-standalone", query: "" })).toBe(
+    "wss://api.openai.com/v1/live",
+  );
+  // Override honored for standalone too.
+  expect(
+    buildLiveSidebandUpstreamWsUrl(
+      { style: "realtime-standalone", query: "model=m" },
+      "https://realtime.example.test/v1",
+    ),
+  ).toBe("wss://realtime.example.test/v1/realtime?model=m");
+  expect(
+    buildLiveSidebandUpstreamWsUrl(
+      { style: "frameless-standalone", query: "model=m" },
+      "http://127.0.0.1:8080/v1",
+    ),
+  ).toBe("ws://127.0.0.1:8080/v1/live?model=m");
 });
 
 test("sideband URL policy: override precedence, normalization, and fail-closed bounds", async () => {

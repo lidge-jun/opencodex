@@ -52,6 +52,10 @@ const DAYBREAK_RED: Cost4 = { input: 12.5, output: 75, cacheRead: 1.25, cacheWri
 const GPT56_TERRA: Cost4 = { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 };
 const GPT56_LUNA: Cost4 = { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
 const GEMINI_36_FLASH: Cost4 = { input: 1.5, output: 7.5, cacheRead: 0.15, cacheWrite: 0 };
+// Gemini 3.7 Flash launch promotion: Google publishes $0.75 in / $3.75 out per 1M
+// through 2026-12-31, stepping up to $1.50 / $7.50 on 2027-01-01. Revisit this row
+// then — the promotional rate is dated on the pricing page, not open-ended.
+const GEMINI_37_FLASH: Cost4 = { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 };
 const MINIMAX_M21_HIGHSPEED: Cost4 = { input: 0.6, output: 2.4, cacheRead: 0.03, cacheWrite: 0.375 };
 const KIMI_K3: Cost4 = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
 const KIMI_K27_CODE: Cost4 = { input: 0.95, output: 4, cacheRead: 0.19, cacheWrite: 0.95 };
@@ -70,6 +74,7 @@ const CLAUDE_OPUS_5_DERIVED_SOURCE =
 const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing (official; 5m cache-write tier)";
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
+const GEMINI_37_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-08-14); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
 const MINIMAX_PRICING = "https://platform.minimax.io/docs/guides/pricing-paygo";
 const OPENAI_GPT56_PRICING = "https://developers.openai.com/api/docs/pricing";
 const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-details-usd; V4 Flash alias transition scheduled 2026-07-24 — re-verify after";
@@ -102,6 +107,12 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Google Antigravity effort-suffix variants — derived from the verified base-model
   // price (Google does not publish per-suffix prices; Agent inference bills at the
   // base model's standard rate per the official Billing FAQ).
+  // 3.7 Flash rides CCA, whose billing equivalence to the Developer API list price is
+  // not published, so this is `verified-derived` rather than `verified`: the number is
+  // proven, the claim that Antigravity charges it is inferred.
+  { provider: "google-antigravity", modelId: "gemini-3.7-flash", cost4: GEMINI_37_FLASH, source: `derived: Gemini 3.7 Flash promotional rate through 2026-12-31 ${GEMINI_37_PRICING}`, verifiedAt: "2026-08-14", status: "verified-derived" },
+  // Retained after the 3.6 retirement: historical usage.jsonl rows still carry these
+  // ids, and dropping the row would silently zero the cost of requests already made.
   { provider: "google-antigravity", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: `collapsed base ID ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro", cost4: GEMINI_31_PRO, source: `collapsed base ID ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified" },
   // OpenAI GPT-5.6 `-pro` virtual selections. The virtual resolver keeps the SELECTED id in
@@ -130,6 +141,8 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "google-antigravity", modelId: "gemini-3-flash-agent", cost4: GEMINI_36_FLASH, source: `compat alias -> gemini-3.6-flash-high ${GEMINI_PRICING}`, verifiedAt: "2026-07-22", status: "verified-derived" },
   // Direct Google Gemini API current model (verified — published table).
   { provider: "google", modelId: "gemini-3.6-flash", cost4: GEMINI_36_FLASH, source: GEMINI_PRICING, verifiedAt: "2026-07-22", status: "verified" },
+  // Developer API row: the price IS published for this surface, so `verified`.
+  { provider: "google", modelId: "gemini-3.7-flash", cost4: GEMINI_37_FLASH, source: GEMINI_37_PRICING, verifiedAt: "2026-08-14", status: "verified" },
   { provider: "google-antigravity", modelId: "gemini-3.1-pro-preview", cost4: GEMINI_31_PRO, source: GEMINI_PRICING, verifiedAt: "2026-07-20", status: "verified" },
   // Antigravity-bundled third-party models — derived from the underlying vendor's
   // official API price (Antigravity itself bills via subscription quota).
@@ -276,6 +289,17 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
     multiplier: UNIFORM_DOUBLE,
     source: "https://docs.x.ai/developers/pricing",
     verifiedAt: "2026-08-03",
+  },
+  {
+    // 260813: grok-4.6 long-context tier mirrored from grok-4.5; the official pricing row
+    // was not yet published when the model page went up, so treat as provisional.
+    provider: "xai",
+    modelId: "grok-4.6",
+    thresholdInputTokens: 200_000,
+    inclusive: true,
+    multiplier: UNIFORM_DOUBLE,
+    source: "https://docs.x.ai/developers/pricing",
+    verifiedAt: "2026-08-13",
   },
   {
     // daybreak-blue-latest aliases gpt-5.6-sol, which publishes the full long-context row

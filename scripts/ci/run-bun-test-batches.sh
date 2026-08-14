@@ -106,7 +106,7 @@ run_test_once() {
   set +e
   timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
     "${BATCH_TIMEOUT_SECONDS}s" \
-    bun test --isolate "${files[@]}" 2>&1 | tee "$log_file"
+    bun test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 

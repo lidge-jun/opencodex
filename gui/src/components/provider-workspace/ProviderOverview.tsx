@@ -339,6 +339,7 @@ function NotesSection({ item, onUpdateProvider }: {
     } finally {
       setSaving(false);
     }
+  // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
   }, [draft, item.name, item.note, onUpdateProvider, saving, t]);
 
   if (!editing) {

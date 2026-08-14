@@ -10,6 +10,7 @@ import { relaySseEagerBounded, type EagerRelayHooks } from "../src/server/relay-
 import { createTranslatorBudget } from "../src/lib/translator-budget";
 import type { RequestLogContext } from "../src/server/request-log";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 const enc = new TextEncoder();
 
 function sse(event: string): Uint8Array {
@@ -290,7 +291,7 @@ describe("relaySseEagerBounded — inline payload rewrite (#864)", () => {
     await Promise.race([
       done,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error("relay cleanup timed out")), 2_000);
+        timeout = setTimeout(() => reject(new Error("relay cleanup timed out")), watchdogMs(2_000));
       }),
     ]).finally(() => {
       if (timeout) clearTimeout(timeout);

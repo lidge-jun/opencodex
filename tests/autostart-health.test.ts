@@ -192,19 +192,14 @@ describe("Codex startup health", () => {
     expect(startupHealthSummary(custom)).not.toContain("ocx service install");
   });
 
-  test("exposes a secret-free startup health DTO to the dashboard", async () => {
+  test("exposes fresh secret-free startup health across cache expiry", async () => {
     invalidateStartupHealthCache();
     const url = new URL("http://localhost/api/startup-health");
-    let timerFired = false;
-    const timer = setTimeout(() => { timerFired = true; }, 25);
     const responsePromise = handleManagementAPI(
       new Request(url),
       url,
       { port: 10100, providers: {}, defaultProvider: "openai", codexAutoStart: true } as OcxConfig,
     );
-    await Bun.sleep(75);
-    expect(timerFired).toBe(true); // service-manager probes run in a child, not the proxy event loop
-    clearTimeout(timer);
     const response = await responsePromise;
     expect(response?.status).toBe(200);
 
@@ -212,6 +207,7 @@ describe("Codex startup health", () => {
     expect(["native", "protected", "at-risk"]).toContain(body.status);
     expect(typeof body.rebootSafe).toBe("boolean");
     expect(typeof body.routingInjected).toBe("boolean");
+    expect(body.diagnosticStale).toBe(false);
     expect(body.commands).toEqual({
       installService: "ocx service install",
       repairService: "ocx service repair",
@@ -223,6 +219,15 @@ describe("Codex startup health", () => {
     for (const secretName of ["api_key", "apikey", "authorization", "access_token", "refresh_token"]) {
       expect(serialized).not.toContain(secretName);
     }
-  });
+
+    await Bun.sleep(30_050);
+    const refreshed = await handleManagementAPI(
+      new Request(url),
+      url,
+      { port: 10100, providers: {}, defaultProvider: "openai", codexAutoStart: true } as OcxConfig,
+    );
+    const refreshedBody = await refreshed!.json() as Record<string, unknown>;
+    expect(refreshedBody.diagnosticStale).toBe(false);
+  }, 40_000);
 });
 import { ManagementRequest as Request } from "./helpers/management-auth";

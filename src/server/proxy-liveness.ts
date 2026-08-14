@@ -20,6 +20,7 @@ export interface HealthzIdentity {
   pid?: unknown;
   port?: unknown;
   restartCapability?: unknown;
+  providerReloadCapability?: unknown;
 }
 
 export interface LivenessIo {

@@ -86,6 +86,8 @@ opencodex는 읽을 수 없거나 빈 작업을 그대로 넘기지 않고 안�
 
 복구 방법은 네이티브 ChatGPT 자식을 선택하거나, 콤보에 네이티브 ChatGPT 대상을 추가하거나, 이종 프로바이더 위임에는 v1을 사용하거나, 호출자를 제어할 수 있을 때 작업을 평문 v2 `agent_message` 콘텐츠로 다시 보내는 것입니다.
 
+실험적인 `agentTaskRecovery`는 기본적으로 꺼져 있습니다. 명시적으로 켜면 고정된 ChatGPT 엔드포인트로 인증된 요청을 하나 더 보내 이 형식을 복구할 수 있지만, 할당량과 지연 시간이 늘고 비공개 백엔드 동작에 의존합니다. 실패하면 기존 `unreadable_encrypted_agent_task` 오류를 그대로 유지합니다. 자세한 내용은 [영문 설정 참고 문서](/reference/configuration/agents/#encrypted-v2-task-recovery)를 보세요.
+
 ## 모드 변경
 
 ### GUI

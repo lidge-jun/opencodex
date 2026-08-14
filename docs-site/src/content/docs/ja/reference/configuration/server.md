@@ -15,7 +15,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `stallTimeoutSec?` | `number` | `300` | `response.incomplete` より前にアップストリーム データがない秒数。最小 1。
 | `connectTimeoutMs?` | `number` | `200000` |試行ごとの DNS/TCP/TLS/最終ヘッダーの期限。本体が生成される前に終了します。 |
 | `shutdownTimeoutMs?` | `number` | `5000` |アクティブなターンが中止される前の正常な排出期限。 |
-| `websockets?` | `boolean` | `false` |応答 WebSocket パスとして `supports_websockets` をアドバタイズします。 False は HTTP/SSE を維持します。 |
+| `websockets?` | `boolean` | `false` | クライアント向け Responses WebSocket パスを広告して許可します。false の場合クライアントは HTTP/SSE を使いますが、対象となる canonical ChatGPT upstream WS 最適化は無効にしません。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 追加の正確な CORS origin。ループバック origin は常に許可します。`chrome-extension://<extension-id>` など authority ベースのブラウザー拡張 origin に対応し、`*` はワイルドカードではありません。Firefox と Safari は拡張 UUID を（インストール/ブラウザー起動ごとに）再生成するため、origin が変わったらエントリを更新してください。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` |生成された `ocx_…` 資格情報は、非ループバック バインドでの管理およびデータ プレーン認証によって受け入れられました。ダッシュボードで管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` |無効 |アーカイブされたセッションのクリーンアップ ポリシーをオプトインします。暗黙的に有効になることはありません。 |
@@ -50,9 +50,15 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` |受け入れられません | **必須** |受け入れられません |
 | `/v1/chat/completions` |受け入れられません | **必須** |受け入れられません |
 | `/v1/messages` |受け入れられました |受け入れられました |受け入れられました |
+| `/v1/messages/count_tokens` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/models` |受け入れられました |受け入れられました |受け入れられました |
 
-応答とチャット完了では、Codex Direct パススルーの可能性のために `Authorization` を予約しているため、そこでは専用のアドミッション ヘッダーのみが受け入れられます。ダッシュボードで生成された `apiKeys` は、起動後に環境トークンを置き換える可能性があります。候補は一定時間内に比較されます。
+応答とチャット完了では、Codex Direct パススルーの可能性のために `Authorization` を予約しているため、そこでは専用のアドミッション ヘッダーのみが受け入れられます。ダッシュボードで生成された `apiKeys` は、起動後に環境トークンを置き換える可能性があります。候補値は定数時間で比較されます。
+
+Messages と `count_tokens` はルーティングクライアントとの互換性のために 3 つの admission 形式を引き続き受け入れます。
+ただし非ループバック bind のネイティブ Anthropic パススルーでは、プロキシ admission は
+`x-opencodex-api-key` のみを使い、`Authorization` と `x-api-key` は Anthropic 認証情報用に
+予約されます。これら provider ヘッダー内のプロキシ admission secret は転送前に削除されます。
 
 :::caution[LAN露出]
 `0.0.0.0` バインドは、プロキシと構成されたプロバイダーの LAN へのアクセスを公開します。強力なトークンを持つ信頼できるネットワークでのみ使用してください。
@@ -84,7 +90,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-これらの設定は、`/v1/messages`、`ocx claude` ランチャー、および Claude ダッシュボード ページを制御します。
+これらの設定は、`/v1/messages`、`/v1/messages/count_tokens`、`ocx claude` ランチャー、および Claude ダッシュボード ページを制御します。
 
 |キー |タイプ |デフォルト |説明 |
 | --- | --- | --- | --- |
@@ -146,7 +152,7 @@ OpenAI バックエンドには、ChatGPT ログインと有効な ChatGPT `forw
 | `model?` | `string` |バックエンド依存 | OpenAI の場合は `gpt-5.4-mini`、Anthropic の場合は `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses の推論負荷。Anthropic は無視します。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` |新しい説明のキャッシュミスはメインターンごとに許可されます。 `0` は通話を無効にします。無効な値にはデフォルトが使用されます。 |
-| `timeoutMs?` | `number` | `45000` |サイドカーのフェッチタイムアウト。 |
+| `timeoutMs?` | `number` | `45000` |サイドカーのフェッチタイムアウト。整数 1–2147483647。 |
 
 対応するレベルは、上流プロバイダーの能力と選択したモデルが公表する推論ラダーによって制限されます。 Vision は、プロバイダーの `noVisionModels` のモデルに送信された画像に対してのみアクティブになります。 OpenAI には、検索と同じログイン/転送要件があります。明示的に選択された Anthropic は、使用可能な認証情報がないと失敗します。成功した `data:` 記述では、バックエンド、モデル、詳細、画像バイト、および正規化されたメッセージ コンテキストをキーとした境界付きキャッシュが使用されます。OpenAI のキーには推論負荷も含まれます（Anthropic のキーには含まれません）。ヒットと同じターンの重複は制限を消費しません。リモート `https:` イメージと失敗した説明、または空の説明はキャッシュされません。
 

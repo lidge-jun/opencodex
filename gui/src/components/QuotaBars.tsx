@@ -209,24 +209,19 @@ export default function QuotaBars({
         </div>
       );
     }
-    // Always reserve two compact rows until real bars paint — plan-based 1-row
-    // skeletons shrink when Plus/Team quotas arrive with weekly+monthly.
+    // Reserve one compact meter row until real bars paint. Extra windows add
+    // height only after WHAM fills them; the default card stays three rows.
     return (
       <div
         className={`codex-account-quota-slot quota-compact quota-compact--pending${className ? ` ${className}` : ""}`}
         aria-busy="true"
         role="status"
       >
-        {Array.from({ length: 2 }, (_, index) => (
-          <div key={index} className="quota-row quota-row--skeleton" aria-hidden="true">
-            <span className="quota-skel quota-skel--label" />
-            <span className="quota-skel quota-skel--reset" />
-            <span className="quota-skel quota-skel--day" />
-            <span className="quota-skel quota-skel--time" />
-            <span className="quota-skel quota-skel--bar" />
-            <span className="quota-skel quota-skel--val" />
-          </div>
-        ))}
+        <div className="quota-row quota-row--skeleton" aria-hidden="true">
+          <span className="quota-skel quota-skel--label" />
+          <span className="quota-skel quota-skel--bar" />
+          <span className="quota-skel quota-skel--val" />
+        </div>
         <span className="sr-only">{t("common.loading")}</span>
       </div>
     );
@@ -278,16 +273,17 @@ function QuotaRow({ label, percent, resetAt, threshold, t, locale }: {
   const warn = isQuotaWarn(percent, threshold);
   const color = quotaBarTone(percent, threshold);
   const reset = formatResetAt(resetAt, t, locale);
+  const resetTitle = reset.day || reset.time
+    ? `${t("codexAuth.resets")} ${reset.day} ${reset.time}`.replace(/\s+/g, " ").trim()
+    : undefined;
   return (
     <div className={`quota-row${warn ? " quota-row--warn" : ""}${exhausted ? " quota-row--exhausted" : ""}`}>
-      <span className="quota-label">{label}</span>
-      <span className="quota-reset-label">{t("codexAuth.resets")}</span>
-      <span className="quota-reset-day">{reset.day}</span>
-      <span className="quota-reset-time">{reset.time}</span>
-      <div className="bar"><div className={`bar-fill ${color}`} style={barFillStyle(percent)} /></div>
+      <span className="quota-label" title={resetTitle}>{label}</span>
+      <div className="bar" title={resetTitle}><div className={`bar-fill ${color}`} style={barFillStyle(percent)} /></div>
       <span
         className={`quota-val${warn ? " quota-val--warn" : ""}`}
-        title={exhausted ? t("quota.limitReached") : undefined}
+        title={exhausted ? t("quota.limitReached") : resetTitle}
+        aria-label={resetTitle}
       >
         {warn && <IconAlert width={12} height={12} aria-hidden="true" />}
         {Math.round(percent)}%

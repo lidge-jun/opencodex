@@ -12,6 +12,19 @@ const RECORDED_CURSOR_GROK_45_DISCOVERY_IDS = [
   "cursor-grok-4.5-high",
 ] as const;
 
+// Account-visible Cursor CLI lineup recorded on 2026-08-13. Grok 4.6 adds a
+// real Extra High tier in both regular and Fast forms; 4.5 still tops out at high.
+const RECORDED_CURSOR_GROK_46_DISCOVERY_IDS = [
+  "cursor-grok-4.6-low",
+  "cursor-grok-4.6-medium",
+  "cursor-grok-4.6-high",
+  "cursor-grok-4.6-xhigh",
+  "cursor-grok-4.6-low-fast",
+  "cursor-grok-4.6-medium-fast",
+  "cursor-grok-4.6-high-fast",
+  "cursor-grok-4.6-xhigh-fast",
+] as const;
+
 function modelIdFor(modelId: string, reasoning?: string): string {
   const parsed: OcxParsedRequest = {
     modelId,
@@ -133,6 +146,41 @@ describe("Cursor per-model reasoning-effort suffix", () => {
       expect(requestModelId).toBe(`cursor-grok-4.5-${effort}`);
       expect(RECORDED_CURSOR_GROK_45_DISCOVERY_IDS).toContain(requestModelId);
     }
+  });
+
+  test("grok-4.6 exposes xhigh and sends Extra High Fast as parameters", () => {
+    expect(modelIdFor("cursor/grok-4.6", "low")).toBe("cursor-grok-4.6-low");
+    expect(modelIdFor("cursor/grok-4.6", "medium")).toBe("cursor-grok-4.6-medium");
+    expect(modelIdFor("cursor/grok-4.6", "high")).toBe("cursor-grok-4.6-high");
+    expect(modelIdFor("cursor/grok-4.6", "xhigh")).toBe("cursor-grok-4.6-xhigh");
+    expect(modelIdFor("cursor/grok-4.6", "max")).toBe("cursor-grok-4.6-xhigh");
+    expect(selectionFor("cursor/grok-4.6")).toEqual({
+      modelId: "cursor-grok-4.6-xhigh",
+      parameters: undefined,
+    });
+    expect(selectionFor("cursor/grok-4.6-fast", "xhigh")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "xhigh" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.6-fast", "max")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "xhigh" }, { id: "fast", value: "true" }],
+    });
+    expect(selectionFor("cursor/grok-4.6-fast")).toEqual({
+      modelId: "grok-4.6",
+      parameters: [{ id: "effort", value: "xhigh" }, { id: "fast", value: "true" }],
+    });
+    expect(cursorModelEffortLadder("grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(cursorModelEffortLadder("grok-4.6-fast")).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
+  test("regular grok-4.6 request ids match the recorded discovery fixture", () => {
+    for (const effort of ["low", "medium", "high", "xhigh"] as const) {
+      const requestModelId = modelIdFor("cursor/grok-4.6", effort);
+      expect(requestModelId).toBe(`cursor-grok-4.6-${effort}`);
+      expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain(requestModelId);
+    }
+    expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain("cursor-grok-4.6-xhigh-fast");
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

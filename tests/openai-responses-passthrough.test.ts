@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../src/adapters/openai-responses";
+import { openaiResponsesUrl } from "../src/adapters/openai-responses-url";
 import { enrichProviderFromRegistry, providerConfigSeed } from "../src/providers/derive";
 import { getProviderRegistryEntry } from "../src/providers/registry";
 import { sanitizeEncryptedContentInPlace } from "../src/server/responses";
@@ -11,9 +12,106 @@ const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResp
 
 const provider = {
   adapter: "openai-responses",
-  baseUrl: "https://chatgpt.example/backend-api/codex",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
   authMode: "forward" as const,
 };
+
+test("noncanonical forward providers cannot receive caller or runtime credentials", () => {
+  const userInfoUrl = new URL("https://chatgpt.com/backend-api/codex");
+  userInfoUrl.username = "user";
+  userInfoUrl.password = "secret";
+  for (const baseUrl of [
+    "https://provider.example/v1/",
+    "https://chatgpt.com/backend-api/not-codex",
+    "https://chatgpt.example/backend-api/codex",
+    "https://chatgpt.com/backend-api/codex?target=custom",
+    "https://chatgpt.com/backend-api/codex#custom",
+    userInfoUrl.toString(),
+  ]) {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl,
+      authMode: "forward",
+      headers: { "x-provider-option": "enabled" },
+      _codexAccountRequired: true,
+      _codexAccountOverride: {
+        accessToken: "runtime-secret",
+        chatgptAccountId: "runtime-account",
+      },
+    } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+    const request = adapter.buildRequest({
+      modelId: "test-model",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { model: "test-model", input: "ping" },
+    }, {
+      headers: new Headers({
+        authorization: "Bearer caller-secret",
+        "chatgpt-account-id": "caller-account",
+        session_id: "caller-session",
+      }),
+    });
+
+    expect(request.url).toBe(`${baseUrl.replace(/\/+$/, "")}/responses`);
+    expect(request.headers["x-provider-option"]).toBe("enabled");
+    expect(request.headers.authorization).toBeUndefined();
+    expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+    expect(request.headers.session_id).toBeUndefined();
+  }
+});
+
+test("canonical forward providers normalize trailing slashes and let the pool override win", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    ...provider,
+    baseUrl: "https://chatgpt.com/backend-api/codex///",
+    _codexAccountRequired: true,
+    _codexAccountOverride: {
+      accessToken: "runtime-secret",
+      chatgptAccountId: "runtime-account",
+    },
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, { headers: new Headers({ authorization: "Bearer caller-secret" }) });
+
+  expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+  expect(request.headers.authorization).toBe("Bearer runtime-secret");
+  expect(request.headers["chatgpt-account-id"]).toBe("runtime-account");
+});
+
+test("noncanonical pool-required providers use only their configured static credentials", () => {
+  const adapter = createResponsesPassthroughAdapter({
+    adapter: "openai-responses",
+    baseUrl: "https://provider.example/v1/",
+    authMode: "forward",
+    headers: { authorization: "Bearer provider-static", "x-provider-option": "enabled" },
+    _codexAccountRequired: true,
+  } as Parameters<typeof createResponsesPassthroughAdapter>[0]);
+  const request = adapter.buildRequest({
+    modelId: "test-model",
+    context: { messages: [] },
+    stream: true,
+    options: {},
+    _rawBody: { model: "test-model", input: "ping" },
+  }, {
+    headers: new Headers({
+      authorization: "Bearer caller-secret",
+      "chatgpt-account-id": "caller-account",
+      session_id: "caller-session",
+    }),
+  });
+
+  expect(request.url).toBe("https://provider.example/v1/responses");
+  expect(request.headers["x-provider-option"]).toBe("enabled");
+  expect(request.headers.authorization).toBe("Bearer provider-static");
+  expect(request.headers["chatgpt-account-id"]).toBeUndefined();
+  expect(request.headers.session_id).toBeUndefined();
+});
 
 test("passthrough serialized-body observation releases after the request settles", () => {
   const budget = createTranslatorBudget();
@@ -53,6 +151,8 @@ describe("OpenAI Responses key-auth URL construction", () => {
       ["https://api.openai.example", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1", "https://api.openai.example/v1/responses"],
       ["https://api.openai.example/v1/", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1/responses", "https://api.openai.example/v1/responses"],
+      ["https://api.openai.example/v1/responses/", "https://api.openai.example/v1/responses"],
     ] as const) {
       expect(buildKeyAuthUrl(baseUrl)).toBe(expectedUrl);
     }
@@ -139,6 +239,162 @@ describe("DeepSeek Responses endpoint contract", () => {
 });
 
 describe("OpenAI Responses passthrough sanitization", () => {
+  const deferredToolBody = {
+    model: "routed-model",
+    input: [
+      {
+        type: "tool_search_call",
+        call_id: "call_search",
+        execution: "client",
+        arguments: { query: "deferred read" },
+      },
+      {
+        type: "tool_search_output",
+        call_id: "call_search",
+        status: "completed",
+        execution: "client",
+        tools: [{
+          type: "namespace",
+          name: "workspace",
+          description: "Workspace tools",
+          tools: [{
+            type: "function",
+            name: "deferred_read",
+            description: "Read deferred data",
+            strict: false,
+            defer_loading: true,
+            parameters: {
+              type: "object",
+              properties: { id: { type: "string" } },
+              required: ["id"],
+              additionalProperties: false,
+            },
+          }, {
+            type: "function",
+            name: "declared_deferred_read",
+            description: "Read declared deferred data",
+            defer_loading: true,
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          }],
+        }],
+      },
+    ],
+    tools: [
+      {
+        type: "namespace",
+        name: "workspace",
+        description: "Workspace tools",
+        tools: [{
+          type: "function",
+          name: "upfront_read",
+          description: "Read upfront data",
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        }, {
+          type: "function",
+          name: "declared_deferred_read",
+          description: "Read declared deferred data",
+          defer_loading: true,
+          parameters: { type: "object", properties: {}, additionalProperties: false },
+        }],
+      },
+      {
+        type: "tool_search",
+        execution: "client",
+        description: "Search deferred tools",
+        parameters: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+    ],
+  };
+
+  test("routed passthrough promotes tool-search results into the active namespace", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "key",
+      apiKey: "test-key",
+    });
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers() }).body) as {
+      tools: Array<{
+        type: string;
+        name?: string;
+        tools?: Array<{ name: string; defer_loading?: boolean }>;
+      }>;
+    };
+
+    const namespace = body.tools.find(tool => tool.type === "namespace" && tool.name === "workspace");
+    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
+      "upfront_read",
+      "declared_deferred_read",
+      "deferred_read",
+    ]);
+    expect(namespace?.tools?.find(tool => tool.name === "declared_deferred_read"))
+      .not.toHaveProperty("defer_loading");
+    expect(namespace?.tools?.find(tool => tool.name === "deferred_read"))
+      .not.toHaveProperty("defer_loading");
+  });
+
+  test("canonical forward passthrough leaves tool-search loading to the native backend", () => {
+    const body = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: deferredToolBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: deferredToolBody,
+    }, { headers: new Headers({ authorization: "Bearer test" }) }).body) as { tools: unknown[] };
+
+    expect(body.tools).toEqual(deferredToolBody.tools);
+  });
+
+  test("routed passthrough promotes tool-search results into Responses Lite additional tools", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://provider.example/v1",
+      authMode: "key",
+      apiKey: "test-key",
+    });
+    const { tools, ...bodyWithoutTools } = deferredToolBody;
+    const rawBody = {
+      ...bodyWithoutTools,
+      input: [
+        ...bodyWithoutTools.input,
+        { type: "additional_tools", role: "developer", tools },
+      ],
+    };
+    const body = JSON.parse(adapter.buildRequest({
+      modelId: rawBody.model,
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: rawBody,
+    }, { headers: new Headers() }).body) as {
+      tools?: unknown[];
+      input: Array<{
+        type: string;
+        tools?: Array<{ type: string; name?: string; tools?: Array<{ name: string }> }>;
+      }>;
+    };
+
+    expect(body.tools).toBeUndefined();
+    const additionalTools = body.input.find(item => item.type === "additional_tools")?.tools;
+    const namespace = additionalTools?.find(tool => tool.type === "namespace" && tool.name === "workspace");
+    expect(namespace?.tools?.map(tool => tool.name)).toEqual([
+      "upfront_read",
+      "declared_deferred_read",
+      "deferred_read",
+    ]);
+  });
+
   test("normalizes top-level function schemas in the serialized raw body (#745)", () => {
     const validParameters = {
       type: "object",
@@ -1785,5 +2041,16 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
 
     expect(body.max_output_tokens).toBe(32000);
     expect(body.metadata).toEqual({ user_id: "u-1" });
+  });
+});
+
+describe("openaiResponsesUrl", () => {
+  test("does not strip mid-path /v1 or a non-endpoint responses suffix", () => {
+    expect(openaiResponsesUrl("https://proxy.example.com/v1/relay")).toBe(
+      "https://proxy.example.com/v1/relay/v1/responses",
+    );
+    expect(openaiResponsesUrl("https://api.example.com/somev1")).toBe(
+      "https://api.example.com/somev1/v1/responses",
+    );
   });
 });

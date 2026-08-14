@@ -130,15 +130,15 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 
 ## 客戶端設定匯出
 
-### `ocx export --client <opencode|pi>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh>`
 
-印出連接到執行中代理的客戶端設定。opencode 與 [Pi](/zh-tw/guides/pi/) 從其自身的 JSON 設定而非環境變數讀取供應商，因此此指令將 `opencodex` 供應商區塊——base URL、模型清單與客戶端的環境變數參考——序列化，供你合併到該檔案中。
+印出連接到執行中代理的客戶端設定。此指令會用所選客戶端的原生格式，序列化含有 base URL、模型清單，以及適用的環境變數參考或 loopback 佔位符的 `opencodex` provider 區塊。
 
 代理必須正在執行；指令解析其即時連接埠、讀取 `/api/models`，並只輸出 Codex 目前可見的模型。
 
 | 旗標 | 動作 |
 | --- | --- |
-| `--client <opencode\|pi>` | 必填。選擇客戶端方言：opencode 的 keyed `provider` 物件或 Pi 的 `providers` 陣列。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh>` | 必填。選擇客戶端設定格式。 |
 | `--json` | 僅在 stdout 印出設定 JSON，使重導向能擷取逐位元組輸出。所有診斷訊息（含 `--out` 寫入提示）皆送至 stderr。 |
 | `--out <path>` | 將設定寫入 `<path>`。拒絕覆寫既有檔案。 |
 | `--force` | 允許 `--out` 覆寫既有檔案。 |
@@ -146,24 +146,35 @@ ocx claude desktop import <path> [--apply]         驗證並匯入 JSON
 ```bash
 ocx export --client opencode                     # 設定加上目的地、合併警告與計數
 ocx export --client pi --json > pi-models.json   # 供 pipe 或 diff 用的逐位元組 JSON
+ocx export --client omp --out ./omp-models.yml    # 原生 OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-未指定 `--json` 時，JSON 在前，接著是標準目的地路徑、合併警告、環境匯出行，以及附帶有多少列省略 context limit 的模型計數（客戶端會對那些套用自身預設值）。
+未指定 `--json` 時，會先輸出客戶端的原生設定格式，接著是標準目的地路徑、合併警告、客戶端專屬提示，以及附帶有多少列省略 context limit 的模型計數（客戶端會對那些套用自身預設值）。
 
 | 客戶端 | 標準目的地 | 下載檔名 | 環境變數 |
 | --- | --- | --- | --- |
 | `opencode` | `~/.config/opencode/opencode.json`（`XDG_CONFIG_HOME` 設定時優先） | `opencode.json` | `OPENCODEX_OPENCODE_API_KEY` |
-| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | `OPENCODEX_API_KEY` |
+| `pi` | `~/.pi/agent/models.json` | `pi-models.json` | 無——區塊帶有字面值 `opencodex-loopback` |
+| `omp` | `~/.omp/agent/models.yml`（即使是空值，`OMP_PROFILE` 仍優先於 `PI_PROFILE`） | `omp-models.yaml` | 無——loopback 佔位符 |
+| `hermes` | `~/.hermes/config.yaml` | `hermes-config.yaml` | `OPENCODEX_HERMES_API_KEY` |
+| `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
+| `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 無——loopback 佔位符 |
+| `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `dsh` | `$DSH_HOME/settings.yaml`（預設 `~/.dsh/settings.yaml`） | `settings.yaml` | 無——非秘密的 loopback bearer 佔位符 |
 
-兩個環境變數名稱不同，且每個客戶端只插值自己的。opencode 讀取
-`{env:OPENCODEX_OPENCODE_API_KEY}`；Pi 讀取 `$OPENCODEX_API_KEY`。
+opencode 會插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 與 OMP 的匯出不需要環境變數，
+而是帶有字面值 `opencodex-loopback`。DSH 匯出需要 DSH 0.1.0-rc.6 或更新版本，且只擁有
+`llm-pi-ai.providers.opencodex`。DSH 會熱重載該 provider；使用者的預設模型與
+`deepseek-official` 維持不變。這項匯出僅支援 loopback，且不含真實憑證。
 
 :::caution[合併，而非取代]
 `ocx export` 永不寫入你的真實客戶端設定。目的地僅印出供你手動合併，而 `--out` 在沒有 `--force` 時拒絕覆寫既有檔案，因為取代設定檔會毀掉其中已有的其他供應商、代理與 MCP 項目。
 :::
 
-金鑰永不被序列化。設定只帶有客戶端的環境變數參考，因此秘密留在你的環境中。回送代理（`127.0.0.1`，預設值）完全不需要許可金鑰——該參考只是未被使用。僅在代理綁定超出回送時才設定該變數；關於許可金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/#remote-access)。上游供應商本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
+金鑰永不被序列化。設定只帶有文件化的環境變數參考，或非秘密的 loopback 佔位符。loopback 代理（`127.0.0.1`，預設值）完全不需要准入金鑰。只有客戶端 schema 支援、且代理綁定超出 loopback 時，才設定被引用的變數；關於准入金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/#remote-access)。上游 provider 本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
+
+Gajae 是例外：`OPENCODEX_GAJAE_API_KEY` 只會從環境提供 provider 憑證，但其 schema 無法傳送遠端准入 header，因此產生的 Gajae 整合仍僅支援 loopback。
 
 相同的 payload 亦由 `GET /api/client-config` 提供，並在儀表板的 API 分頁渲染，因此 CLI、API 與 GUI 使用相同的位元組。
 

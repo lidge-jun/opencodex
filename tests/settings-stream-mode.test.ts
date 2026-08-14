@@ -202,12 +202,12 @@ describe("usage summary retained-store accounting", () => {
       expect((await handleManagementAPI(req, new URL(req.url), baseConfig()))!.status).toBe(200);
     }
     const before = usageSummaryRetainedStoreSnapshot();
-    expect(before.count).toBe(2);
+    expect(before.count).toBe(12);
     expect(before.bytes).toBeGreaterThan(0);
     const released = evictOldestUsageSummaryForBudget();
     const after = usageSummaryRetainedStoreSnapshot();
     expect(released).toBeGreaterThan(0);
-    expect(after.count).toBe(1);
+    expect(after.count).toBe(11);
     expect(after.bytes).toBe(before.bytes - released);
   });
 
@@ -222,18 +222,23 @@ describe("usage summary retained-store accounting", () => {
     // is older than everything else, but its revisionReadAt is the newest.
     setUsageSummaryCacheEntry("slow:stale-generated", {
       revisionKey: "slow-read",
+      identityKey: "slow-read",
+      maxReadBytes: 64 * 1024 * 1024,
+      overlayVersion: 0,
       expiresAt: Date.now() + 60_000,
+      freshUntil: Date.now() + 60_000,
+      lastSeenSize: 0,
       revisionReadAt: Date.now() + 10_000,
       summary: { ...seed!.summary, generatedAt: 1 },
     });
     const before = usageSummaryRetainedStoreSnapshot();
-    expect(before.count).toBe(3);
+    expect(before.count).toBe(13);
     // The slow-read entry has the minimum generatedAt; a generatedAt-keyed
     // implementation would evict it first. Completion order must win instead.
     const released = evictOldestUsageSummaryForBudget();
     expect(released).toBeGreaterThan(0);
     expect(getUsageSummaryCacheEntry("slow:stale-generated")).toBeDefined();
-    expect(usageSummaryRetainedStoreSnapshot().count).toBe(2);
+    expect(usageSummaryRetainedStoreSnapshot().count).toBe(12);
   });
 });
 

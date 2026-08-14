@@ -134,9 +134,15 @@ function recordedFragmentFingerprint(
 /**
  * The two-axis rule: the recorded bytes or fragments prove nobody changed
  * what we may rewrite, and the contribution hash proves our catalog has not
- * moved on. OMP is the sole fragment-scoped client because its writer patches
- * only `providers.opencodex`; every whole-document serializer retains the
- * whole-file fingerprint guard.
+ * moved on. Three classes of client (revising the unconditional whole-file
+ * rule of devlog 260802_client_toggle_api/021 §3 for json — #1631):
+ * registry-declared source-preserving YAML clients are fragment-scoped because
+ * their writers patch only the owned leaf, so the whole-file check is skipped;
+ * strict-json clients keep the whole-file check but downgrade a drift with
+ * intact owned fragments to `stale`, because a rewrite there can lose only
+ * formatting (comments cannot parse, non-round-tripping numbers are refused
+ * by the serializer); every comment-capable whole-document serializer (yaml,
+ * json5, toml) retains the whole-file fingerprint guard as a hard conflict.
  */
 export function classifyIntegration(input: {
   fileText: string | null;
@@ -180,11 +186,37 @@ export function classifyIntegration(input: {
     return { state: "conflict", reason: "unowned-key" };
   }
   const clientId = input.clientId ?? input.record.clientId;
-  if (clientId !== "omp" && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint) {
-    return { state: "conflict", reason: "foreign-edit" };
-  }
+  /*
+   * Checked BEFORE file-level drift: an edit INSIDE an owned fragment is a
+   * conflict no matter what the rest of the file looks like, so the sibling-
+   * edit exemption below can never mask it.
+   */
   if (recordedFragmentFingerprint(input.parsed, input.record) !== input.record.blockFingerprint) {
     return { state: "conflict", reason: "foreign-edit" };
+  }
+  if (!INTEGRATION_CLIENTS[clientId].sourcePreservingYaml
+    && fingerprint(input.fileText ?? "") !== input.record.fileFingerprint) {
+    /*
+     * The file changed since we wrote it, but every fragment we own is still
+     * byte-for-byte what we put there — a sibling edit, not tampering. Apply
+     * rewrites the WHOLE document, so for comment-capable formats (yaml,
+     * json5, toml) it would drop comments the user wrote next to us: fail
+     * closed there. Strict JSON cannot carry comments — a commented file
+     * never reaches this branch because parsing already failed — so the only
+     * possible loss is formatting normalization: everything a rewrite would
+     * actually change (numbers that would not round-trip, duplicate members
+     * a rewrite would delete) is PARSE_FAILED in parseConfig and classifies
+     * as unsafe long before this branch, exactly like comments. Refusing
+     * forever over formatting
+     * dead-ends the integration on the user's first own config edit (#1631).
+     * Report drift instead; a re-apply merges into the parsed document as it
+     * stands and re-owns the file. This also lets disable proceed on a
+     * drifted file — removal still touches only the recorded fragment paths.
+     */
+    if (EXPORT_CLIENTS[clientId].format !== "json") {
+      return { state: "conflict", reason: "foreign-edit" };
+    }
+    return { state: "stale" };
   }
   return input.record.blockFingerprint === fingerprint(canonicalContribution(input.contribution))
     ? { state: "current" }

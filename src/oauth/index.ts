@@ -879,6 +879,9 @@ function isLegacyCommandCodeStaticCatalog(provider: OcxProviderConfig): boolean 
 }
 
 function isLegacyAntigravityStaticCatalog(provider: OcxProviderConfig): boolean {
+  // A fingerprint of the shape version 1 actually shipped, NOT of the current registry.
+  // These literals must stay frozen as the model list moves on: matching them is how we
+  // know the row is the untouched v1 seed rather than a user's own selection.
   return provider.liveModels === false
     && provider.adapter === "google"
     && provider.baseUrl === "https://daily-cloudcode-pa.googleapis.com"
@@ -1121,7 +1124,7 @@ export async function runLogin(
       await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, cred);
     } else {
       await (deps.saveCredential ?? saveCredential)(provider, cred, {
-        preserveIdentityless: provider === "kiro" && opts?.forceLogin === true,
+        preserveIdentityless: opts?.forceLogin === true,
       });
     }
     if (provider !== "chatgpt") {

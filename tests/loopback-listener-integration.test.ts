@@ -191,6 +191,35 @@ describe("unauthenticated loopback listener", () => {
     }
   });
 
+  test("admits standalone realtime voice WebSocket upgrades, HTTP stays rejected", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = startServer(0);
+    const base = `http://127.0.0.1:${loopbackPort}`;
+    const upgradeHeaders = {
+      connection: "upgrade",
+      upgrade: "websocket",
+      "sec-websocket-version": "13",
+      "sec-websocket-key": Buffer.from("0123456789abcdef").toString("base64"),
+    };
+    try {
+      // A directly-spawned `codex app-server` drives desktop voice through the injected
+      // listener (codex-rs thread/realtime/start, standalone WebSocket transport). The
+      // allowlist must not 404 these upgrades; what comes back instead is the relay's own
+      // auth answer (no upstream credential is configured here), which still proves the
+      // request got past the allowlist.
+      for (const path of ["/v1/realtime?model=m", "/v1/live?model=m"]) {
+        const res = await fetch(`${base}${path}`, { headers: upgradeHeaders });
+        expect({ path, status: res.status }).not.toEqual({ path, status: 404 });
+      }
+      // Plain HTTP on the same paths remains outside the allowlist.
+      expect((await fetch(`${base}/v1/realtime?model=m`)).status).toBe(404);
+      expect((await fetch(`${base}/v1/live?model=m`)).status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("admits POST /v1/responses and its compact sibling without a credential", async () => {
     const loopbackPort = await freePort();
     saveConfig(baseConfig(loopbackPort));

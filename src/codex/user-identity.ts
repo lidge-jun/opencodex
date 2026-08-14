@@ -53,15 +53,22 @@ function refuse(message: string, cause?: unknown): never {
 }
 
 function windowsIdentityPowerShellCommand(expression: string): string[] {
+  // PowerShell 5.1 can encode redirected native/host output with the active
+  // Windows code page. Base64 contains ASCII only, while the payload is
+  // explicitly UTF-16LE, so Korean and Western profile paths arrive unchanged.
+  const deterministicOutput = [
+    "$ErrorActionPreference = 'Stop'",
+    `$ocxValue = [string](${expression})`,
+    "$ocxBytes = [System.Text.Encoding]::Unicode.GetBytes($ocxValue)",
+    "[Console]::Out.Write([Convert]::ToBase64String($ocxBytes))",
+  ].join("; ");
   return [
     resolveTrustedWindowsPowerShellExe(),
     "-NoLogo",
     "-NoProfile",
     "-NonInteractive",
-    "-WindowStyle",
-    "Hidden",
     "-Command",
-    expression,
+    deterministicOutput,
   ];
 }
 
@@ -93,6 +100,28 @@ export function windowsIdentityPowerShellSpawnOptionsForTests(): ReturnType<
   return windowsIdentityPowerShellSpawnOptions();
 }
 
+function decodeWindowsIdentityPowerShellOutput(output: Uint8Array): string {
+  let encoded: string;
+  try {
+    encoded = new TextDecoder("utf-8", { fatal: true }).decode(output).trim();
+  } catch (cause) {
+    refuse("Windows effective-account lookup returned a malformed value.", cause);
+  }
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    refuse("Windows effective-account lookup returned a malformed value.");
+  }
+  const bytes = Buffer.from(encoded, "base64");
+  if (bytes.length % 2 !== 0 || bytes.toString("base64") !== encoded) {
+    refuse("Windows effective-account lookup returned a malformed value.");
+  }
+  return bytes.toString("utf16le").trim();
+}
+
+/** Test-only decode seam for the deterministic PowerShell output contract. */
+export function decodeWindowsIdentityPowerShellOutputForTests(output: Uint8Array): string {
+  return decodeWindowsIdentityPowerShellOutput(output);
+}
+
 function powershellValue(expression: string): string {
   let command: string[];
   try {
@@ -105,15 +134,16 @@ function powershellValue(expression: string): string {
     // `windowsHide` is the popup fix (#1278): the desktop proxy parent runs
     // without a console, so a console-subsystem child spawned without
     // CREATE_NO_WINDOW gets a fresh visible console window at startup and on
-    // every config write. `-WindowStyle Hidden` alone does not stop the
-    // allocation; the flag behind `windowsHide` does.
+    // every config write. Do not add PowerShell's `-WindowStyle Hidden` here:
+    // Bun 1.3.14 can fail that direct CLI combination before the SID command
+    // executes (#1589); the process-level `windowsHide` flag is sufficient.
     result = Bun.spawnSync(command, windowsIdentityPowerShellSpawnOptions());
   } catch (cause) {
     refuse("Windows effective-account lookup could not start.", cause);
   }
   if (result.exitedDueToTimeout) refuse("Windows effective-account lookup timed out.");
   if (result.exitCode !== 0) refuse("Windows effective-account lookup failed.");
-  const value = new TextDecoder().decode(result.stdout).trim();
+  const value = decodeWindowsIdentityPowerShellOutput(result.stdout ?? Buffer.alloc(0));
   if (!value) refuse("Windows effective-account lookup returned an empty value.");
   return value;
 }

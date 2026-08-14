@@ -154,6 +154,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
     let sidecarBody = "";
     let sidecarAuth: string | null = null;
     let sidecarAccount: string | null = null;
+    let sidecarPath = "";
     let sidecarHits = 0;
     upstream = serveUpstream(b => { upstreamBody = b; });
     sidecar = serveSidecar((req, b) => {
@@ -161,6 +162,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
       sidecarBody = b;
       sidecarAuth = req.headers.get("authorization");
       sidecarAccount = req.headers.get("chatgpt-account-id");
+      sidecarPath = new URL(req.url).pathname;
     });
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -185,7 +187,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
         openai: {
           adapter: "openai-responses",
           authMode: "forward",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
+          baseUrl: "https://chatgpt.com/backend-api/codex///",
           codexAccountMode: "direct",
         },
       },
@@ -207,6 +209,7 @@ describe("vision sidecar fallback (issue #88, end-to-end)", () => {
 
       // Activation evidence: the sidecar actually ran, got the image + OAuth passthrough.
       expect(sidecarHits).toBe(1);
+      expect(sidecarPath).toBe("/responses");
       expect(sidecarAuth).toBe(`Bearer ${token}`);
       expect(sidecarAccount).toBe("acct-vision-sidecar");
       expect(sidecarBody).toContain("input_image");

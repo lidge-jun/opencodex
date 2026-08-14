@@ -1,3 +1,4 @@
+import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { normalizeAccountPriority } from "../account-priority";
 import { useKeyedClientResource } from "../client-resource";
@@ -112,8 +113,6 @@ export interface CodexAccountPoolController {
 }
 
 const REFRESH_INTERVAL_MS = 30_000;
-const USAGE_REFRESH_INTERVAL_MS = 60_000;
-
 interface CodexAccountUsageRow {
   accountLogLabel: string;
   totalTokens: number;
@@ -132,14 +131,14 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   const seed = lastGoodByBase.get(apiBase);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
   const usage30d = useKeyedClientResource<CodexAccountUsageSummary>(
-    `codex-account-usage-30d:${apiBase}`,
+    usageSummary30dResourceKey(apiBase, "codex"),
     [apiBase],
     async (signal) => {
       const response = await fetch(`${apiBase}/api/usage?range=30d&surface=codex`, { signal });
       if (!response.ok) throw new Error("account usage load failed");
       return response.json() as Promise<CodexAccountUsageSummary>;
     },
-    { enabled, pollMs: USAGE_REFRESH_INTERVAL_MS },
+    { enabled },
   );
   const [activeId, setActiveId] = useState<string | null>(() => seed?.activeId ?? null);
   const [loadState, setLoadState] = useState<CodexAccountLoadState>(() => (seed != null ? "ready" : "loading"));
@@ -297,6 +296,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
       setInflightCount(count => Math.max(0, count - 1));
       setFirstAttemptSettled(true);
     }
+  // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
   }, [apiBase]);
 
   // Initial load plus background refresh. Owned here so mounting or unmounting a surface

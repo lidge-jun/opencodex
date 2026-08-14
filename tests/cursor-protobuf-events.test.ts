@@ -18,7 +18,9 @@ import {
   createCursorProtobufEventState,
   finalizeTurnEvents,
   mapCursorProtobufServerMessage,
+  mapSyntheticMcpExecToToolEvents,
 } from "../src/adapters/cursor/protobuf-events";
+import { createTranslatorBudget } from "../src/lib/translator-budget";
 
 const encoder = new TextEncoder();
 
@@ -309,6 +311,319 @@ describe("Cursor protobuf tool-call events", () => {
     expect(delta && delta.type === "tool_call_delta" ? JSON.parse(delta.arguments) : null).toEqual({ path: "a.txt" });
   });
 
+  test("preserves incomplete streamed args when completion has no argument map", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["mcp__fs__read_file"] });
+    const toolCall = mcpToolCall("mcp__fs__read_file", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_1",
+        modelCallId: "model_1",
+        toolCall,
+        argsTextDelta: "{\"path\":",
+      }),
+    }), state)).toEqual([]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([
+      { type: "tool_call_start", id: "call_1", name: "mcp__fs__read_file" },
+      { type: "tool_call_delta", arguments: "{\"path\":" },
+      { type: "tool_call_end", id: "call_1" },
+    ]);
+  });
+
+  test("keeps named incomplete freeform wrappers open for late native arguments", () => {
+    const freeformSchema = {
+      type: "object",
+      properties: { input: { type: "string" } },
+      required: ["input"],
+    };
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      toolSchemas: new Map([["apply_patch", freeformSchema]]),
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, { callId: "call_freeform", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_freeform",
+        modelCallId: "model_1",
+        toolCall,
+        argsTextDelta: '{"input":"DELETE',
+      }),
+    }), state)).toEqual([]);
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, { callId: "call_freeform", modelCallId: "model_1", toolCall }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_freeform")).toBe(false);
+
+    const lateArgs = create(McpArgsSchema, {
+      name: "apply_patch",
+      toolName: "apply_patch",
+      toolCallId: "call_freeform",
+      providerIdentifier: "opencodex-responses",
+      args: { input: encoder.encode(JSON.stringify("*** Begin Patch\n*** End Patch")) },
+    });
+    expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([
+      { type: "tool_call_start", id: "call_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_freeform" },
+    ]);
+    expect(state.openToolCalls.has("call_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_freeform")).toBe(true);
+
+    // A complete wrapper remains authoritative and commits without waiting for native exec.
+    const valid = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      toolSchemas: new Map([["apply_patch", freeformSchema]]),
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const validToolCall = mcpToolCall("apply_patch", { input: "*** Begin Patch\n*** End Patch" });
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_valid_freeform", modelCallId: "model_2", toolCall: validToolCall,
+      }),
+    }), valid)).toEqual([
+      { type: "tool_call_start", id: "call_valid_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_valid_freeform" },
+    ]);
+  });
+
+  test("keeps an empty started freeform call open for late native arguments", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, {
+        callId: "call_empty_freeform", modelCallId: "model_1", toolCall,
+      }),
+    }), state)).toEqual([]);
+    // Cursor may compact a completion to callId only; the later native frame owns the arguments.
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_empty_freeform", modelCallId: "model_1",
+      }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_empty_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_empty_freeform")).toBe(false);
+
+    const lateArgs = create(McpArgsSchema, {
+      name: "apply_patch",
+      toolName: "apply_patch",
+      toolCallId: "call_empty_freeform",
+      providerIdentifier: "opencodex-responses",
+      args: { input: encoder.encode(JSON.stringify("*** Begin Patch\n*** End Patch")) },
+    });
+    expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([
+      { type: "tool_call_start", id: "call_empty_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_empty_freeform" },
+    ]);
+    expect(state.openToolCalls.has("call_empty_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_empty_freeform")).toBe(true);
+
+    const abandoned = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, {
+        callId: "call_abandoned_freeform", modelCallId: "model_2", toolCall,
+      }),
+    }), abandoned)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_abandoned_freeform", modelCallId: "model_2", toolCall,
+      }),
+    }), abandoned)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(turnEndedFrame(), abandoned)).toEqual([
+      { type: "error", message: expect.stringContaining("call_abandoned_freeform") },
+    ]);
+    expect(abandoned.openToolCalls.size).toBe(0);
+  });
+
+  test("keeps a completion-only freeform call open for late native arguments", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_completion_only_freeform", modelCallId: "model_completion_only", toolCall,
+      }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_completion_only_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_completion_only_freeform")).toBe(false);
+
+    const lateArgs = create(McpArgsSchema, {
+      name: "apply_patch",
+      toolName: "apply_patch",
+      toolCallId: "call_completion_only_freeform",
+      providerIdentifier: "opencodex-responses",
+      args: { input: encoder.encode(JSON.stringify("*** Begin Patch\n*** End Patch")) },
+    });
+    expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([
+      { type: "tool_call_start", id: "call_completion_only_freeform", name: "apply_patch" },
+      {
+        type: "tool_call_delta",
+        arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }),
+      },
+      { type: "tool_call_end", id: "call_completion_only_freeform" },
+    ]);
+    expect(state.openToolCalls.has("call_completion_only_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_completion_only_freeform")).toBe(true);
+  });
+
+  test("bounds retained completion-only client tool calls", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+      maxClientToolCalls: 2,
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    for (let index = 1; index <= 2; index++) {
+      expect(mapCursorProtobufServerMessage(interaction({
+        case: "toolCallCompleted",
+        value: create(ToolCallCompletedUpdateSchema, {
+          callId: `call_bounded_${index}`, modelCallId: `model_bounded_${index}`, toolCall,
+        }),
+      }), state)).toEqual([]);
+    }
+
+    const overflow = mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_bounded_3", modelCallId: "model_bounded_3", toolCall,
+      }),
+    }), state);
+    expect(overflow).toEqual([
+      { type: "error", message: "Cursor exceeded client tool-call limit (2)" },
+    ]);
+    expect(state.openToolCalls.size).toBe(2);
+    expect(state.startedClientToolCalls).toBe(2);
+  });
+
+  test("keeps a partial freeform wrapper open across compact completion for late native arguments", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, {
+        callId: "call_partial_freeform", modelCallId: "model_3", toolCall,
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_partial_freeform",
+        modelCallId: "model_3",
+        toolCall,
+        argsTextDelta: '{"input":',
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_partial_freeform", modelCallId: "model_3",
+      }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_partial_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_partial_freeform")).toBe(false);
+
+    const lateArgs = create(McpArgsSchema, {
+      name: "apply_patch",
+      toolName: "apply_patch",
+      toolCallId: "call_partial_freeform",
+      providerIdentifier: "opencodex-responses",
+      args: { input: encoder.encode(JSON.stringify("*** Begin Patch\n*** End Patch")) },
+    });
+    expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([
+      { type: "tool_call_start", id: "call_partial_freeform", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: JSON.stringify({ input: "*** Begin Patch\n*** End Patch" }) },
+      { type: "tool_call_end", id: "call_partial_freeform" },
+    ]);
+    expect(state.openToolCalls.has("call_partial_freeform")).toBe(false);
+    expect(state.completedToolCalls.has("call_partial_freeform")).toBe(true);
+  });
+
+  test("keeps a complete but invalid freeform wrapper open until turn end", () => {
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["apply_patch"],
+      freeformToolNames: ["apply_patch"],
+      cursorToolNameMap: new Map([["apply_patch", "apply_patch"]]),
+    });
+    const toolCall = mcpToolCall("apply_patch", {});
+
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallStarted",
+      value: create(ToolCallStartedUpdateSchema, {
+        callId: "call_invalid_freeform", modelCallId: "model_invalid", toolCall,
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "partialToolCall",
+      value: create(PartialToolCallUpdateSchema, {
+        callId: "call_invalid_freeform",
+        modelCallId: "model_invalid",
+        toolCall,
+        argsTextDelta: '{"input":1}',
+      }),
+    }), state)).toEqual([]);
+    expect(mapCursorProtobufServerMessage(interaction({
+      case: "toolCallCompleted",
+      value: create(ToolCallCompletedUpdateSchema, {
+        callId: "call_invalid_freeform", modelCallId: "model_invalid",
+      }),
+    }), state)).toEqual([]);
+    expect(state.openToolCalls.has("call_invalid_freeform")).toBe(true);
+    expect(state.completedToolCalls.has("call_invalid_freeform")).toBe(false);
+
+    expect(mapCursorProtobufServerMessage(turnEndedFrame(), state)).toEqual([
+      { type: "error", message: expect.stringContaining("call_invalid_freeform") },
+    ]);
+    expect(state.openToolCalls.size).toBe(0);
+  });
+
   test("commits an advertised no-arg tool call instead of dropping it", () => {
     // A completed client tool call with no args and no streamed text must still reach Codex when the
     // tool is advertised (e.g. a no-arg list/status tool). The bridge serializes empty args as "{}".
@@ -376,23 +691,50 @@ describe("Cursor protobuf tool-call events", () => {
   });
 
   test("turnEnded with an open tool call emits truncation error instead of done (fail-closed)", () => {
-    const state = createCursorProtobufEventState({ clientToolNames: ["mcp__fs__read_file"] });
-    // Start a tool call but never complete it.
-    mapCursorProtobufServerMessage(interaction({
-      case: "toolCallStarted",
-      value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall: mcpToolCall("mcp__fs__read_file", {}) }),
-    }), state);
-    // Now the turn ends while the tool call is still open.
-    const turnEnd = create(AgentServerMessageSchema, {
-      message: { case: "interactionUpdate", value: create(InteractionUpdateSchema, {
-        message: { case: "turnEnded", value: {} },
-      }) },
+    const budget = createTranslatorBudget();
+    const state = createCursorProtobufEventState({
+      clientToolNames: ["mcp__fs__read_file"],
+      translatorBudget: budget,
     });
-    const events = mapCursorProtobufServerMessage(turnEnd, state);
-    expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe("error");
-    expect((events[0] as { message: string }).message).toContain("incomplete tool call");
-    expect((events[0] as { message: string }).message).toContain("call_1");
+    const toolCall = mcpToolCall("mcp__fs__read_file", {});
+    try {
+      expect(mapCursorProtobufServerMessage(interaction({
+        case: "toolCallStarted",
+        value: create(ToolCallStartedUpdateSchema, { callId: "call_1", modelCallId: "model_1", toolCall }),
+      }), state)).toEqual([]);
+      expect(mapCursorProtobufServerMessage(interaction({
+        case: "partialToolCall",
+        value: create(PartialToolCallUpdateSchema, {
+          callId: "call_1",
+          modelCallId: "model_1",
+          toolCall,
+          argsTextDelta: '{"path":',
+        }),
+      }), state)).toEqual([]);
+      expect(budget.snapshot().activeCalls).toBe(1);
+      expect(budget.snapshot().currentBytes).toBeGreaterThan(0);
+
+      const events = mapCursorProtobufServerMessage(turnEndedFrame(), state);
+      expect(events).toHaveLength(1);
+      expect(events[0]!.type).toBe("error");
+      expect((events[0] as { message: string }).message).toContain("incomplete tool call");
+      expect((events[0] as { message: string }).message).toContain("call_1");
+      expect(state.openToolCalls.size).toBe(0);
+      expect(state.terminated).toBe(true);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, activeCalls: 0 });
+
+      const lateArgs = create(McpArgsSchema, {
+        name: "mcp__fs__read_file",
+        toolName: "mcp__fs__read_file",
+        toolCallId: "call_1",
+        providerIdentifier: "opencodex-responses",
+        args: { path: encoder.encode(JSON.stringify("late.txt")) },
+      });
+      expect(mapSyntheticMcpExecToToolEvents(lateArgs, "fallback", { state })).toEqual([]);
+      expect(state.openToolCalls.size).toBe(0);
+    } finally {
+      budget.dispose();
+    }
   });
 
   test("turnEnded without open tool calls emits done normally", () => {

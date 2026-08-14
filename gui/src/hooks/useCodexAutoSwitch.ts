@@ -170,6 +170,7 @@ export function useCodexAutoSwitch(
       savingRef.current = false;
       setSaving(false);
     }
+  // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
   }, [apiBase, apply, clearFeedback, messages.updateFailed, messages.updated, reconcileDeferred, showFeedback]);
 
   const rejectDraft = useCallback(() => {

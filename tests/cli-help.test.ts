@@ -63,6 +63,19 @@ describe("CLI subcommand help", () => {
     expect(result.stdout).toContain("Start the proxy server and sync models to Codex.");
   });
 
+  test("top-level and export help advertise all eight clients including DSH", () => {
+    const topLevel = runCli([]);
+    expectSpawnFinished(topLevel, "ocx help");
+    expect(topLevel.status).toBe(0);
+    expect(topLevel.stdout).toContain("(8 clients)");
+
+    const exportHelp = runCli(["help", "export"]);
+    expectSpawnFinished(exportHelp, "ocx help export");
+    expect(exportHelp.status).toBe(0);
+    expect(exportHelp.stdout).toContain("opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh");
+    expect(exportHelp.stdout).toContain("DeepSeek Harness");
+  });
+
   test("top-level help forms exit before Codex shim auto-restore can mutate launchers", () => {
     const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-help-shim-home-"));
     const binDir = mkdtempSync(join(tmpdir(), "ocx-help-shim-bin-"));

@@ -11,12 +11,12 @@
 const SITE_URL = 'https://opencodex.me';
 
 interface Props {
-	locale?: 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja';
+	locale?: 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr';
 }
 const { locale } = Astro.props;
 
 // Locale path segment (root/English has none) mapped to its BCP-47 tag.
-const langs = { ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja' } as const;
+const langs = { ko: 'ko', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', ru: 'ru', ja: 'ja', tr: 'tr' } as const;
 
 const homeUrl = locale ? `${SITE_URL}/${locale}/` : `${SITE_URL}/`;
 const inLanguage = locale ? langs[locale] : 'en';
@@ -28,6 +28,7 @@ const descriptions = {
 	'zh-TW': '適用於 OpenAI Codex 與 Claude Code 的通用 provider 代理 —— 在 Codex CLI、App、SDK 和 Claude Code 中使用任意 LLM。',
 	ru: 'Универсальный прокси провайдеров для OpenAI Codex и Claude Code — используйте любую LLM с Codex CLI, App, SDK и Claude Code.',
 	ja: 'OpenAI Codex & Claude Code 向けの汎用プロバイダープロキシ — Codex CLI、App、SDK と Claude Code で任意の LLM を使えます。',
+	tr: 'OpenAI Codex ve Claude Code için evrensel sağlayıcı proxy’si — Codex CLI, App, SDK ve Claude Code ile dilediğiniz LLM’i kullanın.',
 } as const;
 
 type GraphNode = Record<string, unknown>;

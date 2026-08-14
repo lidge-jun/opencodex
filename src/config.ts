@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, constants as fsConstants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
@@ -78,6 +78,7 @@ import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import {
   COST4_RATE_KEYS,
   isValidCost4Rate,
+  refreshPreservedProviderOwner,
   refreshUserCostOverlays,
   withPreservedDiskOnlyProviders,
 } from "./usage/user-cost-overlays";
@@ -372,7 +373,21 @@ export class OpenAiTierBackupRollbackError extends Error {
 }
 
 export class OpenAiTierBackupCollisionError extends Error {
-  constructor() { super("Existing OpenAI tier backup differs from the current config"); this.name = "OpenAiTierBackupCollisionError"; }
+  readonly configPath?: string;
+  constructor(configPath?: string) {
+    super("Existing OpenAI tier backup differs from the current config");
+    this.name = "OpenAiTierBackupCollisionError";
+    this.configPath = configPath;
+  }
+}
+
+export class OpenAiTierRollbackPreserveError extends Error {
+  readonly code?: "missing" | "not-rollback" | "mismatch" | "exhausted";
+  constructor(message: string, options?: ErrorOptions & { code?: OpenAiTierRollbackPreserveError["code"] }) {
+    super(message, options);
+    this.name = "OpenAiTierRollbackPreserveError";
+    this.code = options?.code;
+  }
 }
 
 export class OpenAiTierBackupSecretResidualError extends Error {
@@ -460,7 +475,7 @@ export function backupConfigBeforeOpenAiTierMigration(
       // point would be surprising and potentially destructive.
       const backupBytes = io.read(backup);
       if (classifyOpenAiTierBackup(backupBytes) === "rollback") {
-        throw new OpenAiTierBackupCollisionError();
+        throw new OpenAiTierBackupCollisionError(source);
       }
       console.warn("[openai-provider-migration] Replacing stale pre-migration backup (post-migration config was rewritten since last migration).");
       io.unlink(backup);
@@ -515,7 +530,7 @@ export function backupConfigBeforeOpenAiTierMigration(
     } catch (cause) {
       if (!isAlreadyExistsError(cause)) throw cause;
       const winner = io.read(backup);
-      if (!sameBytes(original, winner)) throw new OpenAiTierBackupCollisionError();
+      if (!sameBytes(original, winner)) throw new OpenAiTierBackupCollisionError(source);
       scrubUnpublishedTemp();
       return "reused";
     }
@@ -549,6 +564,67 @@ export function backupConfigBeforeOpenAiTierMigration(
     }
     throw cause;
   }
+}
+
+export interface OpenAiTierRollbackPreserveIO {
+  exists(path: string): boolean;
+  read(path: string): Uint8Array;
+  copyExclusive(source: string, destination: string): void;
+  unlink(path: string): void;
+}
+
+const DEFAULT_ROLLBACK_PRESERVE_IO: OpenAiTierRollbackPreserveIO = {
+  exists: existsSync,
+  read: target => readFileSync(target),
+  copyExclusive: (source, destination) => {
+    copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
+  },
+  unlink: unlinkSync,
+};
+
+const OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS = 16;
+
+/**
+ * Copy a rollback-classified `.pre-openai-tiers-v2.bak` to a unique
+ * `.pre-openai-tiers-v1-rollback.<timestamp>[suffix].bak` path, then unlink the
+ * blocking v2 name. The original bytes are copied with no-replace publication;
+ * the v2 path is removed only after the copy is verified. Shared by startup
+ * migration recovery and `ocx init` cleanup so the two paths cannot drift.
+ */
+export function preserveOpenAiTierRollbackSnapshot(
+  configPath = getConfigPath(),
+  io: OpenAiTierRollbackPreserveIO = DEFAULT_ROLLBACK_PRESERVE_IO,
+): string {
+  const backup = `${configPath}.pre-openai-tiers-v2.bak`;
+  if (!io.exists(backup)) {
+    throw new OpenAiTierRollbackPreserveError("OpenAI tier rollback backup is missing", { code: "missing" });
+  }
+  const original = io.read(backup);
+  if (classifyOpenAiTierBackup(original) !== "rollback") {
+    throw new OpenAiTierRollbackPreserveError("OpenAI tier backup is not a rollback snapshot", { code: "not-rollback" });
+  }
+  for (let attempt = 0; attempt < OPENAI_TIER_ROLLBACK_PRESERVE_ATTEMPTS; attempt++) {
+    const preserved = `${configPath}.pre-openai-tiers-v1-rollback.${Date.now()}${attempt ? `-${attempt}` : ""}.bak`;
+    try {
+      io.copyExclusive(backup, preserved);
+    } catch (error) {
+      if (isAlreadyExistsError(error)) continue;
+      throw error;
+    }
+    let copied: Uint8Array;
+    try {
+      copied = io.read(preserved);
+    } catch (error) {
+      throw new OpenAiTierRollbackPreserveError("Failed to read preserved rollback snapshot", { cause: error, code: "mismatch" });
+    }
+    if (!sameBytes(original, copied)) {
+      try { io.unlink(preserved); } catch { /* keep the original backup; incomplete copy is best-effort */ }
+      throw new OpenAiTierRollbackPreserveError("Preserved rollback snapshot does not match source bytes", { code: "mismatch" });
+    }
+    io.unlink(backup);
+    return preserved;
+  }
+  throw new OpenAiTierRollbackPreserveError("Unable to find a unique rollback snapshot path", { code: "exhausted" });
 }
 
 /**
@@ -1130,6 +1206,13 @@ const clientIntegrationsSchema = z.object({
   "claude-desktop": z.boolean().optional().catch(undefined),
 }).passthrough();
 
+const agentTaskRecoverySchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.string().trim().min(1).optional(),
+  timeoutMs: z.number().int().min(1_000).max(120_000).optional(),
+  cacheEntries: z.number().int().min(1).max(512).optional(),
+}).strict();
+
 const configSchema = z.object({
   port: z.number().int().min(0).max(65535).default(10100),
   managementUsageMaxReadBytes: z.number().int().positive().default(64 * 1024 * 1024),
@@ -1168,6 +1251,8 @@ const configSchema = z.object({
   providerContextCaps: z.record(z.string(), z.number().int().positive()).optional(),
   contextCapValue: z.number().int().positive().optional(),
   multiAgentGuidanceEnabled: z.boolean().optional(),
+  // Invalid optional recovery config must not discard unrelated provider/account state.
+  agentTaskRecovery: agentTaskRecoverySchema.optional().catch(undefined),
   // These selections pre-date schema validation and used to pass through as
   // unknown fields. Invalid hand edits must disable only the optional
   // delegation/native-default feature, not reject the whole config and hide
@@ -1903,6 +1988,20 @@ function warnDegradedUpstreamHostCircuitThreshold(rawParsed: unknown): void {
   if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
 }
 
+function malformedAgentTaskRecoveryWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "agentTaskRecovery")) return null;
+  const result = agentTaskRecoverySchema.safeParse(raw.agentTaskRecovery);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `agentTaskRecovery${field ? `.${field}` : ""} ignored: invalid experimental recovery configuration`;
+}
+
+function warnDegradedAgentTaskRecovery(rawParsed: unknown): void {
+  const warning = malformedAgentTaskRecoveryWarning(rawParsed);
+  if (warning) console.warn(`⚠️  config.json ${warning}. Other settings were preserved.`);
+}
+
 type NativeSubagentPersistedField = "injectionModel" | "injectionEffort" | "syncCodexSubagentDefaults";
 
 function rawConfigRecord(rawParsed: unknown): Record<string, unknown> | null {
@@ -2005,6 +2104,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedAgentTaskRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Schema validation failed — merge defaults into the raw object instead of
@@ -2027,6 +2127,7 @@ export function loadConfig(): OcxConfig {
       warnDegradedNativeSubagentConfig(parsed, config);
       warnDegradedCodexAccountPicker(parsed);
       warnDegradedUpstreamHostCircuitThreshold(parsed);
+      warnDegradedAgentTaskRecovery(parsed);
       return withRefreshedCostOverlays(normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, parsed), parsed));
     }
     // Merge couldn't fix it — truly broken config
@@ -2086,6 +2187,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (pickerWarning) warnings.push(pickerWarning);
   const hostCircuitWarning = malformedUpstreamHostCircuitThresholdWarning(rawParsed);
   if (hostCircuitWarning) warnings.push(hostCircuitWarning);
+  const recoveryWarning = malformedAgentTaskRecoveryWarning(rawParsed);
+  if (recoveryWarning) warnings.push(recoveryWarning);
   if (syncDisabledReason) {
     warnings.push(`syncCodexSubagentDefaults ignored: ${syncDisabledReason}`);
   }
@@ -2165,6 +2268,16 @@ function upstreamHostCircuitThresholdError(value: unknown): string | null {
     && threshold >= 0
     && threshold <= UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD) return null;
   return `schema_invalid: upstreamHostCircuitThreshold: must be an integer from 0 to ${UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD}`;
+}
+
+function agentTaskRecoveryError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "agentTaskRecovery") || raw.agentTaskRecovery === undefined) return null;
+  const result = agentTaskRecoverySchema.safeParse(raw.agentTaskRecovery);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return `schema_invalid: agentTaskRecovery${field ? `.${field}` : ""}: ${issue?.message ?? "invalid configuration"}`;
 }
 
 /**
@@ -2262,6 +2375,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? claudeSubagentEffortError(value)
     ?? appOwnedMemoryBudgetError(value)
     ?? upstreamHostCircuitThresholdError(value)
+    ?? agentTaskRecoveryError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
@@ -2742,6 +2856,24 @@ const persistedLiveServerBinding = new WeakMap<OcxConfig, PersistedServerBinding
 export function armClaudeCodeBaseline(config: OcxConfig): void {
   liveConfigBaseline.set(config, structuredClone(config));
   claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+}
+
+/**
+ * Adopt one schema-validated provider that was read from the authoritative disk
+ * config into a long-lived server config without rebasing any unrelated field.
+ * Updating the matching baseline row keeps a later guarded save from treating the
+ * adopted provider as an unsaved live edit that should defeat a newer disk change.
+ */
+export function adoptPersistedProviderIntoLiveConfig(
+  config: OcxConfig,
+  name: string,
+  provider: OcxProviderConfig,
+  persistedConfig?: OcxConfig,
+): void {
+  config.providers[name] = structuredClone(provider);
+  const baseline = liveConfigBaseline.get(config);
+  if (baseline) baseline.providers[name] = structuredClone(provider);
+  if (persistedConfig) refreshPreservedProviderOwner(config, persistedConfig);
 }
 
 /** Test seam only: is this instance armed? */
@@ -3446,8 +3578,6 @@ function readProcessCommandLine(pid: number): string | undefined {
         "-NoProfile",
         "-NoLogo",
         "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
         "-Command",
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
       ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });

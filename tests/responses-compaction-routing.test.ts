@@ -668,6 +668,30 @@ describe("compact alternate-account attempt (#913)", () => {
     });
   }
 
+  test("canonical trailing slashes are pinned before native compact sends pool credentials", async () => {
+    await withPoolEnv("ocx-compact-canonical-url-", async config => {
+      config.providers.openai!.baseUrl = "https://chatgpt.com/backend-api/codex///";
+      let observedUrl = "";
+      let observedHeaders = new Headers();
+      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+        observedUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        observedHeaders = new Headers(init?.headers);
+        return jsonResponse(completedPayload("canonical compact response"));
+      }) as typeof fetch;
+
+      const res = await handleResponsesCompact(
+        compactionRequest(baseCompactionBody({ model: "gpt-5.5" })),
+        config,
+        { model: "", provider: "" },
+      );
+
+      expect(res.status).toBe(200);
+      expect(observedUrl).toBe("https://chatgpt.com/backend-api/codex/responses/compact");
+      expect(observedHeaders.get("authorization")).toBe("Bearer pool-a-access-token");
+      expect(observedHeaders.get("chatgpt-account-id")).toBe("pool_acc_a");
+    });
+  });
+
   for (const rejection of [429, 402] as const) {
     test(`a pre-body ${rejection} tries exactly one alternate account`, async () => {
       await withPoolEnv(`ocx-compact-alt-${rejection}-`, async config => {

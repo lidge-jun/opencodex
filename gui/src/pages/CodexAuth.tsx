@@ -185,9 +185,15 @@ export default function CodexAuth({ apiBase }: { apiBase: string }) {
 
   return (
     <>
-      <CodexAccountPool apiBase={apiBase} accountModeState={accountModeState} banner={banner} />
-      <CodexAccountPickerSetting apiBase={apiBase} />
-      <DefaultModeRequestUserInputSetting apiBase={apiBase} />
+      <CodexAccountPool
+        apiBase={apiBase}
+        accountModeState={accountModeState}
+        banner={banner}
+        advancedExtras={<>
+          <CodexAccountPickerSetting apiBase={apiBase} />
+          <DefaultModeRequestUserInputSetting apiBase={apiBase} />
+        </>}
+      />
     </>
   );
 }

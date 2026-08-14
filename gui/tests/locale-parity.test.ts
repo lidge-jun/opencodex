@@ -91,6 +91,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.clientConfig.clientOpenclaw",
   "api.clientConfig.clientKimi",
   "api.clientConfig.clientGajae",
+  "api.clientConfig.clientDsh",
   "codexAuth.codexApp",
   "codexAuth.creditNextBadge",
   "common.github",
@@ -106,6 +107,7 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.openclaw",
   "integrations.tab.kimi",
   "integrations.tab.gajae",
+  "integrations.tab.dsh",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",
@@ -160,5 +162,58 @@ test("every locale key set matches the English source", async () => {
     const other = [...(await readDict(locale)).keys()].sort();
     expect(`${locale} key count: ${other.length}`).toBe(`${locale} key count: ${en.length}`);
     expect(other).toEqual(en);
+  }
+});
+
+const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, string, string]> = {
+  en: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+  ],
+  de: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex verwaltet nur llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH lädt diesen Anbieter im laufenden Betrieb neu; Ihr Standardmodell und deepseek-official bleiben unverändert. Derzeit nur über Loopback; es werden keine echten Zugangsdaten geschrieben.",
+  ],
+  ja: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex が管理するのは $DSH_HOME/settings.yaml 内の llm-pi-ai.providers.opencodex だけです。DSH はこのプロバイダーをホットリロードし、既定のモデルと deepseek-official は変更しません。現在はループバック専用で、実際の認証情報は書き込みません。",
+  ],
+  ko: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex는 $DSH_HOME/settings.yaml의 llm-pi-ai.providers.opencodex만 관리합니다. DSH는 이 provider를 hot reload하며 기본 model과 deepseek-official은 변경하지 않습니다. 현재 loopback 전용이며 실제 credential을 기록하지 않습니다.",
+  ],
+  ru: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex управляет только llm-pi-ai.providers.opencodex в $DSH_HOME/settings.yaml. DSH применяет этот провайдер горячей перезагрузкой; модель по умолчанию и deepseek-official остаются без изменений. Сейчас поддерживается только loopback; реальные учётные данные не записываются.",
+  ],
+  tr: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex yalnızca $DSH_HOME/settings.yaml içindeki llm-pi-ai.providers.opencodex bölümünü yönetir. DSH bu sağlayıcıyı çalışırken yeniden yükler; varsayılan modeliniz ve deepseek-official değişmez. Şimdilik yalnızca geri döngü desteklenir; gerçek kimlik bilgisi yazılmaz.",
+  ],
+  zh: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 会热重载该 provider；你的默认模型和 deepseek-official 保持不变。目前仅支持环回地址，且不会写入真实凭据。",
+  ],
+  "zh-TW": [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
+  ],
+};
+
+test("every locale carries the exact DSH label and ownership semantics", async () => {
+  for (const locale of LOCALES) {
+    const dict = await readDict(locale);
+    const expected = DSH_VISIBLE_COPY[locale];
+    expect(dict.get("api.clientConfig.clientDsh")).toBe(expected[0]);
+    expect(dict.get("integrations.tab.dsh")).toBe(expected[1]);
+    expect(dict.get("integrations.semantics.dsh")).toBe(expected[2]);
   }
 });

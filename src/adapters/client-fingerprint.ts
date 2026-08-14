@@ -42,7 +42,7 @@ export function claudeCodeSessionId(token: string | undefined): string {
 
 // ── Antigravity CLI ──
 /** Pinned fallback Antigravity CLI version (real client fetches a manifest; we pin to avoid the network dependency). */
-export const ANTIGRAVITY_CLI_VERSION = "1.0.13";
+export const ANTIGRAVITY_CLI_VERSION = "1.1.12";
 const ANTIGRAVITY_CLI_CLIENT_NAME = "aidev_client";
 const ANTIGRAVITY_CLI_PLATFORM = "darwin/arm64";
 /** Secondary Google API client UA the Antigravity client library reports. */
@@ -50,7 +50,7 @@ export const ANTIGRAVITY_GOOG_API_CLIENT_UA = "google-api-nodejs-client/10.3.0";
 
 /**
  * The real Antigravity CLI User-Agent, e.g.
- * `antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)`.
+ * `antigravity/cli/1.1.12 (aidev_client; os_type=darwin; arch=arm64)`.
  * A `GOOGLE_ANTIGRAVITY_USER_AGENT` override (set by the caller) takes precedence upstream.
  */
 export function antigravityUserAgent(version = ANTIGRAVITY_CLI_VERSION): string {

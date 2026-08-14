@@ -58,7 +58,8 @@ describe("opencode-zen DeepSeek thinking mode", () => {
     modelId => {
       const body = buildToolCallBody(modelId, "xhigh");
 
-      const expectedEffort = modelId.includes("flash") ? "high" : "max";
+      // V4 Pro GA (DeepSeek-V4-Pro-0813): xhigh resolves to high on both V4 models.
+      const expectedEffort = "high";
       expect(body.reasoning_effort).toBe(expectedEffort);
       expect(body.messages[1].reasoning_content).toBe("I need to inspect files before answering.");
       expect(body.messages[1]).toMatchObject({

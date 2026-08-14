@@ -17,6 +17,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 type Capture = {
   url: string;
   method: string;
@@ -346,7 +347,7 @@ describe("OpenAI provider-option integration spine", () => {
       });
       const wsTurn = (model: string) => new Promise<Capture>((resolve, reject) => {
         const before = captures.length;
-        const timer = setTimeout(() => reject(new Error(`fixture websocket timeout: ${model}`)), 2_000);
+        const timer = setTimeout(() => reject(new Error(`fixture websocket timeout: ${model}`)), watchdogMs(2_000));
         const onMessage = (event: MessageEvent) => {
           if (!String(event.data).includes('"type":"response.completed"')) return;
           clearTimeout(timer);

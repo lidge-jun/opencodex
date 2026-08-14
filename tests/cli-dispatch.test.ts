@@ -76,4 +76,45 @@ describe("dispatchCommand exit codes", () => {
       expect(await dispatchCommand(head, fakeDeps), `${name} must be unknown`).toBe(1);
     }
   });
+
+  test("forwards service arguments and preserves handler exit codes", async () => {
+    const previousExitCode = process.exitCode;
+    try {
+      process.exitCode = 7;
+      const successCalls: string[][] = [];
+      const successDeps = {
+        ...fakeDeps,
+        args: ["service", "install", "--scheduler"],
+        serviceCommand: async (...args: string[]) => {
+          successCalls.push(args);
+        },
+      };
+
+      expect(await dispatchCommand(
+        { kind: "command", command: "service", args: successDeps.args },
+        successDeps,
+      )).toBe(0);
+      expect(successCalls).toEqual([["install", "--scheduler"]]);
+
+      for (const expected of [1, 2]) {
+        const calls: string[][] = [];
+        const deps = {
+          ...fakeDeps,
+          args: ["service", "install", "--scheduler"],
+          serviceCommand: async (...args: string[]) => {
+            calls.push(args);
+            process.exitCode = expected;
+          },
+        };
+
+        expect(await dispatchCommand(
+          { kind: "command", command: "service", args: deps.args },
+          deps,
+        )).toBe(expected);
+        expect(calls).toEqual([["install", "--scheduler"]]);
+      }
+    } finally {
+      process.exitCode = previousExitCode ?? 0;
+    }
+  });
 });

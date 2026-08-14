@@ -835,3 +835,58 @@ describe("runReady production findLiveProxy deadline wiring (source-level)", () 
     expect(readySource).toContain("verifyPidFn: () => null");
   });
 });
+
+// ── handleStart service-wrapper exit guard (source-level) ─────────────────────
+// #764 follow-up: in OCX_SERVICE context a healthy proxy from ANY source must
+// end handleStart with exit 0, so the opencodex-service.cmd `:loop` wrapper
+// (retry on non-zero) does not respawn every 5s against a listener it can never
+// claim. Source-level pin so a future edit cannot drop the guard silently.
+describe("handleStart OCX_SERVICE exit guard (source-level)", () => {
+  const cliSource = readFileSync(join(import.meta.dir, "../src/cli/index.ts"), "utf8");
+
+  test("an already-live proxy exits 0 in OCX_SERVICE context", () => {
+    expect(cliSource).toMatch(/process\.env\.OCX_SERVICE === "1"/);
+    expect(cliSource).toMatch(/process\.exit\(0\)/);
+    const guard = cliSource.match(/if\s*\(process\.env\.OCX_SERVICE === "1"\)\s*\{[\s\S]{0,400}?process\.exit\(0\)/);
+    expect(guard, "OCX_SERVICE guard must exit 0 when the port is already served").not.toBeNull();
+    const nonService = cliSource.match(/Proxy already running[\s\S]{0,200}?process\.exit\(1\)/);
+    expect(nonService, "non-service path keeps the exit 1 conflict error").not.toBeNull();
+  });
+
+  test("service.ts teardown kills surviving wrapper processes on stop", () => {
+    const serviceSource = readFileSync(join(import.meta.dir, "../src/service.ts"), "utf8");
+    expect(serviceSource).toMatch(/killWindowsServiceWrapperProcesses/);
+    const callSite = serviceSource.match(/stopServiceIfInstalled[\s\S]{0,1200}?killWindowsServiceWrapperProcesses\(\)/);
+    expect(callSite, "wrapper kill must run during stopServiceIfInstalled").not.toBeNull();
+  });
+
+  test("wrapper kill matches the canonical paths of THIS installation, not bare filenames", () => {
+    // Review follow-up: matching by bare filename would force-terminate a
+    // wrapper from another OpenCodex home (or any process whose command line
+    // merely contains the name). The kill must target the exact canonical
+    // paths windowsServiceScriptPath()/windowsLauncherVbsPath() produce.
+    const serviceSource = readFileSync(join(import.meta.dir, "../src/service.ts"), "utf8");
+    expect(serviceSource).toMatch(/windowsServiceScriptPath\(\)/);
+    expect(serviceSource).toMatch(/windowsLauncherVbsPath\(\)/);
+    const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);
+    expect(killBody, "killWindowsServiceWrapperProcesses body must exist").not.toBeNull();
+    expect(killBody![0]).toContain("windowsServiceScriptPath()");
+    expect(killBody![0]).toContain("windowsLauncherVbsPath()");
+    // Bare wrapper filenames must NOT be the match target.
+    expect(killBody![0]).not.toMatch(/\$pats = @\('opencodex-service\.cmd'\)/);
+  });
+
+  test("wrapper kill requires the canonical path as a complete command-line token", () => {
+    // Review follow-up: a substring match could force-terminate an unrelated
+    // process whose command line merely contains the canonical path. The
+    // PowerShell filter must check token boundaries (whitespace/quote before
+    // and after the path), not a bare IndexOf.
+    const serviceSource = readFileSync(join(import.meta.dir, "../src/service.ts"), "utf8");
+    const killBody = serviceSource.match(/function killWindowsServiceWrapperProcesses\(\)[\s\S]*?\n}/);
+    expect(killBody, "killWindowsServiceWrapperProcesses body must exist").not.toBeNull();
+    expect(killBody![0]).not.toMatch(/IndexOf\(\$p, \[System\.StringComparison\]::OrdinalIgnoreCase\) -ge 0/);
+    expect(killBody![0]).toMatch(/Substring\(/);
+    expect(killBody![0]).toMatch(/before/);
+    expect(killBody![0]).toMatch(/after/);
+  });
+});

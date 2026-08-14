@@ -13,9 +13,22 @@ function runScript(
   script: string,
   extraEnv: Record<string, string> = {},
 ): { stdout: string; status: number; stderr: string } {
+  // The suite preload redirects USERPROFILE, but .NET's Windows known-folder lookup then returns
+  // an empty LocalApplicationData path. Catalog serialization intentionally resolves its lock
+  // namespace from that OS API rather than environment variables, so restore only the real
+  // profile for this child. CODEX_HOME and OPENCODEX_HOME remain explicit test sandboxes.
+  const windowsIdentityEnv = process.platform === "win32" && process.env.OCX_REAL_HOME
+    ? { USERPROFILE: process.env.OCX_REAL_HOME }
+    : {};
   const result = spawnSync(process.execPath, ["--eval", script], {
     cwd: repoRoot,
-    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, ...extraEnv },
+    env: {
+      ...process.env,
+      ...windowsIdentityEnv,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: opencodexHome,
+      ...extraEnv,
+    },
     encoding: "utf8",
   });
   return { stdout: result.stdout?.trim() ?? "", stderr: result.stderr ?? "", status: result.status ?? 1 };
@@ -51,6 +64,9 @@ function nativeEntry(slug: string, priority: number): Record<string, unknown> {
     description: "native",
     priority,
     visibility: "list",
+    shell_type: "shell_command",
+    comp_hash: "native-comp-hash",
+    model_messages: { instructions_template: "You are Codex." },
     base_instructions: "You are Codex, a coding agent based on GPT-5.",
     supported_reasoning_levels: [{ effort: "medium", description: "m" }],
   };
@@ -369,6 +385,101 @@ describe("Codex catalog sync hardening", () => {
     expect(JSON.stringify(rows)).not.toContain("stored-team-account");
     expect(JSON.stringify(rows)).not.toContain("private@example.test");
     expect(JSON.stringify(rows)).not.toContain("Private Display Name");
+  });
+
+  test("account sync preserves an observed account-only native id without creating a bare row", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0)],
+    }, null, 2) + "\n");
+    writeFileSync(join(codexHome, "models_cache.json"), JSON.stringify({
+      models: [{
+        ...nativeEntry("gpt-daybreak-blue-latest", 1),
+        supported_in_api: true,
+        visibility: "hide",
+        opencodex_account_observed_native: true,
+      }],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            liveModels: false
+          }
+        },
+        codexAccountNamespaces: { team: "@main" }
+      }).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(r.status).toBe(0);
+
+    const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
+    expect(rows.find(row => row.slug === "team/gpt-daybreak-blue-latest")).toMatchObject({
+      context_window: 372_000,
+      max_context_window: 372_000,
+      auto_compact_token_limit: 334_800,
+      comp_hash: "3000",
+      tool_mode: "code_mode_only",
+      use_responses_lite: true,
+      supports_parallel_tool_calls: true,
+    });
+    expect(rows.some(row => row.slug === "gpt-daybreak-blue-latest")).toBe(false);
+  });
+
+  test("explicit Codex-forward Daybreak survives sync with Sol metadata while account picker is off", () => {
+    const catalogPath = join(codexHome, "catalog.json");
+    writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "catalog.json"\n', "utf8");
+    writeFileSync(catalogPath, JSON.stringify({
+      models: [nativeEntry("gpt-5.5", 0)],
+    }, null, 2) + "\n");
+
+    const r = runScript(codexHome, opencodexHome, `
+      const { syncCatalogModels } = require("./src/codex/catalog");
+      syncCatalogModels({
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            codexAccountMode: "pool"
+          }
+        },
+        defaultProvider: "openai",
+        codexAccountPickerEnabled: false,
+        codexAccountNamespaces: { main: "@main" },
+        customModels: [{
+          id: "daybreak-codex-forward",
+          provider: "openai",
+          modelId: "gpt-daybreak-blue-latest",
+          contextWindow: 1050000
+        }]
+      }).then(res => console.log(JSON.stringify(res)));
+    `);
+    expect(r.status).toBe(0);
+
+    const rows = JSON.parse(readFileSync(catalogPath, "utf8")).models as Array<Record<string, unknown>>;
+    const daybreak = rows.find(row => row.slug === "openai/gpt-daybreak-blue-latest");
+    expect(daybreak).toMatchObject({
+      display_name: "Daybreak Blue",
+      context_window: 372_000,
+      max_context_window: 372_000,
+      auto_compact_token_limit: 334_800,
+      comp_hash: "3000",
+      tool_mode: "code_mode_only",
+      use_responses_lite: true,
+      supports_parallel_tool_calls: true,
+      supports_search_tool: true,
+      multi_agent_version: "v2",
+      opencodex_catalog_kind: "custom-model-v1",
+    });
+    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(rows.some(row => row.slug === "gpt-daybreak-blue-latest")).toBe(false);
+    expect(rows.some(row => row.slug === "main/gpt-daybreak-blue-latest")).toBe(false);
+    expect(rows.some(row => row.slug === "openai-apikey/daybreak-blue-latest")).toBe(false);
   });
 
   test("a live provider row shadowed by an account selector warns once per runtime generation", () => {

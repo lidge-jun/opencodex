@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import type { CodexAccountModeState } from "../codex-multi-state";
 import CodexAutoSwitchSetting from "./CodexAutoSwitchSetting";
 import CodexPoolStrategySetting from "./CodexPoolStrategySetting";
+import CodexAuthAdvancedSettings from "./CodexAuthAdvancedSettings";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
@@ -33,12 +34,14 @@ const DOCTOR_CMD = "ocx doctor";
  * (the Codex Auth page passes its mode banner); `embedded` (WP090) omits page
  * title chrome while retaining the shared account actions in the Providers workspace.
  */
-export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController }: {
+export default function CodexAccountPool({ apiBase, accountModeState = null, banner = null, embedded = false, onActiveNeedsReauthChange, controller: injectedController, advancedExtras = null }: {
   apiBase: string;
   accountModeState?: CodexAccountModeState | null;
   banner?: ReactNode;
   embedded?: boolean;
   onActiveNeedsReauthChange?: (needs: boolean) => void;
+  /** Whole boxes rendered inside Advanced settings. Never fold these internally. */
+  advancedExtras?: ReactNode;
   /**
    * WP3: when Providers owns the controller, every surface shares one instance so a
    * mutation on Overview is immediately visible on the Accounts tab. The standalone
@@ -63,6 +66,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const { accounts, activeId, loadState, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   const [confirm, setConfirm] = useState<CodexAccountEntry | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [reauthId, setReauthId] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [actionFeedbackTone, setActionFeedbackTone] = useState<NoticeTone | null>(null);
@@ -363,33 +367,40 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
         </>
       )}
 
-      {poolStrategy !== null && (
-        <CodexAutoSwitchSetting
-          threshold={autoSwitch.threshold}
-          draft={autoSwitch.draft}
-          strategy={poolStrategy}
-          hydrated={autoSwitch.hydrated}
-          saving={autoSwitch.saving}
-          loadError={autoSwitch.loadError}
-          feedback={autoSwitch.feedback}
-          onDraftChange={autoSwitch.setDraft}
-          onEditingChange={autoSwitch.setEditing}
-          onCommit={autoSwitch.commit}
-          onCancel={autoSwitch.cancel}
-          onToggle={autoSwitch.toggle}
-          onRetry={() => {
-            autoSwitch.retry();
-            void load();
-          }}
-        />
-      )}
-
       <CodexPoolStrategySetting
         apiBase={apiBase}
         subscribeLoadObserver={controller.subscribeLoadObserver}
         readLastActive={controller.readLastActive}
         onStrategyResolved={setPoolStrategy}
       />
+
+      <CodexAuthAdvancedSettings
+        t={t}
+        open={advancedOpen}
+        onToggle={() => setAdvancedOpen(open => !open)}
+      >
+        {poolStrategy !== null && (
+          <CodexAutoSwitchSetting
+            threshold={autoSwitch.threshold}
+            draft={autoSwitch.draft}
+            strategy={poolStrategy}
+            hydrated={autoSwitch.hydrated}
+            saving={autoSwitch.saving}
+            loadError={autoSwitch.loadError}
+            feedback={autoSwitch.feedback}
+            onDraftChange={autoSwitch.setDraft}
+            onEditingChange={autoSwitch.setEditing}
+            onCommit={autoSwitch.commit}
+            onCancel={autoSwitch.cancel}
+            onToggle={autoSwitch.toggle}
+            onRetry={() => {
+              autoSwitch.retry();
+              void load();
+            }}
+          />
+        )}
+        {advancedExtras}
+      </CodexAuthAdvancedSettings>
 
       {confirm && (
         <CodexAccountSwitchModal

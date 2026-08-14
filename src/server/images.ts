@@ -499,6 +499,12 @@ export async function handleImages(
       headers,
       body: JSON.stringify(body),
       signal: linkedSignal.signal,
+      // Do not follow a cross-origin 3xx while carrying Codex credentials. Bun strips
+      // `Authorization` across origins but forwards nonstandard headers, so
+      // `chatgpt-account-id`, `session_id`, and `x-codex-turn-metadata` would reach the
+      // redirect target. Verified with a two-server probe. The Responses path and native
+      // compact already set this; the credential-bearing sidecars did not.
+      redirect: "manual",
     });
     const observed = await readImageResponseBytes(upstreamResponse, {
       maxBytes: IMAGES_RESPONSE_MAX_BYTES,

@@ -75,6 +75,14 @@ export class KiroThinkingParser {
     return [];
   }
 
+  /** Release any partial tag/content carry when the owning stream stops early. */
+  dispose(): void {
+    this.replaceCarry("preBuffer", "");
+    this.replaceCarry("thinkingBuffer", "");
+    this.closeTag = "";
+    this.state = "streaming";
+  }
+
   private drainThinking(): AdapterEvent[] {
     const close = this.closeTag;
     const idx = this.thinkingBuffer.indexOf(close);

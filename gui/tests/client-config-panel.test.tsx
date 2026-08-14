@@ -12,7 +12,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
-import { CLIENTS } from "../src/components/apikeys-workspace/client-config-clients";
+import {
+  CLIENTS,
+  CLIENT_LABEL_KEYS,
+} from "../src/components/apikeys-workspace/client-config-clients";
 import { LanguageProvider } from "../src/i18n/provider";
 import ClientConfigPanel from "../src/components/apikeys-workspace/ClientConfigPanel";
 
@@ -166,6 +169,11 @@ function rowButton(container: HTMLElement, name: string, label: string): HTMLBut
   return [...row(container, name).querySelectorAll<HTMLButtonElement>("button")]
     .find(el => el.textContent?.trim() === label)!;
 }
+
+test("the API download surface includes DSH as the eighth client", () => {
+  expect(CLIENTS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh"]);
+  expect(CLIENT_LABEL_KEYS.dsh).toBe("api.clientConfig.clientDsh");
+});
 
 test("each row fetches its own client and its dialog renders that client's exact bytes", async () => {
   // Carries the guard the client-switch test owned: payload identity per client.

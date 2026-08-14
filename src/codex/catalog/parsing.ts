@@ -31,7 +31,7 @@ import { redactSecretString } from "../../lib/redact";
 import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 
-import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, nativeMultiAgentVersion } from "./metadata";
+import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, isNativeOpenAiCapabilityAliasModel, nativeMultiAgentVersion } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 
@@ -116,6 +116,11 @@ export interface CatalogModel {
   inputModalities?: string[];
   /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
+  /**
+   * This routed row is an explicitly configured account-native alias on the canonical ChatGPT
+   * forward provider. It may inherit pinned native Codex metadata without changing its wire id.
+   */
+  codexForwardNativeCapabilityAlias?: boolean;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
   supportsReasoningSummaries?: boolean;
@@ -359,9 +364,19 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
     for (const entry of entries) {
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
+      const routedNativeSlug = slug.startsWith(`${OPENAI_CODEX_PROVIDER_ID}/`)
+        ? slug.slice(OPENAI_CODEX_PROVIDER_ID.length + 1)
+        : "";
+      const codexForwardCapabilityAlias = entry.opencodex_catalog_kind === CODEX_CUSTOM_MODEL_CATALOG_KIND
+        && entry.use_responses_lite === true
+        && isNativeOpenAiCapabilityAliasModel(routedNativeSlug)
+        ? routedNativeSlug
+        : undefined;
       const upstreamPin = nativeAlias
         ? nativeMultiAgentVersion(slug)
-        : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
+        : codexForwardCapabilityAlias
+          ? nativeMultiAgentVersion(codexForwardCapabilityAlias)
+          : UPSTREAM_NATIVE_ENTRIES.get(trustedAccountBoundNativeCatalogSlug(entry) ?? slug)?.multi_agent_version;
       if (typeof upstreamPin === "string") {
         entry.multi_agent_version = upstreamPin;
       } else if (v2FeatureEnabled) {
@@ -393,17 +408,22 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
   const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
-  // Routed providers use opencodex sidecars and client-executed tool discovery. The sidecar
-  // runs through native gpt-5.4-mini, so image search is available and verbalized for text-only
-  // models. EXCEPT cursor: its runTurn transport bypasses the web-search plan entirely and
-  // rejects server search queries — advertising the tool would make models call into a void.
+  // `supports_search_tool` selects Codex's deferred tool-discovery surface; it is not the hosted
+  // web-search capability. Routed rows also carry tool_mode=code_mode_only (below), and under code
+  // mode DEFERRED MCP tools remain callable through exec's `tools` global / ALL_TOOLS without any
+  // tool_search round-trip (upstream codex-rs code_mode suite; live canary 2026-08-13: routed
+  // kimi/k3 called tools.mcp__node_repl__js → isError:false). Stamping false here instead forces
+  // every MCP declaration into exec.description — a measured 2.7x turn-1 payload regression
+  // (96,699 → 258,929 chars; devlog/_plan/260813_tool_catalog_deferral/010). So non-Cursor routed
+  // rows advertise deferred discovery; the #1522 reachability concern is covered by the code-mode
+  // path, not by paying the full-catalog tax. Cursor stays false: its runTurn transport bypasses
+  // the web-search sidecar and has no proven deferred path.
   if (isCursorEntry) {
     delete entry.web_search_tool_type;
-    entry.supports_search_tool = false;
   } else {
     entry.web_search_tool_type = "text_and_image";
-    entry.supports_search_tool = true;
   }
+  entry.supports_search_tool = !isCursorEntry;
   // Cursor's transport already serializes overlapping tool calls into atomic Responses tool events.
   // Advertising parallel calls lets Codex send the same native capability bit it sends for OpenAI.
   // Opt-in providers (OcxProviderConfig.parallelToolCalls, e.g. xAI) advertise it too: the

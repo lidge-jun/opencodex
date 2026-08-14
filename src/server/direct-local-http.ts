@@ -219,7 +219,7 @@ function parseResponse(bytes: Buffer): Response {
 }
 
 /**
- * Fetch one local HTTP GET over a direct TCP connection.
+ * Fetch one bodyless local HTTP GET or POST over a direct TCP connection.
  *
  * Bun's global fetch and Bun 1.3's node:http compatibility layer can honor
  * HTTP(S)_PROXY. Local identity and capability probes must not expose headers
@@ -239,18 +239,22 @@ export async function directLocalHttpFetch(
 
   if (url.protocol !== "http:") throw new Error("direct local request must use HTTP");
   if (url.username || url.password) throw new Error("direct local request URL must not contain credentials");
-  if (method !== "GET" || body !== null) throw new Error("direct local request must be a bodyless GET");
+  if ((method !== "GET" && method !== "POST") || body !== null) {
+    throw new Error("direct local request must be a bodyless GET or POST");
+  }
   if (signal?.aborted) throw abortReason(signal);
 
   const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
   headers.delete("proxy-authorization");
   headers.delete("proxy-connection");
+  if (method === "POST") headers.set("content-length", "0");
+  else headers.delete("content-length");
   headers.set("host", url.host);
   headers.set("connection", "close");
   const headerLines: string[] = [];
   headers.forEach((value, key) => { headerLines.push(`${key}: ${value}`); });
   const requestBytes = Buffer.from(
-    `GET ${url.pathname}${url.search} HTTP/1.1\r\n${headerLines.join("\r\n")}\r\n\r\n`,
+    `${method} ${url.pathname}${url.search} HTTP/1.1\r\n${headerLines.join("\r\n")}\r\n\r\n`,
     "latin1",
   );
   const parsedHostname = url.hostname.startsWith("[") && url.hostname.endsWith("]")

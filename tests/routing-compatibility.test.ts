@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluatePolicyProfile } from "../src/routing/evaluator";
 import { assemblePolicyCandidateEvidence } from "../src/routing/compatibility/assemble";
+import { setCompatibilityEvidenceProvider } from "../src/routing/compatibility/provider-slot";
+import { labCompatibilityEvidenceProvider } from "../src/routing/compatibility/lab-evidence-provider";
 import { evaluateCompatibilityForCandidate } from "../src/routing/compatibility/policy";
 import { findVerdictForSuite, loadCompatibilityEvidenceSnapshot } from "../src/routing/compatibility/reader";
 import {
@@ -326,6 +328,10 @@ describe("CL-06 routing compatibility", () => {
     const config = baseConfig();
     const compat = getRoutingProfile(config, "compat")!;
     let resolves = 0;
+    // Compatibility evidence is provider-supplied since the Lab/core boundary landed
+    // (devlog/_plan/260814_lab_core_decoupling): the core assembler no longer reaches Lab
+    // itself, so the test installs the provider the activation path would install.
+    const detach = setCompatibilityEvidenceProvider(labCompatibilityEvidenceProvider);
     const rows = assemblePolicyCandidateEvidence(config, compat, 123, {
       routedProviderConfig: (_name, provider) => provider,
       resolveSubjects: () => {
@@ -341,6 +347,7 @@ describe("CL-06 routing compatibility", () => {
       }]]),
       loadEvidenceSnapshot: () => ({ projectionAvailable: true, projectionIncompatible: false, bySubject: new Map() }),
     });
+    detach();
     expect(rows).toHaveLength(1);
     expect(resolves).toBe(1);
   });

@@ -61,15 +61,12 @@ import { handleConfigRoutes } from "./management/config-routes";
 import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
 import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
-import { handleRoutingProfileRoutes } from "./management/routing-profile-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
 import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
-import { handleLabRoutes } from "./management/lab-routes";
-import { handleLabAutomationRoutes } from "./management/lab-automation-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -95,6 +92,41 @@ const managementConvergenceBindings = new WeakMap<object, Readonly<{
   factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
   converge: ConvergeCodex;
 }>>();
+
+/**
+ * Namespace match for management route prefixes: exact hit or a child path, never a
+ * prefix collision (`/api/labfoo` must not match `/api/lab`).
+ */
+function pathInManagementNamespace(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/**
+ * Routing-profile and Compatibility Lab handlers statically import the Lab module graph,
+ * so mounting them eagerly would pull ~70 `src/lab/` modules into every management
+ * request -- including installs that never opted into Lab. Loading them per namespace
+ * keeps `management-api.ts` on the same footing as the three protected core files.
+ *
+ * Cherry-picked from @Wibias's PR #1676, which solved this before the boundary work
+ * reached it. See devlog/_plan/260814_lab_core_decoupling/.
+ */
+async function handleRoutingProfileRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/routing-profiles")) return null;
+  const { handleRoutingProfileRoutes } = await import("./management/routing-profile-routes");
+  return handleRoutingProfileRoutes(ctx);
+}
+
+async function handleLabRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/lab")) return null;
+  // Automation is checked first so its narrower namespace keeps its own handler, matching
+  // the eager chain's ordering.
+  if (pathInManagementNamespace(ctx.url.pathname, "/api/lab/automation")) {
+    const { handleLabAutomationRoutes } = await import("./management/lab-automation-routes");
+    return handleLabAutomationRoutes(ctx);
+  }
+  const { handleLabRoutes } = await import("./management/lab-routes");
+  return handleLabRoutes(ctx);
+}
 
 export async function handleManagementAPI(
   req: Request,
@@ -180,7 +212,7 @@ export async function handleManagementAPI(
     ??     (await handleLogsUsageRoutes(ctx))
     ??     (await handleRequestHistoryRoutes(ctx))
     ??     (await handleRoutingAnalyticsRoutes(ctx))
-    ??     (await handleRoutingProfileRoutes(ctx))
+    ??     (await handleRoutingProfileRoutesOnDemand(ctx))
     ??     (await handleProviderRoutes(ctx))
     ??     (await handleModelRoutes(ctx))
     ??     (await handleIntegrationRoutes(ctx))
@@ -189,8 +221,7 @@ export async function handleManagementAPI(
     ??     (await handleOauthAccountRoutes(ctx))
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
-    ??     (await handleLabAutomationRoutes(ctx))
-    ??     (await handleLabRoutes(ctx))
+    ??     (await handleLabRoutesOnDemand(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);

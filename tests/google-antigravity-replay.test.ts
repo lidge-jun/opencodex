@@ -604,6 +604,20 @@ describe("durable antigravity replay snapshot", () => {
     await flushAntigravityReplay();
   });
 
+  test("sweeping expired sessions removes them from the durable snapshot", async () => {
+    observeAntigravityReplay(MODEL, SESSION, [fcPart("get_x", { a: 1 }, SIG)]);
+    await flushAntigravityReplay();
+    expect(readFileSync(snapshotPath(), "utf8")).toContain(SIG);
+
+    expect(sweepExpiredAntigravityReplay(Number.MAX_SAFE_INTEGER)).toBe(1);
+    await flushAntigravityReplay();
+
+    const rawText = readFileSync(snapshotPath(), "utf8");
+    const snapshot = JSON.parse(rawText) as { sessions?: unknown[] };
+    expect(snapshot.sessions).toHaveLength(0);
+    expect(rawText).not.toContain(SIG);
+  });
+
   test("snapshot cap keeps the most recently active sessions", async () => {
     // A (two calls, ~899 serialized bytes) fits under the cap; A+B (~1,347)
     // does not, so the cap must pick exactly one session by activity.

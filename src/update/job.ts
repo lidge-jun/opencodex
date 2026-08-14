@@ -578,7 +578,7 @@ export function spawnGuiUpdateWorker(
   ].join("; ");
   const launched = spawnSync(
     resolveTrustedWindowsPowerShellExe(),
-    ["-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+    ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", ps],
     { encoding: "utf8", windowsHide: true, timeout: 15_000 },
   );
   const pid = Number(String(launched.stdout ?? "").trim().split(/\r?\n/).pop());
@@ -1386,7 +1386,7 @@ function killWindowsServiceWrapperProcesses(): void {
       "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
     ].join(" ");
     spawnSync(resolveTrustedWindowsPowerShellExe(), [
-      "-NoProfile", "-NoLogo", "-NonInteractive", "-WindowStyle", "Hidden",
+      "-NoProfile", "-NoLogo", "-NonInteractive",
       "-Command", ps,
     ], { stdio: "ignore", timeout: 5000, windowsHide: true });
   } catch {

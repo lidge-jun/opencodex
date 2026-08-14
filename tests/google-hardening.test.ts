@@ -293,6 +293,97 @@ describe("google provider hardening", () => {
     expect(events.some(e => e.type === "error")).toBe(false);
   });
 
+  test("thought text stays hidden reasoning in streaming and non-streaming responses", async () => {
+    const body = {
+      candidates: [{
+        content: { parts: [{ thought: true, text: "private analysis" }] },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "private analysis" });
+      expect(events).not.toContainEqual({ type: "text_delta", text: "private analysis" });
+    }
+  });
+
+  test("thought text preserves ordering before function calls in both response modes", async () => {
+    const body = {
+      candidates: [{
+        content: {
+          parts: [
+            { thought: true, text: "choose the tool" },
+            { functionCall: { name: "lookup", args: { id: 7 } } },
+          ],
+        },
+        finishReason: "STOP",
+      }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events.slice(0, 4)).toEqual([
+        { type: "reasoning_raw_delta", text: "choose the tool" },
+        { type: "tool_call_start", id: expect.stringMatching(/^call_/), name: "lookup" },
+        { type: "tool_call_delta", arguments: '{"id":7}' },
+        { type: "tool_call_end" },
+      ]);
+      expect(events).not.toContainEqual({ type: "text_delta", text: "choose the tool" });
+    }
+  });
+
+  test("ordinary Google text remains visible in both response modes", async () => {
+    const body = {
+      candidates: [{ content: { parts: [{ text: "visible answer" }] }, finishReason: "STOP" }],
+    };
+
+    const streamEvents = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([body])));
+    const responseEvents = await createGoogleAdapter(provider()).parseResponse!(
+      new Response(JSON.stringify(body), { status: 200 }),
+    );
+
+    for (const events of [streamEvents, responseEvents]) {
+      expect(events).toContainEqual({ type: "text_delta", text: "visible answer" });
+      expect(events).not.toContainEqual({ type: "reasoning_raw_delta", text: "visible answer" });
+    }
+  });
+
+  // `emittedContentEvent` decides `"content"` vs `"continue"`, and its only consumer is the
+  // synthetic-heartbeat suppression in the read loop. A thought delta is real upstream
+  // activity, so it must count as content: emitting a heartbeat alongside it would claim the
+  // stream was idle while the model was demonstrably working. Pinning that here keeps the
+  // classification a decision rather than a side effect of routing thought text elsewhere.
+  test("a thought-only frame counts as content, so no synthetic heartbeat is emitted", async () => {
+    const thoughtOnly = {
+      candidates: [{ content: { parts: [{ thought: true, text: "private analysis" }] } }],
+    };
+    const events = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([thoughtOnly])));
+
+    expect(events).toContainEqual({ type: "reasoning_raw_delta", text: "private analysis" });
+    expect(events.some(e => e.type === "heartbeat")).toBe(false);
+  });
+
+  // The visible-text control for the assertion above: an ordinary text frame has always
+  // suppressed the heartbeat, so a divergence here would mean thought parts are classified
+  // differently from the text they replaced.
+  test("a visible-text frame also suppresses the synthetic heartbeat", async () => {
+    const textOnly = {
+      candidates: [{ content: { parts: [{ text: "visible answer" }] } }],
+    };
+    const events = await collect(createGoogleAdapter(provider()).parseStream(sseResponse([textOnly])));
+
+    expect(events).toContainEqual({ type: "text_delta", text: "visible answer" });
+    expect(events.some(e => e.type === "heartbeat")).toBe(false);
+  });
   test("sends Gemini Flash thinkingLevel only for direct AI Studio requests", async () => {
     const direct = createGoogleAdapter(provider({
       modelReasoningEfforts: {
@@ -323,7 +414,12 @@ describe("google provider hardening", () => {
     expect(JSON.parse(high.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "high" });
     expect(JSON.parse(unset.body).generationConfig).toBeUndefined();
     expect(JSON.parse(legacy.body).generationConfig.thinkingConfig).toEqual({ thinkingLevel: "medium" });
-    expect(JSON.parse(antigravity.body).request.generationConfig).toBeUndefined();
+    // Antigravity used to encode the tier in the wire id, so it sent no thinkingConfig.
+    // Now that Google has retired the suffixed 3.6 ids, that tier has nowhere to live
+    // except an explicit thinkingLevel on the current model.
+    expect(JSON.parse(antigravity.body).model).toBe("gemini-3.7-flash-tiered");
+    expect(JSON.parse(antigravity.body).request.generationConfig.thinkingConfig)
+      .toEqual({ thinkingLevel: "high" });
   });
 
   test("provider-wide effort ladder drives thinkingLevel for a non-image model", async () => {
@@ -420,15 +516,20 @@ describe("google provider hardening", () => {
     const vertex = PROVIDER_REGISTRY.find(entry => entry.id === "google-vertex");
 
     expect(google?.defaultModel).toBe("gemini-3.5-flash");
-    expect(google?.models).toEqual(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview"]);
+    expect(google?.models).toEqual(["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"]);
     expect(google?.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
     expect(google?.modelContextWindows?.["gemini-3.5-flash"]).toBe(1_000_000);
+    expect(google?.modelContextWindows?.["gemini-3.7-flash"]).toBe(1_048_576);
     expect(google?.modelContextWindows?.["gemini-3.1-pro-preview"]).toBeUndefined();
     expect(google?.modelInputModalities?.["gemini-3.6-flash"]).toEqual(["text", "image"]);
+    expect(google?.modelInputModalities?.["gemini-3.7-flash"]).toEqual(["text", "image"]);
     expect(google?.modelReasoningEfforts?.["gemini-3.6-flash"]).toEqual([
       "minimal", "low", "medium", "high",
     ]);
     expect(google?.modelReasoningEfforts?.["gemini-3.5-flash"]).toEqual([
+      "minimal", "low", "medium", "high",
+    ]);
+    expect(google?.modelReasoningEfforts?.["gemini-3.7-flash"]).toEqual([
       "minimal", "low", "medium", "high",
     ]);
     expect(google?.modelReasoningEfforts?.["gemini-3.1-pro-preview"]).toEqual([

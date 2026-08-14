@@ -137,7 +137,7 @@ test("file clients keep their existing badge and applied semantics", () => {
   expect(counts.stale).toBe(1);
 });
 
-test("every client counts toward the summary, not just the file seven", () => {
+test("every client counts toward the summary, not just the file clients", () => {
   const rows = buildOverviewRows(sources({
     clients: [fileStatus({ clientId: "opencode", state: "current" })],
     codex: { routingInjected: true, status: "at-risk" },
@@ -178,9 +178,14 @@ test("every client counts toward the summary, not just the file seven", () => {
 
 test("an unsettled file list renders unknown rows instead of dropping them", () => {
   const built = buildOverviewRows(sources({ clients: [], clientsSettled: false }));
-  expect(built.rows).toHaveLength(11);
+  expect(built.rows).toHaveLength(12);
   expect(rowById(built, "omp").state).toBe("unknown");
   expect(rowById(built, "kimi").state).toBe("unknown");
+  expect(rowById(built, "dsh")).toMatchObject({
+    hash: "integrations/dsh",
+    labelKey: "integrations.tab.dsh",
+    state: "unknown",
+  });
 
   // Once settled, a client the server omitted is genuinely gone.
   const settled = buildOverviewRows(sources({ clients: [], clientsSettled: true }));
@@ -196,4 +201,5 @@ test("each row points at its own tab", () => {
   expect(rowById(rows, "grok").hash).toBe("integrations/grok");
   expect(rowById(rows, "hermes").hash).toBe("integrations/hermes");
   expect(rowById(rows, "omp").hash).toBe("integrations/omp");
+  expect(rowById(rows, "dsh").hash).toBe("integrations/dsh");
 });

@@ -156,6 +156,7 @@ describe("vision-capable provider models feed combo modalities", () => {
   test("xAI grok chat models declare image input in the registry", () => {
     const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
     for (const model of [
+      "grok-4.6",
       "grok-4.5",
       "grok-4.3",
       "grok-4.20-0309-reasoning",

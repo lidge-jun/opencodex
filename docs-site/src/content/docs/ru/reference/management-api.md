@@ -230,7 +230,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список, по желанию импортировать, либо удалить аккаунты Codex. Успешные POST/DELETE включают `catalogRefreshPending`. | 400 invalid input; manual import can be disabled |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Показать/обновить список либо удалить аккаунты Codex. POST сохранён только как отключённый endpoint совместимости; успешный DELETE включает `catalogRefreshPending`. | POST всегда возвращает 403 `manual_import_disabled`; 400 при неверных данных DELETE |
 | `PUT /api/codex-auth/accounts/alias` | Задать или очистить alias аккаунта | 400 invalid account/alias |
 | `PUT /api/codex-auth/accounts/pause` | Поставить один аккаунт на паузу или снять её | 400 invalid account/state; 404 missing account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
@@ -247,8 +247,8 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |
 | `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта. Завершение нового аккаунта включает `catalogRefreshPending: true` только при необходимости восстановления. | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
 
-Если config row нового аккаунта сохранён, но credential setup не завершён, manual POST возвращает
-HTTP 500, а OAuth `login-status` сообщает `status: "error"`. Оба ответа содержат
+Если config row нового аккаунта сохранён, но credential setup не завершён, OAuth `login-status`
+сообщает `status: "error"` и содержит
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true` и при необходимости
 `catalogRefreshPending: true`; детали storage error не раскрываются. Account row остаётся сохранённым:
 перед повторным созданием аккаунта выполните reauthentication или удалите его.

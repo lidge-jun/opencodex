@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# ocx-run — run a long job on this box so it can never wedge, never stack,
+# and never leave a caller guessing whether it is alive.
+#
+# Why this exists. Two `bun test` runs sat on this machine for 3h12m with no
+# output after the first 4 minutes. Nothing was wrong with the box: the suite
+# hung inside one test file, nothing bounded it, and because the wrapper writes
+# its exit code only on completion, every poller read "still running" forever.
+# Meanwhile a second run had been started against the same CPU, so even healthy
+# runs crawled. The three failures are independent, so this guards all three:
+#
+#   stacking  -> flock, one job per name at a time
+#   wedging   -> timeout, a hard ceiling with SIGKILL backstop
+#   silence   -> a status file written on EVERY exit path, including timeout
+#
+# Usage:
+#   ocx-run <name> <workdir> <timeout> <command...>
+#   ocx-run status [name]
+#   ocx-run tail <name> [lines]
+#   ocx-run stop <name>
+#
+# Example:
+#   ocx-run suite ~/ocx-boundary/repo 40m bun run test
+#   ocx-run status
+set -uo pipefail
+
+OCX_RUN_DIR="${OCX_RUN_DIR:-$HOME/.ocx-run}"
+mkdir -p "$OCX_RUN_DIR"
+
+# A non-interactive `ssh host cmd` does not read ~/.bashrc, so PATH is the bare
+# system default and `bun` is missing — the failure surfaces as a bewildering
+# rc=127 from inside the job rather than as "you forgot to set PATH". Every
+# previous caller worked around it by hardcoding ~/.bun/bin/bun at each call
+# site. Do it once, here, so a plain `bun run test` works over ssh.
+for ocx_run_extra in "$HOME/.bun/bin" "$HOME/.local/bin" "$HOME/bin"; do
+  [ -d "$ocx_run_extra" ] && case ":$PATH:" in
+    *":$ocx_run_extra:"*) ;;
+    *) PATH="$ocx_run_extra:$PATH" ;;
+  esac
+done
+export PATH
+
+die() { echo "ocx-run: $*" >&2; exit 2; }
+
+# A job is identified by name; every artifact derives from it.
+log_path()    { echo "$OCX_RUN_DIR/$1.log"; }
+status_path() { echo "$OCX_RUN_DIR/$1.status"; }
+lock_path()   { echo "$OCX_RUN_DIR/$1.lock"; }
+pid_path()    { echo "$OCX_RUN_DIR/$1.pid"; }
+
+cmd_status() {
+  local name="${1:-}"
+  local files
+  if [ -n "$name" ]; then files="$(status_path "$name")"; else files="$OCX_RUN_DIR"/*.status; fi
+  local found=0
+  for f in $files; do
+    [ -e "$f" ] || continue
+    found=1
+    local n; n="$(basename "$f" .status)"
+    local pid_file; pid_file="$(pid_path "$n")"
+    local live="-"
+    if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file" 2>/dev/null)" 2>/dev/null; then live="RUNNING"; fi
+    # A running job has no terminal status yet, so report liveness first.
+    if [ "$live" = "RUNNING" ]; then
+      local lg; lg="$(log_path "$n")"
+      local age="?"
+      [ -f "$lg" ] && age="$(( $(date +%s) - $(stat -c %Y "$lg" 2>/dev/null || echo 0) ))s since last output"
+      echo "$n: RUNNING (pid $(cat "$pid_file"), $age)"
+    else
+      echo "$n: $(cat "$f")"
+    fi
+  done
+  [ "$found" = 1 ] || echo "no jobs recorded in $OCX_RUN_DIR"
+}
+
+cmd_tail() {
+  local name="${1:?name required}" lines="${2:-40}"
+  local lg; lg="$(log_path "$name")"
+  [ -f "$lg" ] || die "no log for '$name'"
+  tail -n "$lines" "$lg"
+}
+
+cmd_stop() {
+  local name="${1:?name required}"
+  local pid_file; pid_file="$(pid_path "$name")"
+  [ -f "$pid_file" ] || die "no pid recorded for '$name'"
+  local pid; pid="$(cat "$pid_file")"
+  # Negative pid targets the whole process group, so sharded children die too —
+  # the orphaned-child case is exactly what left bun workers behind before.
+  kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null
+  sleep 3
+  kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  echo "stopped=$name pid=$pid" > "$(status_path "$name")"
+  echo "stopped $name (pid $pid)"
+}
+
+case "${1:-}" in
+  status) shift; cmd_status "${1:-}"; exit 0 ;;
+  tail)   shift; cmd_tail "$@";       exit 0 ;;
+  stop)   shift; cmd_stop "$@";       exit 0 ;;
+esac
+
+[ $# -ge 4 ] || die "usage: ocx-run <name> <workdir> <timeout> <command...>"
+name="$1"; workdir="$2"; limit="$3"; shift 3
+[ -d "$workdir" ] || die "workdir not found: $workdir"
+
+log="$(log_path "$name")"
+status="$(status_path "$name")"
+lock="$(lock_path "$name")"
+pidf="$(pid_path "$name")"
+
+# Refuse rather than queue when the same job name is already held. Queueing is
+# right for a suite that will finish; here the caller is usually an agent that
+# would otherwise stack a third run onto a box already fighting itself.
+exec 9>"$lock"
+if ! flock -n 9; then
+  echo "ocx-run: '$name' is already running (holder: $(cat "$pidf" 2>/dev/null || echo unknown))." >&2
+  echo "  ocx-run status $name    # check progress" >&2
+  echo "  ocx-run stop $name      # take it down" >&2
+  exit 3
+fi
+
+: > "$log"
+echo "started=$(date -Is) name=$name limit=$limit cmd=$*" > "$status"
+
+# setsid gives the job its own process group so a timeout kills the children too;
+# --kill-after upgrades to SIGKILL for a process that ignores SIGTERM.
+setsid timeout --signal=TERM --kill-after=60s "$limit" "$@" > "$log" 2>&1 &
+job=$!
+echo "$job" > "$pidf"
+
+wait "$job"
+rc=$?
+
+# Status is written on EVERY path. 124 is timeout's own code for "limit hit",
+# which is the case that previously looked identical to "still working".
+if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+  echo "TIMEOUT after $limit (rc=$rc) name=$name finished=$(date -Is)" > "$status"
+elif [ "$rc" = 0 ]; then
+  echo "OK rc=0 name=$name finished=$(date -Is)" > "$status"
+else
+  echo "FAIL rc=$rc name=$name finished=$(date -Is)" > "$status"
+fi
+rm -f "$pidf"
+cat "$status"
+exit "$rc"

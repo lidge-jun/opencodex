@@ -31,9 +31,10 @@ describe("alibaba-token-plan-intl registry entry", () => {
     expect(entry!.models).toContain("deepseek-v4-pro");
     expect(entry!.models).toContain("kimi-k2.7-code");
     expect(entry!.models).toContain("glm-5.2");
+    expect(entry!.models).toContain("glm-5.3");
     expect(entry!.models).toContain("MiniMax-M2.5");
     expect(entry!.models).toContain("qwen3.8-max");
-    expect(entry!.models!.length).toBe(15);
+    expect(entry!.models!.length).toBe(16);
   });
 
   test("MiniMax case-insensitive normalization is set", () => {

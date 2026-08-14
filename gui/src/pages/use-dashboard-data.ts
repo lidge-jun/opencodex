@@ -23,6 +23,7 @@ import {
   normalizeInjectionSelection,
   type DashboardEpochRefs,
 } from "./dashboard-core-poll";
+import { usageSummary30dResourceKey } from "../usage-summary-resource";
 import {
   type DashboardSection,
   type HealthData,
@@ -263,10 +264,10 @@ export function useDashboardData(apiBase: string) {
   );
 
   const usagePoll = useKeyedClientResource(
-    `dashboard-usage:${apiBase}`,
+    usageSummary30dResourceKey(apiBase),
     [apiBase],
     (signal) => fetchDashboardUsage(apiBase, signal),
-    { pollMs: 60_000, enabled: overviewReady },
+    { enabled: overviewReady },
   );
 
   const diagnosticsPoll = useKeyedClientResource(
@@ -283,6 +284,7 @@ export function useDashboardData(apiBase: string) {
     { enabled: overviewReady && !error },
   );
 
+  /* oxlint-disable react/react-compiler -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   /* eslint-disable react-hooks/set-state-in-effect -- mirror client-resource snapshots into mutable dashboard UI state that handlers also update */
   useEffect(() => {
     if (startupHealthPoll.data !== undefined) {
@@ -393,6 +395,7 @@ export function useDashboardData(apiBase: string) {
     setModelsLoading(modelsPoll.loading);
   }, [modelsPoll.data, modelsPoll.loading]);
   /* eslint-enable react-hooks/set-state-in-effect */
+  /* oxlint-enable react/react-compiler */
 
   useEffect(() => () => {
     settingsRequestEpochRef.current += 1;
@@ -437,7 +440,7 @@ export function useDashboardData(apiBase: string) {
     },
   );
 
-  /* eslint-disable react-hooks/set-state-in-effect -- mirror update-job client-resource snapshot into local job UI state */
+  /* oxlint-disable react/react-compiler -- mirror update poll snapshot into mutable dashboard UI state */
   useEffect(() => {
     const data = updatePoll.data;
     if (!data) return;
@@ -445,7 +448,7 @@ export function useDashboardData(apiBase: string) {
     setReconnecting(data.reconnecting);
     if ("reload" in data && data.reload) window.location.reload();
   }, [updatePoll.data]);
-  /* eslint-enable react-hooks/set-state-in-effect */
+  /* oxlint-enable react/react-compiler */
 
   const grouped = useMemo(() => groupDashboardModels(models), [models]);
   const filteredGroups = useMemo(() => {

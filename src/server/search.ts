@@ -152,6 +152,10 @@ export async function handleSearch(
       headers,
       body: JSON.stringify(relayBody),
       signal: linkedSignal.signal,
+      // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
+      // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
+      // `session_id`, and `x-codex-turn-metadata` to the redirect target.
+      redirect: "manual",
     });
     const observed = await readBoundedResponseBytes(upstreamResponse, {
       maxBytes: SEARCH_RESPONSE_MAX_BYTES,

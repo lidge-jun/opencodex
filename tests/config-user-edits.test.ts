@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   armClaudeCodeBaseline,
+  adoptPersistedProviderIntoLiveConfig,
   getConfigPath,
   getDefaultConfig,
   loadConfig,
@@ -112,6 +113,33 @@ test("guarded binding saves project legacy ownership back onto the live config",
     version: 1,
     legacyOwnedSlugs: ["test/legacy-model"],
   });
+});
+
+test("a persisted provider adopted into live state rebases only that provider", () => {
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  const adopted = {
+    ...live.providers.test!,
+    apiKey: "adopted-key",
+    note: "adopted",
+  };
+  adoptPersistedProviderIntoLiveConfig(live, "test", adopted, {
+    ...live,
+    providers: { ...live.providers, test: adopted },
+  });
+  expect(live.providers.test).toEqual(adopted);
+
+  writeDiskConfig({
+    providers: {
+      ...live.providers,
+      test: { ...adopted, note: "newer-disk-edit" },
+    },
+  });
+  live.port = 10101;
+  saveConfigPreservingClaudeCode(live);
+
+  expect((diskConfig().providers as Record<string, { note?: string }>).test?.note)
+    .toBe("newer-disk-edit");
 });
 
 test("field-scoped persisted mutations use the final disk snapshot for legacy ownership", () => {

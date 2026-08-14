@@ -29,10 +29,25 @@ When Codex requests hosted `web_search` for a non-passthrough routed model, open
    (default 3), then removes the search tool and forces a final answer. Real client tools such as
    `apply_patch` or shell finalize the turn so those calls reach Codex.
 
-Every routed-model iteration requests upstream `stream: true`, but opencodex fully buffers semantic
-events internally before deciding whether to search or return the final answer. Only the first
-iteration's final headers/status and 429 key rotations are acquired eagerly. Thus synthetic search
-calls and preliminary output are never exposed as client-visible model output.
+Every routed-model iteration requests upstream `stream: true`, but by default opencodex fully
+buffers semantic events internally before deciding whether to search or return the final answer.
+Only the first iteration's final headers/status and 429 key rotations are acquired eagerly. Thus
+synthetic search calls and preliminary output are never exposed as client-visible model output.
+
+Opt-in `webSearchSidecar.streamRoutedModelOutput` (default `false`) streams each iteration's
+leading text/thinking deltas live instead — the client sees output as soon as the model produces
+it, exactly like the sidecar-less path. The live window closes permanently at the first tool-call
+boundary, so the decision to intercept `web_search` stays atomic and nothing is ever delivered
+twice (the terminal replay skips what already streamed). Tradeoff: text the model emits *before*
+deciding to search — which buffered mode silently drops — becomes visible and may partially repeat
+in the post-search answer. The Dashboard overview page exposes this as the **Stream answers live**
+toggle on the web-search sidecar card (`PUT /api/sidecar-settings` with
+`webSearch.streamRoutedModelOutput`).
+
+Kiro commentary is independent of this option: commentary-phase text already streams ahead of the
+terminal event in buffered mode, and that bypass is unchanged — with or without
+`streamRoutedModelOutput`, only search-decision events (tool calls and everything after the first
+tool-call boundary) remain buffered for the atomic `web_search` decision.
 
 The injected result is wrapped in an untrusted-data boundary, length-capped, and de-duplicated by
 source URL. In structured-output turns (`json_schema` / `json_object`) it is handed over as compact
@@ -48,7 +63,8 @@ relevant images in words and include their source URLs.
     "reasoning": "low",
     "maxSearchesPerTurn": 3,
     "routedModelStallTimeoutMs": 200000,
-    "timeoutMs": 200000
+    "timeoutMs": 200000,
+    "streamRoutedModelOutput": false
   }
 }
 ```
@@ -134,10 +150,19 @@ A model is marked text-only per provider:
 
 ## Dashboard controls and disabling
 
-<!-- TODO(WP5 GUI): Add the sidecar settings-screen walkthrough after the GUI controls ship. -->
+The Dashboard Vision sidecar card can enable or disable the sidecar, set
+`maxDescriptionsPerTurn`, and set `timeoutMs`, along with the existing model,
+backend, and reasoning controls. Disabling the sidecar does not delete those
+settings; turning it back on keeps the previous model, backend, reasoning,
+timeout, and limit.
 
-The config-file keys are available now. Set `enabled: false` on either sidecar in `config.json` to
-disable it. Anthropic-OAuth search and image description reuse the existing Claude Code OAuth
-fingerprint precedent, but should be soak-tested with the intended account and workload.
+`PUT /api/sidecar-settings` accepts the same fields. Partial updates leave
+omitted keys unchanged. `timeoutMs` uses the runtime integer bounds
+(1–2147483647 ms).
+
+You can still set `enabled: false` in `config.json` if you prefer to edit the
+file directly. Anthropic-OAuth search and image description reuse the existing
+Claude Code OAuth fingerprint precedent, but should be soak-tested with the
+intended account and workload.
 
 See the [Configuration reference](/reference/configuration/#sidecars) for every field.

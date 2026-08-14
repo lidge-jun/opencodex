@@ -5,73 +5,22 @@ import type { PolicyCandidateEvidence } from "../evaluator";
 import { policyCandidateHealthEvidence } from "../health";
 import type { NormalizedRoutingProfile } from "../profile";
 import { quotaEvidenceForCandidate } from "../quota";
-import {
-  compatibilitySuiteKey,
-  loadCompatibilityCatalogSnapshot,
-  type CompatibilityCatalogSnapshot,
-} from "./catalog";
-import { findVerdictForSuite, loadCompatibilityEvidenceSnapshot } from "./reader";
-import {
-  resolvePolicyCompatibilitySubjects,
-  type ResolvedPolicyCompatibilitySubjects,
-} from "./subject";
-import type { CandidateCompatibilityEvidence } from "./types";
+import { resolveCompatibilityEvidenceProvider, type CoreEvidenceOptions } from "./provider-slot";
 
 export type RoutedProviderResolver = (
   providerName: string,
   provider: OcxProviderConfig,
 ) => OcxProviderConfig;
 
-export interface AssemblePolicyEvidenceOptions {
-  configDir?: string;
-  routedProviderConfig: RoutedProviderResolver;
-  resolveSubjects?: typeof resolvePolicyCompatibilitySubjects;
-  loadEvidenceSnapshot?: typeof loadCompatibilityEvidenceSnapshot;
-  loadCatalogSnapshot?: typeof loadCompatibilityCatalogSnapshot;
-}
-
-function attachCompatibilityEvidence(
-  resolved: ResolvedPolicyCompatibilitySubjects | undefined,
-  snapshot: ReturnType<typeof loadCompatibilityEvidenceSnapshot>,
-  catalog: CompatibilityCatalogSnapshot,
-  profile: NonNullable<NormalizedRoutingProfile["compatibility"]>,
-): CandidateCompatibilityEvidence {
-  const subjectIds = resolved?.subjectIds ?? {};
-  const suites: CandidateCompatibilityEvidence["suites"] = [];
-
-  for (const requirement of profile.requiredSuites) {
-    const subjectId = subjectIds[requirement.evidenceLayer];
-    if (!subjectId) continue;
-    const metadata = catalog.get(compatibilitySuiteKey(requirement.evidenceLayer, requirement.suiteId));
-    if (!metadata) continue;
-    const row = findVerdictForSuite(
-      snapshot,
-      subjectId,
-      requirement.evidenceLayer,
-      requirement.suiteId,
-      metadata.suiteVersion,
-      metadata.suiteManifestDigest,
-    );
-    if (!row) continue;
-    suites.push({
-      subjectId,
-      suiteId: row.suiteId,
-      evidenceLayer: requirement.evidenceLayer,
-      suiteVersion: row.suiteVersion,
-      suiteManifestDigest: row.suiteManifestDigest,
-      verdict: row.verdict,
-      asOf: row.asOf,
-      maxAgeMs: metadata.maxAgeMs,
-      notes: row.notes,
-    });
-  }
-
-  return {
-    subjectIds: { ...subjectIds },
-    projectionAvailable: snapshot.projectionAvailable,
-    suites,
-  };
-}
+/**
+ * Options the core assembler needs. Provider-specific test seams (subject resolution,
+ * catalog and projection loading) belong to the compatibility provider, not here -- keeping
+ * them out is what stops the core assembler from naming Lab-backed contracts.
+ *
+ * The provider reads its own seams off the same object, so callers may still pass a
+ * `LabCompatibilityProviderOptions`; that type extends this one.
+ */
+export type AssemblePolicyEvidenceOptions = CoreEvidenceOptions;
 
 /**
  * Assemble production policy candidate evidence including compatibility snapshots.
@@ -89,55 +38,20 @@ export function assemblePolicyCandidateEvidence(
   const hasCompatibilityRequirements = Boolean(
     compatibilityPolicy && compatibilityPolicy.requiredSuites.length > 0,
   );
-  const resolvedByCandidate = new Map<string, ResolvedPolicyCompatibilitySubjects>();
-  let catalog: CompatibilityCatalogSnapshot = new Map();
-  let snapshot: ReturnType<typeof loadCompatibilityEvidenceSnapshot> = {
-    projectionAvailable: true,
-    projectionIncompatible: false,
-    bySubject: new Map(),
-  };
-
-  if (hasCompatibilityRequirements && compatibilityPolicy) {
-    const resolveSubjects = options.resolveSubjects ?? resolvePolicyCompatibilitySubjects;
-    const loadCatalog = options.loadCatalogSnapshot ?? loadCompatibilityCatalogSnapshot;
-    const loadEvidence = options.loadEvidenceSnapshot ?? loadCompatibilityEvidenceSnapshot;
-    catalog = loadCatalog(compatibilityPolicy.requiredSuites);
-    const subjectIds = new Set<string>();
-
-    for (const candidate of profile.candidates) {
-      const provider = config.providers[candidate.provider];
-      if (!provider) continue;
-      try {
-        const routed = options.routedProviderConfig(candidate.provider, provider);
-        const resolved = resolveSubjects(
-          config,
-          candidate.provider,
-          candidate.model,
-          routed,
-          options.configDir,
-        );
-        resolvedByCandidate.set(`${candidate.provider}/${candidate.model}`, resolved);
-        for (const subjectId of Object.values(resolved.subjectIds)) {
-          if (subjectId) subjectIds.add(subjectId);
-        }
-      } catch {
-        // Subject construction failure is handled per required layer as unknown.
-      }
-    }
-
-    snapshot = loadEvidence([...subjectIds], options.configDir);
-  }
+  // Compatibility evidence is supplied by an opt-in subsystem. With no provider registered
+  // -- every install without compatibility-gated profiles -- the evaluator sees no
+  // compatibility evidence and scores on capability, health, quota, and cost exactly as it
+  // did before compatibility policy existed.
+  const compatibilityProvider = hasCompatibilityRequirements && compatibilityPolicy
+    ? resolveCompatibilityEvidenceProvider()
+    : null;
+  const compatibilityByCandidate = compatibilityProvider && compatibilityPolicy
+    ? compatibilityProvider(config, profile, compatibilityPolicy, options)
+    : null;
 
   return profile.candidates.map(candidate => {
     const key = `${candidate.provider}/${candidate.model}`;
-    const compatibility = hasCompatibilityRequirements && compatibilityPolicy
-      ? attachCompatibilityEvidence(
-        resolvedByCandidate.get(key),
-        snapshot,
-        catalog,
-        compatibilityPolicy,
-      )
-      : undefined;
+    const compatibility = compatibilityByCandidate?.get(key);
 
     return {
       provider: candidate.provider,

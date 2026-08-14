@@ -3,10 +3,15 @@ import { managementFetch as fetch } from "./helpers/management-auth";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig, saveConfig } from "../src/config";
+import { loadConfig, saveConfig, writePid, writeRuntimePort } from "../src/config";
 import { upsertOAuthProvider } from "../src/oauth";
-import { notifyRunningProxyAfterOAuthLogin } from "../src/oauth/login-cli";
+import {
+  commitKeyLoginProvider,
+  notifyRunningProxy,
+  notifyRunningProxyAfterOAuthLogin,
+} from "../src/oauth/login-cli";
 import { startServer } from "../src/server";
+import { createLocalAttestationSecret } from "../src/lib/local-management-attestation";
 import type { OcxConfig } from "../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 
@@ -53,10 +58,74 @@ afterEach(() => {
 });
 
 describe("CLI OAuth live-update credential preservation", () => {
+  test("does not post provider credentials when a legacy health listener has no verified pid", async () => {
+    const receivedPaths: string[] = [];
+    let healthProbeCount = 0;
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/healthz") {
+          healthProbeCount += 1;
+          return Response.json({ status: "ok", version: "2.6.16", uptime: 5 });
+        }
+        receivedPaths.push(url.pathname);
+        return Response.json({ ok: true });
+      },
+    });
+    try {
+      saveConfig(keyModeXaiConfig(listener.port));
+
+      await notifyRunningProxy("xai");
+
+      expect(healthProbeCount).toBeGreaterThan(0);
+      expect(receivedPaths).toEqual([]);
+    } finally {
+      await listener.stop(true);
+    }
+  }, 15_000);
+
+  test("does not probe or post for a provider outside the login-owned allowlist", async () => {
+    const receivedPaths: string[] = [];
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        receivedPaths.push(new URL(request.url).pathname);
+        return Response.json({ status: "ok" });
+      },
+    });
+    try {
+      const custom = keyModeXaiConfig(listener.port);
+      custom.defaultProvider = "custom";
+      custom.providers.custom = {
+        adapter: "openai-chat",
+        baseUrl: "https://custom.example.test/v1",
+        apiKey: "custom-sentinel-key",
+      };
+      saveConfig(custom);
+
+      await notifyRunningProxy("custom");
+
+      expect(receivedPaths).toEqual([]);
+    } finally {
+      await listener.stop(true);
+    }
+  });
+
   test("notify after OAuth login keeps key billing on live and disk configs", async () => {
-    const server = startServer(0);
+    const localAttestationSecret = createLocalAttestationSecret();
+    const server = startServer(0, { localAttestationSecret });
     try {
       const port = server.port!;
+      writeRuntimePort({
+        pid: process.pid,
+        port,
+        hostname: "127.0.0.1",
+        attestationSecret: localAttestationSecret,
+      });
+      writePid(process.pid);
       const boot = loadConfig();
       boot.port = port;
       saveConfig(boot);
@@ -68,6 +137,7 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(afterLogin.providers.xai!.authMode).toBe("key");
       expect(afterLogin.providers.xai!.apiKey).toBe("live-update-sentinel-key");
 
+      const beforeNotify = readFileSync(join(testDir, "config.json"));
       await notifyRunningProxyAfterOAuthLogin("xai");
 
       const listed = await fetch(new URL("/api/providers", server.url)).then(r => r.json()) as Array<{
@@ -90,8 +160,93 @@ describe("CLI OAuth live-update credential preservation", () => {
       expect(disk.providers.xai!.authMode).toBe("key");
       expect(disk.providers.xai!.apiKey).toBe("live-update-sentinel-key");
       expect(disk.providers.xai!.apiKeyPool?.some(entry => entry.key === "live-update-sentinel-key")).toBe(true);
+      expect(readFileSync(join(testDir, "config.json"))).toEqual(beforeNotify);
     } finally {
       await server.stop(true);
+    }
+  }, 15_000);
+});
+
+/**
+ * Regression: the reload outcome used to be discarded, so a CLI talking to a proxy that
+ * predates attested reload printed unconditional success while the running process kept
+ * routing with the previous credential. The credential does reach disk — that part was
+ * always fine — but the operator had no way to learn a restart was required.
+ */
+describe("live reload outcome is reported to the caller", () => {
+  test("an unattested running proxy yields a diagnosable reason, not silence", async () => {
+    let healthProbeCount = 0;
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (url.pathname === "/healthz") {
+          healthProbeCount += 1;
+          // A pre-update proxy: healthy, but it advertises no attestation capability.
+          return Response.json({ status: "ok", version: "2.6.16", uptime: 5 });
+        }
+        return Response.json({ ok: true });
+      },
+    });
+    try {
+      saveConfig(keyModeXaiConfig(listener.port));
+
+      const result = await notifyRunningProxy("xai");
+
+      expect(healthProbeCount).toBeGreaterThan(0);
+      // The caller can tell "could not reload" apart from "nothing to reload".
+      expect(result).not.toBeNull();
+      expect(result!.kind).toBe("unavailable");
+    } finally {
+      await listener.stop(true);
+    }
+  }, 15_000);
+
+  test("no running proxy is null, which must not warn", async () => {
+    // Nothing is listening, so there is nothing to reload and nothing to warn about.
+    const result = await notifyRunningProxy("xai");
+    expect(result).toBeNull();
+  }, 15_000);
+
+  test("a provider outside the live-reload allowlist is null rather than a failure", async () => {
+    const custom = keyModeXaiConfig();
+    custom.providers.custom = {
+      adapter: "openai-chat",
+      baseUrl: "https://custom.example.test/v1",
+      apiKey: "custom-sentinel-key",
+    };
+    saveConfig(custom);
+
+    expect(await notifyRunningProxy("custom")).toBeNull();
+  });
+
+  /**
+   * `onLiveReload?.(await notifyRunningProxy(name))` reads as "reload, then hand the result
+   * to an optional callback", but optional-call short-circuiting skips the entire argument
+   * list when the callback is absent — so the reload silently never happens for every caller
+   * that does not pass one. That regression was caught once; pin it.
+   */
+  test("commit still reloads when no outcome callback is supplied", async () => {
+    let healthProbeCount = 0;
+    const listener = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname === "/healthz") healthProbeCount += 1;
+        return Response.json({ status: "ok", version: "2.6.16", uptime: 5 });
+      },
+    });
+    try {
+      saveConfig(keyModeXaiConfig(listener.port));
+      const config = loadConfig();
+
+      // No callback argument on purpose: this is the short-circuit shape.
+      await commitKeyLoginProvider(config, "xai", config.providers.xai!);
+
+      expect(healthProbeCount).toBeGreaterThan(0);
+    } finally {
+      await listener.stop(true);
     }
   }, 15_000);
 });

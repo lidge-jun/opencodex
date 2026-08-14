@@ -128,7 +128,7 @@ deny-by-default 상태로 유지됩니다.
 
 자격 증명에 고정된 계정 id나 이메일이 있는 OAuth 프로바이더는 로그인을 여러 개 보관할 수 있습니다.
 Providers 페이지에서 계정을 추가하고, 다른 계정을 로그아웃하지 않은 채 활성 계정만 바꿀 수 있습니다.
-계정 식별 정보가 없는 Kimi 자격 증명만 활성 슬롯을 교체하며, Kiro 계정은 프로필 ARN을 키로 저장됩니다.
+계정 식별 정보가 없는 Kimi 자격 증명은 일반 로그인에서는 활성 슬롯을 교체하지만, 명시적인 **계정 추가**에서는 기존 슬롯을 보존하고 별도의 새 슬롯을 활성화합니다. Kiro 계정은 프로필 ARN을 키로 저장됩니다.
 `chatgpt`는 Codex 계정 풀에 별도 저장소가 있어 항상 단일 슬롯만 씁니다. 토큰은 `~/.opencodex/auth.json`에 저장되고,
 `/api/oauth/accounts`는 마스킹된 메타데이터만 반환합니다.
 
@@ -170,8 +170,8 @@ opencodex에는 빌트인 프리셋이 79개 들어 있습니다. 키 방식 67�
 같은 라우팅 ID는 정상입니다.
 앞의 `cline-pass`는 opencodex 프로바이더이고, 뒤의 `cline-pass/kimi-k3`는 upstream에 보내는
 전체 모델 slug입니다. ClinePass 사용량은 계정의 5시간 롤링·주간·월간 한도를 함께 사용합니다.
-현재 opencodex는 실측된 `low` reasoning 단계만 광고하며, 더 높은 요청은 공식 지원 범위가
-게시되거나 검증될 때까지 `low`로 제한합니다.
+2026-08-13 실측에서 모든 정적 ClinePass 모델이 게이트웨이 입력에서 `low`, `medium`, `high`, `xhigh`, `max`를 수락하는 것을 확인했습니다.
+opencodex는 요청한 단계를 그대로 보존하며, 백엔드별 정규화는 ClinePass가 담당합니다.
 
 **Cline**은 동일한 API 키·엔드포인트를 종량제로 사용하며 100개 이상의 모델에 접근합니다
 (OpenRouter 형식 ID, 예: `anthropic/claude-sonnet-4-6`). Cline의 프로모션 무료 모델은
@@ -218,6 +218,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -381,8 +382,11 @@ Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`�
 Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static fallback model catalog
 metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
 사용합니다. 번들 폴백 목록에는 1M 컨텍스트의 `gpt-5.6-sol` / `terra` / `luna`, 500K 컨텍스트의
-`grok-4.5` / `grok-4.5-fast`, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
-현재 계정에 표시할 모델을 결정합니다. Cursor는 Kimi K3를 effort 접미사가 붙은 wire id로만
+Grok 4.5/4.6의 일반·Fast 항목, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
+현재 계정에 표시할 모델을 결정합니다. Grok 4.6은 두 형식 모두 `low` / `medium` / `high` / `xhigh`를
+노출하고 4.5는 `high`까지만 노출합니다. Fast 요청은 일치하는 Grok 기본 모델과 별도의 `effort`,
+`fast=true` `requested_model` 파라미터를 전송합니다. 평탄화된 `cursor-grok-{version}-{effort}-fast` id는
+탐색 및 picker 식별자로만 사용됩니다. Cursor는 Kimi K3를 effort 접미사가 붙은 wire id로만
 제공하므로 `cursor/kimi-k3`는 `low` / `high` / `max` 래더를 노출하고 기본값은 모델 문서의 API
 기본값과 같은 `max`입니다. Cursor 서버가 직접 보내는 native read/write/delete/ls/grep/shell/fetch 실행은 Codex
 승인 및 sandbox 경로를 우회하므로 기본적으로 비활성화되어 있습니다. 신뢰한 로컬 실험에서만

@@ -259,6 +259,25 @@ describe("Cursor tool definitions", () => {
     expect(cursorToolsForActivePrompt(tools, "Use any 10 tools")?.map(tool => cursorToolWireName(tool))).toEqual(["shell_command"]);
   });
 
+  test("preserves unified Desktop exec for generic tool-use without inventing shell aliases", () => {
+    for (const namespace of [undefined, "opencodex-responses"]) {
+      const tools: OcxTool[] = [
+        {
+          name: "exec",
+          ...(namespace ? { namespace } : {}),
+          description: "Run a command",
+          parameters: { type: "object", properties: { cmd: { type: "string" } }, required: ["cmd"] },
+        },
+        { name: "wait", ...(namespace ? { namespace } : {}), description: "Wait", parameters: {} },
+        { name: "tool_search", description: "Search tools", parameters: {} },
+      ];
+
+      const visible = cursorToolsForActivePrompt(tools, "Use any 3 tools");
+      expect(visible?.map(tool => tool.name)).toEqual(["exec"]);
+      expect(appendCursorGenericToolUseHint(tools, "Use any 3 tools")).toBe("Use any 3 tools");
+    }
+  });
+
   test("does not erase explicit non-exec tool_choice for generic tool-count prompts", () => {
     const tools: OcxTool[] = [
       { name: "exec_command", description: "Run", parameters: {} },
@@ -330,6 +349,7 @@ describe("Cursor tool definitions", () => {
     if (!note) throw new Error("Expected Cursor tool guidance note");
 
     expect(note).toContain("Windows PowerShell 5.1");
+    expect(note).toContain("never emit Get-Content or Get-ChildItem unless the host shell is PowerShell");
     expect(note).toContain("cd /d");
     expect(note).toContain("<<EOF");
     expect(note).toContain("if ($?)");

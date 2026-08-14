@@ -17,6 +17,7 @@ import { saveConfig } from "../src/config";
 import { startServer } from "../src/server";
 import { usageLogPath } from "../src/usage/log";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 const moduleOriginalFetch = globalThis.fetch;
 const moduleOriginalHome = process.env.OPENCODEX_HOME;
 afterEach(() => {
@@ -440,7 +441,7 @@ describe("OpenAI API Pro transport identities", () => {
       url.protocol = "ws:";
       const ws = new WebSocket(url);
       return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("OpenAI API Pro websocket timeout")), 2000);
+        const timer = setTimeout(() => reject(new Error("OpenAI API Pro websocket timeout")), watchdogMs(2000));
         ws.addEventListener("open", () => {
           ws.send(JSON.stringify({ type: "response.create", model, input: "hello", reasoning: { effort: "high" } }));
         }, { once: true });

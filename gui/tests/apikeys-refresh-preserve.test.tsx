@@ -207,6 +207,8 @@ test("successful key delete keeps last-good keys visible when follow-up refresh 
     expect(deleteBtn).toBeTruthy();
     await act(async () => {
       deleteBtn!.click();
+    });
+    await act(async () => {
       await new Promise<void>((resolve) => testWindow.setTimeout(resolve, 310));
     });
 

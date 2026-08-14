@@ -100,11 +100,13 @@ describe("registry per-model wire defaults", () => {
     });
   }
 
-  test("routes only the official Flash API id through Responses", () => {
+  test("routes the official V4 API ids through Responses", () => {
     expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash", deepseek()).adapter)
       .toBe("openai-responses");
+    // V4 Pro GA (DeepSeek-V4-Pro-0813) is officially on the Responses wire too —
+    // the /responses reference lists both V4 ids as accepted `model` values.
     expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-pro", deepseek()).adapter)
-      .toBe("openai-chat");
+      .toBe("openai-responses");
     // The dated release label is not the API model id and must not be silently rewritten.
     expect(resolveWireProtocolOverride("deepseek", "deepseek-v4-flash-0731", deepseek()).adapter)
       .toBe("openai-chat");

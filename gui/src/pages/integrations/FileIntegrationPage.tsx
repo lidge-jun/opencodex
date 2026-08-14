@@ -24,6 +24,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   openclaw: "integrations.semantics.openclaw",
   kimi: "integrations.semantics.kimi",
   gajae: "integrations.semantics.gajae",
+  dsh: "integrations.semantics.dsh",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -34,6 +35,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   openclaw: "integrations.tab.openclaw",
   kimi: "integrations.tab.kimi",
   gajae: "integrations.tab.gajae",
+  dsh: "integrations.tab.dsh",
 };
 
 const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {

@@ -7,6 +7,8 @@ import {
   TRANSLATOR_MAX_CALL_ARGUMENT_BYTES,
   TRANSLATOR_MAX_TURN_BYTES,
   createTranslatorBudget,
+  releaseTranslatedEvent,
+  retainTranslatedEvent,
   translatorObservedBufferSnapshot,
 } from "../src/lib/translator-budget";
 import type { AdapterEvent } from "../src/types";
@@ -20,6 +22,41 @@ async function textWithin(stream: ReadableStream<Uint8Array>, timeoutMs = 2_000)
 }
 
 describe("translator budget", () => {
+  test("incremental event retention transfers array-tail ownership during in-order release", () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 4_096 });
+    const first = { type: "text_delta", text: "first" };
+    const second = { type: "done" };
+    try {
+      retainTranslatedEvent(first, budget);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify([first])));
+
+      retainTranslatedEvent(second, budget, first);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify([first, second])));
+
+      releaseTranslatedEvent(first, budget);
+      expect(budget.snapshot().currentBytes).toBe(Buffer.byteLength(JSON.stringify([second])));
+      releaseTranslatedEvent(second, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
+  test("incremental event retention rejects an event object that already owns a lease", () => {
+    const budget = createTranslatorBudget({ maxTurnBytes: 4_096 });
+    const event = { type: "heartbeat" };
+    try {
+      retainTranslatedEvent(event, budget);
+      const retainedBytes = budget.snapshot().currentBytes;
+      expect(() => retainTranslatedEvent(event, budget)).toThrow(/already retained/);
+      expect(budget.snapshot().currentBytes).toBe(retainedBytes);
+      releaseTranslatedEvent(event, budget);
+      expect(budget.snapshot().currentBytes).toBe(0);
+    } finally {
+      budget.dispose();
+    }
+  });
+
   test("one one-shot tool call admits exactly 2 MiB and rejects one byte over", () => {
     const exact = createTranslatorBudget();
     exact.openCall("call");

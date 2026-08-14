@@ -25,7 +25,7 @@ then turns the events into Responses SSE.
 
 ## `openai-chat`
 
-**Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`) and every compatible
+**Targets:** OpenAI **Chat Completions** (`POST {baseUrl}/chat/completions`; a trailing `/chat/completions` or `/` on `baseUrl` is stripped first) and every compatible
 provider — xAI, Kimi, DeepSeek, GLM, Groq, OpenRouter, Ollama (local & cloud), and more.
 **Auth:** `key` (Bearer).
 

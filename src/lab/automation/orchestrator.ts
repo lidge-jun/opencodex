@@ -1,5 +1,6 @@
 import { readConfigDiagnostics } from "../../config";
 import { registerCurrentServerResourceCleanup } from "../../lib/server-resource-ownership";
+import { registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import { queryLabStatus } from "../query";
 import { rebuildLabProjection } from "../projection/rebuild";
 import { planLabAutomationRuns } from "./planner";
@@ -90,10 +91,12 @@ export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): () =
 
   let released = false;
   let detachServerCleanup = () => {};
+  let detachShutdownHook = () => {};
   const release = () => {
     if (released) return;
     released = true;
     detachServerCleanup();
+    detachShutdownHook();
     const current = dispatchDepsByConfigDir.get(key);
     if (current?.token !== token) return;
     dispatchDepsByConfigDir.delete(key);
@@ -104,6 +107,13 @@ export function setLabAutomationDispatchDeps(deps: AutomationDispatchDeps): () =
     }
   };
   detachServerCleanup = registerCurrentServerResourceCleanup(release);
+  // Shutdown teardown is registered here, at activation, so `server/lifecycle.ts` never has
+  // to import Lab in order to stop it. Scoped to this configDir, unlike the previous
+  // unscoped call from the shutdown path.
+  detachShutdownHook = registerOptionalShutdownHook(`lab-automation:${key}`, () => {
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler(deps.configDir);
+  });
   return release;
 }
 
@@ -399,6 +409,15 @@ export function startLabAutomationScheduler(configDir?: string): void {
     if (currentOwner) existing.ownerToken = currentOwner;
     return;
   }
+  // The scheduler owns a live interval, so its teardown must be registered here rather
+  // than only in setLabAutomationDispatchDeps: the management API and the CLI can start a
+  // scheduler without ever installing dispatch deps (lab-automation-routes.ts
+  // applySchedulerPolicy, cli/lab.ts), and core no longer imports this module to stop it.
+  // Without this registration such a scheduler survives drainAndShutdown.
+  registerOptionalShutdownHook(`lab-automation-scheduler:${key}`, () => {
+    requestLabAutomationShutdown();
+    stopLabAutomationScheduler(configDir);
+  });
   shutdownRequested = false;
   const { policy, routes } = loadLabAutomationConfig(configDir);
   const now = Date.now();

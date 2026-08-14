@@ -82,6 +82,8 @@ describe("Baseten Model APIs provider", () => {
       "thinkingmachines/inkling": ["low", "medium", "high", "xhigh", "max"],
       "openai/gpt-oss-120b": ["low", "medium", "high", "xhigh", "max"],
       "moonshotai/Kimi-K3": ["low", "high", "max"],
+      "zai-org/GLM-5.3": ["low", "high", "max"],
+      "zai-org/GLM-5.3-Fast": ["low", "high", "max"],
       "zai-org/GLM-5.2": ["high", "max"],
       "zai-org/GLM-5.2-Fast": ["high", "max"],
     });
@@ -90,6 +92,8 @@ describe("Baseten Model APIs provider", () => {
       "thinkingmachines/inkling": { none: "none", minimal: "minimal" },
       "openai/gpt-oss-120b": { none: "none", minimal: "minimal" },
       "moonshotai/Kimi-K3": { none: "none" },
+      "zai-org/GLM-5.3": { none: "none" },
+      "zai-org/GLM-5.3-Fast": { none: "none" },
       "zai-org/GLM-5.2": { none: "none" },
       "zai-org/GLM-5.2-Fast": { none: "none" },
     });

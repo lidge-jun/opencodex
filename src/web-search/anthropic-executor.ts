@@ -166,13 +166,17 @@ export async function runAnthropicWebSearch(
       () => fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal: linkedSignal.signal }),
       { abortSignal: linkedSignal.signal, label: "web-search-sidecar-anthropic" },
     );
+    // Guard before any branch reads the body: the failure branch's `res.text()` ran ahead of
+    // the success-path guard, reopening the fetch-resolution-to-reader-attach race
+    // (found investigating #1419).
+    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     if (!res.ok) {
       const t = await res.text().catch(() => "");
+      detachBodyGuard();
       console.warn(`[web-search] anthropic sidecar HTTP ${res.status} for query "${query.slice(0, 80)}" (${Date.now() - t0}ms)`);
       // Redact before surfacing: the body can echo auth headers/tokens (#398 review).
       return { text: "", sources: [], error: `sidecar HTTP ${res.status}: ${redactSecretString(t.slice(0, 200))}` };
     }
-    const detachBodyGuard = cancelBodyOnAbort(res.body, linkedSignal.signal);
     try {
       return await parseAnthropicSidecarSSE(res);
     } finally {

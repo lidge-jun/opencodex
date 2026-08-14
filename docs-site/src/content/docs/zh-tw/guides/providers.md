@@ -124,8 +124,9 @@ session／task key 有助提升 Code Plan cache hit rate；沒有 key 的請求�
 ### 多個 OAuth 帳號
 
 credential 內含穩定 account id 或 email 的 OAuth provider 可以保存多個登入。Providers 頁面會在下拉
-選單顯示這些帳號、允許新增帳號，並在不登出其他帳號的情況下切換目前帳號。只有沒有 identity 的 Kimi
-credential 會取代 active slot；Kiro 帳號以 profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
+選單顯示這些帳號、允許新增帳號，並在不登出其他帳號的情況下切換目前帳號。一般登入時，沒有 identity 的
+Kimi credential 會取代 active slot；明確的 **新增帳號** 會保留原有 slot 並啟用另一個新 slot。Kiro 帳號以
+profile ARN 作為 key。`chatgpt` 始終是 single-slot，因為
 Codex pool 帳號使用獨立 ledger。Token 仍存放在 `~/.opencodex/auth.json`；`/api/oauth/accounts` 只回傳
 遮蔽後的 metadata。
 
@@ -272,6 +273,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | SiliconFlow | `https://api.siliconflow.cn/v1` |
 | Volcengine Ark · Coding Plan · Agent Plan | `https://ark.cn-beijing.volces.com/api/v3` · `https://ark.cn-beijing.volces.com/api/coding/v3` · `https://ark.cn-beijing.volces.com/api/plan/v3` |
 | Xiaomi MiMo | `https://api.xiaomimimo.com/anthropic` |
+| Xiaomi MiMo (OpenAI Chat) | `https://api.xiaomimimo.com/v1` |
 | Kilo | `https://api.kilo.ai/api/gateway` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -461,8 +463,11 @@ Copilot 的 catalog 混合多種 wire：GPT-5 family（`gpt-5.3-codex`、`gpt-5.
 Cursor 另以實驗性 adapter 追蹤。`adapter: "cursor"` 會在 `ocx init` 與 dashboard Add Provider picker
 出現為實驗性 local config，並帶 Cursor static fallback model catalog metadata。設定 Cursor access token
 後，opencodex 使用 Cursor 即時 HTTP/2 transport。bundled fallback seed 包含 1M context 的
-`gpt-5.6-sol`／`terra`／`luna`、500K 的 `grok-4.5`／`grok-4.5-fast`，以及 262K 的 `kimi-k3`；即時探索
-決定哪些模型對帳號保持可見。Cursor 的 Kimi K3 只以帶 effort suffix 的 wire id 提供，因此
+`gpt-5.6-sol`／`terra`／`luna`、500K 的 Grok 4.5/4.6 一般與 Fast 項目，以及 262K 的 `kimi-k3`；即時探索
+決定哪些模型對帳號保持可見。Grok 4.6 的兩種形式都提供 `low`／`medium`／`high`／`xhigh`，4.5 則最高到
+`high`。Fast 請求會傳送對應的 Grok 基礎模型，並使用獨立的 `effort` 與 `fast=true` `requested_model`
+參數；扁平化的 `cursor-grok-{version}-{effort}-fast` id 僅作為探索與 picker 識別。Cursor 的 Kimi K3
+只以帶 effort suffix 的 wire id 提供，因此
 `cursor/kimi-k3` 暴露 `low`／`high`／`max` ladder，預設為 `max`，符合該模型文件化的 API default。
 Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution 預設停用，因為它會繞過 Codex
 approval 與 sandbox 路徑；只有可信本機實驗才應在 `~/.opencodex/config.json` 的 `providers.cursor`

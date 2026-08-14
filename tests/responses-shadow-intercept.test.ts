@@ -58,38 +58,19 @@ describe("isShadowSourceModel", () => {
 });
 
 describe("shouldInterceptShadowCall", () => {
-  const metadata = (requestKind: string) => new Headers({
-    "x-codex-turn-metadata": JSON.stringify({ request_kind: requestKind }),
+  test("intercepts every shadow source model unconditionally (#1684)", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined)).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna-2026-08", undefined)).toBe(true);
   });
 
-  test("intercepts recognized maintenance kinds but not normal turns", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("memory"))).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("compaction"))).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("prewarm"))).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("turn"))).toBe(false);
+  test("does not intercept non-source models", () => {
+    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined)).toBe(false);
+    expect(shouldInterceptShadowCall("gpt-5.5", undefined)).toBe(false);
   });
 
-  test("keeps legacy matching for headerless, malformed, and unrecognized metadata", () => {
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, new Headers())).toBe(true);
-    expect(shouldInterceptShadowCall(
-      "gpt-5.6-luna",
-      undefined,
-      new Headers({ "x-codex-turn-metadata": "{" }),
-    )).toBe(true);
-    expect(shouldInterceptShadowCall(
-      "gpt-5.6-luna",
-      undefined,
-      new Headers({ "x-codex-turn-metadata": "{}" }),
-    )).toBe(true);
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, metadata("future-kind"))).toBe(true);
-  });
-
-  test("uses case-insensitive Headers lookup and still excludes non-source models", () => {
-    const headers = new Headers({
-      "X-CoDeX-TuRn-MeTaDaTa": JSON.stringify({ request_kind: "turn" }),
-    });
-    expect(shouldInterceptShadowCall("gpt-5.6-luna", undefined, headers)).toBe(false);
-    expect(shouldInterceptShadowCall("gpt-5.6-terra", undefined, metadata("memory"))).toBe(false);
+  test("respects configured sourceModels override", () => {
+    expect(shouldInterceptShadowCall("custom-helper-v2", ["custom-helper"])).toBe(true);
+    expect(shouldInterceptShadowCall("gpt-5.6-luna", ["custom-helper"])).toBe(false);
   });
 });
 
@@ -147,17 +128,20 @@ describe("shadow call intercept request path (issue #311)", () => {
     expect(effort).toBe("low");
   });
 
-  test("does not rewrite a foreground gpt-5.6-luna turn", async () => {
-    let sawFetch = false;
-    globalThis.fetch = (async () => {
-      sawFetch = true;
-      return new Response(JSON.stringify({ error: { message: "unreachable" } }), { status: 500 });
+  test("rewrites a gpt-5.6-luna turn request too (#1684)", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
+      return new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
 
-    const response = await post(interceptConfig(), "gpt-5.6-luna", "turn");
+    await post(interceptConfig(), "gpt-5.6-luna", "turn");
 
-    expect(sawFetch).toBe(false);
-    expect(response.status).toBe(404);
+    expect(bodies.length).toBe(1);
+    expect(String(bodies[0]?.model ?? "")).toContain("grok-4.5");
   });
 
   test("leaves gpt-5.6-terra requests unrewritten", async () => {

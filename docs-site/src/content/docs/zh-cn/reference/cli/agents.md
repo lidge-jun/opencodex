@@ -132,7 +132,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 ## Client config export
 
-### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae>`
+### `ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh>`
 
 输出连接到正在运行代理的客户端配置。此命令会以所选客户端的原生格式序列化 `opencodex` provider 块，其中包含基础 URL、模型列表，以及该客户端适用的凭据引用或 `opencodex-loopback` 占位值。
 
@@ -140,7 +140,7 @@ ocx claude desktop import <path> [--apply]         Validate and import JSON
 
 | 标志 | 动作 |
 | --- | --- |
-| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae>` | 必需。选择客户端配置格式。 |
+| `--client <opencode\|pi\|omp\|hermes\|openclaw\|kimi\|gajae\|dsh>` | 必需。选择客户端配置格式。 |
 | `--json` | 仅在 stdout 打印配置 JSON，这样重定向即可捕获字节级精确输出。包括 `--out` 写入提示在内的所有诊断信息都会输出到 stderr。 |
 | `--out <path>` | 将配置写入 `<path>`。拒绝替换已存在的文件。 |
 | `--force` | 允许 `--out` 替换已存在的文件。 |
@@ -163,6 +163,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 | `openclaw` | `~/.openclaw/openclaw.json` | `openclaw.json5` | `OPENCODEX_OPENCLAW_API_KEY` |
 | `kimi` | `~/.kimi-code/config.toml` | `kimi-config.toml` | 无 - loopback placeholder |
 | `gajae` | `~/.gjc/agent/models.yml` | `gajae-models.yaml` | `OPENCODEX_GAJAE_API_KEY` |
+| `dsh` | `$DSH_HOME/settings.yaml`（默认 `~/.dsh/settings.yaml`） | `settings.yaml` | 无 — 非秘密环回 bearer 占位值 |
 
 opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
 
@@ -170,7 +171,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。opencode、Hermes 和 OpenClaw 配置里只包含环境引用，因此密钥仍保留在你的环境中；Pi、OMP、Kimi 和 Gajae 配置里携带的是环回占位值而不是任何凭据。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。生成的 Pi、OMP、Kimi 和 Gajae 集成仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
+任何密钥都不会被序列化。opencode、Hermes、OpenClaw 和 Gajae 配置里只包含环境引用，因此密钥仍保留在你的环境中；Pi、OMP、Kimi 和 DSH 配置里携带的是环回占位值而不是任何凭据。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，请设置对应的 `OPENCODEX_OPENCODE_API_KEY`、`OPENCODEX_HERMES_API_KEY` 或 `OPENCODEX_OPENCLAW_API_KEY`。`OPENCODEX_GAJAE_API_KEY` 只会从环境中提供 Gajae provider 凭据，不能发送远程准入 header，因此生成的 Gajae 集成仍与 Pi、OMP、Kimi 和 DSH 一样仅支持环回。关于准入密钥如何签发，请参见 [远程访问](/reference/configuration/#remote-access)。上游 providers 自身的密钥则完全是另一回事，需要按 [Providers](/guides/providers/) 单独配置。
 
 同一份负载会通过 `GET /api/client-config` 提供，并在仪表盘的 API 选项卡中渲染，因此 CLI、API 和 GUI 使用的是同一字节内容。
 

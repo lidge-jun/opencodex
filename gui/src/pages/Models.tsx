@@ -508,7 +508,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
     if (groups.length === 0) return;
     needsDefaultCollapseRef.current = false;
     const all = new Set(groups.map(group => group.provider));
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
     setCollapsed(all);
     writeCollapsedProviders(all);
   }, [groups]);
@@ -1700,7 +1700,7 @@ export default function Models({ apiBase }: { apiBase: string }) {
           {collapseControls}
           <div className="models-provider-list">
             {
-              // eslint-disable-next-line react-hooks/refs -- The hover ref is only read by row event handlers nested in this renderer.
+              // eslint-disable-next-line react-hooks/refs, react/react-compiler -- The hover ref is only read by row event handlers nested in this renderer.
               visibleGroups.map(group => renderGroup(group))
             }
           </div>

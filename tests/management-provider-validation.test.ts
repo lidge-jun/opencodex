@@ -36,6 +36,8 @@ import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import * as destinationPolicy from "../src/lib/destination-policy";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { LOCAL_PROVIDER_RELOAD_NAME_HEADER, LOCAL_PROVIDER_RELOAD_PATH } from "../src/lib/local-provider-reload-contract";
+import { getAccountSet, saveCredential } from "../src/oauth/store";
 
 // Full-suite Windows load: startServer + multi-step provider PATCH/GET flows exceed the
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
@@ -125,6 +127,120 @@ afterEach(() => {
 });
 
 describe("provider management validation", () => {
+  test("provider reload adopts only the validated disk row without rewriting config", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: "old-live-key",
+        },
+        stable: {
+          adapter: "openai-chat",
+          baseUrl: "https://stable.example.test/v1",
+          apiKey: "stable-live-key",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const diskConfig = structuredClone(liveConfig);
+    diskConfig.providers.xai = {
+      ...diskConfig.providers.xai!,
+      apiKey: "new-disk-key",
+      headers: { "x-operator-header": "operator-owned" },
+    };
+    saveConfig(diskConfig);
+    const diskBefore = readFileSync(join(TEST_DIR, "config.json"));
+    const stableBefore = structuredClone(liveConfig.providers.stable);
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockResolvedValue(null);
+    try {
+      const request = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+        method: "POST",
+        headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+      });
+      const response = await handleManagementAPI(
+        request,
+        new URL(request.url),
+        liveConfig,
+        { createManagementConvergeCodex: catalogConvergenceFactory() },
+        "local-provider-reload-capability",
+      );
+      expect(response?.status).toBe(200);
+      expect(liveConfig.providers.xai).toEqual(diskConfig.providers.xai);
+      expect(liveConfig.providers.stable).toEqual(stableBefore);
+      expect(readFileSync(join(TEST_DIR, "config.json"))).toEqual(diskBefore);
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
+  test("provider reload rejects an untrusted principal and a disk rewrite during DNS validation", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "xai",
+      providers: {
+        xai: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.x.ai/v1",
+          apiKey: "old-live-key",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    const diskConfig = structuredClone(liveConfig);
+    diskConfig.providers.xai = { ...diskConfig.providers.xai!, apiKey: "first-disk-key" };
+    saveConfig(diskConfig);
+
+    const untrusted = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+      method: "POST",
+      headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+    });
+    expect((await handleManagementAPI(
+      untrusted,
+      new URL(untrusted.url),
+      liveConfig,
+      { createManagementConvergeCodex: catalogConvergenceFactory() },
+      "admin-token",
+    ))?.status).toBe(403);
+
+    const resolvedError = spyOn(destinationPolicy, "providerDestinationResolvedError")
+      .mockImplementation(async () => {
+        const changed = loadConfig();
+        changed.providers.xai = { ...changed.providers.xai!, apiKey: "second-disk-key" };
+        saveConfig(changed);
+        return null;
+      });
+    try {
+      const request = new Request(`http://127.0.0.1${LOCAL_PROVIDER_RELOAD_PATH}`, {
+        method: "POST",
+        headers: { [LOCAL_PROVIDER_RELOAD_NAME_HEADER]: "xai" },
+      });
+      const response = await handleManagementAPI(
+        request,
+        new URL(request.url),
+        liveConfig,
+        { createManagementConvergeCodex: catalogConvergenceFactory() },
+        "local-provider-reload-capability",
+      );
+      expect(response?.status).toBe(409);
+      expect(liveConfig.providers.xai?.apiKey).toBe("old-live-key");
+      expect(loadConfig().providers.xai?.apiKey).toBe("second-disk-key");
+    } finally {
+      resolvedError.mockRestore();
+    }
+  });
+
   test("validates and exposes structured-output model opt-outs", () => {
     const provider = {
       adapter: "openai-chat",
@@ -425,6 +541,120 @@ describe("provider management validation", () => {
     } finally {
       await server.stop(true);
     }
+  });
+
+  // #1409: the add/edit form's payload type has no member for contextWindow or
+  // modelContextWindows, so an overwrite arrives without them. Registry enrichment then fills
+  // the absent fields from the seed and the stored row loses the user's values — for
+  // opencode-go the seed is exactly {"kimi-k3": 262144}, which is what the reporter found in
+  // place of their deepseek-v4-flash override.
+  describe("provider POST overwrite preserves hand-edited context windows (#1409)", () => {
+    async function seedProvider(url: URL, extra: Record<string, unknown>): Promise<Response> {
+      return fetch(new URL("/api/providers", url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "opencode-go",
+          provider: { adapter: "openai-chat", baseUrl: "https://opencode.ai/zen/go/v1", apiKey: "k", ...extra },
+        }),
+      });
+    }
+
+    function freshHome(): void {
+      if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+      mkdirSync(TEST_DIR, { recursive: true });
+      process.env.OPENCODEX_HOME = TEST_DIR;
+      saveConfig(config("127.0.0.1"));
+    }
+
+    test("an omitted modelContextWindows keeps the user's map, without registry seed keys", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelContextWindows: { "deepseek-v4-flash": 900000 } })).status).toBe(200);
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+
+        // The user's key survives, and the registry seed is NOT persisted into user config:
+        // router.ts fills registry values beneath user entries at resolve time, so writing
+        // them here would be a side effect of an unrelated save.
+        expect(loadConfig().providers["opencode-go"]?.modelContextWindows).toEqual({ "deepseek-v4-flash": 900000 });
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a submitted modelContextWindows updates that key and keeps the others", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelContextWindows: { "deepseek-v4-flash": 900000 } })).status).toBe(200);
+        expect((await seedProvider(server.url, { modelContextWindows: { "kimi-k3": 300000 } })).status).toBe(200);
+
+        expect(loadConfig().providers["opencode-go"]?.modelContextWindows)
+          .toEqual({ "deepseek-v4-flash": 900000, "kimi-k3": 300000 });
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("an omitted contextWindow keeps the user's scalar", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { contextWindow: 777000 })).status).toBe(200);
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+
+        expect(loadConfig().providers["opencode-go"]?.contextWindow).toBe(777000);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a submitted contextWindow still wins", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { contextWindow: 777000 })).status).toBe(200);
+        expect((await seedProvider(server.url, { contextWindow: 512000 })).status).toBe(200);
+
+        expect(loadConfig().providers["opencode-go"]?.contextWindow).toBe(512000);
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("a brand-new provider still receives the registry seed", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, {})).status).toBe(200);
+
+        // No prior row exists, so enrichment is authoritative and the seed must land.
+        expect(loadConfig().providers["opencode-go"]?.modelContextWindows).toBeDefined();
+      } finally {
+        await server.stop(true);
+      }
+    });
+
+    test("PATCH can still delete a key with an explicit null", async () => {
+      freshHome();
+      const server = startServer(0);
+      try {
+        expect((await seedProvider(server.url, { modelContextWindows: { "deepseek-v4-flash": 900000 } })).status).toBe(200);
+
+        const patch = await fetch(new URL("/api/providers?name=opencode-go", server.url), {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ modelContextWindows: { "deepseek-v4-flash": null } }),
+        });
+        expect(patch.status).toBe(200);
+
+        // Deletion is an explicit null through PATCH, which the POST carry-over must not undo.
+        expect(loadConfig().providers["opencode-go"]?.modelContextWindows?.["deepseek-v4-flash"]).toBeUndefined();
+      } finally {
+        await server.stop(true);
+      }
+    });
   });
 
   test("provider management accepts modelCosts on the canonical openai provider", async () => {
@@ -1219,6 +1449,51 @@ describe("provider management validation", () => {
         method: "DELETE",
       });
       expect(response.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("provider deletion removes the deleted provider's OAuth credential", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig({
+      port: 0,
+      defaultProvider: "test-openai",
+      providers: {
+        "test-openai": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.example.test/v1",
+          apiKey: "test-key",
+        },
+        removable: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.removable.test/v1",
+          apiKey: "test-key",
+        },
+      },
+    });
+    await saveCredential("removable", {
+      access: "credential-to-delete",
+      refresh: "refresh-to-delete",
+      expires: Date.now() + 60_000,
+    });
+    await saveCredential("retained", {
+      access: "credential-to-keep",
+      refresh: "refresh-to-keep",
+      expires: Date.now() + 60_000,
+    });
+
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/providers?name=removable", server.url), {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(200);
+
+      expect(getAccountSet("removable")).toBeNull();
+      expect(getAccountSet("retained")).not.toBeNull();
     } finally {
       await server.stop(true);
     }

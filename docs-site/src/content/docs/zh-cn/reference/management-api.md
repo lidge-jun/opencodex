@@ -208,7 +208,7 @@ Authorization: Bearer <admin-token>
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新，可选导入，或删除 Codex 账户。成功的 POST/DELETE 响应包含 `catalogRefreshPending`。 | 400 输入无效；手动导入可能被禁用 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | 列出/刷新或删除 Codex 账户。POST 仅作为已禁用的兼容端点保留；成功的 DELETE 响应包含 `catalogRefreshPending`。 | POST 始终返回 403 `manual_import_disabled`；DELETE 输入无效时返回 400 |
 | `PUT /api/codex-auth/accounts/alias` | 设置或清除账户别名 | 400 账户/别名无效 |
 | `PUT /api/codex-auth/accounts/pause` | 暂停或恢复一个账户 | 400 账户/状态无效；404 缺少账户 |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
@@ -225,8 +225,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |
 | `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态。新账号流程完成时，仅在需要恢复时包含 `catalogRefreshPending: true`。 | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
 
-如果新账号的 config row 已保存但 credential setup 未能完成，manual POST 会返回 HTTP 500，OAuth
-`login-status` 会报告 `status: "error"`。两者都包含
+如果新账号的 config row 已保存但 credential setup 未能完成，OAuth `login-status` 会报告
+`status: "error"`，并包含
 `code: "codex_credential_persistence_failed"`、`accountId`、`needsReauth: true`，并在需要时包含
 `catalogRefreshPending: true`；底层 storage error 详情不会暴露。account row 会保持已保存状态；再次
 创建账号前，请重新认证或删除该账号。

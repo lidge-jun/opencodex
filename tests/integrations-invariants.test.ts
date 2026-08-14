@@ -66,9 +66,9 @@ afterEach(() => {
 });
 
 describe("the client registries cannot drift apart", () => {
-  test("every list of clients holds exactly the same seven ids", async () => {
+  test("every list of clients holds exactly the same eight ids", async () => {
     /*
-     * Five lists name the same seven clients, and two of them are maintained by
+     * Five lists name the same eight clients, and two of them are maintained by
      * hand: the GUI cannot import the backend registry, because that would
      * pull node:os and node:path into the browser bundle. A client added
      * server-side renders no row until someone remembers the tuple, and the
@@ -78,12 +78,21 @@ describe("the client registries cannot drift apart", () => {
     const guiIntegrations = await import("../gui/src/pages/integrations/integration-api");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(7);
+    expect(expected).toHaveLength(8);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
     expect(Object.keys(gui.CLIENT_LABEL_KEYS).sort()).toEqual(expected);
     expect([...guiIntegrations.FILE_INTEGRATION_CLIENTS].sort()).toEqual(expected);
+  });
+
+  test("source preservation and cross-process locking are registry capabilities", () => {
+    expect(INTEGRATION_CLIENTS.omp.sourcePreservingYaml?.path).toEqual(["providers", "opencodex"]);
+    expect(INTEGRATION_CLIENTS.dsh.sourcePreservingYaml?.path).toEqual([
+      "llm-pi-ai", "providers", "opencodex",
+    ]);
+    expect(INTEGRATION_CLIENT_IDS.filter(id => INTEGRATION_CLIENTS[id].writerLock)).toEqual(["dsh"]);
+    expect(INTEGRATION_CLIENTS.dsh.writerLock).toEqual({ suffix: ".lock" });
   });
 });
 
@@ -130,6 +139,7 @@ describe("every client survives a full lifecycle", () => {
     openclaw: '{\n  models: {\n    providers: {\n      mine: { api: "http://keep-me" },\n    },\n  },\n}\n',
     kimi: '[providers.mine]\napi = "http://keep-me"\n',
     gajae: "providers:\n  mine:\n    api: http://keep-me\n",
+    dsh: "llm-pi-ai:\n  providers:\n    mine:\n      api: openai-completions\n",
   };
 
   for (const clientId of INTEGRATION_CLIENT_IDS) {

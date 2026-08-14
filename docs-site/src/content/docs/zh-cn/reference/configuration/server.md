@@ -16,7 +16,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `stallTimeoutSec?` | `number` | `300` | 在上游没有数据之前可等待的秒数，超过后返回 `response.incomplete`。最小值为 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次尝试的 DNS/TCP/TLS/最终响应头截止时间；它在正文生成之前结束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 优雅停机截止时间，超过后会中止仍在进行中的请求。 |
-| `websockets?` | `boolean` | `false` | 为 Responses WebSocket 路径声明 `supports_websockets`。设为 false 会保留 HTTP/SSE。 |
+| `websockets?` | `boolean` | `false` | 声明并允许面向客户端的 Responses WebSocket 路径。设为 false 时客户端使用 HTTP/SSE；它不会禁用符合条件的 canonical ChatGPT 上游 WS 优化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS 额外允许的精确 origin。loopback origin 始终允许；支持 `chrome-extension://<扩展 ID>` 等基于 authority 的浏览器扩展 origin，`*` 不是通配符。Firefox 和 Safari 会（每次安装/启动浏览器时）重新生成扩展 UUID，origin 变化后请更新该条目。 |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 管理平面和非回环绑定上的数据平面身份验证可接受的已生成 `ocx_…` 凭据。由仪表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
@@ -54,10 +54,15 @@ x-opencodex-api-key: your-secret-token
 | `/v1/responses` | 不接受 | **必需** | 不接受 |
 | `/v1/chat/completions` | 不接受 | **必需** | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
+| `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
 Responses 和 Chat Completions 会保留 `Authorization`，以便将来可能支持 Codex Direct 透传，因此这里只接受专用的准入头。仪表板生成的 `apiKeys` 可以在启动后替换
 环境令牌；候选项按常量时间比较。
+
+Messages 和 `count_tokens` 为兼容路由客户端仍接受三种准入形式。但在非回环绑定上，原生 Anthropic 透传只通过
+`x-opencodex-api-key` 接受代理准入，并把 `Authorization` 和 `x-api-key` 保留给 Anthropic
+凭据。放入这些提供方请求头的代理准入密钥会在转发前被移除。
 
 :::caution[LAN 暴露]
 绑定到 `0.0.0.0` 会将代理及其配置的提供方访问暴露给局域网。仅应在受信任
@@ -95,7 +100,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 
 ## Claude Code (`claudeCode`)
 
-这些设置控制 `/v1/messages`、`ocx claude` 启动器，以及 Claude 仪表板页面。
+这些设置控制 `/v1/messages`、`/v1/messages/count_tokens`、`ocx claude` 启动器，以及 Claude 仪表板页面。
 
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -161,7 +166,7 @@ routed 重放会把主 ChatGPT 认证注入内部请求。Anthropic 后端使用
 | `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.4-mini`，Anthropic 使用 `claude-sonnet-5`。 |
 | `reasoning?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | `"low"` | OpenAI Responses 推理强度；Anthropic 会忽略该项。 |
 | `maxDescriptionsPerTurn?` | `number` | `8` | 每个主轮次允许的新增描述缓存未命中次数。`0` 会禁用调用；无效值会使用默认值。 |
-| `timeoutMs?` | `number` | `45000` | 侧车获取超时。 |
+| `timeoutMs?` | `number` | `45000` | 侧车获取超时。整数 1–2147483647。 |
 
 支持的等级受上游提供方能力与所选模型公布的推理阶梯限制。Vision 只会对发送给其提供方 `noVisionModels` 中模型的图像生效。OpenAI 具有与 search 相同的登录/forward 要求；显式选择的 Anthropic 在没有可用凭据时会失败并关闭。成功的 `data:` 描述会使用一个受限缓存，其键由后端、模型、detail、图像字节以及规范化消息上下文组成；OpenAI 的键还会额外包含推理强度（Anthropic 键不含）。命中和同轮重复不会消耗限额。远程 `https:` 图像以及失败或空的描述不会被缓存。
 

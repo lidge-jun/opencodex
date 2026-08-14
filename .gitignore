@@ -30,6 +30,13 @@ devlog/**/security-advisory-draft*
 .tmp/
 .opencode/
 
+# Capability probes from the trusted-artifact directory check
+# (src/lab/artifacts/secure-fs.ts detectArtifactIoMode). The probe is normally
+# unlinked immediately, but a process that dies between rename and unlink leaves
+# an empty file behind, and they accumulate in whatever directory the check ran
+# from. They are machine-local scratch and must never be committed.
+.dirfd-probe-*
+
 # Local agent/session artifacts
 # These are per-machine agent state (goalplans, ledgers, evidence scratch).
 # They are never part of the product and must not be committed, not even with

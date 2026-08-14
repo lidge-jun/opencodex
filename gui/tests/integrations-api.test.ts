@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nContext, type TFn } from "../src/i18n/shared";
 import IntegrationStateBadge from "../src/pages/integrations/IntegrationStateBadge";
 import {
+  FILE_INTEGRATION_CLIENTS,
   IntegrationApiError,
   loadIntegrationJournal,
   loadIntegrationState,
@@ -14,6 +15,12 @@ import {
 } from "../src/pages/integrations/integration-api";
 
 const originalFetch = globalThis.fetch;
+
+test("DSH is a file integration client", () => {
+  expect(FILE_INTEGRATION_CLIENTS).toEqual([
+    "opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh",
+  ]);
+});
 
 afterEach(() => {
   globalThis.fetch = originalFetch;

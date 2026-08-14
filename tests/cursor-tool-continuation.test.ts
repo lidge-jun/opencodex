@@ -136,6 +136,24 @@ describe("363-A: turn-1 termination for Responses client tool via exec mcpArgs",
     expect(finalized.map(e => e.type)).toEqual(["done"]);
   });
 
+  test("unified Desktop exec is surfaced as a Responses client tool instead of native-exec fallback", () => {
+    const state = createCursorProtobufEventState({ clientToolNames: ["exec"] });
+    const plan = planMcpArgsHandling(execMcpArgs({
+      toolName: "exec",
+      toolCallId: "call_exec",
+      args: { cmd: new TextEncoder().encode(JSON.stringify("pwd")) },
+    }), state);
+
+    expect(plan.handledByResponsesBridge).toBe(true);
+    expect(plan.events).toEqual([
+      { type: "tool_call_start", id: "call_exec", name: "exec" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":\"pwd\"}" },
+      { type: "tool_call_end", id: "call_exec" },
+    ]);
+    expect(plan.writeMcpResult).toBeUndefined();
+    expect(plan.finalizeWhenDrained).toBe(true);
+  });
+
   test("no-checkpoint client-tool finalize carries forward the last known active context usage", () => {
     const tracker = createCursorContextUsageTracker();
     tracker.record("cursor_conv_1", 183_336);

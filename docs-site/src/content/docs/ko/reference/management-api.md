@@ -206,7 +206,7 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신, 선택적으로 가져오기, 또는 삭제합니다. 성공한 POST/DELETE는 `catalogRefreshPending`를 포함합니다. | 400 잘못된 입력; 수동 가져오기를 비활성화할 수 있음 |
+| `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
 | `PUT /api/codex-auth/accounts/pause` | 계정 하나를 일시 중지하거나 재개합니다 | 400 잘못된 account/state; 404 누락된 account |
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
@@ -223,8 +223,8 @@ Authorization: Bearer <admin-token>
 | `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
 
-새 account의 config row는 저장되었지만 credential setup을 완료하지 못하면 manual POST는 HTTP 500을
-반환하고 OAuth `login-status`는 `status: "error"`를 보고합니다. 두 응답 모두
+새 account의 config row는 저장되었지만 credential setup을 완료하지 못하면 OAuth `login-status`는
+`status: "error"`를 보고하며
 `code: "codex_credential_persistence_failed"`, `accountId`, `needsReauth: true`, 필요한 경우
 `catalogRefreshPending: true`를 포함하며 storage error 세부 정보는 노출하지 않습니다. account row는
 저장된 상태이므로 account 생성을 다시 시도하기 전에 재인증하거나 삭제하십시오.

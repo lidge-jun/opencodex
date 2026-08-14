@@ -36,13 +36,16 @@ import {
 } from "../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../src/server/request-log";
 import { handleManagementAPI } from "../src/server/management-api";
+import { handleResponses } from "../src/server/responses";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "./helpers/isolated-codex-home";
 import { ownedServiceHomeInspection } from "./helpers/owned-service-home-inspection";
 import { configuredAdminToken } from "../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../src/lib/system-restart-contract";
+import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../src/lib/local-provider-reload-contract";
 
+import { watchdogMs } from "./helpers/ci-watchdog";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -348,6 +351,132 @@ describe("server local API auth", () => {
         throw new Error("unsupported");
       },
     })).toBe(false);
+  });
+
+  test("responses handler keeps the request timeout until the body is fully accepted", async () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value;
+      },
+    });
+    const cfg = config();
+    cfg.defaultProvider = "fixture";
+    cfg.providers = {
+      fixture: { ...cfg.providers.openai!, disabled: true },
+    };
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, cfg, {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    controller.enqueue(new TextEncoder().encode('{"model":"fixture/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    controller.enqueue(new TextEncoder().encode("}"));
+    controller.close();
+    const response = await responsePromise;
+    expect(accepted).toBe(true);
+    expect(response.status).toBe(404);
+  });
+
+  test("responses handler classifies an aborted pending body as client cancellation", async () => {
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(value) {
+        bodyController = value;
+      },
+    });
+    const abortController = new AbortController();
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: abortController.signal,
+    });
+    let accepted = false;
+    const responsePromise = handleResponses(req, config(), {
+      model: "unknown",
+      provider: "unknown",
+    }, {
+      abortSignal: abortController.signal,
+      onRequestBodyRead: () => {
+        accepted = true;
+      },
+    });
+
+    bodyController.enqueue(new TextEncoder().encode('{"model":"openai/gpt-test","input":"hello"'));
+    await Bun.sleep(10);
+    expect(accepted).toBe(false);
+
+    abortController.abort();
+    const response = await responsePromise;
+    expect(response.status).toBe(499);
+    expect(accepted).toBe(false);
+  });
+
+  test("responses handler accepts a combo body exactly once across failover children", async () => {
+    const upstreamModels: string[] = [];
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.json() as { model?: string };
+        upstreamModels.push(body.model ?? "missing");
+        return Response.json({ error: { message: "rate limited; try the next combo target" } }, {
+          status: 429,
+          headers: { "retry-after": "1" },
+        });
+      },
+    });
+    const baseUrl = `${upstream.url.toString().replace(/\/$/, "")}/v1`;
+    const cfg: OcxConfig = {
+      port: 0,
+      defaultProvider: "first",
+      providers: {
+        first: { adapter: "openai-responses", baseUrl, apiKey: "first-key", allowPrivateNetwork: true },
+        second: { adapter: "openai-responses", baseUrl, apiKey: "second-key", allowPrivateNetwork: true },
+      },
+      combos: {
+        request_timeout: {
+          strategy: "failover",
+          targets: [
+            { provider: "first", model: "first-model" },
+            { provider: "second", model: "second-model" },
+          ],
+        },
+      },
+    };
+    let acceptedCount = 0;
+
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/request_timeout", input: "hello", stream: false }),
+      }), cfg, { model: "unknown", provider: "unknown" }, {
+        onRequestBodyRead: () => {
+          acceptedCount += 1;
+        },
+      });
+
+      expect(response.status).toBe(429);
+      expect(acceptedCount).toBe(1);
+      expect(upstreamModels).toEqual(["first-model", "second-model"]);
+    } finally {
+      await upstream.stop(true);
+    }
   });
 
   test("loopback hostnames do not require opencodex API auth", () => {
@@ -689,6 +818,7 @@ describe("server local API auth", () => {
       expect(Object.keys(healthBody).sort()).toEqual([
         "pid",
         "port",
+        "providerReloadCapability",
         "restartCapability",
         "service",
         "status",
@@ -696,6 +826,7 @@ describe("server local API auth", () => {
         "version",
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
+      expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {
       await server.stop(true);
@@ -1204,7 +1335,7 @@ describe("server local API auth", () => {
       url.protocol = "ws:";
       const ws = new WebSocket(url, { headers: { "x-opencodex-api-key": "local-secret", ...(headers ?? {}) } } as unknown as string[]);
       return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("tier websocket timeout")), 5_000);
+        const timer = setTimeout(() => reject(new Error("tier websocket timeout")), watchdogMs(5_000));
         ws.addEventListener("open", () => {
           ws.send(JSON.stringify({ type: "response.create", model, input: "hello" }));
         }, { once: true });
@@ -1438,7 +1569,7 @@ describe("server local API auth", () => {
       const sendFrame = async (model: string) => {
         const before = seen.length;
         const message = new Promise<string>((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error(`sequential websocket timeout: ${model}`)), 5_000);
+          const timer = setTimeout(() => reject(new Error(`sequential websocket timeout: ${model}`)), watchdogMs(5_000));
           const onMessage = (event: MessageEvent) => {
             const value = typeof event.data === "string" ? event.data : "";
             if (!value.includes('"type":"response.completed"')) return;
@@ -1708,7 +1839,7 @@ describe("server local API auth", () => {
         },
       } as unknown as string[]);
       const wsFailure = new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("websocket affinity timeout")), 1000);
+        const timer = setTimeout(() => reject(new Error("websocket affinity timeout")), watchdogMs(1000));
         ws.addEventListener("open", () => {
           ws.send(JSON.stringify({ type: "response.create", model: "gpt-test", input: "hello" }));
         }, { once: true });
@@ -1796,7 +1927,7 @@ describe("server local API auth", () => {
         ws.addEventListener("error", () => reject(new Error("websocket failed to open")), { once: true });
       });
       const waitForTerminal = () => new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("websocket terminal timeout")), 1000);
+        const timer = setTimeout(() => reject(new Error("websocket terminal timeout")), watchdogMs(1000));
         const onMessage = (event: MessageEvent) => {
           const text = typeof event.data === "string" ? event.data : "";
           if (text.includes('"type":"response.completed"')) {
@@ -1872,7 +2003,7 @@ describe("server local API auth", () => {
         ws.addEventListener("error", () => reject(new Error("websocket failed to open")), { once: true });
       });
       const waitForTerminal = () => new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("websocket terminal timeout")), 1000);
+        const timer = setTimeout(() => reject(new Error("websocket terminal timeout")), watchdogMs(1000));
         const onMessage = (event: MessageEvent) => {
           const text = typeof event.data === "string" ? event.data : "";
           if (text.includes('"type":"response.completed"')) {

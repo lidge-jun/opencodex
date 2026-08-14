@@ -13,6 +13,7 @@ import { extractAccountId } from "../oauth/chatgpt";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "../server/auth-cors";
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import {
+  CODEX_FORWARD_BASE_URL,
   isCanonicalOpenAiForwardProvider,
   OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
@@ -62,10 +63,16 @@ export function listOpenAiForwardSidecarCandidates(config: OcxConfig): OpenAiFor
     ? { ...provider, authMode: "forward" as const }
     : provider;
   if (!isCanonicalOpenAiForwardProvider(canonicalProvider)) return [];
+  // The predicate accepts harmless trailing-slash variants. Pin the provider returned
+  // to credential-bearing sidecars so every consumer builds one exact ChatGPT path
+  // instead of independently concatenating the operator's equivalent spelling.
+  const pinnedProvider = canonicalProvider.baseUrl === CODEX_FORWARD_BASE_URL
+    ? canonicalProvider
+    : { ...canonicalProvider, baseUrl: CODEX_FORWARD_BASE_URL };
   return [{
     providerName: OPENAI_CODEX_PROVIDER_ID,
-    provider: canonicalProvider,
-    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, canonicalProvider) ?? "pool",
+    provider: pinnedProvider,
+    accountMode: providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, pinnedProvider) ?? "pool",
   }];
 }
 

@@ -13,6 +13,11 @@ import {
   writeCustomLayers,
   type CustomLayer,
 } from "../src/codex/prompt-layers";
+import {
+  encodeJournal,
+  hashBytes,
+  type JournalRecord,
+} from "../src/codex/prompt-journal";
 
 const MARKER = "# Auto-injected by opencodex";
 const roots: string[] = [];
@@ -213,6 +218,34 @@ describe("transaction", () => {
     const result = setToggle("apps", false, snap.revision, paths);
     expect(result).toMatchObject({ ok: false, error: "recovery_required" });
     expect(read(paths.configPath)).toBe('model = "x"\n');
+  });
+
+  test("a forged journal cannot redirect recovery away from the active paths", () => {
+    const paths = fixture('model = "x"\n');
+    const attacker = fixture("ATTACKER_POST_CONFIG", "ATTACKER_PRE_STORE");
+    const journalPath = join(paths.root, "opencodex-prompt.journal");
+    const record: JournalRecord = {
+      configPath: attacker.configPath,
+      storePath: attacker.storePath,
+      preConfig: hashBytes("ATTACKER_PRE_CONFIG"),
+      postConfig: hashBytes("ATTACKER_POST_CONFIG"),
+      preStore: hashBytes("ATTACKER_PRE_STORE"),
+      postStore: hashBytes("ATTACKER_POST_STORE"),
+      preConfigBytes: "ATTACKER_PRE_CONFIG",
+      postConfigBytes: "ATTACKER_POST_CONFIG",
+      preStoreBytes: "ATTACKER_PRE_STORE",
+      postStoreBytes: "ATTACKER_POST_STORE",
+    };
+    writeFileSync(journalPath, encodeJournal(record), "utf8");
+
+    const before = readPromptLayers(paths);
+    const result = setToggle("apps", false, before.revision, paths);
+
+    expect(result).toMatchObject({ ok: false, error: "recovery_required" });
+    expect(read(paths.configPath)).toBe('model = "x"\n');
+    expect(read(attacker.configPath)).toBe("ATTACKER_POST_CONFIG");
+    expect(read(attacker.storePath)).toBe("ATTACKER_PRE_STORE");
+    expect(existsSync(journalPath)).toBe(true);
   });
 
   test("a held lock refuses a second writer", () => {

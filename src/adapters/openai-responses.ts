@@ -6,11 +6,12 @@ import { COMPACT_PROMPT, decodeCompactionSummary, SUMMARY_PREFIX } from "../resp
 import { collectResponsesToolGroups } from "../responses/tool-groups";
 import { isHostedToolUnsupportedForModel } from "../responses/hosted-tool-policy";
 import { decodeServerSentEvents } from "../lib/sse-decoder";
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
+import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
 import { modelRecordValue } from "../reasoning-effort";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { rewriteRoutedCustomToolsForUpstream } from "../responses/custom-tool-compat";
+import { openaiResponsesUrl } from "./openai-responses-url";
 
 // Headers relayed verbatim from the caller in OAuth-passthrough ("forward") mode.
 // Exported so the web-search sidecar reuses the exact same forwarded-auth set for its ChatGPT call.
@@ -421,6 +422,112 @@ function normalizeToolSchemas(body: unknown): unknown {
     if (inputChanged) normalizedBody = { ...normalizedBody, input };
   }
   return normalizedBody;
+}
+
+function activateDeferredTool(tool: Record<string, unknown>): Record<string, unknown> {
+  const { defer_loading: _, ...activeTool } = tool;
+  if (tool.type !== "namespace" || !Array.isArray(tool.tools)) return activeTool;
+  return {
+    ...activeTool,
+    tools: tool.tools.map(inner => isPlainObject(inner) ? activateDeferredTool(inner) : inner),
+  };
+}
+
+function mergeLoadedTools(declaredTools: unknown[], loadedTools: unknown[]): unknown[] {
+  const merged = [...declaredTools];
+  let changed = false;
+
+  for (const candidate of loadedTools) {
+    if (!isPlainObject(candidate) || typeof candidate.name !== "string") continue;
+    const loaded = activateDeferredTool(candidate);
+    if (loaded.type === "namespace" && Array.isArray(loaded.tools)) {
+      const namespaceIndex = merged.findIndex(tool =>
+        isPlainObject(tool) && tool.type === "namespace" && tool.name === loaded.name
+      );
+      if (namespaceIndex < 0) {
+        merged.push(loaded);
+        changed = true;
+        continue;
+      }
+
+      const namespace = merged[namespaceIndex];
+      if (!isPlainObject(namespace)) continue;
+      const namespaceTools = Array.isArray(namespace.tools) ? namespace.tools : [];
+      const nextNamespaceTools = [...namespaceTools];
+      let namespaceChanged = "defer_loading" in namespace;
+      for (const tool of loaded.tools) {
+        if (!isPlainObject(tool) || typeof tool.name !== "string") continue;
+        const declaredIndex = nextNamespaceTools.findIndex(declared =>
+          isPlainObject(declared) && declared.name === tool.name
+        );
+        if (declaredIndex < 0) {
+          nextNamespaceTools.push(tool);
+          namespaceChanged = true;
+          continue;
+        }
+        const declared = nextNamespaceTools[declaredIndex];
+        if (isPlainObject(declared) && "defer_loading" in declared) {
+          nextNamespaceTools[declaredIndex] = activateDeferredTool(declared);
+          namespaceChanged = true;
+        }
+      }
+      if (!namespaceChanged) continue;
+      const { defer_loading: _, ...activeNamespace } = namespace;
+      merged[namespaceIndex] = { ...activeNamespace, tools: nextNamespaceTools };
+      changed = true;
+      continue;
+    }
+
+    const declaredIndex = merged.findIndex(tool =>
+      isPlainObject(tool) && tool.type !== "namespace" && tool.name === loaded.name
+    );
+    if (declaredIndex < 0) {
+      merged.push(loaded);
+      changed = true;
+    } else {
+      const declared = merged[declaredIndex];
+      if (isPlainObject(declared) && "defer_loading" in declared) {
+        merged[declaredIndex] = activateDeferredTool(declared);
+        changed = true;
+      }
+    }
+  }
+
+  return changed ? merged : declaredTools;
+}
+
+/**
+ * Client-executed tool search only changes Codex's parsed tool context. Routed passthrough keeps
+ * serializing the raw request, so activate those returned definitions for upstreams that do not
+ * implement the native deferred-loading handshake themselves.
+ */
+function promoteClientLoadedTools(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+
+  const loadedTools = body.input.flatMap(item =>
+    isPlainObject(item) && item.type === "tool_search_output" && Array.isArray(item.tools)
+      ? item.tools
+      : []
+  );
+  if (loadedTools.length === 0) return body;
+
+  if (Array.isArray(body.tools)) {
+    const tools = mergeLoadedTools(body.tools, loadedTools);
+    return tools === body.tools ? body : { ...body, tools };
+  }
+
+  const additionalToolsIndex = body.input.findIndex(item =>
+    isPlainObject(item) && item.type === "additional_tools" && Array.isArray(item.tools)
+  );
+  if (additionalToolsIndex < 0) return { ...body, tools: mergeLoadedTools([], loadedTools) };
+
+  const additionalTools = body.input[additionalToolsIndex];
+  if (!isPlainObject(additionalTools) || !Array.isArray(additionalTools.tools)) return body;
+  const tools = mergeLoadedTools(additionalTools.tools, loadedTools);
+  if (tools === additionalTools.tools) return body;
+  const input = [...body.input];
+  input[additionalToolsIndex] = { ...additionalTools, tools };
+  return { ...body, input };
 }
 
 const MAX_RESPONSES_CALL_ID_LENGTH = 64;
@@ -1237,29 +1344,38 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       let url: string;
 
       if (provider.authMode === "forward") {
+        const mayForwardCallerCredentials = isCanonicalOpenAiForwardProvider(provider);
         // OAuth passthrough: ChatGPT backend path is `${baseUrl}/responses` (no /v1).
-        url = `${provider.baseUrl}/responses`;
+        const baseUrl = mayForwardCallerCredentials
+          ? CODEX_FORWARD_BASE_URL
+          : provider.baseUrl.replace(/\/+$/, "");
+        url = `${baseUrl}/responses`;
         if (provider.headers) Object.assign(headers, provider.headers); // static headers first…
         const runtimeProvider = provider as {
           _codexAccountOverride?: { accessToken: string; chatgptAccountId: string };
           _codexAccountRequired?: boolean;
         };
-        if (runtimeProvider._codexAccountRequired && !runtimeProvider._codexAccountOverride) {
+        if (
+          mayForwardCallerCredentials
+          && runtimeProvider._codexAccountRequired
+          && !runtimeProvider._codexAccountOverride
+        ) {
           throw new Error("Codex pool account auth is required but unavailable");
         }
-        for (const h of FORWARD_HEADERS) {
-          const v = incoming?.headers.get(h);
-          if (v) headers[h] = v;                                        // …so forwarded auth always wins.
+        if (mayForwardCallerCredentials) {
+          for (const h of FORWARD_HEADERS) {
+            const v = incoming?.headers.get(h);
+            if (v) headers[h] = v;                                      // …so forwarded auth always wins.
+          }
         }
         const override = runtimeProvider._codexAccountOverride;
-        if (override) {
+        if (override && mayForwardCallerCredentials) {
           headers["authorization"] = `Bearer ${override.accessToken}`;
           headers["chatgpt-account-id"] = override.chatgptAccountId;
         }
       } else {
         if (provider.responsesPath === undefined) {
-          const base = provider.baseUrl.replace(/\/v1\/?$/, "");
-          url = `${base}/v1/responses`;
+          url = openaiResponsesUrl(provider.baseUrl);
         } else {
           const base = provider.baseUrl.replace(/\/$/, "");
           url = `${base}${provider.responsesPath}`;
@@ -1269,6 +1385,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       }
 
       const forward = provider.authMode === "forward";
+      let convertedRoutedCustomToolNames: Set<string> | undefined;
       const unexpandedMiss = !!parsed.previousResponseId && parsed._previousResponseInputExpanded !== true;
       let outBody = stripPreviousResponseId(
         parsed._rawBody,
@@ -1312,8 +1429,13 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (parsed._compactionRequest === true && !isCanonicalOpenAiForwardProvider(provider)) {
         outBody = buildRoutedCompactionBody(outBody);
       }
+      if (!isCanonicalOpenAiForwardProvider(provider)) {
+        outBody = promoteClientLoadedTools(outBody);
+      }
       if (provider.authMode !== "forward") {
-        outBody = rewriteRoutedCustomToolsForUpstream(outBody).body;
+        const rewritten = rewriteRoutedCustomToolsForUpstream(outBody);
+        outBody = rewritten.body;
+        convertedRoutedCustomToolNames = rewritten.names;
       }
       const sanitizedBody = normalizeToolSchemas(stripSparkCompatibility(stripUnsupportedReasoningParams(stripItemIdsWhenUnstored(stripInvalidItemIds(stripUnsupportedHostedTools(sanitizeReasoningInputContent(scrubOcxCompactionItems(outBody), { preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true })))))));
       const body = JSON.stringify(stripDisabledReasoningSummaries(
@@ -1331,6 +1453,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         headers,
         body,
         releaseBodyObservation,
+        ...(convertedRoutedCustomToolNames ? { convertedRoutedCustomToolNames } : {}),
       };
     },
 

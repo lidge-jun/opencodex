@@ -57,7 +57,8 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     expect(sseBranch).toContain("const needsClientRewrite = clientBlockRewrite !== undefined;");
     expect(sseBranch).toContain("new Response(eagerBody");
     expect(sseBranch).toContain("const rewrittenBody = clientBlockRewrite !== undefined");
-    expect(sseBranch).toContain("eagerPath?.useEagerRelay || win32EagerRewrite");
+    expect(sseBranch).toContain("isCodexWsUpstreamResponse(upstreamResponse)");
+    expect(sseBranch).toContain("forceCodexWsEagerRelay || eagerPath?.useEagerRelay || win32EagerRewrite");
     expect(sseBranch).not.toContain("win32TerminalRelay");
     // #864: win32 traffic that DOES need a client rewrite takes the eager single
     // reader with the payload rewrite applied inline — never the tee()+JS-pull

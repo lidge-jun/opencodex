@@ -613,6 +613,43 @@ export function runWindowsElevated(file: string, args: string[]): Promise<number
 }
 
 /**
+ * Register one scheduled-task definition without exposing a mutable XML pathname to
+ * the elevated process. The XML bytes are fixed in the encoded PowerShell command
+ * before UAC; Register-ScheduledTask receives that string directly after elevation.
+ */
+export function runWindowsElevatedScheduledTaskRegistration(
+  taskName: string,
+  xml: string,
+): Promise<number> {
+  const xmlBase64 = Buffer.from(xml, "utf16le").toString("base64");
+  const inner = [
+    `$taskName = ${psSingleQuote(taskName)}`,
+    `$xmlBase64 = ${psSingleQuote(xmlBase64)}`,
+    "$xml = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($xmlBase64))",
+    "Register-ScheduledTask -TaskName $taskName -Xml $xml -Force -ErrorAction Stop | Out-Null",
+  ].join("; ");
+  const encodedCommand = Buffer.from(inner, "utf16le").toString("base64");
+  const script = [
+    `$p = Start-Process -FilePath ${psSingleQuote(windowsPowerShell())}`,
+    ` -ArgumentList ${psSingleQuote(buildWindowsElevatedArgumentList([
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-EncodedCommand",
+      encodedCommand,
+    ]))}`,
+    " -Verb RunAs -WindowStyle Hidden -PassThru -Wait",
+    `if ($null -eq $p) { exit ${OCX_ELEVATED_UAC_CANCELLED} }`,
+    "$null = $p.Handle",
+    `if ($null -eq $p.ExitCode) { exit ${OCX_ELEVATED_PROTOCOL_FAILED} }`,
+    "exit $p.ExitCode",
+  ].join("; ");
+
+  return startPowerShellCommand(script).completion.then(result => result.exitCode);
+}
+
+/**
  * Build the elevated (post-UAC) script: create → run → optional delete rollback.
  * Returns only OpenCodex protocol exit codes (never raw schtasks codes, never 1223).
  * Does not write through any user-controlled pathname.

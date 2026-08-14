@@ -184,6 +184,10 @@ async function mountHarness(): Promise<Harness> {
   });
   await act(flush);
 
+  const advanced = container.querySelector<HTMLButtonElement>('.codex-auth-advanced__toggle');
+  if (!advanced) throw new Error("advanced settings toggle was not rendered");
+  await act(async () => { advanced.click(); await flush(); });
+
   const input = container.querySelector<HTMLInputElement>('input[aria-label="Usage threshold, percent"]');
   expect(input).not.toBeNull();
   expect(input?.value).toBe("80");
@@ -263,6 +267,11 @@ describe("Codex auto-switch controller interactions", () => {
       accountPoolStickyLimit: 1,
     }));
     await act(flush);
+
+    expect(container.querySelector(".codex-auto-switch-card")).toBeNull();
+    const advanced = container.querySelector<HTMLButtonElement>(".codex-auth-advanced__toggle");
+    expect(advanced).not.toBeNull();
+    await act(async () => { advanced!.click(); await flush(); });
 
     const card = container.querySelector<HTMLElement>(".codex-auto-switch-card");
     expect(card).not.toBeNull();
@@ -350,6 +359,10 @@ describe("Codex auto-switch controller interactions", () => {
       }));
       await flush();
     });
+
+    const advanced = container.querySelector<HTMLButtonElement>(".codex-auth-advanced__toggle");
+    expect(advanced).not.toBeNull();
+    await act(async () => { advanced!.click(); await flush(); });
 
     const readyToggle = container.querySelector<HTMLButtonElement>("button.toggle[aria-pressed]");
     expect(readyToggle?.disabled).toBe(false);

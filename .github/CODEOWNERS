@@ -9,7 +9,12 @@
 
 # Repository automation and release security
 /.github/ @lidge-jun @Ingwannu
+/.coderabbit.yaml @lidge-jun @Ingwannu
+/.npmignore @lidge-jun @Ingwannu
+/bunfig.toml @lidge-jun @Ingwannu
 /scripts/release.ts @lidge-jun @Ingwannu
+/scripts/release-notes.ts @lidge-jun @Ingwannu
+/scripts/prepare-package.ts @lidge-jun @Ingwannu
 /package.json @lidge-jun @Ingwannu
 /bun.lock @lidge-jun @Ingwannu
 
@@ -18,9 +23,24 @@
 /src/codex/auth-context.ts @lidge-jun @Ingwannu
 /src/server/auth-cors.ts @lidge-jun @Ingwannu
 /src/server/management-api.ts @lidge-jun @Ingwannu
+/src/lib/admin-secrets.ts @lidge-jun @Ingwannu
+/src/lib/service-secrets.ts @lidge-jun @Ingwannu
+/src/server/management-auth.ts @lidge-jun @Ingwannu
 
 # Governance and security policy
 /AGENTS.md @lidge-jun @Ingwannu
 **/AGENTS.md @lidge-jun @Ingwannu
 /MAINTAINERS.md @lidge-jun @Ingwannu
 /SECURITY.md @lidge-jun @Ingwannu
+
+# Proxy core boundary — owner approval required.
+# These four files carry every user's request path, including users of no optional
+# subsystem. Optional subsystems (Compatibility Lab and anything added later) register
+# into core-owned slots at activation instead of being imported here; the invariant is
+# enforced by tests/core-lab-boundary.test.ts and designed in
+# devlog/_plan/260814_lab_core_decoupling/.
+# Last-match-wins: this block must stay below /src/server/ to take effect.
+/src/router.ts @lidge-jun
+/src/server/index.ts @lidge-jun
+/src/server/lifecycle.ts @lidge-jun
+/src/server/responses/core.ts @lidge-jun

@@ -293,6 +293,58 @@ describe("Command Code provider", () => {
     expect(JSON.parse(built.body).params).not.toHaveProperty("reasoning_effort");
   });
 
+  test("advertises reasoning efforts for muse spark and rejects ultra at the wire", async () => {
+    // Muse Spark: CLI prints "has no adjustable reasoning effort", but upstream
+    // /alpha/generate accepts low..max (verified 2026-08-13: contributor
+    // variant all 200, ultra 400). The proxy previously stripped the field;
+    // this covers the actual forwarding behavior.
+    expect(commandCodeReasoningEfforts("meta/muse-spark-1.2-contributor")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    expect(commandCodeReasoningEfforts("meta/muse-spark-1.2")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    expect(commandCodeReasoningEfforts("meta/muse-spark-1.1")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    // Case-insensitive lookup (keyFor lowercases).
+    expect(commandCodeReasoningEfforts("Meta/Muse-Spark-1.2-Contributor")).toEqual(
+      ["low", "medium", "high", "xhigh", "max"],
+    );
+    for (const effort of ["low", "medium", "high", "max"] as const) {
+      const withEffort = await builtRequest({
+        ...parsed("meta/muse-spark-1.2-contributor"),
+        options: { reasoning: effort, maxOutputTokens: 100 },
+      });
+      expect(JSON.parse(withEffort.body).params.reasoning_effort).toBe(effort);
+    }
+    // xhigh is a distinct wire value for muse spark (upstream accepts it) and
+    // must not be collapsed to max — only deepseek/glm need that aliasing.
+    const xhigh = await builtRequest({
+      ...parsed("meta/muse-spark-1.2-contributor"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(xhigh.body).params.reasoning_effort).toBe("xhigh");
+    // ultra is not advertised for muse spark and upstream rejects it (400).
+    // The adapter must strip it before request construction.
+    const ultra = await builtRequest({
+      ...parsed("meta/muse-spark-1.2-contributor"),
+      options: { reasoning: "ultra", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(ultra.body).params).not.toHaveProperty("reasoning_effort");
+    // Deepseek/glm still alias xhigh/ultra→max per their official profiles.
+    const deepseekUltra = await builtRequest({
+      ...parsed("deepseek/deepseek-v4-flash"),
+      options: { reasoning: "ultra", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(deepseekUltra.body).params.reasoning_effort).toBe("max");
+    const deepseekXhigh = await builtRequest({
+      ...parsed("deepseek/deepseek-v4-flash"),
+      options: { reasoning: "xhigh", maxOutputTokens: 100 },
+    });
+    expect(JSON.parse(deepseekXhigh.body).params.reasoning_effort).toBe("max");
+  });
+
   test("maps ultra and xhigh to the max wire effort and honors legacy alias ids", async () => {
     const ultra = await builtRequest({ ...parsed(), options: { reasoning: "ultra", maxOutputTokens: 100 } });
     expect(JSON.parse(ultra.body).params.reasoning_effort).toBe("max");

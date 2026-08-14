@@ -342,6 +342,19 @@ describe("Responses bridge reasoning and usage parity", () => {
     expect(json.status).toBe("completed");
   });
 
+  test("non-streaming bridge fails closed when upstream calls an undeclared tool", () => {
+    const json = buildResponseJSON([
+      { type: "tool_call_start", id: "call_bad", name: "apply_patch" },
+      { type: "tool_call_delta", arguments: '{"input":"*** Begin Patch"}' },
+      { type: "tool_call_end" },
+      { type: "done" },
+    ], "deepseek/deepseek-v4-flash", { declaredToolNames: new Set(["exec"]) });
+
+    expect(json.status).toBe("failed");
+    expect(json.output).toEqual([]);
+    expect((json.error as Record<string, unknown>).message).toContain("undeclared client tool");
+  });
+
   test("raw reasoning closes before later text output and preserves ordering", async () => {
     const frames = await collectSse(bridgeToResponsesSSE(replay([
       { type: "reasoning_raw_delta", text: "raw" },
