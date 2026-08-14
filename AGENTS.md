@@ -28,6 +28,42 @@ Bun-native TypeScript with no separate server compile step.
 Read the nearest nested `AGENTS.md` before changing files in a scoped
 directory (`src/`, `gui/`, `docs-site/`, `scripts/`, `.github/`).
 
+## Optional subsystems stay off the core path
+
+`src/lab/` (Compatibility Lab) is opt-in. A user who configures one provider and
+one model — no routing profile, no Lab — must execute no Lab code and start no
+Lab timer.
+
+Three files carry every such user's request path and must not reach `src/lab/`,
+directly or transitively:
+
+- `src/router.ts`
+- `src/server/lifecycle.ts`
+- `src/server/responses/core.ts`
+
+`tests/core-lab-boundary.test.ts` enforces this by walking the runtime import
+graph and printing the offending chain on failure. It is not a style rule: the
+original violation hid in a six-hop chain
+(`assemble → quota → auth-api → native-main-admission → lifecycle → lab`) where
+no single file looked wrong, and it pulled ~69 Lab modules into every install.
+
+An optional subsystem registers into a core-owned slot at activation instead of
+being imported. The existing seams are `src/server/passive-route-linker.ts`,
+`src/routing/compatibility/provider-slot.ts`, and
+`src/lib/optional-shutdown-hooks.ts`.
+
+`src/server/index.ts` is deliberately exempt: a composition root is supposed to
+know which optional subsystems exist. Its obligation is the gate, not the import
+— activation must stay behind `labActivationRequired`, and it must stay
+synchronous. Everything between `Bun.serve` and the return of `startServer` runs
+in one synchronous turn, which is what guarantees a policy route can never be
+evaluated before its evidence provider is registered. The synchronous
+subagent-fallback chain has nowhere to await, so an `await` added before the
+activation block would silently reroute subagents to a different model than the
+operator configured.
+
+Design and audit history: `devlog/_plan/260814_lab_core_decoupling/`.
+
 ## The `devlog` directory
 
 Planning notes, triage matrices, and investigation artifacts live in `devlog/`,
