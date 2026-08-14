@@ -1585,6 +1585,7 @@ export const en = {
   "codexAuth.resetNothingToReset": "No rate-limit window needs resetting right now.",
   "codexAuth.resetNoCredit": "No reset credits available.",
   "codexAuth.resetError": "Failed to redeem reset credit. Please try again.",
+  "codexAuth.resetHistoryFull": "Reset-credit operation history is full. Ask a maintainer to expand capacity or apply an approved retirement policy before trying again.",
   "codexAuth.resetIdentityChanged": "The Codex account identity changed. Reopen this dialog to confirm a new reset-credit request.",
   "codexAuth.resetRetryStateStuck": "{outcome} The result is final, but its local retry state could not be cleared. Fix browser storage access before trying again.",
   "codexAuth.fifoNote": "The oldest credit is used first.",

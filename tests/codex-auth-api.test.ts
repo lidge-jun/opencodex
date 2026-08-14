@@ -59,7 +59,7 @@ import {
 import * as configModule from "../src/config";
 import type { CatalogDisposition } from "../src/codex/convergence-types";
 import { captureConfigGeneration, registerStateStore } from "../src/lib/state-store-sweeper";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   reconcileLiveStateStores,
   setLiveStateStoreConfig,
@@ -75,12 +75,20 @@ import {
   CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER,
   CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER,
 } from "../src/lib/codex-reset-credit-consent-contract";
+import {
+  MAX_MANUAL_RESET_CREDIT_OPERATION_IDS,
+  openManualResetCreditOperation,
+  settleManualResetCreditOperation,
+} from "../src/codex/reset-credit-operation-ledger";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-auth-api-test");
 const TEST_CODEX_HOME = join(TEST_DIR, "codex");
 const MANUAL_IMPORT_ENV = "OPENCODEX_ENABLE_UNVERIFIED_CODEX_IMPORT";
 function resetCreditConsumeBody(accountId: string): string {
   return JSON.stringify({ accountId, operationId: randomUUID() });
+}
+function fixtureResetCreditOperationId(index: number): string {
+  return `123e4567-e89b-42d3-a456-${index.toString(16).padStart(12, "0")}`;
 }
 function handleResetCreditConsume(
   req: Request,
@@ -2242,6 +2250,77 @@ describe("codex-auth API", () => {
     expect(await resp!.json()).toEqual({
       error: "operationId must be an RFC 4122 version 4 UUID",
     });
+  });
+
+  test("reset-credit consume reports immutable history saturation as non-retryable", async () => {
+    const config = makeConfig();
+    const accountId = "pool-history-full";
+    const chatgptAccountId = "acct-history-full";
+    seedPoolAccount(config, {
+      id: accountId,
+      email: "history-full@example.test",
+      chatgptAccountId,
+    });
+    const first = {
+      accountId,
+      chatgptAccountId,
+      operationId: fixtureResetCreditOperationId(10_000),
+    };
+    expect(openManualResetCreditOperation(first, 100)).toMatchObject({ kind: "execute" });
+    expect(settleManualResetCreditOperation(first, "no_credit", 200)).toEqual({ kind: "updated" });
+
+    const database = new Database(join(TEST_DIR, "config-mutation.sqlite"));
+    try {
+      const insert = database.prepare(`
+        INSERT INTO reset_credit_manual_operation_ids (
+          operation_id, account_key, canonical_operation_id,
+          terminal_code, created_at, updated_at
+        ) VALUES (?, ?, ?, 'no_credit', 1, 1)
+      `);
+      database.exec("BEGIN IMMEDIATE");
+      for (let index = 1; index < MAX_MANUAL_RESET_CREDIT_OPERATION_IDS; index += 1) {
+        const operationId = fixtureResetCreditOperationId(10_000 + index);
+        insert.run(
+          operationId,
+          createHash("sha256").update(`history-full-${index}`).digest("hex"),
+          operationId,
+        );
+      }
+      database.exec("COMMIT");
+      insert.finalize();
+    } catch (error) {
+      try { database.exec("ROLLBACK"); } catch { /* preserve fixture failure */ }
+      throw error;
+    } finally {
+      database.close();
+    }
+
+    let consumeCalls = 0;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    globalThis.fetch = (async () => {
+      consumeCalls += 1;
+      throw new Error("consume must not run at history capacity");
+    }) as typeof fetch;
+    try {
+      const req = new Request("http://localhost/api/codex-auth/reset-credits/consume", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          accountId,
+          operationId: fixtureResetCreditOperationId(20_000),
+        }),
+      });
+      const resp = await handleResetCreditConsume(req, config);
+      expect(resp?.status).toBe(507);
+      expect(resp?.headers.get("retry-after")).toBeNull();
+      expect(await resp?.json()).toEqual({
+        error: "Reset-credit operation history is full. Ask a maintainer to expand capacity or apply an approved retirement policy before confirming another request.",
+        code: "reset_credit_operation_history_full",
+      });
+      expect(consumeCalls).toBe(0);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("reset-credit consume sanitizes a pre-dispatch client abort", async () => {

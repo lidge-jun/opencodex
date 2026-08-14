@@ -167,6 +167,59 @@ test("a remote dashboard disables reset-credit consumption and points to the loc
   )).toBe(false);
 });
 
+test("a stalled reset-credit detail request leaves loading after the GUI budget", async () => {
+  const timeoutDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "timeout");
+  const anyDescriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  const timeoutController = new AbortController();
+  let timeoutMs = 0;
+  Object.defineProperty(AbortSignal, "timeout", {
+    configurable: true,
+    value: (ms: number) => {
+      timeoutMs = ms;
+      queueMicrotask(() => timeoutController.abort(new DOMException("timed out", "TimeoutError")));
+      return timeoutController.signal;
+    },
+  });
+  Object.defineProperty(AbortSignal, "any", {
+    configurable: true,
+    value: (signals: AbortSignal[]) => signals[1],
+  });
+  const baseFetch = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/codex-auth/reset-credits" && !url.pathname.endsWith("/consume")) {
+        const signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          const rejectAbort = () => reject(signal?.reason ?? new DOMException("aborted", "AbortError"));
+          if (signal?.aborted) rejectAbort();
+          else signal?.addEventListener("abort", rejectAbort, { once: true });
+        });
+      }
+      return baseFetch(input, init);
+    },
+  });
+
+  try {
+    await mountPool(makeController());
+    const reset = host.querySelector('button[aria-label="2 reset credit(s)"]') as HTMLButtonElement;
+    await act(async () => {
+      reset.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+
+    expect(timeoutMs).toBe(15_000);
+    const resetDialog = host.querySelector('dialog[aria-labelledby="codex-reset-title"]');
+    expect(resetDialog?.textContent).not.toContain("Loading…");
+    expect(resetDialog?.textContent).toContain("Reset-credit consumption is available only from the loopback dashboard");
+    expect(consumeAttempts).toBe(0);
+  } finally {
+    if (timeoutDescriptor) Object.defineProperty(AbortSignal, "timeout", timeoutDescriptor);
+    if (anyDescriptor) Object.defineProperty(AbortSignal, "any", anyDescriptor);
+  }
+});
+
 async function chooseOrder(selectId: string, value: string): Promise<void> {
   const trigger = host.querySelector(`#${selectId}`) as HTMLButtonElement | null;
   expect(trigger).toBeTruthy();

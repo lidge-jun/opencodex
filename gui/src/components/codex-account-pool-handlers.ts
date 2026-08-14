@@ -4,7 +4,8 @@ import { createBoundedFetch } from "../bounded-fetch";
 
 const RESET_CREDIT_OWNER_TOKEN_HEADER = "x-opencodex-reset-credit-owner-token";
 const RESET_CREDIT_IDENTITY_CHANGED_CODE = "reset_credit_operation_identity_changed";
-const RESET_CREDIT_REQUEST_TIMEOUT_MS = 15_000;
+const RESET_CREDIT_OPERATION_HISTORY_FULL_CODE = "reset_credit_operation_history_full";
+export const RESET_CREDIT_REQUEST_TIMEOUT_MS = 15_000;
 
 export async function redeemResetCredit(
   apiBase: string,
@@ -30,18 +31,23 @@ export async function redeemResetCredit(
       body: JSON.stringify({ accountId, operationId }),
     });
     if (!resp.ok) {
-      if (resp.status === 409) {
-        try {
-          const conflict = await resp.json() as { code?: unknown };
-          if (conflict.code === RESET_CREDIT_IDENTITY_CHANGED_CODE) {
-            return {
-              ok: false,
-              outcome: "terminal",
-              toast: t("codexAuth.resetIdentityChanged"),
-            };
-          }
-        } catch { /* malformed conflicts remain ambiguous */ }
-      }
+      try {
+        const rejected = await resp.json() as { code?: unknown };
+        if (resp.status === 409 && rejected.code === RESET_CREDIT_IDENTITY_CHANGED_CODE) {
+          return {
+            ok: false,
+            outcome: "terminal",
+            toast: t("codexAuth.resetIdentityChanged"),
+          };
+        }
+        if (resp.status === 507 && rejected.code === RESET_CREDIT_OPERATION_HISTORY_FULL_CODE) {
+          return {
+            ok: false,
+            outcome: "terminal",
+            toast: t("codexAuth.resetHistoryFull"),
+          };
+        }
+      } catch { /* malformed rejections remain ambiguous */ }
       return { ok: false, outcome: "ambiguous", toast: t("codexAuth.resetError") };
     }
     const result = await readJsonIfOk<{ code: string }>(resp);

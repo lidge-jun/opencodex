@@ -52,6 +52,7 @@ visible to anyone who can run ps:
   ocx account login <provider> --code -   (same, for the login flow)`;
 
 const CODEX_NAMES = new Set(["openai", "codex", "chatgpt"]);
+const RESET_CREDIT_OPERATION_HISTORY_FULL_CODE = "reset_credit_operation_history_full";
 
 interface LoginStart {
   url?: string;
@@ -288,6 +289,18 @@ async function resetCredits(argv: string[], deps: AccountDeps): Promise<void> {
     const terminalCode = body && typeof body === "object"
       ? (body as { code?: unknown }).code
       : undefined;
+    if (terminalCode === RESET_CREDIT_OPERATION_HISTORY_FULL_CODE) {
+      if (!clearOperation()) {
+        throw new CliUsageError(
+          "Reset-credit operation history is full, but local retry state could not be cleared; repair the local retry store and ask a maintainer to expand capacity or apply an approved retirement policy",
+          USAGE,
+        );
+      }
+      throw new CliUsageError(
+        "Reset-credit operation history is full; ask a maintainer to expand capacity or apply an approved retirement policy before confirming another request",
+        USAGE,
+      );
+    }
     if (terminalCode === "reset_credit_operation_identity_changed") {
       if (!clearOperation()) {
         throw new CliUsageError(

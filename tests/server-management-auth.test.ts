@@ -387,7 +387,6 @@ describe("management and data-plane credential separation", () => {
         expiresAt,
       )!,
     };
-
     const request = new Request(`http://127.0.0.1:${local.port}${LOCAL_PROVIDER_RELOAD_PATH}`, {
       method: LOCAL_PROVIDER_RELOAD_METHOD,
       headers,
@@ -509,6 +508,21 @@ describe("management and data-plane credential separation", () => {
         expiresAt,
       )!,
     };
+    const freshHeaders = (freshNonce: string) => ({
+      ...headers,
+      [CODEX_RESET_CREDIT_CONSENT_NONCE_HEADER]: freshNonce,
+      [CODEX_RESET_CREDIT_CONSENT_CAPABILITY_HEADER]: createCodexResetCreditConsentCapability(
+        secret,
+        freshNonce,
+        CODEX_RESET_CREDIT_CONSENT_METHOD,
+        CODEX_RESET_CREDIT_CONSENT_PATH,
+        accountId,
+        operationId,
+        process.pid,
+        local.port,
+        expiresAt,
+      )!,
+    });
 
     const request = new Request(`http://127.0.0.1:${local.port}${CODEX_RESET_CREDIT_CONSENT_PATH}`, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
@@ -522,28 +536,37 @@ describe("management and data-plane credential separation", () => {
     expect(requireManagementAuth(replay, unavailable, remoteConfig(), local)?.status).toBe(503);
     const wrongAccount = new Request(request.url, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
-      headers: { ...headers, [CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER]: "other-account" },
+      headers: {
+        ...freshHeaders("M".repeat(43)),
+        [CODEX_RESET_CREDIT_CONSENT_ACCOUNT_ID_HEADER]: "other-account",
+      },
     });
     expect(requireManagementAuth(wrongAccount, unavailable, remoteConfig(), local)?.status).toBe(503);
     const wrongOperation = new Request(request.url, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
-      headers: { ...headers, [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: "11112222-3333-4444-8999-aabbccddeeff" },
+      headers: {
+        ...freshHeaders("N".repeat(43)),
+        [CODEX_RESET_CREDIT_CONSENT_OPERATION_ID_HEADER]: "11112222-3333-4444-8999-aabbccddeeff",
+      },
     });
     expect(requireManagementAuth(wrongOperation, unavailable, remoteConfig(), local)?.status).toBe(503);
     const query = new Request(`${request.url}?confirm=1`, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
-      headers,
+      headers: freshHeaders("O".repeat(43)),
     });
     expect(requireManagementAuth(query, unavailable, remoteConfig(), local)?.status).toBe(503);
     const body = new Request(request.url, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
-      headers: { ...headers, "content-length": "2" },
+      headers: { ...freshHeaders("P".repeat(43)), "content-length": "2" },
       body: "{}",
     });
     expect(requireManagementAuth(body, unavailable, remoteConfig(), local)?.status).toBe(503);
+    const chunkedHeaders = new Headers(freshHeaders("Q".repeat(43)));
+    chunkedHeaders.delete("content-length");
+    chunkedHeaders.set("transfer-encoding", "chunked");
     const chunked = new Request(request.url, {
       method: CODEX_RESET_CREDIT_CONSENT_METHOD,
-      headers: { ...headers, "transfer-encoding": "chunked" },
+      headers: chunkedHeaders,
     });
     expect(requireManagementAuth(chunked, unavailable, remoteConfig(), local)?.status).toBe(503);
   });

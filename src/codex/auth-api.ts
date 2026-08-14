@@ -286,6 +286,13 @@ function manualResetCreditBusyResponse(): Response {
   return response;
 }
 
+function manualResetCreditHistoryFullResponse(): Response {
+  return jsonResponse({
+    error: "Reset-credit operation history is full. Ask a maintainer to expand capacity or apply an approved retirement policy before confirming another request.",
+    code: "reset_credit_operation_history_full",
+  }, 507);
+}
+
 function manualResetCreditIdentityChangedResponse(): Response {
   return jsonResponse({
     error: "The Codex account identity changed. Confirm a new reset-credit request.",
@@ -1777,7 +1784,10 @@ export async function handleCodexAuthAPI(
         if (opened.kind === "identity-mismatch") {
           return manualResetCreditIdentityChangedResponse();
         }
-        if (opened.kind === "capacity" || opened.kind === "unavailable") {
+        if (opened.kind === "capacity") {
+          return manualResetCreditHistoryFullResponse();
+        }
+        if (opened.kind === "unavailable") {
           return manualResetCreditBusyResponse();
         }
         if (opened.kind === "terminal") {

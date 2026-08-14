@@ -1527,6 +1527,33 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(result.stderr).toContain("retry state could not be cleared");
     });
 
+    test("reset-credit history saturation is explicit and clears the rejected local intent", async () => {
+      let clearCalls = 0;
+      const result = await run(
+        ["reset-credits", "main", "--consume", "--yes"],
+        {
+          ...defaultDeps(),
+          isAgentDrivenImpl: () => false,
+          reserveResetCreditOperationImpl: () => "123e4567-e89b-42d3-a456-426614174004",
+          clearResetCreditOperationImpl: () => {
+            clearCalls += 1;
+            return true;
+          },
+          requestResetCreditConsentImpl: async () => ({
+            kind: "response",
+            response: json({
+              error: "Reset-credit operation history is full.",
+              code: "reset_credit_operation_history_full",
+            }, 507),
+          }),
+        },
+      );
+      expect(result.code).toBe(2);
+      expect(result.stderr).toContain("operation history is full");
+      expect(result.stderr).toContain("ask a maintainer");
+      expect(clearCalls).toBe(1);
+    });
+
     test("reset-credit terminal results remain authoritative when retry cleanup fails", async () => {
       const terminalCodes = ["reset", "already_redeemed", "nothing_to_reset", "no_credit"] as const;
       const cleanupFailures = [

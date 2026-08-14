@@ -101,6 +101,26 @@ test("an account identity conflict is terminal for the stale client id and requi
   expect(loadCalls).toBe(0);
 });
 
+test("history saturation is terminal for the rejected id and gives maintainer guidance", async () => {
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => Response.json({
+      error: "Reset-credit operation history is full.",
+      code: "reset_credit_operation_history_full",
+    }, { status: 507 }),
+  });
+  const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => {
+    loadCalls += 1;
+    return true;
+  }, "owner-proof");
+  expect(result).toEqual({
+    ok: false,
+    outcome: "terminal",
+    toast: "codexAuth.resetHistoryFull",
+  });
+  expect(loadCalls).toBe(0);
+});
+
 test("failure paths return ok:false so callers can set toastError from result.ok", async () => {
   consumeBody = { code: "no_credit" };
   const result = await redeemResetCredit("", "acct-1", crypto.randomUUID(), t, async () => true, "owner-proof");

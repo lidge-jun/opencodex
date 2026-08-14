@@ -27,7 +27,10 @@ const target: LiveProxy = {
   source: "runtime",
 };
 
-function proofResponse(init?: RequestInit): Response {
+function proofResponse(
+  init?: RequestInit,
+  capabilityVersion = CODEX_RESET_CREDIT_CONSENT_CAPABILITY_VERSION,
+): Response {
   const challenge = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
   return Response.json({
     service: "opencodex",
@@ -36,7 +39,7 @@ function proofResponse(init?: RequestInit): Response {
     uptime: 1,
     pid: target.pid,
     port: target.port,
-    resetCreditConsentCapability: CODEX_RESET_CREDIT_CONSENT_CAPABILITY_VERSION,
+    resetCreditConsentCapability: capabilityVersion,
   }, {
     headers: {
       [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(
@@ -74,6 +77,21 @@ describe("reset-credit consent client", () => {
           port: target.port,
           resetCreditConsentCapability: CODEX_RESET_CREDIT_CONSENT_CAPABILITY_VERSION,
         });
+      },
+    });
+    expect(result).toEqual({ kind: "unavailable", reason: "attestation" });
+    expect(requests).toEqual(["http://127.0.0.1:10100/healthz"]);
+  });
+
+  test("rejects a proven listener with a stale consent capability version", async () => {
+    const requests: string[] = [];
+    const result = await requestBoundCodexResetCreditConsent(accountId, operationId, {
+      findLive: async () => target,
+      readRuntime: () => ({ ...target, attestationSecret: secret }),
+      createNonce: () => nonce,
+      fetchImpl: async (input, init) => {
+        requests.push(String(input));
+        return proofResponse(init, "v0");
       },
     });
     expect(result).toEqual({ kind: "unavailable", reason: "attestation" });

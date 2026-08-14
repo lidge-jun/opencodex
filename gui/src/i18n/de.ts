@@ -1111,6 +1111,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.resetNothingToReset": "Kein Ratenbegrenzungs-Fenster muss gerade zurückgesetzt werden.",
   "codexAuth.resetNoCredit": "Keine Reset-Gutschriften verfügbar.",
   "codexAuth.resetError": "Reset-Gutschrift konnte nicht eingelöst werden. Bitte erneut versuchen.",
+  "codexAuth.resetHistoryFull": "Der Verlauf der Reset-Vorgänge ist voll. Bitte einen Maintainer, die Kapazität zu erweitern oder eine genehmigte Bereinigungsrichtlinie anzuwenden, bevor du es erneut versuchst.",
   "codexAuth.resetIdentityChanged": "Die Codex-Kontoidentität hat sich geändert. Öffne diesen Dialog erneut, um eine neue Reset-Anfrage zu bestätigen.",
   "codexAuth.resetRetryStateStuck": "{outcome} Das Ergebnis ist endgültig, aber der lokale Wiederholungsstatus konnte nicht gelöscht werden. Behebe den Zugriff auf den Browser-Speicher, bevor du es erneut versuchst.",
   "codexAuth.fifoNote": "Die älteste Gutschrift wird zuerst verwendet.",

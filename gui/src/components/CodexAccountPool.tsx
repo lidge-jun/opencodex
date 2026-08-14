@@ -11,11 +11,12 @@ import CodexPoolStrategySetting from "./CodexPoolStrategySetting";
 import CodexAuthAdvancedSettings from "./CodexAuthAdvancedSettings";
 import { useCodexAutoSwitch } from "../hooks/useCodexAutoSwitch";
 import { readJsonIfOk } from "../fetch-json";
+import { createBoundedFetch } from "../bounded-fetch";
 import { CodexAccountPoolCards, CodexAccountPoolReauthBanner } from "./codex-account-pool-cards";
 import { CodexAccountSwitchModal } from "./codex-account-switch-modal";
 import { CodexAccountResetModal } from "./codex-account-reset-modal";
 import { CodexAccountPoolLoadStates, CodexAccountPoolMainCard, CodexAccountPoolPageHead } from "./codex-account-pool-main-card";
-import { redeemResetCredit } from "./codex-account-pool-handlers";
+import { redeemResetCredit, RESET_CREDIT_REQUEST_TIMEOUT_MS } from "./codex-account-pool-handlers";
 import type { CodexAccountEntry } from "./codex-account-pool-types";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { useCopyFeedback } from "./use-copy-feedback";
@@ -350,8 +351,12 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     setCreditDetails(null);
     setCreditDetailsLoading(true);
     setGuiResetConsumeAllowed(null);
+    const bounded = createBoundedFetch(RESET_CREDIT_REQUEST_TIMEOUT_MS);
     try {
-      const resp = await fetch(`${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`);
+      const resp = await fetch(
+        `${apiBase}/api/codex-auth/reset-credits?accountId=${encodeURIComponent(account.id)}`,
+        { signal: bounded.signal },
+      );
       const data = await readJsonIfOk<{
         credits?: { granted_at: string; expires_at: string }[];
         guiConsumeAllowed?: boolean;
@@ -370,6 +375,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
       if (resetDetailEpochRef.current === epoch) setGuiResetConsumeAllowed(false);
     }
     finally {
+      bounded.clear();
       if (resetDetailEpochRef.current === epoch) setCreditDetailsLoading(false);
     }
   };

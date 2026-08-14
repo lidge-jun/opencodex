@@ -212,7 +212,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `PUT /api/codex-auth/failover` | 設定帳號容錯移轉閾值 | 400 無效閾值 |
 | `GET /api/codex-auth/quota` | 依帳號讀取快取配額狀態 | — |
 | `GET /api/codex-auth/reset-credits` | 檢查帳號的 reset-credit 資格 | 400 缺失帳號 id；上游狀態 passthrough；500 查詢失敗 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要重新輸入 owner admin token 驗證的 GUI session，或 CLI 的一次性本機同意 capability。單獨的管理認證或 `confirmed` 欄位不能取代。呼叫端必須持久重用同一 operation ID，直到收到包含 terminal code 的回應；quota refresh 是單獨的後續讀取 | 400 缺少/無效的 `accountId` 或 `operationId`；403 `agent_consent_required`；409 `reset_credit_operation_identity_changed`；上游狀態 passthrough；503 `server_busy`；500 消耗失敗 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要重新輸入 owner admin token 驗證的 GUI session，或 CLI 的一次性本機同意 capability。單獨的管理認證或 `confirmed` 欄位不能取代。呼叫端必須提供由呼叫端穩定持有的標準小寫 UUIDv4 作為 `operationId`，並持久重用該值，直到收到包含 terminal code 的回應；quota refresh 是單獨的後續讀取 | 400 缺少/無效的 `accountId` 或 `operationId`；403 `agent_consent_required`；409 `reset_credit_operation_identity_changed`；上游狀態 passthrough；503 `server_busy`；507 `reset_credit_operation_history_full`（需要維護者處理，不得自動重試）；500 消耗失敗 |
 | `POST /api/codex-auth/login` | 啟動 Codex 登入或重新認證 | 400 無效請求；衝突／忙碌登入狀態 |
 | `POST /api/codex-auth/login/code` | 為 Codex 登入流程提交手動碼 | 400 無效流程／碼 |
 | `POST /api/codex-auth/login/cancel` | 取消 Codex 登入流程 | — |

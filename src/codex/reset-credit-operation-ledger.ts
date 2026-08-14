@@ -14,6 +14,10 @@ import { isValidCodexAccountId, MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 
 export const MAX_RESET_CREDIT_OPERATION_ACCOUNTS = 128;
 export const MAX_MANUAL_RESET_CREDIT_OPERATION_IDS = 4_096;
+const MANUAL_RESET_CREDIT_HISTORY_HIGH_WATER_MARK = Math.ceil(
+  MAX_MANUAL_RESET_CREDIT_OPERATION_IDS * 0.9,
+);
+let reportedManualHistoryLevel = 0;
 const ACCOUNT_KEY_PATTERN = /^[0-9a-f]{64}$/;
 const TERMINAL_STATE_BY_CODE: Readonly<Record<
   CodexResetCreditConsumeCode,
@@ -881,6 +885,27 @@ function warnLedgerUnavailable(error: unknown): void {
     : "[opencodex] Reset-credit operation ledger is unavailable.");
 }
 
+function reportManualHistoryCapacity(count: number): void {
+  const level = count >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS
+    ? MAX_MANUAL_RESET_CREDIT_OPERATION_IDS
+    : count >= MANUAL_RESET_CREDIT_HISTORY_HIGH_WATER_MARK
+      ? MANUAL_RESET_CREDIT_HISTORY_HIGH_WATER_MARK
+      : 0;
+  if (level === 0 || level <= reportedManualHistoryLevel) return;
+  reportedManualHistoryLevel = level;
+  try {
+    console.warn(
+      `[opencodex] Reset-credit manual operation history is at ${count}/${MAX_MANUAL_RESET_CREDIT_OPERATION_IDS} entries${
+        level === MAX_MANUAL_RESET_CREDIT_OPERATION_IDS
+          ? "; new manual redemptions are disabled until a maintainer expands capacity or applies an approved retirement policy."
+          : "."
+      }`,
+    );
+  } catch {
+    // Count-only operational reporting must never weaken the fail-closed result.
+  }
+}
+
 /**
  * Throws `TypeError` for a malformed generation or timestamp. Runtime storage
  * and contention failures are represented by a result kind.
@@ -1087,6 +1112,7 @@ export function openManualResetCreditOperation(
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
     return withLedger((database, recordCount, manualIdCount) => {
+      reportManualHistoryCapacity(manualIdCount);
       const admitNewCallerId = () => {
         if (manualIdCount >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
           return Object.freeze({ kind: "capacity" as const });

@@ -219,7 +219,7 @@ Authorization: Bearer <admin-token>
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |
 | `GET /api/codex-auth/reset-credits` | 检查某个账户是否具备 reset-credit 资格 | 400 缺少账户 id；上游状态透传；500 查询失败 |
-| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要通过重新输入 owner admin token 验证的 GUI session，或 CLI 的一次性本地同意 capability。单独的管理认证或 `confirmed` 字段不能代替。调用方必须持久复用同一 operation ID，直到收到包含 terminal code 的响应；quota refresh 是单独的后续读取 | 400 缺少/无效的 `accountId` 或 `operationId`；403 `agent_consent_required`；409 `reset_credit_operation_identity_changed`；上游状态透传；503 `server_busy`；500 消耗失败 |
+| `POST /api/codex-auth/reset-credits/consume` | 消耗 reset credit；需要通过重新输入 owner admin token 验证的 GUI session，或 CLI 的一次性本地同意 capability。单独的管理认证或 `confirmed` 字段不能代替。调用方必须提供由调用方稳定保持的规范小写 UUIDv4 作为 `operationId`，并持久复用该值，直到收到包含 terminal code 的响应；quota refresh 是单独的后续读取 | 400 缺少/无效的 `accountId` 或 `operationId`；403 `agent_consent_required`；409 `reset_credit_operation_identity_changed`；上游状态透传；503 `server_busy`；507 `reset_credit_operation_history_full`（需要维护者处理，不得自动重试）；500 消耗失败 |
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
 | `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |
