@@ -10,31 +10,32 @@ const {
 } = require("./issue-triage-autoclose.cjs");
 
 describe("deterministic duplicate auto-close", () => {
-  it("selects the #1453-style source for the exact #1672 sync failure signature", () => {
+  it("does not treat the generic #1672 final sync message as duplicate proof", () => {
     const signature =
       "Codex sync did not complete. Fix the reported Codex config issue and retry.";
+
+    assert.deepEqual(
+      extractStrongFailureSignatures({
+        number: 1672,
+        title: signature,
+        body: `### Reproduction\n${signature}`,
+      }),
+      [],
+    );
+  });
+
+  it("selects an AI-nominated duplicate when both reports share an exact specific failure signature", () => {
+    const signature =
+      "POST /v1/responses returns HTTP 503 with ECONNRESET in the OpenRouter adapter.";
     const currentIssue = {
-      number: 1672,
-      title: signature,
-      body: [
-        "### Summary",
-        "ocx sync",
-        signature,
-        "### Reproduction",
-        signature,
-      ].join("\n"),
+      number: 2001,
+      title: "OpenRouter responses fail",
+      body: `### Logs or error output\n${signature}`,
     };
     const sourceIssue = {
       number: 1453,
-      title: "ocx sync and restore back fail permanently with an unnamed config issue",
-      body: [
-        "### Summary",
-        "`ocx sync` fails with:",
-        "```",
-        signature,
-        "Plain `codex` was not switched back to opencodex.",
-        "```",
-      ].join("\n"),
+      title: "Existing OpenRouter failure",
+      body: `Observed repeatedly:\n${signature}`,
     };
 
     const match = selectStrongDuplicateMatch({
@@ -67,11 +68,11 @@ describe("deterministic duplicate auto-close", () => {
     assert.equal(match, null);
   });
 
-  it("ignores exact matches that the AI did not nominate as duplicates", () => {
+  it("ignores exact strong matches that the AI did not nominate as duplicates", () => {
     const signature =
-      "Codex sync did not complete. Fix the reported Codex config issue and retry.";
+      "POST /v1/responses returns HTTP 503 with ECONNRESET in the OpenRouter adapter.";
     const match = selectStrongDuplicateMatch({
-      currentIssue: { number: 1672, title: signature, body: signature },
+      currentIssue: { number: 2001, title: "new report", body: signature },
       candidateIssues: [{ number: 1453, title: "old report", body: signature }],
       duplicateNumbers: [],
     });
