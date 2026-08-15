@@ -247,6 +247,32 @@ describe("ocx models custom slash ids", () => {
     }
   });
 
+  test("models add rejects a slash id that encodes to defaultModel only", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        test: {
+          adapter: "openai-chat",
+          baseUrl: "http://localhost:8080/v1",
+          allowPrivateNetwork: true,
+          defaultModel: "openai-gpt-5.5",
+          models: [],
+        },
+      },
+    });
+    try {
+      const result = runCli(["models", "add", "test", "openai/gpt-5.5"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ambiguous");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("models remove rejects an encoded selector that matches more than one custom model", () => {
     const { dir } = freshConfig({
       customModels: [

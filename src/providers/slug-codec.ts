@@ -65,6 +65,20 @@ export function decodeRoutedModelId(requested: string, knownIds: Iterable<string
   return aliasMatch ?? requested;
 }
 
+/**
+ * Decode a Codex-facing id, but fail when a custom slash id and another known id
+ * share the same encoded form. Write-time checks cannot cover a later live cache.
+ */
+export function decodeRoutedModelIdOrThrow(requested: string, knownIds: Iterable<string>): string {
+  const encodedRequested = encodeRoutedModelId(requested);
+  const matches = new Set<string>();
+  for (const id of knownIds) {
+    if (id === requested || encodeRoutedModelId(id) === encodedRequested) matches.add(id);
+  }
+  if (matches.size > 1) throw new Error(`ambiguous model id "${requested}"`);
+  return decodeRoutedModelId(requested, knownIds);
+}
+
 /** Does a stored config slug name this routed model, in either raw or encoded form? */
 export function slugEquals(stored: string, provider: string, id: string): boolean {
   return stored === `${provider}/${id}` || stored === routedSlug(provider, id);

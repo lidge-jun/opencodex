@@ -24,7 +24,7 @@ import {
   OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "./providers/openai-tiers";
-import { decodeRoutedModelId, encodeRoutedModelId } from "./providers/slug-codec";
+import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
@@ -94,6 +94,7 @@ export function knownModelIdsForProvider(
 ): string[] {
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
+  if (prov.defaultModel) ids.add(prov.defaultModel);
   const registry = providerMatchesRegistryTransportWithStaticGuards(provName, prov)
     ? PROVIDER_REGISTRY.find(entry => entry.id === provName)
     : undefined;
@@ -629,7 +630,7 @@ function routeModelInternal(
       return routeResult(
         provName,
         prov,
-        decodeRoutedModelId(modelId.slice(slash + 1), known),
+        decodeRoutedModelIdOrThrow(modelId.slice(slash + 1), known),
         "explicit-provider",
         "explicit-provider-namespace",
       );

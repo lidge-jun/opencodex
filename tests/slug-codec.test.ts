@@ -15,7 +15,7 @@ import {
 } from "../src/providers/slug-codec";
 import { knownModelIdsForProvider, routeModel } from "../src/router";
 import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../src/codex/catalog";
-import { clearModelCache } from "../src/codex/model-cache";
+import { clearModelCache, setCached } from "../src/codex/model-cache";
 import { getModelMetadata } from "../src/generated/model-metadata";
 import type { RawEntry } from "../src/codex/catalog";
 import type { OcxConfig } from "../src/types";
@@ -185,6 +185,13 @@ describe("routeModel decode (proxy layer)", () => {
     expect(ids).not.toContain("should-not-appear");
   });
 
+  test("knownModelIdsForProvider unions defaultModel", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.defaultModel = "openai-gpt-5.5";
+    const ids = knownModelIdsForProvider("zenmux", config.providers.zenmux!, config);
+    expect(ids).toContain("openai-gpt-5.5");
+  });
+
   test("routeModel decodes encoded custom slash id back to native id", () => {
     const config = zenmuxConfig();
     config.customModels = [
@@ -201,9 +208,7 @@ describe("routeModel decode (proxy layer)", () => {
     config.customModels = [
       { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
     ];
-    const route = routeModel(config, "zenmux/openai-gpt-5.5");
-    expect(route.providerName).toBe("zenmux");
-    expect(route.modelId).toBe("openai-gpt-5.5");
+    expect(() => routeModel(config, "zenmux/openai-gpt-5.5")).toThrow(/ambiguous/);
   });
 
   test("routeModel refuses to guess between a/b-c and a-b/c", () => {
@@ -212,9 +217,18 @@ describe("routeModel decode (proxy layer)", () => {
     config.customModels = [
       { id: "c1", provider: "zenmux", modelId: "a/b-c" },
     ];
-    const route = routeModel(config, "zenmux/a-b-c");
-    expect(route.providerName).toBe("zenmux");
-    expect(route.modelId).toBe("a-b-c");
+    expect(() => routeModel(config, "zenmux/a-b-c")).toThrow(/ambiguous/);
+  });
+
+  test("routeModel fails when a later live cache collides with an admitted custom slash id", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    const admitted = routeModel(config, "zenmux/openai-gpt-5.5");
+    expect(admitted.modelId).toBe("openai/gpt-5.5");
+    setCached("zenmux", [{ provider: "zenmux", id: "openai-gpt-5.5" }]);
+    expect(() => routeModel(config, "zenmux/openai-gpt-5.5")).toThrow(/ambiguous/);
   });
 });
 
