@@ -31,7 +31,7 @@ function unwrapSingleEnclosingFence(text) {
  */
 function normalizeRawSectionValue(raw) {
   if (typeof raw !== "string") return null;
-  let value = raw.replace(/<!--[\s\S]*?-->/g, "").trim();
+  let value = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim();
   if (!value) return null;
 
   // A lone fenced block whose entire body is a stand-in is still a stand-in
@@ -179,7 +179,7 @@ function stripHtmlMedia(text) {
   if (typeof text !== "string") return "";
   let s = text
     .replace(/<img\b[^>]*>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ");
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
 
   // Whole media blocks: replace only when the inner content is not
   // substantive text (no word characters outside tags).
@@ -424,7 +424,7 @@ function isMediaOnly(text) {
  */
 function clean(raw) {
   if (typeof raw !== "string") return "";
-  let s = raw.replace(/<!--[\s\S]*?-->/g, "");
+  let s = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, "");
   // Media-only sections (a lone screenshot or embed) carry no reportable
   // text. Strip the media tokens so the section participates in emptiness and
   // duplicate detection like any other blank section. This closes the
