@@ -36,9 +36,10 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -eo pipefail
+          closed_since="$(date -u -d '90 days ago' +%Y-%m-%d)"
           {
             gh issue list --repo "$REPO" --json number,title,body --limit 200 --state open
-            gh issue list --repo "$REPO" --json number,title,body --limit 200 --state closed
+            gh issue list --repo "$REPO" --json number,title,body --limit 200 --state closed --search "closed:>=${closed_since}"
           } | jq -s --arg cur "$ISSUE_NUMBER" '
             add
             | unique_by(.number)
