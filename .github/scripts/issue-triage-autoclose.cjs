@@ -50,7 +50,9 @@ function normalizeSignatureLine(raw) {
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/^\s*(?:>|[-*+]\s+|\d+[.)]\s+)/, "")
     .replace(/^[`~]{3,}[^\n]*$/, "")
-    .replace(/[`*_~]/g, "")
+    // Backticks are unambiguous Markdown code delimiters. Preserve `_`, `~`,
+    // and `*` because they are also meaningful technical punctuation.
+    .replace(/`/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -82,6 +84,12 @@ function extractStrongFailureSignatures(issue) {
   return [...found];
 }
 
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 /**
  * Return one auto-close candidate only when:
  * 1. AI nominated the issue as a duplicate; and
@@ -96,6 +104,7 @@ function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNu
   const allowed = new Set(nominated);
   if (!allowed.size) return null;
 
+  const currentIssueNumber = String(currentIssue?.number ?? "");
   const currentSignatures = new Set(extractStrongFailureSignatures(currentIssue));
   if (!currentSignatures.size) return null;
 
@@ -107,6 +116,7 @@ function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNu
 
   const matches = [];
   for (const number of allowed) {
+    if (number === currentIssueNumber) continue;
     const candidate = candidatesByNumber.get(number);
     if (!candidate) continue;
 
@@ -118,7 +128,7 @@ function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNu
 
   matches.sort((a, b) =>
     b.signature.length - a.signature.length ||
-    a.signature.localeCompare(b.signature) ||
+    compareCodeUnits(a.signature, b.signature) ||
     Number(a.number) - Number(b.number),
   );
 
