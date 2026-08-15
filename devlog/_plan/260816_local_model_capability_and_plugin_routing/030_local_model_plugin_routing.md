@@ -81,7 +81,14 @@ availability.
 
 | Command | Reads this change? | Notes |
 |---------|-------------------|-------|
-| `cat ~/.codex/AGENTS.md` | YES — the changed file is the direct argument | Human-read acceptance; no automated gate observes this file |
+| `cat ~/.codex/AGENTS.md` | Partially — proves bytes on disk, NOT that Codex loaded them | Human-read acceptance |
+| Fresh Codex process reporting its loaded instructions | YES — observes actual resolution | The only check that proves the guidance is live |
+
+Discovery caveats verified during audit (B7): global guidance resolves from
+`$CODEX_HOME` when set (currently unset, so `~/.codex` applies), and
+`AGENTS.override.md` takes precedence over `AGENTS.md` (currently absent).
+The acceptance claim is therefore scoped to the default Codex home on this
+host, and is human-verified rather than gated.
 
 There is no repository gate for this change: `tsc`, `bun test`, and
 `privacy:scan` never read `~/.codex/AGENTS.md`. This acceptance row is human

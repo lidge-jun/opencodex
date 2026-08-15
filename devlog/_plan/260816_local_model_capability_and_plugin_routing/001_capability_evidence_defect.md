@@ -27,7 +27,12 @@ It also reached the on-disk Codex catalog correctly, as
   "input_modalities": ["text", "image"], "supports_parallel_tool_calls": true }
 ```
 
-Yet routing evidence carried neither value:
+Yet routing evidence carried neither value. NOTE (audit round 1, B9): this
+one-liner reproduces only with the provider's `modelContextWindows` and
+`modelInputModalities` ABSENT. They were added by hand later while
+diagnosing, so on today's live config the earlier branches win and the
+symptom is masked. The 17-to-0 catalog proof below is independent of that
+and still reproduces exactly. Use a catalog-only fixture to reproduce:
 
 ```
 candidateCapabilityEvidence(config, "lidge", "qwen3.8-27b-nvfp4")
@@ -124,3 +129,12 @@ The chain for a custom model is:
 Only the last stage is wrong, which is why the value is visible everywhere a
 human looks (config, CLI, catalog file) and absent exactly where routing
 decides.
+
+## Post-audit correction (round 1)
+
+The fix originally proposed here — read `context_window` and
+`input_modalities` straight off the row — is WRONG and was rejected in
+audit. `ensureStrictCatalogFields()` synthesizes both fields for Codex's
+strict parser, so reading them would convert unknown into `image:false`
+and a fabricated `128000`. See `003_audit_synthesis_round1.md` B2 and the
+provenance design in `010_catalog_row_shape.md`.

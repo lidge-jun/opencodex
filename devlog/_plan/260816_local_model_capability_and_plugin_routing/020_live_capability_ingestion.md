@@ -1,197 +1,174 @@
-# 020 — Phase 2: absorb llama.cpp capability metadata from live discovery
+# 020 — Phase 2: absorb llama.cpp served context from live discovery
 
 Diff-level implementation doc. Depends on Phase 1 (`010_catalog_row_shape.md`):
-without it, anything this phase writes into the catalog is still discarded by
-the reader.
+without the provenance channel, anything this phase learns is still invisible to
+routing.
 
-## Goal
+**Re-scoped after audit round 1** — see `003_audit_synthesis_round1.md` (B3).
+The first draft assumed one merged model item. The real parser never builds
+one, so half the original goal moves to a filed issue.
 
-A local llama.cpp server that truthfully advertises multimodality and its
-trained context length should produce correct routing evidence with no manual
-config. Today it does not, because two upstream spellings are unrecognized.
+## What the server actually returns
 
-## Observed payload (verbatim)
+`GET http://100.100.125.116:8081/v1/models` returns a dual-envelope body:
 
-`GET http://100.100.125.116:8081/v1/models` on the `lidge` provider returns a
-dual-shape body — an Ollama-style `models[]` plus an OpenAI-style `data[]`:
+    { "models": [ { "name": "qwen3.8-27b-nvfp4",
+                    "capabilities": ["completion", "multimodal"] } ],
+      "object": "list",
+      "data":   [ { "id": "qwen3.8-27b-nvfp4", "owned_by": "llamacpp",
+                    "meta": { "n_ctx": 262144, "n_ctx_train": 262144 } } ] }
 
-```json
-{ "models": [ { "name": "qwen3.8-27b-nvfp4", "model": "qwen3.8-27b-nvfp4",
-                "capabilities": ["completion", "multimodal"],
-                "details": { "format": "gguf", "family": "" } } ],
-  "object": "list",
-  "data": [ { "id": "qwen3.8-27b-nvfp4", "object": "model", "owned_by": "llamacpp",
-              "meta": { "n_ctx": 262144, "n_ctx_train": 262144,
-                        "n_vocab": 248320, "n_embd": 5120,
-                        "n_params": 27320698192, "size": 16367838528 } } ] }
-```
+The image signal (`multimodal`) is in `models[]`. The context signal
+(`meta.n_ctx`) is in `data[]`.
 
-## Why both signals are dropped today
+`extractProviderModelItems()` reads ONLY `data` envelopes or top-level arrays,
+and says so deliberately (src/providers/model-discovery.ts:337-343):
 
-`src/codex/catalog/provider-fetch.ts`:
+    // Together-style top-level /models arrays. Catalog discovery must not treat a stray
+    // `models` key on openai-chat responses as valid — only `data` envelopes or top-level arrays.
 
-1. `modelInputModalities()` recognizes explicit `input_modalities`/`modalities`
-   lists, an `architecture.modality` arrow form, `capabilities.vision`, and
-   the capability strings `vision` / `image-input` / `image_input`. The token
-   `"multimodal"` is in none of those sets, so the row yields `undefined`.
-2. `catalogHintsFromModelsApiItem()` reads context from
-   `limits.max_context_length`, `metadata.context_length`, `context_length`,
-   `context_size`, `max_model_len`, and `max_context_length`. llama.cpp's
-   `meta.n_ctx` is in none of those, so context stays unknown.
+Verified by running the verbatim payload through it: one surviving item, and
+`catalogHintsFromModelsApiItem` returns `{}` for it.
 
-## Scope boundary
+## Scope decision
 
-IN: `src/codex/catalog/provider-fetch.ts` (the two readers above), one focused
-test using the verbatim payload.
-OUT: the closed `text|image|audio` enum (must not widen — Codex rejects the
-whole catalog file on an unknown modality), the dual `models[]`/`data[]`
-merge behavior, and any other provider's parsing.
+IN: `meta.n_ctx` / `meta.n_ctx_train` as context sources. This is a pure
+addition to an existing precedence list, affects only rows that reach the
+parser, and is independently useful for every llama.cpp deployment.
+
+OUT: cross-envelope merging of `models[]` into `data[]`. That would relax a
+deliberately conservative discovery boundary whose comment explains why it
+exists. Changing it belongs in its own audited unit, not as a rider here. It
+becomes a filed issue carrying the verbatim payload (wp2).
+
+Also OUT (B8): the `ProviderModelsApiItem` type edit. The declaration is
+already `Record<string, unknown> & { id: string }`
+(src/providers/model-discovery.ts:33), so `item.meta` is permitted with no
+change.
 
 ## File change map
 
 | Path | Action | What |
 |------|--------|------|
-| `src/codex/catalog/provider-fetch.ts` | MODIFY | Accept `multimodal` as an image signal; read `meta.n_ctx` as a context source |
-| `tests/catalog-llamacpp-capabilities.test.ts` | NEW | Drives the verbatim payload above |
+| `src/codex/catalog/provider-fetch.ts` | MODIFY | Read `meta.n_ctx` / `meta.n_ctx_train` as context sources |
+| `tests/catalog-llamacpp-capabilities.test.ts` | NEW | Verbatim-payload and precedence coverage |
 
-## MODIFY 1 — `modelInputModalities()`
-
-Before:
-
-```ts
-  if (capabilityRecord?.vision === true || capabilities?.some(value => (
-    value === "vision" || value === "image-input" || value === "image_input"
-  ))) {
-    return ["text", "image"];
-  }
-```
-
-After:
-
-```ts
-  if (capabilityRecord?.vision === true || capabilities?.some(value => (
-    value === "vision" || value === "image-input" || value === "image_input"
-    // llama.cpp / Ollama-compatible servers report vision as "multimodal" in
-    // their capability list; it is the only image signal those servers emit.
-    || value === "multimodal"
-  ))) {
-    return ["text", "image"];
-  }
-```
-
-The returned value stays `["text", "image"]` — inside the closed enum, so the
-catalog-rejection hazard noted in the existing comment is untouched.
-
-Ordering note: the explicit-list branch and the `vision === false` branch both
-run BEFORE this one, so a server that says `vision: false` or lists exact
-modalities still wins. `multimodal` is a last-resort inference, consistent
-with how the existing capability strings are treated.
-
-## MODIFY 2 — `catalogHintsFromModelsApiItem()` context source
+## MODIFY — catalogHintsFromModelsApiItem()
 
 Before:
 
-```ts
-  const limits = plainRecord(metadata?.limits);
-  const contextWindow =
-    positiveSafeInteger(
-      limits?.max_context_length,
-      metadata?.context_length,
-      item.context_length,
-      item.context_size,
-      item.max_model_len,
-      item.max_context_length,
-    );
-```
+    const limits = plainRecord(metadata?.limits);
+    const contextWindow =
+      positiveSafeInteger(
+        limits?.max_context_length,
+        metadata?.context_length,
+        item.context_length,
+        item.context_size,
+        item.max_model_len,
+        item.max_context_length,
+      );
 
 After:
 
-```ts
-  const limits = plainRecord(metadata?.limits);
-  // llama.cpp reports the served context under `meta`: `n_ctx` is the context
-  // the server was actually started with, `n_ctx_train` the model's trained
-  // maximum. Prefer the served value — routing must not promise a window the
-  // running server will refuse.
-  const meta = plainRecord(item.meta);
-  const contextWindow =
-    positiveSafeInteger(
-      limits?.max_context_length,
-      metadata?.context_length,
-      item.context_length,
-      item.context_size,
-      item.max_model_len,
-      item.max_context_length,
-      meta?.n_ctx,
-      meta?.n_ctx_train,
-    );
-```
+    const limits = plainRecord(metadata?.limits);
+    // llama.cpp reports the served context under `meta`: `n_ctx` is what the
+    // server was actually started with, `n_ctx_train` the model's trained
+    // maximum. Prefer the served value — routing must not promise a window the
+    // running server will refuse. Both come LAST so no provider that already
+    // supplies a recognized field changes behavior.
+    const meta = plainRecord(item.meta);
+    const contextWindow =
+      positiveSafeInteger(
+        limits?.max_context_length,
+        metadata?.context_length,
+        item.context_length,
+        item.context_size,
+        item.max_model_len,
+        item.max_context_length,
+        meta?.n_ctx,
+        meta?.n_ctx_train,
+      );
 
-`meta` entries are appended LAST so no existing provider's precedence changes:
-a server that already supplies a recognized field keeps winning.
+## NEW tests/catalog-llamacpp-capabilities.test.ts
 
-### Type surface
+Rewritten after B5: the original precedence tests passed unchanged today and
+so proved nothing.
 
-`ProviderModelsApiItem` needs a `meta?: unknown` member (read through
-`plainRecord`, so no structural typing of llama.cpp internals leaks in). B
-confirms the exact declaration site and amends this doc if the type is
-expressed as an index signature that already permits it.
+    test("absorbs meta.n_ctx from the verbatim llama.cpp data[] item", () => {
+      // This is the item extractProviderModelItems actually produces from the
+      // observed dual-envelope body — not a hand-merged one.
+      const hints = catalogHintsFromModelsApiItem("lidge", {
+        id: "qwen3.8-27b-nvfp4",
+        object: "model",
+        owned_by: "llamacpp",
+        meta: { n_ctx: 262144, n_ctx_train: 262144 },
+      });
+      expect(hints.contextWindow).toBe(262144);
+    });
 
-## NEW `tests/catalog-llamacpp-capabilities.test.ts`
+    test("prefers the served n_ctx over the trained maximum", () => {
+      const hints = catalogHintsFromModelsApiItem("lidge", {
+        id: "short-ctx",
+        meta: { n_ctx: 8192, n_ctx_train: 262144 },
+      });
+      expect(hints.contextWindow).toBe(8192);
+    });
 
-```ts
-test("absorbs multimodal capability and meta.n_ctx from a llama.cpp models item", () => {
-  const hints = catalogHintsFromModelsApiItem("lidge", {
-    id: "qwen3.8-27b-nvfp4",
-    object: "model",
-    owned_by: "llamacpp",
-    capabilities: ["completion", "multimodal"],
-    meta: { n_ctx: 262144, n_ctx_train: 262144 },
-  });
-  expect(hints.inputModalities).toEqual(["text", "image"]);
-  expect(hints.contextWindow).toBe(262144);
-});
+    test("a recognized context field still wins over meta (precedence)", () => {
+      // Contested: without the ordering guarantee this could return 8192.
+      const hints = catalogHintsFromModelsApiItem("lidge", {
+        id: "both",
+        context_length: 32768,
+        meta: { n_ctx: 8192 },
+      });
+      expect(hints.contextWindow).toBe(32768);
+    });
 
-test("an explicit vision:false still beats the multimodal inference", () => {
-  const hints = catalogHintsFromModelsApiItem("lidge", {
-    id: "text-only",
-    capabilities: { vision: false },
-  });
-  expect(hints.inputModalities).toEqual(["text"]);
-});
+    test("the dual-envelope body still yields no image evidence (documents the gap)", () => {
+      // models[] carries "multimodal" but discovery reads only data[]. This
+      // asserts the KNOWN limitation so the filed issue has a live witness and
+      // a future fix has a test to flip.
+      const extracted = extractProviderModelItems(VERBATIM_LLAMACPP_BODY, discovery);
+      const hints = catalogHintsFromModelsApiItem("lidge", extracted.items[0]);
+      expect(hints.contextWindow).toBe(262144);
+      expect(hints.inputModalities).toBeUndefined();
+    });
 
-test("prefers the served n_ctx over the trained maximum", () => {
-  const hints = catalogHintsFromModelsApiItem("lidge", {
-    id: "short-ctx",
-    meta: { n_ctx: 8192, n_ctx_train: 262144 },
-  });
-  expect(hints.contextWindow).toBe(8192);
-});
-```
-
-The third case is the activation scenario for the precedence comment — without
-it the ordering claim is untested prose.
+The fourth test is the honest part: it encodes what this phase does NOT fix.
 
 ## Accept criteria
 
-1. All three tests fail before the change and pass after (activation grounding).
-2. `bun x tsc --noEmit` clean.
-3. No existing catalog test regresses — this file is shared by every provider,
-   so the full suite runs via `ssh lidge`.
-4. The modality enum stays closed to `text|image|audio`.
+1. Tests 1-3 fail before the change and pass after (activation grounding).
+2. Test 4 passes before AND after; it is a characterization test for the gap
+   handed to the filed issue.
+3. `bun x tsc --noEmit` clean.
+4. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
+   shared surface touched by many catalog suites.
 
 ## Verifier commands (PLAN-VERIFIER-REAL-01)
 
 | Command | Reads this change? | Notes |
 |---------|-------------------|-------|
-| `bun test tests/catalog-llamacpp-capabilities.test.ts` | YES — direct argument | New file |
-| `bun test` (via `ssh lidge`) | YES — `provider-fetch.ts` is exercised by the existing catalog suites | Required: shared surface |
-| `bun x tsc --noEmit` | YES — `src/**` in `tsconfig.json` include | |
+| `bun run test tests/catalog-llamacpp-capabilities.test.ts` | YES — direct argument | New file |
+| `bun x tsc --noEmit` | YES — tsconfig include covers `src/**` | Verified exit 0 pre-change |
+| `bun run test` on lidge | YES — existing catalog suites exercise `provider-fetch.ts` | Required: shared surface; verify remote HEAD first |
+
+## Field chain (PLAN-FIELD-CHAIN-01)
+
+| Stage | Path | State |
+|-------|------|-------|
+| creation | upstream server `/v1/models` response | unchanged |
+| extraction | `extractProviderModelItems`, src/providers/model-discovery.ts:329 | unchanged (data[] only) |
+| hint mapping | `catalogHintsFromModelsApiItem` | NEW: meta.n_ctx read |
+| serialization | `applyCatalogModelMetadata` (Phase 1 provenance) | carries the value to routing |
+| consumer | `candidateCapabilityEvidence` | receives contextWindow |
+
+N/A: no new enum value and no new type member (B8).
 
 ## Bypass record (PLAN-BYPASS-NAMED-01)
 
 No enforcement added. Tier: N/A. Executing surface: none. Known bypass: a
-provider that reports neither a recognized modality token nor a recognized
-context field still yields unknown evidence — by design, per "unknown is not
-zero". Residual risk: `multimodal` is a heuristic; a server using it to mean
-"audio + text" would be mislabeled as image-capable. Wording downgrade: this
-is called an inference, not detection. Final enforcement layer: none.
+server reporting context nowhere in the recognized list still yields unknown —
+by design. Residual risk: `n_ctx` is trusted as reported; a server misreporting
+it would mislead routing exactly as any other context field would. Wording
+downgrade: N/A. Final enforcement layer: none.
