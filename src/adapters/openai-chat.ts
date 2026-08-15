@@ -717,6 +717,23 @@ function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] 
   return expanded.length > 0 ? expanded : undefined;
 }
 
+function mergeXaiPropertySchemas(values: unknown[]): unknown {
+  const unique: unknown[] = [];
+  const serialized = new Set<string>();
+  for (const value of values) {
+    const key = JSON.stringify(value);
+    if (serialized.has(key)) continue;
+    serialized.add(key);
+    unique.push(value);
+  }
+  return unique.length === 1 ? unique[0] : { anyOf: unique };
+}
+
+/**
+ * xAI rejects a function parameter schema whose root remains oneOf/anyOf, even when every branch
+ * is an object. Merge the union into one object root while preserving branch choices on each
+ * property. A field stays required only when every branch requires it.
+ */
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
   const variants = expandXaiRootObjectSchemas(parameters);
   if (!variants) return undefined;
@@ -725,7 +742,41 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
     ? parameters as Record<string, unknown>
     : {};
   const metadata = Object.fromEntries(Object.entries(root).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
-  return { ...metadata, oneOf: variants };
+  delete metadata.properties;
+  delete metadata.required;
+
+  const propertyValues = new Map<string, unknown[]>();
+  for (const variant of variants) {
+    if (!variant.properties || typeof variant.properties !== "object" || Array.isArray(variant.properties)) continue;
+    for (const [name, value] of Object.entries(variant.properties as Record<string, unknown>)) {
+      const values = propertyValues.get(name) ?? [];
+      values.push(value);
+      propertyValues.set(name, values);
+    }
+  }
+  const properties = Object.fromEntries(
+    [...propertyValues].map(([name, values]) => [name, mergeXaiPropertySchemas(values)]),
+  );
+
+  const requiredSets = variants.map(variant => new Set(
+    Array.isArray(variant.required)
+      ? variant.required.filter((item): item is string => typeof item === "string")
+      : [],
+  ));
+  const required = requiredSets.length === 0
+    ? []
+    : [...requiredSets[0]].filter(name => requiredSets.every(set => set.has(name)));
+  const additionalProperties = variants.every(variant => variant.additionalProperties === false)
+    ? false
+    : undefined;
+
+  return {
+    ...metadata,
+    type: "object",
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+    ...(additionalProperties === false ? { additionalProperties } : {}),
+  };
 }
 
 function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig): unknown[] | undefined {

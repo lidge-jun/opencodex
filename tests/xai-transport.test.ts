@@ -111,9 +111,13 @@ describe("xAI auth-mode transport selection", () => {
     });
     const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
 
-    expect(xaiParameters.type).toBeUndefined();
-    expect(xaiParameters.oneOf).toHaveLength(3);
-    expect((xaiParameters.oneOf as Record<string, unknown>[]).every(branch => branch.type === "object")).toBe(true);
+    expect(xaiParameters.type).toBe("object");
+    expect(xaiParameters.oneOf).toBeUndefined();
+    expect(xaiParameters.anyOf).toBeUndefined();
+    expect(xaiParameters.properties).toEqual({
+      mode: { type: "string", enum: ["view"] },
+      path: { type: "string" },
+    });
     expect(xaiParameters.$defs).toEqual(schema.$defs);
 
     const otherRequest = createOpenAIChatAdapter({ ...provider("key"), baseUrl: "https://example.test/v1" }).buildRequest({
@@ -169,8 +173,9 @@ describe("xAI auth-mode transport selection", () => {
     const body = JSON.parse(request.body) as { tools: Array<{ function: { name: string; parameters: Record<string, unknown> } }> };
     const tool = body.tools.find(entry => entry.function.name === "automation_update");
 
-    expect(tool?.function.parameters.oneOf).toHaveLength(2);
-    expect((tool?.function.parameters.oneOf as Record<string, unknown>[]).every(branch => branch.type === "object")).toBe(true);
+    expect(tool?.function.parameters.type).toBe("object");
+    expect(tool?.function.parameters.oneOf).toBeUndefined();
+    expect(tool?.function.parameters.properties).toEqual({});
   });
 });
 
