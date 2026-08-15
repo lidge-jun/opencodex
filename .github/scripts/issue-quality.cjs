@@ -83,8 +83,52 @@ function detectIssueKind(issue) {
   return core.detectIssueKind(normalizeEquivalentBugEvidence(issue));
 }
 
+/**
+ * The core validator deliberately accepts longer prose even when it lacks one
+ * of its compact command/error/path signals. That is useful for narrative
+ * reproduction steps, but it let #1672 pass by copying the generic final sync
+ * error from Summary into Reproduction. Only reject the narrow case where the
+ * reproduction is wholly contained in the summary (or vice versa) and adds no
+ * independent actionable step.
+ */
+function reproductionOnlyEchoesSummary(summary, reproduction) {
+  const summaryCan = core.canonicalise(summary);
+  const reproductionCan = core.canonicalise(reproduction);
+  if (!summaryCan || !reproductionCan) return false;
+
+  const hasIndependentAction =
+    core.hasActionableReproductionDetail(reproduction) ||
+    /\b(?:run|execute|invoke|retry)\s+[`'"*_~]*ocx\s+(?:sync|restore|update|doctor|start|stop|restart)\b/i.test(
+      String(reproduction || ""),
+    );
+  if (hasIndependentAction) return false;
+
+  return summaryCan.includes(reproductionCan) || reproductionCan.includes(summaryCan);
+}
+
 function validateIssue(issue) {
-  return core.validateIssue(normalizeEquivalentBugEvidence(issue));
+  const normalizedIssue = normalizeEquivalentBugEvidence(issue);
+  const result = core.validateIssue(normalizedIssue);
+
+  if (result.kind !== "bug" || result.softPass || !result.valid) return result;
+
+  const body = String(normalizedIssue?.body || "");
+  const summary = core.extractSection(body, "Summary");
+  const reproduction = core.extractSection(body, "Reproduction");
+  if (!reproductionOnlyEchoesSummary(summary, reproduction)) return result;
+
+  return {
+    ...result,
+    valid: false,
+    reasons: [
+      ...result.reasons,
+      "Reproduction only echoes the Summary and does not add actionable steps or failure evidence.",
+    ],
+    guidance: [
+      ...result.guidance,
+      "List the exact command or steps that trigger the problem and include the underlying error or observed output, not only the final summary message.",
+    ],
+  };
 }
 
 module.exports = {
@@ -92,4 +136,5 @@ module.exports = {
   detectIssueKind,
   validateIssue,
   normalizeEquivalentBugEvidence,
+  reproductionOnlyEchoesSummary,
 };
