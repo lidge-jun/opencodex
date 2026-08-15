@@ -31,6 +31,7 @@ export default function OpenRouterModelRouting({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const discoveryGeneration = useRef(0);
+  const activeModelRef = useRef(model);
   const modelOptions = useMemo(() => [...new Set([
     ...configuredModels,
     ...(item.defaultModel ? [item.defaultModel] : []),
@@ -38,6 +39,7 @@ export default function OpenRouterModelRouting({
   ])], [availableModels, configuredModels, item.defaultModel]);
 
   const selectModel = (nextModel: string) => {
+    activeModelRef.current = nextModel;
     discoveryGeneration.current += 1;
     setModel(nextModel);
     const route = item.modelOpenRouterRouting?.[nextModel];
@@ -70,6 +72,7 @@ export default function OpenRouterModelRouting({
         throw new Error(text);
       }
       const data = await response.json().catch(() => ({})) as Discovery;
+      if (generation !== discoveryGeneration.current) return;
       setEndpoints(Array.isArray(data.endpoints) ? data.endpoints : []);
       setDiscoveryComplete(true);
       setMessage({ ok: true, text: t("pws.openrouter.loaded", { count: data.endpoints?.length ?? 0 }) });
@@ -95,7 +98,8 @@ export default function OpenRouterModelRouting({
   });
 
   const save = async () => {
-    if (!onUpdateProvider || !model.trim() || saving || (mode !== "inherit" && selected.length === 0)) return;
+    const requestedModel = model.trim();
+    if (!onUpdateProvider || !requestedModel || saving || (mode !== "inherit" && selected.length === 0)) return;
     setSaving(true);
     setMessage(null);
     const routing = mode === "inherit" ? null : {
@@ -104,11 +108,13 @@ export default function OpenRouterModelRouting({
     };
     try {
       const result = await onUpdateProvider(item.name, {
-        modelOpenRouterRouting: { [model.trim()]: routing },
+        modelOpenRouterRouting: { [requestedModel]: routing },
       });
-      setMessage({ ok: result.ok, text: result.ok ? t("pws.openrouter.saved") : result.error ?? t("sub.saveFailed") });
+      if (activeModelRef.current.trim() === requestedModel) {
+        setMessage({ ok: result.ok, text: result.ok ? t("pws.openrouter.saved") : result.error ?? t("sub.saveFailed") });
+      }
     } catch {
-      setMessage({ ok: false, text: t("sub.saveFailed") });
+      if (activeModelRef.current.trim() === requestedModel) setMessage({ ok: false, text: t("sub.saveFailed") });
     } finally {
       setSaving(false);
     }
@@ -177,7 +183,7 @@ export default function OpenRouterModelRouting({
         <button type="button" className="btn btn-primary btn-sm" onClick={() => { void save(); }} disabled={!model.trim() || saving || (mode !== "inherit" && selected.length === 0)}>
           {saving ? t("pws.saving") : t("common.save")}
         </button>
-        {endpoints.length > 0 && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(true); }} disabled={loading}>{t("lab.refresh")}</button>}
+        {discoveryComplete && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(true); }} disabled={loading}>{t("lab.refresh")}</button>}
       </div>
       {message && <p role={message.ok ? "status" : "alert"} className={message.ok ? "pwi-settings-mode-msg pwi-settings-mode-msg--ok" : "pwi-settings-mode-msg pwi-settings-mode-msg--err"}>{message.text}</p>}
     </section>
