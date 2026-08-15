@@ -2,6 +2,7 @@ import type { OcxProviderConfig } from "../types";
 import {
   assessUrlDestination,
   DestinationDnsResolutionError,
+  isBenchmarkAddress,
   providerAllowsPrivateNetwork,
   providerDestinationConfigError,
   resolvePublicAddresses,
@@ -160,7 +161,12 @@ async function providerOutboundRequest(
     warnProxyDnsDegradationOnce();
     return globalThis.fetch(url, { ...init, method, redirect: "manual" });
   }
-  if (proxyConfigured && !resolved.privateNetwork) {
+  const clashFakeIpOnly = resolved.addresses.length > 0
+    && resolved.addresses.every(address => isBenchmarkAddress(address.address));
+  // Clash fake-IP (198.18.0.0/15) is a local DNS artifact. Send it through the
+  // configured HTTP(S) proxy as a hostname CONNECT — the same path a public
+  // destination takes. Requiring NO_PROXY would pin-connect to the fake-IP.
+  if (proxyConfigured && (!resolved.privateNetwork || clashFakeIpOnly)) {
     warnProxyBoundaryOnce();
     return globalThis.fetch(url, { ...init, method, redirect: "manual" });
   }

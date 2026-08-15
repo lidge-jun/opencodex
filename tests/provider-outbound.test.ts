@@ -97,6 +97,45 @@ describe("provider outbound GET transport", () => {
     expect(captured.address).toBeUndefined();
   });
 
+  test("Clash fake-IP behind a configured proxy uses hostname CONNECT instead of NO_PROXY", async () => {
+    const proxyUrl = "http://127.0.0.1:9";
+    process.env.HTTPS_PROXY = proxyUrl;
+    process.env.https_proxy = proxyUrl;
+    process.env.NO_PROXY = "localhost,127.0.0.1,::1,[::1]";
+    process.env.no_proxy = "localhost,127.0.0.1,::1,[::1]";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe("https://www.packyapi.com/v1/models");
+      expect(init?.redirect).toBe("manual");
+      return new Response('{"data":[{"id":"gpt-5.5"}]}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../src/lib/provider-outbound");
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 500 }), {
+        privateNetwork: true,
+        address: "198.18.56.214",
+      });
+
+      const response = await providerOutboundGet(
+        "packy",
+        { baseUrl: "https://www.packyapi.com/v1", allowPrivateNetwork: true },
+        "https://www.packyapi.com/v1/models",
+        {},
+        dependencies,
+      );
+
+      expect(await response.json()).toEqual({ data: [{ id: "gpt-5.5" }] });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(captured.address).toBeUndefined();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../src/lib/provider-outbound");

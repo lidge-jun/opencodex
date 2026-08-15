@@ -108,6 +108,14 @@ function classifyIpv6(hostname: string): DestinationAssessment {
   return { kind: "private", detail: "non-global address" };
 }
 
+/** Clash / Surge / Mihomo fake-IP DNS uses IANA benchmark space 198.18.0.0/15. */
+export function isBenchmarkAddress(address: string): boolean {
+  const hostname = normalizeHostname(address);
+  if (isIP(hostname) !== 4) return false;
+  const assessment = classifyIpv4(hostname);
+  return assessment.kind === "private" && assessment.detail === "benchmark address";
+}
+
 function assessDestination(baseUrl: string): DestinationAssessment | null {
   try {
     const parsed = new URL(baseUrl.trim());
@@ -294,6 +302,13 @@ export async function resolvePublicAddresses(
     const ipKind = isIP(address) || (family === 4 || family === 6 ? family : 0);
     const assessment = ipKind === 4 ? classifyIpv4(address) : ipKind === 6 ? classifyIpv6(normalizeHostname(address)) : null;
     if (!assessment || assessment.kind !== "public") {
+      // Hostname → 198.18.0.0/15 is Clash/Surge/Mihomo fake-IP DNS, not a LAN
+      // provider. Accept it without allowPrivateNetwork and do not mark the
+      // destination private, so outbound can still take the HTTP(S)_PROXY path.
+      if (assessment?.detail === "benchmark address") {
+        validatedAddresses.push({ address, family: ipKind === 4 || ipKind === 6 ? ipKind : (family || 4) });
+        continue;
+      }
       const allowedPrivateAddress = privateNetworkAllowed
         && assessment
         && (assessment.kind === "loopback" || assessment.kind === "private");

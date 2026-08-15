@@ -200,4 +200,28 @@ describe("resolvePublicAddresses — caller-specific diagnostics", () => {
     expect(resolved.privateNetwork).toBe(true);
     expect(resolved.addresses).toEqual([{ address: "192.168.1.50", family: 4 }]);
   });
+
+  test("hostname Clash fake-IP answers are accepted without marking the destination private", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: "198.18.56.214", family: 4 }]);
+
+    const resolved = await resolvePublicAddresses(
+      "https://www.packyapi.com/v1/models",
+      { context: "provider URL" },
+    );
+
+    expect(resolved.privateNetwork).toBe(false);
+    expect(resolved.addresses).toEqual([{ address: "198.18.56.214", family: 4 }]);
+  });
+
+  test("hostname Clash fake-IP mixed with RFC1918 still requires the private-network opt-in", async () => {
+    lookupMock.mockResolvedValueOnce([
+      { address: "198.18.56.214", family: 4 },
+      { address: "10.0.0.5", family: 4 },
+    ]);
+
+    await expect(resolvePublicAddresses(
+      "https://rebind.example.com/v1/models",
+      { context: "provider URL" },
+    )).rejects.toThrow("private-network address (10.0.0.5)");
+  });
 });

@@ -143,7 +143,9 @@ so opencodex cannot pin or verify that peer. This is an explicit security limita
 Private/local destinations require `allowPrivateNetwork: true` and, when an outbound proxy is active,
 a matching `NO_PROXY` entry. Loopback is added automatically; list each LAN host explicitly because
 CIDR entries are not interpreted. The matcher supports exact hosts, domain suffixes, optional ports,
-bracketed IPv6, and `*`; for example, list `192.168.1.50` explicitly. Metadata and link-local
+bracketed IPv6, and `*`; for example, list `192.168.1.50` explicitly. Hostname answers that resolve
+only to Clash/Surge/Mihomo fake-IP space (`198.18.0.0/15`) are not treated as private destinations
+and keep using the outbound proxy. Metadata and link-local
 destinations stay blocked. Diagnostic
 requests reject redirects and report a credential-stripped target. Ordinary provider request redirect
 review remains separate from this diagnostic guard.

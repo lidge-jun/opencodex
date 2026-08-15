@@ -9,6 +9,8 @@ ALL_PROXY, and NO_PROXY semantics remain authoritative. The wrapper classifies s
 only a typed DNS-resolution failure degrades to proxy resolution; every literal, metadata, and
 resolved-address policy error still rejects. Proxy mode logs once that the proxy-selected peer
 cannot be pinned. Private destinations additionally require allowPrivateNetwork plus NO_PROXY.
+Hostname answers that are only Clash/Surge/Mihomo fake-IP space (198.18.0.0/15) are not treated as
+private destinations and stay on the proxy path.
 
 Both paths reject redirects and expose only credential-stripped final-address guidance. This phase
 does not cover ordinary requests, streaming, retries, or per-hop redirect review on those paths.
