@@ -317,7 +317,7 @@ export async function cmdClaude(args: string[]): Promise<number> {
   // Pre-write the CLI's gateway-model cache (devlog 030): without a token the CLI
   // never refreshes it, so the picker would keep showing yesterday's aliases.
   try {
-    const cachePath = await refreshGatewayModelCacheFromProxy(port);
+    const cachePath = await refreshGatewayModelCacheFromProxy(port, { admissionConfig: config });
     if (cachePath === null) {
       console.error("⚠ Gateway model cache could not be refreshed; the model picker may be stale.");
     }
