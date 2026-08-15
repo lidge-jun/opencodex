@@ -659,6 +659,14 @@ export async function prepareCursorRawMessages(
 ): Promise<readonly OcxMessage[] | undefined> {
   if (!messages?.length) return messages;
   const prepareFrom = cursorVisionPrepareStartIndex(messages);
+  const active = messages[prepareFrom];
+  if (
+    active
+    && (active.role === "user" || active.role === "developer")
+    && extractCursorImageParts(active.content).length > MAX_CURSOR_IMAGES
+  ) {
+    throw new CursorImageError(`Too many images in one request (max ${MAX_CURSOR_IMAGES}).`);
+  }
   let changed = false;
   const out: OcxMessage[] = [];
   for (let i = 0; i < messages.length; i++) {

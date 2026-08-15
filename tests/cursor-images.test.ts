@@ -55,6 +55,14 @@ describe("Cursor image resolver", () => {
       name: "CursorImageError",
       message: `Too many images in one request (max ${MAX_CURSOR_IMAGES}).`,
     });
+    await expect(prepareCursorRawMessages([{
+      role: "user",
+      content: urls.map(imageUrl => ({ type: "image" as const, imageUrl })),
+      timestamp: 1,
+    }])).rejects.toMatchObject({
+      name: "CursorImageError",
+      message: `Too many images in one request (max ${MAX_CURSOR_IMAGES}).`,
+    });
   });
 
   test("omits data URLs above the inbound decode bomb ceiling", async () => {

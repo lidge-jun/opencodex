@@ -656,6 +656,9 @@ describe("provider registry parity", () => {
     expect(seed.modelReasoningEfforts?.["gpt-5.6-sol"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(cursor?.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
     expect(seed.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
+    expect(seed.noVisionModels).toContain("composer-2.5");
+    expect(seed.noVisionModels).toContain("glm-5.3");
+    expect(seed.noVisionModels).not.toContain("grok-4.5");
     expect(seed.modelInputModalities?.auto).toEqual(["text", "image"]);
     expect(seed.modelInputModalities?.["composer-2.5"]).toEqual(["text", "image"]);
 

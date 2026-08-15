@@ -29,6 +29,7 @@ describe("Cursor discovery metadata", () => {
       "composer-2.5",
       "composer-2.5-fast",
       "glm-5.2",
+      "glm-5.3",
     ]);
     for (const id of CURSOR_NO_VISION_MODELS) {
       expect(ids.has(id), `${id} must be in the static Cursor seed`).toBe(true);

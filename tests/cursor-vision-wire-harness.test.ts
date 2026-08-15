@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { fromBinary } from "@bufbuild/protobuf";
 import { encodeCursorRunRequest } from "../src/adapters/cursor/protobuf-request";
+import { CURSOR_VISION_IMAGE_HISTORY_MARKER } from "../src/adapters/cursor/images";
 import {
   AgentClientMessageSchema,
   ConversationStepSchema,
@@ -103,5 +104,24 @@ describe("Cursor vision wire harness", () => {
     const base64Payload = imageUrl.slice(imageUrl.indexOf(",") + 1);
     expect(new TextDecoder().decode(viewBytes)).not.toContain(base64Payload);
     expect(new TextDecoder().decode(viewBytes)).not.toContain("data:image/png;base64,");
+    const blobText = hydratedTurnText(viewBytes);
+    expect(blobText).not.toContain(base64Payload);
+    expect(blobText).not.toContain("data:image/png;base64,");
+    expect(blobText).toContain(CURSOR_VISION_IMAGE_HISTORY_MARKER);
   });
 });
+
+function hydratedTurnText(bytes: Uint8Array): string {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  const parts: string[] = [];
+  for (const turnId of run?.conversationState?.turns ?? []) {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") continue;
+    parts.push(new TextDecoder().decode(blobData(turn.turn.value.userMessage)));
+    for (const stepId of turn.turn.value.steps) {
+      parts.push(new TextDecoder().decode(blobData(stepId)));
+    }
+  }
+  return parts.join("\n");
+}

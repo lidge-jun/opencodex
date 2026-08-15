@@ -238,10 +238,10 @@ describe("Cursor native vs sidecar vision registry", () => {
   test("curates noVisionModels for Auto/Composer/GLM while advertising image for all static ids", () => {
     const cursor = PROVIDER_REGISTRY.find(entry => entry.id === "cursor");
     expect(cursor?.noVisionModels).toEqual([...CURSOR_NO_VISION_MODELS]);
-    for (const model of ["auto", "composer-1", "composer-2.5", "composer-2.5-fast", "glm-5.2"]) {
+    for (const model of ["auto", "composer-1", "composer-2.5", "composer-2.5-fast", "glm-5.2", "glm-5.3"]) {
       expect(modelInList(cursor?.noVisionModels, model), `${model} should match noVision`).toBe(true);
     }
-    for (const model of ["auto", "composer-2.5", "glm-5.2", "gpt-5.5", "gemini-3-pro", "grok-4.5", "kimi-k3"]) {
+    for (const model of ["auto", "composer-2.5", "glm-5.2", "glm-5.3", "gpt-5.5", "gemini-3-pro", "grok-4.5", "kimi-k3"]) {
       expect(cursor?.modelInputModalities?.[model]).toEqual(["text", "image"]);
     }
     for (const model of ["gpt-5.5", "gemini-3-pro", "grok-4.5", "kimi-k3"]) {

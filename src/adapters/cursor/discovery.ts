@@ -109,6 +109,7 @@ export const CURSOR_ROUTER_MODEL_IDS = [
  * - Composer family: Cursor staff — text-only; "Model does not support images"
  * - Auto / router modes: Cursor docs omit Images for Auto Cost; staff — pick Claude/GPT for images
  * - glm-5.2: Cursor docs omit Images; Z.ai GLM-5.2 is text-only (vision is GLM-5V)
+ * - glm-5.3: same family; seeded as text-only ahead of Cursor's lineup update
  *
  * Composer ids are enumerated explicitly — prefix wildcard matching is deliberately out of
  * scope here; a live-discovered new Composer slug stays native-path until curated. Everyone
@@ -121,6 +122,7 @@ export const CURSOR_NO_VISION_MODELS = [
   "composer-2.5",
   "composer-2.5-fast",
   "glm-5.2",
+  "glm-5.3",
 ] as const;
 
 /** Wire id Cursor Connect expects for the auto-router (GetUsableModels returns `default`, not `auto`). */

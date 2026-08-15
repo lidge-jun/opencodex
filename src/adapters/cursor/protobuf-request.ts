@@ -346,7 +346,12 @@ function contentText(message: OcxMessage): string {
 function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
-    .map(part => part.type === "text" ? part.text : `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`)
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 }
 
@@ -823,7 +828,6 @@ function buildPreparedCursorRunRequest(
   const actionText = externalToolContinuation
     ? CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT
     : text;
-  const selectedContext = buildSelectedContext(selectedImages, requestScope);
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {
@@ -832,7 +836,7 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text: actionText,
               messageId: crypto.randomUUID(),
-              selectedContext,
+              selectedContext: buildSelectedContext(selectedImages, requestScope),
               // OmniRoute / cursor-agent always send mode=1 on UserMessage.
               mode: 1,
             }),
