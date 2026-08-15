@@ -502,6 +502,22 @@ describe("Cursor image resolver", () => {
     expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
   });
 
+  test("truncated JPEG with a valid SOF is omitted (no header-only passthrough)", async () => {
+    // SOI + SOF0 claiming 2x3, then EOF. Sniff succeeds; Bun.Image must still reject it.
+    const sofOnly = Uint8Array.from([
+      0xff, 0xd8,
+      0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x02, 0x03, 0x01, 0x11, 0x00,
+    ]);
+    expect(sniffCursorImageFormat(sofOnly)).toBe("jpeg");
+    expect(sniffCursorImageDimensions(sofOnly)).toEqual({ width: 2, height: 3 });
+    const outcome = await prepareCursorImageForWire({
+      data: sofOnly,
+      mimeType: "image/jpeg",
+      uuid: "sof-only",
+    });
+    expect(outcome).toEqual({ status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED });
+  });
+
   test("PNG bytes labeled image/jpeg are re-encoded as JPEG, not passthrough", async () => {
     const outcome = await prepareCursorImageForWire({
       data: PNG_BYTES,

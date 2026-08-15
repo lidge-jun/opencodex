@@ -321,22 +321,15 @@ export async function prepareCursorImageForWire(
     }
   }
 
-  // Second-pass skip: already soft-capped JPEG that has a real SOF (not SOI-only junk).
   const declaredJpeg = mime === "image/jpeg" || mime === "image/jpg";
-  const alreadySmallJpeg = declaredJpeg
-    && format === "jpeg"
-    && sniffed !== undefined
-    && image.data.byteLength <= softMax;
-  if (alreadySmallJpeg) {
-    return { status: "ready", image };
-  }
 
   try {
     throwIfImagePhaseAborted(signal);
     // metadata() decodes; reuse it as the Anthropic-style validate pass.
     const meta = await new Bun.Image(image.data).metadata();
 
-    // Passthrough only when declared MIME matches actual JPEG magic (never PNG-as-JPEG).
+    // Passthrough only after a successful decode, and only when declared MIME
+    // matches actual JPEG magic (never PNG-as-JPEG or SOF-only junk).
     if (declaredJpeg && format === "jpeg" && image.data.byteLength <= softMax) {
       return { status: "ready", image };
     }
