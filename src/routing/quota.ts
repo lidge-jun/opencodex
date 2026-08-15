@@ -27,6 +27,8 @@ export interface QuotaEvidenceInput {
   accountRef?: string;
   codexAccountId?: string;
   codexAccountPlan?: string;
+  /** Exact bindings score one account; ordinary Pool candidates may aggregate alternatives. */
+  codexAccountScope?: "exact" | "pool";
 }
 
 export interface CodexPoolQuotaAccount {
@@ -90,6 +92,9 @@ export function codexPoolQuotaEvidence(accounts: readonly CodexPoolQuotaAccount[
 
 export function quotaEvidenceForCandidate(input: QuotaEvidenceInput): RouteQuotaEvidence {
   if (input.provider === "openai" && input.codexAccountId) {
+    if (input.codexAccountScope === "exact") {
+      return codexAccountQuotaEvidence(input.codexAccountId, input.codexAccountPlan);
+    }
     // listAccountQuotas() is the reconciled quota snapshot: config-generation
     // reconciliation prunes removed accounts. Other eligibility dimensions
     // (pause/reauth/cooldown/soft-avoid) remain health/pool-selector concerns.

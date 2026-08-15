@@ -33,11 +33,19 @@ wire id as `openai/gpt-daybreak-blue-latest` through the canonical Codex-login f
     {
       "id": "daybreak-codex-forward",
       "provider": "openai",
-      "modelId": "gpt-daybreak-blue-latest"
+      "modelId": "gpt-daybreak-blue-latest",
+      "codexAccountTarget": "@main"
     }
   ]
 }
 ```
+
+`codexAccountTarget` is an explicit, per-row convenience form of exact Codex account selection.
+Use `@main` for the physical Codex App login or a stable Pool account id for an added account.
+Omit the field to retain ordinary provider Pool/Direct routing. A target-bound row uses only that
+account, overrides the provider's Direct mode just like an account-qualified selector, never rotates
+or retries on another account, and fails closed when the target is missing, paused, cooling down, or
+needs reauthentication. The account picker visibility setting does not create or remove this binding.
 
 Only that exact provider, endpoint, and model id receive the pinned Sol capability snapshot:
 372,000 context, 334,800 automatic compaction, the native reasoning ladder, and native Codex tool
@@ -129,7 +137,7 @@ metadata instead of an older-template approximation.
 | --- | --- |
 | Codex login (account-qualified rows disabled) | Bare native ids such as `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`; Pool or Direct is selected through `codexAccountMode`. GPT-5.6 rows use a 372,000-token catalog window. |
 | Codex login (account-qualified rows enabled with eligible selectors) | One `<selector>/<native-openai-model>` row per eligible selector and supported native model; each row uses only its mapped account, and bare native rows are hidden from the picker. Native metadata and context windows are preserved. |
-| Codex login (explicit Daybreak forward row) | `openai/gpt-daybreak-blue-latest` only when the exact `customModels` row is configured on the canonical `openai` provider. It keeps the Daybreak wire id and uses the pinned Sol capability snapshot (372,000 context; 334,800 automatic compaction). |
+| Codex login (explicit Daybreak forward row) | `openai/gpt-daybreak-blue-latest` only when the exact `customModels` row is configured on the canonical `openai` provider. It keeps the Daybreak wire id and uses the pinned Sol capability snapshot (372,000 context; 334,800 automatic compaction). An optional `codexAccountTarget` binds only that row to `@main` or one Pool account. |
 | OpenAI (API key) | Exactly ten namespaced rows: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, the three `*-pro` virtual ids, and the two Daybreak aliases (1,050,000 context; 922,000 max input for all ten) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
 | Cursor | Static fallback includes `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, and `cursor/gpt-5.6-luna` (1,000,000), plus regular/Fast rows for Grok 4.5 and 4.6 (500,000); 4.6 adds `xhigh`, and live account discovery decides which rows remain visible. |

@@ -27,6 +27,7 @@ import {
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
 import { getStaleCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
+import { customModelCodexAccountIdForRoute } from "./codex/custom-model-account-target";
 import {
   buildRouteDecisionTrace,
   type RouteDecisionKind,
@@ -61,6 +62,8 @@ export interface RouteResult {
   codexAccountId?: string;
   /** Public namespace used by the account-qualified selector. */
   codexAccountNamespace?: string;
+  /** Private routing discriminator for a custom-row exact account binding. */
+  codexAccountBinding?: "custom-model";
   combo?: ComboPick;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
@@ -622,18 +625,34 @@ function routeModelInternal(
       // Self-namespaced native id — the vendor segment equals the provider id, so the FULL ref is
       // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
       // remainder, which would send a bare `auto` the upstream cannot resolve.
-      if (known.includes(modelId)) {
-        return routeResult(provName, prov, modelId, "explicit-provider", "explicit-provider-namespace");
-      }
-      // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
-      // slash id via an exact known-id lookup; raw full-slash selectors keep working.
-      return routeResult(
+      const routed = known.includes(modelId)
+        ? routeResult(provName, prov, modelId, "explicit-provider", "explicit-provider-namespace")
+        // Codex-facing alias ids (`provider/vendor-model`) decode back to the native
+        // slash id via an exact known-id lookup; raw full-slash selectors keep working.
+        : routeResult(
+            provName,
+            prov,
+            decodeRoutedModelIdOrThrow(modelId.slice(slash + 1), known),
+            "explicit-provider",
+            "explicit-provider-namespace",
+          );
+      // A custom row may explicitly select one Codex account. Reuse the exact-account
+      // Pool path so the target is fixed, fails closed, and never rotates or changes the
+      // active account. Picker visibility is deliberately unrelated to this opt-in.
+      const codexAccountId = customModelCodexAccountIdForRoute(
+        config,
         provName,
-        prov,
-        decodeRoutedModelIdOrThrow(modelId.slice(slash + 1), known),
-        "explicit-provider",
-        "explicit-provider-namespace",
+        routed.modelId,
       );
+      if (codexAccountId) {
+        return {
+          ...routed,
+          codexAccountMode: "pool",
+          codexAccountId,
+          codexAccountBinding: "custom-model",
+        };
+      }
+      return routed;
     }
   }
 

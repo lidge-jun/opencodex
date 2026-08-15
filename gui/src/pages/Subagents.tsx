@@ -118,10 +118,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(res, t("sub.loadFail"));
     if (!response) throw new Error(t("sub.loadFail"));
     const available = response.available ?? [];
-    const availableSet = new Set(available);
     const next = {
       available,
-      chosen: (response.chosen ?? []).filter(model => availableSet.has(model)),
+      // Keep configured entries that are temporarily unavailable. The workspace renders them in
+      // the featured list so the user can remove or reorder them deliberately; dropping them here
+      // would make an unrelated Save silently rewrite durable subagent intent.
+      chosen: response.chosen ?? [],
     };
     setChosen(next.chosen);
     writeSessionListCache(cacheKey, next);

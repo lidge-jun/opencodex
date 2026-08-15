@@ -76,7 +76,13 @@ import {
   resolveAnthropicAccountForSession,
   rotateAnthropicAccountOn429,
 } from "../../oauth/anthropic-routing";
-import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
+import {
+  buildWebSearchTool,
+  planWebSearch,
+  resolveOpenAiWebSearchModel,
+  runWithWebSearch,
+  shouldResolveOpenAiWebSearchSidecar,
+} from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
 import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
@@ -99,6 +105,7 @@ import {
   stripCodexRuntimeProviderFields,
   type CodexAuthContext,
 } from "../../codex/auth-context";
+import { customModelCodexAccountIdForRoute } from "../../codex/custom-model-account-target";
 import {
   computeQuotaCooldown,
   formatCodexProviderForLog,
@@ -994,7 +1001,17 @@ async function resolveResponsesCodexAuth(
     };
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return { ok: false, response: cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace) };
+      return {
+        ok: false,
+        response: cooldownErrorResponse(
+          err,
+          Date.now(),
+          route.codexAccountNamespace,
+          route.codexAccountBinding === "custom-model"
+            ? `${route.providerName}/${route.modelId}`
+            : undefined,
+        ),
+      };
     }
     if (err instanceof CodexMainProfileDrainingError) {
       return { ok: false, response: codexMainProfileDrainingResponse() };
@@ -2134,48 +2151,87 @@ async function handleResponsesInner(
     );
   }
 
-  let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
   const needsOpenAiVision = shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed);
   const needsOpenAiSearch = shouldResolveOpenAiWebSearchSidecar(config, parsed, isPassthrough);
-  if (needsOpenAiVision || needsOpenAiSearch) {
+  const visionModelId = resolveOpenAiVisionModel(config);
+  const webSearchModelId = resolveOpenAiWebSearchModel(config);
+  const sidecarCandidates = listOpenAiForwardSidecarCandidates(config);
+  const sidecarByAuthScope = new Map<string, Promise<ResolvedOpenAiForwardSidecar | undefined>>();
+  const resolveHelperSidecar = async (
+    needed: boolean,
+    helperModelId: string,
+  ): Promise<ResolvedOpenAiForwardSidecar | undefined> => {
+    if (!needed) return undefined;
+    let helperAccountId: string | undefined;
     try {
-      openAiSidecar = await resolveFirstUsableOpenAiSidecar(
-        listOpenAiForwardSidecarCandidates(config),
-        req.headers,
+      helperAccountId = customModelCodexAccountIdForRoute(
         config,
-        {
-          // Account-qualified native routes are passthrough, so their in-turn helper is vision.
-          // Scope its cooldown and outcome to the helper model, not the routed text model.
-          ...(route.codexAccountId !== undefined
-            ? { exactAccount: { accountId: route.codexAccountId, modelId: resolveOpenAiVisionModel(config) } }
-            : {}),
-          beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
-        },
+        "openai",
+        helperModelId,
       );
-    } catch (err) {
-      // Sidecars are optional helpers for an otherwise independent routed turn.
-      // An unavailable/cooling/expired Multi credential disables the helper; it
-      // must not turn a valid routed-provider request into a Codex-auth failure.
-      if (
-        !(err instanceof CodexPoolAuthenticationError)
-        && !(err instanceof CodexAuthContextError)
-        && !(err instanceof CodexAccountCooldownError)
-        && !(err instanceof CodexThreadAffinityExpiredError)
-        && !(err instanceof CodexMainProfileDrainingError)
-      ) throw err;
+    } catch {
+      // A malformed hand-edited target disables only this optional helper instead of silently
+      // selecting the route account or failing an otherwise valid primary-model request.
+      return undefined;
     }
-  }
+    const exactAccountId = helperAccountId ?? route.codexAccountId;
+    // Exact-account outcome recording is model-scoped; default Pool/Direct selection is not.
+    // Reuse only scopes that are semantically identical, never merely the same account id.
+    const cacheKey = exactAccountId === undefined
+      ? "default"
+      : `exact:${exactAccountId}:${helperModelId}`;
+    let pending = sidecarByAuthScope.get(cacheKey);
+    if (!pending) {
+      pending = (async () => {
+        try {
+          return await resolveFirstUsableOpenAiSidecar(
+            sidecarCandidates,
+            req.headers,
+            config,
+            {
+              ...(exactAccountId !== undefined
+                ? { exactAccount: { accountId: exactAccountId, modelId: helperModelId } }
+                : {}),
+              beginCodexAccountSelection: codexAccountSelectionForTurn(options.turnAdmissionLease),
+            },
+          );
+        } catch (err) {
+          // Sidecars are optional helpers for an otherwise independent routed turn.
+          // An unavailable/cooling/expired exact credential disables this helper; it must not
+          // borrow another account or turn a valid primary request into a Codex-auth failure.
+          if (
+            !(err instanceof CodexPoolAuthenticationError)
+            && !(err instanceof CodexAuthContextError)
+            && !(err instanceof CodexAccountCooldownError)
+            && !(err instanceof CodexThreadAffinityExpiredError)
+            && !(err instanceof CodexMainProfileDrainingError)
+          ) throw err;
+          return undefined;
+        }
+      })();
+      sidecarByAuthScope.set(cacheKey, pending);
+    }
+    return pending;
+  };
+  const visionSidecar = await resolveHelperSidecar(needsOpenAiVision, visionModelId);
+  const webSearchSidecar = await resolveHelperSidecar(needsOpenAiSearch, webSearchModelId);
 
   // Vision sidecar: the routed model can't see images (provider.noVisionModels). Describe each
   // attached image through the selected sidecar backend and replace it with text BEFORE the main
   // call, so the text-only model can reason about it.
-  const visionPlan = planVisionSidecar(config, route.provider, route.modelId, parsed, openAiSidecar);
-  const recordSidecarOutcome = openAiSidecar?.recordOutcome;
+  const visionPlan = planVisionSidecar(
+    config,
+    route.provider,
+    route.modelId,
+    parsed,
+    visionSidecar,
+  );
+  const recordSidecarOutcome = visionSidecar?.recordOutcome;
   if (visionPlan) {
     await describeImagesInPlace(
       parsed,
       visionPlan,
-      openAiSidecar?.headers ?? selectedForwardHeaders,
+      visionSidecar?.headers ?? selectedForwardHeaders,
       options.abortSignal,
       recordSidecarOutcome,
       translatorBudget,
@@ -2989,7 +3045,7 @@ async function handleResponsesInner(
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
   const wsPlan = !routedCompaction
-    ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar)
+    ? planWebSearch(config, parsed, false, route.provider, route.modelId, webSearchSidecar)
     : undefined;
   const imgPlan = !routedCompaction ? await planImageBridge(config, parsed, route.provider) : undefined;
   const vidPlan = !routedCompaction ? await planVideoBridge(config, parsed, route.provider) : undefined;

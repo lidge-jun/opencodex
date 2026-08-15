@@ -145,6 +145,7 @@ afterEach(() => {
 });
 
 const POOL_RETRY_MODEL = "gpt-5.6-sol";
+const DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
 
 function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
   return JSON.stringify({
@@ -161,6 +162,7 @@ type PoolRetryHarness = {
     model?: string;
     path?: "/v1/responses" | "/v1/responses/compact";
     callerBearer?: boolean;
+    body?: Record<string, unknown>;
   }) => Promise<Response>;
   restoreFetch: () => void;
   server: ReturnType<typeof startServer>;
@@ -194,12 +196,17 @@ async function startPoolRetryHarness(
     accountNamespaces?: Record<string, string>;
     noVisionModels?: string[];
     visionSidecarModel?: string;
+    webSearchSidecarModel?: string;
+    routedProvider?: boolean;
     websockets?: boolean;
     forwardApiKey?: string;
     pausedAccountIds?: string[];
     reauthAccountIds?: string[];
     omitCredentialAccountIds?: string[];
     combos?: OcxConfig["combos"];
+    codexAccountPickerEnabled?: boolean;
+    customModels?: OcxConfig["customModels"];
+    ownsNativeProfile?: boolean;
   } = {},
 ): Promise<PoolRetryHarness> {
   await removeTestDirBestEffort(TEST_DIR);
@@ -242,6 +249,17 @@ async function startPoolRetryHarness(
         ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
         ...(options.forwardApiKey ? { apiKey: options.forwardApiKey } : {}),
       },
+      ...(options.routedProvider
+        ? {
+            routed: {
+              adapter: "openai-chat" as const,
+              baseUrl: `${upstream.url.toString().replace(/\/$/, "")}/v1`,
+              apiKey: "routed-key",
+              allowPrivateNetwork: true,
+              ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
+            },
+          }
+        : {}),
     },
     codexAccounts: [
       { id: "main", email: "main@example.test", isMain: true },
@@ -251,9 +269,14 @@ async function startPoolRetryHarness(
         : []),
     ],
     activeCodexAccountId: options.activeAccountId ?? "pool-a",
+    ...(options.codexAccountPickerEnabled !== undefined
+      ? { codexAccountPickerEnabled: options.codexAccountPickerEnabled }
+      : {}),
+    ...(options.customModels ? { customModels: options.customModels } : {}),
     ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
     ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
     ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
+    ...(options.webSearchSidecarModel ? { webSearchSidecar: { model: options.webSearchSidecarModel } } : {}),
     ...(options.websockets ? { websockets: true } : {}),
     ...(options.streamMode ? { streamMode: options.streamMode } : {}),
     ...(options.combos ? { combos: options.combos } : {}),
@@ -281,7 +304,12 @@ async function startPoolRetryHarness(
   }
   for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
 
-  const server = startServer(0);
+  const server = startServer(
+    0,
+    options.ownsNativeProfile
+      ? { inspectNativeCodexOwnership: ownedServiceHomeInspection("Pool retry harness") }
+      : undefined,
+  );
   return {
     config,
     dispatches,
@@ -296,13 +324,19 @@ async function startPoolRetryHarness(
       model = POOL_RETRY_MODEL,
       path = "/v1/responses",
       callerBearer = true,
+      body,
     } = {}) => originalGlobalFetch(new URL(path, server.url), {
       method: "POST",
       headers: {
         "content-type": "application/json",
         ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
       },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream }),
+      body: JSON.stringify({
+        model,
+        input: path.endsWith("/compact") ? [] : "hello",
+        stream,
+        ...(body ?? {}),
+      }),
       signal,
     }),
   };
@@ -2091,6 +2125,55 @@ describe("server local API auth", () => {
     }
   });
 
+  test.each([400, 402, 429])(
+    "an explicitly main-bound custom model preserves the original %d without account fallback",
+    async status => {
+      writeFileSync(join(isolatedCodexHome!.path, "auth.json"), JSON.stringify({
+        tokens: {
+          access_token: "physical-main-token",
+          account_id: "acct-physical-main",
+        },
+      }));
+      const body = status === 400
+        ? unsupportedModelBody(DAYBREAK_BLUE_MODEL)
+        : JSON.stringify({ error: { message: "rate limited" } });
+      const authorizationHeaders: string[] = [];
+      const harness = await startPoolRetryHarness((_accountId, request) => {
+        authorizationHeaders.push(request.headers.get("authorization") ?? "missing");
+        return new Response(body, {
+          status,
+          headers: {
+            "content-type": "application/json",
+            "x-daybreak-main-pin": "original",
+            ...(status === 400 ? {} : { "retry-after": "60" }),
+          },
+        });
+      }, {
+        activeAccountId: "pool-b",
+        codexAccountPickerEnabled: false,
+        ownsNativeProfile: true,
+        customModels: [{
+          id: "daybreak-codex-forward",
+          provider: "openai",
+          modelId: DAYBREAK_BLUE_MODEL,
+          codexAccountTarget: "@main",
+        }],
+      });
+      try {
+        await waitForNativeMainStartupGate();
+        const response = await harness.request({ model: `openai/${DAYBREAK_BLUE_MODEL}` });
+        expect(response.status).toBe(status);
+        expect(response.headers.get("x-daybreak-main-pin")).toBe("original");
+        expect(await response.text()).toBe(body);
+        expect(harness.dispatches).toEqual(["acct-physical-main"]);
+        expect(authorizationHeaders).toEqual(["Bearer physical-main-token"]);
+        expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+      } finally {
+        await stopPoolRetryHarness(harness);
+      }
+    },
+  );
+
   test("Activation A: allow-listed 400 retries once on another eligible pool account", async () => {
     const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
       ? rejectionResponse(unsupportedModelBody())
@@ -2194,6 +2277,233 @@ describe("server local API auth", () => {
       expect(upstreamBodies[0]).toContain(imageBytes);
       expect(JSON.parse(upstreamBodies[0]) as { model?: string }).not.toMatchObject({ model: POOL_RETRY_MODEL });
       expect(JSON.parse(upstreamBodies[1]) as { model?: string }).toMatchObject({ model: POOL_RETRY_MODEL });
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("a target-bound vision model uses its own exact account instead of the text route account", async () => {
+    const sidecarModel = "targeted-vision-preview";
+    const seen: Array<{ authorization: string | null; model?: string }> = [];
+    const harness = await startPoolRetryHarness(async (_accountId, request) => {
+      const body = await request.json() as { model?: string };
+      seen.push({ authorization: request.headers.get("authorization"), model: body.model });
+      if (body.model === sidecarModel) {
+        return new Response([
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "bound caption" })}`,
+          "",
+          "data: [DONE]",
+          "",
+          "",
+        ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({ id: "targeted-vision", status: "completed", output: [] });
+    }, {
+      activeAccountId: "pool-b",
+      noVisionModels: [POOL_RETRY_MODEL],
+      visionSidecarModel: sidecarModel,
+      customModels: [{
+        id: "targeted-vision-row",
+        provider: "openai",
+        modelId: sidecarModel,
+        codexAccountTarget: "pool-a",
+        inputModalities: ["text", "image"],
+      }],
+    });
+    try {
+      const response = await originalGlobalFetch(new URL("/v1/responses", harness.server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: `openai/${POOL_RETRY_MODEL}`,
+          stream: false,
+          input: [{
+            type: "message",
+            role: "user",
+            content: [{ type: "input_image", image_url: "data:image/png;base64,dGFyZ2V0ZWQtdmlzaW9u" }],
+          }],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      expect(seen).toEqual([
+        { authorization: "Bearer pool-a-token", model: sidecarModel },
+        { authorization: "Bearer pool-b-token", model: POOL_RETRY_MODEL },
+      ]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("vision and web-search helpers keep distinct custom-model account bindings", async () => {
+    const visionModel = "targeted-vision-preview";
+    const searchModel = "targeted-search-preview";
+    const seen: Array<{ accountId: string; authorization: string | null; model?: string }> = [];
+    let routedPass = 0;
+    const sse = (frames: string[]) => new Response(`${frames.join("\n\n")}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+    const harness = await startPoolRetryHarness(async (accountId, request) => {
+      const body = await request.json() as { model?: string };
+      seen.push({ accountId, authorization: request.headers.get("authorization"), model: body.model });
+      if (body.model === visionModel) {
+        return sse([
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "bound caption" })}`,
+          "data: [DONE]",
+        ]);
+      }
+      if (body.model === searchModel) {
+        return sse([
+          `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "bound search result" })}`,
+          `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed" })}`,
+        ]);
+      }
+      routedPass += 1;
+      if (routedPass === 1) {
+        return sse([
+          `data: ${JSON.stringify({
+            choices: [{
+              index: 0,
+              delta: {
+                role: "assistant",
+                tool_calls: [{
+                  index: 0,
+                  id: "call_search",
+                  type: "function",
+                  function: { name: "web_search", arguments: JSON.stringify({ query: "current docs" }) },
+                }],
+              },
+              finish_reason: null,
+            }],
+          })}`,
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}`,
+          "data: [DONE]",
+        ]);
+      }
+      return sse([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "final answer" }, finish_reason: null }] })}`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+        "data: [DONE]",
+      ]);
+    }, {
+      activeAccountId: "pool-b",
+      routedProvider: true,
+      noVisionModels: ["text-model"],
+      visionSidecarModel: visionModel,
+      webSearchSidecarModel: searchModel,
+      customModels: [
+        {
+          id: "targeted-vision-row",
+          provider: "openai",
+          modelId: visionModel,
+          codexAccountTarget: "pool-a",
+          inputModalities: ["text", "image"],
+        },
+        {
+          id: "targeted-search-row",
+          provider: "openai",
+          modelId: searchModel,
+          codexAccountTarget: "pool-b",
+        },
+      ],
+    });
+    try {
+      const response = await harness.request({
+        model: "routed/text-model",
+        body: {
+          input: [{
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "search current docs" },
+              { type: "input_image", image_url: "data:image/png;base64,ZGlzdGluY3QtaGVscGVycw==" },
+            ],
+          }],
+          tools: [{ type: "web_search" }],
+        },
+      });
+
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      expect(seen).toEqual([
+        { accountId: "acct-pool-a", authorization: "Bearer pool-a-token", model: visionModel },
+        { accountId: "missing", authorization: "Bearer routed-key", model: "text-model" },
+        { accountId: "acct-pool-b", authorization: "Bearer pool-b-token", model: searchModel },
+        { accountId: "missing", authorization: "Bearer routed-key", model: "text-model" },
+      ]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    } finally {
+      await stopPoolRetryHarness(harness);
+    }
+  });
+
+  test("an unavailable web-search target never borrows the active Pool account", async () => {
+    const searchModel = "paused-search-preview";
+    const seen: Array<{ accountId: string; model?: string }> = [];
+    let routedPass = 0;
+    const harness = await startPoolRetryHarness(async (accountId, request) => {
+      const body = await request.json() as { model?: string };
+      seen.push({ accountId, model: body.model });
+      if (body.model === searchModel) {
+        return new Response([
+          `event: response.output_text.delta\ndata: ${JSON.stringify({ type: "response.output_text.delta", delta: "must not run" })}`,
+          `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed" })}`,
+          "",
+        ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
+      }
+      routedPass += 1;
+      if (routedPass === 1) {
+        return new Response([
+          `data: ${JSON.stringify({
+            choices: [{
+              index: 0,
+              delta: {
+                role: "assistant",
+                tool_calls: [{
+                  index: 0,
+                  id: "call_search",
+                  type: "function",
+                  function: { name: "web_search", arguments: JSON.stringify({ query: "current docs" }) },
+                }],
+              },
+              finish_reason: null,
+            }],
+          })}`,
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}`,
+          "data: [DONE]",
+          "",
+        ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "no helper" }, finish_reason: null }] })}`,
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n\n"), { headers: { "content-type": "text/event-stream" } });
+    }, {
+      activeAccountId: "pool-b",
+      routedProvider: true,
+      webSearchSidecarModel: searchModel,
+      pausedAccountIds: ["pool-a"],
+      customModels: [{
+        id: "paused-search-row",
+        provider: "openai",
+        modelId: searchModel,
+        codexAccountTarget: "pool-a",
+      }],
+    });
+    try {
+      const response = await harness.request({
+        model: "routed/text-model",
+        stream: true,
+        body: { tools: [{ type: "web_search" }] },
+      });
+      expect(response.status).toBe(200);
+      await response.arrayBuffer();
+      expect(seen).toEqual([{ accountId: "missing", model: "text-model" }]);
       expect(loadConfig().activeCodexAccountId).toBe("pool-b");
     } finally {
       await stopPoolRetryHarness(harness);

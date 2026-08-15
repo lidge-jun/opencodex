@@ -1,4 +1,5 @@
 import type { SidecarOverride } from "./claude-manual-env";
+import { newBrowserUuidV4 } from "../lib/uuid";
 
 export interface MapRow {
   id: string;
@@ -8,23 +9,7 @@ export interface MapRow {
 
 /** Stable client key for list rows; works outside secure contexts (LAN HTTP). */
 export function newClientId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    try {
-      return crypto.randomUUID();
-    } catch {
-      // crypto.randomUUID throws outside a secure context in some browsers.
-    }
-  }
-  const bytes = new Uint8Array(16);
-  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
-    crypto.getRandomValues(bytes);
-  } else {
-    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
-  }
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return newBrowserUuidV4();
 }
 
 export interface ClaudeCodeState {

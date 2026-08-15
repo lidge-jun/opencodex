@@ -278,6 +278,40 @@ géré tente également cette synchronisation peu après le démarrage du proxy.
 `gpt-5.6-sol` → "GPT-5.6-Sol", proviennent de l'instantané amont épinglé et ne sont jamais remplacés par un nom
 d'affichage personnalisé.
 
+### Liaison d’un modèle personnalisé à un compte Codex
+
+Une ligne personnalisée du fournisseur canonique `openai` avec transfert Codex peut sélectionner un
+seul compte Codex exact :
+
+```json
+{
+  "provider": "openai",
+  "modelId": "gpt-daybreak-blue-latest",
+  "codexAccountTarget": "@main"
+}
+```
+
+Choisissez le compte dans l’éditeur de modèles personnalisés du tableau de bord ou passez
+`--codex-account-target <@main|pool-id>` à `ocx models add`. `@main` désigne la connexion physique
+de l’application Codex ; les comptes ajoutés utilisent leur identifiant Pool stable. La liaison est
+propre à chaque ligne personnalisée et indépendante de `codexAccountPickerEnabled`. Sans cible, le
+comportement Pool/Direct existant reste inchangé. Avec une cible, la sélection exacte remplace Direct,
+ne se replie jamais sur un autre compte et échoue de manière sûre si la cible est indisponible.
+`ocx models edit <id> --codex-account-target -` supprime la liaison.
+
+Les nouvelles liaisons n’acceptent que `@main` ou un identifiant Pool actuellement présent. Lorsqu’un
+proxy est actif, un ajout ou une modification avec cible vérifie d’abord que le proxy prend en charge ce
+contrat ; mettez à jour le proxy actif si ce contrôle échoue. L’ajout hors ligne reste disponible, car la
+même configuration est validée avant son écriture.
+
+La suppression d’un compte ajouté conserve la cible configurée afin que le modèle puisse être réparé ou
+restauré en rajoutant le même identifiant stable. La cible orpheline peut aussi être renvoyée sans
+modification pendant la réparation d’autres champs, mais un autre identifiant inconnu est rejeté. La
+ligne orpheline est omise des catalogues du plan de données et des exports clients, tout en restant
+visible dans les vues de gestion. Les anciens binaires ignorent ce champ additif et peuvent router la
+ligne sans liaison ; évitez donc de revenir à une ancienne version lorsque vous dépendez de l’isolation
+par compte exact.
+
 ### Gestionnaires de fournisseurs externes
 
 Si `config.toml` sélectionne déjà un fournisseur autre que `openai` ou `opencodex`, OpenCodex ne modifie pas le

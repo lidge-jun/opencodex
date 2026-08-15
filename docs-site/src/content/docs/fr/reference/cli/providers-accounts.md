@@ -353,8 +353,8 @@ proxy en cours d'exécution (`ocx start` ou un service installé).
 | --- | --- | --- |
 | `list` (par défaut) | `--provider <name>`, `--json` | Répertoriez les modèles prédéfinis dans les fournisseurs configurés. |
 | `live` | `--provider <name>`, `--json` | Lisez le catalogue en cours d'exécution, y compris les modèles découverts lors de l'exécution. Les lignes sont marquées `native`/`routed`, `custom` et `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Enregistrez un modèle dont le catalogue du fournisseur n’annonce pas. |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Modifiez un modèle personnalisé. `-` libère un champ ; `0` efface la fenêtre contextuelle. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | Enregistrez un modèle dont le catalogue du fournisseur n’annonce pas. La cible de compte n’est valide que pour les lignes canoniques `openai` avec transfert Codex et doit désigner un compte Pool actuellement présent. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | Modifiez un modèle personnalisé. `-` efface un champ ou une liaison de compte exacte ; `0` efface la fenêtre contextuelle. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Supprimez un modèle personnalisé. Nécessite `--yes` lorsque stdin n'est pas un terminal interactif. |
 | `list-custom` | `--json` | Affichez tous les modèles personnalisés avec le `custom-id` que prennent les autres sous-commandes. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Rendre un modèle visible à Codex. |
@@ -363,6 +363,15 @@ proxy en cours d'exécution (`ocx start` ou un service installé).
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Lisez ou remplacez la liste autorisée du modèle de fournisseur. `--clear` supprime la liste blanche afin que chaque modèle soit proposé. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Lisez ou définissez la limite de la fenêtre contextuelle, globalement ou par fournisseur. `value <tokens> --set-all` redirige également chaque fournisseur acheminé (comme la bascule du tableau de bord) ; sans cela, la valeur devient uniquement la valeur par défaut. `provider ... on --value <tokens>` définit un plafond explicite pour ce fournisseur uniquement (`--value` est valide avec `on` uniquement). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Lisez ou définissez le modèle de remplacement pour les appels d'assistance en arrière-plan de Codex. `-` efface le modèle. `status` signale également `sourceModels`, l'assistant supprime les interceptions du proxy (par défaut : `gpt-5.6-luna` ; les clients via 0.144.x ont utilisé `gpt-5.4-mini`, qu'une substitution explicite de `sourceModels` peut restaurer). |
+
+Avec un proxy actif, `add` avec cible utilise `POST /api/custom-models/account-target`. `edit` relit
+d'abord la ligne actuelle, puis utilise `PUT /api/custom-models/{id}/account-target` pour une cible
+explicite ou conservée, et le PUT hérité dans les autres cas. Un ancien proxy renvoie 404 avant toute
+mutation ; mettez-le à jour. La CLI ne retombe jamais sur une écriture héritée ou locale après l'échec
+d'une mutation avec cible sur le proxy actif. `add` hors ligne reste pris en charge et modifie la
+configuration sous verrouillage avec une nouvelle validation. Le nonce temporaire n'est jamais
+persisté. Une cible supprimée peut être renvoyée sans modification par le PUT dédié pour réparation,
+mais un nouvel identifiant Pool inconnu est rejeté.
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

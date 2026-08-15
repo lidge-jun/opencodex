@@ -5,6 +5,12 @@ const models = [
   { provider: "openai", id: "gpt-5.6-sol", namespaced: "gpt-5.6-sol" },
   { provider: "subapi", id: "gpt-5.6-sol", namespaced: "subapi/gpt-5.6-sol" },
   { provider: "encoded/provider", id: "model/with/slash", namespaced: "encoded%2Fprovider/model%2Fwith%2Fslash" },
+  {
+    provider: "openai",
+    id: "orphaned-preview",
+    namespaced: "openai/orphaned-preview",
+    codexAccountTargetAvailable: false,
+  },
 ];
 
 test("shadow-call options preserve canonical native and routed namespaced ids", () => {
@@ -14,6 +20,14 @@ test("shadow-call options preserve canonical native and routed namespaced ids", 
   expect(options).toContainEqual({ value: "subapi/gpt-5.6-sol", label: "subapi/gpt-5.6-sol" });
   expect(options).toContainEqual({ value: "encoded%2Fprovider/model%2Fwith%2Fslash", label: "encoded%2Fprovider/model%2Fwith%2Fslash" });
   expect(options.map(option => option.value)).not.toContain("encoded/provider/model/with/slash");
+  expect(options.map(option => option.value)).not.toContain("openai/orphaned-preview");
+});
+
+test("shadow-call options retain an unavailable model only when it is already selected", () => {
+  expect(shadowCallModelOptions(models, "openai/orphaned-preview").at(-1)).toEqual({
+    value: "openai/orphaned-preview",
+    label: "openai/orphaned-preview",
+  });
 });
 
 test("shadow-call options retain an unmatched legacy current value", () => {
@@ -24,7 +38,7 @@ test("shadow-call options retain an unmatched legacy current value", () => {
 });
 
 test("shadow-call options do not append a fallback for an empty current value", () => {
-  expect(shadowCallModelOptions(models, "")).toHaveLength(models.length + 1);
+  expect(shadowCallModelOptions(models, "")).toHaveLength(models.length);
 });
 
 test("both shadow-call selects use the canonical option helper", async () => {

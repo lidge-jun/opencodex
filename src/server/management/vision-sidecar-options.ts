@@ -17,7 +17,7 @@ import {
   type VisionSidecarBackend,
 } from "../../vision/eligibility";
 import { listOpenAiForwardSidecarCandidates } from "../../providers/openai-sidecar";
-import { listManagementModelRows } from "./model-rows";
+import { listManagementModelRows, managementModelRowIsExportable } from "./model-rows";
 
 /**
  * Backends whose executor could actually run: openai forward, anthropic OAuth.
@@ -47,12 +47,14 @@ export async function visionCandidateRows(config: OcxConfig): Promise<VisionCand
   // A catalog outage must not 500 the settings route nor reject a write; with []
   // the option list degrades to the baselines, which is the intended floor.
   try { rows = await listManagementModelRows(config); } catch { rows = []; }
-  return rows.filter(row => row.disabled !== true).map(row => ({
-    provider: row.provider,
-    id: row.id,
-    ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
-    ...(row.native ? { native: true } : {}),
-  }));
+  return rows
+    .filter(managementModelRowIsExportable)
+    .map(row => ({
+      provider: row.provider,
+      id: row.id,
+      ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}),
+      ...(row.native ? { native: true } : {}),
+    }));
 }
 
 export function visionModelOptionsFrom(

@@ -28,6 +28,7 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+import { customModelCodexAccountTargetError } from "./codex/custom-model-account-target";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -73,6 +74,7 @@ import {
   providerModelWireDefault,
 } from "./providers/registry";
 import { resolveOpenAiVirtualModel } from "./providers/openai-virtual-models";
+import { routedSlug } from "./providers/slug-codec";
 import { parseDesktopProfile } from "./claude/desktop-profile";
 import { isCodexReasoningEffort, modelRecordValue } from "./reasoning-effort";
 import {
@@ -2420,6 +2422,42 @@ function loopbackListenerPortError(value: unknown): string | null {
   return null;
 }
 
+function customModelCodexAccountTargetBoundaryError(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const config = value as Record<string, unknown>;
+  if (!Array.isArray(config.customModels)) return null;
+  const providers = config.providers && typeof config.providers === "object" && !Array.isArray(config.providers)
+    ? config.providers as Record<string, OcxProviderConfig>
+    : {};
+  const seenSlugs = new Map<string, { index: number; hasTarget: boolean }>();
+  for (let index = 0; index < config.customModels.length; index += 1) {
+    const row = config.customModels[index];
+    if (!row || typeof row !== "object" || Array.isArray(row)) continue;
+    const model = row as Record<string, unknown>;
+    const providerName = typeof model.provider === "string" ? model.provider : "";
+    const modelId = typeof model.modelId === "string" ? model.modelId : "";
+    const hasTarget = Object.hasOwn(model, "codexAccountTarget")
+      && model.codexAccountTarget !== undefined;
+    if (hasTarget) {
+      const error = customModelCodexAccountTargetError(
+        providerName,
+        providers[providerName],
+        model.codexAccountTarget,
+      );
+      if (error) return `schema_invalid: customModels.${index}.codexAccountTarget: ${error}`;
+    }
+    if (providerName && modelId) {
+      const slug = routedSlug(providerName, modelId);
+      const previous = seenSlugs.get(slug);
+      if (previous && (previous.hasTarget || hasTarget)) {
+        return `schema_invalid: customModels.${index}: duplicate routed model conflicts with customModels.${previous.index}.codexAccountTarget`;
+      }
+      if (!previous) seenSlugs.set(slug, { index, hasTarget });
+    }
+  }
+  return null;
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const boundaryError = blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
@@ -2429,6 +2467,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
+    ?? customModelCodexAccountTargetBoundaryError(value)
     ?? emptyCompletionRetryError(value)
     ?? loopbackListenerPortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
@@ -2782,6 +2821,10 @@ export type PersistedConfigMutationOutcome<T> =
   | { status: "committed" | "unchanged"; value: T }
   | { status: "unavailable"; reason: "missing" | "invalid" | "conflict" };
 
+export type PersistedConfigSnapshotMutationOutcome<T> =
+  | { status: "committed" | "unchanged"; value: T; config: OcxConfig }
+  | { status: "unavailable"; reason: "missing" | "invalid" | "conflict" };
+
 const CONFIG_MUTATION_MAX_REBASE_ATTEMPTS = 3;
 let persistedConfigMutationBeforeCommitForTests: (() => void) | null = null;
 
@@ -2802,9 +2845,9 @@ function unavailableConfigMutationReason(snapshot: ConfigFileSnapshot): "missing
  * no portable conditional rename. Missing or malformed config always fails closed and is never
  * recreated from a prior snapshot.
  */
-export function mutatePersistedConfig<T>(
+export function mutatePersistedConfigWithSnapshot<T>(
   mutate: (config: OcxConfig) => PersistedConfigMutation<T>,
-): PersistedConfigMutationOutcome<T> {
+): PersistedConfigSnapshotMutationOutcome<T> {
   // Avoid creating/opening the coordinator database for a read-path update that already knows
   // there is no valid config. The same check runs again under the transaction for authority.
   const observed = readConfigFileSnapshot();
@@ -2820,7 +2863,13 @@ export function mutatePersistedConfig<T>(
 
       const tentativeConfig = structuredClone(base.diagnostics.config);
       const tentative = mutate(tentativeConfig);
-      if (!tentative.changed) return { status: "unchanged", value: tentative.value };
+      if (!tentative.changed) {
+        return {
+          status: "unchanged",
+          value: tentative.value,
+          config: structuredClone(base.diagnostics.config),
+        };
+      }
 
       const hook = persistedConfigMutationBeforeCommitForTests;
       persistedConfigMutationBeforeCommitForTests = null;
@@ -2839,7 +2888,13 @@ export function mutatePersistedConfig<T>(
       // generation lives in a separate file and may have changed at the injected seam.
       const confirmedConfig = structuredClone(latest.diagnostics.config);
       const confirmed = mutate(confirmedConfig);
-      if (!confirmed.changed) return { status: "unchanged", value: confirmed.value };
+      if (!confirmed.changed) {
+        return {
+          status: "unchanged",
+          value: confirmed.value,
+          config: structuredClone(latest.diagnostics.config),
+        };
+      }
 
       const commitBase = readConfigFileSnapshot();
       if (commitBase.diagnostics.source !== "file" || commitBase.raw === undefined) {
@@ -2855,10 +2910,19 @@ export function mutatePersistedConfig<T>(
         confirmedConfig,
       );
       if (persistConfigUnlocked(projected)) bumpGenerationForCooperatingConfigWrite();
-      return { status: "committed", value: confirmed.value };
+      return { status: "committed", value: confirmed.value, config: structuredClone(projected) };
     }
     return { status: "unavailable", reason: "conflict" };
   });
+}
+
+/** Patch persisted config while retaining the historical value-only return contract. */
+export function mutatePersistedConfig<T>(
+  mutate: (config: OcxConfig) => PersistedConfigMutation<T>,
+): PersistedConfigMutationOutcome<T> {
+  const outcome = mutatePersistedConfigWithSnapshot(mutate);
+  if (outcome.status === "unavailable") return outcome;
+  return { status: outcome.status, value: outcome.value };
 }
 
 export function websocketsEnabled(config: Pick<OcxConfig, "websockets">): boolean {
@@ -2925,6 +2989,40 @@ export function adoptPersistedProviderIntoLiveConfig(
   const baseline = liveConfigBaseline.get(config);
   if (baseline) baseline.providers[name] = structuredClone(provider);
   if (persistedConfig) refreshPreservedProviderOwner(config, persistedConfig);
+}
+
+/**
+ * Adopt an authoritative persisted snapshot into a long-lived server config.
+ *
+ * `hostname` and `port` still describe the socket this process actually opened;
+ * the snapshot binding is only the operator's desired address for the next start.
+ * Refresh every guarded baseline after the adoption so a later unrelated save
+ * neither rolls the snapshot back nor writes the live socket address to disk.
+ */
+export function adoptPersistedConfigSnapshotIntoLiveConfig(
+  config: OcxConfig,
+  snapshot: OcxConfig,
+): void {
+  const liveHostname = config.hostname;
+  const livePort = config.port;
+  const persistedBinding: PersistedServerBinding = {
+    port: snapshot.port,
+    ...(snapshot.hostname !== undefined ? { hostname: snapshot.hostname } : {}),
+  };
+  const target = config as unknown as Record<string, unknown>;
+  for (const key of Object.keys(target)) delete target[key];
+  Object.assign(target, structuredClone(snapshot) as unknown as Record<string, unknown>);
+  target.port = livePort;
+  if (liveHostname === undefined) delete target.hostname;
+  else target.hostname = liveHostname;
+
+  persistedLiveServerBinding.set(config, persistedBinding);
+  if (liveConfigBaseline.has(config)) liveConfigBaseline.set(config, structuredClone(config));
+  if (claudeCodeBaseline.has(config)) {
+    claudeCodeBaseline.set(config, structuredClone(config.claudeCode));
+  }
+  refreshPreservedProviderOwner(config, snapshot);
+  refreshUserCostOverlays(config);
 }
 
 /** Test seam only: is this instance armed? */

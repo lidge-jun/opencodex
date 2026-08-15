@@ -11,6 +11,15 @@ import { readFileSync } from "node:fs";
  * already refuses it. Validate at ingress so all three paths agree.
  */
 const ALLOWED_INPUT_MODALITIES = new Set(["text", "image", "audio"]);
+const CUSTOM_MODEL_CODEX_ACCOUNT_TARGET_WRITE_NONCE_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function readCustomModelAccountTargetWriteNonce(raw: unknown): { value?: string; error?: string } {
+  if (raw === undefined) return {};
+  return typeof raw === "string" && CUSTOM_MODEL_CODEX_ACCOUNT_TARGET_WRITE_NONCE_RE.test(raw)
+    ? { value: raw }
+    : { error: "codexAccountTargetWriteNonce must be a UUID" };
+}
 
 function readInputModalities(raw: unknown): { values?: string[]; error?: string } {
   if (raw === undefined) return {};
@@ -75,13 +84,18 @@ import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
 import { getProviderLiveModelCount } from "../../codex/model-cache";
 import {
   DEFAULT_SUBAGENT_MODELS,
+  adoptPersistedConfigSnapshotIntoLiveConfig,
   codexAutoStartEnabled,
   hasOwnProvider,
   isValidProviderName,
   multiAgentGuidanceEnabled,
+  mutatePersistedConfigWithSnapshot,
   providerBaseUrlConfigError,
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
+  ConfigMutationLockError,
+  type PersistedConfigMutation,
+  type PersistedConfigSnapshotMutationOutcome,
 } from "../../config";
 import {
   clearLoginState,
@@ -104,6 +118,10 @@ import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../provid
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { clearThreadAccountMap } from "../../codex/routing";
 import { primeCodexPoolQuotas } from "../../codex/auth-api";
+import {
+  customModelCodexAccountTargetAssignmentError,
+  filterModelsByCustomRouteAvailability,
+} from "../../codex/custom-model-account-target";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -149,6 +167,132 @@ import type { ManagementContext } from "./context";
 import { listManagementModelRows, loadExportModels } from "./model-rows";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 
+type CustomModelPutBody = {
+  displayName?: unknown;
+  contextWindow?: unknown;
+  inputModalities?: unknown;
+  modelId?: unknown;
+  reasoningEfforts?: unknown;
+  defaultReasoningEffort?: unknown;
+  codexAccountTarget?: unknown;
+  codexAccountTargetWriteNonce?: unknown;
+};
+
+type CustomModelWriteResult =
+  | { ok: true; row: OcxCustomModel; config: OcxConfig }
+  | { ok: false; status: 400 | 404 | 409; error: string; config: OcxConfig };
+
+function customModelWriteError(
+  config: OcxConfig,
+  status: 400 | 404 | 409,
+  error: string,
+): CustomModelWriteResult {
+  return {
+    ok: false,
+    status,
+    error,
+    config: structuredClone(config),
+  };
+}
+
+/** Build one PUT result without mutating the caller until every invariant passes. */
+function buildCustomModelPutMutation(
+  config: OcxConfig,
+  id: string,
+  body: CustomModelPutBody,
+  targetAware: boolean,
+): CustomModelWriteResult {
+  const list = config.customModels ?? [];
+  const idx = list.findIndex(model => model.id === id);
+  if (idx === -1) return customModelWriteError(config, 404, "not found");
+  const cm = { ...list[idx] };
+  if (
+    !targetAware
+    && (
+      Object.hasOwn(body, "codexAccountTarget")
+      || Object.hasOwn(cm, "codexAccountTarget")
+    )
+  ) {
+    return customModelWriteError(config, 409, "target-aware route required");
+  }
+  if (typeof body.modelId === "string" && body.modelId.trim()) {
+    cm.modelId = body.modelId.trim();
+  }
+  if (body.displayName !== undefined) {
+    const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
+    if (displayName.includes("/")) {
+      return customModelWriteError(config, 400, "displayName must not contain /");
+    }
+    cm.displayName = displayName || undefined;
+  }
+  if (body.contextWindow !== undefined) {
+    cm.contextWindow = typeof body.contextWindow === "number" && body.contextWindow > 0
+      ? Math.floor(body.contextWindow)
+      : undefined;
+  }
+  if (body.codexAccountTarget !== undefined) {
+    if (body.codexAccountTarget === null) {
+      delete cm.codexAccountTarget;
+    } else {
+      const targetError = customModelCodexAccountTargetAssignmentError(
+        config,
+        cm.provider,
+        body.codexAccountTarget,
+        cm.codexAccountTarget,
+      );
+      if (targetError) return customModelWriteError(config, 400, targetError);
+      cm.codexAccountTarget = body.codexAccountTarget as string;
+    }
+  }
+  if (body.inputModalities !== undefined) {
+    const edited = readInputModalities(body.inputModalities);
+    if (edited.error) return customModelWriteError(config, 400, edited.error);
+    cm.inputModalities = edited.values && edited.values.length > 0 ? edited.values : undefined;
+  }
+  // `null` clears the stored ladder back to provider inheritance; `[]` remains an
+  // explicit no-reasoning override.
+  if (body.reasoningEfforts !== undefined) {
+    if (body.reasoningEfforts === null) {
+      cm.reasoningEfforts = undefined;
+    } else {
+      const edited = readReasoningEfforts(body.reasoningEfforts);
+      if (edited.error) return customModelWriteError(config, 400, edited.error);
+      cm.reasoningEfforts = edited.values;
+    }
+  }
+  if (body.defaultReasoningEffort !== undefined) {
+    const edited = readDefaultReasoningEffort(body.defaultReasoningEffort, cm.reasoningEfforts);
+    if (edited.error) return customModelWriteError(config, 400, edited.error);
+    cm.defaultReasoningEffort = edited.value;
+  }
+  if (cm.defaultReasoningEffort !== undefined) {
+    const ladder = cm.reasoningEfforts;
+    if (!ladder || ladder.length === 0 || !ladder.includes(cm.defaultReasoningEffort)) {
+      cm.defaultReasoningEffort = undefined;
+    }
+  }
+  const updatedSlug = routedSlug(cm.provider, cm.modelId);
+  if (list.some((other, index) => index !== idx && routedSlug(other.provider, other.modelId) === updatedSlug)) {
+    return customModelWriteError(config, 409, "duplicate model");
+  }
+  const known = knownModelIdsForProvider(cm.provider, config.providers[cm.provider], {
+    ...config,
+    customModels: list.filter((_, index) => index !== idx),
+  });
+  if (encodedModelIdCollides(cm.modelId, known)) {
+    return customModelWriteError(config, 409, "ambiguous model id");
+  }
+  const targetAwareWrite = Object.hasOwn(body, "codexAccountTarget")
+    || Object.hasOwn(cm, "codexAccountTarget");
+  if (targetAware && !targetAwareWrite) {
+    return customModelWriteError(config, 400, "target-aware custom model write has no account binding");
+  }
+  const customModels = list.map((model, index) => index === idx ? cm : model);
+  const nextConfig = structuredClone(config);
+  nextConfig.customModels = structuredClone(customModels);
+  return { ok: true, row: cm, config: nextConfig };
+}
+
 /**
  * Counts read back off the SERIALIZED document rather than recomputed from the input rows.
  * `modelsWithoutLimits` drives a GUI line claiming "these models ship without limits", so it
@@ -169,6 +313,20 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   // bypass this seam with a dynamic config import — doing so replaced a user's
   // ~/.opencodex/config.json with the `existing-uuid` test fixture.
   const persistConfig = deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode;
+  const mutateFixtureConfig = <T>(
+    mutate: (candidate: OcxConfig) => PersistedConfigMutation<T>,
+  ): PersistedConfigSnapshotMutationOutcome<T> => {
+    const candidate = structuredClone(config);
+    const mutation = mutate(candidate);
+    if (mutation.changed) persistConfig(candidate);
+    return {
+      status: mutation.changed ? "committed" : "unchanged",
+      value: mutation.value,
+      config: structuredClone(mutation.changed ? candidate : config),
+    };
+  };
+  const mutateConfig: typeof mutatePersistedConfigWithSnapshot = deps.mutatePersistedConfig
+    ?? (deps.saveConfigPreservingClaudeCode ? mutateFixtureConfig : mutatePersistedConfigWithSnapshot);
 
   if (url.pathname === "/api/catalog" && req.method === "GET") {
     const { readCatalog, readCodexCatalogPath } = await import("../../codex/catalog");
@@ -371,14 +529,20 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse(config.customModels ?? []);
   }
 
-  if (url.pathname === "/api/custom-models" && req.method === "POST") {
-    let body: { provider?: unknown; modelId?: unknown; displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; reasoningEfforts?: unknown; defaultReasoningEffort?: unknown };
+  const targetAwareCustomPost = url.pathname === "/api/custom-models/account-target";
+  if ((url.pathname === "/api/custom-models" || targetAwareCustomPost) && req.method === "POST") {
+    let body: { provider?: unknown; modelId?: unknown; displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; reasoningEfforts?: unknown; defaultReasoningEffort?: unknown; codexAccountTarget?: unknown; codexAccountTargetWriteNonce?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (
+      !targetAwareCustomPost
+      && (Object.hasOwn(body, "codexAccountTarget") || Object.hasOwn(body, "codexAccountTargetWriteNonce"))
+    ) {
+      return jsonResponse({ error: "target-aware route required" }, 409);
+    }
     const provider = typeof body.provider === "string" ? body.provider.trim() : "";
     const modelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
     if (!provider || !modelId) return jsonResponse({ error: "provider and modelId are required" }, 400);
     if (!isValidProviderName(provider)) return jsonResponse({ error: "invalid provider name" }, 400);
-    if (!hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "provider not configured" }, 404);
     const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : undefined;
     if (displayName?.includes("/")) return jsonResponse({ error: "displayName must not contain /" }, 400);
     const contextWindow = typeof body.contextWindow === "number" && body.contextWindow > 0 ? Math.floor(body.contextWindow) : undefined;
@@ -389,14 +553,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (reasoning.error) return jsonResponse({ error: reasoning.error }, 400);
     const defaultEffort = readDefaultReasoningEffort(body.defaultReasoningEffort, reasoning.values);
     if (defaultEffort.error) return jsonResponse({ error: defaultEffort.error }, 400);
-    const existing = config.customModels ?? [];
-    const newSlug = routedSlug(provider, modelId);
-    if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
-      return jsonResponse({ error: "duplicate model" }, 409);
-    }
-    const known = knownModelIdsForProvider(provider, config.providers[provider], config);
-    if (encodedModelIdCollides(modelId, known)) {
-      return jsonResponse({ error: "ambiguous model id" }, 409);
+    const accountTargetWriteNonce = readCustomModelAccountTargetWriteNonce(body.codexAccountTargetWriteNonce);
+    if (accountTargetWriteNonce.error) return jsonResponse({ error: accountTargetWriteNonce.error }, 400);
+    if (targetAwareCustomPost && (typeof body.codexAccountTarget !== "string" || !accountTargetWriteNonce.value)) {
+      return jsonResponse({ error: "target-aware custom model writes require codexAccountTarget and a write nonce" }, 400);
     }
     const entry: OcxCustomModel = {
       id: randomUUID(),
@@ -407,82 +567,134 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
       ...(reasoning.values !== undefined ? { reasoningEfforts: reasoning.values } : {}),
       ...(defaultEffort.value ? { defaultReasoningEffort: defaultEffort.value } : {}),
+      ...(typeof body.codexAccountTarget === "string"
+        ? { codexAccountTarget: body.codexAccountTarget }
+        : {}),
       addedAt: new Date().toISOString(),
     };
+
+    if (targetAwareCustomPost) {
+      let mutation: PersistedConfigSnapshotMutationOutcome<CustomModelWriteResult>;
+      try {
+        mutation = mutateConfig<CustomModelWriteResult>(persisted => {
+          if (!hasOwnProvider(persisted.providers, provider)) {
+            return { changed: false, value: customModelWriteError(persisted, 404, "provider not configured") };
+          }
+          const targetError = customModelCodexAccountTargetAssignmentError(
+            persisted,
+            provider,
+            body.codexAccountTarget,
+          );
+          if (targetError) {
+            return { changed: false, value: customModelWriteError(persisted, 400, targetError) };
+          }
+          const existing = persisted.customModels ?? [];
+          const newSlug = routedSlug(provider, modelId);
+          if (existing.some(model => routedSlug(model.provider, model.modelId) === newSlug)) {
+            return { changed: false, value: customModelWriteError(persisted, 409, "duplicate model") };
+          }
+          const known = knownModelIdsForProvider(provider, persisted.providers[provider], persisted);
+          if (encodedModelIdCollides(modelId, known)) {
+            return { changed: false, value: customModelWriteError(persisted, 409, "ambiguous model id") };
+          }
+          const customModels = [...existing, entry];
+          persisted.customModels = customModels;
+          return {
+            changed: true,
+            value: { ok: true, row: entry, config: structuredClone(persisted) },
+          };
+        });
+      } catch (error) {
+        if (error instanceof ConfigMutationLockError) {
+          return jsonResponse({ error: "config could not be updated safely (conflict)" }, 409);
+        }
+        throw error;
+      }
+      if (mutation.status === "unavailable") {
+        return jsonResponse({ error: `config could not be updated safely (${mutation.reason})` }, 409);
+      }
+      adoptPersistedConfigSnapshotIntoLiveConfig(config, mutation.config);
+      if (!mutation.value.ok) {
+        return jsonResponse({ error: mutation.value.error }, mutation.value.status);
+      }
+      const catalogRefresh = await convergeCodexCatalog();
+      return jsonResponse({
+        ...mutation.value.row,
+        codexAccountTargetWriteNonce: accountTargetWriteNonce.value,
+        catalogRefresh,
+      }, 201);
+    }
+
+    if (!hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "provider not configured" }, 404);
+    const existing = config.customModels ?? [];
+    const newSlug = routedSlug(provider, modelId);
+    if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
+      return jsonResponse({ error: "duplicate model" }, 409);
+    }
+    const known = knownModelIdsForProvider(provider, config.providers[provider], config);
+    if (encodedModelIdCollides(modelId, known)) {
+      return jsonResponse({ error: "ambiguous model id" }, 409);
+    }
     config.customModels = [...existing, entry];
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ...entry, catalogRefresh }, 201);
+    return jsonResponse({
+      ...entry,
+      catalogRefresh,
+    }, 201);
   }
 
-  const customPutMatch = url.pathname.match(/^\/api\/custom-models\/([^/]+)$/);
+  const targetAwareCustomPutMatch = url.pathname.match(/^\/api\/custom-models\/([^/]+)\/account-target$/);
+  const customPutMatch = targetAwareCustomPutMatch
+    ?? url.pathname.match(/^\/api\/custom-models\/([^/]+)$/);
   if (customPutMatch && req.method === "PUT") {
     let id: string;
     try { id = decodeURIComponent(customPutMatch[1]); } catch { return jsonResponse({ error: "invalid id encoding" }, 400); }
-    let body: { displayName?: unknown; contextWindow?: unknown; inputModalities?: unknown; modelId?: unknown; reasoningEfforts?: unknown; defaultReasoningEffort?: unknown };
+    let body: CustomModelPutBody;
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
-    const list = config.customModels ?? [];
-    const idx = list.findIndex(cm => cm.id === id);
-    if (idx === -1) return jsonResponse({ error: "not found" }, 404);
-    const cm = { ...list[idx] };
-    if (typeof body.modelId === "string" && body.modelId.trim()) {
-      cm.modelId = body.modelId.trim();
-    }
-    if (body.displayName !== undefined) {
-      const dn = typeof body.displayName === "string" ? body.displayName.trim() : "";
-      if (dn.includes("/")) return jsonResponse({ error: "displayName must not contain /" }, 400);
-      cm.displayName = dn || undefined;
-    }
-    if (body.contextWindow !== undefined) {
-      cm.contextWindow = typeof body.contextWindow === "number" && body.contextWindow > 0 ? Math.floor(body.contextWindow) : undefined;
-    }
-    if (body.inputModalities !== undefined) {
-      const edited = readInputModalities(body.inputModalities);
-      if (edited.error) return jsonResponse({ error: edited.error }, 400);
-      cm.inputModalities = edited.values && edited.values.length > 0 ? edited.values : undefined;
-    }
-    // `null` clears the stored ladder back to "inherit from the provider row"; `[]` stays
-    // stored as an explicit "no reasoning" override. The default effort rides along and is
-    // validated against the ladder the row ends up with.
-    if (body.reasoningEfforts !== undefined) {
-      if (body.reasoningEfforts === null) {
-        cm.reasoningEfforts = undefined;
-      } else {
-        const edited = readReasoningEfforts(body.reasoningEfforts);
-        if (edited.error) return jsonResponse({ error: edited.error }, 400);
-        cm.reasoningEfforts = edited.values;
+    if (targetAwareCustomPutMatch) {
+      const accountTargetWriteNonce = readCustomModelAccountTargetWriteNonce(body.codexAccountTargetWriteNonce);
+      if (accountTargetWriteNonce.error) return jsonResponse({ error: accountTargetWriteNonce.error }, 400);
+      if (!accountTargetWriteNonce.value) {
+        return jsonResponse({ error: "target-aware custom model writes require a write nonce" }, 400);
       }
-    }
-    if (body.defaultReasoningEffort !== undefined) {
-      const edited = readDefaultReasoningEffort(body.defaultReasoningEffort, cm.reasoningEfforts);
-      if (edited.error) return jsonResponse({ error: edited.error }, 400);
-      cm.defaultReasoningEffort = edited.value;
-    }
-    // Mirror of the POST invariant: a default only survives as a member of the final ladder.
-    // Without this, a ladder shrink/clear on a row that was created with a default leaves a
-    // stale default that re-applies itself onto the inherited ladder in the generated catalog
-    // (the GUI toggle-off path sends only reasoningEfforts, never the default).
-    if (cm.defaultReasoningEffort !== undefined) {
-      const ladder = cm.reasoningEfforts;
-      if (!ladder || ladder.length === 0 || !ladder.includes(cm.defaultReasoningEffort)) {
-        cm.defaultReasoningEffort = undefined;
+      let mutation: PersistedConfigSnapshotMutationOutcome<CustomModelWriteResult>;
+      try {
+        mutation = mutateConfig<CustomModelWriteResult>(persisted => {
+          const result = buildCustomModelPutMutation(persisted, id, body, true);
+          if (!result.ok) return { changed: false, value: result };
+          const target = persisted as unknown as Record<string, unknown>;
+          for (const key of Object.keys(target)) delete target[key];
+          Object.assign(target, structuredClone(result.config) as unknown as Record<string, unknown>);
+          return { changed: true, value: result };
+        });
+      } catch (error) {
+        if (error instanceof ConfigMutationLockError) {
+          return jsonResponse({ error: "config could not be updated safely (conflict)" }, 409);
+        }
+        throw error;
       }
+      if (mutation.status === "unavailable") {
+        return jsonResponse({ error: `config could not be updated safely (${mutation.reason})` }, 409);
+      }
+      adoptPersistedConfigSnapshotIntoLiveConfig(config, mutation.config);
+      if (!mutation.value.ok) {
+        return jsonResponse({ error: mutation.value.error }, mutation.value.status);
+      }
+      const catalogRefresh = await convergeCodexCatalog();
+      return jsonResponse({
+        ...mutation.value.row,
+        codexAccountTargetWriteNonce: accountTargetWriteNonce.value,
+        catalogRefresh,
+      });
     }
-    const updatedSlug = routedSlug(cm.provider, cm.modelId);
-    if (list.some((other, i) => i !== idx && routedSlug(other.provider, other.modelId) === updatedSlug)) {
-      return jsonResponse({ error: "duplicate model" }, 409);
-    }
-    const known = knownModelIdsForProvider(cm.provider, config.providers[cm.provider], {
-      customModels: list.filter((_, i) => i !== idx),
-    });
-    if (encodedModelIdCollides(cm.modelId, known)) {
-      return jsonResponse({ error: "ambiguous model id" }, 409);
-    }
-    list[idx] = cm;
-    config.customModels = list;
+
+    const result = buildCustomModelPutMutation(config, id, body, false);
+    if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    config.customModels = structuredClone(result.config.customModels ?? []);
     persistConfig(config);
     const catalogRefresh = await convergeCodexCatalog();
-    return jsonResponse({ ...cm, catalogRefresh });
+    return jsonResponse({ ...result.row, catalogRefresh });
   }
 
   const customDelMatch = url.pathname.match(/^\/api\/custom-models\/([^/]+)$/);
@@ -501,9 +713,13 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
 
   // Per-provider catalog allowlist (issue #52): when a provider has a non-empty selectedModels list,
   // only those ids ship to Codex's catalog / /v1/models. GET returns the CURRENT selection plus the
-  // FULL available set per provider (unfiltered — the picker needs everything to choose from).
+  // FULL editable set per provider: disabled and currently-unselected rows remain available, while
+  // an exact-account row whose target is unavailable stays repair-only in `/api/models`.
   if (url.pathname === "/api/selected-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = filterModelsByCustomRouteAvailability(
+      await (deps.fetchAllModels ?? fetchAllModels)(config),
+      config,
+    );
     const available: Record<string, string[]> = {};
     for (const m of models) (available[m.provider] ??= []).push(m.id);
     const selected: Record<string, string[]> = {};

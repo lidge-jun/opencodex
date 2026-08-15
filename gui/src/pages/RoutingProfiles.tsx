@@ -20,6 +20,10 @@ import { readJsonIfOk } from "../fetch-json";
 import { Notice } from "../ui";
 import { useI18n, useT } from "../i18n/shared";
 import { ROUTING_COMPATIBILITY_FIELD_LABELS } from "../i18n/routing-compatibility-labels";
+import {
+  modelAvailableForActiveSelection,
+  modelDefaultAvailableForActiveSelection,
+} from "./models-shared";
 
 type DryRunCandidate = {
   provider: string;
@@ -217,7 +221,10 @@ function parseModels(raw: unknown): ModelOption[] {
       ? (row as { id: string }).id.trim()
       : "";
     if (!provider || !id || provider === "combo" || provider === "policy") continue;
-    if ((row as { disabled?: unknown }).disabled === true) continue;
+    if (!modelAvailableForActiveSelection(row as {
+      disabled?: unknown;
+      codexAccountTargetAvailable?: unknown;
+    })) continue;
     const key = JSON.stringify([provider, id]);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -375,7 +382,15 @@ export default function RoutingProfiles({
         .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       const nextDefaults = Object.fromEntries(
         Object.entries(configuredProviders)
-          .filter(([, provider]) => provider.disabled !== true && typeof provider.defaultModel === "string")
+          .filter(([name, provider]) => (
+            provider.disabled !== true
+            && typeof provider.defaultModel === "string"
+            && modelDefaultAvailableForActiveSelection(
+              modelsJson,
+              name,
+              provider.defaultModel.trim(),
+            )
+          ))
           .map(([name, provider]) => [name, provider.defaultModel!.trim()]),
       );
 

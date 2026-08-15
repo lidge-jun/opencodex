@@ -264,6 +264,37 @@ reapplies the configured name. Genuine upstream native names (e.g. `gpt-5.6-sol`
 "GPT-5.6-Sol") come from the pinned upstream snapshot and are never overridden by a custom display
 name.
 
+### Custom model Codex account binding
+
+A custom row on the canonical `openai` Codex-forward provider can optionally select one exact
+Codex account:
+
+```json
+{
+  "provider": "openai",
+  "modelId": "gpt-daybreak-blue-latest",
+  "codexAccountTarget": "@main"
+}
+```
+
+Choose the account in the dashboard's custom-model editor, or pass
+`--codex-account-target <@main|pool-id>` to `ocx models add`. `@main` means the physical Codex App
+login; added accounts use their stable Pool id. The binding is per custom row and independent of
+`codexAccountPickerEnabled`. With no target, existing Pool/Direct behavior is unchanged. With a
+target, exact selection overrides Direct, never falls back to another account, and fails closed if
+the target is unavailable. `ocx models edit <id> --codex-account-target -` clears the binding.
+
+New bindings accept only `@main` or a Pool id that currently exists. When a proxy is running, a
+target-bearing CLI add/edit first verifies that the proxy implements this contract; update the
+running proxy if that capability check fails. Offline `ocx models add` remains available because the
+same config is validated before it is written.
+
+Deleting an added account keeps the configured target so the model can be repaired or restored by
+re-adding the same stable id. The retained target may also be resubmitted unchanged while repairing
+other fields, but a different unknown id is rejected. The orphaned row is omitted from data-plane
+catalogs and client exports. Management views keep it visible. Older binaries ignore this additive field and may route
+the row without a binding, so avoid downgrading while relying on exact-account isolation.
+
 ### External provider managers
 
 If `config.toml` already selects a provider other than `openai` or `opencodex`, OpenCodex leaves the

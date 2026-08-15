@@ -59,6 +59,8 @@ export interface PolicyCandidateEvidence {
   quota?: RouteQuotaEvidence;
   cost?: RouteCostEvidence;
   compatibility?: CandidateCompatibilityEvidence;
+  /** Structural fail-closed exclusions known before scoring (for example a deleted exact account). */
+  staticExclusions?: RouteExclusionReason[];
 }
 
 export interface PolicyEvaluationCandidate {
@@ -277,7 +279,7 @@ export function evaluatePolicyProfile(
       ...requirementFor(profile.require, evidence.capability, evidence.quota),
       ...requestRequirementFor(requestEvidence, evidence.capability),
     ];
-    const exclusions: RouteExclusionReason[] = [];
+    const exclusions: RouteExclusionReason[] = [...(evidence.staticExclusions ?? [])];
     const bad = unsatisfiedOrUnknown(requirements);
     for (const requirement of bad) {
       if (requirement.outcome === "unsatisfied") {
@@ -310,7 +312,11 @@ export function evaluatePolicyProfile(
     if (unknownCostBlocked) {
       exclusions.push({ code: "cost-limit-unknown", detail: "maxEstimatedCostUsd" });
     }
-    let eligible = !unsatisfied && !excludedByUnknown && !overCostLimit && !unknownCostBlocked;
+    let eligible = exclusions.length === 0
+      && !unsatisfied
+      && !excludedByUnknown
+      && !overCostLimit
+      && !unknownCostBlocked;
 
     // Trace/dry-run copy only: report the profile cap that was applied and the
     // operator-visible outcome. Do not feed this copy into costScore() — that

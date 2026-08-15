@@ -30,6 +30,9 @@ import {
   type ExactOpenAiSidecarAccount,
 } from "../providers/openai-sidecar";
 import { routeModel } from "../router";
+import { slugEquals } from "../providers/slug-codec";
+import { resolveComboId } from "../combos";
+import { resolvePolicyProfileId } from "../routing/profile";
 import { readJsonRequestBody } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
 import type { RequestLogContext } from "./request-log";
@@ -72,23 +75,40 @@ export async function handleSearch(
   const accountNamespace = typeof model === "string"
     ? codexAccountNamespaceForModel(config.codexAccountNamespaces, model)
     : undefined;
-  if (accountNamespace && typeof model === "string") {
+  const hasDirectCustomAccountTarget = typeof model === "string"
+    && (config.customModels ?? []).some(custom => (
+      custom.codexAccountTarget !== undefined
+      && slugEquals(model, custom.provider, custom.modelId)
+    ));
+  const policyProfileId = typeof model === "string"
+    ? resolvePolicyProfileId(config, model)
+    : null;
+  const comboId = typeof model === "string" ? resolveComboId(config, model) : null;
+  let customAccountBoundModel: string | undefined;
+  if (
+    typeof model === "string"
+    && (accountNamespace || hasDirectCustomAccountTarget || policyProfileId || comboId)
+  ) {
     try {
       const route = routeModel(config, model);
-      if (!route.codexAccountId || route.codexAccountNamespace !== accountNamespace) {
-        return formatErrorResponse(400, "invalid_request_error", "Invalid Codex account-qualified search model");
+      const customAccountBinding = route.codexAccountBinding === "custom-model";
+      if (accountNamespace || customAccountBinding) {
+        if (!route.codexAccountId || (accountNamespace && route.codexAccountNamespace !== accountNamespace)) {
+          return formatErrorResponse(400, "invalid_request_error", "Invalid Codex account-bound search model");
+        }
+        exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
+        if (accountNamespace) logCtx.provider = `${route.providerName}-${accountNamespace}`;
+        if (customAccountBinding) customAccountBoundModel = model;
+        logCtx.routeDecision = route.routeDecision;
+        // The ChatGPT search endpoint only understands the native model slug. Account
+        // namespaces, policy/combo aliases, and custom provider prefixes stay local.
+        relayBody = { ...(body as Record<string, unknown>), model: route.modelId };
       }
-      exactAccount = { accountId: route.codexAccountId, modelId: route.modelId };
-      logCtx.provider = `${route.providerName}-${accountNamespace}`;
-      logCtx.routeDecision = route.routeDecision;
-      // The ChatGPT search endpoint only understands the native model slug. The
-      // account namespace is proxy routing syntax and must not cross the wire.
-      relayBody = { ...(body as Record<string, unknown>), model: route.modelId };
     } catch (err) {
       return formatErrorResponse(
         400,
         "invalid_request_error",
-        err instanceof Error ? err.message : "Invalid Codex account-qualified search model",
+        err instanceof Error ? err.message : "Invalid Codex account-bound search model",
       );
     }
   }
@@ -121,7 +141,12 @@ export async function handleSearch(
       : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
     if (err instanceof CodexAccountCooldownError) {
-      return cooldownErrorResponse(err, Date.now(), accountNamespace);
+      return cooldownErrorResponse(
+        err,
+        Date.now(),
+        accountNamespace,
+        customAccountBoundModel,
+      );
     }
     if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
     if (err instanceof CodexThreadAffinityExpiredError) {

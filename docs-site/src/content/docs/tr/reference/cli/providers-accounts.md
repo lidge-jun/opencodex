@@ -416,8 +416,8 @@ kurulu bir servis).
 | --- | --- | --- |
 | `list` (varsayılan) | `--provider <ad>`, `--json` | Yapılandırılmış sağlayıcılarda beslenen modelleri listeleyin. |
 | `live` | `--provider <ad>`, `--json` | Çalışma zamanında keşfedilen modeller de dahil olmak üzere çalışan kataloğu okuyun. Satırlar `native`/`routed`, `custom` ve `enabled`/`disabled` olarak bayraklanır. |
-| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Sağlayıcı kataloğunun bildirmediği bir modeli kaydedin. |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <ad\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Özel bir modeli düzenleyin. `-` bir alanı temizler; `0` bağlam penceresini temizler. |
+| `add <saglayici> <modelId>` | `--display-name <ad>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | Bir model kaydedin; hesap hedefi yalnız canonical `openai` Codex-forward satırında geçerlidir ve mevcut bir Pool hesabını göstermelidir. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <ad\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | Özel modeli düzenleyin. `-` alanı veya hesap bağını temizler; `0` bağlam penceresini temizler. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Özel bir modeli silin. Stdin etkileşimli bir terminal olmadığında `--yes` gerektirir. |
 | `list-custom` | `--json` | Diğer alt komutların aldığı `custom-id` ile tüm özel modelleri gösterin. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Bir modeli Codex için görünür yapın. |
@@ -426,6 +426,8 @@ kurulu bir servis).
 | `selected <saglayici>` | `--set <id,id...>`, `--clear`, `--json` | Sağlayıcı model izin listesini okuyun veya değiştirin. `--clear` her modelin sunulması için izin listesini kaldırır. |
 | `context <status\|value <tokens> [--set-all]\|provider <ad> on [--value <tokens>]\|provider <ad> off\|all <on\|off>>` | `--json` | Küresel olarak veya sağlayıcı başına bağlam penceresi sınırını okuyun veya ayarlayın. `value <tokens> --set-all` ayrıca her yönlendirilen sağlayıcıyı yeniden yönlendirir (kontrol paneli anahtarı gibi); bu olmadan değer yalnızca varsayılan olur. `provider ... on --value <tokens>` yalnızca o sağlayıcı için açık bir sınır belirler (`--value` yalnızca `on` ile geçerlidir). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex'in arka plan yardımcı çağrıları için değiştirme modelini okuyun veya ayarlayın. `-` modeli temizler. `status` ayrıca proxy'nin müdahale ettiği yardımcı slug'ları olan `sourceModels`'ı bildirir (varsayılan: `gpt-5.6-luna`; 0.144.x'e kadar olan istemciler açık bir `sourceModels` geçersiz kılmasının geri yükleyebileceği `gpt-5.4-mini` kullanmıştır). |
+
+Proxy çalışırken hedefli `add` özel POST'u kullanır; hedefli `edit` mevcut satırı önce okur ve hedef açıkça belirtilmişse veya korunuyorsa özel PUT'u, aksi halde eski PUT'u kullanır. Eski proxy değişiklikten önce 404 döndürür; güncelleyin. Canlı hedef mutasyonu başarısız olduğunda CLI eski yazmaya veya yerel yapılandırma yazmaya geri dönmez. Çevrimdışı `add` desteklenir ve kilit/yeniden doğrulama altında yapılandırmayı değiştirir; geçici nonce yazılmaz. Silinmiş hedef, onarım için özel PUT ile değiştirilmeden yeniden gönderilebilir; ancak yeni atanan bilinmeyen Pool kimliği reddedilir.
 
 ```bash
 ocx models live --json                                  # Codex'in şu anda gerçekte görebildikleri
@@ -449,5 +451,3 @@ kapalı bir enum olarak ayrıştırır ve başka herhangi bir değer içeren tü
 kataloğu reddeder, bu nedenle `add`, `edit` ve yönetim API'si katalog
 yazıcısının daha sonra çıkarması gereken bir şeyi saklamak yerine hatalı değeri
 reddeder (#759).
-
-

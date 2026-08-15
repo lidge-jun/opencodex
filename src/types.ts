@@ -611,6 +611,12 @@ export interface OcxCustomModel {
   reasoningEfforts?: string[];
   /** Default effort label when `reasoningEfforts` is non-empty. */
   defaultReasoningEffort?: string;
+  /**
+   * Optional exact Codex account binding for this custom row. `@main` selects the
+   * physical Codex Desktop login; any other accepted value is a stable Pool account id.
+   * Omission preserves the provider's ordinary Pool/Direct behavior.
+   */
+  codexAccountTarget?: string;
   /** 추가 시각 (ISO 8601) */
   addedAt?: string;
 }

@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   armClaudeCodeBaseline,
+  adoptPersistedConfigSnapshotIntoLiveConfig,
   adoptPersistedProviderIntoLiveConfig,
   getConfigPath,
   getDefaultConfig,
   loadConfig,
   mutatePersistedConfig,
+  mutatePersistedConfigWithSnapshot,
   readConfigDiagnostics,
   reconcileLiveConfigFromDisk,
   saveConfig,
@@ -142,6 +144,35 @@ test("a persisted provider adopted into live state rebases only that provider", 
     .toBe("newer-disk-edit");
 });
 
+test("an adopted snapshot keeps the live listener binding without restoring it to disk", () => {
+  const live = loadConfig();
+  live.hostname = "0.0.0.0";
+  live.port = 10444;
+  armClaudeCodeBaseline(live);
+
+  const persisted = {
+    ...loadConfig(),
+    hostname: "127.0.0.1",
+    port: 11445,
+    disabledModels: ["test/from-snapshot"],
+  };
+  saveConfig(persisted);
+  adoptPersistedConfigSnapshotIntoLiveConfig(live, persisted);
+
+  expect(live.hostname).toBe("0.0.0.0");
+  expect(live.port).toBe(10444);
+  expect(live.disabledModels).toEqual(["test/from-snapshot"]);
+
+  live.contextCapValue = 240_000;
+  saveConfigPreservingClaudeCode(live);
+
+  expect(live.hostname).toBe("0.0.0.0");
+  expect(live.port).toBe(10444);
+  expect(diskConfig().hostname).toBe("127.0.0.1");
+  expect(diskConfig().port).toBe(11445);
+  expect(diskConfig().contextCapValue).toBe(240_000);
+});
+
 test("field-scoped persisted mutations use the final disk snapshot for legacy ownership", () => {
   writePreVersionCustomConfig();
   const outcome = mutatePersistedConfig(config => {
@@ -151,6 +182,24 @@ test("field-scoped persisted mutations use the final disk snapshot for legacy ow
 
   expect(outcome).toEqual({ status: "committed", value: "removed" });
   expect(legacyCustomModelCatalogSlugs(loadConfig())).toEqual(
+    new Set(["test/legacy-model"]),
+  );
+});
+
+test("snapshot-returning mutations expose the exact projected config committed to disk", () => {
+  writePreVersionCustomConfig();
+  const outcome = mutatePersistedConfigWithSnapshot(config => {
+    delete config.customModels;
+    return { changed: true, value: "removed" };
+  });
+
+  expect(outcome.status).toBe("committed");
+  if (outcome.status === "unavailable") throw new Error(outcome.reason);
+  expect(outcome.value).toBe("removed");
+  expect(outcome.config.customModelCatalogMigration).toEqual(
+    diskConfig().customModelCatalogMigration,
+  );
+  expect(legacyCustomModelCatalogSlugs(outcome.config)).toEqual(
     new Set(["test/legacy-model"]),
   );
 });

@@ -248,8 +248,8 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | --- | --- | --- |
 | `list` (デフォルト) | `--provider <name>`、`--json` |構成されたプロバイダーにシードされたモデルをリストします。 |
 | `live` | `--provider <name>`、`--json` |実行時に検出されたモデルを含む、実行中のカタログを読み取ります。行には、`native`/`routed`、`custom`、および `enabled`/`disabled` というフラグが付けられます。 |
-| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>` |プロバイダー カタログが宣伝していないモデルを登録します。 |
-| `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--json` |カスタムモデルを編集します。 `-` はフィールドをクリアします。 `0` はコンテキスト ウィンドウをクリアします。 |
+| `add <provider> <modelId>` | `--display-name <name>`、`--context-window <tokens>`、`--modalities <text,image,audio>`、`--codex-account-target <@main\|pool-id>` | プロバイダーカタログにないモデルを登録します。アカウント対象は canonical `openai` Codex-forward 行だけで有効で、現在存在する Pool アカウントを指定する必要があります。 |
+| `edit <custom-id>` | `--model-id <id>`、`--display-name <name\|->`、`--context-window <tokens\|0>`、`--modalities <text,image,audio\|->`、`--codex-account-target <@main\|pool-id\|->`、`--json` | カスタムモデルを編集します。`-` はフィールドまたはアカウントバインドを解除し、`0` はコンテキストウィンドウを解除します。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` |カスタムモデルを削除します。標準入力が対話型端末ではない場合は、`--yes` が必要です。 |
 | `list-custom` | `--json` |他のサブコマンドで取得される `custom-id` を持つすべてのカスタム モデルを表示します。 |
 | `enable <provider/model\|native-model>` | `--native`、`--json` | 1 つのモデルを Codex に表示できるようにします。 |
@@ -258,6 +258,8 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 | `selected <provider>` | `--set <id,id...>`、`--clear`、`--json` |プロバイダー モデルのホワイトリストを読み取るか置き換えます。 `--clear` はホワイトリストを削除し、すべてのモデルが提供されるようにします。 |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` |コンテキスト ウィンドウ キャップをグローバルに、またはプロバイダーごとに読み取りまたは設定します。 `value <tokens> --set-all` はすべてのルーティング済みプロバイダーにも値を再適用します（ダッシュボードのトグルと同様）。指定しない場合は既定値のみが変更されます。 `provider ... on --value <tokens>` はそのプロバイダーのみに個別のキャップを設定します（`--value` は `on` でのみ使用できます）。 |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`、`--json` | Codex のバックグラウンド ヘルパー呼び出しの置換モデルを読み取るか、設定します。 `-` はモデルをクリアします。 `status` は `sourceModels` も報告し、プロキシがインターセプトするヘルパースラッグを示します (デフォルト: `gpt-5.6-luna`; 0.144.x 以前のクライアントが使用した `gpt-5.4-mini` は明示的な `sourceModels` オーバーライドで復元できます)。 |
+
+プロキシが実行中の場合、対象付き `add` は専用の POST を使用し、対象付き `edit` は現在の行を先に読み、対象が明示または保持されていれば専用の PUT を、そうでなければ従来の PUT を使用します。古いプロキシは変更前に 404 を返すため更新してください。ライブの対象変更が失敗しても、CLI は従来の書き込みやローカル設定ファイルへの書き込みにフォールバックしません。オフラインの `add` は引き続き使用でき、ロックと再検証の下で設定を変更します。一時 nonce は書き込みません。削除された対象は専用 PUT に同じ値で再送して修復できますが、新しく割り当てる不明な Pool ID は拒否されます。
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

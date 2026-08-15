@@ -33,6 +33,10 @@ export interface ModelRow {
   native?: boolean;
   custom?: boolean;
   customId?: string;
+  /** Stored exact Codex account binding for a custom row; management UI only. */
+  codexAccountTarget?: string;
+  /** False keeps an orphaned/invalid row repair-visible but out of active model choices. */
+  codexAccountTargetAvailable?: boolean;
   displayName?: string;
   inputModalities?: string[];
   contextWindow?: number;
@@ -95,6 +99,44 @@ export function collectDisabledNamespaced(rows: ModelRow[]): Set<string> {
   return next;
 }
 
+/** Repair-only exact-account rows remain visible in Models, but cannot enter active selectors. */
+export function modelAvailableForActiveSelection(
+  model: { disabled?: unknown; codexAccountTargetAvailable?: unknown },
+): boolean {
+  return model.disabled !== true && model.codexAccountTargetAvailable !== false;
+}
+
+/**
+ * Preserve the historical default-model fallback when the catalog has not listed a row,
+ * but never use that fallback to resurrect a row the server explicitly marked inactive.
+ */
+export function modelDefaultAvailableForActiveSelection(
+  raw: unknown,
+  provider: string,
+  id: string,
+): boolean {
+  const rows = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { models?: unknown }).models)
+      ? (raw as { models: unknown[] }).models
+      : [];
+  return !rows.some(row => {
+    if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+    const candidateProvider = typeof (row as { provider?: unknown }).provider === "string"
+      ? (row as { provider: string }).provider.trim()
+      : "";
+    const candidateId = typeof (row as { id?: unknown }).id === "string"
+      ? (row as { id: string }).id.trim()
+      : "";
+    return candidateProvider === provider
+      && candidateId === id
+      && !modelAvailableForActiveSelection(row as {
+        disabled?: unknown;
+        codexAccountTargetAvailable?: unknown;
+      });
+  });
+}
+
 export function activeModelOptions(
   models: ModelRow[],
   disabled: Set<string>,
@@ -103,6 +145,7 @@ export function activeModelOptions(
 ): { value: string; label: string }[] {
   const options: { value: string; label: string }[] = [];
   for (const m of models) {
+    if (!modelAvailableForActiveSelection(m)) continue;
     const blocked = disabled.has(m.id) || disabled.has(m.namespaced);
     if (modelVisible(selected, m.provider, m.id, m.native === true, blocked)) {
       // Friendly label (display-name provider prefix) while the raw route stays the value.
@@ -134,5 +177,3 @@ export function writeCollapsedProviders(collapsed: Set<string>, storage: Storage
     /* quota / private-mode */
   }
 }
-
-

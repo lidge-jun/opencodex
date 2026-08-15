@@ -11,6 +11,7 @@ import { modelLabel } from "../model-display";
 import { formatNamespacedModelId, formatProviderDisplayName, providerDisplaySlug } from "../provider-icons";
 import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
+import { newBrowserUuidV4 } from "../lib/uuid";
 import { setClientResourceData } from "../client-resource";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
@@ -70,6 +71,16 @@ type CachedModelsPage = {
   disabled: string[];
   contextCaps: Record<string, number>;
   contextCapValue: number;
+};
+
+type CodexAccountTargetOption = {
+  target: string;
+  isMain: boolean;
+  label: string;
+  alias?: string;
+  email?: string;
+  logLabel: string;
+  paused: boolean;
 };
 
 /** One subtitle per tab: only one panel is visible, so only one description applies. */
@@ -237,6 +248,16 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   const [customFormModalities, setCustomFormModalities] = useState<string[]>(["text"]);
   const [customFormReasoning, setCustomFormReasoning] = useState(false);
   const [customFormReasoningEfforts, setCustomFormReasoningEfforts] = useState<string[]>([]);
+  const [customFormCodexAccountTarget, setCustomFormCodexAccountTarget] = useState("");
+  const [customFormInitialCodexAccountTarget, setCustomFormInitialCodexAccountTarget] = useState("");
+  const [customModalSupportsCodexAccountTarget, setCustomModalSupportsCodexAccountTarget] = useState(false);
+  const [customModalRepairsCodexAccountTarget, setCustomModalRepairsCodexAccountTarget] = useState(false);
+  const [customModalNeedsCodexAccountTargetClear, setCustomModalNeedsCodexAccountTargetClear] = useState(false);
+  const [customAccountTargetOptions, setCustomAccountTargetOptions] = useState<CodexAccountTargetOption[]>([]);
+  const [customAccountTargetsLoading, setCustomAccountTargetsLoading] = useState(false);
+  const [customAccountTargetsError, setCustomAccountTargetsError] = useState("");
+  const customAccountTargetGenerationRef = useRef(0);
+  const customAccountTargetRequestRef = useRef<AbortController | null>(null);
   // Whether the ladder has been seeded at least once. `[]` is a MEANINGFUL explicit
   // no-reasoning override, so initialization is tracked separately from the array contents:
   // once seeded (an edit's stored ladder — including an explicit empty one — or a new form's
@@ -273,6 +294,100 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
   useEffect(() => () => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
   }, []);
+
+  const loadCustomAccountTargetOptions = useCallback((supported: boolean) => {
+    customAccountTargetRequestRef.current?.abort();
+    const generation = ++customAccountTargetGenerationRef.current;
+    if (!supported) {
+      customAccountTargetRequestRef.current = null;
+      setCustomAccountTargetOptions([]);
+      setCustomAccountTargetsLoading(false);
+      setCustomAccountTargetsError("");
+      return;
+    }
+    const controller = new AbortController();
+    customAccountTargetRequestRef.current = controller;
+    setCustomAccountTargetsLoading(true);
+    setCustomAccountTargetsError("");
+    void fetch(`${apiBase}/api/codex-auth/account-target-options`, { signal: controller.signal })
+      .then(response => readJsonOrThrow<{ targets?: unknown }>(response, t("models.customAccountTargetLoadFailed")))
+      .then(data => {
+        if (controller.signal.aborted || generation !== customAccountTargetGenerationRef.current) return;
+        const targets = Array.isArray(data?.targets)
+          ? data.targets.filter((entry): entry is CodexAccountTargetOption => (
+            !!entry
+            && typeof entry === "object"
+            && typeof (entry as CodexAccountTargetOption).target === "string"
+            && typeof (entry as CodexAccountTargetOption).label === "string"
+            && typeof (entry as CodexAccountTargetOption).logLabel === "string"
+          ))
+          : [];
+        setCustomAccountTargetOptions(targets);
+      })
+      .catch(() => {
+        if (controller.signal.aborted || generation !== customAccountTargetGenerationRef.current) return;
+        setCustomAccountTargetsError(t("models.customAccountTargetLoadFailed"));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && generation === customAccountTargetGenerationRef.current) {
+          customAccountTargetRequestRef.current = null;
+          setCustomAccountTargetsLoading(false);
+        }
+      });
+  }, [apiBase, t]);
+
+  const assertCustomAccountTargetRuntimeCapability = useCallback(async () => {
+    const response = await fetch(`${apiBase}/api/codex-auth/account-target-options`);
+    const data = await readJsonOrThrow<{ targets?: unknown }>(response, t("models.customSaveFailed"));
+    if (
+      !data
+      || !Array.isArray(data.targets)
+      || !data.targets.some(target => (
+        !!target
+        && typeof target === "object"
+        && (target as { target?: unknown }).target === "@main"
+      ))
+    ) {
+      throw new Error(t("models.customSaveFailed"));
+    }
+  }, [apiBase, t]);
+
+  const closeCustomModal = useCallback(() => {
+    customAccountTargetRequestRef.current?.abort();
+    customAccountTargetRequestRef.current = null;
+    customAccountTargetGenerationRef.current += 1;
+    setCustomModalOpen(false);
+  }, []);
+
+  useEffect(() => () => {
+    customAccountTargetRequestRef.current?.abort();
+  }, []);
+
+  const customAccountTargetSelectOptions = useMemo(() => {
+    const options = [
+      { value: "", label: t("models.customAccountTargetAutomatic") },
+      ...customAccountTargetOptions.map(option => {
+        const accountLabel = option.isMain ? t("codexAuth.mainAccount") : option.label;
+        const disambiguatedLabel = `${accountLabel} (${option.logLabel})`;
+        return {
+          value: option.target,
+          label: option.paused
+            ? `${disambiguatedLabel} (${t("models.customAccountTargetPaused")})`
+            : disambiguatedLabel,
+        };
+      }),
+    ];
+    if (
+      customFormCodexAccountTarget
+      && !customAccountTargetOptions.some(option => option.target === customFormCodexAccountTarget)
+    ) {
+      options.push({
+        value: customFormCodexAccountTarget,
+        label: t("models.customAccountTargetUnavailable"),
+      });
+    }
+    return options;
+  }, [customAccountTargetOptions, customFormCodexAccountTarget, t]);
 
   const shadowModelOptions = useMemo(
     () => activeModelOptions(models, disabled, selectedModels ?? {}, t),
@@ -565,12 +680,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
 
   const effectiveVisibleCount = useMemo(() => {
     if (!selectedModels) return 0;
-    return models.filter(model => modelVisible(
-      selectedModels,
-      model.provider,
-      model.id,
-      model.native === true,
-      disabled.has(model.namespaced),
+    return models.filter(model => (
+      model.codexAccountTargetAvailable !== false
+      && modelVisible(
+        selectedModels,
+        model.provider,
+        model.id,
+        model.native === true,
+        disabled.has(model.namespaced),
+      )
     )).length;
   }, [disabled, models, selectedModels]);
 
@@ -910,49 +1028,118 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     contextWindow?: number,
     inputModalities?: string[],
     reasoningEfforts?: string[],
+    codexAccountTarget?: string,
   ) => {
     setCustomSaving(true);
     setCustomError("");
     try {
-      const r = await fetch(`${apiBase}/api/custom-models`, {
+      const codexAccountTargetWriteNonce = codexAccountTarget !== undefined
+        ? newBrowserUuidV4()
+        : undefined;
+      if (codexAccountTarget !== undefined) {
+        await assertCustomAccountTargetRuntimeCapability();
+      }
+      const customModelPath = codexAccountTarget !== undefined
+        ? "/api/custom-models/account-target"
+        : "/api/custom-models";
+      const r = await fetch(`${apiBase}${customModelPath}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, modelId, displayName, contextWindow, inputModalities, reasoningEfforts }),
+        body: JSON.stringify({
+          provider,
+          modelId,
+          displayName,
+          contextWindow,
+          inputModalities,
+          reasoningEfforts,
+          codexAccountTarget,
+          codexAccountTargetWriteNonce,
+        }),
       });
       try {
-        await readJsonOrThrow(r, t("models.customSaveFailed"));
-        setCustomModalOpen(false);
+        const saved = await readJsonOrThrow<{
+          codexAccountTarget?: unknown;
+          codexAccountTargetWriteNonce?: unknown;
+        }>(r, t("models.customSaveFailed"));
+        if (
+          codexAccountTarget !== undefined
+          && (
+            !saved
+            || saved.codexAccountTarget !== codexAccountTarget
+            || saved.codexAccountTargetWriteNonce !== codexAccountTargetWriteNonce
+          )
+        ) {
+          throw new Error(t("models.customSaveFailed"));
+        }
+        closeCustomModal();
         publishFeedback(true, t("models.customAdded"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
       }
     } catch {
-      setCustomError(t("models.networkError"));
+      setCustomError(codexAccountTarget !== undefined
+        ? t("models.customSaveFailed")
+        : t("models.networkError"));
     } finally {
       setCustomSaving(false);
     }
   };
 
   const updateCustomModel = async (id: string, patch: Record<string, unknown>) => {
+    const changesCodexAccountTarget = Object.hasOwn(patch, "codexAccountTarget");
+    const requiresCodexAccountTargetCapability = changesCodexAccountTarget
+      || customFormInitialCodexAccountTarget.length > 0
+      || customModalRepairsCodexAccountTarget
+      || customModalNeedsCodexAccountTargetClear;
     setCustomSaving(true);
     setCustomError("");
     try {
-      const r = await fetch(`${apiBase}/api/custom-models/${encodeURIComponent(id)}`, {
+      const codexAccountTargetWriteNonce = requiresCodexAccountTargetCapability
+        ? newBrowserUuidV4()
+        : undefined;
+      if (requiresCodexAccountTargetCapability) {
+        await assertCustomAccountTargetRuntimeCapability();
+      }
+      const customModelPath = requiresCodexAccountTargetCapability
+        ? `/api/custom-models/${encodeURIComponent(id)}/account-target`
+        : `/api/custom-models/${encodeURIComponent(id)}`;
+      const r = await fetch(`${apiBase}${customModelPath}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({
+          ...patch,
+          ...(codexAccountTargetWriteNonce ? { codexAccountTargetWriteNonce } : {}),
+        }),
       });
       try {
-        await readJsonOrThrow(r, t("models.customSaveFailed"));
-        setCustomModalOpen(false);
+        const saved = await readJsonOrThrow<{
+          codexAccountTarget?: unknown;
+          codexAccountTargetWriteNonce?: unknown;
+        }>(r, t("models.customSaveFailed"));
+        if (requiresCodexAccountTargetCapability) {
+          if (!saved) throw new Error(t("models.customSaveFailed"));
+          if (saved.codexAccountTargetWriteNonce !== codexAccountTargetWriteNonce) {
+            throw new Error(t("models.customSaveFailed"));
+          }
+          if (changesCodexAccountTarget) {
+            const requestedTarget = patch.codexAccountTarget;
+            const applied = requestedTarget === null
+              ? saved.codexAccountTarget === undefined || saved.codexAccountTarget === null
+              : saved.codexAccountTarget === requestedTarget;
+            if (!applied) throw new Error(t("models.customSaveFailed"));
+          }
+        }
+        closeCustomModal();
         publishFeedback(true, t("models.customUpdated"));
         await load(true);
       } catch (e) {
         setCustomError(e instanceof Error ? e.message : t("models.customSaveFailed"));
       }
     } catch {
-      setCustomError(t("models.networkError"));
+      setCustomError(requiresCodexAccountTargetCapability
+        ? t("models.customSaveFailed")
+        : t("models.networkError"));
     } finally {
       setCustomSaving(false);
     }
@@ -992,16 +1179,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
 
   const renderGroup = (group: ProviderModelGroup<ModelRow>) => {
     const { provider, rows, native, liveModels, discovery } = group;
+    const providerSupportsCodexAccountTarget = providers.find(row => row.name === provider)
+      ?.supportsCodexAccountTarget === true;
     const isCollapsed = collapsed.has(provider);
     // Final visibility, not just the disable flag: a model is visible to Codex only when the
     // provider allowlist admits it AND it is not disabled. Reading `disabled` alone made the
     // switches disagree with what the picker actually offers.
-    const isVisible = (model: ModelRow) => modelVisible(
-      selectedModelMap,
-      provider,
-      model.id,
-      model.native === true,
-      disabled.has(model.namespaced),
+    const isVisible = (model: ModelRow) => (
+      model.codexAccountTargetAvailable !== false
+      && modelVisible(
+        selectedModelMap,
+        provider,
+        model.id,
+        model.native === true,
+        disabled.has(model.namespaced),
+      )
     );
     const activeCount = rows.filter(isVisible).length;
     const capOn = contextCaps[provider] !== undefined;
@@ -1018,17 +1210,19 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     const shown = limit[provider] ?? PAGE;
     const visible = sorted.slice(0, shown);
     const remaining = filtered.length - visible.length;
-     // An empty provider has nothing to send: keep both bulk buttons inert so we never PUT an
-     // empty target list (the management API rejects it with 400).
-     const hasRows = rows.length > 0;
-     const allOn = !hasRows || rows.every(isVisible);
-     const allOff = !hasRows || rows.every(m => !isVisible(m));
+     // Orphaned exact-account rows stay visible for repair but are not actionable model routes.
+     // Exclude them from bulk visibility writes so an "all on" action cannot claim success while
+     // those rows correctly remain unavailable.
+     const actionableRows = rows.filter(model => model.codexAccountTargetAvailable !== false);
+     const hasRows = actionableRows.length > 0;
+     const allOn = !hasRows || actionableRows.every(isVisible);
+     const allOff = !hasRows || actionableRows.every(m => !isVisible(m));
      const bulkToggle = (enable: boolean) => {
        if (!hasRows) return;
        void applyVisibility(
          "provider",
          provider,
-         rows.map(m => ({ id: m.id, native: m.native === true })),
+          actionableRows.map(m => ({ id: m.id, native: m.native === true })),
          enable,
        );
      };
@@ -1081,8 +1275,14 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                    setCustomFormModalities(["text"]);
                    setCustomFormReasoning(false);
                    setCustomFormReasoningEfforts([]);
+                   setCustomFormCodexAccountTarget("");
+                   setCustomFormInitialCodexAccountTarget("");
+                   setCustomModalSupportsCodexAccountTarget(providerSupportsCodexAccountTarget);
+                   setCustomModalRepairsCodexAccountTarget(false);
+                   setCustomModalNeedsCodexAccountTargetClear(false);
                    customFormReasoningInitializedRef.current = false;
                    setCustomError("");
+                   loadCustomAccountTargetOptions(providerSupportsCodexAccountTarget);
                    setCustomModalOpen(true);
                  }}
                  aria-label={t("models.customAdd")}
@@ -1147,13 +1347,19 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                 aria-label={t("models.search")}
               />
             )}
-             {visible.map(m => {
-               // The row reflects the same final-visibility answer as the count and the picker.
-               const off = !isVisible(m);
+              {visible.map(m => {
+                // The row reflects the same final-visibility answer as the count and the picker.
+                const accountTargetUnavailable = m.codexAccountTargetAvailable === false;
+                const off = !isVisible(m);
                return (
                  <div
                    key={m.namespaced}
                    className="model-row-wrap"
+                   role={accountTargetUnavailable ? "group" : undefined}
+                   tabIndex={accountTargetUnavailable ? 0 : undefined}
+                   aria-label={accountTargetUnavailable
+                     ? `${m.namespaced}: ${t("models.customAccountTargetUnavailable")}`
+                     : undefined}
                    onMouseEnter={(e) => onRowEnter(m.namespaced, e.currentTarget)}
                    onMouseLeave={onRowLeave}
                    onFocus={(e) => onRowFocus(m.namespaced, e.currentTarget)}
@@ -1162,13 +1368,18 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                    }}
                  >
                    <div className="row models-model-row">
-                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy} label={m.native ? m.id : m.namespaced} />
+                      <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || accountTargetUnavailable} label={m.native ? m.id : m.namespaced} />
                       <code className="mono text-control" style={{ color: off ? "var(--faint)" : "var(--text)", textDecoration: off ? "line-through" : "none" }}>{m.native ? modelLabel(m.id) : formatNamespacedModelId(m.namespaced, t)}</code>
-                     {m.custom && (
+                      {m.custom && (
                        <span className="models-chip muted mono text-caption">
                          {t("models.customBadge")}
                        </span>
-                     )}
+                      )}
+                      {accountTargetUnavailable && (
+                        <span className="models-chip muted mono text-caption">
+                          {t("models.customAccountTargetUnavailable")}
+                        </span>
+                      )}
                      {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                    </div>
                    {hoveredModel?.namespaced === m.namespaced && (() => {
@@ -1212,7 +1423,11 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                              </>
                            )}
                            <span className="model-tip-key">{t("models.tipStatus")}</span>
-                           <span className="model-tip-val">{off ? t("models.tipDisabled") : t("models.tipActive")}</span>
+                            <span className="model-tip-val">
+                              {accountTargetUnavailable
+                                ? t("models.customAccountTargetUnavailable")
+                                : off ? t("models.tipDisabled") : t("models.tipActive")}
+                            </span>
                          </div>
                          {m.custom && m.customId && (
                            <div className="model-tip-actions">
@@ -1233,10 +1448,28 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                                  // provider row's current metadata.
                                  setCustomFormReasoning(Array.isArray(m.reasoningEfforts));
                                  setCustomFormReasoningEfforts(m.reasoningEfforts ?? []);
+                                 const storedCodexAccountTarget = m.codexAccountTarget ?? "";
+                                 const supportsCodexAccountTarget = providers.find(row => row.name === m.provider)
+                                   ?.supportsCodexAccountTarget === true;
+                                 setCustomFormCodexAccountTarget(storedCodexAccountTarget);
+                                 setCustomFormInitialCodexAccountTarget(storedCodexAccountTarget);
+                                 setCustomModalSupportsCodexAccountTarget(supportsCodexAccountTarget);
+                                 setCustomModalRepairsCodexAccountTarget(
+                                   !supportsCodexAccountTarget
+                                   && (m.codexAccountTargetAvailable === false || storedCodexAccountTarget.length > 0),
+                                 );
+                                 setCustomModalNeedsCodexAccountTargetClear(
+                                   m.codexAccountTargetAvailable === false
+                                   && (
+                                     typeof m.codexAccountTarget !== "string"
+                                     || m.codexAccountTarget.length === 0
+                                   ),
+                                 );
                                  // A stored ladder — even an explicit empty one — is a real
                                  // configuration: re-enabling must preserve it, not reseed.
                                  customFormReasoningInitializedRef.current = Array.isArray(m.reasoningEfforts);
                                  setCustomError("");
+                                 loadCustomAccountTargetOptions(supportsCodexAccountTarget);
                                  setCustomModalOpen(true);
                                  setHoveredModel(null);
                                }}
@@ -1594,9 +1827,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           role="dialog"
           aria-modal="true"
           aria-label={t("models.customAdd")}
-          onClick={() => { if (!customSaving) setCustomModalOpen(false); }}
+          onClick={() => { if (!customSaving) closeCustomModal(); }}
           onKeyDown={(e) => {
-            if (e.key === "Escape" && !customSaving) setCustomModalOpen(false);
+            if (e.key === "Escape" && !customSaving) closeCustomModal();
           }}
         >
           <div className="modal-card" onClick={e => e.stopPropagation()}>
@@ -1609,7 +1842,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                onClick={() => setCustomModalOpen(false)}
+                onClick={closeCustomModal}
                 disabled={customSaving}
                 aria-label={t("common.close")}
               >&times;</button>
@@ -1753,10 +1986,40 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                   </div>
                 )}
               </div>
+
+              {(customModalSupportsCodexAccountTarget || customModalRepairsCodexAccountTarget) && (
+                <div className="text-label models-field">
+                  {t("models.customFieldCodexAccount")}
+                  <Select
+                    value={customFormCodexAccountTarget}
+                    options={customAccountTargetSelectOptions}
+                    onChange={setCustomFormCodexAccountTarget}
+                    disabled={customSaving || customAccountTargetsLoading}
+                    label={t("models.customFieldCodexAccount")}
+                  />
+                  <span className="muted text-caption">{t("models.customAccountTargetHint")}</span>
+                  {customAccountTargetsLoading && (
+                    <span className="muted text-caption">{t("common.loading")}</span>
+                  )}
+                  {customAccountTargetsError && (
+                    <div className="row models-field-row">
+                      <span className="text-caption" style={{ color: "var(--red)" }}>
+                        {customAccountTargetsError}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm text-caption"
+                        onClick={() => loadCustomAccountTargetOptions(customModalSupportsCodexAccountTarget)}
+                        disabled={customSaving}
+                      >{t("common.retry")}</button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="modal-actions">
-              <button type="button" className="btn btn-ghost" onClick={() => setCustomModalOpen(false)} disabled={customSaving}>
+              <button type="button" className="btn btn-ghost" onClick={closeCustomModal} disabled={customSaving}>
                 {t("common.cancel")}
               </button>
               <button
@@ -1777,6 +2040,9 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                       contextWindow,
                       customFormModalities.length > 0 ? customFormModalities : undefined,
                       reasoningEfforts,
+                      customModalSupportsCodexAccountTarget
+                        ? customFormCodexAccountTarget || undefined
+                        : undefined,
                     );
                   } else {
                     // `null` clears a stored override back to "inherit from the provider row";
@@ -1787,6 +2053,10 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
                       contextWindow: contextWindow ?? null,
                       inputModalities: customFormModalities,
                       reasoningEfforts: customFormReasoning ? customFormReasoningEfforts : null,
+                      ...((customModalNeedsCodexAccountTargetClear
+                        || customFormCodexAccountTarget !== customFormInitialCodexAccountTarget)
+                        ? { codexAccountTarget: customFormCodexAccountTarget || null }
+                        : {}),
                     });
                   }
                 }}
@@ -1836,12 +2106,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
             {groups.map(group => {
               const { provider, rows } = group;
               // Same final-visibility rule as the provider card, so the rail never disagrees with it.
-              const activeCount = rows.filter(m => modelVisible(
-                selectedModelMap,
-                provider,
-                m.id,
-                m.native === true,
-                disabled.has(m.namespaced),
+              const activeCount = rows.filter(m => (
+                m.codexAccountTargetAvailable !== false
+                && modelVisible(
+                  selectedModelMap,
+                  provider,
+                  m.id,
+                  m.native === true,
+                  disabled.has(m.namespaced),
+                )
               )).length;
               return (
                 <button

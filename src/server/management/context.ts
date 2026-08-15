@@ -8,7 +8,7 @@ import type { ManagementPrincipal } from "../management-auth";
 import type { CatalogModel } from "../../codex/catalog";
 import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
-import type { RuntimePortState } from "../../config";
+import type { RuntimePortState, mutatePersistedConfigWithSnapshot } from "../../config";
 import type { CatalogDisposition, ConvergeCodex } from "../../codex/convergence-types";
 import type {
   performCodexRestart,
@@ -28,6 +28,12 @@ export interface ManagementApiDeps {
    * OPENCODEX_HOME (incident: devlog 260730.../070).
    */
   saveConfigPreservingClaudeCode?: (config: OcxConfig) => void;
+  /**
+   * Field-scoped config mutation seam for target-aware custom-model writes. Production
+   * uses the shared locked writer; route tests inject an in-memory implementation so a
+   * fixture can never touch the developer's OPENCODEX_HOME.
+   */
+  mutatePersistedConfig?: typeof mutatePersistedConfigWithSnapshot;
   /**
    * Catalog seam for the Grok toggle (WP2, devlog 260803_integrations_toggle_all
    * Rev 3 N2). Production leaves this unset and the route dynamic-imports the

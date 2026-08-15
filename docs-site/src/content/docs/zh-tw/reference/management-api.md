@@ -133,8 +133,11 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 | `GET /api/client-config?client=...` | 為 `opencode`、`pi`、`omp`、`hermes`、`openclaw`、`kimi`、`gajae` 或 `dsh` 建構唯讀客戶端設定 | 400 不支援客戶端；503 目錄不可用 |
 | `PUT /api/disabled-models` | 取代共享的 disabled-model 清單 | 400 無效 JSON |
 | `PUT /api/model-visibility` | 原子地變更供應商或模型層級可見性 | 400 無效供應商、scope、目標或 body |
-| `GET, POST /api/custom-models` | 列出自訂模型或新增一個 | 400 無效欄位；404 供應商缺失；409 重複模型 |
-| `PUT, DELETE /api/custom-models/{id}` | 編輯或刪除一個自訂模型 | 400 無效 id/欄位；404 未找到；409 重複模型 |
+| `GET, POST /api/custom-models` | 在不包含 `codexAccountTarget` 或 `codexAccountTargetWriteNonce` 的情況下列出或新增自訂模型。包含目標或 nonce 的舊版 POST 寫入會回傳 409（請使用 `/api/custom-models/account-target`）。 | 400 無效欄位/provider；404 供應商缺失；409 模型 ID 重複/含糊或舊版目標寫入 |
+| `POST /api/custom-models/account-target` | 使用字串 `codexAccountTarget` 與暫時 UUID `codexAccountTargetWriteNonce` 新增自訂模型。目標僅適用於 canonical `openai` Codex-forward 列，且必須指向目前存在的 Pool 帳戶。nonce 僅回顯，不會持久化。 | 400 欄位/目標/nonce/provider 無效或缺失；404 供應商缺失；409 模型 ID 重複/含糊或設定衝突 |
+| `PUT, DELETE /api/custom-models/{id}` | 在不包含目標欄位的情況下編輯或刪除自訂模型。舊版 PUT 會拒絕目標欄位，以及對已包含目標或畸形目標的列進行編輯（請使用 `/api/custom-models/{id}/account-target`）。對於未綁定列，僅含 nonce 的請求會被忽略，以相容舊版用戶端。 | 400 無效 id/欄位；404 未找到；409 模型 ID 重複/含糊或舊版目標寫入 |
+| `PUT /api/custom-models/{id}/account-target` | 設定或清除精確綁定。需要暫時 UUID `codexAccountTargetWriteNonce`，以及 `codexAccountTarget`（`null` 清除）或該列現有的目標屬性（用於不變的修復）其中之一。新指定的未知 Pool ID 會被拒絕。nonce 僅回顯，不會持久化。 | 400 無效 id/目標/nonce；404 未找到；409 模型 ID 重複/含糊或設定衝突 |
+| `GET /api/codex-auth/account-target-options` | 回傳安全的帳戶選擇中繼資料，不讀取憑證或 quota | — |
 | `GET, PUT /api/selected-models` | 讀取供應商允許清單與可用性，或取代一個允許清單 | 400 缺失供應商/body；404 未知供應商 |
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰

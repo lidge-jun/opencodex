@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, invalidateCodexModelsCache, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import {
+  catalogModelSlug,
+  filterCatalogVisibleModels,
+  invalidateCodexModelsCache,
+  nativeModelRows,
+  uniqueCatalogModelsForPublicList,
+} from "../../codex/catalog";
 import {
   DEFAULT_SUBAGENT_MODELS,
   codexAutoStartEnabled,
@@ -460,7 +466,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // effort the prompt tells the agent to pass to spawn_agent. GET returns the current
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = filterCatalogVisibleModels(
+      await (deps.fetchAllModels ?? fetchAllModels)(config),
+      config,
+    );
     const disabled = new Set(config.disabledModels ?? []);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
@@ -602,7 +611,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // Subagent model picker: which ≤5 routed models Codex's spawn_agent advertises (it shows the
   // first 5 routed catalog entries). PUT reorders the injected catalog so the chosen ones lead.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = filterCatalogVisibleModels(
+      await (deps.fetchAllModels ?? fetchAllModels)(config),
+      config,
+    );
     const disabled = new Set(config.disabledModels ?? []);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
@@ -637,7 +649,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
 
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.
   if (url.pathname === "/api/subagent-model-fallback" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = filterCatalogVisibleModels(
+      await (deps.fetchAllModels ?? fetchAllModels)(config),
+      config,
+    );
     const disabled = new Set(config.disabledModels ?? []);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const visibleRouted = [...new Set(models
@@ -952,7 +967,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
 
   // Claude Code inbound settings (GUI "Claude ON" toggle + Claude page).
   if (url.pathname === "/api/claude-code" && req.method === "GET") {
-    const models = await fetchAllModels(config);
+    const models = filterCatalogVisibleModels(
+      await (deps.fetchAllModels ?? fetchAllModels)(config),
+      config,
+    );
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
     const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");

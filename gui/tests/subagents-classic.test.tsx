@@ -4,13 +4,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import Subagents from "../src/pages/Subagents";
 import { LanguageProvider } from "../src/i18n/provider";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
  * Behavioural contract for the denser Subagents workspace: five-slot cap,
  * add/remove via the rail, and the exact save request.
  */
 
-const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let container: HTMLElement;
@@ -28,8 +29,11 @@ beforeEach(() => {
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     localStorage: { configurable: true, value: testWindow.localStorage },
+    sessionStorage: { configurable: true, value: testWindow.sessionStorage },
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  clearClientResourceStoresForTests();
+  testWindow.sessionStorage.clear();
 
   requests = [];
   available = ["a-1", "a-2", "a-3", "a-4", "a-5", "a-6"];
@@ -58,6 +62,7 @@ afterEach(async () => {
     await act(async () => { current.unmount(); });
     root = null;
   }
+  clearClientResourceStoresForTests();
   for (const key of globals) {
     Object.defineProperty(globalThis, key, { configurable: true, value: previousGlobals[key] });
   }
@@ -147,4 +152,19 @@ test("saves the featured order with PUT and the models payload", async () => {
   expect(put).toBeDefined();
   expect(put!.url).toContain("/api/subagent-models");
   expect(put!.init?.body).toBe(JSON.stringify({ models: ["a-1", "a-2"] }));
+});
+
+test("preserves a configured featured model that is temporarily unavailable", async () => {
+  available = ["a-1"];
+  chosen = ["orphaned/model"];
+  await mount();
+
+  expect(container.textContent).toContain("orphaned/model");
+  const save = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === "Save") as HTMLButtonElement | undefined;
+  await act(async () => { save!.click(); });
+
+  const put = requests.find((request) => request.init?.method === "PUT");
+  expect(put).toBeDefined();
+  expect(put!.init?.body).toBe(JSON.stringify({ models: ["orphaned/model"] }));
 });

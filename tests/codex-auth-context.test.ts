@@ -1265,6 +1265,22 @@ describe("cooldown error surface", () => {
     expect(message).not.toContain("Selected Codex account (account-…3c21) is cooling down");
   });
 
+  test("custom-model bindings explain the pin without exposing the target account", () => {
+    const err = new CodexAccountCooldownError(
+      "acct_9f3c21",
+      Date.parse("2026-07-26T10:00:00.000Z"),
+      "reset-derived",
+    );
+
+    const message = cooldownErrorMessage(err, undefined, "openai/targeted-model");
+
+    expect(message).toContain("Selected custom model (openai/targeted-model)");
+    expect(message).toContain("pinned to one Codex account");
+    expect(message).not.toContain("acct_9f3c21");
+    expect(message).not.toContain("account-…3c21");
+    expect(message).not.toContain("ocx account use");
+  });
+
   test("the main login renders as the alias users actually type", () => {
     const err = new CodexAccountCooldownError(MAIN_CODEX_ACCOUNT_ID, Date.now() + 60_000);
 

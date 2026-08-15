@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CliUsageError,
   csv,
@@ -12,13 +13,16 @@ import {
   takeOption,
   type RuntimeApiDeps,
 } from "./runtime-api";
+import { isValidCodexAccountNamespaceTarget } from "../codex/account-namespace-match";
+import { assertCodexAccountTargetRuntimeCapability } from "./models-account-target";
 
 const USAGE = `Usage:
   ocx models live [--provider <name>] [--json]
   ocx models edit <custom-id> [--model-id <id>] [--display-name <name|->]
       [--context-window <tokens|0>] [--modalities <text,image,audio|->]
       [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra|->]
-      [--default-reasoning-effort <level|->] [--json]
+      [--default-reasoning-effort <level|->]
+      [--codex-account-target <@main|pool-id|->] [--json]
   ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
   ocx models provider <name> <on|off> [--json]
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
@@ -34,6 +38,7 @@ type ModelRow = {
   custom?: boolean;
   customId?: string;
   displayName?: string;
+  codexAccountTargetAvailable?: boolean;
 };
 
 async function live(argv: string[], deps: RuntimeApiDeps): Promise<void> {
@@ -44,7 +49,10 @@ async function live(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const rows = await runtimeRequest<ModelRow[]>("/api/models", {}, deps);
   const filtered = provider ? rows.filter(row => row.provider === provider) : rows;
   printData(filtered, wantsJson, filtered.map(row => {
-    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", row.disabled ? "disabled" : "enabled"].filter(Boolean);
+    const availability = row.codexAccountTargetAvailable === false
+      ? "unavailable"
+      : row.disabled ? "disabled" : "enabled";
+    const flags = [row.native ? "native" : "routed", row.custom ? "custom" : "", availability].filter(Boolean);
     return `${row.namespaced ?? `${row.provider}/${row.id}`}  [${flags.join(", ")}]`;
   }));
 }
@@ -61,6 +69,7 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const modalitiesRaw = takeOption(args, "--modalities");
   const reasoningEffortsRaw = takeOption(args, "--reasoning-efforts");
   const defaultEffortRaw = takeOption(args, "--default-reasoning-effort");
+  const codexAccountTargetRaw = takeOption(args, "--codex-account-target");
   rejectArgs(args, USAGE);
   if (modelId !== undefined) patch.modelId = modelId;
   if (displayName !== undefined) patch.displayName = displayName === "-" ? "" : displayName;
@@ -87,12 +96,56 @@ async function edit(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     }
   }
   if (defaultEffortRaw !== undefined) patch.defaultReasoningEffort = defaultEffortRaw === "-" ? null : defaultEffortRaw;
+  if (codexAccountTargetRaw !== undefined) {
+    if (codexAccountTargetRaw === "-") {
+      patch.codexAccountTarget = null;
+    } else if (isValidCodexAccountNamespaceTarget(codexAccountTargetRaw)) {
+      patch.codexAccountTarget = codexAccountTargetRaw;
+    } else {
+      throw new CliUsageError("--codex-account-target must be @main, a valid Codex pool-account id, or - to clear", USAGE);
+    }
+  }
   if (Object.keys(patch).length === 0) throw new CliUsageError("at least one edit option is required", USAGE);
-  const result = await runtimeRequest(`/api/custom-models/${encodeURIComponent(id)}`, {
+  const currentRows = await runtimeRequest<Array<Record<string, unknown>>>(
+    "/api/custom-models",
+    {},
+    deps,
+  );
+  const current = currentRows.find(row => row.id === id);
+  const targetAwareWrite = Object.hasOwn(patch, "codexAccountTarget")
+    || (current !== undefined && Object.hasOwn(current, "codexAccountTarget"));
+  if (codexAccountTargetRaw !== undefined) {
+    await assertCodexAccountTargetRuntimeCapability(deps);
+  }
+  const codexAccountTargetWriteNonce = targetAwareWrite ? randomUUID() : undefined;
+  const result = await runtimeRequest<{
+    codexAccountTarget?: unknown;
+    codexAccountTargetWriteNonce?: unknown;
+    [key: string]: unknown;
+  }>(`/api/custom-models/${encodeURIComponent(id)}${targetAwareWrite ? "/account-target" : ""}`, {
     method: "PUT",
-    body: JSON.stringify(patch),
+    body: JSON.stringify({
+      ...patch,
+      ...(codexAccountTargetWriteNonce ? { codexAccountTargetWriteNonce } : {}),
+    }),
   }, deps);
-  printData(result, wantsJson, [`Updated custom model ${id}.`]);
+  if (
+    targetAwareWrite
+    && result.codexAccountTargetWriteNonce !== codexAccountTargetWriteNonce
+  ) {
+    throw new Error("The running proxy did not attest codexAccountTarget handling; update the proxy and retry");
+  }
+  if (codexAccountTargetRaw !== undefined) {
+    const reflected = result.codexAccountTarget;
+    const applied = codexAccountTargetRaw === "-"
+      ? reflected === undefined || reflected === null
+      : reflected === codexAccountTargetRaw;
+    if (!applied) {
+      throw new Error("The running proxy did not apply codexAccountTarget; update the proxy and retry");
+    }
+  }
+  const { codexAccountTargetWriteNonce: _attestation, ...publicResult } = result;
+  printData(publicResult, wantsJson, [`Updated custom model ${id}.`]);
 }
 
 function parseSelector(selector: string, forceNative: boolean): { provider: string; id: string; native: boolean } {

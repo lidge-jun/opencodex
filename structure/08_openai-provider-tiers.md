@@ -18,6 +18,15 @@ engine. Direct short-circuits that engine before pool state is read or mutated a
 current caller/main-login bearer. Neither mode may fall through to `openai-apikey`, and the API
 provider may not fall through to Codex-login credentials.
 
+An explicit canonical `openai` custom-model row may opt into one exact stored account with
+`codexAccountTarget`. This is a stronger row-level statement than the provider mode: it uses fixed
+Pool credential machinery even under Direct, bypasses affinity/rotation/fallback, leaves the active
+account unchanged, and fails closed when unavailable. Omission remains byte- and behavior-compatible
+with ordinary Pool/Direct. The target stores `@main` or a stable Pool id, never a mutable selector or
+display alias; account-qualified selector routes retain higher precedence. A newly assigned Pool id
+must currently exist. Deletion retains the exact value for repair and later restoration, while a
+different unknown id is rejected.
+
 An explicit `Retry-After` or an unclassified quota 429 is account-wide. A reset-derived native-model
 429 is advisory and remains within its confirmed quota group: `gpt-5.3-codex-spark` is separate from
 the shared native group (including GPT-5.6 Terra/Luna). This allows a same-account combo to test an

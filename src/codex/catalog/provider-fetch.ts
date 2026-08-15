@@ -60,6 +60,7 @@ import {
   providerRedirectError,
 } from "../../lib/provider-outbound";
 import { redactSecretString } from "../../lib/redact";
+import { filterModelsByCustomRouteAvailability } from "../custom-model-account-target";
 import {
   extractProviderModelItems,
   readBoundedDiscoveryJson,
@@ -596,6 +597,7 @@ function gatherFlightKey(config: OcxConfig): string {
       d: cm.displayName ?? null,
       cw: cm.contextWindow ?? null,
       im: cm.inputModalities ?? null,
+      cat: cm.codexAccountTarget ?? null,
     })),
     caps: config.providerContextCaps ?? null,
   });
@@ -1514,7 +1516,7 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
 
 export function filterCatalogVisibleModels(
   models: CatalogModel[],
-  config: Pick<OcxConfig, "disabledModels" | "providers">,
+  config: Pick<OcxConfig, "disabledModels" | "providers" | "customModels" | "codexAccounts">,
 ): CatalogModel[] {
   const disabled = new Set(config.disabledModels ?? []);
   const allowByProvider = new Map<string, Set<string>>();
@@ -1522,7 +1524,7 @@ export function filterCatalogVisibleModels(
     const sel = prov.selectedModels;
     if (Array.isArray(sel) && sel.length > 0) allowByProvider.set(name, new Set(sel));
   }
-  return models.filter(m => {
+  return filterModelsByCustomRouteAvailability(models, config).filter(m => {
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
     // disabledModels may be stored raw (canonical) or encoded (legacy UI writes).
     for (const stored of disabled) {

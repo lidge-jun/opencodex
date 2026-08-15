@@ -6,6 +6,7 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { codexAccountLogLabel, withCodexAccountLogLabel } from "./account-label";
+import { hasCustomModelCodexAccountTarget } from "./custom-model-account-target";
 import {
   getCodexAccountCredential,
   getValidCodexToken,
@@ -19,7 +20,11 @@ import {
   CodexCredentialRefreshStaleError,
   TokenRefreshError,
 } from "./account-store";
-import { deleteCodexAccount, reconcileMainCodexAccountRuntimeState } from "./account-lifecycle";
+import {
+  CodexAccountDeleteCleanupError,
+  deleteCodexAccount,
+  reconcileMainCodexAccountRuntimeState,
+} from "./account-lifecycle";
 import {
   appendDefaultCodexAccountNamespace,
   codexAccountPickerEnabled,
@@ -118,7 +123,10 @@ import {
   isSelectableCodexPoolAccount,
   isValidCodexAccountId,
 } from "./account-id";
-import { codexAccountIdNamespaceCollisionError } from "./account-namespace-match";
+import {
+  codexAccountIdNamespaceCollisionError,
+  MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
+} from "./account-namespace-match";
 import { ResourceAdmissionError, type AdmissionLease } from "../lib/admission";
 import { tryAcquireNativeMainProfileClaim } from "./native-main-admission";
 import { withNativeMainSharedClaim } from "./native-main-claim";
@@ -481,6 +489,10 @@ function persistNewCodexAccount(
       const accounts = [...(runtimeConfig.codexAccounts ?? [])];
       const retainedPickerBindingRestored = codexAccountPickerEnabled(runtimeConfig)
         && Object.values(runtimeConfig.codexAccountNamespaces ?? {}).includes(addedAccount.id);
+      const retainedCustomBindingRestored = hasCustomModelCodexAccountTarget(
+        runtimeConfig,
+        addedAccount.id,
+      );
       accounts.push(addedAccount);
       runtimeConfig.codexAccounts = accounts;
 
@@ -492,7 +504,9 @@ function persistNewCodexAccount(
       }
       const namespaceAdded = tracksPickerNamespaces
         && appendDefaultCodexAccountNamespace(runtimeConfig, addedAccount);
-      pickerVisibilityChanged = namespaceAdded || retainedPickerBindingRestored;
+      pickerVisibilityChanged = (codexAccountPickerEnabled(runtimeConfig) && namespaceAdded)
+        || retainedPickerBindingRestored
+        || retainedCustomBindingRestored;
       saveRuntimeConfig(sourceConfig, runtimeConfig);
     } catch (error) {
       for (const key of Object.keys(runtimeConfig) as Array<keyof OcxConfig>) {
@@ -528,7 +542,7 @@ async function convergeAccountNamespaceCatalog(
   changed: boolean,
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
 ): Promise<AccountNamespaceCatalogRefresh> {
-  if (!changed || !codexAccountPickerEnabled(config)) {
+  if (!changed) {
     return { catalogRefreshPending: false };
   }
   if (!convergeCodexCatalog) return { catalogRefreshPending: true };
@@ -820,6 +834,50 @@ export interface CodexAuthAccountDto {
   healthSummary: string;
   healthAction?: string;
   quotaProbeSkipped?: true;
+}
+
+export interface CodexAccountTargetOption {
+  /** Public config value. Pool ids are opaque handles; main is always `@main`. */
+  target: string;
+  isMain: boolean;
+  label: string;
+  alias?: string;
+  email?: string;
+  logLabel: string;
+  paused: boolean;
+}
+
+/**
+ * Metadata-only account picker projection. It never reads credentials, quotas, health, or
+ * the Codex Desktop profile, so opening the model editor cannot trigger network work.
+ */
+export function listCodexAccountTargetOptions(
+  config: OcxConfig,
+): CodexAccountTargetOption[] {
+  const main: CodexAccountTargetOption = {
+    target: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
+    isMain: true,
+    label: "Codex App login",
+    logLabel: "main",
+    paused: isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID),
+  };
+  const pool = (config.codexAccounts ?? [])
+    .filter(isSelectableCodexPoolAccount)
+    .map((account): CodexAccountTargetOption => {
+      const email = maskEmail(account.email) ?? undefined;
+      const logLabel = codexAccountLogLabel(account);
+      const alias = account.alias?.trim() || undefined;
+      return {
+        target: account.id,
+        isMain: false,
+        label: alias ?? email ?? logLabel,
+        ...(alias ? { alias } : {}),
+        ...(email ? { email } : {}),
+        logLabel,
+        paused: isCodexAccountPaused(config, account.id),
+      };
+    });
+  return [main, ...pool];
 }
 
 interface FreshPoolPlanUpdate {
@@ -1357,6 +1415,10 @@ export async function handleCodexAuthAPI(
   convergeCodexCatalog?: CodexAuthCatalogConvergence,
 ): Promise<Response | null> {
 
+  if (url.pathname === "/api/codex-auth/account-target-options" && req.method === "GET") {
+    return jsonResponse({ targets: listCodexAccountTargetOptions(config) });
+  }
+
   if (url.pathname === "/api/codex-auth/accounts" && req.method === "GET") {
     const forceRefresh = url.searchParams.get("refresh") === "1" || url.searchParams.get("refresh") === "true";
     return jsonResponse({ accounts: await listCodexAuthAccounts(config, forceRefresh) });
@@ -1375,7 +1437,18 @@ export async function handleCodexAuthAPI(
     if (!isValidCodexAccountId(id) && !isLegacyPoolAccount) {
       return jsonResponse({ error: "Invalid account id format" }, 400);
     }
-    const pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
+    let pickerVisibilityChanged = false;
+    let cleanupError: CodexAccountDeleteCleanupError | undefined;
+    try {
+      pickerVisibilityChanged = deleteCodexAccount(runtimeConfig, id);
+    } catch (error) {
+      if (!(error instanceof CodexAccountDeleteCleanupError)) throw error;
+      // The durable account deletion already committed. Finish catalog convergence before
+      // surfacing the fixed cleanup error, otherwise a retry sees no row and cannot repair the
+      // stale target/selector visibility that disappeared with the first request.
+      pickerVisibilityChanged = error.catalogVisibilityChanged;
+      cleanupError = error;
+    }
     saveRuntimeConfig(config, runtimeConfig);
     reconcileLiveStateStores();
     const catalogRefresh = await convergeAccountNamespaceCatalog(
@@ -1383,6 +1456,7 @@ export async function handleCodexAuthAPI(
       pickerVisibilityChanged,
       convergeCodexCatalog,
     );
+    if (cleanupError) throw cleanupError;
     return jsonResponse({ ok: true, ...catalogRefresh });
   }
 

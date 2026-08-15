@@ -16,12 +16,13 @@ import { clearMainAccountCredentialPresence, clearMainAccountInfoCache } from ".
 import { forgetCodexAccountPause } from "./account-pause";
 import { clearCodexAccountPin, forgetCodexAccountPriority } from "./account-priority";
 import { codexAccountNamespaceEntries, codexAccountPickerEnabled } from "./account-namespaces";
+import { hasCustomModelCodexAccountTarget } from "./custom-model-account-target";
 import type { OcxConfig } from "../types";
 
 let observedMainChatgptAccountId: string | undefined;
 
 export class CodexAccountDeleteCleanupError extends Error {
-  constructor() {
+  constructor(readonly catalogVisibilityChanged = false) {
     super("Account deletion was saved, but local credential cleanup did not complete. Retry removal.");
     this.name = "CodexAccountDeleteCleanupError";
   }
@@ -115,7 +116,8 @@ function restorePersistedConfig(configPath: string, previousBytes: string): void
  * config mutation coordinator so a cooperating writer cannot re-add a persisted account between
  * the durable config commit and credential cleanup.
  *
- * Returns true when a picker-visible row disappeared and the catalog must converge.
+ * Returns true when a picker-visible or custom-targeted row disappeared and the catalog
+ * must converge. The binding itself remains durable so re-adding the same id restores it.
  */
 export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string): boolean {
   let cleanupFailed = false;
@@ -124,12 +126,12 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
     const configPath = getConfigPath();
     const hasPersistedConfig = existsSync(configPath);
     const previousPersistedConfig = hasPersistedConfig ? readFileSync(configPath, "utf8") : undefined;
-    const hadStoredAccount = (runtimeConfig.codexAccounts ?? [])
-      .some(account => !account.isMain && account.id === accountId);
-    const hadVisiblePickerBinding = hadStoredAccount
-      && codexAccountPickerEnabled(runtimeConfig)
+    // Bindings outlive account rows by design. Keep reporting convergence on a retry after
+    // durable deletion so an earlier pending/failed catalog refresh remains repairable.
+    const hadVisiblePickerBinding = codexAccountPickerEnabled(runtimeConfig)
       && codexAccountNamespaceEntries(runtimeConfig)
         .some(([, boundAccountId]) => boundAccountId === accountId);
+    const hadVisibleCustomBinding = hasCustomModelCodexAccountTarget(runtimeConfig, accountId);
 
     runtimeConfig.codexAccounts = (runtimeConfig.codexAccounts ?? [])
       .filter(account => account.isMain || account.id !== accountId);
@@ -154,19 +156,15 @@ export function deleteCodexAccount(runtimeConfig: OcxConfig, accountId: string):
       }
     }
 
-    try {
-      removeCodexAccountCredential(accountId);
-      purgeCodexAccountRuntimeState(accountId);
-      invalidateCodexWebSocketsForAccount(accountId);
-    } catch {
-      // Do not throw through the mutation coordinator after config.json committed: that would roll
-      // back only the SQLite generation transaction, not the already-atomic file replacement.
-      cleanupFailed = true;
-    }
+    // Every cleanup is best-effort and independent. One failed disk operation must not leave
+    // stale runtime quota/reauth state or an authenticated WebSocket alive for a deleted account.
+    try { removeCodexAccountCredential(accountId); } catch { cleanupFailed = true; }
+    try { purgeCodexAccountRuntimeState(accountId); } catch { cleanupFailed = true; }
+    try { invalidateCodexWebSocketsForAccount(accountId); } catch { cleanupFailed = true; }
 
-    return hadVisiblePickerBinding;
+    return hadVisiblePickerBinding || hadVisibleCustomBinding;
   });
 
-  if (cleanupFailed) throw new CodexAccountDeleteCleanupError();
+  if (cleanupFailed) throw new CodexAccountDeleteCleanupError(pickerVisibilityChanged);
   return pickerVisibilityChanged;
 }

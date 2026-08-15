@@ -39,6 +39,25 @@ La sélection exacte contourne la stratégie d’attribution du pool et l’affi
 
 La page Codex Auth propose ce comportement du sélecteur sous forme d’option. Sa désactivation masque les lignes générées qualifiées par un sélecteur et rétablit les lignes GPT ordinaires, sans supprimer les associations ni modifier le routage exact `<selector>/<model>`. Sa réactivation rétablit donc les mêmes libellés publics. Les modifications de comptes et de paramètres sont conservées avant une actualisation bornée du catalogue. Un avertissement de `ocx sync` signifie uniquement que le catalogue du sélecteur n’a pas encore convergé, et non que la modification du routage a été perdue.
 
+## Comptes exacts pour les modèles personnalisés
+
+Une ligne personnalisée explicite du fournisseur canonique `openai` avec transfert Codex peut définir
+`codexAccountTarget` sur `@main` ou sur l’identifiant stable d’un compte Pool ajouté. Il s’agit d’un
+raccourci propre à la ligne pour la sélection exacte d’un compte : la route utilise les identifiants fixes
+du Pool même lorsque le fournisseur est globalement en mode Direct, ne change pas de compte, ne modifie
+pas le compte Pool actif et ne réessaie jamais avec un autre compte. L’absence du champ conserve le
+comportement Pool/Direct ordinaire du fournisseur.
+
+La route avec sélecteur de compte a priorité sur la liaison d’une ligne personnalisée, puis vient la ligne
+personnalisée exacte et enfin le routage ordinaire du fournisseur. Les modèles natifs non qualifiés et
+`openai-apikey/*` n’héritent jamais de la cible d’une ligne personnalisée. Une cible absente, en pause,
+en période de temporisation ou nécessitant une réauthentification échoue de manière sûre. Les cibles de
+comptes supprimés restent enregistrées pour réparation, mais sont omises de la découverte du plan de
+données jusqu’au retour du même identifiant. Une nouvelle affectation exige un identifiant Pool
+actuellement présent ; une cible orpheline conservée sans modification peut encore être renvoyée pendant
+la réparation de la ligne. `codexAccountPickerEnabled` contrôle uniquement les lignes de sélecteur
+générées et n’implique jamais une liaison de modèle personnalisé.
+
 ## Combinaisons (`config.combos`)
 
 Chaque clé de combinaison est un identifiant conforme à `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. Elle est toujours directement accessible sous `combo/<id>` et peut également définir un `alias`. Les alias doivent être uniques, ne peuvent pas occuper l’espace de noms `combo/` et ne peuvent pas utiliser les familles natives non qualifiées réservées, telles que `gpt-*`, `o1-*`, `o3-*`, `o4-*` ou `codex-*`, sauf si `nativeAlias: true` active explicitement le contrat de compatibilité Desktop.

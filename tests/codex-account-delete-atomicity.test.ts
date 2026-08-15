@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as accountStoreModule from "../src/codex/account-store";
+import * as websocketRegistryModule from "../src/codex/websocket-registry";
 import {
   getCodexAccountCredential,
   saveCodexAccountCredential,
@@ -141,6 +142,8 @@ describe("Codex account delete persistence ordering", () => {
 
   test("a cleanup failure keeps the deletion durable and exposes only a fixed recovery error", () => {
     const config = seededConfig();
+    const invalidateSpy = spyOn(websocketRegistryModule, "invalidateCodexWebSocketsForAccount")
+      .mockImplementation(() => 0);
     const removeSpy = spyOn(accountStoreModule, "removeCodexAccountCredential")
       .mockImplementation(() => {
         throw new Error("private cleanup detail /private/codex-accounts.json Bearer secret-token");
@@ -154,6 +157,7 @@ describe("Codex account delete persistence ordering", () => {
         thrown = error;
       }
       expect(thrown).toBeInstanceOf(CodexAccountDeleteCleanupError);
+      expect((thrown as CodexAccountDeleteCleanupError).catalogVisibilityChanged).toBe(true);
       expect(String((thrown as Error).message)).toBe(
         "Account deletion was saved, but local credential cleanup did not complete. Retry removal.",
       );
@@ -162,13 +166,17 @@ describe("Codex account delete persistence ordering", () => {
       expect(loadConfig().codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(false);
       expect(config.codexAccounts?.some(account => account.id === ACCOUNT_ID)).toBe(false);
       expect(getCodexAccountCredential(ACCOUNT_ID)).not.toBeNull();
+      expect(isAccountNeedsReauth(ACCOUNT_ID)).toBe(false);
+      expect(getAccountQuota(ACCOUNT_ID)).toBeNull();
+      expect(invalidateSpy).toHaveBeenCalledWith(ACCOUNT_ID);
     } finally {
       removeSpy.mockRestore();
+      invalidateSpy.mockRestore();
     }
 
     // The route is retry-safe even after the durable row is gone: a second delete can finish the
     // tombstone/runtime cleanup without recreating the account or selector mapping.
-    expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(false);
+    expect(deleteCodexAccount(config, ACCOUNT_ID)).toBe(true);
     expect(getCodexAccountCredential(ACCOUNT_ID)).toBeNull();
     expect(loadConfig().codexAccountNamespaces).toEqual({ stable: ACCOUNT_ID });
   });

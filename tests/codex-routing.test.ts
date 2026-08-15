@@ -283,7 +283,79 @@ describe("codex routing", () => {
     });
   });
 
-  test("routes the configured Codex-forward Daybreak selector without API alias rewriting", () => {
+  test("custom Codex account targets are explicit, picker-independent, and row-scoped", () => {
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        "openai-apikey": {
+          adapter: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          authMode: "key",
+          apiKey: "test-openai-api-key",
+        },
+      },
+      defaultProvider: "openai",
+      activeCodexAccountId: "b",
+      codexAccountPickerEnabled: false,
+      customModels: [{
+        id: "daybreak-codex-forward",
+        provider: "openai",
+        modelId: "gpt-daybreak-blue-latest",
+      }],
+    });
+
+    const unbound = routeModel(config, "openai/gpt-daybreak-blue-latest");
+    expect(unbound).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-daybreak-blue-latest",
+      routeKind: "explicit-provider",
+      routeReason: "explicit-provider-namespace",
+      codexAccountMode: "pool",
+    });
+    expect(unbound.codexAccountId).toBeUndefined();
+    expect(unbound.codexAccountNamespace).toBeUndefined();
+    expect(config.activeCodexAccountId).toBe("b");
+
+    config.customModels![0]!.codexAccountTarget = "@main";
+    expect(routeModel(config, "openai/gpt-daybreak-blue-latest")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-daybreak-blue-latest",
+      codexAccountMode: "pool",
+      codexAccountId: MAIN_CODEX_ACCOUNT_ID,
+    });
+
+    config.codexAccountPickerEnabled = true;
+    expect(routeModel(config, "openai/gpt-daybreak-blue-latest").codexAccountId)
+      .toBe(MAIN_CODEX_ACCOUNT_ID);
+
+    config.customModels![0]!.codexAccountTarget = "pool-a";
+    config.providers.openai!.codexAccountMode = "direct";
+    expect(routeModel(config, "openai/gpt-daybreak-blue-latest")).toMatchObject({
+      codexAccountMode: "pool",
+      codexAccountId: "pool-a",
+    });
+
+    expect(routeModel(config, "openai/gpt-5.6-sol")).toMatchObject({
+      providerName: "openai",
+      modelId: "gpt-5.6-sol",
+      codexAccountMode: "direct",
+    });
+    expect(routeModel(config, "openai/gpt-5.6-sol").codexAccountId).toBeUndefined();
+
+    expect(routeModel(config, "openai-apikey/daybreak-blue-latest")).toMatchObject({
+      providerName: "openai-apikey",
+      modelId: "daybreak-blue-latest",
+    });
+    expect(routeModel(config, "openai-apikey/daybreak-blue-latest").codexAccountMode).toBeUndefined();
+    expect(routeModel(config, "openai-apikey/daybreak-blue-latest").codexAccountId).toBeUndefined();
+
+  });
+
+  test("invalid or noncanonical custom account bindings fail closed", () => {
     const config = makeConfig({
       providers: {
         openai: {
@@ -292,20 +364,50 @@ describe("codex routing", () => {
           authMode: "forward",
         },
       },
-      defaultProvider: "openai",
       customModels: [{
-        id: "daybreak-codex-forward",
+        id: "targeted",
         provider: "openai",
-        modelId: "gpt-daybreak-blue-latest",
+        modelId: "custom-targeted",
+        codexAccountTarget: "__main__",
       }],
     });
+    expect(() => routeModel(config, "openai/custom-targeted"))
+      .toThrow("Invalid custom model account binding");
 
-    expect(routeModel(config, "openai/gpt-daybreak-blue-latest")).toMatchObject({
-      providerName: "openai",
-      modelId: "gpt-daybreak-blue-latest",
-      routeKind: "explicit-provider",
-      routeReason: "explicit-provider-namespace",
+    config.customModels![0]!.codexAccountTarget = "@main";
+    config.providers.openai!.baseUrl = "https://example.com/v1";
+    expect(() => routeModel(config, "openai/custom-targeted"))
+      .toThrow("canonical openai Codex-forward provider");
+  });
+
+  test("duplicate custom rows fail closed before an unbound row can bypass an exact target", () => {
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      activeCodexAccountId: "b",
+      customModels: [
+        {
+          id: "duplicate-unbound",
+          provider: "openai",
+          modelId: "duplicate-preview",
+        },
+        {
+          id: "duplicate-bound",
+          provider: "openai",
+          modelId: "duplicate-preview",
+          codexAccountTarget: "@main",
+        },
+      ],
     });
+
+    expect(() => routeModel(config, "openai/duplicate-preview"))
+      .toThrow("Ambiguous custom model account binding");
+    expect(config.activeCodexAccountId).toBe("b");
   });
 
   test("paused main account is excluded even when it is the active and lowest-usage candidate", () => {

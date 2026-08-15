@@ -133,8 +133,11 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-config?client=...` | 지원되는 파일 연동의 읽기 전용 client config를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
 | `PUT /api/disabled-models` | 공유 disabled-model 목록을 교체합니다 | 400 잘못된 JSON |
 | `PUT /api/model-visibility` | provider 또는 model 수준의 visibility를 원자적으로 변경합니다 | 400 잘못된 provider, scope, target, 또는 본문 |
-| `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |
-| `PUT, DELETE /api/custom-models/{id}` | custom model 하나를 수정하거나 삭제합니다 | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 model |
+| `GET, POST /api/custom-models` | `codexAccountTarget` 및 `codexAccountTargetWriteNonce` 없이 custom model을 나열하거나 추가합니다. 대상 또는 nonce가 포함된 레거시 POST 쓰기는 409로 거부됩니다(`/api/custom-models/account-target` 사용). | 400 잘못된 필드/provider; 404 provider 없음; 409 중복 또는 모호한 model ID/레거시 대상 쓰기 |
+| `POST /api/custom-models/account-target` | 문자열 `codexAccountTarget`과 일시적 UUID `codexAccountTargetWriteNonce`로 custom model을 추가합니다. 대상은 canonical `openai` Codex-forward 행에서만 유효하며 현재 존재하는 Pool 계정이어야 합니다. nonce는 echo만 되고 저장되지 않습니다. | 400 잘못되었거나 누락된 필드/대상/nonce/provider; 404 provider 없음; 409 중복 또는 모호한 model ID/구성 충돌 |
+| `PUT, DELETE /api/custom-models/{id}` | 대상 필드 없이 custom model을 수정하거나 삭제합니다. 레거시 PUT은 대상 필드와 이미 대상 또는 잘못된 대상을 가진 행의 수정을 거부합니다(`/api/custom-models/{id}/account-target` 사용). 바인딩되지 않은 행의 nonce-only 요청은 구버전 클라이언트 호환을 위해 무시합니다. | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 또는 모호한 model ID/레거시 대상 쓰기 |
+| `PUT /api/custom-models/{id}/account-target` | 정확한 바인딩을 설정하거나 해제합니다. 일시적 UUID `codexAccountTargetWriteNonce`와 `codexAccountTarget`(`null`이면 해제) 또는 변경하지 않는 복구를 위한 행의 기존 대상 속성 중 하나가 필요합니다. 새로 지정하는 알 수 없는 Pool id는 거부됩니다. nonce는 echo만 되고 저장되지 않습니다. | 400 잘못된 id/대상/nonce; 404 찾을 수 없음; 409 중복 또는 모호한 model ID/구성 충돌 |
+| `GET /api/codex-auth/account-target-options` | 자격 증명이나 quota를 읽지 않고 안전한 계정 선택 메타데이터를 반환합니다 | — |
 | `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider |
 
 ### OAuth 계정, provider key, 데이터 평면 키

@@ -285,8 +285,8 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | --- | --- | --- |
 | `list` (默认) | `--provider <name>`, `--json` | 列出已配置提供方中预置的模型。 |
 | `live` | `--provider <name>`, `--json` | 读取运行中的目录，包括运行时发现的模型。各行会标记为 `native`/`routed`、`custom`，以及 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 注册一个提供方目录未公布的模型。 |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 编辑自定义模型。`-` 会清空字段；`0` 会清空上下文窗口。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | 注册模型；账户目标仅适用于 canonical `openai` Codex-forward 行，并且必须指向当前存在的 Pool 账户。 |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | 编辑自定义模型。`-` 清除字段或账户绑定；`0` 清除上下文窗口。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 删除一个自定义模型。当 stdin 不是交互式终端时，必须提供 `--yes`。 |
 | `list-custom` | `--json` | 显示所有自定义模型，以及其他子命令所使用的 `custom-id`。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 让一个模型对 Codex 可见。 |
@@ -295,6 +295,8 @@ v1 恢复矩阵覆盖的是事务文件通过重命名发布后 OpenCodex 进程
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 读取或替换提供方模型允许列表。`--clear` 会移除允许列表，使所有模型都可提供。 |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | 读取或设置上下文窗口上限，可全局设置或按提供方设置。`value <tokens> --set-all` 还会把值重新应用到所有已路由提供方（等同于仪表板开关）；不加它则只改变默认值。`provider ... on --value <tokens>` 仅为该提供方设置独立上限（`--value` 仅可用于 `on`）。 |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 读取或设置 Codex 后台辅助调用所替换的模型。`-` 会清除该模型。`status` 还会报告 `sourceModels`，即代理拦截的辅助器 slug（默认值：`gpt-5.6-luna`；0.144.x 及更早客户端使用的 `gpt-5.4-mini` 可通过显式 `sourceModels` 覆盖恢复）。 |
+
+代理运行时，带目标的 `add` 使用专用 POST；带目标的 `edit` 先读取当前行，在目标显式指定或保留时使用专用 PUT，否则使用旧版 PUT。旧代理会在变更前返回 404；请升级。实时目标变更失败时，CLI 不会回退到旧版写入，也不会写入本地配置。离线 `add` 仍受支持，并在锁定和重新校验下修改配置；不会写入临时 nonce。删除的目标可通过不变的专用 PUT 重新提交以修复，但新指定的未知 Pool ID 会被拒绝。
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

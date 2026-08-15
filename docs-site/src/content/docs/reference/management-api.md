@@ -157,8 +157,11 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |
 | `PUT /api/model-visibility` | Atomically change provider- or model-level visibility | 400 invalid provider, scope, target, or body |
-| `GET, POST /api/custom-models` | List custom models or add one | 400 invalid fields; 404 provider missing; 409 duplicate model |
-| `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
+| `GET, POST /api/custom-models` | List custom models or add one without `codexAccountTarget` or `codexAccountTargetWriteNonce`. Legacy target- or nonce-bearing POST writes are rejected; use `/api/custom-models/account-target`. | 400 invalid fields/provider; 404 provider missing; 409 duplicate/ambiguous model or legacy target write |
+| `POST /api/custom-models/account-target` | Add a canonical `openai` Codex-forward custom row with string `codexAccountTarget` and transient UUID `codexAccountTargetWriteNonce`. The target must be `@main` or a currently existing Pool-account id. The nonce is echoed only and never persisted. | 400 invalid fields/target/nonce/provider; 404 provider missing; 409 duplicate/ambiguous model or config conflict |
+| `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model without target fields. Legacy PUT rejects target fields and edits to rows that already contain a target or malformed target; use `/api/custom-models/{id}/account-target`. A nonce by itself is ignored for compatibility with older unbound-row clients. | 400 invalid id/fields; 404 not found; 409 duplicate/ambiguous model or legacy target write |
+| `PUT /api/custom-models/{id}/account-target` | Set or clear the exact binding. Requires a transient UUID `codexAccountTargetWriteNonce` plus `codexAccountTarget` (`null` clears) or the row's existing target property for an unchanged repair. A newly assigned unknown Pool id is rejected; the echoed nonce is never persisted. | 400 invalid id/target/nonce; 404 not found; 409 duplicate/ambiguous model or config conflict |
+| `GET /api/codex-auth/account-target-options` | Return privacy-safe, metadata-only account choices for custom-model editors; no quota or credential reads | — |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider |
 
 ### OAuth accounts, provider keys, and data-plane keys

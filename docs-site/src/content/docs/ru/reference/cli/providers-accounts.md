@@ -316,8 +316,8 @@ management API и требуют, чтобы прокси уже работал 
 | --- | --- | --- |
 | `list` (default) | `--provider <name>`, `--json` | Показать модели, засеянные в настроенных провайдерах. |
 | `live` | `--provider <name>`, `--json` | Прочитать работающий каталог, включая модели, обнаруженные во время выполнения. Строки помечаются как `native`/`routed`, `custom` и `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Зарегистрировать модель, которую каталог провайдера сам не рекламирует. |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Изменить custom-модель. `-` очищает поле; `0` очищает context window. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | Зарегистрировать модель; цель допустима только для canonical `openai` Codex-forward и должна указывать на существующий Pool-аккаунт. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | Изменить custom-модель. `-` очищает поле или привязку аккаунта; `0` очищает context window. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Удалить custom-модель. В неинтерактивном stdin требует `--yes`. |
 | `list-custom` | `--json` | Показать все custom-модели вместе с `custom-id`, который используют остальные подкоманды. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Сделать одну модель видимой для Codex. |
@@ -326,6 +326,8 @@ management API и требуют, чтобы прокси уже работал 
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Прочитать или заменить allowlist моделей провайдера. `--clear` удаляет allowlist, и тогда доступны все модели. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Прочитать или задать context-window cap глобально либо по провайдерам. `value <tokens> --set-all` также переустанавливает значение для всех маршрутизируемых провайдеров (как переключатель дашборда); без него меняется только значение по умолчанию. `provider ... on --value <tokens>` задаёт отдельный cap только для этого провайдера (`--value` допустим только с `on`). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Прочитать или задать модель-замену для background helper-call'ов Codex. `-` очищает модель. `status` также показывает `sourceModels` — helper-slug'и, которые перехватывает proxy (по умолчанию `gpt-5.6-luna`; `gpt-5.4-mini` для клиентов до 0.144.x включительно можно восстановить явным переопределением `sourceModels`). |
+
+При работающем proxy `add` с целью использует dedicated POST, а `edit` с целью сначала читает текущую строку и использует dedicated PUT при явной или сохранённой цели; в остальных случаях — legacy PUT. Старый proxy возвращает 404 до мутации — обновите его. При ошибке live-изменения цели CLI не переходит ни к legacy-записи, ни к локальной записи конфига. Offline `add` по-прежнему поддерживается и изменяет конфиг под блокировкой и повторной проверкой; временный nonce не записывается. Удалённую цель можно повторно отправить без изменений через dedicated PUT для восстановления, но новый неизвестный Pool-ID отклоняется.
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

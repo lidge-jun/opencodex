@@ -20,10 +20,11 @@ import type { OcxConfig } from "../types";
 import { openRequestHistoryIndexSync, requestHistoryDb } from "./history/indexer";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import {
+  codexQuotaScopeForModel,
   getCodexAccountCooldownUntil,
+  getCodexQuotaHealthSnapshot,
   getCodexAccountSoftAvoidUntil,
   getEffectiveActiveCodexAccountId,
-  isCodexAccountInCooldown,
   listLiveCodexAccountIds,
 } from "../codex/routing";
 import type { RouteHealthEvidence } from "./trace";
@@ -183,21 +184,25 @@ export function codexPoolHealthEvidence(
  */
 export function policyCandidateHealthEvidence(
   config: Parameters<typeof getEffectiveActiveCodexAccountId>[0],
-  candidate: { provider: string; model: string },
+  candidate: { provider: string; model: string; codexAccountId?: string },
   now = Date.now(),
 ): RouteHealthEvidence {
+  const exactCodexAccountId = candidate.provider === OPENAI_CODEX_PROVIDER_ID
+    ? candidate.codexAccountId
+    : undefined;
   return {
     ...healthEvidenceForCandidate({
       provider: candidate.provider,
       model: candidate.model,
-      codexAccountId: candidate.provider === OPENAI_CODEX_PROVIDER_ID
-        ? getEffectiveActiveCodexAccountId(config)
-        : undefined,
+      codexAccountId: exactCodexAccountId
+        ?? (candidate.provider === OPENAI_CODEX_PROVIDER_ID
+          ? getEffectiveActiveCodexAccountId(config)
+          : undefined),
       now,
     }),
     // Live pool state stays authoritative for `openai` targets even when no
     // account reference exists in the candidate evidence.
-    ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID
+    ...(candidate.provider === OPENAI_CODEX_PROVIDER_ID && !exactCodexAccountId
       ? (codexPoolHealthEvidence(config, now) ?? {})
       : {}),
   };
@@ -340,10 +345,12 @@ export function healthEvidenceForCandidate(input: HealthEvidenceInput): RouteHea
   // accounts. Cooldown stays authoritative over any historical score. Always
   // read fresh - never cached.
   if (input.codexAccountId && input.provider === "openai") {
-    if (isCodexAccountInCooldown(input.codexAccountId, now)) {
-      const until = getCodexAccountCooldownUntil(input.codexAccountId, now);
-      if (until !== null) evidence.cooldownUntilMs = until;
-    }
+    const quotaHealth = getCodexQuotaHealthSnapshot(
+      input.codexAccountId,
+      codexQuotaScopeForModel(input.model),
+      now,
+    );
+    if (quotaHealth?.cooldownUntil !== undefined) evidence.cooldownUntilMs = quotaHealth.cooldownUntil;
     const softAvoidUntil = getCodexAccountSoftAvoidUntil(input.codexAccountId, now);
     if (softAvoidUntil !== null && softAvoidUntil > now) evidence.softAvoidUntilMs = softAvoidUntil;
   }

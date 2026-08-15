@@ -12,6 +12,10 @@ import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
+import {
+  modelAvailableForActiveSelection,
+  modelDefaultAvailableForActiveSelection,
+} from "./models-shared";
 
 type ProviderOption = {
   name: string;
@@ -147,6 +151,7 @@ export default function Combos({
         id?: unknown;
         namespaced?: unknown;
         disabled?: unknown;
+        codexAccountTargetAvailable?: unknown;
         reasoningEfforts?: unknown;
         inputModalities?: unknown;
       };
@@ -158,7 +163,7 @@ export default function Combos({
         catalogued.add(id);
         continue; // combos cannot nest other combos as targets
       }
-      if (model.disabled === true) continue;
+      if (!modelAvailableForActiveSelection(model)) continue;
       const reasoningEfforts = Array.isArray(model.reasoningEfforts)
         ? model.reasoningEfforts.filter((effort): effort is string => typeof effort === "string")
         : undefined;
@@ -181,6 +186,7 @@ export default function Combos({
     for (const [name, provider] of Object.entries(allProviders)) {
       const defaultModel = typeof provider.defaultModel === "string" ? provider.defaultModel.trim() : "";
       if (!defaultModel || provider.disabled) continue;
+      if (!modelDefaultAvailableForActiveSelection(modelRows, name, defaultModel)) continue;
       if (!models.some(model => model.provider === name && model.id === defaultModel)) {
         models.push({ provider: name, id: defaultModel, namespaced: `${name}/${defaultModel}` });
       }

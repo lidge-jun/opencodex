@@ -120,6 +120,15 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   account targets are not advertised, and private account ids never become catalog labels.
   `codexAccountPickerEnabled: false` hides generated rows without deleting exact routing bindings;
   an omitted flag preserves the established behavior of a nonempty hand-written selector map.
+- **Custom rows can bind the same exact-account machinery explicitly.** A canonical `openai`
+  custom row may persist `codexAccountTarget: "@main"` or one stable Pool account id. The target
+  is independent of picker visibility, overrides Direct for that row, never rotates, and remains
+  stored when an added account is deleted. Orphaned target rows stay management-visible for repair
+  but are filtered from catalogs, client exports, and vision choices until the same id returns.
+  New assignments must resolve to a current account; an unchanged orphan value remains writable so
+  unrelated row fields can be repaired without discarding durable intent.
+  Selectors and aliases are display/mapping metadata and are never persisted as the row target
+  (`src/codex/custom-model-account-target.ts`, `src/router.ts`).
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **The credential store is generation-guarded.** A refresh takes a lock and persists only if the

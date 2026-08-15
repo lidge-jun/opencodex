@@ -246,8 +246,8 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 | --- | --- | --- |
 | `list`（預設） | `--provider <name>`, `--json` | 列出已設定供應商中播種的模型。 |
 | `live` | `--provider <name>`, `--json` | 讀取執行中的目錄，包含 runtime 探索的模型。列標記為 `native`/`routed`、`custom` 與 `enabled`/`disabled`。 |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 註冊供應商目錄未廣告的模型。 |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 編輯自訂模型。`-` 清除欄位；`0` 清除 context window。 |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | 註冊模型；帳戶目標只適用於 canonical `openai` Codex-forward 列，且必須指向目前存在的 Pool 帳戶。 |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | 編輯自訂模型。`-` 清除欄位或帳戶綁定；`0` 清除 context window。 |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 刪除自訂模型。stdin 非互動終端時需要 `--yes`。 |
 | `list-custom` | `--json` | 顯示所有自訂模型及其 `custom-id`（其他子指令所採用）。 |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | 使一個模型對 Codex 可見。 |
@@ -256,6 +256,8 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 讀取或替換供應商模型允許清單。`--clear` 移除允許清單，使每個模型都被提供。 |
 | `context <status\|value <tokens>\|provider <name> <on\|off>\|all <on\|off>>` | `--json` | 讀取或設定 context-window 上限，全域或 per 供應商。 |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | 讀取或設定 Codex 背景 helper 呼叫的替換模型。`-` 清除模型。`status` 亦回報 `sourceModels`，即代理攔截的 helper slug（預設：`gpt-5.4-mini` 與 `gpt-5.6-luna`）。 |
+
+代理執行時，帶目標的 `add` 使用專用 POST；帶目標的 `edit` 先讀取目前的列，在目標明確指定或保留時使用專用 PUT，否則使用舊版 PUT。舊代理會在變更前回傳 404；請升級。即時目標變更失敗時，CLI 不會回退到舊版寫入，也不會寫入本機設定檔。離線 `add` 仍受支援，並在鎖定與重新驗證下修改設定；不會寫入暫時 nonce。刪除的目標可透過不變的專用 PUT 重新提交以修復，但新指定的未知 Pool ID 會被拒絕。
 
 ```bash
 ocx models live --json                                  # Codex 目前實際可見的模型

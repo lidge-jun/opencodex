@@ -133,8 +133,11 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-config?client=...` | 为任意支持的文件集成构建只读客户端配置 | 400 不支持的客户端；503 目录不可用 |
 | `PUT /api/disabled-models` | 替换共享的禁用模型列表 | 400 无效 JSON |
 | `PUT /api/model-visibility` | 原子性地更改 provider 级或 model 级可见性 | 400 provider、scope、target 或请求体无效 |
-| `GET, POST /api/custom-models` | 列出自定义模型或添加一个 | 400 字段无效；404 provider 缺失；409 模型重复 |
-| `PUT, DELETE /api/custom-models/{id}` | 编辑或删除一个自定义模型 | 400 id/字段无效；404 未找到；409 模型重复 |
+| `GET, POST /api/custom-models` | 在不包含 `codexAccountTarget` 或 `codexAccountTargetWriteNonce` 的情况下列出或添加自定义模型。包含目标或 nonce 的旧版 POST 写入返回 409（请使用 `/api/custom-models/account-target`）。 | 400 字段/provider 无效；404 provider 缺失；409 模型 ID 重复/有歧义或旧版目标写入 |
+| `POST /api/custom-models/account-target` | 使用字符串 `codexAccountTarget` 和临时 UUID `codexAccountTargetWriteNonce` 添加自定义模型。目标仅适用于 canonical `openai` Codex-forward 行，并且必须指向当前存在的 Pool 账户。nonce 仅回显，不会持久化。 | 400 字段/目标/nonce/provider 无效或缺失；404 provider 缺失；409 模型 ID 重复/有歧义或配置冲突 |
+| `PUT, DELETE /api/custom-models/{id}` | 在不包含目标字段的情况下编辑或删除自定义模型。旧版 PUT 会拒绝目标字段，以及对已包含目标或畸形目标的行进行编辑（请使用 `/api/custom-models/{id}/account-target`）。对于未绑定行，仅含 nonce 的请求会被忽略，以兼容旧客户端。 | 400 id/字段无效；404 未找到；409 模型 ID 重复/有歧义或旧版目标写入 |
+| `PUT /api/custom-models/{id}/account-target` | 设置或清除精确绑定。需要临时 UUID `codexAccountTargetWriteNonce`，并且需要 `codexAccountTarget`（`null` 清除）或该行现有的目标属性（用于不变的修复）之一。新指定的未知 Pool ID 会被拒绝。nonce 仅回显，不会持久化。 | 400 id/目标/nonce 无效；404 未找到；409 模型 ID 重复/有歧义或配置冲突 |
+| `GET /api/codex-auth/account-target-options` | 返回安全的账户选择元数据，不读取凭据或 quota | — |
 | `GET, PUT /api/selected-models` | 读取 provider 允许列表和可用性，或替换一个允许列表 | 400 缺少 provider/请求体；404 未知 provider |
 
 ### OAuth 账户、provider 密钥和数据平面密钥

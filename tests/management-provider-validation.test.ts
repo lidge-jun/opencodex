@@ -2794,9 +2794,15 @@ describe("provider management validation", () => {
     const res = await handleManagementAPI(req, new URL(req.url), liveConfig, {});
     expect(res?.status).toBe(200);
     const raw = await res!.text();
-    const rows = JSON.parse(raw) as { name: string; hasHeaders?: boolean }[];
+    const rows = JSON.parse(raw) as {
+      name: string;
+      hasHeaders?: boolean;
+      supportsCodexAccountTarget?: boolean;
+    }[];
     expect(rows.find(row => row.name === "hdr")?.hasHeaders).toBe(true);
     expect(rows.find(row => row.name === "openai")?.hasHeaders).toBe(false);
+    expect(rows.find(row => row.name === "openai")?.supportsCodexAccountTarget).toBe(true);
+    expect(rows.find(row => row.name === "hdr")?.supportsCodexAccountTarget).toBe(false);
     expect(raw).not.toContain(sentinelName);
     expect(raw).not.toContain(sentinelValue);
   });

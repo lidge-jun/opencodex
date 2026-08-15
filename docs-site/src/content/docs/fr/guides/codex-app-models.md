@@ -37,11 +37,21 @@ l'intermédiaire du fournisseur canonique de transfert de la connexion Codex :
     {
       "id": "daybreak-codex-forward",
       "provider": "openai",
-      "modelId": "gpt-daybreak-blue-latest"
+      "modelId": "gpt-daybreak-blue-latest",
+      "codexAccountTarget": "@main"
     }
   ]
 }
 ```
+
+`codexAccountTarget` est une forme pratique et explicite, propre à chaque ligne, de sélection exacte
+d’un compte Codex. Utilisez `@main` pour la connexion physique de l’application Codex ou l’identifiant
+stable d’un compte Pool ajouté. Omettez ce champ pour conserver le routage Pool/Direct ordinaire du
+fournisseur. Une ligne liée à une cible utilise uniquement ce compte, remplace le mode Direct du
+fournisseur comme un sélecteur qualifié par compte, ne change jamais de compte ni ne réessaie avec un
+autre et échoue de manière sûre lorsque la cible est absente, en pause, en période de temporisation ou
+nécessite une réauthentification. Le réglage de visibilité du sélecteur de comptes ne crée ni ne supprime
+cette liaison.
 
 Seuls ce fournisseur, ce point de terminaison et cet identifiant de modèle exacts reçoivent l'instantané de
 capacités Sol épinglé : contexte de 372 000 jetons, compactage automatique à 334 800 jetons, échelle de
@@ -140,7 +150,7 @@ approximation fondée sur un ancien modèle d'entrée.
 | --- | --- |
 | Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372 000 jetons. |
 | Connexion Codex (lignes qualifiées par compte activées avec des sélecteurs admissibles) | Une ligne `<selector>/<native-openai-model>` par sélecteur admissible et modèle natif pris en charge ; chaque ligne utilise exclusivement le compte associé, et les lignes natives non qualifiées sont masquées dans le sélecteur. Les métadonnées natives et les fenêtres de contexte sont préservées. |
-| Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372 000 jetons ; compactage automatique à 334 800 jetons). |
+| Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372 000 jetons ; compactage automatique à 334 800 jetons). Un `codexAccountTarget` facultatif lie uniquement cette ligne à `@main` ou à un compte Pool. |
 | OpenAI (clé API) | Exactement dix lignes avec espace de noms : `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les trois identifiants virtuels `*-pro` et les deux alias Daybreak (contexte de 1 050 000 jetons ; entrée maximale de 922 000 jetons pour les dix) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1 050 000) |
 | Cursor | Le repli statique comprend `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` et `cursor/gpt-5.6-luna` (1 000 000), ainsi que des lignes ordinaires/rapides pour Grok 4.5 et 4.6 (500 000) ; 4.6 ajoute `xhigh`, et la découverte dynamique propre au compte détermine quelles lignes restent visibles. |

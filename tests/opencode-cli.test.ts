@@ -331,7 +331,7 @@ describe("ocx opencode proxy model catalog", () => {
     })).rejects.toThrow("Management API timed out while fetching /api/models.");
   });
 
-  test("opencodeCatalogFromProxyRows omits disabled and direct-mode native rows", () => {
+  test("opencodeCatalogFromProxyRows omits disabled, unavailable, and direct-mode native rows", () => {
     const directConfig = cfg({
       providers: {
         mock: { adapter: "openai-chat", baseUrl: "http://x/v1" },
@@ -346,6 +346,7 @@ describe("ocx opencode proxy model catalog", () => {
     const rows = [
       { namespaced: "gpt-5.6-sol", native: true, disabled: false, provider: "openai", id: "gpt-5.6-sol" },
       { namespaced: "gpt-5.5", native: true, disabled: true, provider: "openai", id: "gpt-5.5" },
+      { namespaced: "openai/orphaned", native: false, disabled: false, codexAccountTargetAvailable: false, provider: "openai", id: "orphaned" },
       { namespaced: "kiro/glm-5", native: false, disabled: false, provider: "kiro", id: "glm-5", displayName: "GLM-5" },
     ];
     expect(opencodeCatalogFromProxyRows(rows, directConfig).map(m => m.namespaced)).toEqual(["kiro/glm-5"]);

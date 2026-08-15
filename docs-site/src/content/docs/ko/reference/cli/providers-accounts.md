@@ -247,8 +247,8 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | --- | --- | --- |
 | `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | 제공자 카탈로그가 광고하지 않는 모델을 등록합니다. |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | 제공자 카탈로그가 광고하지 않는 모델을 등록합니다. 계정 대상은 canonical `openai` Codex-forward 행에서만 유효하며 현재 존재하는 Pool 계정이어야 합니다. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드나 계정 바인딩을 지우고, `0`은 컨텍스트 창을 지웁니다. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | 사용자 지정 모델을 삭제합니다. stdin이 대화형 터미널이 아닐 때는 `--yes`가 필요합니다. |
 | `list-custom` | `--json` | 다른 하위 명령이 사용하는 `custom-id`와 함께 모든 사용자 지정 모델을 보여줍니다. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Codex에 하나의 모델을 보이게 합니다. |
@@ -257,6 +257,8 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | 제공자 모델 허용 목록을 읽거나 교체합니다. `--clear`는 허용 목록을 제거해 모든 모델을 제공하도록 합니다. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | 전역 또는 제공자별로 컨텍스트 창 한도를 읽거나 설정합니다. `value <tokens> --set-all`은 모든 라우팅된 공급자에도 값을 다시 적용합니다(대시보드 토글과 동일). 지정하지 않으면 값은 기본값만 변경됩니다. `provider ... on --value <tokens>`는 해당 제공자에만 별도 한도를 설정합니다(`--value`는 `on`에서만 사용할 수 있습니다). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Codex의 백그라운드 헬퍼 호출에 사용할 대체 모델을 읽거나 설정합니다. `-`는 모델을 지웁니다. `status`는 프록시가 가로채는 헬퍼 슬러그인 `sourceModels`도 보고합니다(기본값: `gpt-5.6-luna`; 0.144.x 이하 클라이언트가 사용한 `gpt-5.4-mini`는 명시적인 `sourceModels` 재정의로 복원할 수 있습니다). |
+
+프록시가 실행 중이면 대상이 있는 `add`는 전용 POST를 사용하고, 대상이 있는 `edit`은 현재 행을 먼저 읽어 대상이 명시되었거나 유지되면 전용 PUT을, 그렇지 않으면 레거시 PUT을 사용합니다. 오래된 프록시는 변경 전에 404를 반환하므로 업데이트하십시오. 라이브 대상 변경이 실패해도 CLI는 레거시 쓰기나 로컬 구성 파일 쓰기로 폴백하지 않습니다. 오프라인 `add`는 계속 지원되며 잠금과 재검증 아래에서 구성을 변경합니다. 일시적 nonce는 기록하지 않습니다. 삭제된 대상은 전용 PUT으로 같은 값을 다시 보내 복구할 수 있지만 새로 지정한 알 수 없는 Pool id는 거부됩니다.
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

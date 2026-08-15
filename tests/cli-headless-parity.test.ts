@@ -210,6 +210,30 @@ describe("headless GUI parity CLI", () => {
     expect(runtime.requests[0]).toEqual({ path: "/api/provider-context-caps", method: "PUT", body: { setAll: true } });
   });
 
+  test("models live reports an unavailable exact-account row as repair-only", async () => {
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const runtime = fakeRuntime(req => {
+        if (new URL(req.url).pathname !== "/api/models") return undefined;
+        return [{
+          provider: "openai",
+          id: "orphaned-preview",
+          namespaced: "openai/orphaned-preview",
+          custom: true,
+          disabled: false,
+          codexAccountTargetAvailable: false,
+        }];
+      });
+      const code = await handleModelsRuntimeCommand("live", [], runtime.deps);
+      expect(code).toBe(0);
+      const output = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(output).toContain("openai/orphaned-preview  [routed, custom, unavailable]");
+      expect(output).not.toContain("[routed, custom, enabled]");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   test("model context value maps with an explicit set-all flag", async () => {
     const runtime = fakeRuntime();
     const code = await handleModelsRuntimeCommand("context", ["value", "128_000", "--set-all", "--json"], runtime.deps);

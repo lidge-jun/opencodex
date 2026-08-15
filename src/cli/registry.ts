@@ -168,6 +168,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "  --display-name <name>     Human label (no slashes).",
       "  --context-window <tokens> e.g. 200000.",
       "  --modalities text,image   Comma-separated (text|image|audio).",
+      "  --codex-account-target <@main|pool-id>  Bind this custom row to one exact Codex account.",
+      "edit: use --codex-account-target - to restore ordinary provider Pool/Direct routing.",
       "remove: delete a custom model by UUID or <provider>/<modelId>.",
       "list-custom: show all custom models.",
       "Changes apply immediately to a running proxy (catalog sync).",

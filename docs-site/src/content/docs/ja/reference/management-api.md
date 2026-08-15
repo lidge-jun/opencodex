@@ -133,8 +133,11 @@ Authorization: Bearer <admin-token>
 | `GET /api/client-config?client=...` |サポートされているファイル連携の読み取り専用クライアント設定を作成する | 400 クライアントがサポートされていません。 503 カタログは利用できません |
 | `PUT /api/disabled-models` |共有の無効モデル リストを置き換える | 400 無効な JSON |
 | `PUT /api/model-visibility` |プロバイダーレベルまたはモデルレベルの可視性をアトミックに変更 | 400 プロバイダー、スコープ、ターゲット、または本文が無効です。
-| `GET, POST /api/custom-models` |カスタム モデルをリストするか追加する | 400 個の無効なフィールド。 404 プロバイダーがありません。 409 複製モデル |
-| `PUT, DELETE /api/custom-models/{id}` | 1 つのカスタム モデルを編集または削除する | 400 個の無効な ID/フィールド。 404 が見つかりません。 409 複製モデル |
+| `GET, POST /api/custom-models` | `codexAccountTarget` と `codexAccountTargetWriteNonce` なしでカスタムモデルを一覧表示または追加します。対象または nonce を含む従来の POST 書き込みは 409 で拒否されます（`/api/custom-models/account-target` を使用）。 | 400 無効なフィールド/provider、404 provider なし、409 重複または曖昧なモデル ID／従来の対象書き込み |
+| `POST /api/custom-models/account-target` | 文字列 `codexAccountTarget` と一時 UUID `codexAccountTargetWriteNonce` でカスタムモデルを追加します。対象は canonical `openai` Codex-forward 行だけで有効で、現在存在する Pool アカウントを指定する必要があります。nonce はエコーされるだけで永続化されません。 | 400 フィールド/対象/nonce/provider が無効または欠落、404 provider なし、409 重複または曖昧なモデル ID／設定競合 |
+| `PUT, DELETE /api/custom-models/{id}` | 対象フィールドなしでカスタムモデルを編集または削除します。従来の PUT は対象フィールド、および対象や不正な対象をすでに持つ行への編集を拒否します（`/api/custom-models/{id}/account-target` を使用）。未バインド行に nonce だけがある場合は旧クライアント互換のため無視されます。 | 400 無効な ID/フィールド、404 未検出、409 重複または曖昧なモデル ID／従来の対象書き込み |
+| `PUT /api/custom-models/{id}/account-target` | 正確なバインドを設定または解除します。一時 UUID `codexAccountTargetWriteNonce` と、`codexAccountTarget`（`null` で解除）または行の既存の対象プロパティ（変更しない修復用）のいずれかが必要です。新しく割り当てる不明な Pool ID は拒否されます。nonce はエコーされるだけで永続化されません。 | 400 無効な ID/対象/nonce、404 未検出、409 重複または曖昧なモデル ID／設定競合 |
+| `GET /api/codex-auth/account-target-options` | 資格情報や quota を読まず、安全なアカウント選択メタデータを返します | — |
 | `GET, PUT /api/selected-models` |プロバイダーのホワイトリストと可用性を読み取るか、1 つのホワイトリストを置き換えます。 400 のプロバイダー/本体が欠落しています。 404 不明なプロバイダ |
 
 ### OAuth アカウント、プロバイダー キー、およびデータプレーン キー

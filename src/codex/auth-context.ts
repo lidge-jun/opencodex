@@ -177,7 +177,11 @@ export function cooldownAccountLabel(accountId: string): string {
  * as HTTP. The bare "cooling down" string left users with no route but commenting out the
  * injected `openai_base_url` in config.toml.
  */
-export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSelector?: string): string {
+export function cooldownErrorMessage(
+  err: CodexAccountCooldownError,
+  accountSelector?: string,
+  customModel?: string,
+): string {
   const until = new Date(err.cooldownUntil).toISOString();
   const scope = err.quotaScope === "spark"
     ? "Spark quota"
@@ -186,9 +190,13 @@ export function cooldownErrorMessage(err: CodexAccountCooldownError, accountSele
       : null;
   const selected = accountSelector
     ? `Selected Codex account selector (${accountSelector})`
-    : `Selected Codex account (${cooldownAccountLabel(err.accountId)})`;
+    : customModel
+      ? `Selected custom model (${customModel})`
+      : `Selected Codex account (${cooldownAccountLabel(err.accountId)})`;
   const recovery = accountSelector
     ? " This request is pinned to that selector and will not switch accounts; choose another account-qualified model or retry later."
+    : customModel
+      ? " This model is pinned to one Codex account and will not switch accounts; choose another model or retry later."
     : " Run 'ocx account list openai' to find the id, then"
       + " 'ocx account clear-cooldown openai <id>' to lift it, or switch accounts with 'ocx account use openai <id>'.";
   return `${selected}${scope ? ` ${scope} is` : " is"} cooling down until ${until}`
@@ -200,8 +208,9 @@ export function cooldownErrorResponse(
   err: CodexAccountCooldownError,
   now = Date.now(),
   accountSelector?: string,
+  customModel?: string,
 ): Response {
-  const res = formatErrorResponse(429, "rate_limit_error", cooldownErrorMessage(err, accountSelector));
+  const res = formatErrorResponse(429, "rate_limit_error", cooldownErrorMessage(err, accountSelector, customModel));
   const headers = new Headers(res.headers);
   headers.set("Retry-After", String(Math.max(1, Math.ceil((err.cooldownUntil - now) / 1000))));
   return new Response(res.body, { status: res.status, headers });

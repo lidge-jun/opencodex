@@ -8,6 +8,7 @@ import {
 import { readJsonOrThrow } from "../fetch-json";
 import type { TKey } from "../i18n/shared";
 import type { StartupHealthStatus } from "../startup-health-ui";
+import { modelAvailableForActiveSelection } from "./models-shared";
 
 export type DashboardSection = "overview" | "providers" | "models";
 
@@ -44,7 +45,14 @@ export async function requireJson<T>(res: Response, fallbackMessage?: string): P
 
 export interface HealthData { status: string; version: string; uptime: number }
 export interface ProviderInfo { name: string; adapter: string; baseUrl: string; defaultModel?: string; hasApiKey: boolean }
-export interface ModelInfo { id: string; provider: string; namespaced: string; owned_by?: string; reasoningEfforts?: string[] }
+export interface ModelInfo {
+  id: string;
+  provider: string;
+  namespaced: string;
+  owned_by?: string;
+  reasoningEfforts?: string[];
+  codexAccountTargetAvailable?: boolean;
+}
 export interface SettingsData {
   codexAutoStart: boolean;
   port: number;
@@ -273,7 +281,10 @@ export function clampVisionReasoningToLadder(
 export function sidecarModelOptions(models: ModelInfo[]) {
   const out: Array<{ value: string; label: string }> = [];
   for (const model of models) {
-    if (model.provider === "openai" || model.provider === "anthropic") {
+    if (
+      model.codexAccountTargetAvailable !== false
+      && (model.provider === "openai" || model.provider === "anthropic")
+    ) {
       out.push({ value: model.id, label: `${model.provider}/${model.id}` });
     }
   }
@@ -312,7 +323,12 @@ export function visionModelOptions(
 
 /** Options for shadow-call replacement models use the proxy's canonical routing id. */
 export function shadowCallModelOptions(models: ModelInfo[], current: string | undefined) {
-  const out = [{ value: "", label: "—" }, ...models.map(model => ({ value: model.namespaced, label: model.namespaced }))];
+  const out = [
+    { value: "", label: "—" },
+    ...models
+      .filter(modelAvailableForActiveSelection)
+      .map(model => ({ value: model.namespaced, label: model.namespaced })),
+  ];
   if (current && !out.some(option => option.value === current)) out.push({ value: current, label: current });
   return out;
 }

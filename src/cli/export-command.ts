@@ -78,10 +78,11 @@ function hasContextLimit(model: ExportModel): boolean {
 /**
  * Export rows from proxy `/api/models` rows.
  *
- * `opencodeCatalogFromProxyRows` owns the visibility rules (drop `disabled`, drop dupes,
- * drop native under Codex Direct) — the export core does none of that, so a row filtered
- * here is the only thing keeping a disabled model out of a client's picker. Modalities are
- * re-joined by `namespaced` because the launcher's catalog type does not carry them.
+ * `opencodeCatalogFromProxyRows` owns the visibility rules (drop `disabled`, repair-only
+ * exact-account rows, dupes, and native rows under Codex Direct) — the export core does
+ * none of that, so this shared filter is the only thing keeping unavailable models out of
+ * a client's picker. Modalities are re-joined by `namespaced` because the launcher's
+ * catalog type does not carry them.
  */
 export function exportModelsFromProxyRows(
   rows: readonly ExportProxyModelRow[],

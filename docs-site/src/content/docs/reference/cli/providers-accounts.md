@@ -352,8 +352,8 @@ proxy to be running (`ocx start`, or an installed service).
 | --- | --- | --- |
 | `list` (default) | `--provider <name>`, `--json` | List models seeded in configured providers. |
 | `live` | `--provider <name>`, `--json` | Read the running catalog, including models discovered at runtime. Rows are flagged `native`/`routed`, `custom`, and `enabled`/`disabled`. |
-| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>` | Register a model the provider catalog does not advertise. |
-| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Edit a custom model. `-` clears a field; `0` clears the context window. |
+| `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--codex-account-target <@main\|pool-id>` | Register a model the provider catalog does not advertise. The account target is valid only for canonical `openai` Codex-forward rows and must name a currently existing Pool account. |
+| `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--codex-account-target <@main\|pool-id\|->`, `--json` | Edit a custom model. `-` clears a field or exact account binding; `0` clears the context window. |
 | `remove <custom-id\|provider/modelId>` | `--yes` | Delete a custom model. Requires `--yes` when stdin is not an interactive terminal. |
 | `list-custom` | `--json` | Show all custom models with the `custom-id` the other subcommands take. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Make one model visible to Codex. |
@@ -362,6 +362,15 @@ proxy to be running (`ocx start`, or an installed service).
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. `value <tokens> --set-all` also re-points every routed provider (like the dashboard toggle); without it the value only becomes the default. `provider ... on --value <tokens>` sets an explicit cap for that provider only (`--value` is valid with `on` only). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
+
+With a proxy running, target-bearing `add` uses `POST /api/custom-models/account-target`.
+Target-bearing `edit` first reads the current row, then uses
+`PUT /api/custom-models/{id}/account-target` for an explicit or retained target and the legacy PUT
+otherwise. An older proxy returns 404 before mutation; update it. The CLI never falls back to a
+legacy or local write after a failed live target mutation. Offline `add` remains supported and
+mutates config under lock with fresh validation. The transient write nonce is never persisted. A
+deleted target may be resubmitted unchanged through the dedicated PUT for repair, but a newly
+assigned unknown Pool id is rejected.
 
 ```bash
 ocx models live --json                                  # what Codex can actually see right now

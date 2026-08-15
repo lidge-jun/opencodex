@@ -45,6 +45,7 @@ import { handleNativeProfileAPI } from "../src/codex/native-profile-api";
 import type { NativeProfileManager } from "../src/codex/native-profile-manager";
 import { MAIN_CODEX_ACCOUNT_ID, setMainAccountPlan } from "../src/codex/main-account";
 import {
+  CodexAccountDeleteCleanupError,
   deleteCodexAccount,
   reconcileMainCodexAccountRuntimeState,
   resetMainCodexAccountIdentityTrackingForTests,
@@ -2383,6 +2384,29 @@ describe("codex-auth API", () => {
     expect(resp).toBeNull();
   });
 
+  test("GET account-target-options is metadata-only and uses public target values", async () => {
+    const config = makeConfig({
+      codexAccounts: [{
+        id: "target-option",
+        email: "target@example.test",
+        alias: "Work",
+        logLabel: "p123abc",
+        isMain: false,
+      }],
+    });
+    const req = new Request("http://localhost/api/codex-auth/account-target-options");
+    const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
+    expect(resp?.status).toBe(200);
+    const payload = await resp!.json() as { targets: Array<Record<string, unknown>> };
+    expect(payload.targets.map(target => target.target)).toEqual(["@main", "target-option"]);
+    expect(payload.targets[1]).toMatchObject({ label: "Work", email: "t***t@example.test" });
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain("__main__");
+    for (const forbidden of ["quota", "credential", "health", "plan", "chatgptAccountId"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
   test.each([
     ["enabled matching binding", true, "lifecycle-delete", true],
     ["disabled matching binding", false, "lifecycle-delete", false],
@@ -2456,6 +2480,121 @@ describe("codex-auth API", () => {
     expect(config.codexAccountNamespaces).toEqual({ team: accountId });
     expect(config.codexAccounts?.map(account => account.id)).toEqual([accountId]);
     expect(convergences).toBe(2);
+  });
+
+  test("picker-disabled custom binding hides and restores across account delete and re-add", async () => {
+    const accountId = "custom-target-delete";
+    const config = makeConfig({
+      codexAccounts: [{ id: accountId, email: "target@example.test", isMain: false }],
+      codexAccountPickerEnabled: false,
+      customModels: [{
+        id: "targeted-row",
+        provider: "openai",
+        modelId: "targeted-preview",
+        codexAccountTarget: accountId,
+      }],
+    });
+    saveCodexAccountCredential(accountId, {
+      accessToken: "target-access",
+      refreshToken: "target-refresh",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "target-chatgpt-id",
+    });
+    let convergences = 0;
+    const convergeCodexCatalog = async (): Promise<CatalogDisposition> => {
+      convergences += 1;
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.customModels?.[0]?.codexAccountTarget).toBe(accountId);
+      expect(persisted.codexAccountPickerEnabled).toBe(false);
+      expect(persisted.codexAccounts?.some(account => account.id === accountId))
+        .toBe(convergences === 2);
+      return { status: "committed", changed: true, degraded: false, notices: [] };
+    };
+
+    const deleteReq = new Request(
+      `http://localhost/api/codex-auth/accounts?id=${accountId}`,
+      { method: "DELETE" },
+    );
+    const deleted = await handleCodexAuthAPI(
+      deleteReq,
+      new URL(deleteReq.url),
+      config,
+      convergeCodexCatalog,
+    );
+    expect(await deleted!.json()).toEqual({ ok: true, catalogRefreshPending: false });
+    expect(config.customModels?.[0]?.codexAccountTarget).toBe(accountId);
+    expect(config.codexAccounts).toEqual([]);
+
+    const added = await completeMockCodexOAuth({
+      config,
+      requestBody: { id: accountId },
+      oauthAccountId: "target-chatgpt-id",
+      email: "target@example.test",
+      onWarmup: () => {},
+      convergeCodexCatalog,
+    });
+    expect(added.state).toMatchObject({ status: "done" });
+    expect(config.customModels?.[0]?.codexAccountTarget).toBe(accountId);
+    expect(config.codexAccounts?.map(account => account.id)).toEqual([accountId]);
+    expect(convergences).toBe(2);
+  });
+
+  test("a committed delete still converges custom-target visibility when credential cleanup fails", async () => {
+    const accountId = "custom-target-cleanup-failure";
+    const config = makeConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+      },
+      codexAccounts: [{ id: accountId, email: "target@example.test", isMain: false }],
+      customModels: [{
+        id: "targeted-row",
+        provider: "openai",
+        modelId: "targeted-preview",
+        codexAccountTarget: accountId,
+      }],
+    });
+    saveConfig(config);
+    saveCodexAccountCredential(accountId, {
+      accessToken: "cleanup-access",
+      refreshToken: "cleanup-refresh",
+      expiresAt: Date.now() + 60_000,
+      chatgptAccountId: "cleanup-chatgpt-id",
+    });
+    const removeSpy = spyOn(accountStoreModule, "removeCodexAccountCredential")
+      .mockImplementation(() => { throw new Error("private cleanup failure"); });
+    let convergences = 0;
+    try {
+      const req = new Request(
+        `http://localhost/api/codex-auth/accounts?id=${accountId}`,
+        { method: "DELETE" },
+      );
+      let thrown: unknown;
+      try {
+        await handleCodexAuthAPI(
+          req,
+          new URL(req.url),
+          config,
+          async () => {
+            convergences += 1;
+            expect(config.codexAccounts).toEqual([]);
+            expect(config.customModels?.[0]?.codexAccountTarget).toBe(accountId);
+            return { status: "committed", changed: true, degraded: false, notices: [] };
+          },
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(CodexAccountDeleteCleanupError);
+      expect(convergences).toBe(1);
+      expect(loadConfig().codexAccounts).toEqual([]);
+      expect(loadConfig().customModels?.[0]?.codexAccountTarget).toBe(accountId);
+    } finally {
+      removeSpy.mockRestore();
+    }
   });
 
   test("PUT /api/codex-auth/auto-switch rejects invalid threshold", async () => {

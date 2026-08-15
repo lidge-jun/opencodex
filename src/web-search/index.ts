@@ -135,6 +135,13 @@ export function shouldResolveOpenAiWebSearchSidecar(
   return cfg.enabled !== false && resolveSidecarBackend(cfg.backend) === "openai";
 }
 
+/** Native model used by the OpenAI web-search helper, including its bounded default. */
+export function resolveOpenAiWebSearchModel(
+  config: Pick<OcxConfig, "webSearchSidecar">,
+): string {
+  return config.webSearchSidecar?.model || DEFAULT_SIDECAR_MODEL;
+}
+
 /**
  * Decide whether the web-search sidecar should handle this request, returning the plan if so. Active
  * when: web_search was requested (`parsed._webSearch`), the route is NOT the passthrough adapter
@@ -195,7 +202,7 @@ export function planWebSearch(
     backend: "openai",
     forwardSidecar: openAiSidecar,
     hostedTool: parsed._webSearch,
-    settings: { model: cfg.model ?? DEFAULT_SIDECAR_MODEL, reasoning, timeoutMs, describeImages },
+    settings: { model: resolveOpenAiWebSearchModel(config), reasoning, timeoutMs, describeImages },
     maxSearches,
     routedModelStallTimeoutMs,
     stallTimeoutSec,

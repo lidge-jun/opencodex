@@ -327,9 +327,10 @@ describe("ocx export never serializes a key (accept criterion 6)", () => {
 });
 
 describe("export row filtering", () => {
-  test("drops disabled rows, dedupes, and carries modalities through to Pi", () => {
+  test("drops disabled and repair-only rows, dedupes, and carries modalities through to Pi", () => {
     const models = exportModelsFromProxyRows([
       { provider: "a", id: "one", namespaced: "a/one", disabled: true },
+      { provider: "openai", id: "orphaned", namespaced: "openai/orphaned", codexAccountTargetAvailable: false },
       { provider: "a", id: "two", namespaced: "a/two", inputModalities: ["text", "image"] },
       { provider: "a", id: "two", namespaced: "a/two", displayName: "duplicate" },
     ], config());

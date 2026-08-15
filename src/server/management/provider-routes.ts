@@ -57,6 +57,7 @@ import { readUsageEntries } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
 import { parseRange, parseUsageSurface, summarizeUsage } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
+import { providerSupportsCustomModelCodexAccountTarget } from "../../codex/custom-model-account-target";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { getDebugLogEntries } from "../../lib/debug-log-buffer";
 import { getInjectionDebugLogEntries } from "../../lib/injection-debug-log";
@@ -378,6 +379,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       apiKeyTransport: p.apiKeyTransport,
       disabled: p.disabled === true,
       codexAccountMode: providerCodexAccountMode(name, p),
+      supportsCodexAccountTarget: providerSupportsCustomModelCodexAccountTarget(name, p),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
   }

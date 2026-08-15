@@ -83,6 +83,7 @@ export interface OpencodeProxyModelRow {
   namespaced?: string;
   native?: boolean;
   disabled?: boolean;
+  codexAccountTargetAvailable?: boolean;
   displayName?: string;
   contextWindow?: number;
 }
@@ -292,8 +293,8 @@ export async function fetchOpencodeProxyModels(
 }
 
 /**
- * Visible OpenCode catalog entries from proxy /api/models rows. Disabled rows are omitted;
- * native rows are omitted in Codex Direct mode.
+ * Visible OpenCode catalog entries from proxy /api/models rows. Disabled and repair-only
+ * exact-account rows are omitted; native rows are omitted in Codex Direct mode.
  */
 export function opencodeCatalogFromProxyRows(
   rows: readonly OpencodeProxyModelRow[],
@@ -304,7 +305,7 @@ export function opencodeCatalogFromProxyRows(
   const catalog: OpencodeCatalogModel[] = [];
   for (const row of rows) {
     const namespaced = row.namespaced?.trim();
-    if (!namespaced || row.disabled === true) continue;
+    if (!namespaced || row.disabled === true || row.codexAccountTargetAvailable === false) continue;
     if (omitNative && row.native === true) continue;
     if (seen.has(namespaced)) continue;
     seen.add(namespaced);

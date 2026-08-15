@@ -378,7 +378,14 @@ export async function handleResponsesCompact(
       }
     } catch (err) {
       if (err instanceof CodexAccountCooldownError) {
-        return cooldownErrorResponse(err, Date.now(), route.codexAccountNamespace);
+        return cooldownErrorResponse(
+          err,
+          Date.now(),
+          route.codexAccountNamespace,
+          route.codexAccountBinding === "custom-model"
+            ? `${route.providerName}/${route.modelId}`
+            : undefined,
+        );
       }
       if (err instanceof CodexMainProfileDrainingError) return codexMainProfileDrainingResponse();
       if (err instanceof CodexThreadAffinityExpiredError) {

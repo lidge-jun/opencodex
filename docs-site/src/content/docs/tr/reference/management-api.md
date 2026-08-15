@@ -168,8 +168,11 @@ gönderin. Kurtarma gerekebileceğinde karantinayı tercih edin.
 | `GET /api/client-config?client=...` | Desteklenen herhangi bir dosya entegrasyonu için salt okunur bir istemci yapılandırması oluşturun | 400 desteklenmeyen istemci; 503 katalog kullanılamıyor |
 | `PUT /api/disabled-models` | Paylaşılan devre dışı model listesini değiştirin | 400 geçersiz JSON |
 | `PUT /api/model-visibility` | Sağlayıcı veya model düzeyindeki görünürlüğü atomik olarak değiştirin | 400 geçersiz sağlayıcı, kapsam, hedef veya gövde |
-| `GET, POST /api/custom-models` | Özel modelleri listeleyin veya bir tane ekleyin | 400 geçersiz alanlar; 404 sağlayıcı eksik; 409 yinelenen model |
-| `PUT, DELETE /api/custom-models/{id}` | Bir özel modeli düzenleyin veya silin | 400 geçersiz kimlik/alanlar; 404 bulunamadı; 409 yinelenen model |
+| `GET, POST /api/custom-models` | `codexAccountTarget` veya `codexAccountTargetWriteNonce` olmadan özel modelleri listeleyin veya ekleyin. Hedef veya nonce içeren eski POST yazmaları 409 ile reddedilir (`/api/custom-models/account-target` kullanın). | 400 geçersiz alan/sağlayıcı; 404 sağlayıcı eksik; 409 yinelenen/belirsiz model kimliği veya eski hedef yazması |
+| `POST /api/custom-models/account-target` | Dize `codexAccountTarget` ve geçici UUID `codexAccountTargetWriteNonce` ile özel model ekleyin. Hedef yalnız canonical `openai` Codex-forward satırında geçerlidir ve mevcut bir Pool hesabını göstermelidir. Nonce yalnızca yankılanır ve kalıcı olarak saklanmaz. | 400 geçersiz/eksik alan/hedef/nonce/sağlayıcı; 404 sağlayıcı eksik; 409 yinelenen/belirsiz model kimliği veya yapılandırma çakışması |
+| `PUT, DELETE /api/custom-models/{id}` | Hedef alanları olmadan özel modeli düzenleyin veya silin. Eski PUT, hedef alanlarını ve zaten hedefi veya bozuk hedefi olan bir satırın düzenlenmesini reddeder (`/api/custom-models/{id}/account-target` kullanın). Bağlanmamış satırdaki yalnız nonce içeren istek eski istemci uyumluluğu için yok sayılır. | 400 geçersiz kimlik/alan; 404 bulunamadı; 409 yinelenen/belirsiz model kimliği veya eski hedef yazması |
+| `PUT /api/custom-models/{id}/account-target` | Kesin bağlamayı ayarlayın veya kaldırın. Geçici UUID `codexAccountTargetWriteNonce` ile `codexAccountTarget` (`null` kaldırır) ya da değişmeden onarım için satırın mevcut hedef özelliğinden biri gerekir. Yeni atanan bilinmeyen Pool kimliği reddedilir. Nonce yalnızca yankılanır ve kalıcı olarak saklanmaz. | 400 geçersiz kimlik/hedef/nonce; 404 bulunamadı; 409 yinelenen/belirsiz model kimliği veya yapılandırma çakışması |
+| `GET /api/codex-auth/account-target-options` | Kimlik bilgisi veya quota okumadan güvenli hesap seçimi meta verisi döndürür | — |
 | `GET, PUT /api/selected-models` | Sağlayıcı izin listelerini ve kullanılabilirliğini okuyun veya bir izin listesini değiştirin | 400 eksik sağlayıcı/gövde; 404 bilinmeyen sağlayıcı |
 
 ### OAuth hesapları, sağlayıcı anahtarları ve veri düzlemi anahtarları
@@ -300,5 +303,3 @@ rehberli iş akışını sağlar. Başsız ana bilgisayarlar ve otomasyon için 
 olduğunda veya işlem başarısız olduğunda sıfır olmayan bir sonuç döndürürler.
 Doğrudan HTTP, yukarıdaki tam uç nokta sözleşmelerine ihtiyaç duyan
 entegrasyonlar için en yararlıdır.
-
-

@@ -6,6 +6,13 @@ import { policyCandidateHealthEvidence } from "../health";
 import type { NormalizedRoutingProfile } from "../profile";
 import { quotaEvidenceForCandidate } from "../quota";
 import { resolveCompatibilityEvidenceProvider, type CoreEvidenceOptions } from "./provider-slot";
+import {
+  customModelCodexAccountIdForRoute,
+} from "../../codex/custom-model-account-target";
+import { getPoolAccountPlan } from "../../codex/routing";
+import { isCodexAccountPaused } from "../../codex/account-pause";
+import { isCodexAccountUsable } from "../../codex/account-usability";
+import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../../codex/account-id";
 
 export type RoutedProviderResolver = (
   providerName: string,
@@ -52,15 +59,47 @@ export function assemblePolicyCandidateEvidence(
   return profile.candidates.map(candidate => {
     const key = `${candidate.provider}/${candidate.model}`;
     const compatibility = compatibilityByCandidate?.get(key);
+    let exactTargetAvailable = true;
+    let codexAccountId: string | undefined;
+    // Treat a malformed hand-edited target like any other unavailable exact binding:
+    // exclude only that candidate so one broken row cannot poison an otherwise healthy policy.
+    try {
+      codexAccountId = customModelCodexAccountIdForRoute(
+        config,
+        candidate.provider,
+        candidate.model,
+      );
+      exactTargetAvailable = codexAccountId === undefined
+        || codexAccountId === MAIN_CODEX_ACCOUNT_ID
+        || (config.codexAccounts ?? []).some(account => (
+          isSelectableCodexPoolAccount(account) && account.id === codexAccountId
+        ));
+    } catch {
+      exactTargetAvailable = false;
+    }
+    const exactTargetUsable = exactTargetAvailable && (
+      codexAccountId === undefined
+      || (!isCodexAccountPaused(config, codexAccountId)
+        && isCodexAccountUsable(config, codexAccountId))
+    );
+    const codexAccountPlan = codexAccountId
+      ? getPoolAccountPlan(config, codexAccountId)
+      : undefined;
 
     return {
       provider: candidate.provider,
       model: candidate.model,
+      ...(!exactTargetUsable
+        ? { staticExclusions: [{ code: "account-unavailable" }] }
+        : {}),
       capability: candidateCapabilityEvidence(config, candidate.provider, candidate.model),
-      health: policyCandidateHealthEvidence(config, candidate, now),
+      health: policyCandidateHealthEvidence(config, { ...candidate, codexAccountId }, now),
       quota: quotaEvidenceForCandidate({
         provider: candidate.provider,
         model: candidate.model,
+        codexAccountId,
+        codexAccountPlan,
+        ...(codexAccountId ? { codexAccountScope: "exact" as const } : {}),
       }),
       cost: costEvidenceForCandidate({
         provider: candidate.provider,

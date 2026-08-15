@@ -254,6 +254,93 @@ test("an account-qualified search model uses that exact account and sends the ba
   }
 });
 
+test("a target-bound custom search model uses the same exact account path", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured);
+  const config = exactSearchConfig();
+  config.customModels = [{
+    id: "custom-search",
+    provider: "openai",
+    modelId: "custom-search-preview",
+    codexAccountTarget: "pool-a",
+  }];
+  saveConfig(config);
+  saveExactSearchCredentials();
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "search-session",
+        model: "openai/custom-search-preview",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-a-token");
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-a");
+    expect(captured[0].body).toMatchObject({
+      id: "search-session",
+      model: "custom-search-preview",
+    });
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+    const entry = getRequestLogEntries()
+      .findLast(candidate => candidate.model === "openai/custom-search-preview");
+    for (const privateValue of ["pool-a", "acct-pool-a", "pool-a-token", "private-a@example.test"]) {
+      expect(JSON.stringify(entry)).not.toContain(privateValue);
+    }
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("a combo alias keeps the exact account binding of its selected custom model", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured);
+  const config = exactSearchConfig();
+  config.customModels = [{
+    id: "custom-search",
+    provider: "openai",
+    modelId: "custom-search-preview",
+    codexAccountTarget: "pool-a",
+  }];
+  config.combos = {
+    "bound-search": {
+      strategy: "failover",
+      targets: [{ provider: "openai", model: "custom-search-preview" }],
+    },
+  };
+  saveConfig(config);
+  saveExactSearchCredentials();
+
+  const server = startServer(0);
+  try {
+    const response = await fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "combo-search-session",
+        model: "combo/bound-search",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(captured).toHaveLength(1);
+    expect(captured[0].headers.get("authorization")).toBe("Bearer pool-a-token");
+    expect(captured[0].headers.get("chatgpt-account-id")).toBe("acct-pool-a");
+    expect(captured[0].body).toMatchObject({
+      id: "combo-search-session",
+      model: "custom-search-preview",
+    });
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
 test("an exact search 429 never switches to the active Pool account and reports only its public selector", async () => {
   const captured: CapturedRequest[] = [];
   const upstream = fakeSearchUpstream(captured, 429, { error: { message: "rate limited" } });
@@ -287,6 +374,44 @@ test("an exact search 429 never switches to the active Pool account and reports 
     const entry = getRequestLogEntries().findLast(candidate => candidate.model === "side/gpt-test");
     expect(entry?.provider).toBe("openai-side");
     expect(JSON.stringify(entry)).not.toContain("pool-a");
+  } finally {
+    await server.stop(true);
+    await upstream.stop(true);
+  }
+});
+
+test("a cooled target-bound search model reports the model binding without private account advice", async () => {
+  const captured: CapturedRequest[] = [];
+  const upstream = fakeSearchUpstream(captured, 429, { error: { message: "rate limited" } });
+  const config = exactSearchConfig();
+  config.customModels = [{
+    id: "custom-search",
+    provider: "openai",
+    modelId: "custom-search-preview",
+    codexAccountTarget: "pool-a",
+  }];
+  saveConfig(config);
+  saveExactSearchCredentials();
+
+  const server = startServer(0);
+  try {
+    const requestBoundSearch = () => fetch(new URL("/v1/alpha/search", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/custom-search-preview" }),
+    });
+    expect((await requestBoundSearch()).status).toBe(429);
+    const cooled = await requestBoundSearch();
+    expect(cooled.status).toBe(429);
+    const message = ((await cooled.json()) as { error: { message: string } }).error.message;
+    expect(message).toContain("Selected custom model (openai/custom-search-preview)");
+    expect(message).toContain("pinned to one Codex account");
+    expect(message).not.toContain("ocx account use");
+    for (const privateValue of ["pool-a", "acct-pool-a", "pool-a-token", "private-a@example.test"]) {
+      expect(message).not.toContain(privateValue);
+    }
+    expect(captured).toHaveLength(1);
+    expect(loadConfig().activeCodexAccountId).toBe("pool-b");
   } finally {
     await server.stop(true);
     await upstream.stop(true);

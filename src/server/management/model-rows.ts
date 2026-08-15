@@ -26,6 +26,7 @@ import { isVisionReasoningEffort } from "../../reasoning-effort";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import type { OcxConfig } from "../../types";
 import { fetchAllModels } from "./shared";
+import { customModelCodexAccountTargetAvailable } from "../../codex/custom-model-account-target";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -40,6 +41,10 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   native?: boolean;
   custom?: boolean;
   customId?: string;
+  /** Management-only exact Codex account binding; omitted from client exports/catalogs. */
+  codexAccountTarget?: string;
+  /** False only for an invalid/orphaned exact target; repair rows remain visible in /api/models. */
+  codexAccountTargetAvailable?: boolean;
 };
 
 /**
@@ -81,11 +86,14 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
   });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
     const namespaced = routedSlug(cm.provider, cm.modelId);
+    const codexAccountTargetAvailable = customModelCodexAccountTargetAvailable(config, cm);
     return {
       provider: cm.provider,
       id: cm.modelId,
       namespaced,
-      disabled: [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
+      disabled: !config.providers[cm.provider]
+        || config.providers[cm.provider]?.disabled === true
+        || [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
       custom: true,
       customId: cm.id,
       displayName: cm.displayName,
@@ -99,6 +107,14 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       // full edit state; the GUI has no default-effort control today, but dropping it here
       // would make any future PUT-based edit lose it silently.
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
+      ...(Object.hasOwn(cm, "codexAccountTarget") || !codexAccountTargetAvailable
+        ? {
+          ...(typeof cm.codexAccountTarget === "string"
+            ? { codexAccountTarget: cm.codexAccountTarget }
+            : {}),
+          codexAccountTargetAvailable,
+        }
+        : {}),
     };
   });
   const publicModels = uniqueCatalogModelsForPublicList(models);
@@ -142,6 +158,11 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
   };
 }
 
+/** Data-plane/export visibility while keeping unavailable target rows repair-visible in management. */
+export function managementModelRowIsExportable(row: ManagementModelRow): boolean {
+  return !row.disabled && row.codexAccountTargetAvailable !== false;
+}
+
 /**
  * Visible (non-disabled) rows as export models — the ONE loader both
  * `/api/client-config` and the integration routes use, so the two can never
@@ -154,5 +175,7 @@ export function toExportModel(row: ManagementModelRow): ExportModel {
  */
 export async function loadExportModels(config: OcxConfig): Promise<ExportModel[]> {
   const rows = await listManagementModelRows(config);
-  return rows.filter(row => !row.disabled).map(toExportModel);
+  return rows
+    .filter(managementModelRowIsExportable)
+    .map(toExportModel);
 }

@@ -11,6 +11,7 @@ export type ProviderDiscoverySummary =
 export interface ConfiguredProviderSummary {
   name: string;
   authMode?: string;
+  supportsCodexAccountTarget?: boolean;
   disabled?: boolean;
   liveModels?: boolean;
   models?: string[];

@@ -63,6 +63,22 @@ labels. Account and setting mutations are persisted before a bounded catalog ref
 warning means only that the picker catalog still needs convergence, not that the routing change was
 lost.
 
+## Exact accounts for custom models
+
+An explicit custom row on the canonical `openai` Codex-forward provider may set
+`codexAccountTarget` to `@main` or a stable added Pool-account id. This is a row-scoped shorthand
+for exact account selection: the route uses fixed Pool credential machinery even when the provider
+is globally Direct, does not rotate, does not change the active Pool account, and never retries on a
+different account. Omission preserves the provider's ordinary Pool/Direct behavior.
+
+The account selector route has precedence over a custom-row binding, followed by the exact custom
+row, then ordinary provider routing. Bare native models and `openai-apikey/*` never inherit a custom
+row's target. A missing, paused, cooled, or reauthentication-required target fails closed. Deleted
+account targets stay stored for repair but are omitted from data-plane discovery until the same id
+returns. New assignments require a currently existing Pool id; an unchanged retained orphan target
+can still be submitted while repairing the row. `codexAccountPickerEnabled` controls generated selector rows only and never implies a
+custom-model binding.
+
 ## Combos (`config.combos`)
 
 Each combo key is an id matching `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`. It is always directly addressable
