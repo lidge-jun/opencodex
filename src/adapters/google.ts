@@ -8,6 +8,7 @@ import type {
   OcxContentPart,
   OcxParsedRequest,
   OcxProviderConfig,
+  OcxProviderOpaqueToolCallMetadata,
   OcxTextContent,
   OcxToolCall,
   OcxUsage,
@@ -209,7 +210,10 @@ function messagesToGeminiFormat(
             // conversion 400s. Gemini accepts the optional id and pairs call/response by it.
             if (callId !== undefined) functionCall.id = callId;
             const part: Record<string, unknown> = { functionCall };
-            if (isLikelyRealThoughtSignature(tc.thoughtSignature)) part.thoughtSignature = tc.thoughtSignature;
+            // Prefer the metadata that travelled with this exact call; fall back to the legacy
+            // field for callers that have not been migrated. Never merge or synthesize.
+            const signature = tc.providerMetadata?.google?.thoughtSignature ?? tc.thoughtSignature;
+            if (isLikelyRealThoughtSignature(signature)) part.thoughtSignature = signature;
             parts.push(part);
           }
         }
@@ -326,7 +330,21 @@ function artifactMarkdownUrl(filePath: string): string {
 interface GoogleResponsePart {
   text?: string;
   thought?: boolean;
+  thoughtSignature?: string;
   functionCall?: { name: string; args: unknown };
+}
+
+/**
+ * Carry a Gemini thought signature with the exact function-call part that produced it. Google
+ * validates the signature against that specific part, so it must ride the individual tool call
+ * rather than be re-matched by name/arguments later (issue #1735).
+ */
+function googleToolCallMetadataFromPart(
+  part: GoogleResponsePart,
+): { providerMetadata: OcxProviderOpaqueToolCallMetadata } | undefined {
+  const signature = part.thoughtSignature;
+  if (!isLikelyRealThoughtSignature(signature)) return undefined;
+  return { providerMetadata: { google: { thoughtSignature: signature } } };
 }
 
 /**
@@ -674,7 +692,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
               const id = `call_${crypto.randomUUID().slice(0, 8)}`;
               toolCallsStarted++;
               emittedContentEvent = true;
-              yield { type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) };
+              yield {
+                type: "tool_call_start",
+                id,
+                name: restoreGoogleToolName(part.functionCall.name),
+                ...googleToolCallMetadataFromPart(part),
+              };
               yield { type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) };
               yield { type: "tool_call_end" };
             }
@@ -890,7 +913,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           if (part.functionCall) {
             const id = `call_${crypto.randomUUID().slice(0, 8)}`;
             toolCallsStarted++;
-            events.push({ type: "tool_call_start", id, name: restoreGoogleToolName(part.functionCall.name) });
+            events.push({
+              type: "tool_call_start",
+              id,
+              name: restoreGoogleToolName(part.functionCall.name),
+              ...googleToolCallMetadataFromPart(part),
+            });
             events.push({ type: "tool_call_delta", arguments: JSON.stringify(part.functionCall.args ?? {}) });
             events.push({ type: "tool_call_end" });
           }

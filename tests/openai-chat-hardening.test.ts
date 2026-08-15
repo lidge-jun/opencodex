@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter as createOpenAIChatAdapterProduction } from "../src/adapters/openai-chat";
+import { stripResponsesOnlyEncryptedMarker } from "../src/adapters/responses-tool-schema";
 import { getDebugLogEntries, resetDebugLogBufferForTests } from "../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../src/lib/debug-settings";
 import { routeModel } from "../src/router";
@@ -58,6 +59,106 @@ function routedProvider(name: "litellm" | "ollama", apiKey?: string): OcxProvide
   } as OcxConfig;
   return routeModel(config, `${name}/test-model`).provider;
 }
+
+describe("openai-chat request hardening", () => {
+  test("strips Responses-only encrypted annotations without changing schema names or literal values", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        encrypted: { type: "boolean", description: "A legitimate tool argument name" },
+        message: { type: "string", encrypted: true },
+        nested: {
+          type: "object",
+          properties: { value: { type: "string", encrypted: false } },
+        },
+        literalData: {
+          type: "object",
+          const: { encrypted: true },
+          default: { encrypted: false },
+          enum: [{ encrypted: true }],
+          examples: [{ encrypted: false }],
+        },
+      },
+      patternProperties: { encrypted: { type: "string", encrypted: true } },
+      $defs: { encrypted: { type: "number", encrypted: true } },
+      definitions: { encrypted: { type: "integer", encrypted: false } },
+      dependencies: { encrypted: ["message"], other: { type: "object", encrypted: true } },
+      dependentSchemas: { encrypted: { type: "string", encrypted: true } },
+      dependentRequired: { encrypted: ["message"] },
+      propertiesWithSpecialName: { type: "object", properties: { ["__proto__"]: { type: "string", encrypted: true } } },
+      required: ["message", "encrypted"],
+    };
+    const before = structuredClone(parameters);
+    const request = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      context: {
+        messages: [{ role: "user", content: "delegate", timestamp: 0 }],
+        tools: [{
+          name: "spawn_agent",
+          namespace: "collaboration",
+          description: "Spawn a child agent",
+          parameters,
+        }],
+      },
+    });
+    const body = JSON.parse(request.body) as {
+      tools: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools[0].function.parameters).toEqual({
+      type: "object",
+      properties: {
+        encrypted: { type: "boolean", description: "A legitimate tool argument name" },
+        message: { type: "string" },
+        nested: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        literalData: {
+          type: "object",
+          const: { encrypted: true },
+          default: { encrypted: false },
+          enum: [{ encrypted: true }],
+          examples: [{ encrypted: false }],
+        },
+      },
+      patternProperties: { encrypted: { type: "string" } },
+      $defs: { encrypted: { type: "number" } },
+      definitions: { encrypted: { type: "integer" } },
+      dependencies: { encrypted: ["message"], other: { type: "object" } },
+      dependentSchemas: { encrypted: { type: "string" } },
+      dependentRequired: { encrypted: ["message"] },
+      propertiesWithSpecialName: { type: "object", properties: { ["__proto__"]: { type: "string" } } },
+      required: ["message", "encrypted"],
+    });
+    expect(parameters).toEqual(before);
+  });
+
+  test("a deeply nested schema is stripped without exhausting the stack", () => {
+    // The schema is caller-supplied, so its depth is attacker-influenced: a recursive walk
+    // would take the request path down with a stack overflow instead of answering.
+    const depth = 50_000;
+    const root: Record<string, unknown> = { type: "object", encrypted: true };
+    let cursor = root;
+    for (let i = 0; i < depth; i++) {
+      const child: Record<string, unknown> = { type: "object", encrypted: true };
+      cursor.properties = { encrypted: child };
+      cursor = child;
+    }
+    cursor.leaf = { type: "string", encrypted: true };
+
+    const stripped = stripResponsesOnlyEncryptedMarker(root) as Record<string, unknown>;
+    expect(stripped.encrypted).toBeUndefined();
+    let walk = stripped;
+    for (let i = 0; i < depth; i++) {
+      // Each level keeps the property literally named `encrypted` and drops the keyword.
+      walk = (walk.properties as Record<string, Record<string, unknown>>).encrypted;
+      expect(walk.encrypted).toBeUndefined();
+      expect(walk.type).toBe("object");
+    }
+    expect((walk.leaf as Record<string, unknown>).encrypted).toBeUndefined();
+  });
+});
 
 describe("openai-chat non-stream response hardening", () => {
   test("surfaces an upstream error envelope message", async () => {
@@ -331,6 +432,27 @@ describe("openai-chat stream response hardening", () => {
     expect(lines).toContain('"valueType":"null"');
     expect(lines).not.toContain(privateName);
     expect(lines).not.toContain("private arguments");
+  });
+
+  test("debug mode skips accepted null padding and blames the real malformed delta (#1731)", async () => {
+    process.env.OCX_DEBUG = "1";
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: null, function: { name: null, arguments: null } },
+        null,
+      ] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid tool calls" }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    // The null-padded continuation delta at index 0 is accepted by the accumulator, so the
+    // diagnostic must point at index 1 rather than claiming the padding was the defect.
+    expect(lines).toContain('"reason":"tool_call_not_object"');
+    expect(lines).toContain('"callIndex":1');
+    expect(lines).not.toContain('"tool_call_function_name_invalid"');
   });
 });
 

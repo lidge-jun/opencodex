@@ -19,6 +19,7 @@ import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
+import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
@@ -721,35 +722,8 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
   return converted;
 }
 
-// Codex multi-agent v2 stamps a Responses-only `encrypted: true` marker on
-// collaboration tool schemas (openai/codex 5f4d06ef; issue #85). It is an
-// annotation for the ChatGPT backend only. Anthropic input_schema is strict
-// JSON Schema; strip the marker defensively everywhere it can appear as a
-// schema keyword, while preserving properties literally named "encrypted".
-const ENCRYPTED_MARKER_NAME_BAG_KEYS = new Set(["properties", "patternProperties", "$defs", "definitions"]);
-const ENCRYPTED_MARKER_LITERAL_VALUE_KEYS = new Set(["const", "default", "enum", "examples"]);
-
-function stripEncryptedMarker(node: unknown, inNameBag = false): unknown {
-  if (Array.isArray(node)) return node.map(item => stripEncryptedMarker(item));
-  if (!node || typeof node !== "object") return node;
-
-  const out: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-    if (inNameBag) {
-      out[key] = stripEncryptedMarker(value);
-    } else if (key !== "encrypted") {
-      out[key] = ENCRYPTED_MARKER_LITERAL_VALUE_KEYS.has(key)
-        ? value
-        : stripEncryptedMarker(value, ENCRYPTED_MARKER_NAME_BAG_KEYS.has(key));
-    }
-  }
-
-  return out;
-}
-
 function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
-  const stripped = stripEncryptedMarker(schema);
+  const stripped = stripResponsesOnlyEncryptedMarker(schema);
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
