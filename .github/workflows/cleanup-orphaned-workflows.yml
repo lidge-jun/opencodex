@@ -11,7 +11,7 @@ on:
     branches: [main]
     paths:
       # The first promotion to main performs the initial backlog cleanup without
-      # exposing a branch-selectable workflow_dispatch with actions:write.
+      # exposing a branch-selectable manual trigger with actions:write.
       - ".github/workflows/cleanup-orphaned-workflows.yml"
       - "scripts/ci/cleanup-orphaned-workflows.mjs"
 
