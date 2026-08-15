@@ -513,7 +513,7 @@ export const ja: Record<TKey, string> = {
   "models.v2ModeDesc_v2": "すべてのモデル → v2 サーフェス",
   "models.keepNativeOnV1": "ChatGPT を v1 のまま",
   "models.keepNativeOnV1Hint": "ChatGPT ネイティブの親は v2 子タスクを暗号化するため、Grok や Claude は読めません。Sol/Terra から routed モデルを spawn するならオンのまま。routed 親は v2 のままです。",
-  "models.v2Help": "すべてのモデルのマルチエージェントサーフェスを制御します。\n\nv1: クラシックな単一スレッドエージェント。すべてのモデルが v1 コラボサーフェスを使います。\nベース: 上流のデフォルト — sol/terra は v2、luna は v1、それ以外は codex のフィーチャーフラグに従います。\nv2: spawn_agent を備えたマルチスレッドエージェント。すべてのモデルが v2 コラボサーフェスを使います。\n\n変更は新規セッションに適用されます。",
+  "models.v2Help": "すべてのモデルのマルチエージェントサーフェスを制御します。\n\nv1: クラシックな単一スレッドエージェント。すべてのモデルが v1 コラボサーフェスを使います。\nベース: 上流のデフォルト — sol/terra は v2、luna は v1、それ以外は codex のフィーチャーフラグに従います。\nv2: spawn_agent を備えたマルチスレッドエージェント。すべてのモデルが v2 コラボサーフェスを使います。\n\nv2 では「ChatGPT を v1 のまま」にすると Sol/Terra が v1 に留まり、Grok や Claude を spawn できます。ChatGPT は v2 子タスクを暗号化するため routed モデルは読めません。routed 親は v2 のままです。\n\n変更は新規セッションに適用されます。",
   "dash.multiAgent": "サブエージェント",
   "models.v2Conflict": "[agents] max_threads が設定されています — codex は起動を拒否します; config.toml から削除してください",
   "models.v2Applied": "サブエージェントモードを更新しました — 新規セッションに適用(ピッカーを更新するには Codex アプリを再起動)",

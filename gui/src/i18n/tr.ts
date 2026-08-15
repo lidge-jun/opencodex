@@ -521,7 +521,7 @@ export const tr: Record<TKey, string> = {
   "models.v2ModeDesc_v2": "Tüm modeller → v2 yüzeyi",
   "models.keepNativeOnV1": "ChatGPT v1'de kalsın",
   "models.keepNativeOnV1Hint": "ChatGPT yerel ebeveynleri v2 çocuk görevlerini şifreler; Grok ve Claude okuyamaz. Sol/Terra yönlendirilmiş modelleri spawn edecekse açık bırakın. Yönlendirilmiş ebeveynler v2'de kalır.",
-  "models.v2Help": "v1 alt ajanları birincil modelle sınırlandırır; base standart ajan sınırlarını devralır; v2 tam çoklu ajan orkestrasyonunu etkinleştirir.",
+  "models.v2Help": "v1 alt ajanları birincil modelle sınırlandırır; base standart ajan sınırlarını devralır; v2 tam çoklu ajan orkestrasyonunu etkinleştirir.\n\nv2'de ChatGPT v1'de kalsın, Sol/Terra'yı v1'de bırakır; böylece Grok veya Claude spawn edebilirler. ChatGPT v2 çocuk görevlerini şifreler; yönlendirilmiş modeller okuyamaz. Yönlendirilmiş ebeveynler v2'de kalır.\n\nDeğişiklikler yeni oturumlara uygulanır.",
   "dash.multiAgent": "Alt Ajan",
   "models.v2Conflict": "[agents] max_threads ayarlanmış — config.toml dosyasından kaldırın",
   "models.v2Applied": "Çoklu ajan modu güncellendi. Yeni oturumlar bu modu kullanacaktır; model seçiciyi yenilemek için Codex uygulamasını yeniden başlatın.",

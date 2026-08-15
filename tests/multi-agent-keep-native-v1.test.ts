@@ -44,9 +44,22 @@ describe("keepNativeChatGptOnV1", () => {
   });
 
   test("native alias rows count as native; routed providers do not", () => {
-    const alias: RawEntry = { slug: "sol", opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND };
-    expect(catalogEntryIsNativeChatGpt(alias)).toBe(true);
+    const routedAlias: RawEntry = { slug: "sol", opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND };
+    expect(catalogEntryIsNativeChatGpt(routedAlias)).toBe(false);
+    expect(catalogEntryIsNativeChatGpt({
+      slug: "sol",
+      opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND,
+      use_responses_lite: true,
+    })).toBe(true);
     expect(catalogEntryIsNativeChatGpt({ slug: "xai/grok-4.6" })).toBe(false);
     expect(catalogEntryIsNativeChatGpt({ slug: "gpt-5.6-sol" })).toBe(true);
+
+    const stamped: RawEntry[] = [
+      { slug: "sol", opencodex_catalog_kind: CODEX_NATIVE_ALIAS_CATALOG_KIND },
+      { slug: "gpt-5.6-sol" },
+    ];
+    applyMultiAgentMode(stamped, "v2", false, { keepNativeChatGptOnV1: true });
+    expect(stamped[0]!.multi_agent_version).toBe("v2");
+    expect(stamped[1]!.multi_agent_version).toBe("v1");
   });
 });

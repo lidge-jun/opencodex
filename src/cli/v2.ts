@@ -215,12 +215,7 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     }
     const cfg = loadConfig();
     const next = flag === "on";
-    if (cfg.keepNativeChatGptOnV1 === true === next) {
-      log.log(next
-        ? "keep_native_chatgpt_on_v1 already ON — nothing to do."
-        : "keep_native_chatgpt_on_v1 already OFF — nothing to do.");
-      return 0;
-    }
+    const already = cfg.keepNativeChatGptOnV1 === true === next;
     if (next) cfg.keepNativeChatGptOnV1 = true;
     else delete cfg.keepNativeChatGptOnV1;
     saveConfig(cfg);
@@ -230,6 +225,12 @@ export async function cmdV2(args: string[], deps: V2CliDeps = {}, findPort?: () 
     } catch (err) {
       log.error(`catalog resync failed: ${err instanceof Error ? err.message : String(err)} — run 'ocx sync' manually.`);
       return 1;
+    }
+    if (already) {
+      log.log(next
+        ? "keep_native_chatgpt_on_v1 already ON — catalog re-synced."
+        : "keep_native_chatgpt_on_v1 already OFF — catalog re-synced.");
+      return 0;
     }
     log.log(next
       ? "keep_native_chatgpt_on_v1: ON — ChatGPT-native rows stay v1 when mode is v2 (new sessions)."

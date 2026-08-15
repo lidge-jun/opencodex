@@ -353,7 +353,12 @@ export interface MultiAgentModeOptions {
 /** Catalog rows that run on the ChatGPT backend (encrypt v2 child tasks). */
 export function catalogEntryIsNativeChatGpt(entry: RawEntry): boolean {
   const slug = typeof entry.slug === "string" ? entry.slug : "";
-  if (entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND) return true;
+  // combo-native-alias-v1 occupies a bare native slug but is routed through
+  // OpenCodex. Keep those on v2 unless the row still carries the ChatGPT-forward
+  // contract (`use_responses_lite`).
+  if (entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND) {
+    return entry.use_responses_lite === true;
+  }
   if (trustedAccountBoundNativeCatalogSlug(entry)) return true;
   const routedNativeSlug = slug.startsWith(`${OPENAI_CODEX_PROVIDER_ID}/`)
     ? slug.slice(OPENAI_CODEX_PROVIDER_ID.length + 1)

@@ -397,7 +397,7 @@ export const zhTW: Record<TKey, string> = {
   "models.v2ModeDesc_v2": "所有模型 → v2 介面",
   "models.keepNativeOnV1": "ChatGPT 維持 v1",
   "models.keepNativeOnV1Hint": "ChatGPT 原生父代理會加密 v2 子任務，Grok/Claude 無法讀取。若 Sol/Terra 仍需派發路由模型，請保持開啟。路由父代理仍使用 v2。",
-  "models.v2Help": "控制所有模型的多代理介面。\n\nv1: 經典單執行緒代理。所有模型使用 v1 協作介面。\nbase: 上游預設值 — sol/terra 使用 v2，luna 使用 v1，其餘跟隨 codex 功能標誌。\nv2: 多執行緒代理（spawn_agent）。所有模型使用 v2 協作介面。\n\n更改在新會話中生效。",
+  "models.v2Help": "控制所有模型的多代理介面。\n\nv1: 經典單執行緒代理。所有模型使用 v1 協作介面。\nbase: 上游預設值 — sol/terra 使用 v2，luna 使用 v1，其餘跟隨 codex 功能標誌。\nv2: 多執行緒代理（spawn_agent）。所有模型使用 v2 協作介面。\n\n在 v2 下，「ChatGPT 維持 v1」會讓 Sol/Terra 留在 v1，以便繼續派發 Grok 或 Claude。ChatGPT 會加密 v2 子任務，路由模型無法讀取；路由父代理仍留在 v2。\n\n更改在新會話中生效。",
   "dash.multiAgent": "子代理",
   "models.v2Conflict": "[agents] max_threads 仍存在 — codex 將拒絕啟動，請從 config.toml 移除",
   "models.v2Applied": "子代理模式已更新 — 新會話生效（重新啟動 Codex 應用以重新整理選擇器）",

@@ -343,8 +343,11 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       if (body.keepNativeChatGptOnV1 === true) config.keepNativeChatGptOnV1 = true;
       else delete config.keepNativeChatGptOnV1;
       saveConfigPreservingClaudeCode(config);
+      const effectiveMode = mode ?? config.multiAgentMode ?? "default";
       warnings.push(body.keepNativeChatGptOnV1 === true
-        ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
+        ? (effectiveMode === "v2"
+          ? "ChatGPT-native models stay on v1 while other models use v2. Applies to new sessions."
+          : "keepNativeChatGptOnV1 is stored but inactive until multi-agent mode is v2. Applies to new sessions.")
         : "ChatGPT-native models follow the selected v1/v2/base surface. Applies to new sessions.");
     }
     // New-key scalar writes: each writer is individually atomic, so apply them in

@@ -515,7 +515,7 @@ export const ko: Record<TKey, string> = {
   "models.v2ModeDesc_v2": "전 모델 → v2 서피스",
   "models.keepNativeOnV1": "ChatGPT는 v1 유지",
   "models.keepNativeOnV1Hint": "ChatGPT 네이티브 부모는 v2 자식 작업을 암호화해서 Grok/Claude가 읽지 못합니다. Sol/Terra가 routed 모델을 spawn해야 하면 켜 두세요. routed 부모는 v2를 유지합니다.",
-  "models.v2Help": "모든 모델의 멀티에이전트 서피스를 제어합니다.\n\nv1: 단일 스레드 에이전트. 모든 모델이 v1 서피스를 사용합니다.\nbase: 업스트림 기본값 — sol/terra는 v2, luna는 v1, 나머지는 codex 플래그를 따릅니다.\nv2: 멀티 스레드 에이전트(spawn_agent). 모든 모델이 v2 서피스를 사용합니다.\n\n새 세션부터 적용됩니다.",
+  "models.v2Help": "모든 모델의 멀티에이전트 서피스를 제어합니다.\n\nv1: 단일 스레드 에이전트. 모든 모델이 v1 서피스를 사용합니다.\nbase: 업스트림 기본값 — sol/terra는 v2, luna는 v1, 나머지는 codex 플래그를 따릅니다.\nv2: 멀티 스레드 에이전트(spawn_agent). 모든 모델이 v2 서피스를 사용합니다.\n\nv2에서 ChatGPT는 v1 유지를 켜면 Sol/Terra가 v1에 남아 Grok이나 Claude를 spawn할 수 있습니다. ChatGPT는 v2 자식 작업을 암호화하므로 routed 모델은 읽지 못합니다. routed 부모는 v2를 유지합니다.\n\n새 세션부터 적용됩니다.",
   "models.v2DocsLink": "v1 / v2가 뭔가요?",
   "dash.multiAgent": "서브에이전트",
   "models.v2Conflict": "[agents] max_threads가 남아 있어 codex가 부팅을 거부합니다 — config.toml에서 제거하세요",

@@ -26,7 +26,7 @@ routes, and limits delegated work.
 | `agentTaskRecovery?` | `object` | — | Experimental opt-in recovery for backend-encrypted v2 tasks sent to routed providers. Disabled unless `enabled: true`; see [Encrypted v2 task recovery](#encrypted-v2-task-recovery). |
 
 Manage the surface with the dashboard or
-`ocx v2 status|on|off|mode <v1|default|v2>|keep-native-v1 <on\|off>|threads <n>|mode-hint <text|--clear>`.
+`ocx v2 status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`.
 Mode changes apply to new sessions. `maxConcurrentThreadsPerSession` is a `PUT /api/v2` field, not a
 `config.json` key; `ocx v2 threads <n>` writes `max_concurrent_threads_per_session` under
 `[features.multi_agent_v2]` in Codex's `$CODEX_HOME/config.toml` after v2 is enabled.
