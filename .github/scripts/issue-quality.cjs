@@ -83,27 +83,44 @@ function detectIssueKind(issue) {
   return core.detectIssueKind(normalizeEquivalentBugEvidence(issue));
 }
 
+function independentReproductionText(summary, reproduction) {
+  const summaryCan = core.canonicalise(summary);
+  return String(reproduction || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const lineCan = core.canonicalise(line);
+      return lineCan && !summaryCan.includes(lineCan);
+    })
+    .join("\n");
+}
+
 /**
- * The core validator deliberately accepts longer prose even when it lacks one
- * of its compact command/error/path signals. That is useful for narrative
- * reproduction steps, but it let #1672 pass by copying the generic final sync
- * error from Summary into Reproduction. Only reject the narrow case where the
- * reproduction is wholly contained in the summary (or vice versa) and adds no
- * independent actionable step.
+ * Reject the narrow #1672 class: Reproduction is only text already present in
+ * Summary and contributes no independent actionable evidence. Compute the
+ * actionable check only over reproduction-only lines so phrases like
+ * "Codex config" inside the shared generic error cannot be misread by the
+ * legacy command heuristic as a `codex config` invocation.
  */
 function reproductionOnlyEchoesSummary(summary, reproduction) {
   const summaryCan = core.canonicalise(summary);
   const reproductionCan = core.canonicalise(reproduction);
   if (!summaryCan || !reproductionCan) return false;
 
-  const hasIndependentAction =
-    core.hasActionableReproductionDetail(reproduction) ||
-    /\b(?:run|execute|invoke|retry)\s+[`'"*_~]*ocx\s+(?:sync|restore|update|doctor|start|stop|restart)\b/i.test(
-      String(reproduction || ""),
-    );
-  if (hasIndependentAction) return false;
+  if (summaryCan === reproductionCan || summaryCan.includes(reproductionCan)) {
+    return true;
+  }
+  if (!reproductionCan.includes(summaryCan)) return false;
 
-  return summaryCan.includes(reproductionCan) || reproductionCan.includes(summaryCan);
+  const independent = independentReproductionText(summary, reproduction);
+  if (!independent) return true;
+
+  const explicitOcxAction =
+    /\b(?:run|execute|invoke|retry)\s+[`'"*_~]*ocx\s+(?:sync|restore|update|doctor|start|stop|restart)\b/i.test(
+      independent,
+    );
+  return !(explicitOcxAction || core.hasActionableReproductionDetail(independent));
 }
 
 function validateIssue(issue) {
@@ -136,5 +153,6 @@ module.exports = {
   detectIssueKind,
   validateIssue,
   normalizeEquivalentBugEvidence,
+  independentReproductionText,
   reproductionOnlyEchoesSummary,
 };
