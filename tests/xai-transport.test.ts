@@ -107,7 +107,7 @@ describe("xAI auth-mode transport selection", () => {
     });
   });
 
-  test("flattens nested root tool unions for the Grok CLI proxy while other providers keep a root object type", () => {
+  test("omits a CLI union whose properties are only on some branches; api.x.ai keeps the native union", () => {
     const schema = {
       oneOf: [
         { type: "object", properties: { mode: { type: "string", enum: ["view"] } } },
@@ -119,16 +119,7 @@ describe("xAI auth-mode transport selection", () => {
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
-    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
-
-    expect(xaiParameters.type).toBe("object");
-    expect(xaiParameters.oneOf).toBeUndefined();
-    expect(xaiParameters.anyOf).toBeUndefined();
-    expect(xaiParameters.properties).toEqual({
-      mode: { type: "string", enum: ["view"] },
-      path: { type: "string" },
-    });
-    expect(xaiParameters.$defs).toEqual(schema.$defs);
+    expect(JSON.parse(request.body).tools).toBeUndefined();
 
     const apiRequest = createOpenAIChatAdapter(provider("key")).buildRequest({
       ...parsed(),
@@ -141,6 +132,34 @@ describe("xAI auth-mode transport selection", () => {
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
     expect((JSON.parse(otherRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
+  });
+
+  test("omits a CLI union with a branch-local property even when additionalProperties is omitted", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { mode: { type: "string" } } },
+        { type: "object", properties: { path: { type: "string" } } },
+      ],
+    };
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "local", description: "Local", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("omits a CLI union with a branch-local property even when additionalProperties is true", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { a: { type: "string" } }, additionalProperties: true },
+        { type: "object", properties: { b: { type: "number" } }, additionalProperties: true },
+      ],
+    };
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "open", description: "Open", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
   });
 
   test("preserves shared root properties when every xAI branch has the same required set", () => {
@@ -206,7 +225,7 @@ describe("xAI auth-mode transport selection", () => {
     expect((JSON.parse(api.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
   });
 
-  test("resolves local $ref variants before flattening an xAI union", () => {
+  test("omits a $ref union whose resolved properties are only on some branches", () => {
     const schema = {
       $defs: {
         path: { type: "object", properties: { mode: { const: "path" }, path: { type: "string" } } },
@@ -218,14 +237,26 @@ describe("xAI auth-mode transport selection", () => {
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
-    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
 
+  test("resolves local $ref variants and flattens when every property is shared", () => {
+    const schema = {
+      $defs: {
+        path: { type: "object", properties: { mode: { const: "path" } } },
+        url: { type: "object", properties: { mode: { const: "url" } } },
+      },
+      oneOf: [{ $ref: "#/$defs/path" }, { $ref: "#/$defs/url" }],
+    };
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
+    });
+    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
     expect(xaiParameters.type).toBe("object");
     expect(xaiParameters.oneOf).toBeUndefined();
     expect(xaiParameters.properties).toEqual({
       mode: { anyOf: [{ const: "path" }, { const: "url" }] },
-      path: { type: "string" },
-      url: { type: "string" },
     });
     expect(xaiParameters.$defs).toEqual(schema.$defs);
   });

@@ -797,16 +797,12 @@ function variantProperties(variant: Record<string, unknown>): Record<string, unk
 }
 
 /**
- * Independent per-property anyOf is lossless only when at most one property schema
- * differs. Two or more divergent properties can be correlated (kind+value, etc.).
- * A property present on only some closed (`additionalProperties: false`) variants
- * cannot be added to the others without widening the accepted set.
+ * Independent per-property anyOf is lossless only when every property name exists
+ * on every variant (absence is meaningful under xAI's default additionalProperties:
+ * false, and promoting a branch-local key also tightens explicit-true variants)
+ * and at most one of those shared properties has a conflicting schema.
  */
-function xaiPropertyMergeIsLossless(
-  variants: Record<string, unknown>[],
-  additionalProperties: { ok: true; value?: unknown },
-): boolean {
-  const closed = additionalProperties.value === false;
+function xaiPropertyMergeIsLossless(variants: Record<string, unknown>[]): boolean {
   const names = new Set<string>();
   const props = variants.map(variant => {
     const properties = variantProperties(variant);
@@ -815,8 +811,8 @@ function xaiPropertyMergeIsLossless(
   });
   let schemaConflicts = 0;
   for (const name of names) {
-    const values = props.map(property => property[name]).filter(value => value !== undefined);
-    if (values.length !== variants.length && closed) return false;
+    const values = props.map(property => property[name]);
+    if (values.some(value => value === undefined)) return false;
     if (values.some(value => JSON.stringify(value) !== JSON.stringify(values[0]))) schemaConflicts += 1;
   }
   return schemaConflicts <= 1;
@@ -913,8 +909,8 @@ function mergeXaiPropertySchemas(values: unknown[]): unknown {
  * The Grok CLI proxy rejects a function parameter schema whose root remains oneOf/anyOf.
  * Flatten only when the merge is lossless: local $refs resolve, every variant is a concrete
  * object whose keys we can preserve, required sets match, additionalProperties does not change
- * meaning, and at most one property schema differs (so per-property anyOf cannot hide
- * correlations). Otherwise omit the tool rather than emit a weaker schema.
+ * meaning, every property name exists on every variant, and at most one property schema
+ * differs. Otherwise omit the tool rather than emit a weaker schema.
  */
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
   if (!isXaiObjectSchema(parameters)) return undefined;
@@ -928,7 +924,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
   if (!variants.every(xaiVariantIsConcreteObject) || !xaiRequiredSetsMatch(variants)) return undefined;
   const additionalProperties = mergeXaiAdditionalProperties(variants);
   if (!additionalProperties.ok) return undefined;
-  if (!xaiPropertyMergeIsLossless(variants, additionalProperties)) return undefined;
+  if (!xaiPropertyMergeIsLossless(variants)) return undefined;
 
   const metadata = Object.fromEntries(Object.entries(resolved).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
   delete metadata.properties;
