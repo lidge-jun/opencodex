@@ -83,6 +83,13 @@ function detectIssueKind(issue) {
   return core.detectIssueKind(normalizeEquivalentBugEvidence(issue));
 }
 
+function stripOrderedListPrefixes(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*\d+[.)]\s+/, ""))
+    .join("\n");
+}
+
 function independentReproductionText(summary, reproduction) {
   const summaryCan = core.canonicalise(summary);
   return String(reproduction || "")
@@ -90,7 +97,8 @@ function independentReproductionText(summary, reproduction) {
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => {
-      const lineCan = core.canonicalise(line);
+      const comparableLine = line.replace(/^\d+[.)]\s+/, "");
+      const lineCan = core.canonicalise(comparableLine);
       return lineCan && !summaryCan.includes(lineCan);
     })
     .join("\n");
@@ -105,7 +113,9 @@ function independentReproductionText(summary, reproduction) {
  */
 function reproductionOnlyEchoesSummary(summary, reproduction) {
   const summaryCan = core.canonicalise(summary);
-  const reproductionCan = core.canonicalise(reproduction);
+  // Ordered step numbers are presentation, not evidence. Remove them before the
+  // whole-section comparison as well as from per-line independence checks.
+  const reproductionCan = core.canonicalise(stripOrderedListPrefixes(reproduction));
   if (!summaryCan || !reproductionCan) return false;
 
   if (summaryCan === reproductionCan || summaryCan.includes(reproductionCan)) {
@@ -153,6 +163,7 @@ module.exports = {
   detectIssueKind,
   validateIssue,
   normalizeEquivalentBugEvidence,
+  stripOrderedListPrefixes,
   independentReproductionText,
   reproductionOnlyEchoesSummary,
 };
