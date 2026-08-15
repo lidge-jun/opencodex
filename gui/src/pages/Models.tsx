@@ -818,7 +818,20 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        void loadV2();
+        if (!data || typeof data.enabled !== "boolean") {
+          throw new Error(t("models.saveFailed"));
+        }
+        setV2({
+          enabled: data.enabled,
+          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
+          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number"
+            ? data.maxConcurrentThreadsPerSession
+            : null,
+          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2"
+            ? data.multiAgentMode
+            : "default",
+          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
+        });
         setOk(true);
         setStatus(t("models.v2Applied"));
         setV2Note((data?.warnings ?? []).join(" "));
