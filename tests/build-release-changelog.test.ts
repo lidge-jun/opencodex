@@ -2,7 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   buildReleaseNotes,
   categoryForTitle,
+  hasRenderedPullReference,
+  isPrereleaseVersion,
   isReleaseMetadataCommit,
+  parseAssociatedPulls,
+  parseGitLog,
   selectReleaseBaseline,
   trailingLandingPr,
   type ReleaseCommit,
@@ -57,6 +61,20 @@ describe("selectReleaseBaseline", () => {
       "v1.8.0-preview.4",
     ])).toBe("v1.0.0");
   });
+
+  test("stable ignores every SemVer prerelease, not only preview tags", () => {
+    expect(selectReleaseBaseline("2.0.0", [
+      "v1.8.0-beta.2",
+      "v1.9.0",
+      "v2.0.0-preview.1",
+      "v2.0.0-rc.1",
+    ])).toBe("v1.9.0");
+  });
+
+  test("returns null when no earlier release tag exists", () => {
+    expect(selectReleaseBaseline("1.0.0", [])).toBeNull();
+    expect(selectReleaseBaseline("1.0.0", ["v1.0.0", "v2.0.0"])).toBeNull();
+  });
 });
 
 describe("commit helpers", () => {
@@ -66,9 +84,21 @@ describe("commit helpers", () => {
     expect(isReleaseMetadataCommit("fix(release): keep changelog complete")).toBe(false);
   });
 
+  test("recognizes prereleases from SemVer rather than one channel name", () => {
+    expect(isPrereleaseVersion("2.0.0-preview.1")).toBe(true);
+    expect(isPrereleaseVersion("v2.0.0-rc.1")).toBe(true);
+    expect(isPrereleaseVersion("2.0.0-beta.2")).toBe(true);
+    expect(isPrereleaseVersion("2.0.0")).toBe(false);
+  });
+
   test("extracts only a trailing squash-style PR reference", () => {
     expect(trailingLandingPr("fix(api): preserve state (#123)")).toBe(123);
     expect(trailingLandingPr("fix(api): mention #123 in prose")).toBeNull();
+  });
+
+  test("matches rendered PR references without accepting longer-number prefixes", () => {
+    expect(hasRenderedPullReference("- fixed thing (#155)", 155)).toBe(true);
+    expect(hasRenderedPullReference("- unrelated thing (#1553)", 155)).toBe(false);
   });
 
   test("classifies direct conventional commits into release categories", () => {
@@ -77,6 +107,72 @@ describe("commit helpers", () => {
     expect(categoryForTitle("docs: explain setup")).toBe("Documentation");
     expect(categoryForTitle("ci: pin an action")).toBe("Chores");
     expect(categoryForTitle("refactor: simplify routing")).toBe("Other Changes");
+  });
+});
+
+describe("release metadata parsers", () => {
+  test("parses multiline git-log records and trailing separators", () => {
+    const raw = [
+      `${sha("a")}\x1ffix(core): first change\x1ffix(core): first change\n\nline one\nline two\x1e`,
+      `${sha("b")}\x1ffeat(api): second change\x1ffeat(api): second change\x1e`,
+      "",
+    ].join("\n");
+
+    expect(parseGitLog(raw)).toEqual([
+      {
+        sha: sha("a"),
+        subject: "fix(core): first change",
+        body: "fix(core): first change\n\nline one\nline two",
+      },
+      {
+        sha: sha("b"),
+        subject: "feat(api): second change",
+        body: "feat(api): second change",
+      },
+    ]);
+  });
+
+  test("fails closed on malformed git-log records", () => {
+    expect(() => parseGitLog(`\x1ffix(core): missing sha\x1fbody\x1e`)).toThrow(
+      "malformed release commit record",
+    );
+    expect(() => parseGitLog(`${sha("a")}\x1f\x1fbody\x1e`)).toThrow(
+      "malformed release commit record",
+    );
+  });
+
+  test("normalizes associated pull metadata safely", () => {
+    expect(parseAssociatedPulls([
+      {
+        number: 41,
+        title: "fix(core): merged",
+        merged_at: "2026-08-15T00:00:00Z",
+        user: null,
+        labels: [{ name: "bug" }, { name: 123 }, {}],
+      },
+      {
+        number: 42,
+        title: "docs: open",
+        merged_at: null,
+        user: { login: "alice" },
+        labels: null,
+      },
+    ])).toEqual([
+      {
+        number: 41,
+        title: "fix(core): merged",
+        author: "unknown",
+        labels: ["bug"],
+        merged: true,
+      },
+      {
+        number: 42,
+        title: "docs: open",
+        author: "alice",
+        labels: [],
+        merged: false,
+      },
+    ]);
   });
 });
 
