@@ -140,6 +140,36 @@ describe("Command Code provider quota", () => {
     expect(seen[1]).toBe("https://api.commandcode.ai/alpha/billing/credits");
   });
 
+  test("omits creditsUsd when the billing period cannot be established", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.includes("/alpha/whoami")) return new Response("{}", { status: 200 });
+      if (url.includes("/alpha/billing/subscriptions")) return new Response("down", { status: 500 });
+      if (url.includes("/alpha/usage/summary")) {
+        return new Response(JSON.stringify({ totalCost: 999 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        credits: { monthlyCredits: 20, purchasedCredits: 5, freeCredits: 1 },
+        windowLimits: { fiveHour: { cap: 100, used: 40 }, weekly: { cap: 500, used: 25 } },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota).toEqual({
+      fiveHourPercent: 40,
+      weeklyPercent: 5,
+      updatedAt: expect.any(Number),
+    });
+    expect(result.reports[0]?.quota?.creditsUsd).toBeUndefined();
+    expect(seen.some(url => url.includes("/alpha/usage/summary"))).toBe(false);
+  });
+
   test("unwraps a data envelope on credits and spend payloads", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input);

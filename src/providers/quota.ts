@@ -1687,7 +1687,10 @@ async function fetchCommandCodeSpend(
   const subscriptionBody = await fetchCommandCodeJson(`${COMMAND_CODE_SUBSCRIPTIONS_URL}${orgQuery}`, bearer);
   const subscription = asRecord(subscriptionBody?.data) ?? subscriptionBody;
   const periodStart = typeof subscription?.currentPeriodStart === "string" ? subscription.currentPeriodStart.trim() : "";
-  const sinceQuery = periodStart ? `${orgQuery ? "&" : "?"}since=${encodeURIComponent(periodStart)}` : "";
+  // Unscoped /usage/summary is lifetime spend; mixing it with current-cycle
+  // remaining pools produces a wrong percent. Omit creditsUsd until a period exists.
+  if (!periodStart) return undefined;
+  const sinceQuery = `${orgQuery ? "&" : "?"}since=${encodeURIComponent(periodStart)}`;
   const expiresAt = normalizeResetAt(subscription?.currentPeriodEnd);
   const summaryBody = await fetchCommandCodeJson(`${COMMAND_CODE_USAGE_URL}${orgQuery}${sinceQuery}`, bearer);
   const summary = asRecord(summaryBody?.data) ?? summaryBody;
@@ -1702,7 +1705,6 @@ async function fetchCommandCodeSpend(
   if (pools.length === 0) return undefined;
   const remaining = pools.reduce((sum, value) => sum + Math.max(0, value ?? 0), 0);
   const limit = used + remaining;
-  // Without a period start the spend query is unscoped; percent may run high on aged accounts.
   const percent = normalizePercent(limit > 0 ? (used / limit) * 100 : 0);
   // Purchased credits roll over past the subscription period end, so an expiry is
   // only truthful when the aggregate contains no non-expiring purchased pool.
