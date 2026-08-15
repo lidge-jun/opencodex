@@ -83,22 +83,49 @@ function detectIssueKind(issue) {
   return core.detectIssueKind(normalizeEquivalentBugEvidence(issue));
 }
 
+/**
+ * Ordered-list numbers are presentation, not evidence, but numeric output in a
+ * fenced or indented code block may be the failure itself (for example
+ * `404. Not Found`). Strip list prefixes only from prose lines.
+ */
 function stripOrderedListPrefixes(text) {
+  let fence = null;
+
   return String(text || "")
     .split(/\r?\n/)
-    .map((line) => line.replace(/^\s*\d+[.)]\s+/, ""))
+    .map((line) => {
+      if (fence) {
+        const closing = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+        if (
+          closing &&
+          closing[1][0] === fence.char &&
+          closing[1].length >= fence.length
+        ) {
+          fence = null;
+        }
+        return line;
+      }
+
+      const opening = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+      if (opening) {
+        fence = { char: opening[1][0], length: opening[1].length };
+        return line;
+      }
+
+      if (/^(?: {4,}|\t)/.test(line)) return line;
+      return line.replace(/^\s{0,3}\d+[.)]\s+/, "");
+    })
     .join("\n");
 }
 
 function independentReproductionText(summary, reproduction) {
-  const summaryCan = core.canonicalise(summary);
-  return String(reproduction || "")
+  const summaryCan = core.canonicalise(stripOrderedListPrefixes(summary));
+  return stripOrderedListPrefixes(reproduction)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .filter((line) => {
-      const comparableLine = line.replace(/^\d+[.)]\s+/, "");
-      const lineCan = core.canonicalise(comparableLine);
+      const lineCan = core.canonicalise(line);
       return lineCan && !summaryCan.includes(lineCan);
     })
     .join("\n");
@@ -112,9 +139,9 @@ function independentReproductionText(summary, reproduction) {
  * legacy command heuristic as a `codex config` invocation.
  */
 function reproductionOnlyEchoesSummary(summary, reproduction) {
-  const summaryCan = core.canonicalise(summary);
-  // Ordered step numbers are presentation, not evidence. Remove them before the
-  // whole-section comparison as well as from per-line independence checks.
+  // Ordered step numbers are presentation, not evidence. Normalize both sides
+  // consistently while preserving numeric output inside code blocks.
+  const summaryCan = core.canonicalise(stripOrderedListPrefixes(summary));
   const reproductionCan = core.canonicalise(stripOrderedListPrefixes(reproduction));
   if (!summaryCan || !reproductionCan) return false;
 
