@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { hasMeaningfulCarriedNotes } from "../scripts/release-notes";
 import { parseTomlDocument } from "../src/codex/project-config-warnings";
 
 const issueQuality = require("../.github/scripts/issue-quality.cjs") as {
@@ -19,6 +20,12 @@ describe("validated CodeQL regressions", () => {
     expect(issueQuality.clean("<!--\nhidden issue text")).toBe("");
 
     expect(issueQuality.clean("<!-- hidden -->\nVisible text")).toBe("Visible text");
+  });
+
+  test("release-note comments stay non-meaningful through a closing marker or EOF", () => {
+    expect(hasMeaningfulCarriedNotes("<!-- generated\nmetadata -->")).toBe(false);
+    expect(hasMeaningfulCarriedNotes("<!-- generated\nmetadata")).toBe(false);
+    expect(hasMeaningfulCarriedNotes("<!-- hidden -->\n## What's Changed\n* visible fix")).toBe(true);
   });
 
   test("malformed TOML basic strings stay bounded while escaped strings still parse", () => {
