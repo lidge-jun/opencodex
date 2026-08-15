@@ -173,8 +173,18 @@ The fourth test is the honest part: it encodes what this phase does NOT fix.
    `gh issue view 1797`). A deferral with no tracking issue is not a
    deferral, it is a silent drop.
 4. `bun x tsc --noEmit` clean.
-5. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
-   shared surface touched by many catalog suites.
+5. The targeted suites pass on lidge at the pushed head, and the full suite
+   runs with only the documented environment failures — `provider-fetch.ts`
+   is a shared surface touched by many catalog suites, so the full run is
+   required even though it is not fully green.
+
+   Recorded result (see `040_implementation_record.md`): 12337 tests across
+   792 files, 7 fail. All seven are `Cannot find package 'react'` /
+   `react/jsx-dev-runtime` from `gui/` sources, because the isolated clone
+   installs no GUI dependencies; they reproduce identically on an unmodified
+   `dev` checkout. Claiming this criterion as "green" would have been false —
+   the honest bar is: both new suites pass, and no failure is attributable to
+   this change.
 
 ## Verifier commands (PLAN-VERIFIER-REAL-01)
 

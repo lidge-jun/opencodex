@@ -23,7 +23,7 @@ that CI is red. It is not.
 | #1799 | REVIEW_REQUIRED | `macos` pending | **5 unresolved CodeRabbit threads** |
 
 Eight of nine are gated purely on approval. Only two carry real work:
-#1793 has a CHANGES_REQUESTED review, and #1799 (my own unit) has five
+`#1793` has a CHANGES_REQUESTED review, and `#1799` (my own unit) has five
 unresolved review threads including one Major.
 
 The `macos` job is a pre-existing Bun segfault that also fails on unmodified
@@ -45,7 +45,7 @@ The `macos` job is a pre-existing Bun segfault that also fails on unmodified
 
 ## Conflict found during triage
 
-#1793 and #1799 both modify `src/providers/model-discovery.ts`, and #1793 also
+`#1793` and `#1799` both modify `src/providers/model-discovery.ts`, and `#1793` also
 rewrites `src/providers/slug-codec.ts` — the module #1799's design deliberately
 avoided importing. Whichever lands second must rebase and re-verify rather than
 trusting a clean auto-merge. This is the single ordering constraint that is not

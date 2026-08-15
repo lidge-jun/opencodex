@@ -3,6 +3,15 @@
 Diff-level implementation doc. Research: `002_local_model_plugin_failure.md`.
 No dependency on Phases 1-2; it may land in any order.
 
+> **Superseded placement (review correction).** This document originally
+> selected `~/.codex/AGENTS.md`. That was wrong: an untracked host file cannot
+> ship with the package or be reproduced from a clone, so it is not a
+> deliverable. The guidance now lives in the tracked `AGENTS_INSTALL.md`,
+> which `package.json` publishes and which `AGENTS.md` and `README.md` both
+> point an installing or operating agent at. Every mention of the host path
+> below is historical; treat `AGENTS_INSTALL.md` as the placement decision.
+> The host copy remains only as local convenience and host-only verification.
+
 ## Goal
 
 A weaker local model asked to browse should reach `mcp__node_repl__js` on its
@@ -38,7 +47,8 @@ Candidates considered:
 |-----------|---------|
 | Bundled plugin `SKILL.md` | REJECTED — vendor-owned, overwritten on plugin update |
 | Repository `AGENTS.md` | REJECTED — this is host tooling, not opencodex development guidance; loaded for every code change where it is noise |
-| `~/.codex/AGENTS.md` (global, currently empty) | CHOSEN — resolves for every session on this host regardless of repository |
+| `~/.codex/AGENTS.md` (global) | SUPERSEDED — host-only, untracked, cannot ship or be reproduced from a clone |
+| `AGENTS_INSTALL.md` (tracked, published) | **CHOSEN** — the file an installing or operating agent reads; shipped in the package |
 
 Verified: `/Users/jun/.codex/AGENTS.md` exists and is 0 bytes, so the guidance
 is additive with no merge risk.
@@ -47,7 +57,7 @@ is additive with no merge risk.
 
 | Path | Action | What |
 |------|--------|------|
-| `~/.codex/AGENTS.md` | MODIFY (append) | Browser-plugin routing rule |
+| `AGENTS_INSTALL.md` | MODIFY (append) | Browser-plugin routing rule |
 
 ## Content to append
 
@@ -71,7 +81,7 @@ availability.
 
 ## Accept criteria
 
-1. The file exists at the documented path with the section present.
+1. The section is present in the tracked `AGENTS_INSTALL.md`.
 2. The wording names the tool explicitly — the bundled skill's own instruction
    to avoid naming `node_repl` in user-facing prose is what confuses a weaker
    model, so this internal-guidance surface deliberately names it.
