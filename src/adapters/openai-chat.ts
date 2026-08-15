@@ -333,6 +333,16 @@ type InvalidToolCallReason =
   | "tool_call_function_arguments_invalid";
 
 /**
+ * Streamed string fields are absent when null or undefined (#1731): OpenAI-compatible
+ * streamers repeat already-sent `id`/`name`/`arguments` as null on continuation deltas.
+ * The accumulator and this diagnostic share this predicate so they cannot disagree about
+ * which delta was the invalid one.
+ */
+function isInvalidStreamStringField(value: unknown): boolean {
+  return value != null && typeof value !== "string";
+}
+
+/**
  * Explain only the rejected wire shape, never its values. This diagnostic exists so provider
  * compatibility can be tightened from evidence without retaining tool arguments or credentials.
  */
@@ -358,6 +368,10 @@ function diagnoseInvalidToolCalls(
       // Blank names are caught later at flush, not here, so they are not diagnosed on this
       // branch. Describe exactly that boundary rather than tightening compatibility in a
       // diagnostic change.
+      // #1731: "present" means the same thing here as in the accumulator — null and undefined
+      // are both absent, because some OpenAI-compatible streamers repeat already-sent fields
+      // as null on continuation deltas. A separate predicate here would diagnose accepted
+      // padding as the failure and point compatibility work at the wrong delta.
       const streamFunction = (rawToolCall as { function?: unknown }).function;
       if (streamFunction !== undefined && streamFunction !== null) {
         if (!isRecord(streamFunction)) {
@@ -367,14 +381,14 @@ function diagnoseInvalidToolCalls(
             valueType: Array.isArray(streamFunction) ? "array" : typeof streamFunction,
           };
         }
-        if (streamFunction.name !== undefined && typeof streamFunction.name !== "string") {
+        if (isInvalidStreamStringField(streamFunction.name)) {
           return { reason: "tool_call_function_name_invalid", callIndex, valueType: typeof streamFunction.name };
         }
-        if (streamFunction.arguments !== undefined && typeof streamFunction.arguments !== "string") {
+        if (isInvalidStreamStringField(streamFunction.arguments)) {
           return { reason: "tool_call_function_arguments_invalid", callIndex, valueType: typeof streamFunction.arguments };
         }
       }
-      if (rawToolCall.id !== undefined && typeof rawToolCall.id !== "string") {
+      if (isInvalidStreamStringField(rawToolCall.id)) {
         return { reason: "tool_call_id_invalid", callIndex, valueType: typeof rawToolCall.id };
       }
       continue;
@@ -1488,13 +1502,15 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
                 }
                 const rawName = rawFunction.name;
                 const rawArguments = rawFunction.arguments;
-                if ((rawName !== undefined && typeof rawName !== "string")
-                  || (rawArguments !== undefined && typeof rawArguments !== "string")) {
+                // Some OpenAI-compatible streamers repeat already-sent fields as null on
+                // continuation deltas. Treat only null/undefined as absent; every other
+                // non-string value still fails closed before entering the accumulator.
+                if (isInvalidStreamStringField(rawName) || isInvalidStreamStringField(rawArguments)) {
                   logInvalidToolCalls("stream", rawToolCalls);
                   return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
                 }
               }
-              if (tc.id !== undefined && typeof tc.id !== "string") {
+              if (isInvalidStreamStringField(tc.id)) {
                 logInvalidToolCalls("stream", rawToolCalls);
                 return yield* terminateWithError(invalidToolCallsEvent(pendingUsage));
               }

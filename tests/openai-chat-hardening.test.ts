@@ -332,6 +332,27 @@ describe("openai-chat stream response hardening", () => {
     expect(lines).not.toContain(privateName);
     expect(lines).not.toContain("private arguments");
   });
+
+  test("debug mode skips accepted null padding and blames the real malformed delta (#1731)", async () => {
+    process.env.OCX_DEBUG = "1";
+    const adapter = createOpenAIChatAdapter(provider());
+    const response = new Response([
+      `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: null, function: { name: null, arguments: null } },
+        null,
+      ] } }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join(""));
+
+    const events = await collect(adapter.parseStream(response));
+    expect(events).toEqual([{ type: "error", message: "upstream response contained invalid tool calls" }]);
+    const lines = getDebugLogEntries().map(entry => entry.line).join("\n");
+    // The null-padded continuation delta at index 0 is accepted by the accumulator, so the
+    // diagnostic must point at index 1 rather than claiming the padding was the defect.
+    expect(lines).toContain('"reason":"tool_call_not_object"');
+    expect(lines).toContain('"callIndex":1');
+    expect(lines).not.toContain('"tool_call_function_name_invalid"');
+  });
 });
 
 describe("openai-chat credential hardening", () => {

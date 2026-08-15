@@ -97,6 +97,20 @@ describe("openai-chat parallel tool call stream assembly", () => {
     ]);
   });
 
+  test("T2b: null-padded continuation fields preserve the earlier tool call", async () => {
+    const events = await collect(sse([
+      chunkOf([{ index: 0, id: "call_null_padding", function: { name: "shell", arguments: "{\"x\":" } }]),
+      chunkOf([{ index: 0, id: null, function: { name: null, arguments: "1}" } }]),
+      chunkOf([{ index: 0, id: null, function: { name: null, arguments: null } }]),
+      chunkOf([], "tool_calls"),
+    ]));
+    expect(assembled(events)).toEqual([{
+      id: "call_null_padding",
+      name: "shell",
+      args: "{\"x\":1}",
+    }]);
+  });
+
   test("T3: whole-chunk multi-call (xAI style) emits both calls", async () => {
     const events = await collect(sse([
       chunkOf([
@@ -147,7 +161,7 @@ describe("openai-chat parallel tool call stream assembly", () => {
   // a call the Codex tool-call contract cannot dispatch was never a usable outcome (#1514).
   test("T7: name never arrives - turn fails closed instead of emitting an undispatchable call", async () => {
     const events = await collect(sse([
-      chunkOf([{ index: 0, id: "anon", function: { arguments: "{\"q\":1}" } }]),
+      chunkOf([{ index: 0, id: "anon", function: { name: null, arguments: "{\"q\":1}" } }]),
       chunkOf([], "tool_calls"),
     ]));
     expect(assembled(events)).toEqual([]);
