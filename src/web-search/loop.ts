@@ -1,6 +1,7 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../adapters/base";
-import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxProviderOpaqueToolCallMetadata, OcxThinkingContent, OcxUsage, RateLimitRetryPolicy } from "../types";
 import { namespacedToolName, toolChoiceToolPredicate } from "../types";
+import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -32,6 +33,11 @@ interface WebSearchCall {
   // empty array means the model called the tool with neither `query` nor `queries` (handled as an
   // empty-query placeholder).
   queries: string[];
+  /**
+   * Provider-opaque metadata from the originating part (issue #1735). Stored PER CALL so a
+   * signature can never migrate to a different call when the model batches several.
+   */
+  providerMetadata?: OcxProviderOpaqueToolCallMetadata;
 }
 
 /**
@@ -69,7 +75,7 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
   const passthrough: AdapterEvent[] = [];
   let hasRealToolCall = false;
   let hasMalformedToolCall = false;
-  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[] } | null = null;
+  let pending: { name: string; id: string; argsBuf: string; closed: boolean; events: AdapterEvent[]; providerMetadata?: OcxProviderOpaqueToolCallMetadata } | null = null;
   const isBlank = (value: string): boolean => value.trim().length === 0;
   const flushPending = (): void => {
     // A pending call that never saw tool_call_end is structurally malformed.
@@ -84,7 +90,7 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
     if (e.type === "tool_call_start") {
       flushPending();
       if (isBlank(e.id) || isBlank(e.name)) hasMalformedToolCall = true;
-      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e] };
+      pending = { name: e.name, id: e.id, argsBuf: "", closed: false, events: [e], providerMetadata: e.providerMetadata };
     } else if (e.type === "tool_call_delta") {
       // Orphan delta (no open call) is malformed.
       if (!pending) hasMalformedToolCall = true;
@@ -100,7 +106,7 @@ export function scanEventsForWebSearch(events: AdapterEvent[]): {
         pending.events.push(e);
         pending.closed = true;
         if (pending.name === WEB_SEARCH_TOOL_NAME) {
-          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf) });
+          calls.push({ id: pending.id, queries: parseQueries(pending.argsBuf), providerMetadata: pending.providerMetadata });
         } else {
           passthrough.push(...pending.events);
           if (!isBlank(pending.id) && !isBlank(pending.name)) hasRealToolCall = true;
@@ -678,7 +684,17 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         // Signed thinking must precede tool_use on replay (Anthropic extended thinking), and
         // unsigned raw reasoning has to ride along for providers that require it back (#688).
         ...precedingThinking,
-        { type: "toolCall" as const, id: call.id, name: WEB_SEARCH_TOOL_NAME, arguments: callArgs },
+        {
+          type: "toolCall" as const,
+          id: call.id,
+          name: WEB_SEARCH_TOOL_NAME,
+          arguments: callArgs,
+          // Re-attach the signature to the rebuilt call so a sidecar turn keeps Gemini
+          // reasoning continuity instead of relying on the same-process replay cache.
+          ...(cloneProviderOpaqueToolCallMetadata(call.providerMetadata)
+            ? { providerMetadata: cloneProviderOpaqueToolCallMetadata(call.providerMetadata) }
+            : {}),
+        },
       ],
       timestamp: now,
     });

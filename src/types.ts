@@ -180,8 +180,25 @@ export interface OcxToolCall {
   arguments: Record<string, unknown>;
   customWireName?: string;
   thoughtSignature?: string;
+  /**
+   * Provider-issued opaque metadata that must survive the whole round trip unchanged
+   * (issue #1735). A signed Gemini part is only valid when its signature comes back on the
+   * SAME part it was issued for, so this travels with the individual tool call rather than
+   * being matched by name/arguments after the fact.
+   */
+  providerMetadata?: OcxProviderOpaqueToolCallMetadata;
   /** MCP namespace (e.g. "mcp__context7") when this call targets a namespaced tool. */
   namespace?: string;
+}
+
+/**
+ * Opaque, provider-scoped tool-call metadata. Values are never parsed, merged, re-encoded, or
+ * synthesized — they are carried verbatim or not at all.
+ */
+export interface OcxProviderOpaqueToolCallMetadata {
+  google?: {
+    thoughtSignature?: string;
+  };
 }
 
 export type OcxAssistantContentPart = OcxTextContent | OcxThinkingContent | OcxToolCall;
@@ -328,7 +345,7 @@ export type AdapterEvent =
   // Never rendered — it only rides the reasoning item's envelope so the next request can replay it.
   | { type: "kiro_redacted_reasoning"; data: string }
   | { type: "reasoning_raw_delta"; text: string }
-  | { type: "tool_call_start"; id: string; name: string }
+  | { type: "tool_call_start"; id: string; name: string; providerMetadata?: OcxProviderOpaqueToolCallMetadata }
   | { type: "tool_call_delta"; arguments: string }
   | { type: "tool_call_end" }
   /** Internal boundary between a guarded first pass and its one-shot continuation. */
