@@ -658,6 +658,7 @@ export async function prepareCursorRawMessages(
   signal?: AbortSignal,
 ): Promise<readonly OcxMessage[] | undefined> {
   if (!messages?.length) return messages;
+  throwIfImagePhaseAborted(signal);
   const prepareFrom = cursorVisionPrepareStartIndex(messages);
   const active = messages[prepareFrom];
   if (
