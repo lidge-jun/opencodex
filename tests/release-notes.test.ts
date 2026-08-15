@@ -3,6 +3,7 @@ import {
   cleanPrTitle,
   extractChangelogPrNumbers,
   extractCommitBulletSections,
+  mergeCommitBulletSections,
   extractPrNumbers,
   hasMeaningfulCarriedNotes,
   isReleasePlumbingCommit,
@@ -60,9 +61,14 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
 
   test("markdown metacharacters cannot restructure the release body", () => {
     const subject = "fix(x): drop " + String.fromCharCode(96) + "code" + String.fromCharCode(96) + " and <b>tags</b>";
-    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\\u001f" + subject + "\\u001fdev"));
-    expect(out).not.toContain(String.fromCharCode(96));
-    expect(out).not.toContain("<b>");
+    const NUL = String.fromCharCode(0);
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + subject + NUL + "dev"));
+    // Non-vacuous: the entry must actually render.
+    expect(out).toContain("drop");
+    // Escaped, not deleted: technical text survives but cannot restructure the body.
+    expect(out).toContain("\\" + String.fromCharCode(96) + "code");
+    expect(out).toContain("\\<b\\>");
+    expect(out).not.toMatch(/(^|[^\\])<b>/);
   });
 
   test("sanitizeCommitText collapses newlines and strips the separator byte", () => {
@@ -89,7 +95,10 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
   test("conventional merge: commits are plumbing too", () => {
     expect(isReleasePlumbingCommit("merge: bring dev into main")).toBe(true);
     expect(isReleasePlumbingCommit("merge(dev): sync")).toBe(true);
-    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1\\u001fmerge: bring dev into main\\u001fdev"))).toBe("");
+    const NUL = String.fromCharCode(0);
+    // Non-vacuous: an ordinary commit in the same shape does render.
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + "fix(x): real" + NUL + "dev"))).toContain("real");
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + "merge: bring dev into main" + NUL + "dev"))).toBe("");
   });
 
   test("preview fallback notes survive the carry into a stable release", () => {
@@ -124,6 +133,30 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
     expect(out).toContain("gui: commit style");
     expect(out).not.toContain("#42");
     expect(out).not.toContain("Changelog");
+  });
+
+  test("carried and current fallback bullets merge under one heading per category", () => {
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: "## Bug Fixes\n\n- carried one (aaa1234, N)\n",
+      commitFallbackNotes: "## Bug Fixes\n\n- current one (bbb1234, M)\n\n## Chores\n\n- chore one (ccc1234, O)\n",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("carried one");
+    expect(rendered).toContain("current one");
+    expect(rendered).toContain("chore one");
+    expect((rendered.match(/## Bug Fixes/g) ?? [])).toHaveLength(1);
+  });
+
+  test("mergeCommitBulletSections drops duplicate bullets", () => {
+    const merged = mergeCommitBulletSections([
+      "## Bug Fixes\n\n- same (aaa1234, N)\n",
+      "## Bug Fixes\n\n- same (aaa1234, N)\n- other (bbb1234, M)\n",
+    ]);
+    expect((merged.match(/- same/g) ?? [])).toHaveLength(1);
+    expect(merged).toContain("- other");
   });
 
   test("carried PR sections still win over carried commit bullets", () => {

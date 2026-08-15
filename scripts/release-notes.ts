@@ -340,6 +340,42 @@ export function extractCommitBulletSections(body: string): string {
  * record is read as exactly three fields; anything longer is a malformed record
  * and is skipped rather than silently reinterpreted.
  */
+export function mergeCommitBulletSections(bodies: string[]): string {
+  const buckets = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const body of bodies) {
+    let current: string | null = null;
+    for (const rawLine of (body ?? "").replace(/\r\n/g, "\n").split("\n")) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.startsWith("## ") || line.startsWith("### ")) {
+        current = line.replace(/^#{2,3}\s+/, "").trim();
+        if (!buckets.has(current)) buckets.set(current, []);
+        continue;
+      }
+      if (!current || !line.startsWith("- ")) continue;
+      const key = `${current}\u0000${line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      buckets.get(current)!.push(line);
+    }
+  }
+  const titles = [...buckets.keys()].sort((x, y) => {
+    const ix = RENDER_CATEGORY_ORDER.indexOf(x);
+    const iy = RENDER_CATEGORY_ORDER.indexOf(y);
+    const rx = ix === -1 ? RENDER_CATEGORY_ORDER.length : ix;
+    const ry = iy === -1 ? RENDER_CATEGORY_ORDER.length : iy;
+    return rx - ry;
+  });
+  const merged: string[] = [];
+  for (const title of titles) {
+    const lines = buckets.get(title)!;
+    if (lines.length === 0) continue;
+    merged.push([`## ${title}`, "", ...lines].join("\n"));
+  }
+  return merged.join("\n\n").trim();
+}
+
 export function parseCommitLog(raw: string): ReleaseNoteCommit[] {
   const commits: ReleaseNoteCommit[] = [];
   const fields = raw.split("\u0000");
@@ -681,9 +717,12 @@ export function renderReleaseNotes(input: {
   const renderedAnyPrSection = parts.length > (npmMetadata ? 1 : 0);
   if (!renderedAnyPrSection) {
     // Carried commit bullets first (older preview work), then this range's own.
-    const carriedCommitSections = extractCommitBulletSections(input.carriedPreviewNotes ?? "").trim();
-    const commitFallback = (input.commitFallbackNotes ?? "").trim();
-    const merged = [carriedCommitSections, commitFallback].filter(Boolean).join("\n\n");
+    // They are merged BY CATEGORY: concatenating two rendered bodies would emit
+    // `## Bug Fixes` twice when both halves touched the same category.
+    const merged = mergeCommitBulletSections([
+      extractCommitBulletSections(input.carriedPreviewNotes ?? ""),
+      input.commitFallbackNotes ?? "",
+    ]);
     if (merged) parts.push(merged);
   }
 
