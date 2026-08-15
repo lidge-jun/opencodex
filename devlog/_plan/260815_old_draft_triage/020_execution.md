@@ -14,9 +14,12 @@ Shared mechanics for every worker (sol/medium, forked session):
  
 ### repair/260815-pr-1664 (MiniMax Code/CLI, 3 commits)
  
-Cherry-pick pull/1664/head commits. Repairs:
+Cherry-pick EXACTLY the two non-merge commits (A-audit: skip merge commit 50ac35d02, whose second-parent patch duplicates befd076f6):
+  git cherry-pick befd076f601f1c77a57406b93dabe10347013edb
+  git cherry-pick cd3c26a4c7a51937c4a58ced88a4cbb5a8519098
+Repairs:
 - Introduce ONE shared compiled-aware launcher argv helper (Bun.isStandaloneExecutable split: standalone -> spawn(process.execPath, args); source -> spawn(process.execPath, [process.argv[1], ...args])) in a shared cli module.
-- Migrate all four call sites: PR-head src/cli/minimax.ts:261 plus existing src/cli/index.ts:123, src/cli/opencode.ts:497, src/cli/claude.ts:272 (repo-wide debt, per A-audit).
+- Migrate ALL launcher call sites (A-audit expanded scope): PR-head src/cli/minimax.ts:261; existing src/cli/index.ts:123 (+consumers 471/518, dispatch injection 934-936), src/cli/opencode.ts:497, src/cli/claude.ts:272, src/server/management/system-restart.ts:216, src/update/index.ts (251, 301, 307, 331, 375), src/update/job.ts (1869, 1873).
 - Unit tests for both modes.
  
 ### repair/260815-pr-1669 (modelPickerOrder, 1 commit)
@@ -37,7 +40,7 @@ Cherry-pick pull/1664/head commits. Repairs:
  
 ### repair/260815-pr-1165 (imageInput combo control, 3 commits)
  
-- Fix double expansion of combo continuations (PR-head src/server/responses/core.ts:1261 area; re-locate on current dev).
+- Preserve and regression-test the existing anti-double-expansion deletion (PR head deletes previous_response_id before child dispatch; A-audit: already correct - lock with a test, do not 'fix').
 - ocx combo set must not silently reset imageInput disabled mode (round-trip test).
 - Add missing Turkish + zh-TW locale keys; stored-image replay coverage.
  
