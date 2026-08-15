@@ -29,7 +29,7 @@ Le résultat est enregistré dans `$OPENCODEX_HOME/config.json` (par défaut `~/
 La version stable actuelle contient des entrées initiales GPT-5.6 Sol/Terra/Luna pour le transfert direct
 ChatGPT, les clés API OpenAI, OpenRouter et l’adaptateur expérimental Cursor. Elles ne fonctionnent que si
 le compte en amont dispose de l’accès correspondant. Les préréglages de clé API OpenAI et OpenRouter
-annoncent une fenêtre de contexte utilisable de 372,000 jetons ; Cursor conserve les métadonnées de son adaptateur.
+annoncent une fenêtre de contexte utilisable de 372 000 jetons ; Cursor conserve les métadonnées de son adaptateur.
 :::
 
 ## 2. Démarrez le proxy

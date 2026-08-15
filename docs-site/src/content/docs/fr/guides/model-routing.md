@@ -91,7 +91,7 @@ Le routage et la visibilité dans le catalogue sont deux mécanismes distincts :
 - `provider.disabled: true` retire ce fournisseur de la découverte du catalogue. Les requêtes explicites
   `provider/model` échouent, et les recherches dans `defaultModel` et `models[]` l'ignorent.
 - `providerContextCaps` applique des plafonds de contexte visibles par Codex, fournisseur par fournisseur.
-  `contextCapValue` est la valeur par défaut du tableau de bord (350,000 par défaut), mais n'a aucun effet à
+  `contextCapValue` est la valeur par défaut du tableau de bord (350 000 par défaut), mais n'a aucun effet à
   lui seul tant qu'un fournisseur ne figure pas dans `providerContextCaps`. La modification de la valeur dans
   le tableau de bord réaffecte tous les fournisseurs activés uniquement lorsque l'option « appliquer à tous les
   fournisseurs routés » est activée ; sinon, chaque fournisseur conserve son propre plafond. Un plafond peut

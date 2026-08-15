@@ -16,8 +16,8 @@ définis sous `providers` dans `~/.opencodex/config.json`.
 
 Utilisez l'identifiant non qualifié `gpt-5.6-sol` avec l'option Pool/Direct de la page **Fournisseurs**, ou
 `openai-apikey/gpt-5.6-sol` pour l'API. Ces routes d'authentification ne se rabattent jamais l'une sur l'autre.
-La route API publie des métadonnées indiquant un contexte de 1,050,000 jetons et une entrée maximale de
-922,000 jetons. Ses identifiants virtuels `sol-pro`, `terra-pro` et `luna-pro` conservent l'identité publique
+La route API publie des métadonnées indiquant un contexte de 1 050 000 jetons et une entrée maximale de
+922 000 jetons. Ses identifiants virtuels `sol-pro`, `terra-pro` et `luna-pro` conservent l'identité publique
 sélectionnée, tandis que la requête transmise emploie le modèle de base avec `reasoning.mode: "pro"`.
 
 Si le fournisseur `openai` intégré est absent ou désactivé, le sélecteur de comptes du tableau de bord et la
@@ -44,7 +44,7 @@ incomplète chaque fenêtre concernée, au lieu d'assimiler la mesure absente à
 
 Cette estimation est destinée uniquement à l'affichage. Elle ne change ni la sélection du compte, ni
 l'affinité de session, ni le changement automatique, ni les délais de récupération, ni aucune autre décision de
-routage. Consultez le [pool de comptes d'authentification Codex](/fr/guides/web-dashboard/#authentification-codex-et-pools-de-comptes)
+routage. Consultez le [groupe de comptes d'authentification Codex](/fr/guides/web-dashboard/#authentification-codex-et-groupes-de-comptes)
 pour l'état de chaque compte et les contrôles de routage.
 
 Les configurations v1 livrées migrent automatiquement vers le marqueur 2 et une ligne tenant compte de
@@ -87,7 +87,7 @@ Le fournisseur `openai` ne nécessite **aucune clé API**. Direct transfère les
 
 Seul un ensemble sélectionné d'en-têtes est transmis (`FORWARD_HEADERS` : autorisation, identifiant de
 compte ChatGPT, bêta/originator/session OpenAI — voir [Adaptateurs](/fr/reference/adapters/)). Ce parcours
-alimente aussi les [side-cars de recherche web et de vision](/fr/guides/sidecars/).
+alimente aussi les [services auxiliaires de recherche web et de vision](/fr/guides/sidecars/).
 
 Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifiés GPT-5.6 Sol/Terra/Luna
 (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`) pour les comptes qui peuvent les utiliser.
@@ -210,7 +210,7 @@ identifiants de compte expurgés, aucun jeton. `ocx doctor` ajoute une section s
 contrôles du magasin accessible en écriture et de l'appel unique, ainsi que des lignes WARN qui indiquent une
 action de récupération. Lorsqu'un compte de fournisseur OAuth doit être réauthentifié, exécutez
 `ocx login <provider>` ou utilisez **Réauthentifier** dans le tableau de bord. Les comptes du pool Codex ne
-constituent pas un fournisseur `ocx login` : réauthentifiez-les dans le pool de comptes Codex du tableau de bord. Consultez
+constituent pas un fournisseur `ocx login` : réauthentifiez-les dans le groupe de comptes Codex du tableau de bord. Consultez
 [`ocx status` / `ocx doctor`](/fr/reference/cli/) dans la référence CLI.
 
 ### Importation des identifiants Kiro
@@ -496,7 +496,7 @@ ou de supprimer une clé ; l'API de gestion est `/api/providers/keys` et ne renv
 ### Changer de compte depuis le terminal
 
 Utilisez `ocx account list`, `ocx account current` et `ocx account use` pour consulter ou changer les mêmes
-pools de comptes Codex, de comptes OAuth et de clés API sans ouvrir le tableau de bord. Consultez la
+groupes de comptes Codex, de comptes OAuth et de clés API sans ouvrir le tableau de bord. Consultez la
 [référence de la CLI](/fr/reference/cli/providers-accounts/#ocx-account-subcommand) pour les commandes, la sortie JSON et le
 comportement lors de l'ouverture d'une nouvelle session.
 
@@ -507,10 +507,10 @@ maintenir leur visibilité même lorsque les catalogues en direct ne sont pas en
 
 | Route Codex | Identifiants de modèle préchargés | Contexte visible dans Codex |
 | --- | --- | --- |
-| Connexion Codex (Pool ou Direct) | `gpt-5.6-*` | 372,000 |
-| OpenAI (clé API) | `openai-apikey/gpt-5.6-*` plus `*-pro` | 1,050,000 (entrée maximale de 922,000) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 1,050,000 |
-| Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1,000,000 |
+| Connexion Codex (Pool ou Direct) | `gpt-5.6-*` | 372 000 |
+| OpenAI (clé API) | `openai-apikey/gpt-5.6-*` plus `*-pro` | 1 050 000 (entrée maximale de 922 000) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` | 1 050 000 |
+| Cursor | `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` | 1 000 000 |
 
 Les entrées natives GPT-5.6 conservent les niveaux de raisonnement fixés en amont — Luna propose par exemple
 `max`, mais pas `ultra`. Les entrées routées utilisent les métadonnées et les correspondances de raisonnement de
@@ -567,7 +567,7 @@ connexion par clé.
 Ollama Cloud est une version hébergée — et non locale — d'Ollama, compatible avec OpenAI à l'adresse
 `https://ollama.com/v1` et accessible avec une clé créée sur
 [ollama.com/settings/keys](https://ollama.com/settings/keys). opencodex classe les modèles cloud selon leurs
-capacités visuelles, afin que le [side-car de vision](/fr/guides/sidecars/) n'intervienne que pour les modèles
+capacités visuelles, afin que le [service auxiliaire de vision](/fr/guides/sidecars/) n'intervienne que pour les modèles
 exclusivement textuels. Ces derniers, par exemple `glm-5.2`, `deepseek-v4-pro`, `gpt-oss`, `qwen3-coder`,
 `minimax-m2.x` et `nemotron-3-*`, figurent dans `noVisionModels` ; les modèles à vision native, comme
 `kimi-k2.6`, `minimax-m3`, `gemma4`, `qwen3.5` et `gemini-3-flash-preview`, n'y figurent pas. La correspondance

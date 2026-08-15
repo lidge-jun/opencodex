@@ -36,7 +36,7 @@ const fr = {
 	'Combos': 'Combinaisons',
 	'Codex Integration': 'Intégration de Codex',
 	'Codex App Model Picker': 'Sélecteur de modèles de Codex App',
-	'Sidecars: Search & Vision': 'Side-cars : recherche et vision',
+	'Sidecars: Search & Vision': 'Services auxiliaires : recherche et vision',
 	'Image Bridge': 'Pont d’images',
 	'Video Bridge': 'Pont vidéo',
 	'Web Dashboard': 'Tableau de bord web',
@@ -48,13 +48,13 @@ const fr = {
 	'Proxy API Formats': 'Formats de l’API proxy',
 	'Management API': 'API de gestion',
 	'Contributing': 'Contribuer',
-	'Main': 'Principal',
+	'Main': 'Navigation principale',
 	'Select language': 'Choisir la langue',
 	'Menu': 'Menu',
 } as const;
 
-const t = (en: string, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string) =>
-	locale === 'fr' ? fr[en as keyof typeof fr] ?? en : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
+const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
+	locale === 'fr' ? fr[en] : locale === 'ko' ? ko : locale === 'zh-cn' ? zh : locale === 'zh-tw' ? zhTW : locale === 'ru' ? ru : locale === 'ja' ? ja : locale === 'tr' ? tr : en;
 
 type LanguageOption = { code: 'root' | 'fr' | 'ko' | 'zh-cn' | 'zh-tw' | 'ru' | 'ja' | 'tr'; label: string };
 const languages: LanguageOption[] = [

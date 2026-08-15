@@ -1,11 +1,11 @@
 ---
 title: Tableau de bord web
-description: L'interface graphique d'opencodex pour l'état du proxy, les fournisseurs, les modèles, les consignes de délégation, les pools d'authentification, l'utilisation et les journaux.
+description: L'interface graphique d'opencodex pour l'état du proxy, les fournisseurs, les modèles, les consignes de délégation, les groupes d'authentification, l'utilisation et les journaux.
 ---
 
 opencodex fournit un tableau de bord web local — une application Vite/React située sous `gui/` — servi par
 le proxy. C'est le moyen le plus direct de gérer les fournisseurs, les comptes Codex/ChatGPT, les modèles du
-catalogue, les side-cars, les réglages des sous-agents et le trafic des requêtes.
+catalogue, les services auxiliaires, les réglages des sous-agents et le trafic des requêtes.
 
 ## Ouverture
 
@@ -42,12 +42,12 @@ gestionnaire de mots de passe.
 | --- | --- |
 | **Résumé du tableau de bord** | Mode multi-agent, état en ligne, version, durée de fonctionnement, nombre de fournisseurs, total de jetons sur 30 jours, fournisseurs actifs et modèles natifs/routés disponibles. |
 | **Délégation de sous-agent** | Choisissez un modèle natif ou routé et, facultativement, un effort de raisonnement partagés entre les consignes de délégation OpenCodex et l'option distincte de valeurs par défaut natives. Il ne s'agit pas d'un routeur par création de sous-agent côté proxy ; voir ci-dessous. |
-| **Side-cars** | Choisissez le modèle et l'effort de recherche web, ainsi que le modèle de description visuelle. Les modifications s'appliquent à la requête suivante. |
+| **Services auxiliaires** | Choisissez le modèle et l'effort de recherche web, ainsi que le modèle de description visuelle. Les modifications s'appliquent à la requête suivante. |
 | **Maintenance** | Resynchronisez le catalogue de modèles Codex, examinez les avertissements de contournement par une configuration locale au projet, recherchez la dernière version stable ou préliminaire et lancez une mise à jour avec redémarrage facultatif du proxy. |
 | **Sécurité au démarrage** | Vérifiez si le routage Codex injecté résiste à un redémarrage, avec des états distincts pour le service et le lanceur intermédiaire, ainsi que les commandes de réparation exactes. |
 | **Zone de notification Windows** | Installez au niveau de l'utilisateur un contrôleur lancé à la connexion pour démarrer, arrêter ou redémarrer le proxy en un clic, ouvrir le tableau de bord et consulter l'état. Ce contrôleur n'est pas un service de redémarrage du proxy. |
 | **Démarrage automatique de Codex** | Autorisez un lanceur intermédiaire Codex déjà installé à exécuter `ocx ensure`. Ce commutateur n'installe ni lanceur ni service d'arrière-plan. |
-| **Fournisseurs** | Ajoutez, modifiez, activez, désactivez ou supprimez des fournisseurs, définissez le fournisseur par défaut parmi ceux activés et gérez, lorsqu'ils sont pris en charge, les pools de comptes OAuth et de clés API. Si le fournisseur par défaut actuel est supprimé, le premier fournisseur activé restant prend sa place ; s'il n'en reste aucun, la suppression est refusée et le fournisseur par défaut actuel est conservé. Les réglages d'un fournisseur peuvent désactiver la découverte dynamique pour les points de terminaison dont le catalogue `/models` est absent, lent ou trop volumineux. Pour les pools OAuth Claude (Anthropic), chaque compte connecté affiche ses propres barres de limites sur 5 heures et une semaine — l'utilisation est propre à chaque identifiant. En cas d'échec d'une sonde, les dernières barres connues sont conservées et marquées indisponibles jusqu'à la prochaine actualisation réussie. |
+| **Fournisseurs** | Ajoutez, modifiez, activez, désactivez ou supprimez des fournisseurs, définissez le fournisseur par défaut parmi ceux activés et gérez, lorsqu'ils sont pris en charge, les groupes de comptes OAuth et de clés API. Si le fournisseur par défaut actuel est supprimé, le premier fournisseur activé restant prend sa place ; s'il n'en reste aucun, la suppression est refusée et le fournisseur par défaut actuel est conservé. Les réglages d'un fournisseur peuvent désactiver la découverte dynamique pour les points de terminaison dont le catalogue `/models` est absent, lent ou trop volumineux. Pour les groupes OAuth Claude (Anthropic), chaque compte connecté affiche ses propres barres de limites sur 5 heures et une semaine — l'utilisation est propre à chaque identifiant. En cas d'échec d'une sonde, les dernières barres connues sont conservées et marquées indisponibles jusqu'à la prochaine actualisation réussie. |
 | **Ajouter un fournisseur** | Recherchez dans les préréglages du registre une connexion par compte, un service à clé API, un serveur local ou un point de terminaison personnalisé. |
 | **Authentification Codex** | Ajoutez des comptes ChatGPT/Codex au pool, sélectionnez le compte de la prochaine session, actualisez les quotas sur 5 h, une semaine et 30 jours, activez ou désactivez le changement automatique selon les quotas, réglez son seuil de 1 à 100 % et configurez le basculement en cas de défaillance transitoire. |
 | **Sous-agents** | Mettez en avant jusqu'à cinq modèles natifs non qualifiés ou modèles routés avec espace de noms dans la liste des remplacements de `spawn_agent`. |
@@ -107,7 +107,7 @@ Le sélecteur propose les modèles natifs et routés activés, ainsi que l'éche
 L'API valide globalement l'effort choisi ; Codex continue de valider l'effort de création d'un sous-agent par
 rapport à l'entrée cible du catalogue.
 
-## Authentification Codex et pools de comptes
+## Authentification Codex et groupes de comptes
 
 La page **Authentification Codex** gère la route ChatGPT/Codex native.
 
@@ -160,7 +160,7 @@ L'interface graphique est un client léger de l'API JSON de gestion du proxy. Pa
 | `GET` / `POST /api/windows-tray` | Lire ou modifier l'installation de la zone de notification Windows et l'état du processus visible. POST accepte `install`, `start`, `stop` ou `uninstall`. |
 | `POST /api/sync` | Reconstruire le catalogue de modèles partagé et rendre obsolète le cache de modèles Codex. |
 | `GET /api/update/check` · `POST /api/update/run` · `GET /api/update/status` | Rechercher, exécuter et surveiller les tâches d'auto-mise à jour. Les PID des processus sont conservés pour qu'une tâche interrompue récupère automatiquement ; les anciennes tâches sans PID récupèrent après dix minutes. |
-| `GET` / `PUT /api/sidecar-settings` | Lire ou définir les modèles des side-cars de recherche et de vision. |
+| `GET` / `PUT /api/sidecar-settings` | Lire ou définir les modèles des services auxiliaires de recherche et de vision. |
 | `GET` / `PUT /api/injection-model` | Lire ou définir le choix partagé du modèle et de l'effort du sous-agent, ainsi que les commutateurs indépendants de consignes et de valeurs par défaut natives. |
 | `GET` / `PUT /api/v2` | Lire ou définir le mode de surface, l'indicateur de fonctionnalité Codex et la limite de fils v2. |
 | `GET /api/providers` · `POST /api/providers` · `PATCH /api/providers?name=...` · `DELETE /api/providers?name=...` | Répertorier, ajouter/remplacer, activer/désactiver, définir par défaut ou supprimer des fournisseurs. `PATCH` emploie seul `{ "setDefault": true }` sur un fournisseur activé ; `POST` peut inclure `setDefault` lors d'une création ou d'un remplacement, également sur un fournisseur activé uniquement. Supprimer le fournisseur par défaut actuel affecte le premier fournisseur activé restant, s'il en existe un ; sinon, l'API renvoie `409` avec `code: "last_provider"` et conserve le fournisseur par défaut actuel. |
@@ -179,5 +179,5 @@ L'interface graphique est un client léger de l'API JSON de gestion du proxy. Pa
 :::tip
 L'ajout d'**Ollama Cloud** ou d'un autre fournisseur doté d'un catalogue depuis le tableau de bord copie sa
 classification texte/vision dans la configuration enregistrée du fournisseur. Le
-[side-car de vision](/fr/guides/sidecars/) est ainsi correctement conditionné sans classification manuelle.
+[service auxiliaire de vision](/fr/guides/sidecars/) est ainsi correctement conditionné sans classification manuelle.
 :::

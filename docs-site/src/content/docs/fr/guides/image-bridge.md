@@ -90,6 +90,6 @@ silencieusement.
 ## Limitations
 
 - **Seul xAI Grok Imagine est pris en charge.** DALL-E et d'autres fournisseurs d'images pourront être ajoutés ultérieurement.
-- **La recherche web est prioritaire** sur les adaptateurs qui prennent en charge la boucle du side-car de recherche web. Si la recherche web et la génération d'images sont toutes deux demandées pendant le même tour, la recherche web est exécutée et la génération d'images est ignorée. Les adaptateurs Cursor/`runTurn` ne peuvent actuellement pas utiliser ce side-car ; le pont de génération d'images peut donc tout de même s'exécuter pendant ces tours qui demandent les deux outils.
+- **La recherche web est prioritaire** sur les adaptateurs qui prennent en charge la boucle du service auxiliaire de recherche web. Si la recherche web et la génération d'images sont toutes deux demandées pendant le même tour, la recherche web est exécutée et la génération d'images est ignorée. Les adaptateurs Cursor/`runTurn` ne peuvent actuellement pas utiliser ce service auxiliaire ; le pont de génération d'images peut donc tout de même s'exécuter pendant ces tours qui demandent les deux outils.
 - **Les tarifs xAI s'appliquent.** La génération d'images par xAI exige un abonnement xAI actif ou des crédits API.
 - **Diffusion en continu uniquement.** Le pont intercepte le flux de réponse SSE ; les requêtes contenant `stream: false` sont rejetées avec une erreur 400.

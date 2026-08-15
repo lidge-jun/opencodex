@@ -38,15 +38,15 @@ ocx start        # proxy + dashboard on localhost:10100
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <b>Français</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/"><b>Documentation complète →</b></a>
+  <a href="../README.md">English</a> · <b>Français</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/fr/"><b>Documentation complète →</b></a>
 </p>
 
 opencodex est un proxy local léger qui traduit l'API Responses de Codex vers le protocole utilisé
 par votre fournisseur — streaming, appels d'outils, jetons de raisonnement et images, dans les deux
 sens. Utilisez Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama ou tout autre LLM avec Codex,
-Claude Code, Claude Desktop et Grok Build. Il peut également gérer un **pool de comptes ChatGPT**
+Claude Code, Claude Desktop et Grok Build. Il peut également gérer un **groupe de comptes ChatGPT**
 pour l'authentification Codex : ajoutez des comptes, actualisez leurs quotas dans le tableau de bord
-et laissez les nouvelles sessions être automatiquement routées vers le compte sain le moins utilisé,
+et laissez les nouvelles sessions être automatiquement routées vers le compte opérationnel le moins utilisé,
 tandis que les fils existants restent associés au compte qui les a démarrés.
 
 ## Démarrage rapide
@@ -88,9 +88,9 @@ d'exécution et les correctifs non publiés y sont disponibles avant leur arriv�
 Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web — ajoutez des
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles et gérez les comptes. `ocx gui` permet de rouvrir le tableau de bord à tout moment.
-Il peut également gérer un **pool de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
+Il peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
 comptes ChatGPT / Codex et actualisez leurs quotas sur 5 h / hebdomadaires / 30 j dans le tableau de bord.
-Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte sain le moins sollicité ;
+Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte opérationnel le moins sollicité ;
 les modes round-robin et fill-first appliquent leurs propres politiques. Les fils Codex existants restent
 normalement associés au compte qui les a démarrés, afin que les longues sessions SSH, tmux ou connectées
 depuis un appareil mobile ne changent pas de compte en cours de conversation — mais la réévaluation des
@@ -128,7 +128,7 @@ mais les commandes sans interface comme `ocx provider add` et `ocx combo set` co
 Nécessite [Node](https://nodejs.org) 18 ou version ultérieure. L'environnement d'exécution Bun est inclus
 lors de `npm install` — aucune installation séparée de Bun n'est nécessaire, ni WSL sous Windows. Si npm a
 bloqué les scripts d'installation de l'environnement inclus, consultez la
-[documentation d'installation](https://opencodex.me/getting-started/installation/).
+[documentation d'installation](https://opencodex.me/fr/getting-started/installation/).
 
 ## Points forts
 
@@ -137,10 +137,10 @@ bloqué les scripts d'installation de l'environnement inclus, consultez la
 - **Regroupez les comptes ChatGPT en toute sécurité** — association aux fils, basculement automatique
   tenant compte des quotas, période de récupération et gestion de l'authentification en mode fail-closed.
 - **Combos** — un identifiant de modèle virtuel avec basculement ou round-robin pondéré entre fournisseurs.
-  Consultez le [guide des combos](https://opencodex.me/guides/combos/).
+  Consultez le [guide des combos](https://opencodex.me/fr/guides/combos/).
 - **Des sous-agents sur n'importe quel modèle** — affichez les modèles routés dans le sélecteur de sous-agents
   de Codex, avec contrôle des surfaces v1/v2 et chaînes de repli. Consultez le
-  [guide des sous-agents](https://opencodex.me/guides/sub-agent-surface/).
+  [guide des sous-agents](https://opencodex.me/fr/guides/sub-agent-surface/).
 - **Connectez-vous une fois, oubliez la clé API** — OAuth pour xAI, Anthropic et Kimi ; ou transmettez
   `codex login`, collez une clé ou utilisez des références `${ENV_VAR}`.
 - **Modules complémentaires de recherche web et de vision** — les modèles non-OpenAI bénéficient d'une
@@ -194,7 +194,7 @@ Omettez le préfixe `provider/` pour utiliser le fournisseur par défaut ou éta
 correspondance selon le motif du nom du modèle. Les identifiants de modèles du fournisseur contenant `/`
 sont présentés avec leurs barres obliques internes remplacées par `-` ; la forme brute comportant toutes
 les barres obliques continue également de fonctionner. Détails :
-[documentation sur le routage des modèles](https://opencodex.me/guides/model-routing/).
+[documentation sur le routage des modèles](https://opencodex.me/fr/guides/model-routing/).
 
 ## Fournisseurs et adaptateurs
 
@@ -202,7 +202,7 @@ OpenAI (connexion ChatGPT ou clé API), Anthropic, Google Gemini, xAI, Kimi, Azu
 (local + Cloud), Cursor (expérimental) et tous les points de terminaison compatibles OpenAI — ainsi que
 DeepSeek, Groq, OpenRouter, Together, Fireworks, Cerebras, Mistral, Hugging Face, NVIDIA NIM, MiniMax,
 Qwen Cloud, SiliconFlow et bien d'autres. Liste complète : `ocx init` ou la
-[documentation des fournisseurs](https://opencodex.me/guides/providers/).
+[documentation des fournisseurs](https://opencodex.me/fr/guides/providers/).
 
 ## CLI
 
@@ -225,7 +225,7 @@ ocx update [--tag preview]     # update opencodex
 
 Les démarrages sans port imposé peuvent choisir un autre port libre si celui qui est préféré est occupé ;
 un `--port` explicite ne change jamais de port. Référence complète :
-[documentation de la CLI](https://opencodex.me/reference/cli/).
+[documentation de la CLI](https://opencodex.me/fr/reference/cli/).
 
 ### État de fonctionnement et disponibilité
 
@@ -268,13 +268,13 @@ Par défaut, opencodex se lie à `127.0.0.1` et ne nécessite aucune authentific
 au-delà de l'adresse de bouclage (`"hostname": "0.0.0.0"`) **nécessite** un jeton bearer — le proxy refuse de
 démarrer sans `OPENCODEX_API_AUTH_TOKEN`, et chaque requête cliente doit le fournir dans
 `x-opencodex-api-key`. Détails :
-[référence de configuration](https://opencodex.me/reference/configuration/).
+[référence de configuration](https://opencodex.me/fr/reference/configuration/).
 
 ## Documentation
 
 La documentation publique — installation, fournisseurs, routage, combos, sous-agents, modules complémentaires,
 intégrations et références de la CLI, de la configuration et de l'API de gestion — est générée depuis
-[`docs-site/`](../docs-site) et publiée sur **[opencodex.me](https://opencodex.me/)**.
+[`docs-site/`](../docs-site) et publiée sur **[opencodex.me](https://opencodex.me/fr/)**.
 
 Les notes de référence des mainteneurs se trouvent dans [`structure/`](../structure), la configuration pour
 les contributeurs dans [`CONTRIBUTING.md`](../CONTRIBUTING.md) et le signalement de problèmes de sécurité dans

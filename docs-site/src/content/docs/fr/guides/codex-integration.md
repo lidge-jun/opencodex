@@ -354,7 +354,7 @@ délégation v1/base/v2 et de ses mécanismes de repli.
 
 ## Préchauffage des comptes Codex
 
-Lorsqu'un compte ChatGPT est ajouté au pool de comptes Codex, opencodex le vérifie avant de l'enregistrer
+Lorsqu'un compte ChatGPT est ajouté au groupe de comptes Codex, opencodex le vérifie avant de l'enregistrer
 avec une petite requête en streaming vers le service Codex Responses. La requête utilise un véritable tableau
 d'éléments Responses (`input: [{ type: "message", ... }]`), attend `response.completed` et utilise par défaut
 `gpt-5.4-mini`. Si ce modèle renvoie HTTP 400, opencodex réessaie avec `gpt-5.5` ; les détails structurés de

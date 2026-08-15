@@ -9,7 +9,7 @@ Ces commandes contrôlent la politique et le routage de l'agent, inspectent le p
 
 ### `ocx agent <status|injection|effort|subagents|fallback|sidecar> ...`
 
-Gérez la liste multi-agents sans tête, les plafonds d’effort, l’injection rapide, les paramètres de secours et de side-car.
+Gérez la liste multi-agents sans tête, les plafonds d’effort, l’injection rapide, les paramètres de secours et des services auxiliaires.
 Utilisez `status` pour la stratégie actuelle. Voir [Surfaces de sous-agent](/fr/guides/sub-agent-surface/) pour savoir comment
 les modes de surface, la délégation, l'effort et le comportement de repli s'emboîtent.
 

@@ -44,11 +44,11 @@ l'intermédiaire du fournisseur canonique de transfert de la connexion Codex :
 ```
 
 Seuls ce fournisseur, ce point de terminaison et cet identifiant de modèle exacts reçoivent l'instantané de
-capacités Sol épinglé : contexte de 372,000 jetons, compactage automatique à 334,800 jetons, échelle de
+capacités Sol épinglé : contexte de 372 000 jetons, compactage automatique à 334 800 jetons, échelle de
 raisonnement native et métadonnées d'outils Codex natives. La requête continue d'envoyer
 `gpt-daybreak-blue-latest` ; opencodex ne le réécrit pas en Sol, ne crée aucune ligne non qualifiée et
 n'accorde aucun droit au compte. La ligne API `openai-apikey/daybreak-blue-latest`, facturée séparément,
-emprunte une autre route, et ses limites de 1,050,000 / 922,000 jetons ne sont jamais copiées dans la ligne
+emprunte une autre route, et ses limites de 1 050 000 / 922 000 jetons ne sont jamais copiées dans la ligne
 de connexion Codex.
 
 Lorsque la table `codexAccountNamespaces` est vide, les lignes qualifiées par compte sont désactivées. Si
@@ -57,8 +57,8 @@ activées par compatibilité ascendante. Définissez-le sur `false` pour masquer
 et rétablir les lignes natives non qualifiées dans le sélecteur, sans supprimer les associations ni désactiver
 le routage exact `<selector>/<native-openai-model>`.
 
-Les entrées API GPT-5.6 et Daybreak emploient un contexte de 1,050,000 jetons et une entrée maximale de
-922,000 jetons. Les identifiants `*-pro` du sélecteur se résolvent vers le modèle transmis de base avec
+Les entrées API GPT-5.6 et Daybreak emploient un contexte de 1 050 000 jetons et une entrée maximale de
+922 000 jetons. Les identifiants `*-pro` du sélecteur se résolvent vers le modèle transmis de base avec
 `reasoning.mode: "pro"`, tandis que les **Journaux**, l'**Utilisation** et l'état du sélecteur conservent
 l'identifiant virtuel. Le catalogue API contient exactement dix identifiants : `gpt-5.5`, `gpt-5.6`,
 Sol/Terra/Luna, leurs trois identifiants virtuels Pro, `daybreak-red-latest` et `daybreak-blue-latest` ; il
@@ -138,13 +138,13 @@ approximation fondée sur un ancien modèle d'entrée.
 
 | Route | Identifiants du sélecteur et métadonnées du catalogue |
 | --- | --- |
-| Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372,000 jetons. |
+| Connexion Codex (lignes qualifiées par compte désactivées) | Identifiants natifs non qualifiés comme `gpt-5.6-sol`, `gpt-5.6-terra` et `gpt-5.6-luna` ; Pool ou Direct est choisi avec `codexAccountMode`. Les lignes GPT-5.6 utilisent une fenêtre de catalogue de 372 000 jetons. |
 | Connexion Codex (lignes qualifiées par compte activées avec des sélecteurs admissibles) | Une ligne `<selector>/<native-openai-model>` par sélecteur admissible et modèle natif pris en charge ; chaque ligne utilise exclusivement le compte associé, et les lignes natives non qualifiées sont masquées dans le sélecteur. Les métadonnées natives et les fenêtres de contexte sont préservées. |
-| Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372,000 jetons ; compactage automatique à 334,800 jetons). |
-| OpenAI (clé API) | Exactement dix lignes avec espace de noms : `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les trois identifiants virtuels `*-pro` et les deux alias Daybreak (contexte de 1,050,000 jetons ; entrée maximale de 922,000 jetons pour les dix) |
-| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1,050,000) |
-| Cursor | Le repli statique comprend `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` et `cursor/gpt-5.6-luna` (1,000,000), ainsi que des lignes ordinaires/rapides pour Grok 4.5 et 4.6 (500,000) ; 4.6 ajoute `xhigh`, et la découverte dynamique propre au compte détermine quelles lignes restent visibles. |
-| xAI | La découverte dynamique fait autorité. Le catalogue de secours comprend `xai/grok-4.6` et utilise `xai/grok-4.5` par défaut ; les deux ont une fenêtre de 500,000 jetons. Grok 4.6 propose `low` / `medium` / `high` / `xhigh` (valeur amont par défaut : `high`), tandis que Grok 4.5 s'arrête à `high`. |
+| Connexion Codex (ligne Daybreak transférée explicitement) | `openai/gpt-daybreak-blue-latest` uniquement lorsque l'entrée `customModels` exacte est configurée sur le fournisseur canonique `openai`. Elle conserve l'identifiant Daybreak transmis et utilise l'instantané de capacités Sol épinglé (contexte de 372 000 jetons ; compactage automatique à 334 800 jetons). |
+| OpenAI (clé API) | Exactement dix lignes avec espace de noms : `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, les trois identifiants virtuels `*-pro` et les deux alias Daybreak (contexte de 1 050 000 jetons ; entrée maximale de 922 000 jetons pour les dix) |
+| OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (1 050 000) |
+| Cursor | Le repli statique comprend `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra` et `cursor/gpt-5.6-luna` (1 000 000), ainsi que des lignes ordinaires/rapides pour Grok 4.5 et 4.6 (500 000) ; 4.6 ajoute `xhigh`, et la découverte dynamique propre au compte détermine quelles lignes restent visibles. |
+| xAI | La découverte dynamique fait autorité. Le catalogue de secours comprend `xai/grok-4.6` et utilise `xai/grok-4.5` par défaut ; les deux ont une fenêtre de 500 000 jetons. Grok 4.6 propose `low` / `medium` / `high` / `xhigh` (valeur amont par défaut : `high`), tandis que Grok 4.5 s'arrête à `high`. |
 
 Les entrées GPT-5.6 épinglées préservent exactement l'échelle amont. Sol et Terra proposent les niveaux de
 `low` à `ultra` ; Luna s'arrête à `max`. Sol utilise `low` par défaut, contre `medium` pour Terra et Luna.

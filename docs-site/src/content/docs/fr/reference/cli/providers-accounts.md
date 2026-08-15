@@ -67,7 +67,7 @@ ID de fournisseur de clé OAuth et API actuellement acceptés lorsque le nom est
 Utilisez la même commande pour **réauthentifier** après `ocx status` / `ocx doctor` rapports
 réauthentification requise ou échec de l'actualisation du terminal (ou utilisez Réauthentifier dans le tableau de bord).
 Codex les comptes de pool ne sont pas un fournisseur `ocx login` public — réauthentifiez-vous via le tableau de bord Codex
-pool de comptes (Réauthentifier) ou le flux `ocx account reauth` sans tête à la place.
+groupe de comptes (Réauthentifier) ou le flux `ocx account reauth` sans tête à la place.
 
 ```bash
 ocx login xai
@@ -119,7 +119,7 @@ Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur o
 proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
 les commodités sont synthétisées côté client, comme le tableau de bord : `main` est l'alias CLI du
-Codex App connectez-vous au pool de comptes `openai`, OAuth les comptes sans e-mail apparaissent comme `Account N`,
+Codex App connectez-vous au groupe de comptes `openai`, OAuth les comptes sans e-mail apparaissent comme `Account N`,
 et la colonne plan/label recouvre le plan, l'e-mail masqué, l'étiquette et la clé masquée.
 
 `--json` les lignes de compte utilisent cette forme courante (les champs facultatifs sont omis lorsqu'ils ne sont pas disponibles) :
@@ -201,7 +201,7 @@ renvoient 1 ; une sonde de quota en amont qui échoue ou expire produit plutôt 
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Contrôle uniquement le pool de comptes `openai` Codex. `on` règle 80%, `off` règle 0%, `status` lit le courant
+Contrôle uniquement le groupe de comptes `openai` Codex. `on` règle 80%, `off` règle 0%, `status` lit le courant
 valeur, et `threshold <n>` accepte un entier de 0 à 100. Autres fournisseurs et valeurs non valides
 exit 1. `--json` renvoie :
 
@@ -281,7 +281,7 @@ Inspectez Codex réinitialiser les crédits d'un compte. Consommer un crédit es
 
 ### `ocx account main <subcommand>`
 
-Gérez les profils de connexion principale natifs nommés Codex sans modifier le routage du pool de comptes OpenCodex :
+Gérez les profils de connexion principale natifs nommés Codex sans modifier le routage du groupe de comptes OpenCodex :
 
 ```text
 ocx account main doctor [--json]

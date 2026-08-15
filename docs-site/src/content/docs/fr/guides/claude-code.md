@@ -4,15 +4,15 @@ description: "Utilisez n'importe quel modèle routé depuis Claude Code : openco
 ---
 
 opencodex sert `POST /v1/messages` (ainsi que count_tokens) parallèlement à `/v1/responses`. Claude Code peut
-ainsi utiliser tous les fournisseurs routés, y compris les connexions, les pools de comptes, le basculement de
+ainsi utiliser tous les fournisseurs routés, y compris les connexions, les groupes de comptes, le basculement de
 clé et les services auxiliaires, sans configuration d'authentification supplémentaire.
 
-## Pool de comptes OAuth Claude (expérimental)
+## Groupe de comptes OAuth Claude (expérimental)
 
 Vous pouvez vous connecter à plusieurs comptes Claude via le tableau de bord des fournisseurs (`ocx login anthropic` /
 ajouter un compte). Par défaut, chaque requête utilise uniquement le compte **actif**.
 
-Un pool de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
+Un groupe de comptes Claude **expérimental et facultatif** (`anthropicAccountPool.enabled`) ajoute l'affinité de
 session et le basculement en cas de délai de récupération 429 entre ces comptes OAuth. Pour les **nouvelles**
 sessions uniquement, `anthropicAccountPool.strategy` sélectionne un compte éligible : `quota` (par défaut)
 choisit la plus faible utilisation connue sur 5 heures lorsqu'elle dépasse `autoSwitchThreshold` ; `round-robin`
@@ -289,7 +289,7 @@ Le transfert Anthropic natif reste intact.
 
 1. **Résultat d'outil :** pour les appels assistant `Skill(...)`, le corps `tool_result` associé est
    remplacé par un contenu minimal lorsque l'entrée JSON en minuscules contient un nom bloqué.
-2. **Vecteur de bloc de texte :** un bloc de texte utilisateur d'au moins 10,000 caractères commençant par
+2. **Vecteur de bloc de texte :** un bloc de texte utilisateur d'au moins 10 000 caractères commençant par
    `Base directory for this skill: ` — est reconnu lorsque le nom de base du répertoire correspond à un nom bloqué
    (insensible à la casse).
 

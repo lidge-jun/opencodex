@@ -131,9 +131,9 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 ## Conventions
 
 - **Modules ES uniquement** (`import`/`export`), TypeScript, mode `strict`. Gardez `bun x tsc --noEmit` propre.
-- **Environ 500 lignes au maximum par fichier** — répartissez le code par responsabilité. Les side-cars `web-search/` et `vision/` sont
+- **Environ 500 lignes au maximum par fichier** — répartissez le code par responsabilité. Les services auxiliaires `web-search/` et `vision/` sont
   bons exemples de petits modules ciblés derrière un seul `index.ts`).
-- **Gérer les erreurs asynchrones aux frontières** — les side-cars ne propagent jamais d’exception dans le
+- **Gérer les erreurs asynchrones aux frontières** — les services auxiliaires ne propagent jamais d’exception dans le
   chemin de requête ; ils se dégradent en un marqueur explicite.
 - **Structure, source de vérité** — les invariants actuels des responsables résident dans `structure/`. Conservez
   les parcours utilisateurs publics dans `docs-site/` et les notes d’enquête historiques dans `docs/`.

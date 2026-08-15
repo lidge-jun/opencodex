@@ -70,16 +70,16 @@ le modèle et l’effort de raisonnement à utiliser. Les requêtes v2 conserven
    Pour les comptes du pool ChatGPT/Codex, `codex/auth-context.ts` résout d’abord le compte et l’adaptateur
    de transfert direct refuse de poursuivre si les informations d’identification requises sont indisponibles.
 
-4. **Side-car de vision (facultatif)** — si le modèle routé figure dans `provider.noVisionModels` et que
-   la requête contient une image, opencodex fait décrire chaque image par le side-car de vision ChatGPT
+4. **Service auxiliaire de vision (facultatif)** — si le modèle routé figure dans `provider.noVisionModels` et que
+   la requête contient une image, opencodex fait décrire chaque image par le service auxiliaire de vision ChatGPT
    configuré, puis la remplace par du texte afin qu’un modèle textuel puisse tout de même la traiter.
-   Voir [Side-cars](/fr/guides/sidecars/).
+   Voir [Services auxiliaires](/fr/guides/sidecars/).
 
 5. **Transfert direct rapide** — si l’adaptateur transfère directement les Responses (`openai-responses` ou
    `azure-openai`), opencodex conserve le corps Responses, applique les réécritures de routage et de
    compatibilité ciblées, puis relaie la réponse sans la convertir en événements `AdapterEvent`.
 
-6. **Side-car de recherche web (facultatif)** — si Codex active l’outil hébergé `web_search` alors que
+6. **Service auxiliaire de recherche web (facultatif)** — si Codex active l’outil hébergé `web_search` alors que
    le modèle routé n’est pas un modèle OpenAI, opencodex expose une fonction synthétique `web_search` et
    exécute le modèle dans une courte boucle agentique. Par défaut, les recherches réelles passent par
    `gpt-5.6-luna` avec votre connexion ChatGPT, puis leurs résultats sont réinjectés comme résultats d’outil.

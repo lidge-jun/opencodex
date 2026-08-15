@@ -163,19 +163,23 @@ describe("French base catalog", () => {
     expect(accidental).toEqual([]);
   });
 
+  test("uses unambiguous copy for abandoning unsaved changes", () => {
+    expect(DICTS.fr["common.discard"]).toBe("Abandonner les modifications");
+    expect(DICTS.fr["pws.discardSettings"]).toBe("Abandonner les modifications");
+  });
+
   test("registers Français with the French HTML language tag", () => {
-    const frenchLocale = LOCALES.find(locale => locale.code === ("fr" as never));
+    const frenchLocale = LOCALES.find(locale => locale.code === "fr");
     expect(frenchLocale).toEqual({ code: "fr", htmlLang: "fr" });
-    expect((DICTS as Record<string, Record<TKey, string>>).fr?.["lang.nativeName"]).toBe("Français");
+    expect(DICTS.fr["lang.nativeName"]).toBe("Français");
   });
 });
 
 describe("French auxiliary localization surfaces", () => {
   test("localizes Lab copy and supplements", () => {
-    const french = (DICTS as Record<string, Record<TKey, string>>).fr;
-    expect(french?.["lab.title"]).toBe("Laboratoire de compatibilité");
-    expect(labSupplement("fr" as never, "artifact.present")).toBe("Présent");
-    expect(labSupplement("fr" as never, "selectVerdict", { subject: "sujet-a" })).toContain("sujet-a");
+    expect(DICTS.fr["lab.title"]).toBe("Laboratoire de compatibilité");
+    expect(labSupplement("fr", "artifact.present")).toBe("Présent");
+    expect(labSupplement("fr", "selectVerdict", { subject: "sujet-a" })).toContain("sujet-a");
   });
 
   test("localizes specific and generic HTTP errors", () => {
@@ -189,12 +193,8 @@ describe("French auxiliary localization surfaces", () => {
   });
 
   test("localizes reasoning and routing compatibility labels", () => {
-    expect(visionReasoningLabel("fr" as never, "xhigh")).toBe("Très élevé");
-    expect((ROUTING_COMPATIBILITY_FIELD_LABELS as Record<string, {
-      maxEvidenceAgeMs: string;
-      unknownEvidence: string;
-      degradedEvidence: string;
-    }>).fr).toEqual({
+    expect(visionReasoningLabel("fr", "xhigh")).toBe("Très élevé");
+    expect(ROUTING_COMPATIBILITY_FIELD_LABELS.fr).toEqual({
       maxEvidenceAgeMs: "Âge maximal des preuves (ms)",
       unknownEvidence: "Preuves inconnues",
       degradedEvidence: "Preuves dégradées",
@@ -220,11 +220,10 @@ describe("French auxiliary localization surfaces", () => {
     expect(formatCreditDate(iso, "fr-FR")).toBe(expectedDate);
     expect(formatCreditDateTime(iso, "fr-FR")).toBe(expectedDateTime);
     expect(formatCreatedDate(iso, "fr-FR")).toBe(date.toLocaleDateString("fr-FR"));
-    expect(formatUptime(90060, "fr" as never)).toBe("1j 1h");
+    expect(formatUptime(90060, "fr")).toBe("1j 1h");
 
-    const french = (DICTS as Record<string, Record<TKey, string>>).fr;
     const t = (key: TKey, vars?: Record<string, string | number>) => {
-      let value = french[key];
+      let value = DICTS.fr[key];
       for (const [name, replacement] of Object.entries(vars ?? {})) {
         value = value.replaceAll(`{${name}}`, String(replacement));
       }
@@ -233,7 +232,7 @@ describe("French auxiliary localization surfaces", () => {
     expect(formatResetFuture(
       Date.UTC(2026, 6, 31, 12, 34),
       t,
-      "fr" as never,
+      "fr",
       Date.UTC(2026, 6, 31, 10, 34),
     )).toBe("Réinitialisation dans 2 h");
   });

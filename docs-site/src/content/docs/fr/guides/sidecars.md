@@ -1,11 +1,11 @@
 ---
-title: "Side-cars : recherche web et vision"
-description: Dotez les modèles routés d’une véritable recherche web et donnez aux modèles textuels une compréhension des images grâce à des side-cars ChatGPT natifs.
+title: "Services auxiliaires : recherche web et vision"
+description: Dotez les modèles routés d’une véritable recherche web et donnez aux modèles textuels une compréhension des images grâce à des services auxiliaires ChatGPT natifs.
 ---
 
 Tous les modèles routés ne proposent pas une **recherche web** hébergée ni une **entrée d’image** native. opencodex complète
-ces capacités au moyen de deux side-cars. Chacun peut s’appuyer sur un fournisseur connecté à ChatGPT (`forward`) ou sur un
-fournisseur Anthropic OAuth enregistré. Les erreurs des side-cars sont converties en résultats d’outil limités ou en marqueurs d’image,
+ces capacités au moyen de deux services auxiliaires. Chacun peut s’appuyer sur un fournisseur connecté à ChatGPT (`forward`) ou sur un
+fournisseur Anthropic OAuth enregistré. Les erreurs des services auxiliaires sont converties en résultats d’outil limités ou en marqueurs d’image,
 au lieu de faire échouer l’intégralité du tour.
 
 :::note[Sélection automatique du moteur]
@@ -15,14 +15,14 @@ possède un compte actif qui n'est pas marqué `needsReauth` ; sinon, il utilis
 fournisseur `forward` actif.
 :::
 
-## Side-car de recherche web
+## Service auxiliaire de recherche web
 
 Lorsque Codex demande un hébergement `web_search` pour un modèle routé sans passage, opencodex :
 
 1. **Supprime** l'outil hébergé `web_search` et expose à sa place un outil de fonction synthétique `web_search(query)`
-   au modèle routé. Les options de l'outil hébergé d'origine sont conservées pour l'appel du side-car.
+   au modèle routé. Les options de l'outil hébergé d'origine sont conservées pour l'appel du service auxiliaire.
 2. Exécute le modèle routé dans une petite **boucle d'agent**. Lorsqu'il appelle `web_search`, opencodex utilise le
-   moteur du side-car sélectionné : OpenAI exécute l'outil hébergé `web_search` avec `gpt-5.6-luna` par défaut ;
+   moteur du service auxiliaire sélectionné : OpenAI exécute l'outil hébergé `web_search` avec `gpt-5.6-luna` par défaut ;
    Anthropic exécute `web_search_20250305` avec `claude-sonnet-5` par défaut. La réponse en streaming et
    les citations deviennent le résultat d’un outil.
 3. **Répète la boucle** jusqu'à ce que le modèle réponde ou que le nombre total de recherches réelles atteigne `maxSearchesPerTurn`
@@ -35,12 +35,12 @@ Seuls les en-têtes et le statut du tour final, ainsi que les réponses 429 de l
 les appels de recherche synthétiques et les résultats préliminaires ne sont jamais exposés comme sorties du modèle visibles par le client.
 
 L'activation explicite de `webSearchSidecar.streamRoutedModelOutput` (`false` par défaut) diffuse à la place les principaux deltas
-de texte et de raisonnement de chaque itération. Le client voit la sortie dès que le modèle la produit, comme sur le chemin sans side-car.
+de texte et de raisonnement de chaque itération. Le client voit la sortie dès que le modèle la produit, comme sur le chemin sans service auxiliaire.
 Cette fenêtre de diffusion se ferme définitivement à la limite du premier appel d'outil : la décision d'intercepter `web_search` reste donc
 atomique et aucun contenu n'est livré deux fois, puisque la relecture terminale ignore ce qui a déjà été diffusé. En contrepartie, le texte
 émis par le modèle *avant* sa décision de lancer une recherche — texte que le mode avec tampon supprime silencieusement — devient visible
 et peut être partiellement répété dans la réponse qui suit la recherche. La page Vue d'ensemble du tableau de bord expose ce réglage sous
-**Diffuser les réponses en direct** dans la carte du side-car de recherche web (`PUT /api/sidecar-settings` avec
+**Diffuser les réponses en direct** dans la carte du service auxiliaire de recherche web (`PUT /api/sidecar-settings` avec
 `webSearch.streamRoutedModelOutput`).
 
 Les commentaires Kiro sont indépendants de cette option : en mode avec tampon, le texte de la phase de commentaire est déjà diffusé
@@ -82,7 +82,7 @@ Le délai de surveillance effectif du pont vaut
 n'est pas un délai total de génération. Les échecs antérieurs au démarrage du flux SSE renvoient une réponse JSON non-2xx ;
 les échecs de génération postérieurs à l'envoi des en-têtes sont transmis sous la forme d'un événement SSE `response.failed`.
 
-## Side-car de vision
+## Service auxiliaire de vision
 
 Lorsque le modèle routé est répertorié dans le `noVisionModels` de son fournisseur et qu'une requête porte une image,
 opencodex décrit chaque image **avant** l'appel principal et la remplace par du texte. Quand
@@ -100,14 +100,14 @@ champ du modèle.
   niveau pris en charge le plus élevé qui ne dépasse pas la valeur demandée ; s'il n'en existe aucun, le niveau pris en charge le plus bas
   est utilisé. Les modèles inconnus ou personnalisés restent permissifs en l'absence de métadonnées fiables sur leurs capacités.
 - Les descriptions s'exécutent avec une concurrence limitée (3 à la fois, dans l'ordre des entrées). Le contexte utilisateur envoyé
-  au modèle de description est limité à 800 caractères, et chaque description injectée à 2,000
+  au modèle de description est limité à 800 caractères, et chaque description injectée à 2 000
   caractères. La requête n'envoie pas `max_output_tokens`, que le moteur ChatGPT rejette.
 - Les URL des images sont validées avant transfert : les URL des données doivent utiliser `png` / `jpeg` / `jpg` / `webp` /
   `gif` et les données base64 sont limitées à environ 20 Mo. Seuls les schémas `data:` et `https:` sont acceptés ;
   les images distantes `https` sont récupérées par le moteur OpenAI, et non par le proxy.
 - La correspondance `noVisionModels` ignore un suffixe `:size` de style Ollama, donc une entrée `gpt-oss` couvre également
   `gpt-oss:120b`.
-- Si la description échoue, le modèle reçoit un bref marqueur d'erreur de traitement. Si aucun side-car n'est
+- Si la description échoue, le modèle reçoit un bref marqueur d'erreur de traitement. Si aucun service auxiliaire n'est
   disponible, l'image brute est supprimée plutôt que transmise à un moteur limité au texte.
 - `maxDescriptionsPerTurn` (8 par défaut) limite les nouvelles descriptions par tour du modèle principal. Les résultats du cache et
   les doublons au même tour ne le consomment pas. Les descriptions d'images `data:` réussies sont mises en cache par
@@ -149,9 +149,9 @@ Un modèle est marqué en texte uniquement par fournisseur :
 
 ## Contrôles du tableau de bord et désactivation
 
-La carte Vision du tableau de bord permet d'activer ou de désactiver le side-car, de définir
+La carte Vision du tableau de bord permet d'activer ou de désactiver le service auxiliaire, de définir
 `maxDescriptionsPerTurn` et `timeoutMs`, ainsi que de régler le modèle, le moteur
-et le raisonnement. La désactivation du side-car ne supprime pas ces
+et le raisonnement. La désactivation du service auxiliaire ne supprime pas ces
 paramètres ; sa réactivation conserve le modèle, le moteur, le niveau de raisonnement,
 le délai d'attente et la limite précédemment choisis.
 

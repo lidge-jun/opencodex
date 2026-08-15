@@ -53,7 +53,7 @@ au lieu d'en attribuer un nouveau.
 `openai` et `openai-apikey` sont des identifiants réservés fixes. Par défaut, `openai.codexAccountMode` vaut `"pool"`
 et sélectionne le compte principal ou l'un des comptes ajoutés ; `"direct"` utilise uniquement la connexion actuelle de l'appelant ou du compte principal.
 La route API utilise exclusivement sa clé API ou son pool de clés configuré. Employez un modèle sans préfixe ou `openai-apikey/<model>` :
-aucun repli d'identifiants entre les routes n'est effectué. Les lignes API GPT-5.6 indiquent un contexte de 1,050,000 et une entrée maximale de 922,000.
+aucun repli d'identifiants entre les routes n'est effectué. Les lignes API GPT-5.6 indiquent un contexte de 1 050 000 et une entrée maximale de 922 000.
 Les identifiants virtuels Pro sont réécrits vers le modèle de protocole de base avec `reasoning.mode: "pro"`.
 
 `openaiProviderTierVersion: 2` marque la projection actuelle fondée sur un fournisseur unique. Avant de migrer une
@@ -83,7 +83,7 @@ sauvegarde dont le contenu diffère, puis réécrit en identifiants sans préfix
 | `modelMaxInputTokens?` | `Record<string, number>` | Limites d'entrée maximales positives par modèle utilisées pour les conseils de compactage automatique du catalogue. |
 | `defaultMaxOutputTokens?` | `number` | Solution de secours `openai-chat` à l’échelle du fournisseur lorsque le client omet `max_output_tokens`. |
 | `modelMaxOutputTokens?` | `Record<string, number>` | Budgets de repli `openai-chat` positifs par modèle ; les correspondances exactes ou par motif priment sur la valeur par défaut du fournisseur. |
-| `modelCosts?` | `Record<string, Cost4>` | Prix affichés par modèle (USD par 1M de jetons), indexés par l'identifiant exact du modèle en amont de ce fournisseur — et non par un identifiant de fournisseur ni par une étiquette routée `provider/model`, par exemple `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Tout identifiant de modèle constitue une clé valide : les fournisseurs personnalisés peuvent cibler n'importe quel point de terminaison compatible avec OpenAI au moyen de l'adaptateur `openai-chat`, et les identifiants de fournisseur locaux ou internes fonctionnent même s'ils sont absents des catalogues intégrés. Les prix configurés par l'utilisateur priment sur les catalogues intégrés dans les estimations des pages Journaux (`~$`) et Utilisation. Les entrées historiques sont recalculées à partir de la surcharge actuelle ; modifier un prix peut donc changer les totaux antérieurs. L'ordre de repli est le suivant : `modelCosts` défini par l'utilisateur → catalogue jawcode → surcharge des prix attendus → repli propre au fournisseur au niveau du modèle. Une entrée entièrement nulle passe à la source suivante. Chaque tarif doit être un nombre fini positif ou nul, inférieur ou égal à 1,000,000 (USD par 1M de jetons) ; les lignes hors plage sont rejetées par l'interface de gestion et ignorées au chargement. Ces valeurs servent uniquement à l'estimation lors de l'affichage : les surcharges n'affectent jamais le routage, la sélection des comptes, les quotas ni la facturation. |
+| `modelCosts?` | `Record<string, Cost4>` | Prix affichés par modèle (USD par 1M de jetons), indexés par l'identifiant exact du modèle en amont de ce fournisseur — et non par un identifiant de fournisseur ni par une étiquette routée `provider/model`, par exemple `{ "deepseek-v4-flash": { "input": 0.14, "output": 0.28, "cacheRead": 0.0028, "cacheWrite": 0 } }`. Tout identifiant de modèle constitue une clé valide : les fournisseurs personnalisés peuvent cibler n'importe quel point de terminaison compatible avec OpenAI au moyen de l'adaptateur `openai-chat`, et les identifiants de fournisseur locaux ou internes fonctionnent même s'ils sont absents des catalogues intégrés. Les prix configurés par l'utilisateur priment sur les catalogues intégrés dans les estimations des pages Journaux (`~$`) et Utilisation. Les entrées historiques sont recalculées à partir de la surcharge actuelle ; modifier un prix peut donc changer les totaux antérieurs. L'ordre de repli est le suivant : `modelCosts` défini par l'utilisateur → catalogue jawcode → surcharge des prix attendus → repli propre au fournisseur au niveau du modèle. Une entrée entièrement nulle passe à la source suivante. Chaque tarif doit être un nombre fini positif ou nul, inférieur ou égal à 1 000 000 (USD par 1M de jetons) ; les lignes hors plage sont rejetées par l'interface de gestion et ignorées au chargement. Ces valeurs servent uniquement à l'estimation lors de l'affichage : les surcharges n'affectent jamais le routage, la sélection des comptes, les quotas ni la facturation. |
 | `headers?` | `Record<string, string>` | En-têtes supplémentaires en amont. L'autorisation, les cookies, les en-têtes de clé API, les nouvelles lignes intégrées et les noms invalides sont rejetés. |
 | `openRouterRouting?` | `OpenRouterProviderRouting` | Préférences OpenRouter `order`, `only` et `allowFallbacks` par défaut ; valable uniquement pour les OpenRouter canoniques avec `openai-chat`. |
 | `modelOpenRouterRouting?` | `Record<string, OpenRouterProviderRouting>` | Remplacements exacts de l'ID de modèle qui remplacent la préférence OpenRouter à l'échelle du fournisseur. |
@@ -146,7 +146,7 @@ les adresses IPv6 entre crochets et `*` ; par exemple, indiquez explicitement `
 restent bloquées. Les requêtes de diagnostic rejettent les redirections et signalent une cible dont les identifiants ont été retirés. L'examen des
 redirections des requêtes ordinaires vers les fournisseurs reste distinct de cette protection de diagnostic.
 
-## Pool de comptes Codex
+## Groupe de comptes Codex
 
 Utilisez **Codex Auth** dans le tableau de bord pour ajouter des comptes au pool et actualiser les quotas. `config.json` stocke les
 métadonnées non secrètes ; les jetons d'accès et d'actualisation utilisent le magasin d'identifiants renforcé. Le routage du pool
@@ -358,7 +358,7 @@ la règle du modèle.
 ## Listes autorisées de modèles statiques
 
 Réglez `liveModels: false` pour exposer uniquement `models`. Si `models` est vide ou omis, le fournisseur n'expose
-aucun modèle routé. La découverte dynamique rejette plus de 4 Mio ou 2,000 lignes de modèle brutes avant leur mise en cache ;
+aucun modèle routé. La découverte dynamique rejette plus de 4 Mio ou 2 000 lignes de modèle brutes avant leur mise en cache ;
 les préréglages intégrés peuvent appliquer des limites inférieures et filtrer les lignes admissibles à la conversation. Les résultats trop volumineux ou mal formés
 utilisent le catalogue obsolète ou configuré comme solution de repli. Un résultat valide ne contenant aucun modèle admissible fait autorité et n'est pas
 silencieusement remplacé ou tronqué.

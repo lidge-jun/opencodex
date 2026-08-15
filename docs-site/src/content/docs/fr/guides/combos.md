@@ -300,7 +300,7 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | Champ | Obligatoire | Par défaut | Règles |
 | --- | --- | --- | --- |
 | `targets` | Oui | — | Tableau ordonné non vide de `{ provider, model, weight? }` cibles configurées. Les paires provider/model en double sont rejetées. |
-| `targets[].weight` | Non | `1` | Entier de 1 à 10,000. Utilisé en round-robin ; ignoré par le basculement. |
+| `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé en round-robin ; ignoré par le basculement. |
 | `strategy` | Non | `"failover"` | `"failover"` ou `"round-robin"`. |
 | `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |

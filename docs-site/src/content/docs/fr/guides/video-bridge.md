@@ -82,5 +82,5 @@ L'outil `video_gen` accepte les paramètres suivants :
 - **Coût** : la génération vidéo est une fonctionnalité xAI payante (environ 0.05 $/s en 480p et 0.07 $/s en 720p).
 - **Une vidéo par appel** : chaque appel à `video_gen` produit une vidéo.
 - **Coexiste avec le pont de génération d'images** : les deux ponts peuvent être activés simultanément.
-- **Priorité à la recherche web** : lorsqu'un side-car de recherche web est actif pendant un tour (adaptateur autre que `runTurn`), le pont vidéo est ignoré ; les deux ne peuvent pas s'exécuter simultanément. Un `console.warn` est émis afin que vous puissiez le repérer dans les journaux.
+- **Priorité à la recherche web** : lorsqu'un service auxiliaire de recherche web est actif pendant un tour (adaptateur autre que `runTurn`), le pont vidéo est ignoré ; les deux ne peuvent pas s'exécuter simultanément. Un `console.warn` est émis afin que vous puissiez le repérer dans les journaux.
 - **Le délai couvre la soumission et l'interrogation** : le budget `videoTimeoutMs` commence avant la soumission de la tâche ; l'appel de soumission (60 s) et les interrogations suivantes partagent donc la même échéance.
