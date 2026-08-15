@@ -58,8 +58,8 @@ const PR_TEMPLATE_BOILERPLATE_LINES = new Set([
 
 /** Case-insensitive whole-word match for the GUI surface (repo convention: `gui/`). */
 const GUI_CUE_RE = /\bgui\b/i;
-/** HTML comments, which GitHub never renders. */
-const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+/** HTML comments, which GitHub never renders. An unclosed comment runs through EOF. */
+const HTML_COMMENT_RE = /<!--[\s\S]*?(?:-->|$)/g;
 /** Fenced code blocks (``` or ~~~) whose content GitHub does not render. */
 const FENCED_CODE_RE = /(?:^|\n)[ \t]*(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]*\1[ \t]*(?=\n|$)/gm;
 /** Embedded markdown image (`![alt](url)`), as GitHub renders for dropped images. */
@@ -147,7 +147,7 @@ function assessPrDescription(body) {
   const withoutTemplate = stripPrTemplateBoilerplate(withoutReadiness);
   const cleaned = clean(withoutTemplate);
   if (!cleaned) {
-    const strippedComments = withoutTemplate.replace(/<!--[\s\S]*?-->/g, "").trim();
+    const strippedComments = withoutTemplate.replace(HTML_COMMENT_RE, "").trim();
     if (!strippedComments) return { ok: false, reason: "empty" };
     if (isPlaceholderOnlyValue(strippedComments)) {
       return { ok: false, reason: "placeholder" };
