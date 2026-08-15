@@ -140,17 +140,53 @@ export function browserSecurityHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * Baseline data-plane request headers. ChatGPT-Account-Id is required for browser/Electron
+ * ChatGPT & Codex App voice preflights (direct forward auth matches the bearer to this account
+ * id). The OpenAI-Alpha .. X-OAI-Attestation block covers GPT-Live voice protocol headers
+ * relayed by the /v1/live call-create path.
+ */
+const STATIC_ALLOWED_REQUEST_HEADERS =
+  "Content-Type, Authorization, X-OpenCodex-API-Key, X-Api-Key, Anthropic-Version, Anthropic-Beta, ChatGPT-Account-Id, OpenAI-Alpha, X-Session-Id, Session-Id, Thread-Id, Originator, X-OAI-Attestation";
+
+/**
+ * A fixed allow-list cannot enumerate vendor telemetry headers: the OpenAI and Anthropic
+ * browser SDKs send `X-Stainless-*` describing runtime and retry state, and the browser blocks
+ * the real request when the preflight omits even one of them (#1773).
+ *
+ * Echo what an already-allowed origin asked for, and fall back to the static list otherwise.
+ * The echo is deliberately gated on the origin check that ran first: this widens which headers
+ * an admitted caller may send, never which origins are admitted, and it grants nothing to an
+ * origin that would have been rejected anyway. Authentication is unchanged — the preflight
+ * itself carries no credential and produces no auth or account-pool side effect.
+ */
+function allowedRequestHeaders(req?: Request): string {
+  const requested = req?.headers.get("Access-Control-Request-Headers")?.trim();
+  if (!requested) return STATIC_ALLOWED_REQUEST_HEADERS;
+  const seen = new Set(STATIC_ALLOWED_REQUEST_HEADERS.split(",").map(h => h.trim().toLowerCase()));
+  const extra: string[] = [];
+  for (const raw of requested.split(",")) {
+    const name = raw.trim();
+    // Header names are case-insensitive on the wire, so normalize before de-duplicating;
+    // echo the caller's spelling for the ones we add.
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    extra.push(name);
+  }
+  return extra.length === 0 ? STATIC_ALLOWED_REQUEST_HEADERS : `${STATIC_ALLOWED_REQUEST_HEADERS}, ${extra.join(", ")}`;
+}
+
 export function corsHeaders(req?: Request, config?: RequestPolicyView): Record<string, string> {
   const origin = req?.headers.get("Origin");
-  const allowOrigin = origin && req && config && isAllowedRequestOrigin(req, config) ? origin : _corsOrigin;
+  const originAllowed = Boolean(origin && req && config && isAllowedRequestOrigin(req, config));
+  const allowOrigin = originAllowed && origin ? origin : _corsOrigin;
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-    // ChatGPT-Account-Id is required for browser/Electron ChatGPT & Codex App voice preflights
-    // (direct forward auth matches the bearer to this account id). The OpenAI-Alpha .. X-OAI-Attestation
-    // block covers GPT-Live voice protocol headers relayed by the /v1/live call-create path.
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-OpenCodex-API-Key, X-Api-Key, Anthropic-Version, Anthropic-Beta, ChatGPT-Account-Id, OpenAI-Alpha, X-Session-Id, Session-Id, Thread-Id, Originator, X-OAI-Attestation",
-    "Vary": "Origin",
+    "Access-Control-Allow-Headers": allowedRequestHeaders(originAllowed ? req : undefined),
+    // A response that varies by the request's headers must say so, or a shared cache can
+    // replay one client's allow-list to a client that asked for different headers.
+    "Vary": "Origin, Access-Control-Request-Headers",
     ...browserSecurityHeaders(),
   };
 }
