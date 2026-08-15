@@ -78,15 +78,19 @@ instead.
 `find()` on slug equivalence can attach one model's evidence to another. Rare,
 but silent and wrong when it happens.
 
-**Amendment:** match on the explicit provenance keys from B2 first; fall back to
-slug equivalence only when exactly one row matches, and leave evidence unknown
-on ambiguity.
+**Amendment (final form):** the provenance block from B2 carries the exact
+native `provider`/`model_id`, so the existing equality lookup is KEPT and no
+slug fallback exists at all. The collision path is removed structurally
+rather than mitigated, and no `slug-codec` import is added. See
+`010_catalog_row_shape.md` section 2c.
 
 ## B5 (Medium) — ACCEPTED
 
-My `vision:false` precedence test passes unchanged today, so it proves nothing
-about the patch. Correct construction combines `capabilities: {vision:false}`
-with `capabilities:["multimodal"]` so the new branch is actually contested.
+My precedence tests passed unchanged today, so they proved nothing about the
+patch. **Amendment (final form):** because B3 removed multimodal ingestion
+from this unit, the rewritten tests are context-only. The contested case is
+now `context_length: 32768` against `meta.n_ctx: 8192`, and audit round 2
+measured the real before/after matrix into `020_live_capability_ingestion.md`.
 
 ## B6 (Medium) — ACCEPTED
 
@@ -121,3 +125,13 @@ that the reproduction requires a catalog-only fixture.
 All nine findings are accepted. Two — B1 and B2 — would have shipped a
 regression affecting every provider, not just the local model that started this
 investigation.
+
+## Round 2 outcome
+
+VERDICT: GO-WITH-FIXES (blockers=4), all Medium/Low plan-precision items,
+folded above and into the phase docs. The three High blockers are cleared. The
+strict-parser risk flagged as the largest remaining unknown was cleared
+empirically: an object-valued unknown key returned EXIT=0 on both Codex CLI
+0.146.0 and the plugin app-server 0.148.0-alpha.9, while an invalid known
+modality returned EXIT=1 — so the parser rejects bad enum values, not unknown
+keys.

@@ -138,9 +138,20 @@ The fourth test is the honest part: it encodes what this phase does NOT fix.
 
 ## Accept criteria
 
-1. Tests 1-3 fail before the change and pass after (activation grounding).
-2. Test 4 passes before AND after; it is a characterization test for the gap
-   handed to the filed issue.
+1. Measured pre-change matrix (audit round 2 ran these):
+
+   | Test | Before | After |
+   |------|--------|-------|
+   | 1 verbatim meta.n_ctx | FAIL (hints `{}`) | PASS |
+   | 2 served n_ctx over trained | FAIL (hints `{}`) | PASS |
+   | 3 recognized field wins over meta | PASS already | PASS |
+   | 4 dual-envelope gap characterization | FAIL (asserts the new context value too) | PASS |
+
+   Test 3 passes today because recognized fields already win while `meta`
+   is ignored; it guards the ordering against a future reshuffle rather
+   than proving this change. Tests 1, 2 and 4 are the activation evidence.
+2. Test 4 keeps characterizing the surviving image gap after the change:
+   contextWindow present, inputModalities still undefined.
 3. `bun x tsc --noEmit` clean.
 4. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
    shared surface touched by many catalog suites.
@@ -151,7 +162,7 @@ The fourth test is the honest part: it encodes what this phase does NOT fix.
 |---------|-------------------|-------|
 | `bun run test tests/catalog-llamacpp-capabilities.test.ts` | YES — direct argument | New file |
 | `bun x tsc --noEmit` | YES — tsconfig include covers `src/**` | Verified exit 0 pre-change |
-| `bun run test` on lidge | YES — existing catalog suites exercise `provider-fetch.ts` | Required: shared surface; verify remote HEAD first |
+| Remote exact-head suite (command below) | YES — existing catalog suites exercise `provider-fetch.ts` | Required: shared surface |
 
 ## Field chain (PLAN-FIELD-CHAIN-01)
 
@@ -172,3 +183,22 @@ server reporting context nowhere in the recognized list still yields unknown —
 by design. Residual risk: `n_ctx` is trusted as reported; a server misreporting
 it would mislead routing exactly as any other context field would. Wording
 downgrade: N/A. Final enforcement layer: none.
+
+## Remote exact-head suite (B6/round-2 B2)
+
+Pushing a branch updates a remote ref, not a remote checkout. Audit round 2
+confirmed all three lidge checkouts sat on unrelated commits. The verifier must
+therefore fetch and assert the SHA before running:
+
+    LOCAL_SHA=$(git rev-parse HEAD)
+    ssh lidge "cd ~/ocx-ci/opencodex \\
+      && git fetch --quiet csa906 <branch> \\
+      && git checkout --quiet --detach FETCH_HEAD \\
+      && test \"\$(git rev-parse HEAD)\" = \"$LOCAL_SHA\" \\
+      && bun install --frozen-lockfile \\
+      && bun run test"
+
+The `test` comparison is the gate: a mismatched checkout fails the command
+instead of silently reporting a green suite for different code. `~/ocx-ci/opencodex`
+is the chosen checkout (verified present, `origin` = lidge-jun/opencodex, on `dev`);
+the push remote `csa906` must be added there if absent.

@@ -242,7 +242,7 @@ amends this doc if it differs.
    regression the audit predicted.
 4. `bun x tsc --noEmit` clean.
 5. `tests/core-lab-boundary.test.ts` green.
-6. `bun run test` green on lidge at the pushed head (B6).
+6. Remote exact-head suite green on lidge (command in the section below).
 
 ## Verifier commands (PLAN-VERIFIER-REAL-01)
 
@@ -251,7 +251,7 @@ amends this doc if it differs.
 | `bun run test tests/routing-capability-catalog.test.ts` | YES — the file under test is the direct argument | Bare `bun test` bypasses the wrapper and fails test-home-guard (B6) |
 | `bun x tsc --noEmit` | YES — tsconfig include covers `src/**` | Verified exit 0 pre-change |
 | `bun run test tests/core-lab-boundary.test.ts` | YES — walks the import graph from `src/router.ts` into `src/routing/capability.ts` | Verified 13 pass pre-change |
-| `bun run test` on lidge | YES — shared routing surface | Requires the pushed head; verify remote HEAD first |
+| Remote exact-head suite (command below) | YES — shared routing surface | Required: shared surface |
 
 ## Field chain (PLAN-FIELD-CHAIN-01)
 
@@ -273,3 +273,22 @@ unknown evidence — by design. Residual risk: provenance is written by exactly
 one function, so a future writer bypassing `applyCatalogModelMetadata` would
 produce rows routing cannot read. The new tests are the early warning, not
 enforcement. Final enforcement layer: none.
+
+## Remote exact-head suite (B6/round-2 B2)
+
+Pushing a branch updates a remote ref, not a remote checkout. Audit round 2
+confirmed all three lidge checkouts sat on unrelated commits. The verifier must
+therefore fetch and assert the SHA before running:
+
+    LOCAL_SHA=$(git rev-parse HEAD)
+    ssh lidge "cd ~/ocx-ci/opencodex \\
+      && git fetch --quiet csa906 <branch> \\
+      && git checkout --quiet --detach FETCH_HEAD \\
+      && test \"\$(git rev-parse HEAD)\" = \"$LOCAL_SHA\" \\
+      && bun install --frozen-lockfile \\
+      && bun run test"
+
+The `test` comparison is the gate: a mismatched checkout fails the command
+instead of silently reporting a green suite for different code. `~/ocx-ci/opencodex`
+is the chosen checkout (verified present, `origin` = lidge-jun/opencodex, on `dev`);
+the push remote `csa906` must be added there if absent.

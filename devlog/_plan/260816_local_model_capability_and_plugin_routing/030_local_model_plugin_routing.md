@@ -82,7 +82,7 @@ availability.
 | Command | Reads this change? | Notes |
 |---------|-------------------|-------|
 | `cat ~/.codex/AGENTS.md` | Partially — proves bytes on disk, NOT that Codex loaded them | Human-read acceptance |
-| Fresh Codex process reporting its loaded instructions | YES — observes actual resolution | The only check that proves the guidance is live |
+| `OCX_SHIM_BYPASS=1 codex -C <repo> debug prompt-input \| rg "mcp__node_repl__js"` | YES — renders the instructions the model actually receives | Proven in audit round 2: an isolated `$CODEX_HOME/AGENTS.md` carrying this guidance appeared in the prompt, exit 0. No network needed |
 
 Discovery caveats verified during audit (B7): global guidance resolves from
 `$CODEX_HOME` when set (currently unset, so `~/.codex` applies), and
