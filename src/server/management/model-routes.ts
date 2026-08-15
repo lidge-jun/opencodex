@@ -376,7 +376,6 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const provider = typeof body.provider === "string" ? body.provider.trim() : "";
     const modelId = typeof body.modelId === "string" ? body.modelId.trim() : "";
     if (!provider || !modelId) return jsonResponse({ error: "provider and modelId are required" }, 400);
-    if (modelId.includes("/")) return jsonResponse({ error: "modelId must not contain /" }, 400);
     if (!isValidProviderName(provider)) return jsonResponse({ error: "invalid provider name" }, 400);
     if (!hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "provider not configured" }, 404);
     const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim() : undefined;
@@ -422,7 +421,6 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (idx === -1) return jsonResponse({ error: "not found" }, 404);
     const cm = { ...list[idx] };
     if (typeof body.modelId === "string" && body.modelId.trim()) {
-      if (body.modelId.includes("/")) return jsonResponse({ error: "modelId must not contain /" }, 400);
       cm.modelId = body.modelId.trim();
     }
     if (body.displayName !== undefined) {

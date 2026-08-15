@@ -85,7 +85,7 @@ function entryParts(entry: string, config: OcxConfig): { alias: string; id: stri
     const provider = entry.slice(0, slash);
     const prov = hasOwnProvider(config.providers, provider) ? config.providers[provider] : undefined;
     const id = prov
-      ? decodeRoutedModelId(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov))
+      ? decodeRoutedModelId(entry.slice(slash + 1), knownModelIdsForProvider(provider, prov, config))
       : entry.slice(slash + 1);
     return { alias: claudeCodeAlias(provider, id), id, provider };
   }

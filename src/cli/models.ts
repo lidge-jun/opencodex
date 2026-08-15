@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
 import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../reasoning-effort";
-import { routedSlug } from "../providers/slug-codec";
+import { routedSlug, slugEquals } from "../providers/slug-codec";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig, OcxCustomModel } from "../types";
 
@@ -180,7 +180,6 @@ async function handleCustomAdd(args: string[]): Promise<void> {
 
   if (!provider || !modelId) fail("provider and modelId are required", ADD_USAGE);
   if (!isValidProviderName(provider)) fail(`invalid provider name "${provider}"`);
-  if (modelId.includes("/")) fail("modelId must not contain /");
 
   const config = loadConfig();
   if (!hasOwnProvider(config.providers, provider)) {
@@ -257,7 +256,7 @@ async function handleCustomRemove(args: string[]): Promise<void> {
   const config = loadConfig();
   const existing = config.customModels ?? [];
   const index = target.includes("/")
-    ? existing.findIndex(model => routedSlug(model.provider, model.modelId) === target)
+    ? existing.findIndex(model => slugEquals(target, model.provider, model.modelId))
     : existing.findIndex(model => model.id === target);
   if (index === -1) fail(`custom model "${target}" not found`);
 

@@ -50,7 +50,6 @@ export default function ProviderModels({
   const trimmedCustomModelId = customModelId.trim();
   const customModelInvalid = !customModelsReady
     || !trimmedCustomModelId
-    || trimmedCustomModelId.includes("/")
     || availableModels.includes(trimmedCustomModelId)
     || customModelIds.includes(trimmedCustomModelId)
     || configuredModels.includes(trimmedCustomModelId)

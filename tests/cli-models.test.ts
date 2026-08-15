@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -169,6 +169,50 @@ describe("ocx models richer metadata", () => {
       const result = runCli(["models", "--bogus"], { OPENCODEX_HOME: dir });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown flag");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ocx models custom slash ids", () => {
+  test("models add accepts slash model ids", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(["models", "add", "test", "openai/gpt-5.5"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels[0].modelId).toBe("openai/gpt-5.5");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("models remove accepts raw and encoded slash selectors", () => {
+    for (const target of ["test/openai/gpt-5.5", "test/openai-gpt-5.5"]) {
+      const { dir } = freshConfig();
+      try {
+        const add = runCli(["models", "add", "test", "openai/gpt-5.5"], { OPENCODEX_HOME: dir });
+        expect(add.status).toBe(0);
+        const remove = runCli(["models", "remove", target, "--yes"], { OPENCODEX_HOME: dir });
+        expect(remove.status).toBe(0);
+        const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+        expect(config.customModels ?? []).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("models add still rejects displayName with slash", () => {
+    const { dir } = freshConfig();
+    try {
+      const result = runCli(
+        ["models", "add", "test", "openai/gpt-5.5", "--display-name", "foo/bar"],
+        { OPENCODEX_HOME: dir },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("displayName must not contain /");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

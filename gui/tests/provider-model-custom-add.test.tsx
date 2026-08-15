@@ -114,7 +114,7 @@ test("quick-add submits the trimmed model id for the current provider", async ()
   await act(async () => { root.unmount(); });
 });
 
-test("quick-add blocks existing and namespaced model ids", async () => {
+test("quick-add blocks existing ids but allows namespaced model ids", async () => {
   let requests = 0;
   globalThis.fetch = (async (_input, init) => {
     if (!init?.method || init.method === "GET") return Response.json([]);
@@ -126,7 +126,7 @@ test("quick-add blocks existing and namespaced model ids", async () => {
   await enterModelId(input, "claude-opus-5");
   expect(addButton.disabled).toBe(true);
   await enterModelId(input, "vendor/model");
-  expect(addButton.disabled).toBe(true);
+  expect(addButton.disabled).toBe(false);
   expect(requests).toBe(0);
 
   await act(async () => { root.unmount(); });

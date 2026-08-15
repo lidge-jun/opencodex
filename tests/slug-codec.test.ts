@@ -166,6 +166,27 @@ describe("routeModel decode (proxy layer)", () => {
     expect(ids).toContain("moonshotai/kimi-k3-free");
     expect(ids).toContain("moonshotai/kimi-k3");
   });
+
+  test("knownModelIdsForProvider unions customModels for that provider", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+      { id: "c2", provider: "other", modelId: "should-not-appear" },
+    ];
+    const ids = knownModelIdsForProvider("zenmux", config.providers.zenmux!, config);
+    expect(ids).toContain("openai/gpt-5.5");
+    expect(ids).not.toContain("should-not-appear");
+  });
+
+  test("routeModel decodes encoded custom slash id back to native id", () => {
+    const config = zenmuxConfig();
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    const route = routeModel(config, "zenmux/openai-gpt-5.5");
+    expect(route.providerName).toBe("zenmux");
+    expect(route.modelId).toBe("openai/gpt-5.5");
+  });
 });
 
 describe("catalog emission (Codex-facing)", () => {

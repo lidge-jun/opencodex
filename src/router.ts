@@ -87,7 +87,11 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
  * last-known-good live /models cache (may be empty on a cold start; decode then passes
  * unknown ids through unchanged for an honest upstream error).
  */
-export function knownModelIdsForProvider(provName: string, prov: OcxProviderConfig): string[] {
+export function knownModelIdsForProvider(
+  provName: string,
+  prov: OcxProviderConfig,
+  config?: Pick<OcxConfig, "customModels">,
+): string[] {
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
   const registry = providerMatchesRegistryTransportWithStaticGuards(provName, prov)
@@ -108,6 +112,9 @@ export function knownModelIdsForProvider(provName: string, prov: OcxProviderConf
     for (const id of Object.keys(map ?? {})) ids.add(id);
   }
   for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
+  for (const model of config?.customModels ?? []) {
+    if (model.provider === provName && model.modelId) ids.add(model.modelId);
+  }
   return [...ids];
 }
 
@@ -610,7 +617,7 @@ function routeModelInternal(
     if (hasOwnProvider(config.providers, provName)) {
       const prov = config.providers[provName];
       if (prov.disabled === true) throw new Error(`Provider is disabled: ${provName}`);
-      const known = knownModelIdsForProvider(provName, prov);
+      const known = knownModelIdsForProvider(provName, prov, config);
       // Self-namespaced native id — the vendor segment equals the provider id, so the FULL ref is
       // itself a known model (e.g. orcarouter/auto). Route it whole instead of stripping to the
       // remainder, which would send a bare `auto` the upstream cannot resolve.
