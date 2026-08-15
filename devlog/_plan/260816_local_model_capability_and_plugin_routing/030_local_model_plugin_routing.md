@@ -82,9 +82,7 @@ availability.
 | Command | Reads this change? | Notes |
 |---------|-------------------|-------|
 | `cat ~/.codex/AGENTS.md` | Partially — proves bytes on disk, NOT that Codex loaded them | Human-read acceptance |
-| `REPO=$(git rev-parse --show-toplevel); OCX_SHIM_BYPASS=1 codex -C "$REPO" debug prompt-input \| rg "mcp__node_repl__js"` | YES — renders the instructions the model actually receives | Round 7 note: the earlier form wrote `<repo>`, which a shell reads as input
-redirection (`no such file or directory: repo`), so it was never runnable as
-printed. Proven in audit round 2: an isolated `$CODEX_HOME/AGENTS.md` carrying this guidance appeared in the prompt, exit 0. No network needed |
+| `REPO=$(git rev-parse --show-toplevel); OCX_SHIM_BYPASS=1 codex -C "$REPO" debug prompt-input \| rg "mcp__node_repl__js"` | YES — renders the instructions the model actually receives | Round 7 note: the earlier form wrote `<repo>`, which a shell reads as input redirection (`no such file or directory: repo`), so it was never runnable as printed. Proven in audit round 2: an isolated `$CODEX_HOME/AGENTS.md` carrying this guidance appeared in the prompt, exit 0. No network needed |
 
 Discovery caveats verified during audit (B7): global guidance resolves from
 `$CODEX_HOME` when set (currently unset, so `~/.codex` applies), and

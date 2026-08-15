@@ -34,7 +34,8 @@ said anything", so it needs a separate channel.
 
 IN: the provenance stamp in `src/codex/catalog/effort.ts` (sourcing both the
 CatalogModel and the jawcode generated-metadata lookup), the reader in
-`src/routing/capability.ts`, the `supportsImages` tri-state restoration in
+`src/routing/capability.ts`, the shared generated-metadata lookup export in
+`src/codex/catalog/parsing.ts`, the `supportsImages` tri-state restoration in
 `src/providers/antigravity-models.ts` (added after audit round 5), and the
 focused tests including the two writer-through-normalizer regressions.
 OUT: the evidence priority order, the memoization strategy, the policy
@@ -46,14 +47,16 @@ evaluator, reasoning-effort ingestion, and every other module.
 |------|--------|------|
 | `src/codex/catalog/effort.ts` | MODIFY | Stamp `opencodex_capability_provenance` for non-combo rows only |
 | `src/providers/antigravity-models.ts` | MODIFY | Restore the supportsImages tri-state (absent != false) |
+| `src/codex/catalog/parsing.ts` | MODIFY | Export the generated-metadata lookup so `effort.ts` shares it instead of duplicating |
 | `src/routing/capability.ts` | MODIFY | Read the provenance block; make the adapter tool fallback unconditional |
 | `tests/routing-capability-catalog.test.ts` | NEW | Real evidence survives; synthesized defaults stay unknown; tools never regresses |
 
 ## MODIFY 1 — src/codex/catalog/effort.ts
 
-`applyCatalogModelMetadata()` is the only place that knows a value came from a
-real `CatalogModel`: it writes exclusively inside guarded blocks that test the
-model's own fields. Stamp provenance there.
+`applyCatalogModelMetadata()` writes exclusively inside guarded blocks that test
+the `CatalogModel`'s own fields, which makes it the right place to stamp. It is
+NOT the only writer of real values, though — see "Capturing jawcode generated
+metadata too" below, which is why the stamp reads two sources rather than one.
 
 Existing shape (unchanged):
 
@@ -202,8 +205,14 @@ reintroduce the B2 defect the moment `ensureStrictCatalogFields` has run.
       : (Array.isArray(meta?.input) && meta.input.length > 0 ? meta.input : undefined);
 
 Precedence matches the existing write order: the `CatalogModel` wins where it
-asserts, generated metadata fills the rest. B extracts the lookup rather than
-duplicating it, so the two cannot drift.
+asserts, generated metadata fills the rest.
+
+The lookup currently lives inside `applyCatalogMetadata` and is not exported
+(`src/codex/catalog/parsing.ts:458-463`); `effort.ts` imports only `readCatalog`
+and types from that module (`src/codex/catalog/effort.ts:34-35`). So "extract,
+not duplicate" is a real edit to `parsing.ts`, not a free choice: export the
+resolve-and-fetch step as a named helper and have both callers use it. That is
+why `parsing.ts` is in the file map and the scope boundary above.
 
 Context-cap note: `applyCatalogMetadata` passes the metadata context through
 `applyProviderContextCap(meta.contextWindow, contextCap)`. Provenance must apply
@@ -220,6 +229,17 @@ catch this either:
       expect(entry.context_window).toBe(500000);
       expect(entry.opencodex_capability_provenance.context_window).toBe(500000);
       expect(entry.opencodex_capability_provenance.input_modalities).toEqual(["text", "image"]);
+    });
+
+    test("provenance carries the CAPPED metadata context, not the raw table value", () => {
+      // applyCatalogMetadata pipes generated context through applyProviderContextCap
+      // (parsing.ts:464-466). An implementation that stamps the uncapped table value
+      // would still pass the test above while advertising a window the cap refused.
+      const entry = buildRoutedEntry({ provider: "opencode-go", id: "grok-4.6", contextCap: 350000 });
+      expect(entry.context_window).toBe(350000);
+      expect(entry.opencodex_capability_provenance.context_window).toBe(350000);
+      // And the same value must survive all the way to routing evidence.
+      expect(candidateCapabilityEvidence(config, "opencode-go", "grok-4.6").contextWindow).toBe(350000);
     });
 
     test("a model with no assertion anywhere stamps identity only", () => {
