@@ -1,0 +1,118 @@
+name: Temporary PR 1750 CodeRabbit fixes
+
+on:
+  push:
+    branches:
+      - agent/codeql-real-findings-20260815
+
+concurrency:
+  group: tmp-fix-coderabbit-1750-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fix-and-verify:
+    name: Fix and verify viable CodeRabbit findings
+    # This temporary job must push the verified fix commit back to the PR branch.
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.14
+
+      - name: Apply fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          source = Path("src/codex/plugins-doctor.ts")
+          source_text = source.read_text(encoding="utf-8")
+          old_regex = r'''    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^#]+?)\s*(?:#.*)?$/);'''
+          new_regex = r'''    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);'''
+          if source_text.count(old_regex) != 1:
+              raise SystemExit("plugins-doctor matcher anchor did not match exactly once")
+          source.write_text(source_text.replace(old_regex, new_regex, 1), encoding="utf-8")
+
+          tests = Path("tests/codex-plugins-doctor.test.ts")
+          test_text = tests.read_text(encoding="utf-8")
+          old_block = r'''  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({ platform: "win32", configPath });
+      expect(result.applicable).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+'''
+          new_block = r'''  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+
+  test("malformed quoted values with long trailing whitespace are not parsed as bare values", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${" ".repeat(20_000)}x\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+      if (result.applicable) {
+        expect(result.marketplace.sourceType).toBe("local");
+        expect(result.marketplace.source).toBeNull();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+'''
+          if test_text.count(old_block) != 1:
+              raise SystemExit("malformed marketplace test anchor did not match exactly once")
+          tests.write_text(test_text.replace(old_block, new_block, 1), encoding="utf-8")
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run affected tests
+        run: bun test tests/codex-plugins-doctor.test.ts
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Check diff
+        run: git diff --check
+
+      - name: Commit fixes and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/tmp-fix-coderabbit-1750.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/codex/plugins-doctor.ts tests/codex-plugins-doctor.test.ts .github/workflows/tmp-fix-coderabbit-1750.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: address viable CodeRabbit parser findings"
+          git push origin HEAD:agent/codeql-real-findings-20260815
