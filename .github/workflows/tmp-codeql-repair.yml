@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   repair-and-verify:
+    # Re-run after correcting the regression assertion; the source patch is still exact-count gated.
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
