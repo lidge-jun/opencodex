@@ -59,6 +59,81 @@ function routedProvider(name: "litellm" | "ollama", apiKey?: string): OcxProvide
   return routeModel(config, `${name}/test-model`).provider;
 }
 
+describe("openai-chat request hardening", () => {
+  test("strips Responses-only encrypted annotations without changing schema names or literal values", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        encrypted: { type: "boolean", description: "A legitimate tool argument name" },
+        message: { type: "string", encrypted: true },
+        nested: {
+          type: "object",
+          properties: { value: { type: "string", encrypted: false } },
+        },
+        literalData: {
+          type: "object",
+          const: { encrypted: true },
+          default: { encrypted: false },
+          enum: [{ encrypted: true }],
+          examples: [{ encrypted: false }],
+        },
+      },
+      patternProperties: { encrypted: { type: "string", encrypted: true } },
+      $defs: { encrypted: { type: "number", encrypted: true } },
+      definitions: { encrypted: { type: "integer", encrypted: false } },
+      dependencies: { encrypted: ["message"], other: { type: "object", encrypted: true } },
+      dependentSchemas: { encrypted: { type: "string", encrypted: true } },
+      dependentRequired: { encrypted: ["message"] },
+      propertiesWithSpecialName: { type: "object", properties: { ["__proto__"]: { type: "string", encrypted: true } } },
+      required: ["message", "encrypted"],
+    };
+    const before = structuredClone(parameters);
+    const request = createOpenAIChatAdapter(provider()).buildRequest({
+      ...parsed(),
+      context: {
+        messages: [{ role: "user", content: "delegate", timestamp: 0 }],
+        tools: [{
+          name: "spawn_agent",
+          namespace: "collaboration",
+          description: "Spawn a child agent",
+          parameters,
+        }],
+      },
+    });
+    const body = JSON.parse(request.body) as {
+      tools: Array<{ function: { parameters: Record<string, unknown> } }>;
+    };
+
+    expect(body.tools[0].function.parameters).toEqual({
+      type: "object",
+      properties: {
+        encrypted: { type: "boolean", description: "A legitimate tool argument name" },
+        message: { type: "string" },
+        nested: {
+          type: "object",
+          properties: { value: { type: "string" } },
+        },
+        literalData: {
+          type: "object",
+          const: { encrypted: true },
+          default: { encrypted: false },
+          enum: [{ encrypted: true }],
+          examples: [{ encrypted: false }],
+        },
+      },
+      patternProperties: { encrypted: { type: "string" } },
+      $defs: { encrypted: { type: "number" } },
+      definitions: { encrypted: { type: "integer" } },
+      dependencies: { encrypted: ["message"], other: { type: "object" } },
+      dependentSchemas: { encrypted: { type: "string" } },
+      dependentRequired: { encrypted: ["message"] },
+      propertiesWithSpecialName: { type: "object", properties: { ["__proto__"]: { type: "string" } } },
+      required: ["message", "encrypted"],
+    });
+    expect(parameters).toEqual(before);
+  });
+});
+
 describe("openai-chat non-stream response hardening", () => {
   test("surfaces an upstream error envelope message", async () => {
     const adapter = createOpenAIChatAdapter(provider());
