@@ -8,6 +8,9 @@
  * failure signature that is long and specific enough to avoid generic overlap.
  */
 
+const KNOWN_ERRNO =
+  "ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|EADDRINUSE";
+
 const STRONG_FAILURE_RE = new RegExp([
   "\\bdid not complete\\b",
   "\\bfailed?\\b",
@@ -24,8 +27,22 @@ const STRONG_FAILURE_RE = new RegExp([
   "\\bdenied\\b",
   "\\bnot supported\\b",
   "\\binvalid\\b",
-  "\\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EPIPE|EAI_AGAIN|ECONNABORTED|EHOSTUNREACH|ENETUNREACH|EADDRINUSE)\\b",
+  `\\b(?:${KNOWN_ERRNO})\\b`,
   "\\b(?:HTTP(?: status(?: code)?)?|status(?: code)?|returns?|returned)\\s*[:=]?\\s*[45]\\d\\d\\b",
+].join("|"), "i");
+
+// Generic final summaries are not duplicate proof. Require at least one
+// concrete discriminator that normally comes from the underlying failure:
+// errno/status, endpoint/path, file name, structured field path, or named
+// Error/Exception class.
+const SPECIFIC_FAILURE_EVIDENCE_RE = new RegExp([
+  `\\b(?:${KNOWN_ERRNO})\\b`,
+  "\\b(?:HTTP(?: status(?: code)?)?|status(?: code)?|returns?|returned)\\s*[:=]?\\s*[45]\\d\\d\\b",
+  "(?:^|\\s)(?:GET|POST|PUT|PATCH|DELETE|HEAD)\\s+/[^\\s]+",
+  "(?:^|[\\s(`])(?:~?/|[A-Za-z]:\\\\)[^\\s)`]+",
+  "\\b[\\w.-]+\\.(?:json|toml|yaml|yml|log|conf|env|sqlite|db)\\b",
+  "\\b[\\w-]+(?:\\.[\\w-]+){2,}\\b",
+  "\\b[A-Za-z][A-Za-z0-9_.-]{3,}(?:Error|Exception)\\b",
 ].join("|"), "i");
 
 function normalizeSignatureLine(raw) {
@@ -46,7 +63,8 @@ function wordCount(text) {
 function isStrongFailureSignature(line) {
   if (line.length < 36 || line.length > 240) return false;
   if (wordCount(line) < 7) return false;
-  return STRONG_FAILURE_RE.test(line);
+  if (!STRONG_FAILURE_RE.test(line)) return false;
+  return SPECIFIC_FAILURE_EVIDENCE_RE.test(line);
 }
 
 function extractStrongFailureSignatures(issue) {
@@ -103,6 +121,7 @@ function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNu
 
 module.exports = {
   STRONG_FAILURE_RE,
+  SPECIFIC_FAILURE_EVIDENCE_RE,
   normalizeSignatureLine,
   isStrongFailureSignature,
   extractStrongFailureSignatures,
