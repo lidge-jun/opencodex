@@ -22,8 +22,7 @@ on:
       - ".github/scripts/pr-sponsored-surface.test.cjs"
       - ".github/scripts/issue-translation.cjs"
       - ".github/scripts/issue-translation.test.cjs"
-      - ".github/scripts/issue-triage.cjs"
-      - ".github/scripts/issue-triage.test.cjs"
+      - ".github/scripts/issue-triage*.cjs"
       - ".github/scripts/copilot-workflows.test.cjs"
       - ".github/scripts/parse-issue-translation-response.cjs"
       - ".github/scripts/parse-issue-translation-response.test.cjs"
@@ -54,8 +53,7 @@ on:
       - ".github/scripts/pr-sponsored-surface.test.cjs"
       - ".github/scripts/issue-translation.cjs"
       - ".github/scripts/issue-translation.test.cjs"
-      - ".github/scripts/issue-triage.cjs"
-      - ".github/scripts/issue-triage.test.cjs"
+      - ".github/scripts/issue-triage*.cjs"
       - ".github/scripts/copilot-workflows.test.cjs"
       - ".github/scripts/parse-issue-translation-response.cjs"
       - ".github/scripts/parse-issue-translation-response.test.cjs"
@@ -90,7 +88,7 @@ jobs:
           node --test .github/scripts/pr-hygiene.test.cjs
           node --test .github/scripts/pr-sponsored-surface.test.cjs
           node --test .github/scripts/issue-translation.test.cjs
-          node --test .github/scripts/issue-triage.test.cjs
+          node --test .github/scripts/issue-triage*.test.cjs
           node --test .github/scripts/copilot-workflows.test.cjs
           node --test .github/scripts/parse-issue-translation-response.test.cjs
 
