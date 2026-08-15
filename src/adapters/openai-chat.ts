@@ -706,6 +706,122 @@ function stringRequiredFields(value: unknown): string[] {
     : [];
 }
 
+const XAI_UNSAFE_VARIANT_KEYS = [
+  "$ref",
+  "oneOf",
+  "anyOf",
+  "allOf",
+  "if",
+  "then",
+  "else",
+  "not",
+  "dependentRequired",
+  "dependentSchemas",
+  "patternProperties",
+  "unevaluatedProperties",
+] as const;
+
+function decodeJsonPointerToken(token: string): string {
+  return token.replace(/~1/g, "/").replace(/~0/g, "~");
+}
+
+function lookupLocalJsonPointer(root: unknown, ref: string): unknown {
+  if (ref === "#" || ref === "#/") return root;
+  if (!ref.startsWith("#/")) return undefined;
+  let current: unknown = root;
+  for (const token of ref.slice(2).split("/").map(decodeJsonPointerToken)) {
+    if (!isXaiObjectSchema(current) || !Object.hasOwn(current, token)) return undefined;
+    current = current[token];
+  }
+  return current;
+}
+
+/** Resolve local `#/` `$ref`s. Unresolvable or cyclic refs return undefined. */
+function resolveXaiSchemaRefs(
+  schema: unknown,
+  root: Record<string, unknown>,
+  stack: Set<string> = new Set(),
+): unknown | undefined {
+  if (!isXaiObjectSchema(schema)) return schema;
+  if (typeof schema.$ref === "string") {
+    const ref = schema.$ref;
+    if (stack.has(ref)) return undefined;
+    const target = lookupLocalJsonPointer(root, ref);
+    if (target === undefined) return undefined;
+    stack.add(ref);
+    const resolvedTarget = resolveXaiSchemaRefs(target, root, stack);
+    stack.delete(ref);
+    if (resolvedTarget === undefined) return undefined;
+    const rest: Record<string, unknown> = { ...schema };
+    delete rest.$ref;
+    if (Object.keys(rest).length === 0) return resolvedTarget;
+    const resolvedRest = resolveXaiSchemaRefs(rest, root, stack);
+    if (resolvedRest === undefined || !isXaiObjectSchema(resolvedTarget) || !isXaiObjectSchema(resolvedRest)) {
+      return undefined;
+    }
+    return composeXaiObjectSchemas(resolvedTarget, resolvedRest);
+  }
+
+  const resolved: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if ((key === "oneOf" || key === "anyOf") && Array.isArray(value)) {
+      const items: unknown[] = [];
+      for (const item of value) {
+        const next = resolveXaiSchemaRefs(item, root, stack);
+        if (next === undefined) return undefined;
+        items.push(next);
+      }
+      resolved[key] = items;
+      continue;
+    }
+    if (key === "properties" && isXaiObjectSchema(value)) {
+      const properties: Record<string, unknown> = {};
+      for (const [name, property] of Object.entries(value)) {
+        const next = resolveXaiSchemaRefs(property, root, stack);
+        if (next === undefined) return undefined;
+        properties[name] = next;
+      }
+      resolved[key] = properties;
+      continue;
+    }
+    resolved[key] = value;
+  }
+  return resolved;
+}
+
+function xaiVariantIsConcreteObject(variant: Record<string, unknown>): boolean {
+  if (variant.type !== undefined && variant.type !== "object") return false;
+  return XAI_UNSAFE_VARIANT_KEYS.every(key => !(key in variant));
+}
+
+function xaiRequiredSetsMatch(variants: Record<string, unknown>[]): boolean {
+  const serialized = variants.map(variant => [...stringRequiredFields(variant.required)].sort().join("\0"));
+  return serialized.every(value => value === serialized[0]);
+}
+
+function mergeXaiAdditionalProperties(
+  variants: Record<string, unknown>[],
+): { ok: true; value?: unknown } | { ok: false } {
+  const values = variants.map(variant => variant.additionalProperties);
+  const explicit = values.filter(value => value !== undefined);
+  if (explicit.length === 0) return { ok: true };
+  if (explicit.length !== values.length) return { ok: false };
+  const hasFalse = explicit.some(value => value === false);
+  const permissive = explicit.filter(value => value !== false);
+  if (hasFalse && permissive.length > 0) return { ok: false };
+  if (hasFalse) return { ok: true, value: false };
+  const unique: unknown[] = [];
+  const seen = new Set<string>();
+  for (const value of permissive) {
+    const key = JSON.stringify(value);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(value);
+  }
+  if (unique.length !== 1) return { ok: false };
+  return { ok: true, value: unique[0] };
+}
+
 /** Compose root siblings into a branch so properties/required are not overwritten. */
 function composeXaiObjectSchemas(
   inherited: Record<string, unknown>,
@@ -767,19 +883,27 @@ function mergeXaiPropertySchemas(values: unknown[]): unknown {
 
 /**
  * xAI rejects a function parameter schema whose root remains oneOf/anyOf, even when every branch
- * is an object. Merge the union into one object root while preserving branch choices on each
- * property. A field stays required only when every branch requires it.
+ * is an object. Flatten only when the merge is lossless: local $refs resolve, every variant is a
+ * concrete object, required sets match, and additionalProperties does not change meaning.
+ * Otherwise omit the tool rather than emit a weaker schema.
  */
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
-  const variants = expandXaiRootObjectSchemas(parameters);
+  if (!isXaiObjectSchema(parameters)) return undefined;
+  const resolved = resolveXaiSchemaRefs(parameters, parameters);
+  if (!isXaiObjectSchema(resolved)) return undefined;
+  const variants = expandXaiRootObjectSchemas(resolved);
   if (!variants) return undefined;
-  if (variants.length === 1) return variants[0];
-  const root = parameters && typeof parameters === "object" && !Array.isArray(parameters)
-    ? parameters as Record<string, unknown>
-    : {};
-  const metadata = Object.fromEntries(Object.entries(root).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
+  if (variants.length === 1) {
+    return xaiVariantIsConcreteObject(variants[0]) ? variants[0] : undefined;
+  }
+  if (!variants.every(xaiVariantIsConcreteObject) || !xaiRequiredSetsMatch(variants)) return undefined;
+  const additionalProperties = mergeXaiAdditionalProperties(variants);
+  if (!additionalProperties.ok) return undefined;
+
+  const metadata = Object.fromEntries(Object.entries(resolved).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
   delete metadata.properties;
   delete metadata.required;
+  delete metadata.additionalProperties;
 
   const propertyValues = new Map<string, unknown[]>();
   for (const variant of variants) {
@@ -793,21 +917,14 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
   const properties = Object.fromEntries(
     [...propertyValues].map(([name, values]) => [name, mergeXaiPropertySchemas(values)]),
   );
-
-  const requiredSets = variants.map(variant => new Set(stringRequiredFields(variant.required)));
-  const required = requiredSets.length === 0
-    ? []
-    : [...requiredSets[0]].filter(name => requiredSets.every(set => set.has(name)));
-  const additionalProperties = variants.every(variant => variant.additionalProperties === false)
-    ? false
-    : undefined;
+  const required = stringRequiredFields(variants[0]?.required);
 
   return {
     ...metadata,
     type: "object",
     properties,
     ...(required.length > 0 ? { required } : {}),
-    ...(additionalProperties === false ? { additionalProperties } : {}),
+    ...("value" in additionalProperties ? { additionalProperties: additionalProperties.value } : {}),
   };
 }
 

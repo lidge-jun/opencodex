@@ -127,14 +127,14 @@ describe("xAI auth-mode transport selection", () => {
     expect((JSON.parse(otherRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
   });
 
-  test("preserves root properties and required across xAI union branches", () => {
+  test("preserves shared root properties when every xAI branch has the same required set", () => {
     const schema = {
       type: "object",
       properties: { token: { type: "string" } },
       required: ["token"],
       oneOf: [
-        { properties: { mode: { const: "path" }, path: { type: "string" } }, required: ["mode", "path"] },
-        { properties: { mode: { const: "url" }, url: { type: "string" } }, required: ["mode", "url"] },
+        { properties: { mode: { const: "path" } } },
+        { properties: { mode: { const: "url" } } },
       ],
     };
     const request = createOpenAIChatAdapter(provider("key")).buildRequest({
@@ -149,10 +149,92 @@ describe("xAI auth-mode transport selection", () => {
     expect(xaiParameters.properties).toEqual({
       token: { type: "string" },
       mode: { anyOf: [{ const: "path" }, { const: "url" }] },
+    });
+    expect(xaiParameters.required).toEqual(["token"]);
+  });
+
+  test("omits an xAI union whose branch required fields cannot be flattened", () => {
+    const schema = {
+      type: "object",
+      properties: { token: { type: "string" } },
+      required: ["token"],
+      oneOf: [
+        { properties: { mode: { const: "path" }, path: { type: "string" } }, required: ["mode", "path"] },
+        { properties: { mode: { const: "url" }, url: { type: "string" } }, required: ["mode", "url"] },
+      ],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("resolves local $ref variants before flattening an xAI union", () => {
+    const schema = {
+      $defs: {
+        path: { type: "object", properties: { mode: { const: "path" }, path: { type: "string" } } },
+        url: { type: "object", properties: { mode: { const: "url" }, url: { type: "string" } } },
+      },
+      oneOf: [{ $ref: "#/$defs/path" }, { $ref: "#/$defs/url" }],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
+    });
+    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
+
+    expect(xaiParameters.type).toBe("object");
+    expect(xaiParameters.oneOf).toBeUndefined();
+    expect(xaiParameters.properties).toEqual({
+      mode: { anyOf: [{ const: "path" }, { const: "url" }] },
       path: { type: "string" },
       url: { type: "string" },
     });
-    expect(xaiParameters.required).toEqual(["token", "mode"]);
+    expect(xaiParameters.$defs).toEqual(schema.$defs);
+  });
+
+  test("omits an xAI $ref union that would collapse to an empty object", () => {
+    const schema = {
+      $defs: {
+        named: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      },
+      oneOf: [{ $ref: "#/$defs/named" }, { type: "object", properties: { id: { type: "number" } } }],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "lookup", description: "Lookup", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("keeps additionalProperties: false only when every xAI variant is closed", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { a: { type: "string" } }, additionalProperties: false },
+        { type: "object", properties: { b: { type: "string" } }, additionalProperties: false },
+      ],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "closed", description: "Closed", parameters: schema }] },
+    });
+    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
+    expect(xaiParameters.additionalProperties).toBe(false);
+  });
+
+  test("omits an xAI union that would tighten additionalProperties", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { a: { type: "string" } }, additionalProperties: true },
+        { type: "object", properties: { b: { type: "string" } }, additionalProperties: false },
+      ],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "mixed", description: "Mixed", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
   });
 
   test("non-xAI providers preserve nested nullable and annotation schema content", () => {
