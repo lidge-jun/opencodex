@@ -27,6 +27,13 @@ export interface SubagentDelegationSectionProps {
   onUltraModeSave: (patch: UltraModePatch) => void;
   ultraLoadFailed: boolean;
   onUltraModeRetry: () => void;
+  taskRecovery: {
+    enabled: boolean;
+    saving: boolean;
+    loadFailed: boolean;
+    onSave: (enabled: boolean) => void;
+    onRetry: () => void;
+  };
 }
 
 export default function SubagentDelegationSection({
@@ -43,6 +50,7 @@ export default function SubagentDelegationSection({
   onUltraModeSave,
   ultraLoadFailed,
   onUltraModeRetry,
+  taskRecovery,
 }: SubagentDelegationSectionProps) {
   const t = useT();
   // A present empty/whitespace hint is an upstream override that suppresses the
@@ -63,6 +71,33 @@ export default function SubagentDelegationSection({
           </button>
         </div>
       )}
+      <div className="swi-delegation-row">
+        <div className="setting-copy">
+          <div className="font-semibold">{t("sub.taskRecovery")}</div>
+          <div className="muted setting-hint">{t("sub.taskRecoveryHint")}</div>
+        </div>
+        {taskRecovery.loadFailed ? (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={taskRecovery.onRetry}>
+            {t("common.retry")}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={`switch ${taskRecovery.enabled ? "on" : ""}`}
+            onClick={() => {
+              const next = !taskRecovery.enabled;
+              if (next && !window.confirm(t("sub.taskRecoveryConfirm"))) return;
+              taskRecovery.onSave(next);
+            }}
+            disabled={saving || taskRecovery.saving}
+            aria-label={t("sub.taskRecovery")}
+            aria-pressed={taskRecovery.enabled}
+          >
+            <span className="knob" />
+          </button>
+        )}
+      </div>
+
       <div className="swi-delegation-row">
         <div className="setting-copy">
           <div className="font-semibold">{t("sub.delegation.model")}</div>

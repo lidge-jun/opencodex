@@ -15,6 +15,8 @@ export interface ProvidersConfig {
     disabled?: boolean;
     note?: string;
     codexAccountMode?: "direct" | "pool";
+    openRouterRouting?: import("../provider-workspace/catalog").OpenRouterRoutingPreference;
+    modelOpenRouterRouting?: Record<string, import("../provider-workspace/catalog").OpenRouterRoutingPreference>;
   }>;
 }
 

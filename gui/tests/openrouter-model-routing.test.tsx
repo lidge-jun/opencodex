@@ -1,0 +1,80 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Window } from "happy-dom";
+import { act } from "react";
+import type { Root } from "react-dom/client";
+import { LanguageProvider } from "../src/i18n/provider";
+import OpenRouterModelRouting from "../src/components/provider-workspace/OpenRouterModelRouting";
+import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
+import type { WorkspaceItem } from "../src/provider-workspace/catalog";
+
+const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const originalFetch = globalThis.fetch;
+let previous: Record<(typeof globals)[number], unknown>;
+let testWindow: Window;
+let root: Root | null;
+
+beforeEach(() => {
+  previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
+  testWindow = new Window({ url: "http://localhost/#providers" });
+  Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: testWindow.document },
+    window: { configurable: true, value: testWindow },
+    navigator: { configurable: true, value: testWindow.navigator },
+    localStorage: { configurable: true, value: testWindow.localStorage },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  root = null;
+});
+
+afterEach(async () => {
+  globalThis.fetch = originalFetch;
+  if (root) await act(async () => root?.unmount());
+  testWindow.close();
+  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+});
+
+test("loads exact OpenRouter endpoint tags and saves a model-only allowlist", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async input => {
+    requests.push(String(input));
+    return Response.json({ endpoints: [{ tag: "deepinfra/turbo", providerName: "DeepInfra", supportsImplicitCaching: true }] });
+  }) as typeof fetch;
+  const updates: Array<{ name: string; patch: ProviderUpdatePatch }> = [];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["deepseek/deepseek-r1"]}
+      onUpdateProvider={async (name, patch) => { updates.push({ name, patch }); return { ok: true }; }}
+    /></LanguageProvider>);
+  });
+
+  const model = host.querySelector<HTMLInputElement>('input[list^="openrouter-models-"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(model, "deepseek/deepseek-r1");
+    model.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { load.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(requests[0]).toContain("model=deepseek%2Fdeepseek-r1");
+
+  const mode = host.querySelector<HTMLSelectElement>("select")!;
+  await act(async () => {
+    mode.value = "only";
+    mode.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  const endpoint = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].at(-1)!;
+  await act(async () => { endpoint.click(); });
+  const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
+  await act(async () => { save.click(); await Promise.resolve(); });
+
+  expect(updates).toEqual([{
+    name: "openrouter",
+    patch: { modelOpenRouterRouting: { "deepseek/deepseek-r1": { only: ["deepinfra/turbo"], allowFallbacks: true } } },
+  }]);
+});

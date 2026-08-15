@@ -117,6 +117,28 @@
 
 .pwi-settings-dirty { font-size: var(--text-caption); color: var(--amber); }
 
+.pwi-openrouter-routing {
+  display: flex; flex-direction: column; gap: 12px; margin-block: 4px 18px; padding: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface);
+}
+.pwi-openrouter-head h3 { margin: 0; color: var(--text); font-size: var(--text-control); }
+.pwi-openrouter-head p { max-width: 70ch; margin: 4px 0 0; color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
+.pwi-openrouter-model-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.pwi-openrouter-controls { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 2fr); gap: 12px; align-items: end; }
+.pwi-openrouter-fallbacks { display: flex; align-items: center; gap: 8px; min-height: 36px; color: var(--text); font-size: var(--text-label); }
+.pwi-openrouter-selected { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.pwi-openrouter-selected li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; padding: 6px 8px; border-radius: var(--radius-xs); background: var(--raised); }
+.pwi-openrouter-selected code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwi-openrouter-selected span { color: var(--amber); font-size: var(--text-caption); }
+.pwi-openrouter-endpoints { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-height: 320px; overflow: auto; }
+.pwi-openrouter-endpoint { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px; border-radius: var(--radius-xs); background: var(--raised); cursor: pointer; }
+.pwi-openrouter-endpoint:hover { background: var(--hover); }
+.pwi-openrouter-endpoint > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.pwi-openrouter-endpoint strong, .pwi-openrouter-endpoint code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwi-openrouter-endpoint strong { color: var(--text); font-size: var(--text-label); }
+.pwi-openrouter-endpoint code { color: var(--muted); font-size: var(--text-caption); }
+.pwi-openrouter-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .pwi-pacing-card {
   display: flex; flex-direction: column; gap: 12px; padding: 14px;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -137,6 +159,8 @@
 .pwi-pacing-row span { color: var(--muted); font-size: var(--text-caption); }
 
 @media (max-width: 760px) {
+  .pwi-openrouter-model-row, .pwi-openrouter-controls, .pwi-openrouter-endpoints { grid-template-columns: 1fr; }
+  .pwi-openrouter-model-row .btn { width: 100%; }
   .pwi-pacing-head { flex-direction: column; }
   .pwi-pacing-grid, .pwi-pacing-grid--model, .pwi-pacing-status { grid-template-columns: 1fr; }
   .pwi-pacing-grid--model .btn { width: 100%; }

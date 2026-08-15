@@ -64,6 +64,7 @@ describe("headless GUI parity CLI", () => {
       // skipping the endpoint.
       ["/api/github/star", "(none — GUI-only)"],
       ["/api/oauth", "ocx account"],
+      ["/api/openrouter/model-providers", "ocx provider"],
       ["/api/providers/keys", "ocx account"],
       ["/api/providers", "ocx provider"],
       ["/api/provider-", "ocx provider/models"],
@@ -83,6 +84,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],
+      ["/api/agent-task-recovery", "ocx agent recovery"],
       ["/api/grok", "ocx grok"],
       ["/api/injection", "ocx agent"],
       ["/api/keys", "ocx access"],
@@ -106,10 +108,21 @@ describe("headless GUI parity CLI", () => {
       ["/api/update", "ocx system update"],
       ["/api/usage", "ocx observe usage"],
       ["/api/v2", "ocx v2/agent"],
+      ["/api/v1", "(none — canonical upstream URL literal in GUI eligibility check)"],
       ["/api/windows-tray", "ocx tray"],
     ];
     const uncovered = [...endpoints].filter(endpoint => !coverage.some(([prefix]) => endpoint === prefix || endpoint.startsWith(prefix)));
     expect(uncovered).toEqual([]);
+  });
+
+  test("agent recovery mirrors the explicit management toggle", async () => {
+    const runtime = fakeRuntime();
+    expect(await handleAgentCommand(["recovery", "on", "--json"], runtime.deps)).toBe(0);
+    expect(runtime.requests).toEqual([{
+      path: "/api/agent-task-recovery",
+      method: "PUT",
+      body: { enabled: true },
+    }]);
   });
 
   test("provider edit reuses the management provider patch", async () => {

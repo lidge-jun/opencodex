@@ -53,6 +53,14 @@ export interface WorkspaceProvider {
   };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
+  openRouterRouting?: OpenRouterRoutingPreference;
+  modelOpenRouterRouting?: Record<string, OpenRouterRoutingPreference>;
+}
+
+export interface OpenRouterRoutingPreference {
+  order?: string[];
+  only?: string[];
+  allowFallbacks?: boolean;
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */
