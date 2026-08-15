@@ -42,7 +42,7 @@ const SPECIFIC_FAILURE_EVIDENCE_RE = new RegExp([
   "(?:^|[\\s(`])(?:~?/|[A-Za-z]:\\\\)[^\\s)`]+",
   "\\b[\\w.-]+\\.(?:json|toml|yaml|yml|log|conf|env|sqlite|db)\\b",
   "\\b[\\w-]+(?:\\.[\\w-]+){2,}\\b",
-  "\\b[A-Za-z][A-Za-z0-9_.-]{3,}(?:Error|Exception)\\b",
+  "\\b[A-Za-z][A-Za-z0-9_.-]*(?:Error|Exception)\\b",
 ].join("|"), "i");
 
 function normalizeSignatureLine(raw) {
