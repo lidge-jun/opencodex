@@ -89,11 +89,16 @@ export default function OpenRouterModelRouting({
       [mode]: selected,
       allowFallbacks,
     };
-    const result = await onUpdateProvider(item.name, {
-      modelOpenRouterRouting: { [model.trim()]: routing },
-    });
-    setMessage({ ok: result.ok, text: result.ok ? t("pws.openrouter.saved") : result.error ?? t("sub.saveFailed") });
-    setSaving(false);
+    try {
+      const result = await onUpdateProvider(item.name, {
+        modelOpenRouterRouting: { [model.trim()]: routing },
+      });
+      setMessage({ ok: result.ok, text: result.ok ? t("pws.openrouter.saved") : result.error ?? t("sub.saveFailed") });
+    } catch {
+      setMessage({ ok: false, text: t("sub.saveFailed") });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const knownTags = new Set(endpoints.map(endpoint => endpoint.tag));
