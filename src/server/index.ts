@@ -177,6 +177,7 @@ import {
 import { handleImages } from "./images";
 import { handleLive, logLiveSidebandFrame, parseLiveSidebandTarget, resolveLiveSidebandUpgrade } from "./live";
 import { handleSearch } from "./search";
+import { buildDataPlaneCatalogResponse, dataPlaneCatalogMethodNotAllowed, withDataPlaneCatalogResponseHeaders } from "./data-plane-catalog";
 import { fetchAllModels, handleManagementAPI, VERSION, type ManagementApiDeps } from "./management-api";
 import {
   initializeManagementAuthState,
@@ -1066,6 +1067,37 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           })),
         ];
         return jsonResponse({ object: "list", data }, 200, req, policy);
+      }
+
+      /**
+       * Least-privilege catalog distribution (#809). A client that can already POST
+       * /v1/responses can fetch the generated catalog with the same credential, so a
+       * multi-machine deployment no longer needs the management token on every client.
+       *
+       * Admission is checked before the method, so an unauthenticated POST answers 401
+       * while an admitted caller gets the accurate 405 plus `Allow`. CORS preflight is
+       * the standing exception: the global OPTIONS handler above answers a bodyless 204
+       * before any route authentication runs, for this route as for every other.
+       *
+       * Every outcome — success, HEAD, and each error — goes through the shared header
+       * wrapper so `Cache-Control: no-store` and `X-Content-Type-Options: nosniff` cannot
+       * be missed on one branch. A cacheable `404 catalog_not_found` would keep telling a
+       * client there is no catalog after the operator generates one.
+       *
+       * Not added to `loopbackRouteAllowed`: the unauthenticated loopback listener serves
+       * what a directly-spawned `codex app-server` needs, and it does not need this.
+       */
+      if (url.pathname === "/v1/catalog") {
+        const respond = (response: Response) => withCors(withDataPlaneCatalogResponseHeaders(response), req, policy);
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return respond(formatErrorResponse(401, "authentication_error", "opencodex API key required"));
+        if (!isAllowedRequestOrigin(req, policy)) {
+          return respond(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"));
+        }
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          return respond(dataPlaneCatalogMethodNotAllowed());
+        }
+        return respond(await buildDataPlaneCatalogResponse(req.method));
       }
 
       // Remote compaction v1 (codex-rs with Feature::RemoteCompactionV2 off — the default).

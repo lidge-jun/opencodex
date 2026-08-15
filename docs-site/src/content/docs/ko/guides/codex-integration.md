@@ -153,18 +153,26 @@ CLI에서 표시 이름을 추가할 수 있습니다(proxy가 live 상태면 ca
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-원격 Codex client는 management API로 같은 생성된 catalog를 가져올 수 있습니다(다른 `/api/*` 경로와 같은 admission token을 사용합니다):
+원격 Codex client는 이미 추론에 쓰고 있는 data-plane key로 **data plane**에서 같은 catalog를 가져옵니다:
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+[Proxy API Formats](/ko/reference/proxy-formats/)의 표준 원자적 다운로드 절차를 따르십시오. 대상 디렉터리
+안의 임시 파일에 쓰고 성공했을 때만 이름을 바꾸므로, 실패하거나 중단된 전송이 동작 중인 catalog를 덮어쓰지
+않습니다. `${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json`에 설치한 뒤 다음을 실행합니다:
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
 
-응답은 원시 `opencodex-catalog.json` 문서입니다( provider credential 없음). 사용 가능할 때는 `x-opencodex-codex-version` header가 서버 쪽 Codex runtime version을 보고해서 client가 version skew를 알아볼 수 있습니다.
+이 용도로 management token을 client 머신에 보내지 마십시오. `GET /api/catalog`은 같은 문서를 반환하지만,
+신뢰된 머신의 dashboard와 운영 도구를 위한 management 평면 경로입니다. admin secret이 필요하고, 그 secret은
+provider 설정·OAuth 관리·proxy 종료까지 함께 authorize합니다.
+
+응답은 생성된 `opencodex-catalog.json` 문서입니다. data-plane 경로는 현재의 catalog 배포 안전 검사를 적용하고 credential·신원·설정 모양으로 인식되는 내용을 거부합니다. 적용 방식은 아직 maintainer 검토 중입니다. 사용 가능할 때는 `x-opencodex-codex-version` header가 서버 쪽 Codex runtime version을 보고해서 client가 version skew를 알아볼 수 있습니다.
 
 또한 management API(`POST /api/custom-models`, `PUT /api/custom-models/<id>`의 `displayName` string)와 웹 대시보드에서도 설정하거나 수정할 수 있습니다. `/`는 routed-slug separator와 충돌하므로 거부됩니다.
 

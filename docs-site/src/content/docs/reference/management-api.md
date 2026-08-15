@@ -152,7 +152,7 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
-| `GET /api/catalog` | Return the installed Codex catalog document | 404 catalog not found |
+| `GET /api/catalog` | Return the installed Codex catalog document | 404 catalog not found; 500 catalog contains values that are not safe to distribute; 500 catalog file is too large to read |
 | `GET /api/models` | Return the dashboard/CLI model rows | `catalog_busy` when gathering is saturated |
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |
@@ -160,6 +160,31 @@ first and submit the returned digest. Prefer quarantine when recovery may be nee
 | `GET, POST /api/custom-models` | List custom models or add one | 400 invalid fields; 404 provider missing; 409 duplicate model |
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider |
+
+`GET /api/catalog` is for the dashboard and operator tooling. When a remote client needs the
+catalog, use the data-plane route `GET /v1/catalog`: it returns the same document from the same
+generator, so client machines never receive the admin secret. See
+[Proxy API Formats](/reference/proxy-formats/).
+
+Both routes share one materialization step, so this route inherits its two refusals. Each answers
+in the ordinary management envelope — `{ "error": "<message>" }` — and not in the data-plane
+`type`/`code` envelope, so the `/v1/catalog` error codes do not appear here:
+
+| Status | Response body | Meaning |
+| --- | --- | --- |
+| 404 | `{ "error": "catalog not found" }` | No catalog document could be read |
+| 500 | `{ "error": "catalog contains values that are not safe to distribute" }` | The stored catalog carries credential-, identity-, or configuration-shaped content. The message is deliberately content-free |
+| 500 | `{ "error": "catalog file is too large to read" }` | The stored file exceeds the safe 32 MiB source read limit, so it was refused before parsing |
+
+This route does **not** apply the data plane's 8 MiB serialized-response ceiling; that bound belongs
+to the remotely reachable transport only.
+
+:::note
+Applying the shared rejection to the management route is a consequence of the single
+materialization step, not an approved policy: before it, this route served any parseable catalog
+file. Whether the management plane should stay subject to the same refusal is an open maintainer
+decision recorded in `structure/05_gui-and-management-api.md`.
+:::
 
 ### OAuth accounts, provider keys, and data-plane keys
 

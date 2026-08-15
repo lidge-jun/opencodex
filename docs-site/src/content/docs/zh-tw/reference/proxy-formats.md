@@ -23,6 +23,7 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | Anthropic Messages | `POST /v1/messages` | Anthropic `message` JSON | Anthropic Messages SSE |
 | Anthropic token 計數 | `POST /v1/messages/count_tokens` | `{ "input_tokens": number }` | 不適用 |
 | 模型探索 | `GET /v1/models` | 三種目錄契約之一 | 不適用 |
+| 目錄分發 | `GET`、`HEAD /v1/catalog` | 生成的 Codex 目錄文件 | 不適用 |
 | 語音與 Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | 中繼的 call-creation 回應 | 一個獨立的 sideband WebSocket 雙向中繼 frame |
 | Responses compaction | `POST /v1/responses/compact` | 取代歷史 JSON | 不適用 |
 
@@ -152,6 +153,96 @@ Responses 表示是橋接的中心。原生相容的路由可跳過部分轉譯�
 | Codex 目錄 | `client_version` query 參數 | `{ "models": [...] }` | 原生與路由項目帶有更豐富的 Codex 目錄欄位、可見性、effort、WebSocket 與多代理中繼資料 |
 | 普通 OpenAI 清單 | 無觸發 | `{ "object": "list", "data": [...] }` | 可見的原生 id 為裸 id；路由 id 為別名或 `provider/model` |
 
+## `GET /v1/catalog` 與 `HEAD /v1/catalog`
+
+此路由將生成的 Codex 目錄文件提供給 data-plane 呼叫方，因此遠端客戶端可以用它已經用於推論的憑證取得模型中繼資料。管理路由 `GET /api/catalog` 仍然存在，並為儀表板與運維工具回傳同一份文件；它需要管理秘密，而該秘密不應散布到客戶端機器。
+
+兩個路由讀取同一份生成的目錄。不存在第二個目錄生成器，也沒有在 `/api/*` 管理前綴上加入任何 data-plane 例外。
+
+| 屬性 | 行為 |
+| --- | --- |
+| 方法 | 僅 `GET` 與 `HEAD`。此介面為唯讀，`/v1` 之下不存在任何目錄變更 API |
+| Body | 目錄文件，與 `GET /api/catalog` 回傳的位元組完全相同 |
+| 內容型別 | `application/json` |
+| 快取與嗅探 | 此路由自身產生的每一個回應 —— 文件、`HEAD` 以及每種錯誤 —— 都帶 `Cache-Control: no-store` 與 `X-Content-Type-Options: nosniff`。該文件追蹤即時的供應商、可見性與 selector 狀態，且按憑證提供，因此中介不得保留或重播它；被快取的 404 也不得掩蓋之後生成的目錄。全域的無本文 `OPTIONS` 預檢在路由執行之前就被回應，因此不帶這兩個路由層級標頭 |
+| 版本中繼資料 | `x-opencodex-codex-version` 回報本代理選定的 Codex 版本。當代理沒有權威的執行期版本時，此標頭會被省略，而不是猜測一個值 |
+| `HEAD` | 與 `GET` 相同的狀態與標頭，另加 `Content-Length`，且沒有 body —— 在下載前檢查大小與版本偏差 |
+| 回應上限 | 8 MiB。更大的文件會被確定性地拒絕，而不是繼續傳輸 |
+
+此路由專屬的失敗：
+
+| 狀態 | 型別或代碼 | 意義 |
+| --- | --- | --- |
+| 404 | `catalog_not_found` | 代理沒有可提供的目錄文件。這與未知 `/v1/*` 路徑回傳的一般 `not_found` 不同，因此腳本可以區分兩者 |
+| 405 | `method_not_allowed` | 使用了非讀取方法。回應帶有 `Allow: GET, HEAD` |
+| 500 | `catalog_unsafe` | 儲存的目錄帶有不得散布的內容（形似憑證、身分或設定的值或鍵名）。此錯誤刻意不含任何內容 |
+| 500 | `catalog_too_large` | 序列化後的目錄文件超過 8 MiB 的 data-plane 上限 |
+| 500 | `catalog_source_too_large` | 儲存的目錄檔案超過安全讀取上限，因此在解析之前就被拒絕。單獨回報是因為此時序列化後的大小是未知的 |
+
+缺失或無效的憑證會在考慮方法之前就以 401 被拒絕，因此匿名的 `POST`、`PUT`、`PATCH` 或 `DELETE` 得到的是 `authentication_error`，而不是揭露此路由的存在。`OPTIONS` 是固定的例外：CORS 預檢在任何路由認證之前就由全域處理器以無本文的 204 回應，此路由與其他路由相同。
+
+### 多機器目錄下載
+
+在集中託管的部署中，客戶端機器以自己的 data-plane 金鑰下載目錄。先下載到暫存檔，只有在成功後才原子地重新命名到目標位置，如此失敗或中斷的傳輸永遠不會截斷或取代 Codex 正在使用的目錄。金鑰只透過請求標頭傳遞，絕不放入 URL：
+
+```bash
+codex_dir="${CODEX_HOME:-$HOME/.codex}"
+mkdir -p -- "$codex_dir" || exit 1
+
+# 清理只掛在 EXIT 上，因此在每一條退出路徑上恰好執行一次。訊號處理器執行 exit 而不是只做清理：
+# 單純的 `trap 'rm -f ...' INT` 會取代預設的終止動作，shell 可能在它執行後繼續進入 curl 或 mv。
+tmp=""
+cleanup() {
+  if [ -n "$tmp" ]; then
+    rm -f -- "$tmp"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+tmp="$(mktemp "$codex_dir/opencodex-catalog.json.XXXXXX")" || exit 1
+
+if ! curl -fsS \
+    -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+    -o "$tmp" \
+    -- https://proxy.example.com/v1/catalog; then
+  echo "目錄下載失敗；保留原有目錄" >&2
+  exit 1
+fi
+
+# 同目錄內重新命名：在它成功之前，原有目錄始終保持不變。
+if ! mv -f -- "$tmp" "$codex_dir/opencodex-catalog.json"; then
+  echo "目錄安裝失敗；保留原有目錄" >&2
+  exit 1
+fi
+
+# 暫存路徑已不存在；清除所有處理器，使結束時不再執行任何動作。
+tmp=""
+trap - EXIT HUP INT TERM
+```
+
+同一個金鑰接著用於推論：
+
+```bash
+curl -fsS \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  -H "content-type: application/json" \
+  -d '{"model":"openai/gpt-5.3-codex","input":"hello"}' \
+  https://proxy.example.com/v1/responses
+```
+
+在不下載的情況下檢查目錄是否變更：
+
+```bash
+curl -fsSI \
+  -H "x-opencodex-api-key: $DATA_PLANE_KEY" \
+  https://proxy.example.com/v1/catalog
+```
+
+管理秘密始終留在運維方的可信機器上。上面使用的 data-plane 金鑰在每一個 `/api/*` 路由上都會被拒絕，包含 `GET /api/catalog`。
+
 ## `POST /v1/live` 與 Realtime sideband
 
 `POST /v1/live` 接受 ChatGPT/Codex App Frameless call-creation 介面。
@@ -196,9 +287,18 @@ Compaction 為需要縮短長 Responses 對話的客戶端回傳取代歷史。
 | `/v1/chat/completions` | 必填 | 代理許可被拒 | 被拒 |
 | `/v1/messages` 與 `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
+| `/v1/catalog` | 接受 | 接受 | 接受 |
 | `/v1/live`、`/v1/realtime/calls` 與 sideband join | 接受 | 接受 | 接受 |
 
 Responses 家族與 Chat 請求為供應商或 Codex Direct passthrough 保留 `Authorization`，因此遠端代理金鑰必須使用專屬標頭。Messages 與 Realtime 介面需要更廣的客戶端相容性，因此接受所有三種形式。
+
+Data-plane 金鑰只能到達上表中的介面，別無其他。`/api/*` 是管理平面，需要管理秘密；GUI session 同樣只屬於管理平面。具體來說：
+
+| 憑證類別 | 允許的介面 |
+| --- | --- |
+| Data plane | 上面的推論端點，加上唯讀的 `GET /v1/models` 與 `GET`/`HEAD /v1/catalog` |
+| 管理平面 | 僅 `/api/*` |
+| GUI session | 僅 `/api/*`，並綁定到簽發它的儀表板來源 |
 
 :::caution
 Data-plane 金鑰不是管理憑證。管理 API 使用獨立的管理秘密；請見[管理 API](/zh-tw/reference/management-api/)。絕不為兩個平面重用同一個秘密。

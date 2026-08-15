@@ -128,7 +128,7 @@ Authorization: Bearer <admin-token>
 
 | Method and path | 목적 | 주요 오류 |
 | --- | --- | --- |
-| `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음 |
+| `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음; 500 배포해서는 안 되는 값이 catalog에 있음; 500 catalog 파일이 너무 커서 읽을 수 없음 |
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
 | `GET /api/client-config?client=...` | 지원되는 파일 연동의 읽기 전용 client config를 만듭니다 | 400 지원되지 않는 client; 503 catalog 사용 불가 |
 | `PUT /api/disabled-models` | 공유 disabled-model 목록을 교체합니다 | 400 잘못된 JSON |
@@ -136,6 +136,30 @@ Authorization: Bearer <admin-token>
 | `GET, POST /api/custom-models` | custom model을 나열하거나 하나를 추가합니다 | 400 잘못된 필드; 404 provider 없음; 409 중복 model |
 | `PUT, DELETE /api/custom-models/{id}` | custom model 하나를 수정하거나 삭제합니다 | 400 잘못된 id/필드; 404 찾을 수 없음; 409 중복 model |
 | `GET, PUT /api/selected-models` | provider allowlist와 가용성을 읽거나 allowlist 하나를 교체합니다 | 400 provider/body 누락; 404 알 수 없는 provider |
+
+`GET /api/catalog`은 dashboard와 운영 도구용입니다. 원격 클라이언트가 카탈로그를 필요로 할 때는
+data-plane 경로 `GET /v1/catalog`을 사용하십시오. 같은 생성기에서 같은 문서를 반환하므로 클라이언트
+머신이 admin secret을 받을 일이 없습니다. [Proxy API Formats](/ko/reference/proxy-formats/)를 보십시오.
+
+두 경로는 하나의 materialization 단계를 공유하므로, 이 경로도 그 두 가지 거부를 그대로 물려받습니다.
+각각은 data-plane의 `type`/`code` envelope가 아니라 일반 management envelope
+`{ "error": "<message>" }`로 응답하므로 `/v1/catalog`의 오류 코드는 여기에 나타나지 않습니다.
+
+| 상태 | 응답 본문 | 의미 |
+| --- | --- | --- |
+| 404 | `{ "error": "catalog not found" }` | 읽을 수 있는 catalog 문서가 없습니다 |
+| 500 | `{ "error": "catalog contains values that are not safe to distribute" }` | 저장된 catalog에 credential·신원·설정 모양의 내용이 있습니다. 이 메시지는 의도적으로 아무 내용도 담지 않습니다 |
+| 500 | `{ "error": "catalog file is too large to read" }` | 저장된 파일이 안전한 32 MiB 소스 읽기 상한을 초과해 파싱 전에 거부되었습니다 |
+
+이 경로는 data plane의 8 MiB 직렬화 응답 상한을 적용하지 **않습니다**. 그 한계는 원격에서 접근 가능한
+transport에만 속합니다.
+
+:::note
+공유된 거부가 management 경로에도 적용되는 것은 materialization 단계가 하나라는 사실의 결과이며
+승인된 정책이 아닙니다. 이전에는 이 경로가 파싱 가능한 catalog 파일이면 모두 제공했습니다.
+management 평면이 같은 거부의 대상으로 남아야 하는지는 `structure/05_gui-and-management-api.md`에
+기록된 미결 maintainer 결정입니다.
+:::
 
 ### OAuth 계정, provider key, 데이터 평면 키
 

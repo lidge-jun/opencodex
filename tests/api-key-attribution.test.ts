@@ -465,7 +465,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
           [row.xApiKey, { "x-api-key": key }],
         ];
         for (const [disposition, headers] of cases) {
-          const isGet = row.endpoint === "/v1/models";
+          const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog";
           const res = await fetch(new URL(row.endpoint, server.url), {
             method: isGet ? "GET" : "POST",
             headers: { "content-type": "application/json", ...headers },

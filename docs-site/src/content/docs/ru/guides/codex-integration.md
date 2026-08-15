@@ -238,21 +238,35 @@ picker'е Codex, не меняя саму маршрутизацию. Display na
 ocx models add deepseek deepseek-v4 --display-name "DeepSeek V4" --context-window 128000
 ```
 
-Удалённые клиенты Codex могут получить тот же сгенерированный каталог через management API (с тем
-же admission token, что и для других маршрутов `/api/*`):
+Удалённые клиенты Codex получают тот же каталог из **data plane**, тем же ключом data plane,
+который они уже используют для inference:
+
+```text
+GET /v1/catalog
+x-opencodex-api-key: $DATA_PLANE_KEY
+```
+
+Следуйте каноническому атомарному порядку загрузки из
+[Proxy API Formats](/ru/reference/proxy-formats/): он пишет во временный файл в целевой директории и
+переименовывает его только после успеха, поэтому сбойная или прерванная передача никогда не заменит
+работающий каталог. Установите его в `${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json`, затем
+выполните:
 
 ```bash
-dest="${CODEX_HOME:-$HOME/.codex}/opencodex-catalog.json"
-tmp="$(mktemp "${dest}.XXXXXX")"
-curl -fsS -H "x-opencodex-api-key: $OPENCODEX_ADMIN_AUTH_TOKEN" \
-  "https://proxy.example.com/api/catalog" > "$tmp" \
-  && mv "$tmp" "$dest"
 ocx sync-cache
 ```
 
-Ответ — это сырой документ `opencodex-catalog.json` (без credential'ов провайдеров). Если
-доступен заголовок `x-opencodex-codex-version`, он сообщает версию рантайма Codex на сервере,
-чтобы клиенты могли заметить version skew.
+Никогда не отправляйте для этого management-токен на клиентскую машину. `GET /api/catalog` возвращает
+тот же документ, но это маршрут management plane для dashboard и операторских инструментов на
+доверенной машине; он требует admin-secret, который также авторизует настройку провайдеров,
+управление OAuth и остановку прокси.
+
+Ответ — это сгенерированный документ `opencodex-catalog.json`. Маршрут data plane применяет
+текущие проверки безопасности распространения каталога и отклоняет содержимое, которое
+распознаёт как похожее на credential, идентичность или конфигурацию; сама стратегия
+обеспечения остаётся на рассмотрении мейнтейнеров. Если доступен заголовок
+`x-opencodex-codex-version`, он сообщает версию рантайма Codex на сервере, чтобы клиенты
+могли заметить version skew.
 
 Display name можно задать или отредактировать и через management API
 (`POST /api/custom-models`, `PUT /api/custom-models/<id>` с полем `displayName`) и через

@@ -12,3 +12,5 @@ export { MAX_SPAWN_AGENT_MODEL_OVERRIDES, CANONICAL_NATIVE_CATALOG_CONTENT_POLIC
 export type { ObservedCatalogMergeInput } from "./catalog/sync";
 export type { SpawnAgentSurface, SubagentRosterExclusionReason, EffectiveSubagentModel, SubagentRosterExclusion, EffectiveSubagentRoster } from "./catalog/sync";
 export { accountBoundNativeDisplayName, accountBoundNativeModelSlugs, CODEX_ACCOUNT_BOUND_CATALOG_KIND, trustedAccountBoundNativeCatalogSlug, visibleCodexAccountSelectors } from "./catalog/account-models";
+export { CATALOG_CODEX_VERSION_HEADER, CATALOG_DISTRIBUTION_CONTENT_TYPE, catalogDistributionHeaders, materializeCatalogDistribution } from "./catalog/distribution";
+export type { CatalogDistribution, MaterializedCatalog } from "./catalog/distribution";

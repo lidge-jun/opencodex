@@ -171,6 +171,11 @@ describe("unauthenticated loopback listener", () => {
         { method: "GET", path: "/v1/opencodex/artifacts/x" },
         { method: "POST", path: "/v1/live", body: "{}" },
         { method: "POST", path: "/v1/realtime/calls", body: "{}" },
+        // The catalog route (#809) is deliberately absent from the allowlist: catalog
+        // distribution is for remote credentialed clients, and a directly-spawned
+        // `codex app-server` has no use for it. Both served methods must 404 here.
+        { method: "GET", path: "/v1/catalog" },
+        { method: "HEAD", path: "/v1/catalog" },
         // Allowlisted paths still reject the methods they do not serve.
         { method: "DELETE", path: "/v1/responses" },
         { method: "POST", path: "/v1/models" },
@@ -186,6 +191,11 @@ describe("unauthenticated loopback listener", () => {
       // And an allowlisted route is genuinely reachable, so the rejections above are not
       // passing merely because nothing works on this listener.
       expect((await fetch(`${base}/v1/models`)).status).toBe(200);
+
+      // The public listener's answer for the catalog route is a credential demand, not a
+      // missing route: the loopback 404s above must not be mistaken for the route not
+      // existing, and the remote bind must keep requiring data-plane admission.
+      expect((await fetch(`http://127.0.0.1:${server.port}/v1/catalog`)).status).toBe(401);
     } finally {
       await server.stop(true);
     }
