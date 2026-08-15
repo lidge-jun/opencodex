@@ -59,9 +59,9 @@ export default function OpenRouterModelRouting({
     setMessage(null);
     try {
       const response = await fetch(`${apiBase}/api/openrouter/model-providers?provider=${encodeURIComponent(item.name)}&model=${encodeURIComponent(requestedModel)}${refresh ? "&refresh=1" : ""}`);
-      const data = await response.json().catch(() => ({})) as Discovery;
       if (generation !== discoveryGeneration.current) return;
       if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as Discovery;
         const text = data.code === "openrouter_management_key_required"
           ? t("pws.openrouter.managementKeyRequired")
           : data.code === "openrouter_key_required"
@@ -69,6 +69,7 @@ export default function OpenRouterModelRouting({
             : t("pws.openrouter.loadFailed");
         throw new Error(text);
       }
+      const data = await response.json().catch(() => ({})) as Discovery;
       setEndpoints(Array.isArray(data.endpoints) ? data.endpoints : []);
       setDiscoveryComplete(true);
       setMessage({ ok: true, text: t("pws.openrouter.loaded", { count: data.endpoints?.length ?? 0 }) });
@@ -114,6 +115,7 @@ export default function OpenRouterModelRouting({
   };
 
   const knownTags = new Set(endpoints.map(endpoint => endpoint.tag));
+  const selectedTags = useMemo(() => new Set(selected), [selected]);
   return (
     <section className="pwi-openrouter-routing" aria-labelledby={`openrouter-routing-${item.name}`}>
       <div className="pwi-openrouter-head">
@@ -164,7 +166,7 @@ export default function OpenRouterModelRouting({
         <div className="pwi-openrouter-endpoints">
           {endpoints.map(endpoint => (
             <label key={endpoint.tag} className="pwi-openrouter-endpoint">
-              <input type="checkbox" checked={selected.includes(endpoint.tag)} onChange={() => toggle(endpoint.tag)} />
+              <input type="checkbox" checked={selectedTags.has(endpoint.tag)} onChange={() => toggle(endpoint.tag)} />
               <span><strong>{endpoint.providerName}</strong><code>{endpoint.tag}</code></span>
               {endpoint.supportsImplicitCaching && <span className="badge badge-muted">{t("pws.openrouter.cache")}</span>}
             </label>
