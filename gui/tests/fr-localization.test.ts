@@ -93,6 +93,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // Correct French words whose spelling is identical to English.
   "routing.exclusions",
   "routing.score",
+  "dash.actions",
   "dash.workspace.sections",
   "dash.version",
   "dash.mem.storeTotal",
