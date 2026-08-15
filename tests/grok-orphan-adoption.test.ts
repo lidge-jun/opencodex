@@ -1201,6 +1201,32 @@ describe("Grok orphan adoption — fence boundary (#511 follow-up)", () => {
     expect(content).not.toContain("ocx-gpt-5-6-sol-2");
   });
 
+  test("a below-fence orphan still gets its reasoning_efforts tables swept", () => {
+    writeFileSync(configPath, [
+      "[models]",
+      'default = "ocx-gpt-5-6-sol"',
+      "",
+      ...fence("ocx-placeholder"),
+      "",
+      ...orphan("ocx-gpt-5-6-sol"),
+      "",
+      "[[model.ocx-gpt-5-6-sol.reasoning_efforts]]",
+      'id = "low"',
+      'value = "low"',
+      'label = "Low"',
+      'description = "Quick, fast implementations"',
+      "default = true",
+      "",
+    ].join("\n"));
+
+    injectGrokConfig(10100, MODELS, { grokHome });
+    const content = readFileSync(configPath, "utf8");
+
+    expect(content).not.toContain("[[model.ocx-gpt-5-6-sol.reasoning_efforts]]");
+    expect(tables(content)).toEqual(["ocx-gpt-5-6-sol"]);
+    expect(content).not.toContain("ocx-gpt-5-6-sol-2");
+  });
+
   test("an adjacent orphan with no blank line before the marker is still bounded", () => {
     writeFileSync(configPath, [
       "[models]",
