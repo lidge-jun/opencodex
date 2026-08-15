@@ -1080,6 +1080,19 @@ async function applyFinalRouteRequestNormalization(args: {
     }
   }
 
+  // Generic Responses clients (e.g. AI-SDK apps) omit `store`, but the canonical
+  // forward Codex backend rejects a native request without an explicit store:false.
+  // Default it only there — stateful key-auth Responses upstreams intentionally keep
+  // the omitted-store server-side default for previous_response_id reuse — and never
+  // override an explicit value.
+  if (
+    route.provider.adapter === "openai-responses" && route.provider.authMode === "forward"
+    && parsed._rawBody && typeof parsed._rawBody === "object"
+    && (parsed._rawBody as Record<string, unknown>).store === undefined
+  ) {
+    (parsed._rawBody as Record<string, unknown>).store = false;
+  }
+
   // Final selected model before virtual wire-model rewriting (Pro aliases).
   const finalSelectedModelId = route.modelId;
 
@@ -1578,13 +1591,6 @@ async function handleResponsesInner(
       return clientCancelledResponse();
     }
     return decodeRequestErrorResponse(err, "responses");
-  }
-  // Generic Responses clients (e.g. AI-SDK apps) omit `store`, but the Codex
-  // backend rejects a native request without an explicit store:false. Default it
-  // the same way the chat-completions inbound does; never override an explicit value.
-  if (body && typeof body === "object" && !Array.isArray(body)) {
-    const rawBody = body as Record<string, unknown>;
-    if (rawBody.store === undefined) rawBody.store = false;
   }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
