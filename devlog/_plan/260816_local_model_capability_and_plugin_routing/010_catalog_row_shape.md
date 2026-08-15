@@ -92,6 +92,67 @@ and that Codex's strict parse accepts an extra object-valued key. If it does
 not, the fallback is a flat JSON string under the same prefix; B records which
 was used.
 
+### Excluding synthesized combo rows (round-4 B2)
+
+The claim that `applyCatalogModelMetadata()` only ever sees real assertions is
+FALSE as written, and audit round 4 proved it. The combo synthesis path builds a
+`CatalogModel` out of last-resort defaults and feeds it through the same
+function:
+
+- `src/codex/catalog/provider-fetch.ts:697` — a synthetic `128000` context is the
+  documented final fallback for combo member synthesis.
+- `src/codex/catalog/provider-fetch.ts:793` — that fallback plus a synthesized
+  `["text"]` modality is applied.
+- `src/codex/catalog/aggregation.ts:164` — the result becomes an ordinary
+  `CatalogModel` with `provider: COMBO_NAMESPACE`.
+
+Reviewer reproduction:
+
+    MEMBER={"id":"unknown","provider":"demo",...,"inputModalities":["text"],"contextWindow":128000}
+    DERIVED={"provider":"combo","id":"synthetic",...,"contextWindow":128000,"inputModalities":["text"]}
+
+Stamping that as provenance would reintroduce exactly the B2 defect the whole
+redesign exists to avoid — a synthesized `128000` and a synthesized `["text"]`
+presented to routing as asserted fact.
+
+**Amendment.** Do not stamp synthesized combo rows. The function already tests
+this namespace on its first line (`src/codex/catalog/effort.ts:117`), so the
+guard is a one-line reuse of an existing check:
+
+    // Virtual combo rows are synthesized from last-resort defaults
+    // (provider-fetch.ts:697/793 -> aggregation.ts:164), so their context and
+    // modality values are placeholders, not provider assertions. Stamping them
+    // would recreate the exact false-evidence defect this block exists to
+    // prevent. Combos are not ordinary routing candidates, so skipping them
+    // costs nothing.
+    if (model.provider !== COMBO_NAMESPACE) {
+      const provenance: Record<string, unknown> = { provider: model.provider, model_id: model.id };
+      ...
+      entry.opencodex_capability_provenance = provenance;
+    }
+
+**Required regression (writer-through-normalizer).** The consumer-only tests
+proposed earlier cannot catch this, because they hand-write catalog rows. B adds
+a test that drives the real combo synthesis path end to end and asserts the
+emitted entry carries NO `opencodex_capability_provenance`:
+
+    test("synthesized combo rows are not stamped with capability provenance", () => {
+      // Drives provider-fetch synthesis -> aggregation -> applyCatalogModelMetadata,
+      // rather than hand-writing a row, so the writer itself is under test.
+      const entry = buildComboCatalogEntry(/* member with no asserted context/modalities */);
+      expect(entry.opencodex_capability_provenance).toBeUndefined();
+      expect(entry.context_window).toBe(128000); // the synthesized default still ships to Codex
+    });
+
+The second assertion matters: the synthesized value must keep reaching Codex's
+catalog (it is what makes the row parse), while staying invisible to routing.
+That split is the whole point of a separate provenance channel.
+
+**Residual, stated honestly.** This guard covers the one synthesized producer
+found by audit. Any future path that manufactures a `CatalogModel` from defaults
+would need the same treatment; the regression test is an early warning for that
+class, not a proof that no other producer exists.
+
 ## MODIFY 2 — src/routing/capability.ts
 
 ### 2a. Row type
@@ -274,16 +335,28 @@ one function, so a future writer bypassing `applyCatalogModelMetadata` would
 produce rows routing cannot read. The new tests are the early warning, not
 enforcement. Final enforcement layer: none.
 
-## Remote exact-head suite (round-3 correction)
+## Remote exact-head suite (round-4 correction)
 
-Pushing a branch updates a remote ref, not a remote checkout. Audit rounds 2-3
-found every lidge checkout on an unrelated commit, `~/ocx-ci/opencodex` carrying
-uncommitted work, and no `csa906` remote configured there. The verifier must
-therefore be self-contained: clone the exact SHA into a scratch directory and
-never touch an existing checkout.
+Three rounds of audit found three separate reasons a naive remote command lies:
+the lidge checkouts sit on unrelated commits, `~/ocx-ci/opencodex` carries
+uncommitted work and has no `csa906` remote, and a non-interactive SSH shell has
+no `bun` on `PATH` (`command -v bun` is empty while `~/.bun/bin/bun` exists).
+The block below addresses all three and fails closed on each.
+
+Preconditions asserted locally BEFORE any ssh:
 
     LOCAL_SHA=$(git rev-parse HEAD)
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git push --no-verify csa906 "$BRANCH"
+    # The remote must actually carry this commit; an unpushed SHA makes the
+    # remote fetch fail with 'upload-pack: not our ref'.
+    test "$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)" = "$LOCAL_SHA"
+
+Then the isolated remote run:
+
     ssh lidge "set -e
+      export PATH=\"\$HOME/.bun/bin:\$PATH\"
+      command -v bun >/dev/null
       WORKDIR=\$(mktemp -d -t ocx-verify-XXXXXX)
       trap 'rm -rf \"\$WORKDIR\"' EXIT
       git clone --quiet --no-checkout https://github.com/csa906/opencodex.git \"\$WORKDIR\"
@@ -294,16 +367,13 @@ never touch an existing checkout.
       bun install --frozen-lockfile
       bun run test"
 
-Why a scratch clone rather than a shared checkout:
+Each guard exists because a specific failure was observed:
 
-- `~/ocx-ci/opencodex` had modified `src/bridge.ts`,
-  `src/server/responses/core.ts` and others at audit time. A detach there can
-  refuse outright, or worse, run the suite against someone else's in-progress
-  edits and report a green that means nothing about this change.
-- `mktemp -d` plus the `trap` cleanup keeps the run leaving no residue, so it
-  cannot drift into the same stale state next time.
-- The `test` SHA comparison is retained and still fails closed: if the checkout
-  is not the exact audited commit, the command aborts before `bun run test`.
+| Guard | Observed failure it prevents |
+|-------|------------------------------|
+| `git ls-remote` SHA test | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` when the branch was not pushed |
+| `export PATH` + `command -v bun` | `command -v bun` empty over non-interactive ssh while `/home/lidgeai/.bun/bin/bun` exists |
+| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a suite run there proves nothing about this change |
+| `git rev-parse HEAD` test | a stale checkout silently reporting a green suite for different code |
 
-The push remote is addressed by URL, so no remote needs to be configured on the
-host.
+C must run this literal block and paste its output; a paraphrase is not evidence.

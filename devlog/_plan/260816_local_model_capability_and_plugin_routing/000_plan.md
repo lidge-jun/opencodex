@@ -54,3 +54,13 @@ one exists; if none does, the D summary recommends creating it.
   mismatch, and why every existing test passes over it.
 - `002_local_model_plugin_failure.md` — why the local model could not reach
   the Chrome and Computer Use plugins.
+
+## Filed issues
+
+| Issue | Covers | Fixed by |
+|-------|--------|----------|
+| [#1796](https://github.com/lidge-jun/opencodex/issues/1796) | Routing discards every catalog row (field-shape mismatch) | Phase 1 |
+| [#1797](https://github.com/lidge-jun/opencodex/issues/1797) | llama.cpp `multimodal` token + dual-envelope join | Deferred; Phase 2 ships the context half only |
+
+Phase 3 files no issue: it is host-side guidance with no opencodex defect
+behind it (see `002_local_model_plugin_failure.md`).

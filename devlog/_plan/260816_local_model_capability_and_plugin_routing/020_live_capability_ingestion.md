@@ -36,10 +36,26 @@ IN: `meta.n_ctx` / `meta.n_ctx_train` as context sources. This is a pure
 addition to an existing precedence list, affects only rows that reach the
 parser, and is independently useful for every llama.cpp deployment.
 
-OUT: cross-envelope merging of `models[]` into `data[]`. That would relax a
-deliberately conservative discovery boundary whose comment explains why it
-exists. Changing it belongs in its own audited unit, not as a rider here. It
-becomes a filed issue carrying the verbatim payload (wp2).
+OUT: the two harder halves of the image gap, now tracked as **issue #1797**:
+
+1. Cross-envelope merging of `models[]` into `data[]`. That relaxes a
+   deliberately conservative discovery boundary (src/providers/model-discovery.ts:337)
+   whose comment explains why it refuses a stray `models` key. It needs
+   identity-safe joining by model id and belongs in its own audited unit.
+2. Mapping the `multimodal` capability token to image input. Audit round 4
+   showed the first draft of this doc was WRONG to imply the merge alone
+   would restore image evidence: even a hand-merged item stays image-unknown,
+   because modelInputModalities (src/codex/catalog/provider-fetch.ts:991)
+   recognizes only vision / image-input / image_input.
+
+   Reviewer proof:
+
+       catalogHintsFromModelsApiItem("lidge", {
+         meta: { n_ctx: 262144 }, capabilities: ["completion", "multimodal"] })
+       => { "capabilities": ["completion", "multimodal"] }   // no inputModalities
+
+So this phase fixes ONLY the context source. The image gap is fully deferred,
+both halves of it, to #1797.
 
 Also OUT (B8): the `ProviderModelsApiItem` type edit. The declaration is
 already `Record<string, unknown> & { id: string }`
@@ -151,7 +167,11 @@ The fourth test is the honest part: it encodes what this phase does NOT fix.
    is ignored; it guards the ordering against a future reshuffle rather
    than proving this change. Tests 1, 2 and 4 are the activation evidence.
 2. Test 4 keeps characterizing the surviving image gap after the change:
-   contextWindow present, inputModalities still undefined.
+   contextWindow present, inputModalities still undefined. It is the live
+   witness for #1797 and the test a future fix flips.
+3. Issue #1797 is filed and linked before this phase closes (verified with
+   `gh issue view 1797`). A deferral with no tracking issue is not a
+   deferral, it is a silent drop.
 3. `bun x tsc --noEmit` clean.
 4. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
    shared surface touched by many catalog suites.
@@ -184,16 +204,28 @@ by design. Residual risk: `n_ctx` is trusted as reported; a server misreporting
 it would mislead routing exactly as any other context field would. Wording
 downgrade: N/A. Final enforcement layer: none.
 
-## Remote exact-head suite (round-3 correction)
+## Remote exact-head suite (round-4 correction)
 
-Pushing a branch updates a remote ref, not a remote checkout. Audit rounds 2-3
-found every lidge checkout on an unrelated commit, `~/ocx-ci/opencodex` carrying
-uncommitted work, and no `csa906` remote configured there. The verifier must
-therefore be self-contained: clone the exact SHA into a scratch directory and
-never touch an existing checkout.
+Three rounds of audit found three separate reasons a naive remote command lies:
+the lidge checkouts sit on unrelated commits, `~/ocx-ci/opencodex` carries
+uncommitted work and has no `csa906` remote, and a non-interactive SSH shell has
+no `bun` on `PATH` (`command -v bun` is empty while `~/.bun/bin/bun` exists).
+The block below addresses all three and fails closed on each.
+
+Preconditions asserted locally BEFORE any ssh:
 
     LOCAL_SHA=$(git rev-parse HEAD)
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    git push --no-verify csa906 "$BRANCH"
+    # The remote must actually carry this commit; an unpushed SHA makes the
+    # remote fetch fail with 'upload-pack: not our ref'.
+    test "$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)" = "$LOCAL_SHA"
+
+Then the isolated remote run:
+
     ssh lidge "set -e
+      export PATH=\"\$HOME/.bun/bin:\$PATH\"
+      command -v bun >/dev/null
       WORKDIR=\$(mktemp -d -t ocx-verify-XXXXXX)
       trap 'rm -rf \"\$WORKDIR\"' EXIT
       git clone --quiet --no-checkout https://github.com/csa906/opencodex.git \"\$WORKDIR\"
@@ -204,16 +236,13 @@ never touch an existing checkout.
       bun install --frozen-lockfile
       bun run test"
 
-Why a scratch clone rather than a shared checkout:
+Each guard exists because a specific failure was observed:
 
-- `~/ocx-ci/opencodex` had modified `src/bridge.ts`,
-  `src/server/responses/core.ts` and others at audit time. A detach there can
-  refuse outright, or worse, run the suite against someone else's in-progress
-  edits and report a green that means nothing about this change.
-- `mktemp -d` plus the `trap` cleanup keeps the run leaving no residue, so it
-  cannot drift into the same stale state next time.
-- The `test` SHA comparison is retained and still fails closed: if the checkout
-  is not the exact audited commit, the command aborts before `bun run test`.
+| Guard | Observed failure it prevents |
+|-------|------------------------------|
+| `git ls-remote` SHA test | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` when the branch was not pushed |
+| `export PATH` + `command -v bun` | `command -v bun` empty over non-interactive ssh while `/home/lidgeai/.bun/bin/bun` exists |
+| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a suite run there proves nothing about this change |
+| `git rev-parse HEAD` test | a stale checkout silently reporting a green suite for different code |
 
-The push remote is addressed by URL, so no remote needs to be configured on the
-host.
+C must run this literal block and paste its output; a paraphrase is not evidence.
