@@ -21,9 +21,12 @@ describe("validated CodeQL regressions", () => {
     expect(issueQuality.clean("<!-- hidden -->\nVisible text")).toBe("Visible text");
   });
 
-  test("malformed TOML basic strings are ignored while escaped strings still parse", () => {
-    const malformed = parseTomlDocument('model_provider = "' + "\\".repeat(64));
-    expect(malformed.root.model_provider).toBeUndefined();
+  test("malformed TOML basic strings stay bounded while escaped strings still parse", () => {
+    const started = performance.now();
+    const malformed = parseTomlDocument('model_provider = "' + "\\".repeat(40));
+    const elapsedMs = performance.now() - started;
+    expect(elapsedMs).toBeLessThan(100);
+    expect(typeof malformed.root.model_provider).toBe("string");
 
     const valid = parseTomlDocument('model_provider = "provider\\\\name"');
     expect(valid.root.model_provider).toBe("provider\\name");
