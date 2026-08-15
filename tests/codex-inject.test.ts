@@ -115,6 +115,19 @@ describe("Codex config injection", () => {
     expect(stripped).toContain('model_verbosity = "high"');
   });
 
+  test("malformed quoted root values cannot wedge restore transforms", () => {
+    const slashRun = "\\".repeat(64);
+    const stripped = stripOpencodexConfig([
+      'model_provider = "opencodex"',
+      `model = "${slashRun}`,
+      `model_catalog_json = "${slashRun}`,
+      "",
+    ].join("\n"));
+
+    expect(stripped).toContain(`model = "${slashRun}`);
+    expect(stripped).toContain(`model_catalog_json = "${slashRun}`);
+  }, 2_000);
+
   test("preserves non-opencodex routed model names during fallback restore", () => {
     const stripped = stripOpencodexConfig([
       'model_provider = "proxy"',

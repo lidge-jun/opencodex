@@ -68,6 +68,10 @@ describe("assessPrDescription", () => {
       assessPrDescription("<!-- release notes by coderabbit.ai -->\n\n<!-- end -->").reason,
       "empty",
     );
+    assert.equal(
+      assessPrDescription("<!--\n![proof](https://example.invalid/screenshot.png)").reason,
+      "empty",
+    );
   });
 
   it("rejects placeholder-only bodies", () => {
@@ -289,6 +293,10 @@ describe("hasScreenshotEvidence", () => {
     );
     assert.equal(
       hasScreenshotEvidence('<!-- <img src="https://example.com/ui.png"> -->'),
+      false,
+    );
+    assert.equal(
+      hasScreenshotEvidence("<!--\n![after](https://example.com/after.png)"),
       false,
     );
   });

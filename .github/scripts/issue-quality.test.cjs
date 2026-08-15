@@ -1379,6 +1379,8 @@ describe("normalisation", () => {
 
   it("strips HTML comments", () => {
     assert.equal(clean("Hello <!-- hidden --> world"), "Hello  world");
+    assert.equal(clean("<!--\nhidden issue text"), "");
+    assert.equal(clean("<!-- hidden -->\nVisible text"), "Visible text");
   });
 
   it("normalises punctuation and capitalisation", () => {

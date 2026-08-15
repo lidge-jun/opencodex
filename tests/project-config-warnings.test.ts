@@ -9,6 +9,7 @@ import {
   explainProjectConfigBypass,
   isGlobalOpencodexRoutingActive,
   invalidateProjectConfigDiagnosticsCache,
+  parseTomlDocument,
   parseTrustedProjectPathsFromCodexConfig,
   relPath,
   resolveEffectiveProjectModelProvider,
@@ -119,7 +120,17 @@ base_url = "http://127.0.0.1:10100/v1"
   });
 });
 
-describe("parseTrustedProjectPathsFromCodexConfig", () => {
+describe("parseTomlDocument", () => {
+    test("malformed basic strings cannot wedge parsing and escaped strings still parse", () => {
+      const malformed = parseTomlDocument('model_provider = "' + "\\".repeat(64));
+      expect(typeof malformed.root.model_provider).toBe("string");
+
+      const valid = parseTomlDocument('model_provider = "provider\\\\name"');
+      expect(valid.root.model_provider).toBe("provider\\name");
+    }, 2_000);
+  });
+
+  describe("parseTrustedProjectPathsFromCodexConfig", () => {
   test("collects only trusted project paths", () => {
     const text = `
 [projects.'C:\\repo-a']

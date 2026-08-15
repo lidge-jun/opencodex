@@ -172,7 +172,15 @@ describe("stripCarriedReleaseNotes", () => {
   });
 });
 
-describe("joinCarriedPreviewNotes", () => {
+describe("hasMeaningfulCarriedNotes", () => {
+    test("HTML comments stay non-meaningful through a closing marker or EOF", () => {
+      expect(hasMeaningfulCarriedNotes("<!-- generated\nmetadata -->")).toBe(false);
+      expect(hasMeaningfulCarriedNotes("<!-- generated\nmetadata")).toBe(false);
+      expect(hasMeaningfulCarriedNotes("<!-- hidden -->\n## What's Changed\n* visible fix")).toBe(true);
+    });
+  });
+
+  describe("joinCarriedPreviewNotes", () => {
   test("aggregates multiple incremental preview bodies in order", () => {
     const joined = joinCarriedPreviewNotes([
       "## What's Changed\n* fix A",

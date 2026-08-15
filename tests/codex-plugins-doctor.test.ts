@@ -120,6 +120,18 @@ describe("diagnoseCodexBundledPlugins (direct, platform-injected)", () => {
     }
   });
 
+  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({ platform: "win32", configPath });
+      expect(result.applicable).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+
   test("parses a table header with a trailing inline comment", () => {
     const { dir, configPath } = makeConfig(
       `[marketplaces.openai-bundled] # bundled\nsource_type = "local"\nsource = "X:\\\\gone"\n`,
