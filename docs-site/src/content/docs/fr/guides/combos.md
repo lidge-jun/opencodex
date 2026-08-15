@@ -321,7 +321,7 @@ exécution d'une instance opencodex qui reçoit des requêtes de modèle.
 Chaque cible est actuellement inéligible : par exemple, son fournisseur est désactivé, il est en phase de refroidissement,
 elle a déjà été tentée pour cette requête, ou une tâche v2 chiffrée l'exclut. Vérifier la cible
 état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes ou la
-période `Retry-After` amont (jamais plus de 10 minutes), puis réessayez.
+délai indiqué par `Retry-After` en amont (jamais plus de 10 minutes), puis réessayez.
 
 ### Pourquoi mon alias a-t-il été rejeté ?
 

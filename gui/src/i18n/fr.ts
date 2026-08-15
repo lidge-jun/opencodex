@@ -1565,7 +1565,7 @@ export const fr: Record<TKey, string> = {
   "api.responsesEndpoint": "API Responses",
   "api.chatCompletionsEndpoint": "API Chat Completions",
   "api.messagesEndpoint": "API Messages",
-  "api.modelsEndpoint": "API Models",
+  "api.modelsEndpoint": "API des modèles",
   "api.endpointNote": "Utilisez l’URL de base avec les clients compatibles avec OpenAI. Responses et Chat Completions sont accessibles sous /v1.",
   "api.endpointsTitle": "Points de terminaison",
   "api.authTitle": "Authentification",

@@ -29,7 +29,7 @@ Comportement lorsque cette option est activée :
 - L'affinité est **locale au processus** et disparaît au redémarrage du proxy.
 - Les erreurs d'identification **401/403** mettent le compte en quarantaine (`needsReauth`) afin de l'exclure de la
   sélection jusqu'à sa réauthentification.
-- Si chaque compte éligible se refroidit, le proxy renvoie **429** (et non 401) avec `Retry-After`
+- Si chaque compte éligible est en temporisation, le proxy renvoie **429** (et non 401) avec `Retry-After`
   lorsqu'il est connu.
 
 Voir [Configuration](/fr/reference/configuration/providers/#anthropicaccountpool-expérimental).

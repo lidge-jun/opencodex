@@ -177,7 +177,7 @@ la récupération peut sélectionner ultérieurement un autre compte Pool éligi
 la commutation basée sur l'utilisation est désactivée. OpenCodex rejoue la conversation après un changement de compte, mais le
 Le cache d'invites côté fournisseur peut être froid. Fournisseurs ou identifiants inconnus quittent 1.
 Sur une connexion **401/403**, App efface l'affinité locale de processus de ce compte et nécessite une réauthentification.
-Sur un **429**, opencodex honore `Retry-After`, démarre le temps de recharge du compte, efface l'affinité et peut
+Sur un **429**, opencodex respecte `Retry-After`, démarre la temporisation du compte, efface l'affinité et peut
 faire basculer la requête vers un autre compte de pool admissible. Ces transitions en cas d’échec restent actives avec
 `autoSwitchThreshold: 0` ; ce paramètre désactive uniquement le basculement proactif fondé sur l’utilisation.
 `--json` renvoie :
