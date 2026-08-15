@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   decodeRoutedModelId,
   encodeRoutedModelId,
+  encodedModelIdCollides,
   routedSlug,
   slugEquals,
   slugEquivalenceKey,
@@ -75,6 +76,12 @@ describe("slug-codec primitives", () => {
     // Both `x/y/z` and `x/y-z` encode to `x-y-z`; no native `x-y-z` exists.
     const known = ["x/y/z", "x/y-z"];
     expect(decodeRoutedModelId("x-y-z", known)).toBe("x-y-z");
+  });
+
+  test("encodedModelIdCollides detects native vs slash custom collisions", () => {
+    expect(encodedModelIdCollides("openai/gpt-5.5", ["openai-gpt-5.5"])).toBe(true);
+    expect(encodedModelIdCollides("a/b-c", ["a-b/c"])).toBe(true);
+    expect(encodedModelIdCollides("openai/gpt-5.5", ["openai/gpt-5.5", "other"])).toBe(false);
   });
 
   test("slugEquals / slugsEquivalent tolerate raw and encoded mixes", () => {
@@ -186,6 +193,28 @@ describe("routeModel decode (proxy layer)", () => {
     const route = routeModel(config, "zenmux/openai-gpt-5.5");
     expect(route.providerName).toBe("zenmux");
     expect(route.modelId).toBe("openai/gpt-5.5");
+  });
+
+  test("routeModel prefers native hyphen id over colliding custom slash id", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.models = ["openai-gpt-5.5"];
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "openai/gpt-5.5" },
+    ];
+    const route = routeModel(config, "zenmux/openai-gpt-5.5");
+    expect(route.providerName).toBe("zenmux");
+    expect(route.modelId).toBe("openai-gpt-5.5");
+  });
+
+  test("routeModel refuses to guess between a/b-c and a-b/c", () => {
+    const config = zenmuxConfig();
+    config.providers.zenmux!.models = ["a-b/c"];
+    config.customModels = [
+      { id: "c1", provider: "zenmux", modelId: "a/b-c" },
+    ];
+    const route = routeModel(config, "zenmux/a-b-c");
+    expect(route.providerName).toBe("zenmux");
+    expect(route.modelId).toBe("a-b-c");
   });
 });
 

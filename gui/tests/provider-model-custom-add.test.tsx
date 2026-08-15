@@ -132,6 +132,23 @@ test("quick-add blocks existing ids but allows namespaced model ids", async () =
   await act(async () => { root.unmount(); });
 });
 
+test("quick-add blocks a slash id that encodes to an existing native id", async () => {
+  let requests = 0;
+  globalThis.fetch = (async (_input, init) => {
+    if (!init?.method || init.method === "GET") return Response.json([]);
+    requests += 1;
+    return Response.json({ id: "unexpected" }, { status: 201 });
+  }) as typeof fetch;
+  const colliding = { ...item, models: ["openai-gpt-5.5"], defaultModel: "openai-gpt-5.5" } as WorkspaceItem;
+  const { root, input, addButton } = await mountProviderModels(["openai-gpt-5.5"], undefined, colliding);
+
+  await enterModelId(input, "openai/gpt-5.5");
+  expect(addButton.disabled).toBe(true);
+  expect(requests).toBe(0);
+
+  await act(async () => { root.unmount(); });
+});
+
 test("quick-add keeps the model id when the server rejects it", async () => {
   globalThis.fetch = (async (_input, init) => (
     !init?.method || init.method === "GET"

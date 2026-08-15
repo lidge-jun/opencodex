@@ -97,7 +97,8 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
-import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { encodedModelIdCollides, routedSlug, slugEquals } from "../../providers/slug-codec";
+import { knownModelIdsForProvider } from "../../router";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
 import { clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -393,6 +394,10 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (existing.some(cm => routedSlug(cm.provider, cm.modelId) === newSlug)) {
       return jsonResponse({ error: "duplicate model" }, 409);
     }
+    const known = knownModelIdsForProvider(provider, config.providers[provider], config);
+    if (encodedModelIdCollides(modelId, known)) {
+      return jsonResponse({ error: "ambiguous model id" }, 409);
+    }
     const entry: OcxCustomModel = {
       id: randomUUID(),
       provider,
@@ -466,6 +471,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     const updatedSlug = routedSlug(cm.provider, cm.modelId);
     if (list.some((other, i) => i !== idx && routedSlug(other.provider, other.modelId) === updatedSlug)) {
       return jsonResponse({ error: "duplicate model" }, 409);
+    }
+    const known = knownModelIdsForProvider(cm.provider, config.providers[cm.provider], {
+      customModels: list.filter((_, i) => i !== idx),
+    });
+    if (encodedModelIdCollides(cm.modelId, known)) {
+      return jsonResponse({ error: "ambiguous model id" }, 409);
     }
     list[idx] = cm;
     config.customModels = list;

@@ -217,4 +217,52 @@ describe("ocx models custom slash ids", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("models add rejects a slash id that encodes to an existing native id", () => {
+    const { dir } = freshConfig({
+      providers: {
+        openai: {
+          adapter: "openai-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          authMode: "forward",
+        },
+        test: {
+          adapter: "openai-chat",
+          baseUrl: "http://localhost:8080/v1",
+          allowPrivateNetwork: true,
+          defaultModel: "openai-gpt-5.5",
+          models: ["openai-gpt-5.5", "a-b/c"],
+        },
+      },
+    });
+    try {
+      const slash = runCli(["models", "add", "test", "openai/gpt-5.5"], { OPENCODEX_HOME: dir });
+      expect(slash.status).toBe(1);
+      expect(slash.stderr).toContain("ambiguous");
+      const multi = runCli(["models", "add", "test", "a/b-c"], { OPENCODEX_HOME: dir });
+      expect(multi.status).toBe(1);
+      expect(multi.stderr).toContain("ambiguous");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("models remove rejects an encoded selector that matches more than one custom model", () => {
+    const { dir } = freshConfig({
+      customModels: [
+        { id: "11111111-1111-4111-8111-111111111111", provider: "test", modelId: "openai/gpt-5.5" },
+        { id: "22222222-2222-4222-8222-222222222222", provider: "test", modelId: "openai-gpt-5.5" },
+      ],
+    });
+    try {
+      const result = runCli(["models", "remove", "test/openai-gpt-5.5", "--yes"], { OPENCODEX_HOME: dir });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ambiguous");
+      expect(result.stderr).toContain("custom model id");
+      const config = JSON.parse(readFileSync(join(dir, "config.json"), "utf8"));
+      expect(config.customModels).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
