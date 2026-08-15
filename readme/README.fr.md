@@ -13,7 +13,7 @@ Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start        # proxy et tableau de bord sur localhost:10100
+ocx start        # proxy et tableau de bord sur le port par défaut localhost:10100
 ```
 
 <table align="center">

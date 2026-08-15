@@ -70,7 +70,7 @@ page **Fournisseurs** ; `<selector>` désigne ci-dessous un libellé public choi
 par `codexAccountNamespaces` :
 
 ```text
-gpt-5.6-sol                         # route de connexion Codex nue via Groupe ou Direct
+gpt-5.6-sol                         # route de connexion Codex nue via Pool ou Direct
 <selector>/gpt-5.6-sol              # compte Codex enregistré associé à ce sélecteur
 openai-apikey/gpt-5.6-sol           # clé API
 openai/gpt-daybreak-blue-latest     # ligne personnalisée explicite relayée vers Codex (372 000)
