@@ -184,21 +184,36 @@ by design. Residual risk: `n_ctx` is trusted as reported; a server misreporting
 it would mislead routing exactly as any other context field would. Wording
 downgrade: N/A. Final enforcement layer: none.
 
-## Remote exact-head suite (B6/round-2 B2)
+## Remote exact-head suite (round-3 correction)
 
-Pushing a branch updates a remote ref, not a remote checkout. Audit round 2
-confirmed all three lidge checkouts sat on unrelated commits. The verifier must
-therefore fetch and assert the SHA before running:
+Pushing a branch updates a remote ref, not a remote checkout. Audit rounds 2-3
+found every lidge checkout on an unrelated commit, `~/ocx-ci/opencodex` carrying
+uncommitted work, and no `csa906` remote configured there. The verifier must
+therefore be self-contained: clone the exact SHA into a scratch directory and
+never touch an existing checkout.
 
     LOCAL_SHA=$(git rev-parse HEAD)
-    ssh lidge "cd ~/ocx-ci/opencodex \\
-      && git fetch --quiet csa906 <branch> \\
-      && git checkout --quiet --detach FETCH_HEAD \\
-      && test \"\$(git rev-parse HEAD)\" = \"$LOCAL_SHA\" \\
-      && bun install --frozen-lockfile \\
-      && bun run test"
+    ssh lidge "set -e
+      WORKDIR=\$(mktemp -d -t ocx-verify-XXXXXX)
+      trap 'rm -rf \"\$WORKDIR\"' EXIT
+      git clone --quiet --no-checkout https://github.com/csa906/opencodex.git \"\$WORKDIR\"
+      cd \"\$WORKDIR\"
+      git fetch --quiet origin $LOCAL_SHA
+      git checkout --quiet --detach $LOCAL_SHA
+      test \"\$(git rev-parse HEAD)\" = \"$LOCAL_SHA\"
+      bun install --frozen-lockfile
+      bun run test"
 
-The `test` comparison is the gate: a mismatched checkout fails the command
-instead of silently reporting a green suite for different code. `~/ocx-ci/opencodex`
-is the chosen checkout (verified present, `origin` = lidge-jun/opencodex, on `dev`);
-the push remote `csa906` must be added there if absent.
+Why a scratch clone rather than a shared checkout:
+
+- `~/ocx-ci/opencodex` had modified `src/bridge.ts`,
+  `src/server/responses/core.ts` and others at audit time. A detach there can
+  refuse outright, or worse, run the suite against someone else's in-progress
+  edits and report a green that means nothing about this change.
+- `mktemp -d` plus the `trap` cleanup keeps the run leaving no residue, so it
+  cannot drift into the same stale state next time.
+- The `test` SHA comparison is retained and still fails closed: if the checkout
+  is not the exact audited commit, the command aborts before `bun run test`.
+
+The push remote is addressed by URL, so no remote needs to be configured on the
+host.
