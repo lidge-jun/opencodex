@@ -204,26 +204,36 @@ by design. Residual risk: `n_ctx` is trusted as reported; a server misreporting
 it would mislead routing exactly as any other context field would. Wording
 downgrade: N/A. Final enforcement layer: none.
 
-## Remote exact-head suite (round-4 correction)
+## Remote exact-head suite (round-5 correction)
 
-Three rounds of audit found three separate reasons a naive remote command lies:
-the lidge checkouts sit on unrelated commits, `~/ocx-ci/opencodex` carries
-uncommitted work and has no `csa906` remote, and a non-interactive SSH shell has
-no `bun` on `PATH` (`command -v bun` is empty while `~/.bun/bin/bun` exists).
-The block below addresses all three and fails closed on each.
+Five rounds of audit produced five distinct ways a remote command can lie. The
+final form separates PUBLISH from VERIFY, and every step fails closed.
 
-Preconditions asserted locally BEFORE any ssh:
+**Step 1 — publish (separate, must succeed on its own).**
 
-    LOCAL_SHA=$(git rev-parse HEAD)
+    set -eu
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    LOCAL_SHA=$(git rev-parse HEAD)
     git push --no-verify csa906 "$BRANCH"
-    # The remote must actually carry this commit; an unpushed SHA makes the
-    # remote fetch fail with 'upload-pack: not our ref'.
-    test "$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)" = "$LOCAL_SHA"
 
-Then the isolated remote run:
+Round 5 observed this step fail with `! [remote rejected] ... (permission denied)`
+while the verification that followed still ran and could have reported success.
+Publication is therefore its own command whose exit code is checked before
+anything else happens.
 
-    ssh lidge "set -e
+**Step 2 — assert the remote actually has this commit.**
+
+    set -eu
+    REMOTE_SHA=$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)
+    test -n "$REMOTE_SHA"
+    test "$REMOTE_SHA" = "$LOCAL_SHA"
+
+`test -n` matters independently: a failed push leaves `REMOTE_SHA` EMPTY, and an
+empty-vs-empty comparison would otherwise pass.
+
+**Step 3 — verify in an isolated scratch clone.**
+
+    ssh lidge "set -eu
       export PATH=\"\$HOME/.bun/bin:\$PATH\"
       command -v bun >/dev/null
       WORKDIR=\$(mktemp -d -t ocx-verify-XXXXXX)
@@ -236,13 +246,20 @@ Then the isolated remote run:
       bun install --frozen-lockfile
       bun run test"
 
-Each guard exists because a specific failure was observed:
+Each guard exists because a specific failure was observed in audit:
 
 | Guard | Observed failure it prevents |
 |-------|------------------------------|
-| `git ls-remote` SHA test | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` when the branch was not pushed |
+| Steps split + `set -eu` | round 5: push was rejected and `ls-remote` returned empty, yet the suite still ran and could have reported success |
+| `test -n "$REMOTE_SHA"` | an empty remote SHA comparing equal to an empty string |
+| `git ls-remote` SHA equality | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` on an unpushed commit |
 | `export PATH` + `command -v bun` | `command -v bun` empty over non-interactive ssh while `/home/lidgeai/.bun/bin/bun` exists |
-| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a suite run there proves nothing about this change |
-| `git rev-parse HEAD` test | a stale checkout silently reporting a green suite for different code |
+| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a run there proves nothing about this change |
+| `git rev-parse HEAD` equality | a stale checkout reporting a green suite for different code |
 
-C must run this literal block and paste its output; a paraphrase is not evidence.
+C runs these three literal steps in order and pastes each exit code. A green
+suite whose publication step failed is not evidence.
+
+Note: round 5 ran step 3 successfully and recorded `12299 pass, 11 skip, 7 fail`
+on an unrelated tree state. C must reach a green run at THIS unit's head, or
+triage each failure against `dev` before claiming the phase verified.

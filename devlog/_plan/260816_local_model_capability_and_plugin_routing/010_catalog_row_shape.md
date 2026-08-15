@@ -41,7 +41,8 @@ evaluator, reasoning-effort ingestion, and every other module.
 
 | Path | Action | What |
 |------|--------|------|
-| `src/codex/catalog/effort.ts` | MODIFY | Stamp `opencodex_capability_provenance` when real values are applied |
+| `src/codex/catalog/effort.ts` | MODIFY | Stamp `opencodex_capability_provenance` for non-combo rows only |
+| `src/providers/antigravity-models.ts` | MODIFY | Restore the supportsImages tri-state (absent != false) |
 | `src/routing/capability.ts` | MODIFY | Read the provenance block; make the adapter tool fallback unconditional |
 | `tests/routing-capability-catalog.test.ts` | NEW | Real evidence survives; synthesized defaults stay unknown; tools never regresses |
 
@@ -152,6 +153,75 @@ That split is the whole point of a separate provenance channel.
 found by audit. Any future path that manufactures a `CatalogModel` from defaults
 would need the same treatment; the regression test is an early warning for that
 class, not a proof that no other producer exists.
+
+### Restoring the tri-state in the Antigravity producer (round-5 B2)
+
+The combo guard above is necessary but NOT sufficient. Audit round 5 found a
+second synthesizer that carries a real provider name, so it walks straight past
+a `COMBO_NAMESPACE` check:
+
+    // src/providers/antigravity-models.ts:334
+    inputModalities: info.supportsImages === true ? ["text", "image"] : ["text"],
+
+That ternary collapses two different facts into one value. `supportsImages:
+false` (the provider said no) and `supportsImages` absent (nobody said anything)
+both become `["text"]`. `src/codex/catalog/provider-fetch.ts:1338` then turns the
+row into an ordinary `CatalogModel` with `provider: name`, and
+`src/routing/capability.ts:163` reads `["text"]` as `image: false`.
+
+Reviewer reproduction, with no `supportsImages` assertion present:
+
+    [ { "id": "future-agent-model", "contextWindow": 333333,
+        "inputModalities": ["text"] } ]
+
+Such rows are not hypothetical: `tests/google-antigravity-wire.test.ts:131`
+already constructs models without the field.
+
+**Amendment.** Preserve the tri-state at the producer, which is the only place
+the distinction still exists:
+
+    // Tri-state, deliberately not a ternary: `true` is an assertion of image
+    // support, `false` is an assertion against it, and ABSENT is unknown.
+    // Collapsing absent into ["text"] would let routing read it as a confident
+    // image:false (src/routing/capability.ts:163). The strict catalog still
+    // receives its ["text"] compatibility default downstream via
+    // ensureStrictCatalogFields; only the routing-evidence channel stays honest.
+    ...(info.supportsImages === true
+      ? { inputModalities: ["text", "image"] }
+      : info.supportsImages === false
+        ? { inputModalities: ["text"] }
+        : {}),
+
+**Required regression (writer-through-normalizer).** Same class as the combo
+test, and equally uncatchable by consumer-only fixtures:
+
+    test("an Antigravity model with no supportsImages leaves modality unknown", () => {
+      const rows = parseAntigravityAvailableModels(/* wire payload without supportsImages */);
+      expect(rows[0].inputModalities).toBeUndefined();
+      // The strict catalog still gets its compatibility default...
+      const entry = buildCatalogEntry(rows[0]);
+      expect(entry.input_modalities).toEqual(["text"]);
+      // ...but provenance carries no modality claim, so routing stays unknown.
+      expect(entry.opencodex_capability_provenance.input_modalities).toBeUndefined();
+    });
+
+    test("an explicit supportsImages:false still asserts text-only", () => {
+      const rows = parseAntigravityAvailableModels(/* payload with supportsImages: false */);
+      expect(rows[0].inputModalities).toEqual(["text"]);
+    });
+
+The second test is what keeps this a tri-state restoration rather than a
+silent weakening: a provider that genuinely says "no images" must keep saying it.
+
+**Scope addition.** `src/providers/antigravity-models.ts` joins Phase 1's file
+change map for this reason.
+
+**Residual, restated.** Audit found two synthesizers (combo, Antigravity). The
+guard plus the tri-state cover both. Any future producer that manufactures a
+`CatalogModel` field from a default would need the same treatment; the two
+writer-through-normalizer tests are the early warning for that class, not proof
+that no third producer exists. B greps for other `inputModalities:` and
+`contextWindow:` literal assignments in producer paths before closing.
 
 ## MODIFY 2 — src/routing/capability.ts
 
@@ -335,26 +405,36 @@ one function, so a future writer bypassing `applyCatalogModelMetadata` would
 produce rows routing cannot read. The new tests are the early warning, not
 enforcement. Final enforcement layer: none.
 
-## Remote exact-head suite (round-4 correction)
+## Remote exact-head suite (round-5 correction)
 
-Three rounds of audit found three separate reasons a naive remote command lies:
-the lidge checkouts sit on unrelated commits, `~/ocx-ci/opencodex` carries
-uncommitted work and has no `csa906` remote, and a non-interactive SSH shell has
-no `bun` on `PATH` (`command -v bun` is empty while `~/.bun/bin/bun` exists).
-The block below addresses all three and fails closed on each.
+Five rounds of audit produced five distinct ways a remote command can lie. The
+final form separates PUBLISH from VERIFY, and every step fails closed.
 
-Preconditions asserted locally BEFORE any ssh:
+**Step 1 — publish (separate, must succeed on its own).**
 
-    LOCAL_SHA=$(git rev-parse HEAD)
+    set -eu
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    LOCAL_SHA=$(git rev-parse HEAD)
     git push --no-verify csa906 "$BRANCH"
-    # The remote must actually carry this commit; an unpushed SHA makes the
-    # remote fetch fail with 'upload-pack: not our ref'.
-    test "$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)" = "$LOCAL_SHA"
 
-Then the isolated remote run:
+Round 5 observed this step fail with `! [remote rejected] ... (permission denied)`
+while the verification that followed still ran and could have reported success.
+Publication is therefore its own command whose exit code is checked before
+anything else happens.
 
-    ssh lidge "set -e
+**Step 2 — assert the remote actually has this commit.**
+
+    set -eu
+    REMOTE_SHA=$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)
+    test -n "$REMOTE_SHA"
+    test "$REMOTE_SHA" = "$LOCAL_SHA"
+
+`test -n` matters independently: a failed push leaves `REMOTE_SHA` EMPTY, and an
+empty-vs-empty comparison would otherwise pass.
+
+**Step 3 — verify in an isolated scratch clone.**
+
+    ssh lidge "set -eu
       export PATH=\"\$HOME/.bun/bin:\$PATH\"
       command -v bun >/dev/null
       WORKDIR=\$(mktemp -d -t ocx-verify-XXXXXX)
@@ -367,13 +447,20 @@ Then the isolated remote run:
       bun install --frozen-lockfile
       bun run test"
 
-Each guard exists because a specific failure was observed:
+Each guard exists because a specific failure was observed in audit:
 
 | Guard | Observed failure it prevents |
 |-------|------------------------------|
-| `git ls-remote` SHA test | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` when the branch was not pushed |
+| Steps split + `set -eu` | round 5: push was rejected and `ls-remote` returned empty, yet the suite still ran and could have reported success |
+| `test -n "$REMOTE_SHA"` | an empty remote SHA comparing equal to an empty string |
+| `git ls-remote` SHA equality | `fatal: remote error: upload-pack: not our ref 60fd5a7d9...` on an unpushed commit |
 | `export PATH` + `command -v bun` | `command -v bun` empty over non-interactive ssh while `/home/lidgeai/.bun/bin/bun` exists |
-| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a suite run there proves nothing about this change |
-| `git rev-parse HEAD` test | a stale checkout silently reporting a green suite for different code |
+| `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a run there proves nothing about this change |
+| `git rev-parse HEAD` equality | a stale checkout reporting a green suite for different code |
 
-C must run this literal block and paste its output; a paraphrase is not evidence.
+C runs these three literal steps in order and pastes each exit code. A green
+suite whose publication step failed is not evidence.
+
+Note: round 5 ran step 3 successfully and recorded `12299 pass, 11 skip, 7 fail`
+on an unrelated tree state. C must reach a green run at THIS unit's head, or
+triage each failure against `dev` before claiming the phase verified.
