@@ -97,6 +97,12 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
     expect((body as Record<string, unknown>).store).toBe(true);
   });
 
+  test("forward route: explicit store:false is preserved", async () => {
+    const { body } = await drive(providerConfig({ authMode: "forward" }), false);
+    expect(body).not.toBeNull();
+    expect((body as Record<string, unknown>).store).toBe(false);
+  });
+
   test("key-auth route: explicit store:false is preserved", async () => {
     const { body } = await drive(providerConfig(), false);
     expect(body).not.toBeNull();
