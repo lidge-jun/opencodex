@@ -4,14 +4,17 @@ import {
   extractChangelogPrNumbers,
   extractPrNumbers,
   hasMeaningfulCarriedNotes,
+  isReleasePlumbingCommit,
   isPolishBaseUrlAllowed,
   joinCarriedPreviewNotes,
   matchingPreviewTag,
   matchingPreviewTags,
+  parseCommitLog,
   parseGeneratedNotes,
   parseSectionHeadings,
   parseTakeoverSourcePr,
   previousReleaseNotesTag,
+  renderCommitFallbackNotes,
   renderReleaseNotes,
   rewriteTakeoverCredits,
   selectNewestCarriedPreviewTag,
@@ -694,5 +697,110 @@ describe("polish validation", () => {
     const errors = validatePolishedSections(out, [653, 744, 853], ["New Features", "Bug Fixes"]);
     expect(errors).toContain("missing headings: Bug Fixes");
     expect(errors).toContain("unexpected headings: Internal");
+  });
+});
+
+describe("commit-based changelog fallback", () => {
+  const log = [
+    "aaaaaaaaaaaa1\u001ffeat(gui): add a quota badge\u001falice",
+    "bbbbbbbbbbbb2\u001ffix(codex): stop a launcher crash (#1625)\u001fbob",
+    "cccccccccccc3\u001fdocs(devlog): record the release train\u001fcarol",
+    "dddddddddddd4\u001fchore(ci): prune stale workflows\u001fdave",
+    "eeeeeeeeeeee5\u001fjust a bare subject\u001feve",
+    "ffffffffffff6\u001fMerge dev into main: v9.9.9 release\u001fmallory",
+    "gggggggggggg7\u001frelease: v9.9.9\u001ftrent",
+  ].join("\n");
+
+  test("parseCommitLog reads the unit-separated git log format", () => {
+    const commits = parseCommitLog(log);
+    expect(commits).toHaveLength(7);
+    expect(commits[0]).toEqual({ sha: "aaaaaaaaaaaa1", subject: "feat(gui): add a quota badge", author: "alice" });
+  });
+
+  test("parseCommitLog ignores blank and malformed lines", () => {
+    expect(parseCommitLog("")).toEqual([]);
+    expect(parseCommitLog("\n\n")).toEqual([]);
+    // A hash with no subject carries no changelog value.
+    expect(parseCommitLog("abc123")).toEqual([]);
+  });
+
+  test("conventional prefixes map onto the release.yml categories", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    expect(out).toContain("## New Features");
+    expect(out).toContain("- gui: add a quota badge (aaaaaaaaa) @alice");
+    expect(out).toContain("## Bug Fixes");
+    expect(out).toContain("- codex: stop a launcher crash (#1625) (bbbbbbbbb) @bob");
+    expect(out).toContain("## Documentation");
+    expect(out).toContain("## Chores");
+    expect(out).toContain("## Other Changes");
+    expect(out).toContain("- just a bare subject (eeeeeeeee) @eve");
+  });
+
+  test("categories render in the canonical order", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    const order = ["## New Features", "## Bug Fixes", "## Documentation", "## Chores", "## Other Changes"]
+      .map(heading => out.indexOf(heading));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every(index => index >= 0)).toBe(true);
+  });
+
+  test("merge commits and release bumps are excluded", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    expect(out).not.toContain("Merge dev into main");
+    expect(out).not.toContain("release: v9.9.9");
+    expect(isReleasePlumbingCommit("Merge pull request #1 from x/y")).toBe(true);
+    expect(isReleasePlumbingCommit("release: v2.20.0")).toBe(true);
+    expect(isReleasePlumbingCommit("fix(codex): a real fix")).toBe(false);
+  });
+
+  test("a range with only plumbing commits renders nothing, so the caller keeps minimal notes", () => {
+    const plumbingOnly = [
+      "ffffffffffff6\u001fMerge dev into main: v9.9.9 release\u001fmallory",
+      "gggggggggggg7\u001frelease: v9.9.9\u001ftrent",
+    ].join("\n");
+    const out = renderCommitFallbackNotes(parseCommitLog(plumbingOnly));
+    expect(out).toBe("");
+    expect(hasMeaningfulCarriedNotes(out)).toBe(false);
+  });
+
+  test("no commits at all renders nothing", () => {
+    expect(renderCommitFallbackNotes([])).toBe("");
+  });
+
+  test("real PR sections win; the commit fallback is not appended alongside them", () => {
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      deltaPrNotes: "## Bug Fixes\n\n* fix a thing by @dev in https://github.com/o/n/pull/42\n",
+      commitFallbackNotes: renderCommitFallbackNotes(parseCommitLog(log)),
+      compareFrom: "v9.9.8",
+      compareTo: "v9.9.9",
+      repository: "owner/name",
+    });
+    expect(rendered).toContain("#42");
+    expect(rendered).not.toContain("@alice");
+    expect(rendered).not.toContain("aaaaaaaaa");
+  });
+
+  test("the fallback output is meaningful, which is the workflow's switch condition", () => {
+    // The workflow calls has-meaningful on the generate-notes body; when that is
+    // empty it renders the commit fallback and checks the same predicate again.
+    const emptyGenerateNotes = "<!-- Release notes generated using configuration in .github/release.yml at v9.9.9 -->\n\n\n";
+    expect(hasMeaningfulCarriedNotes(emptyGenerateNotes)).toBe(false);
+    expect(hasMeaningfulCarriedNotes(renderCommitFallbackNotes(parseCommitLog(log)))).toBe(true);
+  });
+
+  test("fallback sections flow through the real renderer into a non-empty body", () => {
+    // The whole point: an empty generate-notes delta must still produce a body
+    // with categorized content rather than the npm line plus a compare link.
+    const rendered = renderReleaseNotes({
+      npmMetadata: "Published to npm as \`pkg@9.9.9\` with dist-tag \`latest\`.",
+      commitFallbackNotes: renderCommitFallbackNotes(parseCommitLog(log)),
+      compareFrom: "v9.9.8",
+      compareTo: "v9.9.9",
+      repository: "owner/name",
+    });
+    expect(rendered).toContain("## New Features");
+    expect(rendered).toContain("## Bug Fixes");
+    expect(rendered.length).toBeGreaterThan(400);
   });
 });

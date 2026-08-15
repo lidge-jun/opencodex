@@ -10,6 +10,7 @@
  *   bun scripts/release-notes.ts matching-preview-tags <version>
  *   bun scripts/release-notes.ts previous-release-tag <version>
  *   bun scripts/release-notes.ts has-meaningful [body-file]
+ *   bun scripts/release-notes.ts commit-fallback [commit-log-file]
  *   bun scripts/release-notes.ts credit-takeovers --repo <owner/name> --in <file> --out <file>
  *   bun scripts/release-notes.ts render --npm-metadata ... --out ... [--carried ...] [--delta ...] [--compare-from ...] [--compare-to ...] [--repository ...]
  *   bun scripts/release-notes.ts polish --in <file> --out <file> [--model ...] [--base-url ...]
@@ -175,6 +176,104 @@ export function isEmptyGeneratedNotes(body: string): boolean {
  */
 export function hasMeaningfulCarriedNotes(stripped: string): boolean {
   return !isEmptyGeneratedNotes(stripped);
+}
+
+/**
+ * A single commit considered for the commit-based changelog fallback.
+ * `sha` is the full or short hash; `subject` is the commit subject line.
+ */
+export type ReleaseNoteCommit = {
+  sha: string;
+  subject: string;
+  author: string;
+};
+
+/** Category order shared by the PR renderer and the commit fallback. */
+const RENDER_CATEGORY_ORDER = ["New Features", "Bug Fixes", "Documentation", "Chores", "Other Changes"];
+
+/** Conventional-commit type -> release.yml category title. */
+const COMMIT_TYPE_CATEGORY: Record<string, string> = {
+  feat: "New Features",
+  fix: "Bug Fixes",
+  perf: "Bug Fixes",
+  docs: "Documentation",
+  chore: "Chores",
+  build: "Chores",
+  ci: "Chores",
+  refactor: "Chores",
+  style: "Chores",
+  test: "Chores",
+};
+
+/**
+ * Commits that are release plumbing rather than shipped work. A merge commit's
+ * content is already represented by the commits it brings in, and a `release:`
+ * bump is the release itself.
+ */
+export function isReleasePlumbingCommit(subject: string): boolean {
+  const text = subject.trim();
+  if (/^Merge\s/i.test(text)) return true;
+  if (/^release:\s/i.test(text)) return true;
+  return false;
+}
+
+/**
+ * Render commits as a generate-notes-shaped body so the existing category
+ * parser/renderer can consume them unchanged.
+ *
+ * Why this exists: `releases/generate-notes` aggregates MERGED PULL REQUESTS
+ * against the compared tag range. When work lands as direct commits on the
+ * integration branch (or through PRs whose base is `dev` rather than the
+ * release branch), that range contains no PRs the API will count and the body
+ * collapses to the npm line plus a compare link — v2.17.0..v2.18.2 had 0 of 36
+ * commits associated with a main-merged PR, and both releases shipped an empty
+ * changelog. The fallback keeps the release body honest regardless of how the
+ * work reached the branch.
+ *
+ * Commits carry no PR number, so the synthetic entries use `#0` — a sentinel
+ * the renderer never prints as a link because these are emitted as plain
+ * bullets under their category heading.
+ */
+export function renderCommitFallbackNotes(commits: ReleaseNoteCommit[]): string {
+  const buckets = new Map<string, string[]>();
+  for (const commit of commits) {
+    const subject = commit.subject.trim();
+    if (!subject) continue;
+    if (isReleasePlumbingCommit(subject)) continue;
+    const match = /^([a-zA-Z]+)(?:\(([^)]*)\))?!?:\s*(.+)$/.exec(subject);
+    const type = match?.[1]?.toLowerCase();
+    const scope = match?.[2]?.trim();
+    const summary = (match?.[3] ?? subject).trim();
+    const category = (type && COMMIT_TYPE_CATEGORY[type]) ?? "Other Changes";
+    const shortSha = commit.sha.trim().slice(0, 9);
+    const scopePrefix = scope ? `${scope}: ` : "";
+    const author = commit.author.trim();
+    const credit = author ? ` @${author}` : "";
+    const line = `- ${scopePrefix}${summary} (${shortSha})${credit}`;
+    const existing = buckets.get(category);
+    if (existing) existing.push(line);
+    else buckets.set(category, [line]);
+  }
+  if (buckets.size === 0) return "";
+  const parts: string[] = [];
+  for (const title of RENDER_CATEGORY_ORDER) {
+    const lines = buckets.get(title);
+    if (!lines || lines.length === 0) continue;
+    parts.push([`## ${title}`, "", ...lines].join("\n"));
+  }
+  return parts.join("\n\n").replace(/\n+$/, "") + "\n";
+}
+
+/** Parse `git log --format=%H%x1f%s%x1f%an` output into commits. */
+export function parseCommitLog(raw: string): ReleaseNoteCommit[] {
+  const commits: ReleaseNoteCommit[] = [];
+  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+    if (!line.trim()) continue;
+    const [sha, subject, author] = line.split("\u001f");
+    if (!sha || !subject) continue;
+    commits.push({ sha, subject, author: author ?? "" });
+  }
+  return commits;
 }
 
 export function hasNonWhitespace(text: string): boolean {
@@ -425,8 +524,6 @@ export function groupPrsByScope(prs: ReleaseNotePr[]): Array<{ scope: string | n
   return groups;
 }
 
-const RENDER_CATEGORY_ORDER = ["New Features", "Bug Fixes", "Documentation", "Chores", "Other Changes"];
-
 /**
  * Render OpenAI-Codex-style release notes from the generate-notes pieces:
  * H2 category sections with scope-grouped, prefix-free summary bullets, then a
@@ -439,6 +536,12 @@ export function renderReleaseNotes(input: {
   npmMetadata: string;
   carriedPreviewNotes?: string;
   deltaPrNotes?: string;
+  /**
+   * Pre-rendered category sections for commit-based entries (no PR numbers).
+   * Used only when the PR pipeline yields nothing, so a release body can never
+   * collapse to the npm line plus a compare link.
+   */
+  commitFallbackNotes?: string;
   compareFrom?: string | null;
   compareTo?: string;
   repository?: string;
@@ -493,6 +596,12 @@ export function renderReleaseNotes(input: {
     }
     parts.push(lines.join("\n"));
   }
+
+  // Commit fallback: only when the PR pipeline produced no category content at
+  // all. Its sections are already rendered, so they are appended verbatim.
+  const renderedAnyPrSection = parts.length > (npmMetadata ? 1 : 0);
+  const commitFallback = (input.commitFallbackNotes ?? "").trim();
+  if (!renderedAnyPrSection && commitFallback) parts.push(commitFallback);
 
   const allPrs = [...categories.values()].flat().sort((a, b) => a.number - b.number);
   const from = input.compareFrom?.trim();
@@ -734,6 +843,13 @@ async function main(argv: string[]): Promise<void> {
     process.exit(hasMeaningfulCarriedNotes(stripped) ? 0 : 1);
   }
 
+  if (cmd === "commit-fallback") {
+    // stdin: `git log --format=%H%x1f%s%x1f%an <range>` output.
+    const rendered = renderCommitFallbackNotes(parseCommitLog(await readStdinOrFile(rest[0])));
+    process.stdout.write(rendered);
+    return;
+  }
+
   if (cmd === "join-carried") {
     let out: string | undefined;
     const files: string[] = [];
@@ -888,6 +1004,7 @@ async function main(argv: string[]): Promise<void> {
       "out",
       "carried",
       "delta",
+      "commit-fallback",
       "compare-from",
       "compare-to",
       "repository",
@@ -909,6 +1026,7 @@ async function main(argv: string[]): Promise<void> {
       npmMetadata,
       carriedPreviewNotes: await readOptional("carried"),
       deltaPrNotes: await readOptional("delta"),
+      commitFallbackNotes: await readOptional("commit-fallback"),
       compareFrom: args.get("compare-from") ?? null,
       compareTo: args.get("compare-to"),
       repository: args.get("repository"),
@@ -972,6 +1090,7 @@ async function main(argv: string[]): Promise<void> {
 Usage:
   bun scripts/release-notes.ts strip-carried [body-file]
   bun scripts/release-notes.ts has-meaningful [body-file]
+  bun scripts/release-notes.ts commit-fallback [commit-log-file]
   bun scripts/release-notes.ts join-carried --out <file> <part-file>...
   bun scripts/release-notes.ts matching-preview-tag <version>   # tags on stdin
   bun scripts/release-notes.ts matching-preview-tags <version>  # tags on stdin, oldest→newest
