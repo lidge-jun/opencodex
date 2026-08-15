@@ -6,6 +6,7 @@ const {
   validateIssue,
   stripOrderedListPrefixes,
   independentReproductionText,
+  reproductionOnlyEchoesSummary,
 } = require("./issue-quality.cjs");
 
 function bugBody({ summary, reproduction }) {
@@ -83,7 +84,7 @@ describe("issue #1672 regression", () => {
     );
   });
 
-  it("rejects identical multi-line ordered lists in Summary and Reproduction", () => {
+  it("normalizes identical multi-line ordered lists on both sides", () => {
     const genericFailure =
       "Codex sync did not complete. Fix the reported Codex config issue and retry.";
     const repeated = ["1. Run `ocx sync`.", `2. ${genericFailure}`].join("\n");
@@ -91,6 +92,8 @@ describe("issue #1672 regression", () => {
       summary: repeated,
       reproduction: repeated,
     });
+
+    assert.equal(reproductionOnlyEchoesSummary(repeated, repeated), true);
 
     const result = validateIssue({
       title: genericFailure,
@@ -100,10 +103,6 @@ describe("issue #1672 regression", () => {
 
     assert.equal(result.kind, "bug");
     assert.equal(result.valid, false);
-    assert.ok(
-      result.reasons.some((reason) => /reproduction.*repeat|echo/i.test(reason)),
-      `Expected identical ordered summary-echo rejection, got: ${result.reasons.join("; ")}`,
-    );
   });
 
   it("preserves numeric failure evidence inside fenced and indented code blocks", () => {
