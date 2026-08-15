@@ -57,6 +57,28 @@ describe("issue #1672 regression", () => {
     );
   });
 
+  it("rejects ordered-list formatting when it only repeats Summary evidence", () => {
+    const genericFailure =
+      "Codex sync did not complete. Fix the reported Codex config issue and retry.";
+    const body = bugBody({
+      summary: ["Run `ocx sync`.", genericFailure].join("\n"),
+      reproduction: ["1. Run `ocx sync`.", `2. ${genericFailure}`].join("\n"),
+    });
+
+    const result = validateIssue({
+      title: genericFailure,
+      body,
+      labels: ["bug"],
+    });
+
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((reason) => /reproduction.*repeat|echo/i.test(reason)),
+      `Expected ordered summary-echo rejection, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
   it("keeps the same failure text valid when Reproduction adds an actionable command", () => {
     const genericFailure =
       "Codex sync did not complete. Fix the reported Codex config issue and retry.";
