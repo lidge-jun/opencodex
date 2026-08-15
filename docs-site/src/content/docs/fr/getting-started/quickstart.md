@@ -35,7 +35,7 @@ annoncent une fenêtre de contexte utilisable de 372 000 jetons ; Cursor con
 ## 2. Démarrez le proxy
 
 ```bash
-ocx start            # defaults to port 10100
+ocx start            # utilise le port 10100 par défaut
 ocx start --port 8080
 ```
 
@@ -53,7 +53,7 @@ Vérifiez-le :
 
 ```bash
 ocx status
-ocx gui       # open the dashboard on the live port
+ocx gui       # ouvre le tableau de bord sur le port actif
 ```
 
 ## 3. Utiliser Codex
@@ -84,7 +84,7 @@ pour choisir v1, base ou v2 et comprendre quand s’appliquent les instructions,
 Certains fournisseurs prennent en charge la connexion à un compte réel (OAuth, actualisation automatique) :
 
 ```bash
-ocx login xai          # or: anthropic, kimi, kiro, google-antigravity, cursor
+ocx login xai          # ou : anthropic, kimi, kiro, google-antigravity, cursor
 ocx logout xai
 ```
 
@@ -94,9 +94,9 @@ d’identification de votre `codex login` existant (consultez [Fournisseurs](/fr
 ## Arrêt et restauration
 
 ```bash
-ocx stop          # stop the proxy and restore native Codex
-ocx restore       # restore native Codex without stopping (alias: ocx eject)
-ocx restore back  # route Codex through the still-running proxy again
+ocx stop          # arrête le proxy et restaure Codex natif
+ocx restore       # restaure Codex natif sans arrêter le proxy (alias : ocx eject)
+ocx restore back  # route de nouveau Codex par le proxy toujours actif
 ```
 
 ## Suivant

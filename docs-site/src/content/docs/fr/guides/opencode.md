@@ -86,10 +86,10 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## La clé d’admission n’est pas écrite sur disque
 
-Lorsque le proxy nécessite une clé API, la configuration d'exécution en ligne transporte le code opencode
-`{env:…}` la référence plutôt que le secret. Les liaisons de bouclage utilisent cette référence comme
-`apiKey` ; les liaisons sans bouclage l'envoient uniquement via `x-opencodex-api-key` donc proxy
-l’admission reste séparée de tout en-tête `Authorization` en amont.
+La configuration enregistre la référence `{env:OPENCODEX_OPENCODE_API_KEY}`, jamais le secret lui-même.
+Sur une liaison de bouclage, cette référence est utilisée comme valeur `apiKey`. Sur une liaison hors
+bouclage, OpenCode résout la variable et n’envoie sa valeur que dans `x-opencodex-api-key`, afin que
+l’admission au proxy reste distincte de tout en-tête `Authorization` destiné au fournisseur en amont.
 
 Exemple de bouclage :
 
@@ -128,12 +128,13 @@ Rien à annuler — aucun fichier de configuration généré n'est écrit sous `
 
 ## Limites du modèle
 
-`limit.context` est écrit uniquement lorsque le catalogue signale une fenêtre contextuelle faisant autorité ; quand il
-ce n'est pas le cas, tout le bloc `limit` est omis et l'opencode conserve ses propres valeurs par défaut.le schéma d'opencode rejette un bloc `limit` portant `context` sans `output`, et le catalogue a
-pas de champ de sortie faisant autorité par modèle, donc un budget `output` de `32000` est émis à côté,
-limité à la fenêtre contextuelle afin qu'un modèle à petit contexte ne soit jamais donné `output > context`.
-Ce chiffre existe pour satisfaire le schéma — il ne s'agit pas d'une affirmation sur la réalité d'un modèle spécifique.
-maximum.
+`limit.context` n’est écrit que lorsque le catalogue fournit une fenêtre de contexte faisant autorité. Dans le cas
+contraire, le bloc `limit` entier est omis et opencode conserve ses propres valeurs par défaut.
+
+Le schéma d’opencode rejette un bloc `limit` qui contient `context` sans `output`. Comme le catalogue ne fournit
+aucune limite de sortie faisant autorité par modèle, opencodex émet également un budget `output` de `32000`, limité
+à la fenêtre de contexte afin qu’un modèle à petit contexte ne reçoive jamais `output > context`. Cette valeur sert
+uniquement à satisfaire le schéma ; elle ne prétend pas représenter la véritable limite d’un modèle particulier.
 
 Le bloc fournisseur `opencodex` est régénéré à chaque lancement, donc des ajustements par modèle y sont apportés
 ne survivra pas. Conservez plutôt les entrées personnalisées sous votre propre clé de fournisseur.

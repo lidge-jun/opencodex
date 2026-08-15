@@ -78,13 +78,15 @@ Trois contrôles déterministes précèdent la revue humaine. Chaque message d�
   d’un lockfile sans son manifeste nécessitent chacun un label d’approbation explicite. Une modification limitée
   à un commentaire dans un fichier source ne change pas le comportement et n’exige aucun test.
 
-- **CI multiplateforme.** Pour chaque pull request, la suite est fragmentée sous Linux et exécutée intégralement
-  sous macOS. Windows intervient à la limite de publication, lors de la promotion vers `main` ou `preview`, afin
-  qu’un runner Windows lent ou instable ne détermine pas quand votre PR devient verte.
+- **CI multiplateforme.** Pour les changements concernés, la suite est fragmentée sous Linux et exécutée
+  intégralement sous macOS pour chaque pull request. La voie Windows principale ne s’exécute actuellement que
+  sur lancement manuel avec `workflow_dispatch` ; elle ne bloque ni les PR ni les promotions. Des tests ciblés
+  du trousseau système et de l’installation npm globale peuvent toutefois inclure Windows.
 
-  Cette règle s’applique à **toutes** les pull requests, quelle que soit leur branche de base, y compris une PR
-  enfant empilée dont la base est la tête d’une autre PR ouverte. Le filtre `paths:`, et non la branche de base,
-  détermine si les tâches sont lancées : une PR limitée à la documentation ou à `devlog/` ne met rien en file d’attente.
+  Le workflow est créé pour **toutes** les pull requests, quelle que soit leur branche de base, y compris une PR
+  enfant empilée dont la base est la tête d’une autre PR ouverte. Le filtre interne des changements, et non la
+  branche de base, décide quelles tâches coûteuses s’exécutent ; une PR limitée à la documentation reçoit tout
+  de même un contrôle agrégé explicite.
 
 - **Label de type.** Le contrôle `label` déduit `bug`, `enhancement`, `documentation` ou `chore` du titre de la
   PR. Si le titre ne possède aucun préfixe reconnu, par exemple `stack 3/5: …`, le contrôle examine les commits,

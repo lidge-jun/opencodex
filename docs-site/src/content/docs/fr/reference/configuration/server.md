@@ -35,20 +35,26 @@ Si une ancienne version de développement a modifié les métadonnées de l'hist
 
 ## Accès à distance
 
-La liaison par défaut à `127.0.0.1` est limitée au bouclage. Une adresse hors bouclage telle que `0.0.0.0` nécessite une
-authentification par jeton à la fois sur `/api/*` et sur le plan de données. Exportez le jeton avant le démarrage :
+La liaison par défaut à `127.0.0.1` est limitée au bouclage. Une adresse hors bouclage telle que `0.0.0.0`
+exige un identifiant pour le plan de données : `OPENCODEX_API_AUTH_TOKEN` ou au moins une entrée `apiKeys`
+configurée. Pour utiliser le jeton d’environnement, exportez-le avant le démarrage :
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-Le proxy refuse une liaison distante sans cette variable. Pour un service en arrière-plan, exportez-le avant
-`ocx service install` donc launchd, systemd ou Task Scheduler le reçoit. Les clients doivent envoyer :
+Le proxy refuse une liaison distante sans identifiant du plan de données. L’installation d’un service exige
+spécifiquement `OPENCODEX_API_AUTH_TOKEN` ; exportez-le avant `ocx service install` afin que launchd, systemd
+ou le Planificateur de tâches le reçoive. Les clients du plan de données peuvent envoyer :
 
 ```text
 x-opencodex-api-key: your-secret-token
 ```
+
+Ce jeton n’autorise pas les routes de gestion `/api/*`. Celles-ci exigent l’identifiant administrateur
+indépendant décrit dans la [documentation de l’API de gestion](/fr/reference/management-api/), lequel doit
+être différent de tous les identifiants du plan de données.
 
 | Point de terminaison | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |

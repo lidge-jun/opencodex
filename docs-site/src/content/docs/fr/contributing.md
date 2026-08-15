@@ -63,11 +63,13 @@ bun run build
 
 Les workflows GitHub Actions restent volontairement limités :
 
-- **CI multiplateforme** (`.github/workflows/ci.yml`) s’exécute sur les pull requests et les push vers
-  `main` qui touchent le runtime, les tests, les paquets, les scripts, TypeScript ou les workflows. Sa matrice
-  Bun couvre Linux, Windows et macOS : installation, vérification des types, tests, analyse de confidentialité,
-  test sommaire de l’outil de génération, construction de l’interface et `ocx help`. Une seconde voie sur les
-  trois systèmes prouve que l’installation npm globale fonctionne sans Bun préinstallé, grâce au runtime fourni.
+- **CI multiplateforme** (`.github/workflows/ci.yml`) s’exécute sur toutes les pull requests et sur les push vers
+  `dev`, `preview` et `main`. Un filtre interne limite les tâches coûteuses aux changements qui touchent le runtime,
+  les tests, les paquets, les scripts, TypeScript ou les workflows, tout en produisant un contrôle agrégé explicite
+  pour les PR documentaires. La suite principale est répartie sur Linux et exécutée intégralement sur macOS ; sa
+  voie Windows, actuellement non bloquante, ne s’exécute que sur lancement manuel avec `workflow_dispatch`. Des
+  tests ciblés du trousseau système et, lorsque le paquet change, de l’installation npm globale couvrent néanmoins
+  les trois systèmes. Cette dernière voie vérifie l’installation sans Bun préinstallé grâce au runtime fourni.
 - **Version** (`.github/workflows/release.yml`) est un workflow manuel. Il ne remplace pas une seconde CI complète :
   avant une simulation ou une publication, il exige qu’une CI multiplateforme ait déjà réussi pour le commit
   exact de la version (`GITHUB_SHA`).
@@ -196,7 +198,8 @@ préréglage qu’il ne peut garantir. Promouvez l’entrée dans le registre lo
 ## Ajout d'un adaptateur
 
 Implémentez `ProviderAdapter` (voir [Adaptateurs](/fr/reference/adapters/)) dans `src/adapters/`,
-enregistrez son nom dans `src/server/adapter-resolve.ts` et reliez sa sortie au flux interne `AdapterEvent`.
+enregistrez sa fabrique dans `src/adapters/registry.ts` et reliez sa sortie au flux interne `AdapterEvent`.
+`src/server/adapter-resolve.ts` reste chargé de choisir le protocole effectif avant de déléguer au registre.
 Réutilisez `image.ts` pour la gestion des images et suivez `openai-chat.ts` pour la diffusion et les appels
 d’outils ; utilisez `fetchResponse` uniquement lorsque l’adaptateur gère ses propres nouvelles tentatives de transport, ou `runTurn`
 pour un transport véritablement bidirectionnel tel que Cursor. Ajoutez des tests ciblés sous `tests/` et exportez

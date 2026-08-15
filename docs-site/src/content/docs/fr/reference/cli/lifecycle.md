@@ -171,13 +171,13 @@ ocx service uninstall
 
 Avant de signaler une réussite, `install`, `start` et `repair` vérifient, sur les trois plateformes, qu’un proxy répond effectivement sur le port inscrit dans le service installé. Elles attendent jusqu’à 20 secondes, puis affichent le port utilisé :
 
-```
+```text
 ✅ opencodex service installed and serving on port 10100.
 ```
 
 Si aucun processus ne répond, elles affichent un avertissement et **renvoient un code non nul** :
 
-```
+```text
 ⚠️  Service installed, but no proxy answered on port 10100 within 20s.
    The manager registered the job; that is not the same as serving.
    Log:       ~/.opencodex/service.log
@@ -188,12 +188,12 @@ Dans ce cas, un code non nul signifie *enregistré, mais non opérationnel*, et 
 
 `ocx service status` distingue les trois mêmes états au lieu d’afficher la sortie brute du gestionnaire :
 
-```
+```text
 ✅ installed and loaded (launchd; logs: …)
    Serving on port 10100.
 ```
 
-```
+```text
 ⚠️  installed and loaded (launchd; logs: …)
    Registered, but no proxy is answering on port 10100.
    launchd is running an OLDER plist than the one on disk.

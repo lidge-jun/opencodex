@@ -59,10 +59,11 @@ Utilisez `--api-key` ou un identifiant OAuth pour tout ce qui est secret.
 
 ### `ocx login <provider>`
 
-Démarrez le flux de connexion enregistré du fournisseur. OAuth Les fournisseurs ouvrent un navigateur et stockent des informations actualisées automatiquement.
-informations d'identification sous `~/.opencodex/` ; Les fournisseurs de connexion à clé API ouvrent leur tableau de bord clé, demandent le
-clé, validez-la lorsque cela est possible et enregistrez la configuration du fournisseur résultante. La commande imprime le
-ID de fournisseur de clé OAuth et API actuellement acceptés lorsque le nom est manquant ou inconnu.
+Démarrez le flux de connexion enregistré du fournisseur. Les fournisseurs OAuth ouvrent un navigateur et stockent
+sous `~/.opencodex/` des informations d’identification actualisées automatiquement. Les fournisseurs à clé API
+ouvrent leur tableau de bord de clés, demandent la clé, la valident lorsque c’est possible, puis enregistrent la
+configuration de fournisseur obtenue. Lorsque le nom est absent ou inconnu, la commande affiche les identifiants
+de fournisseurs OAuth et à clé API actuellement acceptés.
 
 Utilisez la même commande pour **réauthentifier** après `ocx status` / `ocx doctor` rapports
 réauthentification requise ou échec de l'actualisation du terminal (ou utilisez Réauthentifier dans le tableau de bord).
@@ -81,7 +82,7 @@ le proxy en cours d'exécution ne peut pas accepter cette demande - le plus souv
 rechargement attesté : la connexion réussit toujours et les informations d'identification sont toujours écrites sur le disque, mais le
 le processus live continue de servir le précédent. Le CLI le dit et vous demande de redémarrer :
 
-```
+```text
 ⚠️  A proxy is running but could not reload this provider (unattested-target).
    The credential is saved to disk; the running proxy keeps using the previous one.
    Restart it to pick this up: ocx restart
@@ -212,10 +213,10 @@ invalides entraînent le code de sortie 1. `--json` renvoie :
 
 ### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
-Lit ou définit l'ordre de sélection d'un compte de pool Codex : **plus élevé est utilisé plus tôt**, la valeur par défaut est
-`0`, et la plage va de `-100` à `100`. Seule la piscine `openai` Codex est commandée, donc les autres
-La sortie des fournisseurs 1. `main` cible la connexion Codex Desktop, qui est classée comme n'importe quel autre pool.
-compte — `ocx account priority openai main last` est la façon dont vous le conservez comme réserve.
+Lit ou définit l’ordre de sélection d’un compte du groupe Codex : **une priorité plus élevée est utilisée plus tôt**.
+La valeur par défaut est `0` et la plage va de `-100` à `100`. Seul le groupe Codex `openai` peut être ordonné ;
+les autres fournisseurs renvoient le code de sortie `1`. `main` cible la connexion Codex Desktop, ordonnée comme
+n’importe quel autre compte du groupe : `ocx account priority openai main last` permet de la conserver comme réserve.
 
 Les mots prédéfinis remplacent les petits entiers : `first` est `+2`, `earlier` est `+1`, `normal` est `0`,
 `later` est `-1` et `last` est `-2`. `reset` ramène le compte à sa valeur par défaut et supprime ses
@@ -308,17 +309,20 @@ La matrice de récupération v1 couvre un processus OpenCodex sortant après qu'
 publié par renommer. Il ne revendique pas la durabilité en cas de crash du système d'exploitation ou du noyau ou d'une mise sous tension soudaine.
 perte : `atomicWriteFileAsync()` ne `fsync` ni le fichier ni son répertoire parent.
 
-Le coffre-fort chiffré, le journal de commutation, le marqueur de récupération et la quarantaine du journal se trouvent dans le répertoire canonique.
-`<real CODEX_HOME>/.opencodex-native-main-profiles` répertoire, donc chaque OpenCodex partage d'instance
-cette maison Codex observe un propriétaire et un état de récupération. La préparation de la connexion en texte brut reste isolée
-sous chaque répertoire `<OPENCODEX_HOME>/native-main-profile-staging`.Avant que le trafic principal natif ou la récupération du journal ne soient admis, le propriétaire à vie prend l'exclusivité
-réclamation d'informations d'identification et supprime uniquement les résidus exacts de crash `auth.json.ocx.<pid>.<sequence>.tmp`. Chacun
-le candidat doit rester un dossier régulier à lien unique sous le `CODEX_HOME` canonique inchangé ; c'est
-tronqué, vidé, puis dissocié. Link/reparse substitutions, changements d’identité et autres
-l'ambiguïté maintient le trafic principal natif fermé, tandis que les noms quasi-accidentés ne sont jamais supprimés automatiquement.
-Cela protège contre les plantages coopératifs, et non contre un processus malveillant déjà en cours d'exécution en tant que serveur.
-même utilisateur du système d'exploitation. Cet utilisateur et le système de fichiers contenant `CODEX_HOME` restent fiables, et la troncature
-ne promet pas d'effacement physique du stockage de copie sur écriture, des instantanés ou de la rémanence.
+Le coffre-fort chiffré, le journal de bascule, le marqueur de récupération et la quarantaine du journal résident
+dans le répertoire canonique `<real CODEX_HOME>/.opencodex-native-main-profiles`. Toutes les instances OpenCodex
+qui partagent ce répertoire Codex observent ainsi un propriétaire et un état de récupération uniques. La préparation
+des identifiants en clair reste isolée sous chaque répertoire `<OPENCODEX_HOME>/native-main-profile-staging`.
+
+Avant d’autoriser le trafic natif principal ou la récupération du journal, le propriétaire pour la durée de vie du
+processus acquiert la revendication exclusive sur les identifiants et ne supprime que les résidus exacts de plantage
+`auth.json.ocx.<pid>.<sequence>.tmp`. Chaque candidat doit rester un fichier ordinaire à lien unique sous le
+`CODEX_HOME` canonique inchangé ; il est tronqué, vidé sur disque, puis dissocié. Toute substitution de lien ou de
+point d’analyse, toute modification d’identité ou toute autre ambiguïté maintient le trafic natif principal fermé,
+tandis que les noms seulement ressemblants ne sont jamais supprimés automatiquement. Cette protection couvre les
+plantages coopératifs d’OpenCodex, pas un processus malveillant déjà exécuté par le même utilisateur du système.
+Cet utilisateur et le système de fichiers contenant `CODEX_HOME` restent donc des éléments de confiance, et la
+troncature ne garantit aucun effacement physique sur un stockage à copie sur écriture, dans des instantanés ou sur SSD.
 
 Aperçu des builds utilisés `<OPENCODEX_HOME>/native-main-profiles`. Cette mise en page n'est jamais importée silencieusement.
 Si `doctor` signale l’état du profil hérité, arrêtez tous les proxy OpenCodex partageant le même `CODEX_HOME`.
@@ -372,9 +376,9 @@ ocx models list-custom --json                           # read the custom-id for
 ocx models remove deepseek/deepseek-v4 --yes
 ```
 
-Un sélecteur de modèle avec une barre oblique est routé (`anthropic/claude-opus-5`) ; une pièce d'identité nue est traitée comme un
-modèle OpenAI natif, donc `--native` n'est nécessaire que pour forcer cette lecture pour un identifiant qui
-sinon, ayez l'air en déroute.
+Un sélecteur de modèle avec une barre oblique est routé (`anthropic/claude-opus-5`) ; un identifiant nu est traité
+comme un modèle OpenAI natif. L’option `--native` n’est donc nécessaire que pour forcer cette interprétation pour
+un identifiant qui semblerait autrement routé.
 
 `--modalities` accepte uniquement `text`, `image` et `audio`. Codex analyse ce champ comme une énumération fermée
 et rejette un catalogue entier contenant toute autre valeur, donc `add`, `edit`, et la gestion API

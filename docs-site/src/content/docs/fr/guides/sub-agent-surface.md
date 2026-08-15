@@ -131,21 +131,25 @@ Les options de récupération consistent à sélectionner un enfant ChatGPT nati
 v1 pour la délégation de fournisseurs hétérogènes, ou renvoyer la tâche en texte brut v2 `agent_message`
 contenu lorsque vous contrôlez l’appelant.
 
-Une option `agentTaskRecovery` expérimentale, désactivée par défaut, peut récupérer ce fichier natif spécifique.
-forme à acheminer via un passage de réponses brutes vers le point final ChatGPT `/responses` fixe à l'aide
-la forme des informations d'identification entrantes utilisée par le fournisseur canonique `openai` avec `authMode: "forward"`.
-La récupération est disponible uniquement lorsque le proxy est lié au bouclage. Il ne remplace jamais la clé API
-authentification, les informations d'identification d'un autre fournisseur ou un autre compte Codex. Seulement `authorization`, correspondant
-Les métadonnées `chatgpt-account-id`, `originator` et facultatives `openai-beta`/`user-agent` sont transmises ;
-`content-type` et `accept` sont générés localement et aucun autre en-tête d'appelant ne traverse la frontière.
-Il consomme du quota, ajoute de la latence, conserve brièvement le texte brut récupéré dans un cache en mémoire limité,
-et dépend d'un comportement ChatGPT backend non documenté. Parce qu'un modèle renvoie le texte récupéré,
-la fidélité octet par octet n’est pas garantie. Il rejette les appelants proxy génériques/à clé API et préserve
-`unreadable_encrypted_agent_task` en cas de panne. Voir
+L’option expérimentale `agentTaskRecovery`, désactivée par défaut, peut récupérer cette forme précise de
+tâche native envoyée vers une route externe. Elle utilise un transfert Responses brut vers le point de
+terminaison ChatGPT `/responses` fixe et la forme d’identification entrante du fournisseur canonique
+`openai` configuré avec `authMode: "forward"`.
+
+Cette récupération est disponible uniquement lorsque le proxy écoute sur l’interface de bouclage. Elle ne
+substitue jamais une autre clé API, l’identifiant d’un autre fournisseur ou un autre compte Codex. Seuls les
+en-têtes `authorization`, `chatgpt-account-id` correspondant, `originator`, ainsi que les métadonnées
+facultatives `openai-beta` et `user-agent`, sont transmis. `content-type` et `accept` sont générés localement ;
+aucun autre en-tête de l’appelant ne franchit cette frontière.
+
+Cette opération consomme du quota, ajoute de la latence, conserve brièvement le texte récupéré dans un cache
+mémoire borné et dépend d’un comportement non documenté du service ChatGPT. Comme un modèle renvoie le texte
+récupéré, la fidélité octet par octet n’est pas garantie. Les appelants génériques ou authentifiés par clé API
+sont rejetés, et tout échec conserve l’erreur `unreadable_encrypted_agent_task`. Consultez
 [Configuration de l'agent : récupération de tâche chiffrée v2](/fr/reference/configuration/agents/#récupération-des-tâches-v2-chiffrées)
 pour la limite de confiance complète et la configuration.
-Le routage combo reste inchangé et continue de considérer uniquement les cibles ChatGPT natives canoniques pour
-tâches cryptées.
+Le routage des combinaisons reste inchangé et continue de considérer uniquement les cibles ChatGPT natives
+canoniques pour les tâches chiffrées.
 
 ## Changer le mode
 

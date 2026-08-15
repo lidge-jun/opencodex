@@ -7,7 +7,7 @@ opencodex s’exécute dans un seul processus Bun. Une requête arrive au format
 
 ## Carte des modules
 
-```
+```text
 src/
 ├── cli/                # ocx command dispatch, init, status, provider commands
 ├── server/             # Bun.serve, /v1/* proxy, /api/* management API, WS bridge
@@ -43,7 +43,7 @@ Trois anciens points d’entrée volumineux préservent désormais la compatibil
 3. `router.ts` résout un identifiant simple ou `provider/model`. Le serveur détermine ensuite l’affinité du compte Codex, actualise l’authentification OAuth du fournisseur si nécessaire et applique à la route les identifiants sélectionnés.
 4. Avant l’appel principal, `vision/` décrit les images pour les modèles figurant dans `noVisionModels`. En l’absence de service auxiliaire sûr, les images sont supprimées plutôt qu’envoyées à un service en amont purement textuel.
 5. `server/adapter-resolve.ts` applique toute substitution de protocole propre au modèle et construit l’un des sept adaptateurs. L’adaptateur Responses relaie le corps natif, Cursor exécute son transport bidirectionnel `runTurn`, et les adaptateurs traduits construisent, envoient et analysent une requête en amont.
-6. Pour les modèles routés avec un outil hébergé `web_search`, `web-search/` expose une fonction synthétique, exécute la recherche réelle via le service auxiliaire ChatGPT, renvoie les résultats au modèle routé et recommence dans la limite de boucle configurée.
+6. Pour les modèles routés avec un outil hébergé `web_search`, `web-search/` expose une fonction synthétique, exécute la recherche réelle via le service auxiliaire ChatGPT, renvoie les résultats au modèle routé et recommence dans la limite de boucle configurée. Ce service auxiliaire ne prend en charge que le chemin HTTP classique ; les adaptateurs qui implémentent `runTurn`, comme Cursor, le contournent et poursuivent leur propre transport.
 7. `bridge.ts` produit un flux SSE Responses ou une réponse JSON. `server/request-log.ts` et `usage/` recueillent de manière bornée l’état, la latence, les libellés de fournisseur/modèle et l’utilisation estimée des jetons, sans modifier la réponse.
 
 ## Analyseur
@@ -79,7 +79,7 @@ Les appels d’outils sont répartis entre trois types d’éléments Responses 
 
 ## API de gestion, OAuth et utilisation
 
-`server/management-api.ts` alimente le tableau de bord et répartit les requêtes entre des groupes de routes spécialisés dans `server/management/*.ts`. Ses routes `/api/*` couvrent la configuration et les paramètres sûrs, les opérations CRUD sur les fournisseurs et les pools de clés, la sélection des modèles, les limites de contexte et les contrôles v2, la synchronisation du catalogue, les diagnostics et journaux de débogage, l’utilisation et les quotas, les paramètres des services auxiliaires, les mises à jour, les clés d’API clientes générées, la connexion/l’état/la déconnexion OAuth et la sélection du compte, la gestion des comptes Codex et l’arrêt progressif. `server/auth-cors.ts` exige `OPENCODEX_API_AUTH_TOKEN` pour `/api/*` comme pour `/v1/*` lorsque le proxy écoute au-delà de l’interface de bouclage ; les entrées `corsAllowOrigins` configurées étendent la liste locale des origines autorisées.
+`server/management-api.ts` alimente le tableau de bord et répartit les requêtes entre des groupes de routes spécialisés dans `server/management/*.ts`. Ses routes `/api/*` couvrent la configuration et les paramètres sûrs, les opérations CRUD sur les fournisseurs et les groupes de clés, la sélection des modèles, les limites de contexte et les contrôles v2, la synchronisation du catalogue, les diagnostics et journaux de débogage, l’utilisation et les quotas, les paramètres des services auxiliaires, les mises à jour, les clés d’API clientes générées, la connexion/l’état/la déconnexion OAuth et la sélection du compte, la gestion des comptes Codex et l’arrêt progressif. Pour une liaison hors bouclage, `server/auth-cors.ts` protège le plan de données `/v1/*` avec `OPENCODEX_API_AUTH_TOKEN` ou une entrée `apiKeys` configurée. Les routes de gestion `/api/*` emploient un identifiant administrateur distinct, décrit dans la [référence de l’API de gestion](/fr/reference/management-api/), qui doit différer des identifiants du plan de données. Les entrées `corsAllowOrigins` configurées étendent la liste locale des origines autorisées.
 
 Les implémentations OAuth se trouvent dans `oauth/`. Les jetons d’accès sont chargés ou actualisés immédiatement avant un appel routé, tandis que `oauth/token-guardian.ts` ne peut les actualiser de manière proactive que pour les fournisseurs dont la politique l’autorise. L’actualisation est coordonnée par une opération unique en cours de processus, un verrou de fichier par compte et un CAS de génération, afin que des écritures concurrentes ne puissent pas écraser un identifiant plus récent. Une projection partagée de l’état de santé (`oauth/health.ts`) alimente `ocx status`, `ocx doctor`, l’API de gestion et le tableau de bord. Les identifiants des pools Codex/ChatGPT et l’affinité des fils propre au processus se trouvent dans `codex/` et ne figurent pas dans les réponses de gestion. L’affinité est supprimée en cas de `401` / `403` / `429` (elle n’est pas conservée au-delà des limites de débit) et ne persiste pas après un redémarrage. L’utilisation des requêtes est normalisée en `OcxUsage`, exposée dans les événements terminaux Responses et agrégée par `usage/` pour le tableau de bord et les diagnostics JSONL facultatifs.
 
@@ -98,7 +98,7 @@ Le compactage du contexte Codex fonctionne avec les modèles routés. `server/re
 
 ## Effort de raisonnement
 
-`reasoning-effort.ts` traduit les libellés de raisonnement de Codex dans les valeurs de protocole propres à chaque fournisseur. Le catalogue Codex annonce les libellés acceptés par Codex (`low` / `medium` / `high` / `xhigh` / `max`), mais les fournisseurs en amont peuvent ne prendre en charge qu’un sous-ensemble plus restreint ou exiger un véritable alias. Le module :
+`reasoning-effort.ts` traduit les libellés de raisonnement de Codex dans les valeurs de protocole propres à chaque fournisseur. Le catalogue Codex annonce les libellés acceptés par Codex (`low` / `medium` / `high` / `xhigh` / `max` / `ultra`), mais les fournisseurs en amont peuvent ne prendre en charge qu’un sous-ensemble plus restreint ou exiger un véritable alias. Le module :
 
 - définit les `CODEX_REASONING_LEVELS` canoniques et leur ordre de tri ;
 - ramène un effort demandé au niveau pris en charge le plus proche lorsque le niveau exact n’est pas disponible ;

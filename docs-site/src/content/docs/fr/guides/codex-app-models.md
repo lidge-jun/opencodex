@@ -70,17 +70,17 @@ page **Fournisseurs** ; `<selector>` désigne ci-dessous un libellé public choi
 par `codexAccountNamespaces` :
 
 ```text
-gpt-5.6-sol                         # bare Codex-login route via Pool or Direct
-<selector>/gpt-5.6-sol              # stored Codex account mapped by that selector
-openai-apikey/gpt-5.6-sol           # API key
-openai/gpt-daybreak-blue-latest     # explicit Codex-forward custom row (372,000)
-<selector>/gpt-daybreak-blue-latest # observed account-qualified native id, when available
-openai-apikey/daybreak-blue-latest  # separate API-key route (1,050,000 / 922,000)
+gpt-5.6-sol                         # route de connexion Codex nue via Groupe ou Direct
+<selector>/gpt-5.6-sol              # compte Codex enregistré associé à ce sélecteur
+openai-apikey/gpt-5.6-sol           # clé API
+openai/gpt-daybreak-blue-latest     # ligne personnalisée explicite relayée vers Codex (372 000)
+<selector>/gpt-daybreak-blue-latest # identifiant natif qualifié par compte observé, si disponible
+openai-apikey/daybreak-blue-latest  # route à clé API distincte (1 050 000 / 922 000)
 ```
 
 Les nouvelles installations et les configurations sans mode enregistré utilisent Pool par défaut. Les
-configurations actuelles emploient le marqueur 2 et conservent une fois la configuration v1 livrée dans
-`~/.opencodex/config.json.pre-openai-tiers-v2.bak` ; restaurez-la avec :
+configurations actuelles emploient le marqueur 2 et enregistrent une copie de sauvegarde unique de la
+configuration v1 livrée dans `~/.opencodex/config.json.pre-openai-tiers-v2.bak`. Restaurez cette copie avec :
 
 ```sh
 cp ~/.opencodex/config.json.pre-openai-tiers-v2.bak ~/.opencodex/config.json

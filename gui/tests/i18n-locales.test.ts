@@ -176,7 +176,7 @@ describe("i18n locale contracts", () => {
           value: { language },
           configurable: true,
         });
-        expect(detectInitial()).toBe("fr" as never);
+        expect(detectInitial()).toBe("fr");
       }
     } finally {
       if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);

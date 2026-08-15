@@ -9,11 +9,11 @@ format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/
 ```ts
 interface ProviderAdapter {
   name: string;
-  buildRequest(parsed, incoming?): AdapterRequest | Promise<AdapterRequest>;
-  fetchResponse?(request, context): Promise<Response>;   // custom retry/transport
-  parseStream(response): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response): Promise<AdapterEvent[]>;   // non-streaming
-  runTurn?(parsed, incoming, emit): Promise<void>;      // bidirectional transport
+  buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
+  fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
+  parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
+  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
+  runTurn?(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void): Promise<void>;
 }
 ```
 

@@ -89,8 +89,8 @@ Inspectez les requêtes de proxy, l’utilisation, le stockage, la mémoire et l
 
 | Alias ​​| Ressource équivalente |
 | --- | --- |
-| `ocx logs [filters] [--follow] [--json|--jsonl]` | `ocx observe logs` |
-| `ocx usage [--range <7d|30d|all>] [--surface <all|codex|claude|grok>] [--json]` | `ocx observe usage` |
+| `ocx logs [filters] [--follow] [--json\|--jsonl]` | `ocx observe logs` |
+| `ocx usage [--range <7d\|30d\|all>] [--surface <all\|codex\|claude\|grok>] [--json]` | `ocx observe usage` |
 | `ocx storage [--json]` | `ocx observe storage` |
 | `ocx memory [--json]` | `ocx observe memory` |
 
@@ -187,9 +187,10 @@ ocx export --client omp --out ./omp-models.yml    # native OMP YAML
 ocx export --client opencode --out ~/opencodex-opencode.json
 ```
 
-Sans `--json` les leads de configuration générés, puis le chemin de destination canonique, l'avertissement de fusion, l'env
-ligne d'exportation là où le client en a une, et un nombre de modèles avec le nombre de lignes omettant les limites de contexte (la
-le client applique ses propres valeurs par défaut pour ceux-ci).
+Sans `--json`, la configuration générée est affichée en premier. Elle est suivie du chemin de destination canonique,
+de l’avertissement de fusion, de la ligne `export` de la variable d’environnement lorsque le client en utilise une,
+puis du nombre de modèles et du nombre de lignes sans limite de contexte faisant autorité. Le client applique ses
+propres valeurs par défaut à ces lignes.
 
 | Client | Destination canonique | Télécharger le nom du fichier | Var.environnement |
 | --- | --- | --- | --- |

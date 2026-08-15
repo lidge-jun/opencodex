@@ -1,3 +1,5 @@
+# opencodex
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Proxy universel de fournisseurs pour OpenAI Codex, Claude Code, Claude Desktop et Grok Build</b><br>
 Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</p>
@@ -11,7 +13,7 @@ Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start        # proxy + dashboard on localhost:10100
+ocx start        # proxy et tableau de bord sur localhost:10100
 ```
 
 <table align="center">
@@ -54,8 +56,8 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 ### Pour les humains
 
 ```bash
-npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
-ocx start                            # or `ocx service` to run it in the background
+npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
+ocx start                            # ou `ocx service` pour l’exécuter en arrière-plan
 ```
 
 <details>
@@ -102,8 +104,8 @@ l'un d'eux — généralement votre connexion Codex Desktop — ne doit être ut
 
 ```bash
 npm install -g @bitkyc08/opencodex
-ocx start     # or `ocx service`
-ocx init      # interactive setup: writes ~/.opencodex/config.json and wires Codex
+ocx start     # ou `ocx service`
+ocx init      # configuration interactive : écrit ~/.opencodex/config.json et relie Codex
 ```
 
 `ocx init` ne démarre jamais le proxy ; démarrez-le d'abord (ou après — les deux ordres fonctionnent,
@@ -207,20 +209,20 @@ Qwen Cloud, SiliconFlow et bien d'autres. Liste complète : `ocx init` ou la
 ## CLI
 
 ```bash
-ocx init                       # interactive setup (writes config, wires Codex, offers the shim)
-ocx start [--port 10100]       # start the proxy in the foreground
-ocx stop                       # stop + restore native Codex
-ocx service [install|start|stop|status|uninstall|remove]  # background service
-ocx codex-shim install         # start the proxy on demand whenever `codex` launches
-ocx health [--json]            # check immediate proxy liveness
-ocx ready [--json] [--wait [--timeout <seconds>]]  # check post-sync readiness
-ocx status                     # is the proxy running?
-ocx gui                        # open the web dashboard
-ocx provider <...>             # manage providers (list/add/edit/test/remove)
-ocx account <...>              # manage ChatGPT accounts & API-key pools
-ocx combo <...>                # manage failover / round-robin combos
-ocx v2 <...>                   # multi-agent v1/v2 surface controls
-ocx update [--tag preview]     # update opencodex
+ocx init                       # configuration interactive (écrit la configuration, relie Codex, propose le shim)
+ocx start [--port 10100]       # démarre le proxy au premier plan
+ocx stop                       # arrête le proxy et restaure Codex natif
+ocx service [install|start|stop|status|uninstall|remove]  # service en arrière-plan
+ocx codex-shim install         # démarre le proxy à la demande lors du lancement de `codex`
+ocx health [--json]            # vérifie immédiatement que le proxy répond
+ocx ready [--json] [--wait [--timeout <seconds>]]  # vérifie l’état après synchronisation
+ocx status                     # indique si le proxy est actif
+ocx gui                        # ouvre le tableau de bord web
+ocx provider <...>             # gère les fournisseurs (list/add/edit/test/remove)
+ocx account <...>              # gère les comptes ChatGPT et les groupes de clés API
+ocx combo <...>                # gère les combos de basculement ou de rotation
+ocx v2 <...>                   # contrôle les surfaces multi-agents v1/v2
+ocx update [--tag preview]     # met à jour opencodex
 ```
 
 Les démarrages sans port imposé peuvent choisir un autre port libre si celui qui est préféré est occupé ;
@@ -258,7 +260,7 @@ Supprimez-les avec `ocx service uninstall` / `ocx codex-shim uninstall`.
 ### Désinstallation
 
 ```bash
-ocx uninstall                  # stop, remove service/shim, restore native Codex, clean up state
+ocx uninstall                  # arrête, supprime le service ou shim, restaure Codex natif et nettoie l’état
 npm uninstall -g @bitkyc08/opencodex
 ```
 

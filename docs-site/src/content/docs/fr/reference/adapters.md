@@ -8,15 +8,17 @@ Un **adaptateur** traduit les échanges entre le modèle interne de requête/ré
 ```ts
 interface ProviderAdapter {
   name: string;
-  buildRequest(parsed, incoming?): AdapterRequest | Promise<AdapterRequest>;
-  fetchResponse?(request, context): Promise<Response>;   // custom retry/transport
-  parseStream(response): AsyncGenerator<AdapterEvent>;
-  parseResponse?(response): Promise<AdapterEvent[]>;   // non-streaming
-  runTurn?(parsed, incoming, emit): Promise<void>;      // bidirectional transport
+  buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): AdapterRequest | Promise<AdapterRequest>;
+  fetchResponse?(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response>;
+  parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent>;
+  parseResponse?(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]>;
+  runTurn?(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void): Promise<void>;
 }
 ```
 
 `buildRequest` transforme un `OcxParsedRequest` en requête HTTP en amont ; `parseStream` / `parseResponse` reconvertissent la réponse du fournisseur en événements `AdapterEvent` internes. `fetchResponse` permet à l’adaptateur de gérer lui-même les nouvelles tentatives et les délais d’expiration, tandis que `runTurn` prend en charge les transports qui ne peuvent pas être représentés par une seule requête HTTP suivie d’un flux de réponse. [`bridge.ts`](/fr/reference/architecture/#pont) transforme ensuite ces événements en flux SSE Responses.
+
+`incoming` est un `IncomingMeta` obligatoire qui transporte notamment les en-têtes, le signal d’abandon et le budget de traduction. Le contexte facultatif de `fetchResponse` est un `AdapterFetchContext`. Les méthodes d’analyse reçoivent elles aussi un `TranslatorBudget` obligatoire afin de borner les données traduites.
 
 ## `openai-chat`
 

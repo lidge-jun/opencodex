@@ -32,7 +32,7 @@ le répertoire courant :
 ```bash
 npm install -g --allow-scripts=bun @bitkyc08/opencodex
 
-# if the original install used sudo, keep using sudo:
+# si l’installation initiale utilisait sudo, continuez à l’utiliser :
 sudo npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 :::
@@ -64,8 +64,8 @@ Pour développer opencodex lui-même :
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run dev:proxy   # starts the proxy API in dev mode (src/cli/index.ts start)
-bun run dev:gui     # starts the dashboard dev server (another terminal)
+bun run dev:proxy   # démarre l’API du proxy en mode développement (src/cli/index.ts start)
+bun run dev:gui     # démarre le serveur de développement du tableau de bord (dans un autre terminal)
 ```
 
 `bun run dev` reste un alias de `bun run dev:proxy`. L’API du proxy expose `/healthz`,

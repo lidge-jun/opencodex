@@ -74,7 +74,8 @@ prend la décision à chaque lancement :
 
 | Ce qu'il trouve | Ce qu'il fait |
 | --- | --- |
-| Une connexion Claude (compte `~/.claude.json` OAuth, `.credentials.json`, le trousseau macOS ou un `ANTHROPIC_API_KEY` exporté) | Laisse le jeton non défini, afin que votre abonnement et vos connecteurs continuent de fonctionner |
+| Des identifiants OAuth Claude (compte OAuth dans `~/.claude.json`, `.credentials.json` ou trousseau macOS) | Laisse le jeton non défini, afin que votre abonnement et vos connecteurs continuent de fonctionner |
+| Un `ANTHROPIC_API_KEY` exporté | Laisse `ANTHROPIC_AUTH_TOKEN` non défini et conserve la clé API ; Claude Code utilise l’authentification par clé API, qui désactive la connexion claude.ai et ses connecteurs |
 | Pas d'authentification Claude du tout | Injecte un jeton d'espace réservé, donc Claude Code arrête de vous demander de vous connecter et achemine via le proxy |
 | Détection impossible (trousseau illisible, fichier corrompu) | Suppose qu'un abonnement existe et affiche un avertissement — un échec de lecture ne fait jamais basculer un abonnement payant vers le proxy |
 
@@ -88,8 +89,6 @@ déconnectez ultérieurement. Revenez à Auto pour rendre de nouveau la décisio
 Sur macOS, l'intégration automatique (`claudeCode.systemEnv`) suit la même résolution : une commande
 `claude` lancée sans passer par `ocx` se comporte donc de la même manière. Le fichier d'environnement est un instantané actualisé au
 démarrage du proxy ou lors de l'enregistrement des paramètres, tandis que `ocx claude` effectue toujours une résolution immédiate.
-
-## Intégration de l'environnement système (macOS)
 
 ## Profil Claude Desktop
 

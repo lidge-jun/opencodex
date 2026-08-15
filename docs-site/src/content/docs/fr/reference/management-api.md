@@ -101,7 +101,7 @@ Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de rech
 | Méthode et chemin | Objectif | Erreurs notables |
 | --- | --- | --- |
 | `GET /api/config` | Renvoyer l'objet de transfert de configuration expurgé et sécurisé pour la gestion | — |
-| `PUT /api/config` | Protection désactivée contre le remplacement intégral de la configuration | 405 ; utiliser plutôt des points de terminaison ciblés |
+| `PUT /api/config` | Toujours refusé : le remplacement intégral de la configuration est désactivé | 405 ; utiliser les points de terminaison ciblés, notamment `POST /api/providers` pour les fournisseurs |
 | `GET, PUT /api/settings` | Lire les paramètres d'exécution et de démarrage, ou mettre à jour le démarrage automatique, le mode de diffusion, le budget mémoire propre à l'application et `codexAccountPickerEnabled` | 400 mise à jour invalide, vide ou qui n'est pas un objet |
 | `GET /api/startup-health` | Lire l'état de santé du service et du lanceur intermédiaire, mis en cache au démarrage | — |
 | `POST /api/startup-action` | Installer ou réparer le service ou le lanceur intermédiaire Codex | 400 action invalide ; 500 échec de l'action |

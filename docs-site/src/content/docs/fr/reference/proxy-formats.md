@@ -213,8 +213,10 @@ estimation documentée du contenu du système, des messages et des outils et ret
 
 ## `GET /v1/models`
 
-Le même itinéraire dessert trois clients qui s'attendent à des enveloppes de catalogue incompatibles. Anthropic saveur
-gagne sauf si `client_version` est également présent.| Contrat | Déclencheur | Forme de niveau supérieur | Comportement de l'identifiant du modèle |
+Le même itinéraire dessert trois clients qui attendent des enveloppes de catalogue incompatibles.
+La variante Anthropic est prioritaire, sauf si `client_version` est également présent.
+
+| Contrat | Déclencheur | Forme de niveau supérieur | Comportement de l’identifiant du modèle |
 | --- | --- | --- | --- |
 | Anthropic liste des modèles | `anthropic-version` en-tête ou `?flavor=anthropic`, sans `client_version` | `{ "data": [...] }` avec Anthropic entrées d'informations sur le modèle | Claude Code reçoit des identifiants lisibles ; Desktop peut recevoir sa famille d'alias spécifique au profil |
 | Codex catalogue | `client_version` paramètre de requête | `{ "models": [...] }` | Les entrées natives et routées contiennent les champs de catalogue Codex les plus riches, la visibilité, l'effort, WebSocket et les métadonnées multi-agents |

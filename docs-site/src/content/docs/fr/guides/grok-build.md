@@ -53,20 +53,20 @@ annonce une échelle d’effort : la récupération de la liste des modèles lit
 les entrées doivent contenir `supports_reasoning_effort` ainsi que les choix du menu
 `reasoning_efforts`. Pour les entrées de modèles routés, opencodex reflète les niveaux configurés pour le fournisseur
 (`reasoningEfforts` / `modelReasoningEfforts`, et la valeur par défaut de
-`modelDefaultReasoningEfforts`) sur cette réponse. Ces métadonnées décrivent le
-échelle routée configurée par proxy - elle ne revendique pas la prise en charge native du raisonnement en amont,
-et les adaptateurs peuvent émuler le raisonnement ou mapper les niveaux sur des champs spécifiques au fournisseur. Acheminé
-les modèles avec une échelle configurée affichent le contrôle de l'effort dans Grok Construisez comme ils le font
-en Codex. Les modèles avec une liste de niveaux vide ne conservent aucun contrôle sur l'effort, correspondant à Codex
-comportement. Les entrées natives GPT-5.6 sont distinctes : elles préservent et exposent leurs
-des échelles de raisonnement en amont plutôt que des métadonnées routées configurées par le fournisseur.
+`modelDefaultReasoningEfforts`) dans cette réponse. Ces métadonnées décrivent l’échelle des modèles routés
+configurée dans le proxy ; elles ne prétendent pas que le fournisseur prend nativement en charge ces niveaux.
+Les adaptateurs peuvent émuler le raisonnement ou mapper les niveaux sur des champs propres au fournisseur.
+Les modèles routés qui possèdent une échelle configurée affichent le contrôle de l’effort dans Grok Build comme
+dans Codex. Ceux dont la liste de niveaux est vide n’affichent aucun contrôle d’effort, conformément au comportement
+de Codex. Les entrées GPT-5.6 natives sont distinctes : elles conservent et exposent leurs échelles de raisonnement
+en amont fixes, et non les métadonnées configurées pour les modèles routés.
 
 Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
 l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses
 `reasoning.summary` sur `auto` ; les traces de raisonnement parviennent donc à Grok sous la forme
-`delta.reasoning_content` au lieu d'être masqué. Réglez `include_reasoning: false` (ou
+`delta.reasoning_content` au lieu d’être masquées. Réglez `include_reasoning: false` (ou
 `reasoning.summary: "none"`) si un client souhaite que le modèle réfléchisse sans renvoyer le
-tracer. Un `reasoning.summary` explicite gagne lorsque les deux boutons sont présents.
+tracé. Une valeur explicite de `reasoning.summary` prévaut lorsque les deux options sont présentes.
 
 ## Note d'authentification
 
@@ -81,7 +81,7 @@ mettez votre secret dans `~/.grok/config.toml` et écrasez tout ce que vous y av
 `ocx start`/`ensure`/`restart`. Donc opencodex n’écrit rien du tout dans ce cas (et supprime
 tout bloc restant d'une liaison de bouclage précédente), et vous configurez les modèles vous-même
 en dehors des marqueurs gérés, où rien de ce que opencodex fait ne peut les écraser. Voir
-[Recette manuelle](#manual-recipe-without-auto-registration) pour le tableau exact et réglez les deux
+[Recette manuelle](#recette-manuelle-sans-enregistrement-automatique) pour le tableau exact et réglez les deux
 `base_url` (un hôte réellement accessible à partir de l'endroit où vous exécutez `grok`) et `api_key`
 (votre `OPENCODEX_API_AUTH_TOKEN`).
 

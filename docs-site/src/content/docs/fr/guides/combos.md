@@ -111,22 +111,23 @@ Les clés de visibilité restent sans ambiguïté :
 - L'entrée `gpt-5.6-sol` nue dans `disabledModels` continue de signifier la ligne OpenAI native dormante ;
   cela ne masque pas le combo qui détient actuellement cet identifiant public.
 - Lorsqu'au moins un alias natif est configuré, les lignes natives nues désactivées sont omises du
-  catalogue Codex effectif au lieu de retenu comme `visibility: "hide"`. Cela empêche le bureau
-  liste autorisée de la résurrection des lignes, elle ne devrait pas s'afficher. La page Modèles répertorie toujours les natifs non masqués
-  commutateurs, et la réactivation d’un commutateur restaure ses métadonnées natives préservées ou actuelles.
+  catalogue Codex effectif au lieu d’être conservées avec `visibility: "hide"`. La liste d’autorisation de
+  Desktop ne peut donc pas faire réapparaître des lignes qui devraient rester masquées. La page **Modèles**
+  continue d’afficher les commutateurs natifs non masqués ; réactiver l’un d’eux restaure ses métadonnées
+  natives préservées ou actuelles.
 
 :::caution
 Un alias natif reprend intentionnellement un identifiant de modèle propriétaire. Utilisez-le uniquement lorsque la cible
-est opérationnellement équivalent et étiquetez honnêtement la ligne du sélecteur. La suppression du combo rétablit la normale
-le routage natif et l'identité du catalogue lors de la prochaine synchronisation.
+est opérationnellement équivalente et étiquetez honnêtement la ligne du sélecteur. La suppression du combo restaure
+le routage natif et l’identité du catalogue lors de la prochaine synchronisation.
 :::
 
 ## Choisissez une stratégie
 
 ### Basculement : commande principale et sauvegardes
 
-`failover` sélectionne la première cible éligible dans l'ordre de configuration. Une cible est éligible lorsque son
-Le fournisseur existe, est activé, ne refroidit pas et peut gérer toute contrainte de demande spéciale.
+`failover` sélectionne la première cible éligible dans l’ordre de configuration. Une cible est éligible lorsque son
+fournisseur existe, est activé, n’est pas en période de refroidissement et peut gérer toute contrainte particulière de la demande.
 Les poids et `stickyLimit` n’affectent pas cette stratégie.
 
 Compte tenu de cet ordre :
@@ -203,7 +204,7 @@ Le basculement est intentionnellement limité. Il facilite la disponibilité, l'
 3. le catalogue de la cible sélectionnée annonce cet effort précis.
 
 Si la requête n'a pas d'objet `reasoning`, opencodex en crée un. Si `reasoning` existe sans
-`effort`, il préserve les autres champs et ajoute la valeur par défaut. Un effort fourni par l'appelant est
+`effort`, il préserve les autres champs et ajoute la valeur par défaut. Un effort fourni par l’appelant n’est
 jamais écrasé.
 
 Lorsque la capacité cible est inconnue ou n'inclut pas l'effort configuré, opencodex omet le
@@ -271,15 +272,15 @@ ocx combo remove <id> --yes
 
 `set` accepte également `--strategy`, `--sticky`, `--effort`, `--alias`, `--native-alias`,
 `--display-name` et `--rename-from`. Utilisez `-` comme valeur de `--effort`, `--alias` ou
-`--display-name` pour effacer ce champ. `--native-alias` exige un alias natif non qualifié actuellement pris en charge
-un alias de modèle et un nom d'affichage non vide. `create` et `update` sont des alias pour `set` ; `delete` est un alias pour
+`--display-name` pour effacer ce champ. `--native-alias` exige un alias de modèle natif non qualifié actuellement
+pris en charge et un nom d’affichage non vide. `create` et `update` sont des alias pour `set` ; `delete` est un alias pour
 `remove` ; et les mêmes sous-commandes sont disponibles sous `ocx route combo`.
 
 ### Gestion API
 
-Les clients sans tête utilisent `GET`, `PUT` et `DELETE` sur `/api/combos`. `GET` liste les combos normalisés
-définitions, `PUT` en crée ou en remplace une (et peut en renommer une), et `DELETE` prend la requête id
-paramètre. L'authentification et les détails request/response se trouvent dans le
+Les clients sans interface utilisent `GET`, `PUT` et `DELETE` sur `/api/combos`. `GET` liste les définitions
+normalisées, `PUT` en crée ou en remplace une et peut en renommer une, tandis que `DELETE` utilise le paramètre
+de requête `id`. L’authentification et les détails des requêtes et réponses se trouvent dans la
 [Gestion API référence](/fr/reference/management-api/).
 
 Pour la configuration persistante complète, voir [Configuration](/fr/reference/configuration/).
