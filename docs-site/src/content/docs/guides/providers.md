@@ -367,6 +367,13 @@ account-scoped and comes from the authenticated discovery endpoint after login. 
 configured Bearer key. Create keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
+**Command Code quota.** The dashboard and `ocx account refresh` probe Command Code's
+`/alpha/billing/credits` windows (5-hour and weekly) on the canonical
+`https://api.commandcode.ai` host. The OAuth preset (`command-code`) uses the stored
+account bearer; the Provider-API key preset (`commandcode`) uses the active configured
+key. A user-edited lookalike base URL is never probed. Remaining monthly, purchased, and
+free credits are shown as a USD window when Command Code also reports period spend.
+
 **SambaNova Cloud discovery.** The preset reads SambaNova Cloud's public `/v1/models` list from the fixed API
 host, preserves provider-native ids, and caps discovery at 128 KiB and 128 raw rows. Because the
 catalog is unauthenticated, the CLI login flow reports the key as unverifiable instead of treating

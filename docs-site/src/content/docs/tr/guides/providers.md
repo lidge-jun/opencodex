@@ -435,6 +435,8 @@ doğrulamalı keşif uç noktasından gelir. Sohbet istekleri yapılandırılmı
 anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
 üzerinden anahtarlar oluşturun.
 
+**Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
+
 **SambaNova Cloud keşfi.** Önayar, sabit API ana bilgisayarından SambaNova
 Cloud'un genel `/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
 ve keşfi 128 KiB ve 128 ham satırla sınırlar. Katalog kimlik doğrulamasız
@@ -662,4 +664,3 @@ Canlı araştırmaya sahip sağlayıcılar: OpenAI/Codex, Anthropic, xAI, Cursor
 Kimi, Google Antigravity, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt ve a6api destekli herhangi
 bir özel sağlayıcı.
-

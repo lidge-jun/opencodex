@@ -275,6 +275,8 @@ CLI 資格情報の取り込みも可能)。モデルカタログはアカウン
 discovery エンドポイントから取得します。チャットリクエストは設定済みの bearer キーを使います。
 キーは [Command Code Studio](https://commandcode.ai/studio/) で作成します。
 
+**Command Code の quota:** ダッシュボードと `ocx account refresh` は、正規ホスト `https://api.commandcode.ai` 上の `/alpha/billing/credits` ウィンドウ（5時間と週次）を照会します。OAuth プリセット (`command-code`) は保存済みアカウント bearer を使い、Provider-API キープリセット (`commandcode`) は設定済みの有効キーを使います。ユーザーが編集した類似ホストは照会しません。期間支出が返る場合は、残りの monthly / purchased / free credits を USD ウィンドウとして表示します。
+
 **SambaNova Cloud の discovery:** preset は固定 API ホスト上の SambaNova Cloud の公開 `/v1/models` 一覧を読み、
 プロバイダー固有の ID を保持し、discovery を 128 KiB と raw 128 行に制限します。カタログは認証不要のため、
 CLI の login flow は公開レスポンスをキーの有効性の証拠にせず、キーを検証不能として報告します。chat リクエストは

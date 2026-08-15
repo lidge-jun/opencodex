@@ -339,6 +339,8 @@ Hyperbolic 另外的 image、audio 與 GPU endpoint 不在範圍內。可在
 endpoint 取得。Chat request 使用設定的 Bearer key。可在
 [Command Code Studio](https://commandcode.ai/studio/) 建立 key。
 
+**Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
+
 **SambaNova Cloud 探索。** preset 從固定 API host 讀取 SambaNova Cloud 公開的 `/v1/models` 列表，保留
 provider-native id，並把 discovery 限制在 128 KiB／128 個 raw row。因 catalog 不需要認證，CLI login
 流程會把 key 回報為 unverifiable，而不會把公開 response 當成有效 key 的證明。Chat request 仍使用

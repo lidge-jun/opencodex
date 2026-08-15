@@ -259,6 +259,8 @@ inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制
 `~/.commandcode/auth.json` 导入本地 CLI 凭据）；模型目录按账户隔离，并在登录后从经过认证的发现
 端点获取。聊天请求使用已配置的 bearer 密钥。密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
 
+**Command Code 配额：**仪表盘和 `ocx account refresh` 会在规范主机 `https://api.commandcode.ai` 上探测 `/alpha/billing/credits` 窗口（5 小时和每周）。OAuth 预设 (`command-code`) 使用已保存的账户 bearer；Provider-API 密钥预设 (`commandcode`) 使用当前配置的有效密钥。用户改写后的仿冒 base URL 不会被探测。当 Command Code 同时返回周期消耗时，剩余的 monthly / purchased / free credits 会显示为 USD 窗口。
+
 **SambaNova Cloud 发现：**该预设从固定 API 主机读取 SambaNova Cloud 的公开 `/v1/models` 列表，保留提供商原生
 模型 id，并将发现限制为 128 KiB 和 128 条原始记录。该目录无需鉴权，因此 CLI 登录流程不会把公开响应
 当作密钥有效性的证明，而会将密钥报告为无法验证。chat 请求仍使用已配置的 Bearer 密钥；由于 SambaNova
