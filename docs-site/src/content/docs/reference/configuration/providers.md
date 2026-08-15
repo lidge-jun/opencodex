@@ -367,7 +367,8 @@ For canonical OpenRouter providers (`openai-chat` plus `https://openrouter.ai/ap
 **Providers → OpenRouter → Models → Provider routing by model**. Enter an exact OpenRouter model id,
 load its available endpoints, then choose one of three behaviors:
 
-- inherit the provider-wide `openRouterRouting` value;
+- inherit the provider-wide `openRouterRouting` value; saving this mode removes that model's
+  `modelOpenRouterRouting` entry, so the provider-wide value applies again;
 - prioritize selected endpoint tags with `order`;
 - restrict routing to selected endpoint tags with `only`.
 
