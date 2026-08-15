@@ -65,6 +65,21 @@ describe("deterministic duplicate auto-close", () => {
     });
   });
 
+  it("recognizes short-prefix named error classes as specific duplicate evidence", () => {
+    const signature =
+      "The sync command failed with OSError while loading the provider catalog during startup.";
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2004, title: "new", body: signature },
+      candidateIssues: [{ number: 1457, title: "old", body: signature }],
+      duplicateNumbers: ["1457"],
+    });
+
+    assert.deepEqual(match, {
+      number: "1457",
+      signature: signature.toLowerCase(),
+    });
+  });
+
   it("selects the longest shared signature across all nominated candidates", () => {
     const shorter =
       "POST /v1/responses returns HTTP 503 in the OpenRouter adapter during requests.";
