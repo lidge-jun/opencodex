@@ -14,6 +14,7 @@ import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalo
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
 import { canSerializeServiceTierForChatModel } from "../providers/service-tier";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
+import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 import {
   isTranslatorBudgetExceededError,
   retainTranslatedEventBatch,
@@ -1091,9 +1092,9 @@ function toolsToChatFormat(parsed: OcxParsedRequest, provider: OcxProviderConfig
   if (tools.length === 0) return undefined;
   const xaiTarget = isXaiSchemaTarget(provider);
   const formatted = tools.flatMap(t => {
-    const parameters = xaiTarget
+    const parameters = stripResponsesOnlyEncryptedMarker(xaiTarget
       ? normalizeXaiToolParameters(t.parameters)
-      : ensureRootObjectType(t.parameters);
+      : ensureRootObjectType(t.parameters));
 
     if (parameters === undefined) return [];
     return [{
