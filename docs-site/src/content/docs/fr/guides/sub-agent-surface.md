@@ -20,6 +20,12 @@ Choisissez le mode pour les **nouvelles sessions**. Les sessions existantes cons
 | **base** (par défaut) | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
 | **v2** | Outils plats `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` et liste d'agents, avec sessions simultanées. | Utilisateurs souhaitant utiliser le flux de travail simultané le plus récent et comprenant l'héritage de modèle et la limitation des tâches chiffrées ci-dessous. |
 
+En **v2**, l'option facultative **Garder ChatGPT sur v1** (`keepNativeChatGptOnV1`) laisse Sol/Terra
+sur la surface v1 afin qu'ils puissent encore lancer Grok ou Claude. Les parents natifs ChatGPT
+chiffrent les corps `NEW_TASK` v2 ; les modèles routés ne peuvent pas les lire. Les parents routés
+restent sur v2, où les tâches enfants sont en texte clair. C'est un interrupteur *à l'intérieur*
+de v2, pas un quatrième mode de catalogue. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
+
 :::tip[Pas sûr ?]
 Commencez par **base**. Choisissez **v1** lorsque la délégation entre fournisseurs doit fonctionner de manière prévisible. Forcer **v2**
 uniquement lorsque vous souhaitez spécifiquement son modèle de session le plus récent dans chaque entrée de catalogue.
@@ -31,7 +37,7 @@ Le mode sélectionné contrôle le champ `multi_agent_version` dans chaque entr�
 
 - **v1** inscrit `multi_agent_version = "v1"` sur chaque modèle.
 - **base** restaure les paramètres en amont. Les entrées sans valeur explicite suivent l’indicateur de fonctionnalité natif `multi_agent_v2`.
-- **v2** inscrit `multi_agent_version = "v2"` sur chaque modèle.
+- **v2** inscrit `multi_agent_version = "v2"` sur chaque modèle, sauf lorsque **Garder ChatGPT sur v1** est activé : les lignes natives ChatGPT restent `"v1"` et les lignes routées ou combo restent `"v2"`.
 
 opencodex applique cela comme passe finale à la fois au catalogue `/v1/models` en direct et au catalogue synchronisé
 sur le disque. C'est pourquoi un changement de mode affecte de manière cohérente les sessions App, CLI et TUI nouvellement créées.
@@ -169,6 +175,8 @@ ocx v2 status
 ocx v2 mode v1
 ocx v2 mode default
 ocx v2 mode v2
+ocx v2 keep-native-v1 on
+ocx v2 keep-native-v1 off
 ocx v2 threads 8
 ```
 
