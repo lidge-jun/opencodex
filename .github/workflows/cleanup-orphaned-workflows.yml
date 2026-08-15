@@ -5,8 +5,8 @@ name: Clean orphaned workflow runs
 # can drop the stale workflow entry too.
 on:
   schedule:
-    # Daily, offset from the hour to avoid the busiest scheduler window.
-    - cron: "47 5 * * *"
+    # Daily at 06:00 UTC.
+    - cron: "0 6 * * *"
   push:
     branches: [main]
     paths:
