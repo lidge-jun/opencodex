@@ -459,12 +459,15 @@ jobs:
             # exactly that, 0 of 36 commits PR-associated. Fall back to the commit log so a
             # release can never publish an empty changelog.
             # The renderer only keeps entries carrying a PR number, so the fallback
-            # travels in its own channel (--commit-fallback) and is emitted only when
-            # the PR pipeline produced no category sections at all.
-            if ! bun scripts/release-notes.ts has-meaningful "$delta_file" \
-              && ! bun scripts/release-notes.ts has-meaningful "$carried_file"; then
+            # travels in its own channel (--commit-fallback). The decision depends on
+            # THIS range's PR delta only: carried preview notes cover the pre-preview
+            # span, so gating on them too would silently drop every post-preview
+            # direct commit. The renderer decides whether to emit the channel.
+            if ! bun scripts/release-notes.ts has-meaningful "$delta_file"; then
               commit_log_file="$(mktemp)"
-              git log --format='%H%x1f%s%x1f%an' "${notes_range_start}..${GITHUB_SHA}" > "$commit_log_file"
+              # NUL-delimited: Git forbids NUL in commit content, so neither a crafted
+              # subject nor an author name can forge a field boundary.
+              git log -z --format='%H%x00%s%x00%an' "${notes_range_start}..${GITHUB_SHA}" > "$commit_log_file"
               bun scripts/release-notes.ts commit-fallback "$commit_log_file" > "$commit_fallback_file"
               if bun scripts/release-notes.ts has-meaningful "$commit_fallback_file"; then
                 echo "::notice::generate-notes returned no PR categories for ${notes_range_start}..${release_tag}; using the commit-based changelog fallback"

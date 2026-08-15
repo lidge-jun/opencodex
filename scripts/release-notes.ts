@@ -229,9 +229,9 @@ export function sanitizeCommitText(text: string): string {
   return text
     .replace(/\r?\n/g, " ")
     // Strip the ASCII unit separator so a subject can never forge a log field.
-    .replace(/\u001f/g, " ")
-    .replace(/[`<>|]/g, "")
-    .replace(/([[\]])/g, "\\$1")
+    .replace(/[\u0000\u001f]/g, " ")
+    // Escape rather than delete: `Map<K, V> | CLI` must stay readable.
+    .replace(/([`<>|[\]\\])/g, "\\$1")
     // `@name` -> `@\u200bname`: reads identically, never notifies.
     .replace(/@(?=[A-Za-z0-9_-])/g, "@\u200b")
     .replace(/\s+/g, " ")
@@ -332,23 +332,24 @@ export function extractCommitBulletSections(body: string): string {
 }
 
 /**
- * Parse `git log --format=%H%x1f%s%x1f%an` output into commits.
+ * Parse `git log -z --format=%H%x00%s%x00%an` output into commits.
  *
- * Fields are split from the LEFT for the hash and from the RIGHT for the
- * author, so a subject containing the separator byte cannot shift the author
- * field (the subject keeps the remainder). `sanitizeCommitText` strips any
- * stray separator at render time.
+ * Records are NUL-delimited and fields are NUL-separated. Git forbids NUL in
+ * commit content, so — unlike the unit separator, which Git happily accepts in
+ * both subjects and author names — no field value can forge a boundary. Every
+ * record is read as exactly three fields; anything longer is a malformed record
+ * and is skipped rather than silently reinterpreted.
  */
 export function parseCommitLog(raw: string): ReleaseNoteCommit[] {
   const commits: ReleaseNoteCommit[] = [];
-  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
-    if (!line.trim()) continue;
-    const parts = line.split("\u001f");
-    if (parts.length < 2) continue;
-    const sha = parts[0]!;
-    const author = parts.length >= 3 ? parts[parts.length - 1]! : "";
-    const subject = (parts.length >= 3 ? parts.slice(1, -1).join("\u001f") : parts[1]!);
-    if (!sha.trim() || !subject.trim()) continue;
+  const fields = raw.split("\u0000");
+  // Trailing separator from `git log -z` leaves an empty final element.
+  if (fields.length > 0 && fields[fields.length - 1]!.trim() === "") fields.pop();
+  for (let i = 0; i + 2 < fields.length + 1; i += 3) {
+    const sha = (fields[i] ?? "").replace(/^\n+/, "").trim();
+    const subject = fields[i + 1] ?? "";
+    const author = fields[i + 2] ?? "";
+    if (!sha || !subject.trim()) continue;
     commits.push({ sha, subject, author });
   }
   return commits;

@@ -47,20 +47,20 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
 
   test("git author display names never render as GitHub mentions", () => {
     // %an is a free-form display name; "@Abhishek" would notify an unrelated account.
-    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1fix(x): a fixAbhishek Sharma"));
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\u0000fix(x): a fix\u0000Abhishek Sharma"));
     expect(out).toContain("Abhishek Sharma");
     expect(out).not.toMatch(/@Abhishek/);
   });
 
   test("mentions inside commit subjects are neutralized but stay readable", () => {
-    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1fix(x): thanks @octocatdev"));
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\u0000fix(x): thanks @octocat\u0000dev"));
     expect(out).not.toMatch(/@octocat/);
     expect(out).toContain("octocat");
   });
 
   test("markdown metacharacters cannot restructure the release body", () => {
     const subject = "fix(x): drop " + String.fromCharCode(96) + "code" + String.fromCharCode(96) + " and <b>tags</b>";
-    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + subject + "dev"));
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\\u001f" + subject + "\\u001fdev"));
     expect(out).not.toContain(String.fromCharCode(96));
     expect(out).not.toContain("<b>");
   });
@@ -70,12 +70,14 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
     expect(sanitizeCommitText("a" + String.fromCharCode(31) + "b")).toBe("a b");
   });
 
-  test("a separator byte inside a subject cannot shift the author field", () => {
-    const commits = log("aaaaaaaaaaaa1subjectwith seprealauthor");
+  test("a unit separator in subject OR author cannot forge a field boundary", () => {
+    // Git accepts U+001F in both subjects and author names, so the old framing
+    // was ambiguous in both directions; NUL cannot appear in commit content.
+    const commits = log("aaaaaaaaaaaa1\u0000subject\u001fwith sep\u0000Mallory\u001fInjected");
     expect(commits).toHaveLength(1);
-    expect(commits[0]!.author).toBe("realauthor");
-    expect(commits[0]!.subject).toContain("subject");
-    expect(commits[0]!.subject).toContain("with sep");
+    expect(commits[0]!.subject).toBe("subject\u001fwith sep");
+    expect(commits[0]!.author).toBe("Mallory\u001fInjected");
+    expect(renderCommitFallbackNotes(commits)).not.toContain("\u001f");
   });
 
   test("a non-hex sha is dropped rather than rendered", () => {
@@ -87,7 +89,7 @@ describe("commit fallback: untrusted-input and carry hardening", () => {
   test("conventional merge: commits are plumbing too", () => {
     expect(isReleasePlumbingCommit("merge: bring dev into main")).toBe(true);
     expect(isReleasePlumbingCommit("merge(dev): sync")).toBe(true);
-    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1merge: bring dev into maindev"))).toBe("");
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1\\u001fmerge: bring dev into main\\u001fdev"))).toBe("");
   });
 
   test("preview fallback notes survive the carry into a stable release", () => {
@@ -801,16 +803,16 @@ describe("polish validation", () => {
 
 describe("commit-based changelog fallback", () => {
   const log = [
-    "aaaaaaaaaaaa1\u001ffeat(gui): add a quota badge\u001falice",
-    "bbbbbbbbbbbb2\u001ffix(codex): stop a launcher crash (#1625)\u001fbob",
-    "cccccccccccc3\u001fdocs(devlog): record the release train\u001fcarol",
-    "dddddddddddd4\u001fchore(ci): prune stale workflows\u001fdave",
-    "eeeeeeeeeeee5\u001fjust a bare subject\u001feve",
-    "ffffffffffff6\u001fMerge dev into main: v9.9.9 release\u001fmallory",
-    "gggggggggggg7\u001frelease: v9.9.9\u001ftrent",
-  ].join("\n");
+    "aaaaaaaaaaaa1\u0000feat(gui): add a quota badge\u0000alice",
+    "bbbbbbbbbbbb2\u0000fix(codex): stop a launcher crash (#1625)\u0000bob",
+    "cccccccccccc3\u0000docs(devlog): record the release train\u0000carol",
+    "dddddddddddd4\u0000chore(ci): prune stale workflows\u0000dave",
+    "eeeeeeeeeeee5\u0000just a bare subject\u0000eve",
+    "ffffffffffff6\u0000Merge dev into main: v9.9.9 release\u0000mallory",
+    "gggggggggggg7\u0000release: v9.9.9\u0000trent",
+  ].join("\u0000");
 
-  test("parseCommitLog reads the unit-separated git log format", () => {
+  test("parseCommitLog reads the NUL-separated git log format", () => {
     const commits = parseCommitLog(log);
     expect(commits).toHaveLength(7);
     expect(commits[0]).toEqual({ sha: "aaaaaaaaaaaa1", subject: "feat(gui): add a quota badge", author: "alice" });
@@ -854,9 +856,9 @@ describe("commit-based changelog fallback", () => {
 
   test("a range with only plumbing commits renders nothing, so the caller keeps minimal notes", () => {
     const plumbingOnly = [
-      "ffffffffffff6\u001fMerge dev into main: v9.9.9 release\u001fmallory",
-      "gggggggggggg7\u001frelease: v9.9.9\u001ftrent",
-    ].join("\n");
+      "ffffffffffff6\u0000Merge dev into main: v9.9.9 release\u0000mallory",
+      "gggggggggggg7\u0000release: v9.9.9\u0000trent",
+    ].join("\u0000");
     const out = renderCommitFallbackNotes(parseCommitLog(plumbingOnly));
     expect(out).toBe("");
     expect(hasMeaningfulCarriedNotes(out)).toBe(false);
