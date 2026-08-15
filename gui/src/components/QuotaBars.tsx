@@ -116,6 +116,8 @@ function bcp47(locale: Locale): string {
       return "en-GB";
     case "de":
       return "de-DE";
+    case "fr":
+      return "fr-FR";
     case "ko":
       return "ko-KR";
     case "zh":

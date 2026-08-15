@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-const LOCALES = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW"] as const;
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();

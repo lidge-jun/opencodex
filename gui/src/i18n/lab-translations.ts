@@ -1,6 +1,6 @@
 import type { TKey } from "./en";
 
-export type LabLocale = "en" | "de" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
+export type LabLocale = "en" | "de" | "fr" | "ko" | "zh" | "zh-TW" | "ru" | "ja" | "tr";
 export type LabCatalogKey = Exclude<Extract<TKey, `lab.${string}`>, `lab.production.${string}`>;
 export type LabSupplementKey =
   | "subjectKindUnknown"
@@ -107,6 +107,56 @@ const de: Record<LabCatalogKey, string> = {
   "lab.layer.protocol_conformance": "Protokollkonformität",
   "lab.layer.live_route_compatibility": "Live-Route-Kompatibilität",
   "lab.layer.task_effectiveness": "Aufgabenwirksamkeit",
+};
+
+const fr: Record<LabCatalogKey, string> = {
+  "lab.title": "Laboratoire de compatibilité",
+  "lab.subtitle": "Matrice en lecture seule des verdicts de compatibilité fondée sur les preuves de la projection du laboratoire.",
+  "lab.loadFailed": "Impossible de charger les données du laboratoire de compatibilité",
+  "lab.projectionUnavailable": "La projection du laboratoire n’est pas disponible. Exécutez d’abord les sondes de conformité ou en conditions réelles.",
+  "lab.projectionIncompatible": "Le schéma de la projection du laboratoire est incompatible. Reconstruisez la projection.",
+  "lab.statusTitle": "État de la projection",
+  "lab.matrixTitle": "Matrice de compatibilité",
+  "lab.verdictsTitle": "Enregistrements des verdicts",
+  "lab.filter.layer": "Couche de preuves",
+  "lab.filter.verdict": "Verdict",
+  "lab.filter.subject": "ID du sujet",
+  "lab.filter.all": "Tous",
+  "lab.col.subject": "Sujet",
+  "lab.col.layer": "Couche",
+  "lab.col.suite": "Suite",
+  "lab.col.verdict": "Verdict",
+  "lab.col.asOf": "Établi le",
+  "lab.col.protocol": "Conformité au protocole",
+  "lab.col.live": "Compatibilité du routage en conditions réelles",
+  "lab.col.task": "Efficacité des tâches",
+  "lab.empty": "La projection ne contient encore aucun verdict de compatibilité.",
+  "lab.subjectKind": "Type",
+  "lab.observationCount": "Observations",
+  "lab.eventCount": "Événements",
+  "lab.verdictCount": "Verdicts",
+  "lab.subjectCount": "Sujets",
+  "lab.builtAt": "Générée le",
+  "lab.loading": "Chargement des preuves de compatibilité…",
+  "lab.loadMore": "Charger plus",
+  "lab.detailTitle": "Détails du verdict",
+  "lab.detailClose": "Fermer",
+  "lab.detailSubject": "Sujet",
+  "lab.detailObservations": "Observations",
+  "lab.detailEvents": "Événements probants",
+  "lab.detailArtifacts": "Métadonnées des artefacts",
+  "lab.detailLoadFailed": "Impossible de charger les détails du verdict",
+  "lab.refresh": "Actualiser",
+  "lab.verdict.UNKNOWN": "Inconnu",
+  "lab.verdict.CLAIMED": "Déclaré",
+  "lab.verdict.PROBED": "Sondé",
+  "lab.verdict.VERIFIED": "Vérifié",
+  "lab.verdict.DEGRADED": "Dégradé",
+  "lab.verdict.BLOCKED": "Bloqué",
+  "lab.verdict.UNSUPPORTED": "Non pris en charge",
+  "lab.layer.protocol_conformance": "Conformité au protocole",
+  "lab.layer.live_route_compatibility": "Compatibilité du routage en conditions réelles",
+  "lab.layer.task_effectiveness": "Efficacité des tâches",
 };
 
 const ja: Record<LabCatalogKey, string> = {
@@ -412,6 +462,7 @@ const zhTW: Record<LabCatalogKey, string> = {
 export const LAB_CATALOG_OVERRIDES: Record<LabLocale, Record<LabCatalogKey, string>> = {
   en,
   de,
+  fr,
   ko,
   zh,
   "zh-TW": zhTW,
@@ -434,6 +485,13 @@ const supplements: Record<LabLocale, Record<LabSupplementKey, string>> = {
     "artifact.corrupt": "Beschädigt",
     "artifact.purged_unavailable": "Gelöscht / nicht verfügbar",
     selectVerdict: "Urteil für {subject} anzeigen",
+  },
+  fr: {
+    subjectKindUnknown: "Inconnu",
+    "artifact.present": "Présent",
+    "artifact.corrupt": "Corrompu",
+    "artifact.purged_unavailable": "Purgé / indisponible",
+    selectVerdict: "Afficher le verdict pour {subject}",
   },
   ko: {
     subjectKindUnknown: "알 수 없음",

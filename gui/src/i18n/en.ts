@@ -1,4 +1,4 @@
-// English — source of truth. Its keys define the TKey type; de/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
+// English — source of truth. Its keys define the TKey type; de/fr/ko/zh/zh-TW/ru/ja/tr must match (compile-checked).
 // Strings with {cmd} render a <code> chip via <Trans>; {var} are plain interpolations.
 /**
  * English i18n catalog — source of truth. Its keys define the compile-checked `TKey` set;

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { DICTS, type Locale } from "../src/i18n/catalogs";
 import { LAB_CATALOG_OVERRIDES, labSupplement } from "../src/i18n/lab-translations";
 
-const NON_ENGLISH: Locale[] = ["de", "ja", "ko", "ru", "tr", "zh"];
+const NON_ENGLISH: Locale[] = ["de", "fr", "ja", "ko", "ru", "tr", "zh"];
 
 test("Compatibility Lab catalog overrides cover the translated overlay namespace", () => {
   const englishKeys = Object.keys(DICTS.en)

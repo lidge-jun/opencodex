@@ -206,3 +206,47 @@ describe("zh-TW language switch on the real GUI surface", () => {
     expect(Object.getOwnPropertyDescriptor(smokeNavigator, "language")).toEqual(expectedSmokeLanguageDescriptor);
   });
 });
+
+describe("French language switch on the real GUI surface", () => {
+  test("switches to French, persists it, switches back, and restores globals", async () => {
+    const expectedDom = Object.fromEntries(domGlobals.map((k) => [k, previousDom[k]])) as typeof previousDom;
+    const originalNavigator = previousNavigator;
+    const expectedLanguageDescriptor = previousLanguageDescriptor;
+    const smokeNavigator = testWindow.navigator;
+    const expectedSmokeLanguageDescriptor = testWindowLanguageDescriptor;
+
+    await mountSurface();
+    expect(navLabels()).toContain("Dashboard");
+
+    await choose(["Français"]);
+
+    expect(navLabels()).toEqual([
+      "Tableau de bord",
+      "Fournisseurs",
+      "Modèles",
+      "Sous-agents",
+      "Utilisation",
+      "Stockage",
+      "Intégrations",
+    ]);
+    expect(localStorage.getItem("ocx-lang")).toBe("fr");
+    expect(testWindow.document.documentElement.lang).toBe("fr-FR");
+
+    await choose(["English"]);
+
+    expect(navLabels()).toContain("Dashboard");
+    expect(navLabels()).toContain("Providers");
+    expect(localStorage.getItem("ocx-lang")).toBe("en");
+    expect(testWindow.document.documentElement.lang).toBe("en");
+
+    await teardownDom();
+
+    for (const k of domGlobals) {
+      expect(Object.getOwnPropertyDescriptor(globalThis, k)).toEqual(expectedDom[k]);
+    }
+    if (originalNavigator) {
+      expect(Object.getOwnPropertyDescriptor(originalNavigator, "language")).toEqual(expectedLanguageDescriptor);
+    }
+    expect(Object.getOwnPropertyDescriptor(smokeNavigator, "language")).toEqual(expectedSmokeLanguageDescriptor);
+  });
+});

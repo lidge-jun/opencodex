@@ -61,7 +61,7 @@ test("Usage loading and empty states guard the workspace body", async () => {
 });
 
 test("usage workspace i18n keys exist in every locale", async () => {
-  const locales = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"] as const;
+  const locales = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW"] as const;
   for (const locale of locales) {
     const dict = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
     expect(dict).toContain('"usage.workspace.sections":');

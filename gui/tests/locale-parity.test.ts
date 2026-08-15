@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-const LOCALES = ["en", "de", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
+const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
@@ -170,6 +170,11 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, strin
     "DeepSeek Harness (DSH)",
     "DeepSeek Harness (DSH)",
     "OpenCodex manages only llm-pi-ai.providers.opencodex in $DSH_HOME/settings.yaml. DSH hot reloads this provider; your default model and deepseek-official stay unchanged. Currently loopback-only; no real credential is written.",
+  ],
+  fr: [
+    "DeepSeek Harness (DSH)",
+    "DeepSeek Harness (DSH)",
+    "OpenCodex gère uniquement llm-pi-ai.providers.opencodex dans $DSH_HOME/settings.yaml. DSH recharge ce fournisseur à chaud ; votre modèle par défaut et deepseek-official restent inchangés. Seule l’adresse de bouclage est actuellement prise en charge ; aucun identifiant réel n’est écrit.",
   ],
   de: [
     "DeepSeek Harness (DSH)",

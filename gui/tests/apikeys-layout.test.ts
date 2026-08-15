@@ -111,7 +111,7 @@ test("every locale has exactly the English api namespace", () => {
   // that had seventy-four. It passed while five locales were missing the same
   // key. Compare the loaded dictionaries instead: this catches missing AND
   // extra keys, in all six files, without searching source text.
-  const locales: Locale[] = ["en", "de", "ja", "ko", "ru", "zh", "zh-TW"];
+  const locales: Locale[] = ["en", "de", "fr", "ja", "ko", "ru", "zh", "zh-TW"];
   const englishApiKeys = Object.keys(DICTS.en).filter(key => key.startsWith("api.")).sort();
 
   // Activation guard: swapping the extraction back to a curated subset fails.
