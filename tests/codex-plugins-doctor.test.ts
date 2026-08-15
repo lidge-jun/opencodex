@@ -125,8 +125,32 @@ describe("diagnoseCodexBundledPlugins (direct, platform-injected)", () => {
       `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
     );
     try {
-      const result = diagnoseCodexBundledPlugins({ platform: "win32", configPath });
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
       expect(result.applicable).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 2_000);
+
+  test("malformed quoted values with long trailing whitespace are not parsed as bare values", () => {
+    const { dir, configPath } = makeConfig(
+      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${" ".repeat(20_000)}x\n`,
+    );
+    try {
+      const result = diagnoseCodexBundledPlugins({
+        platform: "win32",
+        configPath,
+        locateCurrent: () => null,
+      });
+      expect(result.applicable).toBe(true);
+      if (result.applicable) {
+        expect(result.marketplace.sourceType).toBe("local");
+        expect(result.marketplace.source).toBeNull();
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
