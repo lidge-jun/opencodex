@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { useAgentTaskRecovery } from "../src/pages/use-agent-task-recovery";
 
@@ -18,6 +18,14 @@ function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
 async function flush(): Promise<void> {
   await Promise.resolve();
   await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
+}
+
+type RecoveryState = ReturnType<typeof useAgentTaskRecovery>;
+
+function RecoveryProbe({ onChange }: { onChange(value: RecoveryState): void }) {
+  const recovery = useAgentTaskRecovery("http://proxy");
+  useEffect(() => { onChange(recovery); }, [onChange, recovery]);
+  return null;
 }
 
 beforeEach(() => {
@@ -51,18 +59,15 @@ test("a delayed initial read cannot overwrite a successful save", async () => {
     ? Response.json({ ok: true, enabled: true })
     : initialGet.promise) as typeof fetch;
 
-  let recovery: ReturnType<typeof useAgentTaskRecovery> | undefined;
-  function Probe() {
-    recovery = useAgentTaskRecovery("http://proxy");
-    return null;
-  }
+  let recovery: RecoveryState | undefined;
+  const publishRecovery = (value: RecoveryState) => { recovery = value; };
 
   const host = document.createElement("div");
   document.body.append(host);
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    root.render(<Probe />);
+    root.render(<RecoveryProbe onChange={publishRecovery} />);
   });
 
   await act(async () => {
@@ -87,18 +92,15 @@ test("overlapping saves issue only one recovery write", async () => {
     return pendingPut.promise;
   }) as typeof fetch;
 
-  let recovery: ReturnType<typeof useAgentTaskRecovery> | undefined;
-  function Probe() {
-    recovery = useAgentTaskRecovery("http://proxy");
-    return null;
-  }
+  let recovery: RecoveryState | undefined;
+  const publishRecovery = (value: RecoveryState) => { recovery = value; };
 
   const host = document.createElement("div");
   document.body.append(host);
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
-    root.render(<Probe />);
+    root.render(<RecoveryProbe onChange={publishRecovery} />);
     await flush();
   });
 
