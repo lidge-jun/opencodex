@@ -772,9 +772,15 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     }
   };
 
-  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+  /**
+   * Both v2 surface writes adopt the response directly instead of calling
+   * `loadV2()`. `loadV2` returns early while `v2BusyRef` is still held by the
+   * in-flight write, so the refetch was a no-op and the control kept its old
+   * value until the next 10s poll. That is visible here: "Keep ChatGPT on v1"
+   * only renders while the mode is v2, so a stale mode also delayed the row.
+   */
+  const putV2Setting = async (body: Record<string, unknown>) => {
     if (!v2 || v2BusyRef.current) return;
-    if (v2.multiAgentMode === mode) return;
     setV2Busy(true);
     v2BusyRef.current = true;
     setV2Note("");
@@ -783,14 +789,25 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
       const r = await fetch(`${apiBase}/api/v2`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ multiAgentMode: mode }),
+        body: JSON.stringify(body),
       });
       try {
         const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        void loadV2();
+        if (!data || typeof data.enabled !== "boolean") {
+          setOk(false);
+          setStatus(t("models.saveFailed"));
+          return;
+        }
+        setV2({
+          enabled: data.enabled,
+          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
+          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
+          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
+        });
         setOk(true);
         setStatus(t("models.v2Applied"));
-        setV2Note((data?.warnings ?? []).join(" "));
+        setV2Note((data.warnings ?? []).join(" "));
       } catch (e) {
         setOk(false);
         setStatus(e instanceof Error ? e.message : t("models.saveFailed"));
@@ -803,48 +820,14 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     }
   };
 
+  const setMultiAgentMode = async (mode: "v1" | "default" | "v2") => {
+    if (!v2 || v2.multiAgentMode === mode) return;
+    await putV2Setting({ multiAgentMode: mode });
+  };
+
   const setKeepNativeChatGptOnV1 = async (next: boolean) => {
-    if (!v2 || v2BusyRef.current) return;
-    if (v2.keepNativeChatGptOnV1 === next) return;
-    setV2Busy(true);
-    v2BusyRef.current = true;
-    setV2Note("");
-    setStatus("");
-    try {
-      const r = await fetch(`${apiBase}/api/v2`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keepNativeChatGptOnV1: next }),
-      });
-      try {
-        const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
-        if (!data || typeof data.enabled !== "boolean") {
-          throw new Error(t("models.saveFailed"));
-        }
-        setV2({
-          enabled: data.enabled,
-          agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
-          maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number"
-            ? data.maxConcurrentThreadsPerSession
-            : null,
-          multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2"
-            ? data.multiAgentMode
-            : "default",
-          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
-        });
-        setOk(true);
-        setStatus(t("models.v2Applied"));
-        setV2Note((data?.warnings ?? []).join(" "));
-      } catch (e) {
-        setOk(false);
-        setStatus(e instanceof Error ? e.message : t("models.saveFailed"));
-      }
-    } catch {
-      setOk(false); setStatus(t("models.networkError"));
-    } finally {
-      setV2Busy(false);
-      v2BusyRef.current = false;
-    }
+    if (!v2 || v2.keepNativeChatGptOnV1 === next) return;
+    await putV2Setting({ keepNativeChatGptOnV1: next });
   };
 
   const putV2Threads = async (value: number) => {

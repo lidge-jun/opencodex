@@ -51,3 +51,30 @@ test("the help affordance wraps only the info icon, never the switch", () => {
   expect(switchAt).toBeLessThan(tooltipAt);
   expect(row).toContain("models-v2-keep-native-info");
 });
+
+/**
+ * `loadV2()` returns early while `v2BusyRef` is held, so refetching from inside
+ * an in-flight write left the control showing its old value until the next 10s
+ * poll. The keep-native row only renders while the mode is v2, so a stale mode
+ * also delayed the row from appearing at all.
+ */
+test("v2 setting writes adopt the response instead of a no-op refetch", () => {
+  const helperAt = modelsSource.indexOf("const putV2Setting = async");
+  expect(helperAt).toBeGreaterThan(-1);
+
+  const helper = modelsSource.slice(helperAt, modelsSource.indexOf("const setMultiAgentMode"));
+  expect(helper).toContain("setV2({");
+  expect(helper).toContain("keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true");
+  expect(helper).not.toContain("void loadV2()");
+});
+
+test("both v2 surface setters route through the shared writer", () => {
+  const setters = modelsSource.slice(
+    modelsSource.indexOf("const setMultiAgentMode"),
+    modelsSource.indexOf("const putV2Threads"),
+  );
+
+  expect(setters).toContain("putV2Setting({ multiAgentMode: mode })");
+  expect(setters).toContain("putV2Setting({ keepNativeChatGptOnV1: next })");
+  expect(setters).not.toContain("void loadV2()");
+});
