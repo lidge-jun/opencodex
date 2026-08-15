@@ -187,6 +187,10 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
+  const [manualCode, setManualCode] = useState("");
+  const [manualCodeBusy, setManualCodeBusy] = useState(false);
+  const [manualCodeMsg, setManualCodeMsg] = useState("");
+  const [manualCodeOk, setManualCodeOk] = useState(true);
   const [importBusy, setImportBusy] = useState(false);
   const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
@@ -260,6 +264,25 @@ export default function ProviderAuthPanel({
       if (ok) { setNewKey(""); setAddingKey(false); }
     } finally {
       setKeyBusy(false);
+    }
+  };
+
+  const submitManualCode = async () => {
+    const input = manualCode.trim();
+    if (!input || manualCodeBusy || !authHandlers.onSubmitManualCode) return;
+    setManualCodeBusy(true);
+    setManualCodeMsg("");
+    try {
+      await authHandlers.onSubmitManualCode(item.name, input);
+      setManualCode("");
+      setManualCodeOk(true);
+      setManualCodeMsg(t("prov.pasteOk"));
+    } catch (error) {
+      setManualCodeOk(false);
+      const message = error instanceof Error && error.message.trim() ? error.message : t("prov.networkError");
+      setManualCodeMsg(t("prov.pasteFail", { error: message }));
+    } finally {
+      setManualCodeBusy(false);
     }
   };
 
@@ -400,6 +423,53 @@ export default function ProviderAuthPanel({
                     </div>
                   )}
                   <LoginUrlBlock url={hintForThis.url ?? ""} />
+                  {authHandlers.onSubmitManualCode && (
+                    <div className="pwi-auth-paste">
+                      <div className="muted text-label">
+                        {item.name === "command-code"
+                          ? t("prov.pasteCommandCodeHint")
+                          : t("prov.pasteRedirectHint")}
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                          type={item.name === "command-code" ? "password" : "text"}
+                          autoComplete="off"
+                          spellCheck={false}
+                          value={manualCode}
+                          onChange={e => { setManualCode(e.target.value); setManualCodeMsg(""); }}
+                          onKeyDown={e => {
+                            if (e.key === "Enter" && manualCode.trim()) {
+                              e.preventDefault();
+                              void submitManualCode();
+                            }
+                          }}
+                          placeholder={item.name === "command-code" ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          aria-label={item.name === "command-code" ? t("prov.pasteCommandCodePlaceholder") : t("prov.pasteRedirect")}
+                          disabled={manualCodeBusy}
+                          className="input text-label"
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          className="btn btn-ghost"
+                          type="button"
+                          disabled={manualCodeBusy || !manualCode.trim()}
+                          onClick={() => void submitManualCode()}
+                        >
+                          {manualCodeBusy ? t("prov.pasteSubmitting") : t("prov.pasteSubmit")}
+                        </button>
+                      </div>
+                      {manualCodeMsg && (
+                        <div
+                          role={manualCodeOk ? "status" : "alert"}
+                          aria-atomic="true"
+                          className="text-label"
+                          style={{ color: manualCodeOk ? "var(--accent-hover)" : "var(--amber)" }}
+                        >
+                          {manualCodeMsg}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {authHandlers.onCancelLogin && (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
                       {t("common.cancel")}

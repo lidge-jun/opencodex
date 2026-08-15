@@ -211,5 +211,24 @@ export function useProvidersOAuth({
     }
   };
 
-  return { cancelLoginOAuth, loginOAuth, logoutOAuth };
+  const submitManualCode = async (provider: string, input: string) => {
+    try {
+      const res = await fetch(`${apiBase}/api/oauth/login/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, input }),
+      });
+      if (!aliveRef.current) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || res.statusText);
+      }
+    } catch (error) {
+      if (aliveRef.current) {
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+    }
+  };
+
+  return { cancelLoginOAuth, loginOAuth, logoutOAuth, submitManualCode };
 }

@@ -403,6 +403,8 @@ export const en = {
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Paste redirect URL or code",
   "prov.pasteRedirectHint": "If the browser shows a localhost error, copy the full URL from its address bar and paste it here (or paste the authorization code).",
+  "prov.pasteCommandCodePlaceholder": "Paste Command Code API key or redirect URL",
+  "prov.pasteCommandCodeHint": "Paste a Command Code API key (user_… from ~/.commandcode/auth.json) to add it as another account, or the redirect URL from the browser.",
   "prov.pasteSubmit": "Submit",
   "prov.pasteSubmitting": "Submitting…",
   "prov.pasteOk": "Code submitted — finishing login…",

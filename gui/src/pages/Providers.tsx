@@ -212,7 +212,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, submitManualCode } = useProvidersOAuth({
     apiBase, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
@@ -366,6 +366,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             authHandlers={{
               onLogin: requestLoginOAuth,
               onCancelLogin: cancelLoginOAuth,
+              onSubmitManualCode: submitManualCode,
               onLogout: logoutOAuth,
               onReauth: (provider, accountId) => loginOAuth(provider, true, accountId),
               onSwitchAccount: switchAccount,
