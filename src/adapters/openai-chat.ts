@@ -696,23 +696,59 @@ function ensureRootObjectType(parameters: unknown): Record<string, unknown> {
   return { ...obj, type: "object" };
 }
 
+function isXaiObjectSchema(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringRequiredFields(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+/** Compose root siblings into a branch so properties/required are not overwritten. */
+function composeXaiObjectSchemas(
+  inherited: Record<string, unknown>,
+  branch: Record<string, unknown>,
+): Record<string, unknown> {
+  const composed: Record<string, unknown> = { ...inherited, ...branch };
+  const inheritedProps = isXaiObjectSchema(inherited.properties) ? inherited.properties : undefined;
+  const branchProps = isXaiObjectSchema(branch.properties) ? branch.properties : undefined;
+  if (inheritedProps || branchProps) {
+    const properties: Record<string, unknown> = { ...(inheritedProps ?? {}) };
+    for (const [name, value] of Object.entries(branchProps ?? {})) {
+      const inheritedValue = inheritedProps?.[name];
+      properties[name] = inheritedValue !== undefined && JSON.stringify(inheritedValue) !== JSON.stringify(value)
+        ? { allOf: [inheritedValue, value] }
+        : value;
+    }
+    composed.properties = properties;
+  }
+  const required = [...new Set([
+    ...stringRequiredFields(inherited.required),
+    ...stringRequiredFields(branch.required),
+  ])];
+  if (required.length > 0) composed.required = required;
+  else delete composed.required;
+  return composed;
+}
+
 function expandXaiRootObjectSchemas(schema: unknown): Record<string, unknown>[] | undefined {
-  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return undefined;
-  const obj = schema as Record<string, unknown>;
-  const compositionKey = ["oneOf", "anyOf"].find(key => Array.isArray(obj[key]));
+  if (!isXaiObjectSchema(schema)) return undefined;
+  const compositionKey = ["oneOf", "anyOf"].find(key => Array.isArray(schema[key]));
   if (!compositionKey) {
-    if (obj.type !== undefined && obj.type !== "object") return undefined;
-    return [{ ...obj, type: "object" }];
+    if (schema.type !== undefined && schema.type !== "object") return undefined;
+    return [{ ...schema, type: "object" }];
   }
 
-  const siblings = Object.fromEntries(Object.entries(obj).filter(([key]) => key !== compositionKey));
-  const branches = obj[compositionKey];
+  const siblings = Object.fromEntries(Object.entries(schema).filter(([key]) => key !== compositionKey));
+  const branches = schema[compositionKey];
   if (!Array.isArray(branches)) return undefined;
   const expanded: Record<string, unknown>[] = [];
   for (const branch of branches) {
     const variants = expandXaiRootObjectSchemas(branch);
     if (!variants) return undefined;
-    for (const variant of variants) expanded.push({ ...siblings, ...variant });
+    for (const variant of variants) expanded.push(composeXaiObjectSchemas(siblings, variant));
   }
   return expanded.length > 0 ? expanded : undefined;
 }
@@ -758,11 +794,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
     [...propertyValues].map(([name, values]) => [name, mergeXaiPropertySchemas(values)]),
   );
 
-  const requiredSets = variants.map(variant => new Set(
-    Array.isArray(variant.required)
-      ? variant.required.filter((item): item is string => typeof item === "string")
-      : [],
-  ));
+  const requiredSets = variants.map(variant => new Set(stringRequiredFields(variant.required)));
   const required = requiredSets.length === 0
     ? []
     : [...requiredSets[0]].filter(name => requiredSets.every(set => set.has(name)));

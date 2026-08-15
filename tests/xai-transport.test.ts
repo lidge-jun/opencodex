@@ -127,6 +127,34 @@ describe("xAI auth-mode transport selection", () => {
     expect((JSON.parse(otherRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
   });
 
+  test("preserves root properties and required across xAI union branches", () => {
+    const schema = {
+      type: "object",
+      properties: { token: { type: "string" } },
+      required: ["token"],
+      oneOf: [
+        { properties: { mode: { const: "path" }, path: { type: "string" } }, required: ["mode", "path"] },
+        { properties: { mode: { const: "url" }, url: { type: "string" } }, required: ["mode", "url"] },
+      ],
+    };
+    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
+    });
+    const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
+
+    expect(xaiParameters.type).toBe("object");
+    expect(xaiParameters.oneOf).toBeUndefined();
+    expect(xaiParameters.anyOf).toBeUndefined();
+    expect(xaiParameters.properties).toEqual({
+      token: { type: "string" },
+      mode: { anyOf: [{ const: "path" }, { const: "url" }] },
+      path: { type: "string" },
+      url: { type: "string" },
+    });
+    expect(xaiParameters.required).toEqual(["token", "mode"]);
+  });
+
   test("non-xAI providers preserve nested nullable and annotation schema content", () => {
     const schema = {
       type: "object",
