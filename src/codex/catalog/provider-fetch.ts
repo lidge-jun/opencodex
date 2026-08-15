@@ -1008,6 +1008,13 @@ export function catalogHintsFromModelsApiItem(providerName: string, item: Provid
       item.context_size,
       item.max_model_len,
       item.max_context_length,
+      // llama.cpp reports the served context under `meta`: `n_ctx` is what the
+      // server was actually started with, `n_ctx_train` the model's trained
+      // maximum. Prefer the served value — routing must not promise a window the
+      // running server will refuse. Both come LAST so no provider already
+      // supplying a recognized field changes behavior (#1797).
+      plainRecord(item.meta)?.n_ctx,
+      plainRecord(item.meta)?.n_ctx_train,
     );
   const maxInputTokens = positiveSafeInteger(limits?.max_input_tokens, item.max_input_tokens);
   // Some OpenAI-compatible catalogs expose the selectable ladder under
