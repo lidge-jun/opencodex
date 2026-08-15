@@ -73,9 +73,14 @@ const CATEGORY_ORDER = [
 
 const RELEASE_METADATA_COMMIT =
   /^(?:release|chore\(release\)):\s*v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\s*$/i;
+const RELEASE_VERSION = /^v?\d+\.\d+\.\d+(?:-([0-9A-Za-z.-]+))?$/;
 
 export function isReleaseMetadataCommit(subject: string): boolean {
   return RELEASE_METADATA_COMMIT.test(subject.trim());
+}
+
+export function isPrereleaseVersion(version: string): boolean {
+  return RELEASE_VERSION.exec(version.trim())?.[1] !== undefined;
 }
 
 export function categoryForTitle(title: string): string {
@@ -109,16 +114,17 @@ export function categoryForPull(pr: AssociatedPullRequest): string {
 /**
  * Select the release-note baseline from the full repository tag set.
  *
- * Preview: newest prior release of either channel, so previews stay incremental.
+ * Prerelease: newest prior release of either channel, so previews stay incremental.
  * Stable: newest prior stable only, so the final changelog always reconstructs
- * the complete stable-to-stable range and cannot lose preview changes.
+ * the complete stable-to-stable range and cannot lose prerelease changes.
  */
 export function selectReleaseBaseline(version: string, tags: string[]): string | null {
   const releaseTag = version.startsWith("v") ? version : `v${version}`;
+  const targetIsPrerelease = isPrereleaseVersion(version);
   const candidates = tags
     .map(tag => tag.trim())
     .filter(tag => /^v\d/.test(tag) && compareReleaseTags(tag, releaseTag) < 0)
-    .filter(tag => version.includes("-preview.") || !tag.includes("-preview."))
+    .filter(tag => targetIsPrerelease || !isPrereleaseVersion(tag))
     .sort(compareReleaseTags);
   return candidates.length > 0 ? candidates[candidates.length - 1]! : null;
 }
@@ -129,6 +135,10 @@ export function trailingLandingPr(subject: string): number | null {
   if (!match) return null;
   const value = Number(match[1]);
   return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+export function hasRenderedPullReference(body: string, number: number): boolean {
+  return new RegExp(`#${number}(?!\\d)`).test(body);
 }
 
 function hasSkipChangelog(pr: AssociatedPullRequest): boolean {
@@ -314,7 +324,7 @@ export function buildReleaseNotes(input: {
     if (covered.kind === "commit" && !body.includes(commit.sha.slice(0, 8))) {
       errors.push(`direct commit ${commit.sha.slice(0, 12)} is missing from rendered notes`);
     }
-    if (covered.kind === "pr" && !covered.ids.some(number => body.includes(`#${number}`))) {
+    if (covered.kind === "pr" && !covered.ids.some(number => hasRenderedPullReference(body, number))) {
       errors.push(
         `commit ${commit.sha.slice(0, 12)} is mapped to PR ${covered.ids.map(number => `#${number}`).join(", ")}, but none are rendered`,
       );
@@ -404,12 +414,14 @@ async function generateGitHubNotes(
   ]);
 }
 
-function parseGitLog(raw: string): Array<Omit<ReleaseCommit, "pulls">> {
+export function parseGitLog(raw: string): Array<Omit<ReleaseCommit, "pulls">> {
   const commits: Array<Omit<ReleaseCommit, "pulls">> = [];
   for (const record of raw.split("\x1e")) {
     if (!record.trim()) continue;
     const [sha, subject, ...bodyParts] = record.replace(/^\n+/, "").split("\x1f");
-    if (!sha || subject === undefined) continue;
+    if (!sha?.trim() || !subject?.trim()) {
+      throw new Error("git log produced a malformed release commit record");
+    }
     commits.push({
       sha: sha.trim(),
       subject: subject.trim(),
@@ -435,7 +447,7 @@ async function releaseCommits(
   return parseGitLog(raw);
 }
 
-function parseAssociatedPulls(data: unknown): AssociatedPullRequest[] {
+export function parseAssociatedPulls(data: unknown): AssociatedPullRequest[] {
   if (!Array.isArray(data)) throw new Error("commit PR lookup returned non-array JSON");
   const pulls: AssociatedPullRequest[] = [];
   for (const item of data) {
@@ -444,7 +456,7 @@ function parseAssociatedPulls(data: unknown): AssociatedPullRequest[] {
       number?: unknown;
       title?: unknown;
       merged_at?: unknown;
-      user?: { login?: unknown };
+      user?: { login?: unknown } | null;
       labels?: Array<{ name?: unknown }>;
     };
     if (typeof pr.number !== "number" || typeof pr.title !== "string") continue;
@@ -479,6 +491,16 @@ function parseFlags(rest: string[]): Map<string, string> {
   return flags;
 }
 
+async function readPackageName(): Promise<string> {
+  const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json() as {
+    name?: unknown;
+  };
+  if (typeof manifest.name !== "string" || manifest.name.trim().length === 0) {
+    throw new Error("package.json is missing a valid package name");
+  }
+  return manifest.name.trim();
+}
+
 async function main(argv: string[]): Promise<void> {
   const flags = parseFlags(argv);
   const version = flags.get("version");
@@ -499,7 +521,7 @@ async function main(argv: string[]): Promise<void> {
   const baseline = selectReleaseBaseline(version, tags);
   const releaseTag = version.startsWith("v") ? version : `v${version}`;
 
-  if (baseline && !version.includes("-preview.")) {
+  if (baseline && !isPrereleaseVersion(version)) {
     const ancestry = await runCommand(["git", "merge-base", "--is-ancestor", baseline, target]);
     if (ancestry.exitCode !== 0) {
       throw new Error(
@@ -568,8 +590,9 @@ async function main(argv: string[]): Promise<void> {
     commits.push({ ...commit, pulls: parseAssociatedPulls(data) });
   }
 
+  const packageName = await readPackageName();
   const npmMetadata =
-    `Published to npm as \`@bitkyc08/opencodex@${version}\` with dist-tag \`${distTag}\`.`;
+    `Published to npm as \`${packageName}@${version}\` with dist-tag \`${distTag}\`.`;
   const built = buildReleaseNotes({
     version,
     tags,
