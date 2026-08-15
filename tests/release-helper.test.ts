@@ -396,4 +396,24 @@ describe("release helper", () => {
     // And the launcher must still be the thing it reaches for.
     expect(withoutComments).toContain("commandInvocation");
   });
+
+  // #1753 review follow-up: build metadata on the channel tip is valid semver
+  // and compares by precedence only; an unparseable tip must fail CLOSED
+  // (Number() on a garbage core used to yield NaN and pass any candidate).
+  test("channel tip with build metadata compares by precedence, not NaN", () => {
+    const { result } = runRelease("2.19.4", { npmLatest: "2.19.3+build.1" });
+    expect(`${result.status}\n${result.stderr ?? ""}`.trim()).toBe("0");
+  });
+
+  test("channel tip equal after stripping build metadata does not move forward", () => {
+    const { result } = runRelease("2.19.3", { npmLatest: "2.19.3+build.1" });
+    expect(result.status).toBe(1);
+    expect(result.stderr ?? "").toContain("does not move");
+  });
+
+  test("unparseable channel tip fails closed", () => {
+    const { result } = runRelease("2.19.4", { npmLatest: "not-a-version" });
+    expect(result.status).toBe(1);
+    expect(result.stderr ?? "").toContain("cannot compare release versions");
+  });
 });

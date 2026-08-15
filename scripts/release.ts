@@ -157,10 +157,15 @@ async function githubReleaseExists(tagName: string): Promise<boolean> {
 /** Order two semver strings per the semver.org rules (numeric identifiers numerically,
  * numeric < alphanumeric prerelease, prerelease < release). Returns negative/0/positive. */
 export function compareReleaseVersions(left: string, right: string): number {
+  // SemVer 2.0.0: build metadata (+...) is valid and ignored for precedence, but
+  // anything else unparseable must fail CLOSED. Number() on a garbage core used to
+  // yield NaN, and NaN comparisons made the forward guard pass any candidate.
+  const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
   const parse = (value: string) => {
-    const [main, ...preParts] = value.split("-");
-    const nums = (main ?? "").split(".").map(part => Number(part));
-    return { nums, pre: preParts.length ? preParts.join("-").split(".") : null };
+    const match = SEMVER.exec(value.trim());
+    if (!match) throw new Error(`unparseable release version: ${JSON.stringify(value)}`);
+    const nums = [Number(match[1]), Number(match[2]), Number(match[3])];
+    return { nums, pre: match[4] ? match[4].split(".") : null };
   };
   const a = parse(left);
   const b = parse(right);
@@ -206,7 +211,14 @@ async function assertChannelVersionMovesForward(packageName: string, version: st
   }
   const current = distTags[channel];
   if (!current) return; // channel not published yet — nothing to regress
-  if (compareReleaseVersions(version, current) <= 0) {
+  let forward: number;
+  try {
+    forward = compareReleaseVersions(version, current);
+  } catch (err) {
+    console.error(`✗ cannot compare release versions (candidate ${version}, channel tip ${JSON.stringify(current)}): ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  if (forward <= 0) {
     console.error(`✗ release version ${version} does not move the '${channel}' channel forward (current: ${current}).`);
     console.error("Reconcile the version line first: dev's package.json may trail the latest release; pick a version strictly newer than the channel tip.");
     process.exit(1);
