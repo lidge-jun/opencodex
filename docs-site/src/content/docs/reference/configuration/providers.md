@@ -319,7 +319,7 @@ selection on every request. They remain available when live discovery omits `def
 
 Native Cursor vision uses `SelectedImage` (JPEG soft-cap + `blobIdWithData`) for models that can
 see images natively — Claude, Gemini, GPT, Kimi, and Grok among them — using active-turn `data:`
-images only. Auto, the Composer family, and GLM (`glm-5.2`) stay on the curated `noVisionModels`
+images only. Auto, the Composer family, and GLM (`glm-5.2`, `glm-5.3`) stay on the curated `noVisionModels`
 list and use the vision describe sidecar instead.
 
 Cursor server-driven local tools are disabled by default. Codex continues using its own tools such as
