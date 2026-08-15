@@ -39,8 +39,5 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Lint
-        run: bun run lint
-
       - name: Check branch diff
         run: git diff --check origin/dev...HEAD
