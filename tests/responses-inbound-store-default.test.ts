@@ -2,18 +2,20 @@
  * Generic Responses-API clients (AI-SDK apps such as ZCode) omit `store`, but the
  * canonical forward Codex backend rejects a native request without an explicit
  * store:false ("Store must be set to false"). The default is applied only after
- * routing settles and only for authMode "forward" + openai-responses providers:
- * stateful key-auth Responses upstreams (the official OpenAI API, gateways)
- * intentionally keep the omitted-store server-side default so a later turn can
- * continue through an unexpanded previous_response_id. These tests pin the scoped
- * default (forward positive cases), the key-auth negative, and explicit-value
- * survival on both sides.
+ * routing settles and only on the canonical Codex forward backend
+ * (isCanonicalOpenAiForwardProvider: adapter + forward auth + the canonical base
+ * URL). Every other Responses upstream — key-auth providers and custom forward
+ * gateways alike — intentionally keeps the omitted-store server-side default so a
+ * later turn can continue through an unexpanded previous_response_id. These tests
+ * pin the scoped default (forward positive cases), the key-auth and custom-gateway
+ * negatives, and explicit-value survival on both sides.
  *
  * End-to-end cases assert the captured upstream request body — the externally
  * observable payload. Pattern mirrors tests/responses-compaction-routing.test.ts
  * and tests/github-copilot-wire-defaults.test.ts.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { CODEX_FORWARD_BASE_URL } from "../src/providers/openai-tiers";
 import { handleResponses } from "../src/server/responses";
 import type { OcxConfig, OcxProviderConfig } from "../src/types";
 
@@ -23,7 +25,7 @@ function providerConfig(overrides: Partial<OcxProviderConfig> = {}): OcxConfig {
     providers: {
       gw: {
         adapter: "openai-responses",
-        baseUrl: "https://gateway.example/v1",
+        baseUrl: CODEX_FORWARD_BASE_URL,
         authMode: "key",
         apiKey: "test-key",
         ...overrides,
@@ -87,6 +89,15 @@ describe("/v1/responses defaults store:false only for the canonical forward Code
 
   test("key-auth route: omitted store is NOT injected (stateful upstream keeps its default)", async () => {
     const { body } = await drive(providerConfig(), undefined);
+    expect(body).not.toBeNull();
+    expect(!("store" in (body as Record<string, unknown>))).toBe(true);
+  });
+
+  test("custom forward gateway: omitted store is NOT injected (non-canonical base URL keeps its default)", async () => {
+    const { body } = await drive(
+      providerConfig({ authMode: "forward", baseUrl: "https://gateway.example/v1" }),
+      undefined,
+    );
     expect(body).not.toBeNull();
     expect(!("store" in (body as Record<string, unknown>))).toBe(true);
   });
