@@ -172,8 +172,8 @@ The fourth test is the honest part: it encodes what this phase does NOT fix.
 3. Issue #1797 is filed and linked before this phase closes (verified with
    `gh issue view 1797`). A deferral with no tracking issue is not a
    deferral, it is a silent drop.
-3. `bun x tsc --noEmit` clean.
-4. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
+4. `bun x tsc --noEmit` clean.
+5. `bun run test` green on lidge at the pushed head — `provider-fetch.ts` is a
    shared surface touched by many catalog suites.
 
 ## Verifier commands (PLAN-VERIFIER-REAL-01)

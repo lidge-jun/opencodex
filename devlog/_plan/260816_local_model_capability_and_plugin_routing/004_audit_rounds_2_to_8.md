@@ -1,6 +1,6 @@
-# 004 — Audit rounds 2-6: verdict ledger
+# 004 — Audit rounds 2-8: verdict ledger
 
-Six audit rounds ran against this plan. `003_audit_synthesis_round1.md` covers
+Eight audit rounds ran against this plan. `003_audit_synthesis_round1.md` covers
 round 1 in detail; this file records the rest and the mechanical caveat about
 how the verdicts were captured.
 
@@ -15,7 +15,7 @@ how the verdicts were captured.
 | 5 | explorer B | FAIL, 2 High | Antigravity synthesizer found; remote steps not fail-closed |
 | 6 | explorer B | NEAR-PASS, 1 Medium + 1 Low | Step self-containment; scope boundary |
 
-Every finding across all six rounds was ACCEPTED and folded. None were rebutted.
+Every finding across all eight rounds was ACCEPTED and folded. None were rebutted.
 
 ## What the audit actually prevented
 

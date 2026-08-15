@@ -13,7 +13,7 @@ Node script before declaring the tooling unavailable.
 
 Nothing in `src/` participates. The failure is host-side tool routing:
 
-```
+```console
 $ node -e "import('.../chrome/scripts/browser-client.mjs').then(m => m.setupBrowserRuntime())"
 RUNTIME FAIL: Browser use requires privileged node_repl capabilities
 ```

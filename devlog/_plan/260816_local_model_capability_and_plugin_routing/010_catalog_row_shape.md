@@ -69,14 +69,12 @@ Existing shape (unchanged):
       entry.input_modalities = model.inputModalities;
     }
 
-Added at the end of the function:
+Added at the end of the function — **SUPERSEDED, kept for provenance of the
+design's evolution.** This first form stamped only `CatalogModel` fields, with no
+combo guard, no generated-metadata fallback, and no context cap. Audit rounds 4,
+5 and 7 each proved it insufficient. The single authoritative algorithm is
+"Final stamp algorithm" below; do not implement from this snippet.
 
-    // Routing evidence provenance. ensureStrictCatalogFields() later fills
-    // context_window/input_modalities with compatibility defaults for Codex's
-    // strict parser, so their presence cannot distinguish a real provider
-    // assertion from a synthesized placeholder. These keys record only what a
-    // CatalogModel actually asserted; src/routing/capability.ts reads them and
-    // nothing else, which is what keeps "unknown is not zero" true.
     const provenance: Record<string, unknown> = { provider: model.provider, model_id: model.id };
     if (typeof model.contextWindow === "number" && model.contextWindow > 0) {
       provenance.context_window = model.contextWindow;
@@ -84,10 +82,45 @@ Added at the end of the function:
     if (Array.isArray(model.inputModalities) && model.inputModalities.length > 0) {
       provenance.input_modalities = model.inputModalities;
     }
-    if (Array.isArray(model.capabilities) && model.capabilities.length > 0) {
-      provenance.capabilities = model.capabilities;
-    }
     entry.opencodex_capability_provenance = provenance;
+
+### Final stamp algorithm (authoritative — this is what shipped)
+
+One algorithm, covering all three audit corrections: skip synthesized combo rows
+(round 5), read both real evidence sources (round 7), and apply the context cap
+(round 8). Verbatim from `src/codex/catalog/effort.ts`:
+
+    function stampCapabilityProvenance(entry: RawEntry, model: CatalogModel): void {
+      // Virtual combo rows are synthesized from last-resort defaults (a generic
+      // 128k context and a ["text"] modality), so their values are placeholders
+      // rather than assertions. Stamping them would reintroduce the exact
+      // false-evidence defect this block exists to prevent.
+      if (model.provider === COMBO_NAMESPACE) return;
+
+      const meta = generatedModelMetadata(model.provider, model.id);
+      const metaContext = typeof meta?.contextWindow === "number" && meta.contextWindow > 0
+        // The generated context is capped before it reaches the entry, so
+        // provenance must apply the same cap or routing would advertise a
+        // window the cap refused.
+        ? applyProviderContextCap(meta.contextWindow, model.contextCap) ?? meta.contextWindow
+        : undefined;
+      const contextWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
+        ? model.contextWindow
+        : metaContext;
+      const inputModalities = Array.isArray(model.inputModalities) && model.inputModalities.length > 0
+        ? model.inputModalities
+        : (Array.isArray(meta?.input) && meta.input.length > 0 ? meta.input : undefined);
+
+      entry.opencodex_capability_provenance = {
+        provider: model.provider,
+        model_id: model.id,
+        ...(contextWindow !== undefined ? { context_window: contextWindow } : {}),
+        ...(inputModalities !== undefined ? { input_modalities: [...inputModalities] } : {}),
+        ...(Array.isArray(model.capabilities) && model.capabilities.length > 0
+          ? { capabilities: [...model.capabilities] }
+          : {}),
+      };
+    }
 
 `provider`/`model_id` are always stamped: they are the exact-identity match
 that closes the slug-collision hole (B4).

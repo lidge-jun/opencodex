@@ -75,3 +75,35 @@ Regression coverage: `tests/startup-prompt.test.ts`,
 If a future action spends the user's identity, credits, or reputation, gate it
 the same way rather than relying on a prompt an agent can answer, and document
 it here.
+
+## Browser and Computer Use plugins: entry point
+
+This is not a consent boundary — it is a routing fact that costs agents real
+time when they do not know it, and it belongs here because it applies to an
+agent *operating* opencodex rather than changing it.
+
+The Chrome, Browser, and Computer Use plugins run **only** through the
+privileged Node REPL tool (`mcp__node_repl__js`). Call it directly. If it is not
+in the current tool set, search available tools for `node_repl js` before
+concluding anything is unavailable.
+
+These do not work and are not worth attempting:
+
+- `node` / `node -e` importing the plugin's `scripts/browser-client.mjs`. It
+  refuses with `Browser use requires privileged node_repl capabilities` — the
+  bundle reads `globalThis.nodeRepl` and ships its own `process` shim, both
+  injected by the privileged REPL host and by nothing else.
+- Filesystem searches for `@oai/sky`. Computer Use injects it at runtime; there
+  is no package on disk, so `find` and `mdfind` can only ever come back empty.
+- `osascript` / AppleScript / JXA as a substitute for the plugin API.
+
+A failed shell attempt is evidence about the shell, not about plugin
+availability.
+
+Smaller local models misroute here for a specific reason worth naming: the
+bundled Chrome skill asks an agent not to *mention* the REPL tool in
+user-facing prose while simultaneously requiring it to *use* that tool. Both
+hold at once. The naming restriction governs what you say to the user; it never
+means the tool is off-limits. A model that resolves the tension by avoiding the
+tool will exhaust every shell path and then report the plugins as unavailable,
+which is what prompted writing this down.

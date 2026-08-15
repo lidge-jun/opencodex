@@ -19,7 +19,7 @@ The tooling was available the whole time.
 expects a privileged host. Importing it from an ordinary Node process
 resolves its exports and then refuses at runtime:
 
-```
+```console
 $ node -e "import('.../scripts/browser-client.mjs').then(m => m.setupBrowserRuntime())"
 RUNTIME FAIL: Browser use requires privileged node_repl capabilities
 ```

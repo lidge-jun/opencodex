@@ -14,7 +14,22 @@ and opened as PR #1799 against `dev`.
 | `meta.n_ctx` / `n_ctx_train` as context sources | `src/codex/catalog/provider-fetch.ts` | cc3512ed0 |
 | 10 regressions | `tests/routing-capability-catalog.test.ts` | c435340bb |
 | 4 regressions | `tests/catalog-llamacpp-capabilities.test.ts` | cc3512ed0 |
-| Plugin routing guidance | `~/.codex/AGENTS.md` (host, untracked) | n/a |
+| Plugin routing guidance | `AGENTS_INSTALL.md` | (this commit) |
+
+### Where the plugin guidance lives (review correction)
+
+The first draft of this record listed `~/.codex/AGENTS.md` as a shipped
+change. That was wrong on its own terms: the file is untracked host state, so
+it is not part of the PR and cannot be reproduced from a clone. CodeRabbit
+caught it, and the fix is the honest one — the guidance now lives in the
+tracked `AGENTS_INSTALL.md`, which is precisely the file an agent installing
+or operating opencodex reads.
+
+The host file remains as a local convenience and is recorded here as
+host-only verification, not as a deliverable. The live check
+(`codex debug prompt-input | rg mcp__node_repl__js`, exit 0) proved the
+guidance reaches a model through the host path; the tracked copy is what
+makes it reproducible for everyone else.
 
 ## Activation grounding (C-ACTIVATION-GROUNDING-01)
 
