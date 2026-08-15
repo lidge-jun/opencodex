@@ -13,7 +13,7 @@ const KNOWN_ERRNO =
 
 const STRONG_FAILURE_RE = new RegExp([
   "\\bdid not complete\\b",
-  "\\bfailed?\\b",
+  "\\bfail(?:s|ed)?\\b",
   "\\bfailure\\b",
   "\\berror\\b",
   "\\bexception\\b",
@@ -88,9 +88,12 @@ function extractStrongFailureSignatures(issue) {
  * 2. both live issue bodies contain an exact strong failure signature.
  *
  * Exact line equality is deliberate. Semantic similarity remains advisory.
+ * When several nominated issues qualify, prefer the strongest exact evidence
+ * globally, not whichever candidate the AI happened to list first.
  */
 function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNumbers }) {
-  const allowed = new Set((Array.isArray(duplicateNumbers) ? duplicateNumbers : []).map(String));
+  const nominated = Array.isArray(duplicateNumbers) ? duplicateNumbers.map(String) : [];
+  const allowed = new Set(nominated);
   if (!allowed.size) return null;
 
   const currentSignatures = new Set(extractStrongFailureSignatures(currentIssue));
@@ -102,21 +105,24 @@ function selectStrongDuplicateMatch({ currentIssue, candidateIssues, duplicateNu
       .filter(([number]) => /^\d+$/.test(number)),
   );
 
-  for (const rawNumber of duplicateNumbers) {
-    const number = String(rawNumber);
-    if (!allowed.has(number)) continue;
+  const matches = [];
+  for (const number of allowed) {
     const candidate = candidatesByNumber.get(number);
     if (!candidate) continue;
 
-    const shared = extractStrongFailureSignatures(candidate)
-      .filter((signature) => currentSignatures.has(signature))
-      .sort((a, b) => b.length - a.length || a.localeCompare(b));
-    if (!shared.length) continue;
-
-    return { number, signature: shared[0] };
+    for (const signature of extractStrongFailureSignatures(candidate)) {
+      if (!currentSignatures.has(signature)) continue;
+      matches.push({ number, signature });
+    }
   }
 
-  return null;
+  matches.sort((a, b) =>
+    b.signature.length - a.signature.length ||
+    a.signature.localeCompare(b.signature) ||
+    Number(a.number) - Number(b.number),
+  );
+
+  return matches[0] || null;
 }
 
 module.exports = {
