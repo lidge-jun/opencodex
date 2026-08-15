@@ -699,89 +699,56 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toContain("main releases must use a stable semver version");
     expect(workflow).toContain("preview releases must use a preview prerelease version");
 
-    // Release notes must be OpenAI-Codex-style: PR categories with grouped summary
-    // bullets plus a full PR changelog (no raw commit dump). Preflight forbids an
-    // existing release, so only create (not edit) is wired. Stable releases also
-    // carry matching preview notes.
-    expect(workflow).toContain("releases/generate-notes");
-    expect(workflow).not.toContain("git log --pretty=format");
-    expect(workflow).toContain('previous_tag_name=${notes_range_start}');
-    expect(workflow).toContain("skipping generate-notes (minimal notes)");
-    expect(workflow).toContain("bun scripts/release-notes.ts strip-carried");
-    expect(workflow).toContain("bun scripts/release-notes.ts render");
-    expect(workflow).not.toContain("bun scripts/release-notes.ts assemble");
-    expect(workflow).not.toContain("--commits");
-    expect(workflow).not.toContain("commits_file");
-    expect(workflow).toContain("bun scripts/release-notes.ts matching-preview-tags");
-    expect(workflow).toContain("bun scripts/release-notes.ts previous-release-tag");
-    expect(workflow).toContain("bun scripts/release-notes.ts has-meaningful");
-    expect(workflow).toContain("bun scripts/release-notes.ts join-carried");
-    expect(workflow).toContain("bun scripts/release-notes.ts credit-takeovers");
-    expect(workflow).toContain('if [ -s "$carried_file" ]; then');
-    expect(workflow).toContain('if [ -s "$delta_file" ]; then');
-    // Preview notes must baseline any prior release (stable or preview), not preview-only.
-    expect(workflow).toContain('bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"');
-    expect(workflow).not.toMatch(
-      /RELEASE_VERSION" == \*-preview\.\*[\s\S]{0,200}grep -- '-preview\\.'/,
-    );
-    expect(workflow).toContain("releases/tags/");
-    expect(workflow).toContain('gh api "repos/${GITHUB_REPOSITORY}" --jq \'.full_name\'');
-    expect(workflow).toContain("git merge-base --is-ancestor");
-    expect(workflow).toContain("operational error, not a missing release");
-    expect(workflow).toContain("not an ancestor");
-    expect(workflow).toContain("newest_carried_preview_tag");
-    expect(workflow).not.toMatch(/newest_preview_tag="\$preview_carry_tag"/);
-    expect(workflow).toContain('--carried "$carried_file"');
-    expect(workflow).toContain('--delta "$delta_file"');
-    expect(workflow).toContain('git tag --list "v${RELEASE_VERSION}-preview.*"');
-    expect(workflow).toContain("Carrying preview release notes from");
-    // Every subcommand the workflow invokes must be dispatched by the CLI.
-    const releaseNotesHelper = await readText("scripts/release-notes.ts");
-    const invoked = [...workflow.matchAll(/bun scripts\/release-notes\.ts ([a-z-]+)/g)]
-      .map(m => m[1]!);
-    expect(invoked.length).toBeGreaterThan(0);
-    for (const cmd of new Set(invoked)) {
-      expect(releaseNotesHelper).toContain(`"${cmd}"`);
-    }
+    // Release notes are built and coverage-validated before npm publish. The
+    // builder owns Git-history/PR coverage; the workflow only wires the validated
+    // artifact into the release. Stable/preview range semantics are unit-tested in
+    // build-release-changelog.test.ts rather than duplicated as YAML string pins.
+    const notesBuildIndex = workflow.indexOf("- name: Build and validate release changelog");
+    const publishIndex = workflow.indexOf("- name: Publish (or dry-run)");
+    expect(notesBuildIndex).toBeGreaterThan(-1);
+    expect(publishIndex).toBeGreaterThan(notesBuildIndex);
+    expect(workflow).toContain("bun scripts/build-release-changelog.ts");
+    expect(workflow).toContain('--version "$RELEASE_VERSION"');
+    expect(workflow).toContain('--dist-tag "$NPM_DIST_TAG"');
+    expect(workflow).toContain('--repository "$GITHUB_REPOSITORY"');
+    expect(workflow).toContain('--target "$GITHUB_SHA"');
+    expect(workflow).toContain('--out "$notes_file"');
+    expect(workflow).toContain('test -s "$notes_file"');
+    expect(workflow).not.toContain("bun scripts/release-notes.ts matching-preview-tags");
+    expect(workflow).not.toContain("newest_carried_preview_tag");
+    expect(workflow).not.toContain("carried_file");
+    expect(workflow).not.toContain("delta_file");
+    expect(workflow).not.toContain("notes_range_start");
+
+    const releaseNotesBuilder = await readText("scripts/build-release-changelog.ts");
+    expect(releaseNotesBuilder).toContain("releases/generate-notes");
+    expect(releaseNotesBuilder).toContain('"git",');
+    expect(releaseNotesBuilder).toContain('"log",');
+    expect(releaseNotesBuilder).toContain("selectReleaseBaseline");
+    expect(releaseNotesBuilder).toContain("skip-changelog");
+    expect(releaseNotesBuilder).toContain("release changelog failed coverage validation");
+
     expect(workflow).toMatch(/gh release create[\s\S]*?--notes-file "\$notes_file"/);
     expect(workflow).not.toContain("gh release edit");
     expect(workflow).not.toContain("--generate-notes");
-    // Notes must be assembled before tagging so a notes API failure does not leave
-    // a remote tag that blocks release retries at preflight.
-    const createStep = workflow.split("- name: Create GitHub release")[1]!.split(/\n {6}- name:/)[0]!;
-    // Preview carry lookup must use tag-specific API status, not `gh release view` stderr prose.
-    expect(createStep).toContain("releases/tags/");
-    expect(createStep).not.toContain("gh release view");
-    // Fail closed: no soft-skip in any spelling around gh api calls in this step.
-    for (const line of createStep.split("\n").filter(l => l.includes("gh api"))) {
-      expect(line).not.toMatch(/\|\|\s*(true|echo|:)/);
-    }
-    expect(createStep).not.toContain("set +e\n            pr_notes");
-    expect(createStep.indexOf("gh api")).toBeGreaterThan(-1);
-    expect(createStep.indexOf('git tag "$release_tag"')).toBeGreaterThan(-1);
-    expect(createStep.indexOf("gh api")).toBeLessThan(createStep.indexOf('git tag "$release_tag"'));
-    // The notes baseline must read the FULL tag set, not `--merged HEAD`: stable
-    // tags live on main's lineage, which the preview branch does not carry, and a
-    // trailing same-core preview must not hide the stable from the range
-    // (v2.9.1-preview → v2.10.0-preview is wrong; the range must start at v2.9.1).
-    expect(createStep).toContain("git tag --list 'v[0-9]*' |");
-    expect(createStep).not.toContain("--merged HEAD");
+
+    const createStep = workflow
+      .split("- name: Create GitHub release")[1]!
+      .split(/\n {6}- name:/)[0]!;
+    expect(createStep).toContain('notes_file="$GITHUB_WORKSPACE/.release-notes.md"');
+    expect(createStep).toContain('test -s "$notes_file"');
+    expect(createStep).not.toContain("generate-notes");
+    expect(createStep).not.toContain("gh api");
+    expect(createStep.indexOf('test -s "$notes_file"')).toBeLessThan(
+      createStep.indexOf('git tag "$release_tag"'),
+    );
+
     // The merged-only restriction remains on the service gate, whose
     // changed-files comparison is deliberately lineage-relative.
     const ciGateStep = workflow
       .split("- name: Require successful Cross-platform CI for this commit")[1]!
       .split(/\n {6}- name:/)[0]!;
     expect(ciGateStep).toContain("--merged HEAD");
-    // First-channel releases must not call generate-notes without an explicit baseline
-    // (GitHub would otherwise pick the newest repo tag, possibly from the other channel).
-    // Scope to the single if-block that owns generate-notes; createStep has two
-    // `[ -n "$notes_range_start" ]` blocks, so an unanchored [\s\S]* can straddle them.
-    const notesBlock = createStep
-      .split(/if \[ -n "\$notes_range_start" \]; then/)[1]!
-      .split(/\n {10}if \[/)[0]!;
-    expect(notesBlock).toContain("previous_tag_name=${notes_range_start}");
-    expect(notesBlock).toContain("skipping generate-notes");
-    expect(notesBlock).toMatch(/\n {10}else\n/);
   });
 
   /**

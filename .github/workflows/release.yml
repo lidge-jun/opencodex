@@ -294,6 +294,25 @@ jobs:
             fi
           fi
 
+      - name: Build and validate release changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          notes_file="$GITHUB_WORKSPACE/.release-notes.md"
+          bun scripts/build-release-changelog.ts \
+            --version "$RELEASE_VERSION" \
+            --dist-tag "$NPM_DIST_TAG" \
+            --repository "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --out "$notes_file"
+          test -s "$notes_file" || {
+            echo "::error::release changelog builder produced an empty notes file"
+            exit 1
+          }
+
       - name: Publish (or dry-run)
         env:
           DRY_RUN: ${{ inputs.dry-run }}
@@ -332,11 +351,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-          NPM_DIST_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
 
           release_tag="v${RELEASE_VERSION}"
+          notes_file="$GITHUB_WORKSPACE/.release-notes.md"
+          test -s "$notes_file" || {
+            echo "::error::validated release notes are missing; refusing to tag or create a release"
+            exit 1
+          }
 
           git fetch --force --tags origin
 
@@ -346,147 +369,10 @@ jobs:
             exit 1
           fi
 
-          # Channel previous tag for Full Changelog + default notes baseline.
-          # Preview baselines any prior release; stable baselines prior stable only.
-          # Read the FULL tag set: stable tags live on main's lineage, which the
-          # preview branch does not carry, and a trailing same-core preview
-          # (vX.Y.Z-preview.* shipped after vX.Y.Z) must not hide the stable from
-          # the compare range. The helper's semver ordering already ranks the
-          # stable above its own trailing preview, so the full tag list yields
-          # v2.9.1 → v2.10.0-preview instead of v2.9.1-preview → v2.10.0-preview.
-          previous_tag="$(
-            git tag --list 'v[0-9]*' |
-              bun scripts/release-notes.ts previous-release-tag "$RELEASE_VERSION"
-          )"
-          npm_metadata="Published to npm as \`@bitkyc08/opencodex@${RELEASE_VERSION}\` with dist-tag \`${NPM_DIST_TAG}\`."
-
-          # Preview builds must be marked prerelease so GitHub "latest" keeps pointing at the
-          # stable channel (matching npm dist-tags); see issue #64.
           prerelease_flag=""
           if [[ "$RELEASE_VERSION" == *-preview.* ]]; then
             prerelease_flag="--prerelease"
           fi
-
-          # Build notes before tagging: if generate-notes fails after a tag push, preflight
-          # blocks retries because the tag already exists. API uses target_commitish, so the
-          # tag need not exist yet. Preflight already rejects an existing GitHub Release for
-          # non-dry runs, so this step only creates.
-          notes_file="$(mktemp)"
-          carried_file="$(mktemp)"
-          delta_file="$(mktemp)"
-          : > "$carried_file"
-          : > "$delta_file"
-
-          # Stable releases after matching previews: aggregate every matching preview
-          # changelog (oldest→newest; each preview body is incremental), then only
-          # generate-notes / commits for the post-preview delta when the newest
-          # *successfully carried* preview tag is an ancestor of this commit. Never
-          # advance the baseline to a later preview that is missing/empty — that would
-          # drop the gap between the last carried preview and that later tag.
-          notes_range_start="$previous_tag"
-          if [[ "$RELEASE_VERSION" != *-preview.* ]]; then
-            preview_carry_tags="$(
-              git tag --list "v${RELEASE_VERSION}-preview.*" |
-                bun scripts/release-notes.ts matching-preview-tags "$RELEASE_VERSION"
-            )"
-            newest_carried_preview_tag=""
-            carried_part_files=()
-            # Probe repo readability once so a token/permission 404 cannot be
-            # mistaken for "this preview tag has no release".
-            gh api "repos/${GITHUB_REPOSITORY}" --jq '.full_name' > /dev/null
-            view_err="$(mktemp)"
-            while IFS= read -r preview_carry_tag; do
-              [ -n "$preview_carry_tag" ] || continue
-              : > "$view_err"
-              set +e
-              # Prefer HTTP status over stderr prose: auth failures also say "Not Found".
-              gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${preview_carry_tag}" \
-                --jq '.body' > "${carried_file}.raw" 2>"$view_err"
-              view_status=$?
-              set -e
-              if [ "$view_status" -eq 0 ]; then
-                bun scripts/release-notes.ts strip-carried "${carried_file}.raw" > "${carried_file}.one"
-                if bun scripts/release-notes.ts has-meaningful "${carried_file}.one"; then
-                  part_file="${carried_file}.part.${#carried_part_files[@]}"
-                  cp "${carried_file}.one" "$part_file"
-                  carried_part_files+=("$part_file")
-                  newest_carried_preview_tag="$preview_carry_tag"
-                  echo "::notice::Carrying preview release notes from ${preview_carry_tag} into ${release_tag}"
-                else
-                  echo "::notice::Preview release ${preview_carry_tag} has no usable changelog after strip; leaving carried baseline unchanged for this tag"
-                fi
-              elif grep -qE 'HTTP 404' "$view_err"; then
-                echo "::notice::Matching preview tag ${preview_carry_tag} has no GitHub Release; skipping"
-              else
-                echo "::error::Failed to look up GitHub Release for ${preview_carry_tag} (operational error, not a missing release)"
-                cat "$view_err" >&2 || true
-                exit 1
-              fi
-            done <<< "$preview_carry_tags"
-
-            if [ "${#carried_part_files[@]}" -gt 0 ]; then
-              bun scripts/release-notes.ts join-carried --out "$carried_file" "${carried_part_files[@]}"
-            fi
-
-            if [ -n "$newest_carried_preview_tag" ]; then
-              if git merge-base --is-ancestor "$newest_carried_preview_tag" "$GITHUB_SHA"; then
-                notes_range_start="$newest_carried_preview_tag"
-                echo "::notice::Using preview tag ${newest_carried_preview_tag} as notes/commits baseline (ancestor of ${GITHUB_SHA})"
-              else
-                echo "::notice::Preview tag ${newest_carried_preview_tag} is not an ancestor of ${GITHUB_SHA}; keeping channel baseline ${previous_tag:-none} for generate-notes/commits"
-              fi
-            fi
-          fi
-
-          if [ -n "$notes_range_start" ]; then
-            generate_notes_api=(
-              "repos/${GITHUB_REPOSITORY}/releases/generate-notes"
-              -f "tag_name=${release_tag}"
-              -f "target_commitish=${GITHUB_SHA}"
-              -f "previous_tag_name=${notes_range_start}"
-            )
-            # Fail closed: missing PR categories is a broken release note, not a soft skip.
-            pr_notes="$(gh api "${generate_notes_api[@]}" --jq '.body')"
-            # Drop generate-notes' trailing compare link; we re-append it after the commit list.
-            printf '%s\n' "$pr_notes" | sed '/^\*\*Full Changelog\*\*:/d' > "$delta_file"
-          else
-            # First release on this channel: never call generate-notes without previous_tag_name.
-            # GitHub would baseline the newest repo tag, which may belong to the other channel.
-            echo "::notice::No previous channel tag; skipping generate-notes (minimal notes)"
-          fi
-
-          # Rewrite takeover credits on both carried preview notes and the since-preview
-          # delta. Carried bodies may predate this helper and would otherwise keep
-          # landing-author-only attribution on stable releases.
-          if [ -s "$carried_file" ]; then
-            bun scripts/release-notes.ts credit-takeovers \
-              --repo "$GITHUB_REPOSITORY" \
-              --in "$carried_file" \
-              --out "$carried_file"
-          fi
-          if [ -s "$delta_file" ]; then
-            bun scripts/release-notes.ts credit-takeovers \
-              --repo "$GITHUB_REPOSITORY" \
-              --in "$delta_file" \
-              --out "$delta_file"
-          fi
-
-          render_args=(
-            bun scripts/release-notes.ts render
-            --npm-metadata "$npm_metadata"
-            --carried "$carried_file"
-            --delta "$delta_file"
-            --out "$notes_file"
-            --compare-to "$release_tag"
-            --repository "$GITHUB_REPOSITORY"
-          )
-          # Prefer the stable-channel previous tag for the compare link when present.
-          if [ -n "$previous_tag" ]; then
-            render_args+=(--compare-from "$previous_tag")
-          elif [ -n "$notes_range_start" ]; then
-            render_args+=(--compare-from "$notes_range_start")
-          fi
-          "${render_args[@]}"
 
           if [ -z "$existing_tag_sha" ]; then
             git tag "$release_tag" "$GITHUB_SHA"
