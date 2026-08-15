@@ -33,65 +33,27 @@ jobs:
 
           source = Path("src/codex/plugins-doctor.ts")
           source_text = source.read_text(encoding="utf-8")
-          old_regex = r'''    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^#]+?)\s*(?:#.*)?$/);'''
-          new_regex = r'''    const m = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s#]+)\s*(?:#.*)?$/);'''
+          old_regex = '    const m = line.match(/^\\s*([A-Za-z0-9_-]+)\\s*=\\s*("(?:\\\\.|[^"\\\\])*"|\'[^\']*\'|[^#]+?)\\s*(?:#.*)?$/);'
+          new_regex = '    const m = line.match(/^\\s*([A-Za-z0-9_-]+)\\s*=\\s*("(?:\\\\.|[^"\\\\])*"|\'[^\']*\'|[^\\s#]+)\\s*(?:#.*)?$/);'
           if source_text.count(old_regex) != 1:
               raise SystemExit("plugins-doctor matcher anchor did not match exactly once")
           source.write_text(source_text.replace(old_regex, new_regex, 1), encoding="utf-8")
 
           tests = Path("tests/codex-plugins-doctor.test.ts")
           test_text = tests.read_text(encoding="utf-8")
-          old_block = r'''  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
-    const { dir, configPath } = makeConfig(
-      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
-    );
-    try {
-      const result = diagnoseCodexBundledPlugins({ platform: "win32", configPath });
-      expect(result.applicable).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 2_000);
-'''
-          new_block = r'''  test("malformed quoted marketplace values cannot wedge diagnosis", () => {
-    const { dir, configPath } = makeConfig(
-      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${"\\".repeat(64)}\n`,
-    );
-    try {
-      const result = diagnoseCodexBundledPlugins({
-        platform: "win32",
-        configPath,
-        locateCurrent: () => null,
-      });
-      expect(result.applicable).toBe(true);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 2_000);
-
-  test("malformed quoted values with long trailing whitespace are not parsed as bare values", () => {
-    const { dir, configPath } = makeConfig(
-      `[marketplaces.openai-bundled]\nsource_type = "local"\nsource = "${" ".repeat(20_000)}x\n`,
-    );
-    try {
-      const result = diagnoseCodexBundledPlugins({
-        platform: "win32",
-        configPath,
-        locateCurrent: () => null,
-      });
-      expect(result.applicable).toBe(true);
-      if (result.applicable) {
-        expect(result.marketplace.sourceType).toBe("local");
-        expect(result.marketplace.source).toBeNull();
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 2_000);
-'''
-          if test_text.count(old_block) != 1:
-              raise SystemExit("malformed marketplace test anchor did not match exactly once")
-          tests.write_text(test_text.replace(old_block, new_block, 1), encoding="utf-8")
+          marker = '  test("malformed quoted marketplace values cannot wedge diagnosis", () => {'
+          next_marker = '  test("parses a table header with a trailing inline comment", () => {'
+          start = test_text.index(marker)
+          end = test_text.index(next_marker, start)
+          block = test_text[start:end]
+          old_call = '      const result = diagnoseCodexBundledPlugins({ platform: "win32", configPath });'
+          new_call = '      const result = diagnoseCodexBundledPlugins({\n        platform: "win32",\n        configPath,\n        locateCurrent: () => null,\n      });'
+          if block.count(old_call) != 1:
+              raise SystemExit("malformed marketplace diagnosis call did not match exactly once")
+          block = block.replace(old_call, new_call, 1)
+          whitespace_test = '  test("malformed quoted values with long trailing whitespace are not parsed as bare values", () => {\n    const { dir, configPath } = makeConfig(\n      `[marketplaces.openai-bundled]\\nsource_type = "local"\\nsource = "${" ".repeat(20_000)}x\\n`,\n    );\n    try {\n      const result = diagnoseCodexBundledPlugins({\n        platform: "win32",\n        configPath,\n        locateCurrent: () => null,\n      });\n      expect(result.applicable).toBe(true);\n      if (result.applicable) {\n        expect(result.marketplace.sourceType).toBe("local");\n        expect(result.marketplace.source).toBeNull();\n      }\n    } finally {\n      rmSync(dir, { recursive: true, force: true });\n    }\n  }, 2_000);\n\n'
+          test_text = test_text[:start] + block + whitespace_test + test_text[end:]
+          tests.write_text(test_text, encoding="utf-8")
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
