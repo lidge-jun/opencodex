@@ -224,6 +224,8 @@ anything else happens.
 **Step 2 — assert the remote actually has this commit.**
 
     set -eu
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    LOCAL_SHA=$(git rev-parse HEAD)
     REMOTE_SHA=$(git ls-remote csa906 "refs/heads/$BRANCH" | cut -f1)
     test -n "$REMOTE_SHA"
     test "$REMOTE_SHA" = "$LOCAL_SHA"
@@ -233,6 +235,7 @@ empty-vs-empty comparison would otherwise pass.
 
 **Step 3 — verify in an isolated scratch clone.**
 
+    LOCAL_SHA=$(git rev-parse HEAD)
     ssh lidge "set -eu
       export PATH=\"\$HOME/.bun/bin:\$PATH\"
       command -v bun >/dev/null
@@ -256,6 +259,12 @@ Each guard exists because a specific failure was observed in audit:
 | `export PATH` + `command -v bun` | `command -v bun` empty over non-interactive ssh while `/home/lidgeai/.bun/bin/bun` exists |
 | `mktemp -d` + `trap` cleanup | `~/ocx-ci/opencodex` had modified `src/bridge.ts`, `src/server/responses/core.ts`; a run there proves nothing about this change |
 | `git rev-parse HEAD` equality | a stale checkout reporting a green suite for different code |
+
+Each step recomputes `BRANCH`/`LOCAL_SHA` so it is independently runnable in a
+fresh shell: audit round 6 showed Step 2 aborting with `BRANCH: parameter not
+set` when the variables only existed in Step 1. That failed closed, but a
+verifier that only works when pasted in one session is not the verifier the
+doc describes.
 
 C runs these three literal steps in order and pastes each exit code. A green
 suite whose publication step failed is not evidence.
