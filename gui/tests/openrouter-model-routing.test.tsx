@@ -7,14 +7,26 @@ import OpenRouterModelRouting from "../src/components/provider-workspace/OpenRou
 import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 
-const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
-const originalFetch = globalThis.fetch;
-let previous: Record<(typeof globals)[number], unknown>;
+const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
+let previous: Record<(typeof globals)[number], PropertyDescriptor | undefined>;
 let testWindow: Window;
 let root: Root | null;
 
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function flush(): Promise<void> {
+  await Promise.resolve();
+  await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
+}
+
 beforeEach(() => {
-  previous = Object.fromEntries(globals.map(key => [key, Reflect.get(globalThis, key)])) as typeof previous;
+  previous = Object.fromEntries(
+    globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  ) as typeof previous;
   testWindow = new Window({ url: "http://localhost/#providers" });
   Object.defineProperty(testWindow.navigator, "language", { configurable: true, value: "en-US" });
   Object.defineProperties(globalThis, {
@@ -28,10 +40,13 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch;
   if (root) await act(async () => root?.unmount());
   testWindow.close();
-  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+  for (const key of globals) {
+    const descriptor = previous[key];
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else Reflect.deleteProperty(globalThis, key);
+  }
 });
 
 test("loads exact OpenRouter endpoint tags and saves a model-only allowlist", async () => {
@@ -77,4 +92,72 @@ test("loads exact OpenRouter endpoint tags and saves a model-only allowlist", as
     name: "openrouter",
     patch: { modelOpenRouterRouting: { "deepseek/deepseek-r1": { only: ["deepinfra/turbo"], allowFallbacks: true } } },
   }]);
+});
+
+test("ignores endpoint discovery that finishes after the selected model changes", async () => {
+  const alpha = deferred<Response>();
+  globalThis.fetch = (async input => String(input).includes("model=author%2Falpha")
+    ? alpha.promise
+    : Response.json({ endpoints: [{ tag: "beta/provider", providerName: "Beta" }] })) as typeof fetch;
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "author/alpha" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/alpha", "author/beta"]}
+    /></LanguageProvider>);
+  });
+
+  const model = host.querySelector<HTMLInputElement>('input[list^="openrouter-models-"]')!;
+  const loadButton = () => [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { loadButton().click(); await flush(); });
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(model, "author/beta");
+    model.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await act(async () => { loadButton().click(); await flush(); });
+
+  const mode = host.querySelector<HTMLSelectElement>("select")!;
+  await act(async () => {
+    mode.value = "only";
+    mode.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
+  });
+  expect(host.textContent).toContain("beta/provider");
+
+  await act(async () => {
+    alpha.resolve(Response.json({ endpoints: [{ tag: "alpha/provider", providerName: "Alpha" }] }));
+    await flush();
+  });
+  expect(host.textContent).toContain("beta/provider");
+  expect(host.textContent).not.toContain("alpha/provider");
+});
+
+test("labels a configured tag as absent only after successful discovery", async () => {
+  globalThis.fetch = (async () => Response.json({ endpoints: [] })) as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{
+        name: "openrouter",
+        adapter: "openai-chat",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelOpenRouterRouting: { "author/model": { only: ["saved/provider"], allowFallbacks: true } },
+      } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/model"]}
+    /></LanguageProvider>);
+  });
+
+  expect(host.textContent).toContain("saved/provider");
+  expect(host.querySelector(".pwi-openrouter-missing")).toBeNull();
+  const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { load.click(); await flush(); });
+  expect(host.querySelector(".pwi-openrouter-missing")?.textContent).toContain("saved/provider");
 });

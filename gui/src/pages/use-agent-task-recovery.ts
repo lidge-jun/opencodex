@@ -8,6 +8,7 @@ export function useAgentTaskRecovery(apiBase: string) {
   const [saving, setSaving] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const operationRef = useRef(0);
+  const activeSaveRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     const operation = ++operationRef.current;
@@ -30,8 +31,9 @@ export function useAgentTaskRecovery(apiBase: string) {
   }, [load]);
 
   const save = useCallback(async (next: boolean) => {
-    if (saving) return false;
+    if (activeSaveRef.current !== null) return false;
     const operation = ++operationRef.current;
+    activeSaveRef.current = operation;
     setSaving(true);
     try {
       const response = await fetch(`${apiBase}/api/agent-task-recovery`, {
@@ -48,9 +50,12 @@ export function useAgentTaskRecovery(apiBase: string) {
     } catch {
       return false;
     } finally {
-      setSaving(false);
+      if (activeSaveRef.current === operation) {
+        activeSaveRef.current = null;
+        setSaving(false);
+      }
     }
-  }, [apiBase, saving]);
+  }, [apiBase]);
 
   const retry = useCallback(() => { void load(); }, [load]);
 
