@@ -106,6 +106,59 @@ describe("deterministic duplicate auto-close", () => {
     });
   });
 
+  it("preserves technical punctuation so distinct signatures cannot collapse together", () => {
+    const currentSignature =
+      "The sync command failed while reading user_profile.yml from ~/config.yml during provider startup.";
+    const candidateSignature =
+      "The sync command failed while reading userprofile.yml from /config.yml during provider startup.";
+
+    assert.equal(
+      selectStrongDuplicateMatch({
+        currentIssue: { number: 2005, title: "new", body: currentSignature },
+        candidateIssues: [{ number: 1458, title: "old", body: candidateSignature }],
+        duplicateNumbers: ["1458"],
+      }),
+      null,
+    );
+  });
+
+  it("never selects the current issue as its own duplicate", () => {
+    const signature =
+      "POST /v1/responses returns HTTP 503 with ECONNRESET in the OpenRouter adapter.";
+    const currentIssue = { number: 2006, title: "new", body: signature };
+
+    assert.equal(
+      selectStrongDuplicateMatch({
+        currentIssue,
+        candidateIssues: [currentIssue],
+        duplicateNumbers: ["2006"],
+      }),
+      null,
+    );
+  });
+
+  it("uses a locale-independent code-unit tie-breaker for equal-length signatures", () => {
+    const hyphen =
+      "POST /v1/a returns HTTP 503 with ECONNRESET in adapter-a during requests.";
+    const underscore =
+      "POST /v1/a returns HTTP 503 with ECONNRESET in adapter_a during requests.";
+    assert.equal(hyphen.length, underscore.length);
+
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2007, title: "new", body: `${underscore}\n${hyphen}` },
+      candidateIssues: [
+        { number: 1459, title: "underscore", body: underscore },
+        { number: 1460, title: "hyphen", body: hyphen },
+      ],
+      duplicateNumbers: ["1459", "1460"],
+    });
+
+    assert.deepEqual(match, {
+      number: "1460",
+      signature: hyphen.toLowerCase(),
+    });
+  });
+
   it("does not auto-close an AI duplicate without an exact strong failure signature", () => {
     const match = selectStrongDuplicateMatch({
       currentIssue: {
@@ -156,5 +209,13 @@ describe("deterministic duplicate auto-close", () => {
     assert.match(workflow, /gh issue list[^\n]*--state closed/);
     assert.match(workflow, /issue-triage-autoclose\.cjs/);
     assert.match(workflow, /state_reason:\s*["']duplicate["']/);
+    assert.match(
+      workflow,
+      /eligible for automatic duplicate closure after final revalidation/,
+    );
+    assert.doesNotMatch(
+      workflow,
+      /This issue will be closed automatically as a duplicate/,
+    );
   });
 });
