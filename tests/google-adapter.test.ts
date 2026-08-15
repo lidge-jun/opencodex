@@ -303,4 +303,16 @@ describe("google adapter — direct -tiered wire renames", () => {
       expect(url).toContain(`/v1beta/models/${modelId}:generateContent`);
     }
   });
+
+  test("directGeminiWireRenames does not affect Vertex requests", async () => {
+    const vertexProvider = { ...provider, googleMode: "vertex" as const };
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const parsed = renamedParsed(modelId);
+      const defaultRequest = await createGoogleAdapter(vertexProvider).buildRequest(parsed);
+      const optOutRequest = await createGoogleAdapter({ ...vertexProvider, directGeminiWireRenames: false })
+        .buildRequest(parsed);
+      expect(optOutRequest.url).toBe(defaultRequest.url);
+      expect(optOutRequest.body).toBe(defaultRequest.body);
+    }
+  });
 });

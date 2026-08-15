@@ -370,7 +370,9 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             parsed.modelId,
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
           ).wireModelId
-        : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
+        : provider.googleMode === "vertex"
+          ? parsed.modelId
+          : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       const { systemInstruction, contents } = messagesToGeminiFormat(parsed, routedModelId);
       const tools = toolsToGeminiFormat(parsed);
 
