@@ -37,6 +37,7 @@ import {
   GetBlobArgsSchema,
   KvServerMessageSchema,
   SetBlobArgsSchema,
+  UserMessageSchema,
 } from "../src/adapters/cursor/gen/agent_pb";
 
 beforeEach(() => {
@@ -115,6 +116,35 @@ function actionText(bytes: Uint8Array): string | undefined {
   return action?.case === "userMessageAction" ? action.value.userMessage?.text : undefined;
 }
 
+/** Minimal valid 1×1 PNG for SelectedImage fixtures (not signature-only). */
+const PNG_1X1 = Uint8Array.from(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
+
+function activeUserMessage(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  const action = run?.action?.action;
+  return action?.case === "userMessageAction" ? action.value.userMessage : undefined;
+}
+
+function activeSelectedImages(bytes: Uint8Array) {
+  return activeUserMessage(bytes)?.selectedContext?.selectedImages;
+}
+
+function nativeTurnUserMessages(bytes: Uint8Array) {
+  const msg = fromBinary(AgentClientMessageSchema, bytes);
+  const run = msg.message.case === "runRequest" ? msg.message.value : undefined;
+  return (run?.conversationState?.turns ?? []).map(turnId => {
+    const turn = fromBinary(ConversationTurnStructureSchema, blobData(turnId));
+    if (turn.turn.case !== "agentConversationTurn") return undefined;
+    return fromBinary(UserMessageSchema, blobData(turn.turn.value.userMessage));
+  }).filter((message): message is NonNullable<typeof message> => message !== undefined);
+}
+
 /** The `toolName`s advertised in the top-level AgentRunRequest.mcp_tools channel (undefined when unset). */
 function mcpToolNames(bytes: Uint8Array): string[] | undefined {
   const msg = fromBinary(AgentClientMessageSchema, bytes);
@@ -128,6 +158,160 @@ describe("Cursor blob handshake", () => {
     const id = storeCursorBlob(data);
     expect(id.length).toBe(32);
     expect(Array.from(id)).toEqual(Array.from(sha256(data)));
+  });
+
+  test("encodeCursorRunRequest attaches selectedContext with blobIdWithData image refs on the active user turn", () => {
+    const imageBytes = PNG_1X1;
+    const expectedBlobId = sha256(imageBytes);
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "see this" }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "img-uuid-1",
+      }],
+    });
+
+    expect(actionText(bytes)).toBe("see this");
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("img-uuid-1");
+    expect(images?.[0]?.mimeType).toBe("image/png");
+    expect(images?.[0]?.path).toBe("attachment-img-uuid-1.png");
+    expect(images?.[0]?.dataOrBlobId.case).toBe("blobIdWithData");
+    const withData = images?.[0]?.dataOrBlobId.value as { blobId: Uint8Array; data: Uint8Array };
+    expect(Array.from(withData.blobId)).toEqual(Array.from(expectedBlobId));
+    expect(Array.from(withData.data)).toEqual(Array.from(imageBytes));
+    expect(Array.from(blobData(expectedBlobId))).toEqual(Array.from(imageBytes));
+  });
+
+  test("encodeCursorRunRequest always sends empty selectedContext and mode=1 on text-only turns", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    const userMessage = activeUserMessage(bytes);
+    expect(userMessage?.text).toBe("hi");
+    expect(userMessage?.mode).toBe(1);
+    expect(userMessage?.selectedContext).toBeDefined();
+    expect(userMessage?.selectedContext?.selectedImages.length).toBe(0);
+  });
+
+  test("encodeCursorRunRequest keeps selectedContext only on the active user turn", () => {
+    const activeImageBytes = PNG_1X1;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: ["You are helpful."],
+      messages: [{ role: "user", content: "active turn" }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "old turn" },
+            { type: "image", imageUrl: "data:image/png;base64,old", detail: "auto" },
+          ],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        { role: "user", content: "active turn", timestamp: 3 },
+      ],
+      selectedImages: [{
+        data: activeImageBytes,
+        mimeType: "image/png",
+        uuid: "active-img",
+      }],
+    });
+
+    const roots = decodeRootMessages(bytes) as Array<{ role?: string; selectedContext?: unknown }>;
+    expect(roots.some(root => root.selectedContext !== undefined)).toBe(false);
+
+    const historicalUser = nativeTurnUserMessages(bytes)[0];
+    expect(historicalUser?.text).toBe("old turn");
+    expect(historicalUser?.mode).toBe(1);
+    expect(historicalUser?.selectedContext).toBeDefined();
+    expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
+
+    const activeMessage = activeUserMessage(bytes);
+    expect(activeMessage?.mode).toBe(1);
+    const images = activeSelectedImages(bytes);
+    expect(images?.length).toBe(1);
+    expect(images?.[0]?.uuid).toBe("active-img");
+  });
+
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {
+    const imageBytes = PNG_1X1;
+    const bytes = encodeCursorRunRequest({
+      modelId: "claude-4.6-opus-high",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "" }],
+      rawMessages: [{
+        role: "user",
+        content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+        timestamp: 1,
+      }],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "image-only",
+      }],
+    });
+
+    expect(activeUserMessage(bytes)).toBeDefined();
+    expect(actionText(bytes)).toBe("");
+    expect(activeSelectedImages(bytes)?.length).toBe(1);
+  });
+
+  test("encodeCursorRunRequest uses userMessageAction for image-only turns after assistant reply", () => {
+    const imageBytes = PNG_1X1;
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: [],
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "ack" },
+        { role: "user", content: "" },
+      ],
+      rawMessages: [
+        { role: "user", content: "first", timestamp: 1 },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+          timestamp: 3,
+        },
+      ],
+      selectedImages: [{
+        data: imageBytes,
+        mimeType: "image/png",
+        uuid: "follow-up-image",
+      }],
+    });
+
+    expect(activeUserMessage(bytes)).toBeDefined();
+    expect(actionText(bytes)).toBe("");
+    expect(activeSelectedImages(bytes)?.length).toBe(1);
   });
 
   test("encodeCursorRunRequest sends rootPromptMessagesJson as blob IDs, not inline JSON", () => {

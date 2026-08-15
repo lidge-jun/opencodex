@@ -13,6 +13,8 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { activePromptText, prepareCursorRunRequest } from "./protobuf-request";
+import { prepareCursorRawMessages, resolveActiveCursorImages } from "./images";
+import { cursorRequestMessagesFromRaw } from "./request-builder";
 import {
   createCursorContextUsageTracker,
   createCursorProtobufEventState,
@@ -567,10 +569,24 @@ class LiveCursorTransport implements CursorTransport {
 
     // Advertise MCP tools before the stream opens — the server only calls tools it was told about.
     await this.prepareMcp();
-    const activeText = activePromptText(request);
-    this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(request, this.clientToolFinalizeGraceMs);
-    const cursorVisibleTools = cursorToolsForActivePrompt(request.tools, activeText, request.toolChoice);
-    const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, request.toolChoice);
+    // JPEG soft-cap rewrite for active-turn data: images before encode. Rebuild text
+    // messages from the prepared raw channel so omission markers replace stale
+    // pre-rewrite content that activePromptText and the tool filter would otherwise see.
+    const preparedRawMessages = await prepareCursorRawMessages(request.rawMessages, signal);
+    const selectedImages = await resolveActiveCursorImages(preparedRawMessages, signal);
+    const preparedMessages = preparedRawMessages === request.rawMessages
+      ? request.messages
+      : cursorRequestMessagesFromRaw(preparedRawMessages);
+    const activeRequest: CursorRunRequest = {
+      ...request,
+      messages: preparedMessages,
+      rawMessages: preparedRawMessages,
+      selectedImages,
+    };
+    const activeText = activePromptText(activeRequest);
+    this.activeClientToolFinalizeGraceMs = clientToolFinalizeGraceMsForRequest(activeRequest, this.clientToolFinalizeGraceMs);
+    const cursorVisibleTools = cursorToolsForActivePrompt(activeRequest.tools, activeText, activeRequest.toolChoice);
+    const clientToolDefs = buildCursorToolDefinitions(cursorVisibleTools, activeRequest.toolChoice);
     // `request.tools` is the catalog already filtered and budgeted by request-builder. Derive
     // conversion provenance only from tagged synthetic tools that also survive this final prompt
     // filter; a client tool with the same wire name can never opt into conversion by collision.
@@ -606,7 +622,7 @@ class LiveCursorTransport implements CursorTransport {
     });
     // Build the payload once. The estimate is only worth deriving when there is no
     // carry-forward to fall back on — with a carry present it would never be used (#373).
-    const prepared = prepareCursorRunRequest(request, {
+    const prepared = prepareCursorRunRequest(activeRequest, {
       estimateInputTokens: contextUsage.carryForwardTokens === undefined,
     });
     this.blobRequestScope = prepared.blobRequestScope;

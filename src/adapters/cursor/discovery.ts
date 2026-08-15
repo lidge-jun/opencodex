@@ -103,6 +103,26 @@ export const CURSOR_ROUTER_MODEL_IDS = [
   ...CURSOR_ROUTING_LEVELS.map(level => `${CURSOR_AUTO_MODEL_ID}-${level}`),
 ] as const;
 
+/**
+ * Cursor models that cannot see images natively. OpenCodex routes them through the vision
+ * sidecar (the catalog still advertises image so Codex can attach). Evidence:
+ * - Composer family: Cursor staff — text-only; "Model does not support images"
+ * - Auto / router modes: Cursor docs omit Images for Auto Cost; staff — pick Claude/GPT for images
+ * - glm-5.2: Cursor docs omit Images; Z.ai GLM-5.2 is text-only (vision is GLM-5V)
+ *
+ * Composer ids are enumerated explicitly — prefix wildcard matching is deliberately out of
+ * scope here; a live-discovered new Composer slug stays native-path until curated. Everyone
+ * else in the static seed (Claude, Gemini, GPT, Kimi, Grok) takes SelectedImage. Other
+ * live-discovered ids stay unclassified (native path) until curated.
+ */
+export const CURSOR_NO_VISION_MODELS = [
+  ...CURSOR_ROUTER_MODEL_IDS,
+  "composer-1",
+  "composer-2.5",
+  "composer-2.5-fast",
+  "glm-5.2",
+] as const;
+
 /** Wire id Cursor Connect expects for the auto-router (GetUsableModels returns `default`, not `auto`). */
 export const CURSOR_AUTO_WIRE_MODEL_ID = "default";
 

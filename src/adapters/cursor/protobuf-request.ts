@@ -15,6 +15,7 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
+import { buildSelectedContext } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import { parseDataUrl } from "../image";
 import {
@@ -335,7 +336,7 @@ function contentText(message: OcxMessage): string {
     .map(part => {
       if (part.type === "text") return part.text;
       if (part.type === "thinking") return part.thinking;
-      if (part.type === "image") return `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`;
+      if (part.type === "image") return undefined;
       return undefined;
     })
     .filter((value): value is string => typeof value === "string" && value.length > 0)
@@ -722,6 +723,8 @@ function conversationTurns(
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
         text: contentText(message),
         messageId: crypto.randomUUID(),
+        selectedContext: buildSelectedContext([], requestScope),
+        mode: 1,
       })), requestScope),
       steps: [],
     };
@@ -791,16 +794,22 @@ function buildPreparedCursorRunRequest(
     ? appendCursorGenericToolUseHint(request.tools, rawText)
     : rawText;
   const lastRawIsToolResult = request.rawMessages?.at(-1)?.role === "toolResult";
+  const selectedImages = request.selectedImages ?? [];
   // Native models resume the remembered Cursor conversation. External wire
   // models continue as userMessageAction so history-blob tool results stay
   // visible without a ResumeAction.
   const externalToolContinuation = lastRawIsToolResult && isCursorExternalWireModel(request.modelId);
-  const actionCase = (externalToolContinuation || (!lastRawIsToolResult && text.trim().length > 0))
+  // Image-only active turns (including soft-omitted images) stay userMessageAction.
+  const actionCase = (
+    externalToolContinuation
+    || (!lastRawIsToolResult && (text.trim().length > 0 || selectedImages.length > 0))
+  )
     ? "userMessageAction"
     : "resumeAction";
   const actionText = externalToolContinuation
     ? CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT
     : text;
+  const selectedContext = buildSelectedContext(selectedImages, requestScope);
   const action = create(ConversationActionSchema, {
     action: actionCase === "userMessageAction"
       ? {
@@ -809,6 +818,9 @@ function buildPreparedCursorRunRequest(
             userMessage: create(UserMessageSchema, {
               text: actionText,
               messageId: crypto.randomUUID(),
+              selectedContext,
+              // OmniRoute / cursor-agent always send mode=1 on UserMessage.
+              mode: 1,
             }),
             requestContext: buildRequestContext(),
           }),
