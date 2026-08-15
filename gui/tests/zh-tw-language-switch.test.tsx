@@ -230,7 +230,7 @@ describe("French language switch on the real GUI surface", () => {
       "Intégrations",
     ]);
     expect(localStorage.getItem("ocx-lang")).toBe("fr");
-    expect(testWindow.document.documentElement.lang).toBe("fr-FR");
+    expect(testWindow.document.documentElement.lang).toBe("fr");
 
     await choose(["English"]);
 

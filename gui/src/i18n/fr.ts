@@ -1,6 +1,9 @@
-// Français international — catalogue complet de l’interface OpenCodex.
-// Les clés et les jetons d’interpolation correspondent exactement à la source anglaise.
-export const fr = {
+import type { TKey } from "./en";
+
+/**
+ * French i18n catalog. Must match the `TKey` set.
+ */
+export const fr: Record<TKey, string> = {
   "nav.dashboard": "Tableau de bord",
   "uptime.day": "j",
   "uptime.hour": "h",
@@ -2005,4 +2008,4 @@ export const fr = {
   "lab.layer.protocol_conformance": "Conformité du protocole",
   "lab.layer.live_route_compatibility": "Compatibilité des routes en direct",
   "lab.layer.task_effectiveness": "Efficacité des tâches",
-} as const;
+};

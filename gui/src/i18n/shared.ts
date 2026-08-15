@@ -6,7 +6,7 @@ export { DICTS, localeDisplayName, type Locale, type TKey };
 export const LOCALES: { code: Locale; htmlLang: string }[] = [
   { code: "en", htmlLang: "en" },
   { code: "de", htmlLang: "de" },
-  { code: "fr", htmlLang: "fr-FR" },
+  { code: "fr", htmlLang: "fr" },
   { code: "ko", htmlLang: "ko" },
   { code: "zh", htmlLang: "zh-CN" },
   { code: "zh-TW", htmlLang: "zh-TW" },

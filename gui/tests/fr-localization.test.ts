@@ -164,7 +164,7 @@ describe("French base catalog", () => {
 
   test("registers Français with the French HTML language tag", () => {
     const frenchLocale = LOCALES.find(locale => locale.code === ("fr" as never));
-    expect(frenchLocale).toEqual({ code: "fr", htmlLang: "fr-FR" });
+    expect(frenchLocale).toEqual({ code: "fr", htmlLang: "fr" });
     expect((DICTS as Record<string, Record<TKey, string>>).fr?.["lang.nativeName"]).toBe("Français");
   });
 });
