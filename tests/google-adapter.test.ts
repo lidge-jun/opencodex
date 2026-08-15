@@ -278,3 +278,29 @@ describe("google adapter — tool_choice on the wire", () => {
     });
   });
 });
+
+describe("google adapter — direct -tiered wire renames", () => {
+  function renamedParsed(modelId: string): OcxParsedRequest {
+    return {
+      modelId,
+      stream: false,
+      options: {},
+      context: { messages: [{ role: "user", content: "hi" }], tools: [] },
+    } as unknown as OcxParsedRequest;
+  }
+
+  test("default maps the picker id to the -tiered wire id", async () => {
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const { url } = await createGoogleAdapter(provider).buildRequest(renamedParsed(modelId));
+      expect(url).toContain(`/v1beta/models/${modelId}-tiered:generateContent`);
+    }
+  });
+
+  test("directGeminiWireRenames: false keeps the bare wire id", async () => {
+    const adapter = createGoogleAdapter({ ...provider, directGeminiWireRenames: false });
+    for (const modelId of ["gemini-3.7-flash", "gemini-3.6-flash"]) {
+      const { url } = await adapter.buildRequest(renamedParsed(modelId));
+      expect(url).toContain(`/v1beta/models/${modelId}:generateContent`);
+    }
+  });
+});

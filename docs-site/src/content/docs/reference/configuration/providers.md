@@ -121,6 +121,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `escapeBuiltinToolNames?` | `boolean` | Escape built-in tool names for Anthropic-compatible gateways and restore them in returned calls. |
 | `anthropicEofTolerance?` | `boolean` | Let an Anthropic-compatible gateway complete a stream that ends before `message_stop`, only when visible text or a complete JSON-object tool input was received. Off by default. |
 | `googleMode?` | `"ai-studio" \| "vertex" \| "cloud-code-assist"` | Google transport/auth mode. Default `ai-studio`. |
+| `directGeminiWireRenames?` | `boolean` | Google only. When `false`, the AI Studio (direct) path sends Gemini Flash ids to the wire unchanged instead of applying the `-tiered` suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). Defaults to the rename; set `false` when the configured upstream still serves the bare ids. |
 | `project?` | `string` | Vertex or Antigravity Cloud Code Assist project id. |
 | `location?` | `string` | Vertex location; environment fallback is `GOOGLE_CLOUD_LOCATION`. |
 | `mcpServers?` | `Record<string, CursorMcpServerConfig>` | Cursor only: stdio or Streamable HTTP MCP servers. |

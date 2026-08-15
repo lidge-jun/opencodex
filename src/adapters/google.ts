@@ -46,19 +46,17 @@ const GOOGLE_BREVITY_INSTRUCTION = [
 ].join("\n");
 
 /**
- * Google renamed the current Gemini Flash generations on the Generative Language API,
- * appending a `-tiered` suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). The
- * old `gemini-3.7-flash` path 404s, so a saved config or registry entry naming the base
- * id must be resolved here before it reaches the URL. The user-facing id is deliberately
- * left alone: the picker, the catalog, the usage log and the price overlays all stay
- * keyed on the base id, and only the wire path learns the new spelling.
+ * Some Google direct deployments expose current Gemini Flash generations with a `-tiered`
+ * wire suffix (`gemini-3.7-flash` -> `gemini-3.7-flash-tiered`). Keep the picker-visible id
+ * stable and make the mapping configurable for deployments that still serve the bare id.
  */
 const GEMINI_DIRECT_WIRE_RENAMES: Record<string, string> = {
   "gemini-3.7-flash": "gemini-3.7-flash-tiered",
   "gemini-3.6-flash": "gemini-3.6-flash-tiered",
 };
 
-function resolveDirectGeminiWireModelId(modelId: string): string {
+function resolveDirectGeminiWireModelId(modelId: string, applyRenames: boolean): string {
+  if (!applyRenames) return modelId;
   return Object.hasOwn(GEMINI_DIRECT_WIRE_RENAMES, modelId)
     ? GEMINI_DIRECT_WIRE_RENAMES[modelId]!
     : modelId;
@@ -372,7 +370,7 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
             parsed.modelId,
             mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning),
           ).wireModelId
-        : resolveDirectGeminiWireModelId(parsed.modelId);
+        : resolveDirectGeminiWireModelId(parsed.modelId, provider.directGeminiWireRenames !== false);
       const { systemInstruction, contents } = messagesToGeminiFormat(parsed, routedModelId);
       const tools = toolsToGeminiFormat(parsed);
 

@@ -1353,6 +1353,13 @@ export interface OcxProviderConfig {
    * link-local, or unique-local upstreams. Metadata endpoints remain blocked.
    */
   allowPrivateNetwork?: boolean;
+  /**
+   * Google only. When `false`, the AI Studio (direct) path sends Gemini Flash ids
+   * unchanged to the wire instead of applying the `-tiered` suffix (`gemini-3.7-flash`
+   * -> `gemini-3.7-flash-tiered`). Set this to `false` when the configured upstream still
+   * serves the bare ids. Absent (default) keeps the rename.
+   */
+  directGeminiWireRenames?: boolean;
   /** Keep provider settings on disk but exclude it from routing and model/catalog listings. */
   disabled?: boolean;
   /**
