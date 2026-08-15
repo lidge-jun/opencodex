@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp } from "../../icons";
+import { IconArrowDown, IconArrowUp, IconX } from "../../icons";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import type { ProviderUpdatePatch } from "./types";
@@ -64,8 +64,8 @@ export default function OpenRouterModelRouting({
       if (generation !== discoveryGeneration.current) return;
       if (!response.ok) {
         const data = await response.json().catch(() => ({})) as Discovery;
-        const text = data.code === "openrouter_management_key_required"
-          ? t("pws.openrouter.managementKeyRequired")
+        const text = data.code === "openrouter_authorization_failed"
+          ? t("pws.openrouter.authorizationFailed")
           : data.code === "openrouter_key_required"
             ? t("pws.openrouter.keyRequired")
             : t("pws.openrouter.loadFailed");
@@ -89,6 +89,7 @@ export default function OpenRouterModelRouting({
   const toggle = (tag: string) => setSelected(current => current.includes(tag)
     ? current.filter(value => value !== tag)
     : [...current, tag]);
+  const remove = (tag: string) => setSelected(current => current.filter(value => value !== tag));
   const move = (index: number, direction: -1 | 1) => setSelected(current => {
     const target = index + direction;
     if (target < 0 || target >= current.length) return current;
@@ -143,7 +144,7 @@ export default function OpenRouterModelRouting({
       <div className="pwi-openrouter-controls">
         <label className="pwi-settings-field">
           <span className="pwi-settings-label">{t("pws.openrouter.mode")}</span>
-          <select className="input" value={mode} onChange={event => setMode(event.target.value as Mode)}>
+          <select className="input" value={mode} onChange={event => setMode(event.target.value as Mode)} disabled={saving}>
             <option value="inherit">{t("pws.openrouter.inherit")}</option>
             <option value="order">{t("pws.openrouter.order")}</option>
             <option value="only">{t("pws.openrouter.only")}</option>
@@ -151,7 +152,7 @@ export default function OpenRouterModelRouting({
         </label>
         {mode !== "inherit" && (
           <label className="pwi-openrouter-fallbacks">
-            <input type="checkbox" checked={allowFallbacks} onChange={event => setAllowFallbacks(event.target.checked)} />
+            <input type="checkbox" checked={allowFallbacks} onChange={event => setAllowFallbacks(event.target.checked)} disabled={saving} />
             <span>{t("pws.openrouter.allowFallbacks")}</span>
           </label>
         )}
@@ -162,8 +163,9 @@ export default function OpenRouterModelRouting({
             <li key={tag} className={discoveryComplete && !knownTags.has(tag) ? "pwi-openrouter-missing" : ""}>
               <code>{tag}</code>
               {discoveryComplete && !knownTags.has(tag) && <span>{t("pws.openrouter.notReturned")}</span>}
-              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, -1)} disabled={index === 0} aria-label={t("sub.moveUp", { m: tag })}><IconArrowUp /></button>
-              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, 1)} disabled={index === selected.length - 1} aria-label={t("sub.moveDown", { m: tag })}><IconArrowDown /></button>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, -1)} disabled={saving || index === 0} aria-label={t("sub.moveUp", { m: tag })}><IconArrowUp /></button>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, 1)} disabled={saving || index === selected.length - 1} aria-label={t("sub.moveDown", { m: tag })}><IconArrowDown /></button>
+              <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => remove(tag)} disabled={saving} aria-label={t("sub.removeAria", { m: tag })}><IconX /></button>
             </li>
           ))}
         </ol>
@@ -172,7 +174,7 @@ export default function OpenRouterModelRouting({
         <div className="pwi-openrouter-endpoints">
           {endpoints.map(endpoint => (
             <label key={endpoint.tag} className="pwi-openrouter-endpoint">
-              <input type="checkbox" checked={selectedTags.has(endpoint.tag)} onChange={() => toggle(endpoint.tag)} />
+              <input type="checkbox" checked={selectedTags.has(endpoint.tag)} onChange={() => toggle(endpoint.tag)} disabled={saving} />
               <span><strong>{endpoint.providerName}</strong><code>{endpoint.tag}</code></span>
               {endpoint.supportsImplicitCaching && <span className="badge badge-muted">{t("pws.openrouter.cache")}</span>}
             </label>
@@ -180,7 +182,7 @@ export default function OpenRouterModelRouting({
         </div>
       )}
       <div className="pwi-openrouter-actions">
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => { void save(); }} disabled={!model.trim() || saving || (mode !== "inherit" && selected.length === 0)}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => { void save(); }} disabled={!onUpdateProvider || !model.trim() || saving || (mode !== "inherit" && selected.length === 0)}>
           {saving ? t("pws.saving") : t("common.save")}
         </button>
         {discoveryComplete && <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(true); }} disabled={loading}>{t("lab.refresh")}</button>}

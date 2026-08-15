@@ -5,6 +5,12 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 
 供應商告訴 opencodex 模型在哪裡、它使用哪種 wire adapter，以及請求如何被認證。
 
+## 在儀表板中依模型設定 OpenRouter 路由
+
+對於規範 OpenRouter 供應商，請開啟**供應商 → OpenRouter → 模型 → 依模型的供應商路由**。輸入精確的 OpenRouter model ID、載入 endpoint，然後選擇繼承 `openRouterRouting`、使用 `order` 排序或以 `only` 限制。儲存繼承模式會移除對應的 `modelOpenRouterRouting` 項目。探索結果中已不存在的已設定 tag 仍會顯示，並可明確移除。
+
+探索使用已設定的 OpenRouter API 金鑰。授權失敗不會變更已儲存的路由。成功結果會快取五分鐘；即使結果為空，也能透過**重新整理**略過快取。
+
 ## 供應商相關的頂層欄位
 
 | 欄位 | 型別 | 預設值 | 意義 |

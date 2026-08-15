@@ -198,7 +198,8 @@ ocx agent recovery off
 
 The management API equivalent is `GET/PUT /api/agent-task-recovery`; `PUT` accepts only
 `{"enabled": boolean}` and preserves advanced `model`, `timeoutMs`, and `cacheEntries` values that
-were configured manually.
+were configured manually. The route commits this field-scoped change to disk before mirroring it into
+the running proxy, so a persistence failure cannot enable or disable live recovery by itself.
 
 This recovery path applies to direct-routed children. At most 32 recovery requests can be active at
 once; additional misses fail closed. Combo routing keeps its existing native-only filter for

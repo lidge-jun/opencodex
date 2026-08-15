@@ -126,6 +126,24 @@ function persistDesktopProfileField(
   return { ok: true };
 }
 
+function persistAgentTaskRecoveryEnabled(
+  config: OcxConfig,
+  enabled: boolean,
+): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" } {
+  const outcome = mutatePersistedConfig(persisted => {
+    const changed = persisted.agentTaskRecovery?.enabled !== enabled;
+    const next = { ...(persisted.agentTaskRecovery ?? {}), enabled };
+    persisted.agentTaskRecovery = next;
+    return {
+      changed,
+      value: next,
+    };
+  });
+  if (outcome.status === "unavailable") return { ok: false, reason: outcome.reason };
+  config.agentTaskRecovery = outcome.value;
+  return { ok: true };
+}
+
 export function grokApplyFlightSnapshot(): { currentBytes: number; highWaterBytes: number; active: number } {
   return {
     currentBytes: grokApplyFlight?.bytes ?? 0,
@@ -239,11 +257,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     if (typeof body.enabled !== "boolean") {
       return jsonResponse({ error: "body.enabled must be a boolean" }, 400);
     }
-    config.agentTaskRecovery = {
-      ...(config.agentTaskRecovery ?? {}),
-      enabled: body.enabled,
-    };
-    saveConfigPreservingClaudeCode(config);
+    const persisted = persistAgentTaskRecoveryEnabled(config, body.enabled);
+    if (!persisted.ok) {
+      return jsonResponse({ error: "configuration update unavailable", code: "config_update_unavailable" }, 409);
+    }
     return jsonResponse({ ok: true, enabled: body.enabled });
   }
 

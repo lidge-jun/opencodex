@@ -187,6 +187,7 @@ test("does not show an old model save result after the selected model changes", 
 
   const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
   await act(async () => { save.click(); await flush(); });
+  expect(host.querySelector<HTMLSelectElement>("select")?.disabled).toBe(true);
   const model = host.querySelector<HTMLInputElement>('input[list^="openrouter-models-"]')!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(model, "author/beta");
@@ -196,6 +197,7 @@ test("does not show an old model save result after the selected model changes", 
 
   expect(host.textContent).not.toContain("Saved");
   expect(save.disabled).toBe(false);
+  expect(host.querySelector<HTMLSelectElement>("select")?.disabled).toBe(false);
 });
 
 test("offers a cache-bypassing refresh after an empty successful discovery", async () => {
@@ -249,4 +251,98 @@ test("labels a configured tag as absent only after successful discovery", async 
   const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
   await act(async () => { load.click(); await flush(); });
   expect(host.querySelector(".pwi-openrouter-missing")?.textContent).toContain("saved/provider");
+});
+
+test("removes a configured tag missing from discovery and saves only the live tag", async () => {
+  globalThis.fetch = (async () => Response.json({
+    endpoints: [{ tag: "live/provider", providerName: "Live" }],
+  })) as typeof fetch;
+  const updates: ProviderUpdatePatch[] = [];
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{
+        name: "openrouter",
+        adapter: "openai-chat",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelOpenRouterRouting: {
+          "author/model": { only: ["missing/provider", "live/provider"], allowFallbacks: false },
+        },
+      } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/model"]}
+      onUpdateProvider={async (_name, patch) => { updates.push(patch); return { ok: true }; }}
+    /></LanguageProvider>);
+  });
+
+  const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { load.click(); await flush(); });
+  const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove missing/provider"]')!;
+  expect(remove).not.toBeNull();
+  await act(async () => { remove.click(); });
+  const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
+  await act(async () => { save.click(); await flush(); });
+
+  expect(updates).toEqual([{
+    modelOpenRouterRouting: {
+      "author/model": { only: ["live/provider"], allowFallbacks: false },
+    },
+  }]);
+});
+
+test("disables Save when the provider update callback is unavailable", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "author/model" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/model"]}
+    /></LanguageProvider>);
+  });
+
+  const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
+  expect(save.disabled).toBe(true);
+});
+
+test("locks routing mutation controls to the payload while Save is pending", async () => {
+  const update = deferred<{ ok: boolean }>();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{
+        name: "openrouter",
+        adapter: "openai-chat",
+        baseUrl: "https://openrouter.ai/api/v1",
+        modelOpenRouterRouting: {
+          "author/model": { only: ["saved/provider"], allowFallbacks: true },
+        },
+      } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/model"]}
+      onUpdateProvider={async () => update.promise}
+    /></LanguageProvider>);
+  });
+
+  const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
+  await act(async () => { save.click(); await flush(); });
+  const mode = host.querySelector<HTMLSelectElement>("select")!;
+  const fallbacks = host.querySelector<HTMLInputElement>('.pwi-openrouter-fallbacks input[type="checkbox"]')!;
+  const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove saved/provider"]')!;
+  expect(mode.disabled).toBe(true);
+  expect(fallbacks.disabled).toBe(true);
+  expect(remove.disabled).toBe(true);
+
+  await act(async () => { update.resolve({ ok: true }); await flush(); });
+  expect(mode.disabled).toBe(false);
+  expect(fallbacks.disabled).toBe(false);
+  expect(remove.disabled).toBe(false);
 });

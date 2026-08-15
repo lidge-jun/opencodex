@@ -6,6 +6,12 @@ description: Sağlayıcı girdileri, kimlik doğrulama, uç noktalar, model kata
 Bir sağlayıcı, opencodex'e bir modelin nerede yaşadığını, hangi hat adaptörünü
 konuştuğunu ve isteklerin nasıl doğrulandığını söyler.
 
+## Kontrol panelinde model başına OpenRouter yönlendirmesi
+
+Kurallı bir OpenRouter sağlayıcısında **Sağlayıcılar → OpenRouter → Modeller → Model başına sağlayıcı yönlendirmesi** yolunu açın. Tam OpenRouter model kimliğini girip uçları yükleyin; ardından `openRouterRouting` kalıtımını, `order` sırasını veya `only` kısıtını seçin. Kalıtımı kaydetmek ilgili `modelOpenRouterRouting` girdisini kaldırır. Keşifte artık dönmeyen yapılandırılmış etiketler görünür kalır ve açıkça kaldırılabilir.
+
+Keşif yapılandırılmış OpenRouter API anahtarını kullanır. Yetkilendirme reddi kayıtlı yönlendirmeyi değiştirmez. Başarılı sonuçlar beş dakika önbelleğe alınır; boş bir sonuçtan sonra bile **Yenile** önbelleği atlar.
+
 ## Sağlayıcı ile ilgili üst düzey alanlar
 
 | Alan | Tip | Varsayılan | Anlamı |
@@ -480,4 +486,3 @@ bildirir; senkronize edilen katalog `xhigh`'ı ayrı tutarken `max` bildirir.
   "visionSidecar": { "enabled": true }
 }
 ```
-

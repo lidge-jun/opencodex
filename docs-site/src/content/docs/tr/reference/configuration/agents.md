@@ -7,6 +7,10 @@ Ajan ayarları hangi Codex işbirliği yüzeyinin tanıtılacağını ve opencod
 devredilen işleri nasıl yönlendireceğini, yönlendireceğini ve sınırlayacağını
 kontrol eder.
 
+## Şifrelenmiş v2 görev kurtarma denetimi
+
+Deneysel kurtarma varsayılan olarak kapalıdır. Kota ve gecikme uyarısını kabul ettikten sonra **Alt ajanlar → Ayarlar → Şifrelenmiş v2 görevlerini kurtar** yolundan etkinleştirin veya `ocx agent recovery status|on|off` kullanın. Eşdeğer API `GET/PUT /api/agent-task-recovery`'dir. `PUT` yalnızca `{"enabled": boolean}` kabul eder, etkin durumu güncellemeden önce kalıcı yapılandırmayı yazar ve elle yapılandırılmış gelişmiş seçenekleri korur.
+
 ## Ajan alanları
 
 | Alan | Tip | Varsayılan | Anlamı |
@@ -246,5 +250,4 @@ ile `xhigh` arasını sunar.
 
 v1, varsayılan ve v2 davranışının yeni başlayanlara yönelik açıklaması için [Alt
 ajan yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
-
 

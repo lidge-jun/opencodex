@@ -535,14 +535,17 @@ load its available endpoints, then choose one of three behaviors:
 
 Selections preserve the exact endpoint `tag` returned by OpenRouter, including region or speed
 suffixes such as `google-vertex/us-east5` or `deepinfra/turbo`. Configured tags that disappear from a
-later discovery response remain visible and are never silently deleted.
+later discovery response remain visible and can be removed explicitly; they are never silently
+deleted.
 
 Endpoint discovery uses OpenRouter's authenticated
 `GET /api/v1/models/{author}/{slug}/endpoints` API on demand and caches successful results in memory
-for five minutes. OpenRouter may require an authorized **Management Key** for this endpoint; a normal
-inference key can continue serving model requests even when discovery returns 401/403. In that case,
-existing routing remains unchanged and manual JSON configuration is still available. opencodex never
-returns the key to the browser or includes upstream error bodies in the dashboard response.
+for five minutes. It authenticates with the configured OpenRouter API key, the same credential class
+used for inference. If OpenRouter rejects that key, existing routing remains unchanged and manual JSON
+configuration is still available. opencodex never returns the key to the browser or includes upstream
+error bodies in the dashboard response. At most eight distinct endpoint discoveries run concurrently;
+additional unique requests receive a bounded busy response while callers for an existing discovery
+still share that request.
 
 ## Static model allowlists
 

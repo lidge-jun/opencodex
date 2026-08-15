@@ -37,7 +37,7 @@ describe("OpenRouter model routing management API", () => {
     const current = config({
       adapter: "openai-chat",
       baseUrl: "https://openrouter.ai/api/v1",
-      apiKey: "test-management-key",
+      apiKey: "test-api-key",
       fetch: async () => Response.json({
         data: { id: "deepseek/deepseek-r1", endpoints: [{ tag: "deepinfra/turbo", provider_name: "DeepInfra" }] },
       }),
@@ -76,5 +76,65 @@ describe("OpenRouter model routing management API", () => {
     const current = config({ adapter: "openai-chat", baseUrl: "https://example.test/v1", apiKey: "test-key" });
     const response = await management(current, "/api/openrouter/model-providers?provider=openrouter&model=deepseek%2Fdeepseek-r1");
     expect(response.status).toBe(400);
+  });
+
+  test("reports ordinary OpenRouter API-key rejection without reflecting upstream details", async () => {
+    const current = config({
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "test-api-key",
+      fetch: async () => Response.json({ error: "private upstream detail" }, { status: 401 }),
+    } as OcxProviderConfig);
+    const response = await management(
+      current,
+      "/api/openrouter/model-providers?provider=openrouter&model=deepseek%2Fdeepseek-r1",
+    );
+
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "OpenRouter rejected the configured API key for endpoint discovery",
+      code: "openrouter_authorization_failed",
+    });
+  });
+
+  test("returns a bounded busy response when unique discovery capacity is exhausted", async () => {
+    let release!: () => void;
+    let fetches = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const current = config({
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "test-key",
+      fetch: async (input: string | URL | Request) => {
+        fetches += 1;
+        await gate;
+        const parts = new URL(String(input)).pathname.split("/");
+        return Response.json({
+          data: {
+            id: `${decodeURIComponent(parts.at(-3)!)}/${decodeURIComponent(parts.at(-2)!)}`,
+            endpoints: [],
+          },
+        });
+      },
+    } as OcxProviderConfig);
+    const active = Array.from({ length: 8 }, (_, index) => management(
+      current,
+      `/api/openrouter/model-providers?provider=openrouter&model=author%2Fmodel-${index}`,
+    ));
+    for (let attempt = 0; attempt < 100 && fetches < 8; attempt += 1) await new Promise(resolve => setTimeout(resolve, 0));
+    expect(fetches).toBe(8);
+
+    const overflow = await management(
+      current,
+      "/api/openrouter/model-providers?provider=openrouter&model=author%2Foverflow",
+    );
+    expect(overflow.status).toBe(429);
+    expect(await overflow.json()).toEqual({
+      error: "OpenRouter endpoint discovery is busy",
+      code: "openrouter_busy",
+    });
+
+    release();
+    await expect(Promise.all(active)).resolves.toHaveLength(8);
   });
 });
