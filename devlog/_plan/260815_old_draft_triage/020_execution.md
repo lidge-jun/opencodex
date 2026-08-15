@@ -52,5 +52,9 @@ Repairs:
  
 ## Execution log
  
+- wp2 (light six): #1744 merged (dev 656376fc6); source PRs #1664 #1669 #1660 #1652 #1165 #1644 closed with attribution comments. 8 KEEP-DRAFT comments posted. lidge @ b05c4942: 12259 pass / 0 fail.
+- wp2b (heavy four): repair workers rebuilt all four; repair reviewer 3 rounds (native fidelity FAIL -> reworked and sentinel-probed; pacing runtime+reconciliation fixed; exact-model Chat auth added; runTurn pacing-rejection containment fixed; flight-authority defect a65bfc0df caught by suite and root-caused). Four-way integration with 5 composition requirements verified. Landed via #1752 (dev 9ed2e8459): #1521 #1584 #1569 #1655 closed with attribution comments. lidge @ a65bfc0df: 12336 pass / 11 skip / 0 fail, all gates OK.
+- Collision note: a parallel maintainer session absorbed the devlog docs (#1745), fixed mcode client-inventory fallout (#1749), and integrated the same repair branches on its own (unpushed) int/260815-heavy; my reviewed int/260815-heavy-final landed first via #1752.
+ 
 (pending)
  
