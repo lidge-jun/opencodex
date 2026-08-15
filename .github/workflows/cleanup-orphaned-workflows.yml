@@ -16,7 +16,7 @@ on:
       - "scripts/ci/cleanup-orphaned-workflows.mjs"
 
 permissions:
-  actions: write
+  actions: write # Required to delete orphaned workflow runs through the Actions API.
   contents: read
 
 concurrency:
