@@ -3,11 +3,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { atomicWriteFile } from "../config";
 import { applyEol, dominantEol, isLoopbackHostname, providerBaseHost } from "../codex/inject";
+import {
+  grokDefaultReasoningEffort,
+  grokReasoningEffortOption,
+  sanitizeGrokReasoningEfforts,
+} from "./effort";
 
 export interface GrokInjectModel {
   id: string;
   name?: string;
   contextWindow?: number;
+  /** Catalog ladder. Empty or absent omits every thinking-intensity field. */
+  reasoningEfforts?: string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface GrokInjectResult {
@@ -334,6 +342,28 @@ export function buildGrokManagedBlock(
     );
     if (Number.isFinite(model.contextWindow) && (model.contextWindow ?? 0) > 0) {
       lines.push(`context_window = ${model.contextWindow}`);
+    }
+    // Array-of-tables MUST follow every parent keyval (including inline extra_headers).
+    // Keep every picker option inside Grok's accepted CLI vocabulary; ultra is Codex-only.
+    const efforts = sanitizeGrokReasoningEfforts(model.reasoningEfforts);
+    const defaultEffort = grokDefaultReasoningEffort(efforts, model.defaultReasoningEffort);
+    if (defaultEffort !== undefined) {
+      lines.push(
+        "supports_reasoning_effort = true",
+        `reasoning_effort = ${tomlString(defaultEffort)}`,
+      );
+      for (const effort of efforts) {
+        const option = grokReasoningEffortOption(effort, effort === defaultEffort);
+        lines.push(
+          "",
+          `[[model.${alias}.reasoning_efforts]]`,
+          `id = ${tomlString(option.id)}`,
+          `value = ${tomlString(option.value)}`,
+          `label = ${tomlString(option.label)}`,
+          `description = ${tomlString(option.description)}`,
+          `default = ${option.default}`,
+        );
+      }
     }
   }
 
