@@ -7,7 +7,7 @@
  * image/video/speech/music/search/quota endpoints are MiniMax-specific APIs that
  * OpenCodex does not claim to implement.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,10 +32,47 @@ export interface MmxTextBridge {
 }
 
 export interface MmxTextBridgeOptions {
+  /** Optional outer guard; production delegates timeout policy to `/v1/messages`. */
   headerTimeoutMs?: number;
 }
 
-const MMX_BRIDGE_HEADER_TIMEOUT_MS = 30_000;
+export interface MmxTerminationTarget {
+  pid?: number;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+export interface MmxTerminationDeps {
+  platform?: NodeJS.Platform;
+  killWindowsTree?: (pid: number) => void;
+}
+
+export interface MmxSignalHost {
+  on(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+  off(signal: "SIGINT" | "SIGTERM", listener: () => void): unknown;
+}
+
+export interface MmxTerminationHandlersOptions {
+  getChild: () => MmxTerminationTarget | null;
+  cleanup: () => Promise<void>;
+  host?: MmxSignalHost;
+  now?: () => number;
+  terminationDeps?: MmxTerminationDeps;
+  onCleanupError?: (error: unknown) => void;
+}
+
+const MMX_TERMINATION_DUPLICATE_WINDOW_MS = 500;
+
+const MMX_CHILD_OWNED_ENV_KEYS = new Set([
+  "MMX_CONFIG_DIR",
+  "MINIMAX_BASE_URL",
+  "MINIMAX_REGION",
+  "MINIMAX_API_KEY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+]);
 
 const MMX_GLOBAL_BOOLEAN_FLAGS = new Set([
   "--quiet",
@@ -89,23 +126,20 @@ export function buildMmxEnv(
   configDir: string,
   base: MinimaxLaunchEnv = process.env,
 ): MinimaxLaunchEnv {
-  const env: MinimaxLaunchEnv = {
-    ...base,
-    MMX_CONFIG_DIR: configDir,
-    MINIMAX_BASE_URL: `http://${probeHostname(live.hostname)}:${live.port}`,
-    // Prevent a parent-shell region from triggering key detection against the
-    // official MiniMax hosts. The base URL above remains authoritative.
-    MINIMAX_REGION: "global",
-  };
+  const env: MinimaxLaunchEnv = { ...base };
   // The official MMX client installs one ProxyAgent whenever any proxy variable
   // is present and does not apply NO_PROXY. Its OpenCodex destination is always
   // loopback, so carrying these variables could send the request off-machine.
-  for (const key of [
-    "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy",
-    // The isolated config already supplies the public loopback placeholder.
-    // Do not expose a user's real MiniMax environment credential to the child.
-    "MINIMAX_API_KEY",
-  ]) delete env[key];
+  // Windows environment names are case-insensitive; strip every inherited
+  // spelling before installing the wrapper-owned values below.
+  for (const key of Object.keys(env)) {
+    if (MMX_CHILD_OWNED_ENV_KEYS.has(key.toUpperCase())) delete env[key];
+  }
+  env.MMX_CONFIG_DIR = configDir;
+  env.MINIMAX_BASE_URL = `http://${probeHostname(live.hostname)}:${live.port}`;
+  // Prevent a parent-shell region from triggering key detection against the
+  // official MiniMax hosts. The base URL above remains authoritative.
+  env.MINIMAX_REGION = "global";
   return env;
 }
 
@@ -119,7 +153,6 @@ export function startMmxTextBridge(
   live: Pick<LiveProxy, "hostname" | "port">,
   options: MmxTextBridgeOptions = {},
 ): MmxTextBridge {
-  const headerTimeoutMs = options.headerTimeoutMs ?? MMX_BRIDGE_HEADER_TIMEOUT_MS;
   const upstreamOrigin = `http://${probeHostname(live.hostname)}:${live.port}`;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -149,13 +182,18 @@ export function startMmxTextBridge(
       headers.set("x-api-key", LOOPBACK_API_KEY_PLACEHOLDER);
       headers.delete("host");
       headers.delete("content-length");
-      const headerDeadline = clearableDeadline(headerTimeoutMs, req.signal);
+      // The canonical data plane owns its configured response-header, retry,
+      // and stream-stall budgets. An extra default here would cut off valid
+      // non-streaming or failover completions before their real response.
+      const headerDeadline = options.headerTimeoutMs === undefined
+        ? null
+        : clearableDeadline(options.headerTimeoutMs, req.signal);
       try {
         return await fetch(new Request(target, {
           method: "POST",
           headers,
           body: req.body,
-          signal: headerDeadline.signal,
+          signal: headerDeadline?.signal ?? req.signal,
         }));
       } catch {
         return Response.json({
@@ -165,7 +203,7 @@ export function startMmxTextBridge(
       } finally {
         // Once response headers arrive, streaming body cancellation remains
         // linked to the client while this response-header timer is disarmed.
-        headerDeadline.clear();
+        headerDeadline?.clear();
       }
     },
   });
@@ -252,15 +290,91 @@ export function isStandaloneInformationalInvocation(
   return client === "mmx" ? arg === "-v" : arg === "-v" || arg === "-V";
 }
 
+/** Forward wrapper termination only while the MMX child is still live. */
+export function forwardMmxTerminationSignal(
+  child: MmxTerminationTarget,
+  signal: "SIGINT" | "SIGTERM",
+  deps: MmxTerminationDeps = {},
+): boolean {
+  if (child.exitCode !== null || child.signalCode !== null) return false;
+  try {
+    if ((deps.platform ?? process.platform) === "win32") {
+      if (!Number.isInteger(child.pid) || child.pid === undefined || child.pid <= 0) return false;
+      const killWindowsTree = deps.killWindowsTree ?? (pid => {
+        const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+        execFileSync(taskkill, ["/PID", String(pid), "/T", "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+      });
+      killWindowsTree(child.pid);
+      return true;
+    }
+    return child.kill(signal);
+  } catch {
+    return false;
+  }
+}
+
+/** Install persistent, duplicate-aware wrapper signal handlers. */
+export function installMmxTerminationHandlers(
+  options: MmxTerminationHandlersOptions,
+): () => void {
+  const host = options.host ?? process;
+  const now = options.now ?? Date.now;
+  let lastTerminationSignalAt: number | null = null;
+  const onTerminationSignal = (signal: "SIGINT" | "SIGTERM") => {
+    const receivedAt = now();
+    // Ctrl-C reaches the foreground Bun process directly and is also
+    // forwarded by bin/ocx.mjs. Keep the listener installed and coalesce the
+    // near-simultaneous duplicate so async cleanup cannot be interrupted by
+    // the default signal action after a once-listener disappears.
+    if (
+      lastTerminationSignalAt !== null
+      && receivedAt - lastTerminationSignalAt < MMX_TERMINATION_DUPLICATE_WINDOW_MS
+    ) return;
+    lastTerminationSignalAt = receivedAt;
+    const child = options.getChild();
+    if (child) forwardMmxTerminationSignal(child, signal, options.terminationDeps);
+    try {
+      void options.cleanup().catch(error => { options.onCleanupError?.(error); });
+    } catch (error) {
+      options.onCleanupError?.(error);
+    }
+  };
+  const onSigint = () => onTerminationSignal("SIGINT");
+  const onSigterm = () => onTerminationSignal("SIGTERM");
+  host.on("SIGINT", onSigint);
+  host.on("SIGTERM", onSigterm);
+  return () => {
+    host.off("SIGINT", onSigint);
+    host.off("SIGTERM", onSigterm);
+  };
+}
+
+/** Keep signal handlers active until asynchronous bridge cleanup has settled. */
+export async function finishMmxClientCleanup(
+  cleanup: () => Promise<void>,
+  removeTerminationHandlers: () => void,
+): Promise<void> {
+  try {
+    await cleanup();
+  } finally {
+    removeTerminationHandlers();
+  }
+}
+
 function spawnClient(
   command: "mcode" | "mmx",
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   installHint: string,
+  onSpawn?: (child: ChildProcess) => void,
 ): Promise<number> {
   return new Promise(resolve => {
     const inv = commandInvocation(command, [...args]);
     const child = spawn(inv.file, inv.args, { stdio: "inherit", env, ...inv.options });
+    onSpawn?.(child);
     child.on("error", (error: NodeJS.ErrnoException) => {
       console.error(error.code === "ENOENT" ? installHint : `❌ Failed to launch ${command}: ${error.message}`);
       resolve(1);
@@ -336,6 +450,7 @@ export async function cmdMmx(args: string[]): Promise<number> {
 
   const configDir = mkdtempSync(join(tmpdir(), "opencodex-mmx-"));
   let bridge: MmxTextBridge | null = null;
+  let mmxChild: ChildProcess | null = null;
   let cleanupPromise: Promise<void> | null = null;
   let removeTerminationHandlers = () => {};
   const cleanup = (): Promise<void> => {
@@ -361,20 +476,15 @@ export async function cmdMmx(args: string[]): Promise<number> {
     bridge = startMmxTextBridge(live);
     const env = buildMmxEnv({ hostname: "127.0.0.1", port: bridge.port }, configDir, process.env) as NodeJS.ProcessEnv;
     console.error(`✅ MiniMax CLI text bridged to http://${probeHostname(live.hostname)}:${live.port}/v1/messages.`);
-    const onTerminationSignal = () => {
-      void cleanup().catch(error => {
+    removeTerminationHandlers = installMmxTerminationHandlers({
+      getChild: () => mmxChild,
+      cleanup,
+      onCleanupError: error => {
         console.error(`❌ Failed to clean up the MMX bridge after a termination signal: ${String(error)}`);
-      });
-    };
-    process.once("SIGINT", onTerminationSignal);
-    process.once("SIGTERM", onTerminationSignal);
-    removeTerminationHandlers = () => {
-      process.off("SIGINT", onTerminationSignal);
-      process.off("SIGTERM", onTerminationSignal);
-    };
-    return await spawnClient("mmx", args, env, MMX_INSTALL_HINT);
+      },
+    });
+    return await spawnClient("mmx", args, env, MMX_INSTALL_HINT, child => { mmxChild = child; });
   } finally {
-    removeTerminationHandlers();
-    await cleanup();
+    await finishMmxClientCleanup(cleanup, removeTerminationHandlers);
   }
 }

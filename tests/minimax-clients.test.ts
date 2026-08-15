@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import {
   ClientPathError,
@@ -13,6 +14,9 @@ import {
 } from "../src/clients/config-export";
 import {
   buildMmxEnv,
+  finishMmxClientCleanup,
+  forwardMmxTerminationSignal,
+  installMmxTerminationHandlers,
   mcodeOpenCodexBaseUrl,
   mmxCommandPath,
   mmxUnsafeOverride,
@@ -126,13 +130,20 @@ describe("MiniMax CLI wrapper", () => {
       MMX_CONFIG_DIR: "/real/user/config",
       MINIMAX_BASE_URL: "https://api.minimax.io",
       MINIMAX_API_KEY: "real-user-secret",
+      Minimax_Api_Key: "mixed-case-real-user-secret",
+      Mmx_Config_Dir: "/mixed-case/user/config",
+      Minimax_Base_Url: "https://mixed-case.example.test",
+      Minimax_Region: "cn",
       KEEP_ME: "yes",
       HTTP_PROXY: "http://proxy.example.test:8080",
       http_proxy: "http://proxy.example.test:8080",
+      Http_Proxy: "http://mixed-case-proxy.example.test:8080",
       HTTPS_PROXY: "http://proxy.example.test:8080",
       https_proxy: "http://proxy.example.test:8080",
+      Https_Proxy: "http://mixed-case-proxy.example.test:8080",
       ALL_PROXY: "socks5://proxy.example.test:1080",
       all_proxy: "socks5://proxy.example.test:1080",
+      All_Proxy: "socks5://mixed-case-proxy.example.test:1080",
     };
     const env = buildMmxEnv({ port: 10123, hostname: "0.0.0.0" }, "/isolated/config", base);
     expect(env).toMatchObject({
@@ -143,12 +154,109 @@ describe("MiniMax CLI wrapper", () => {
     });
     expect(base.MMX_CONFIG_DIR).toBe("/real/user/config");
     expect(base.MINIMAX_BASE_URL).toBe("https://api.minimax.io");
-    for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+    for (const key of [
+      "HTTP_PROXY", "http_proxy", "Http_Proxy",
+      "HTTPS_PROXY", "https_proxy", "Https_Proxy",
+      "ALL_PROXY", "all_proxy", "All_Proxy",
+      "MINIMAX_API_KEY", "Minimax_Api_Key",
+      "Mmx_Config_Dir", "Minimax_Base_Url", "Minimax_Region",
+    ]) {
       expect(env[key]).toBeUndefined();
-      expect(base[key]).toContain("proxy.example.test");
+      expect(base[key]).toBeDefined();
     }
-    expect(env.MINIMAX_API_KEY).toBeUndefined();
     expect(base.MINIMAX_API_KEY).toBe("real-user-secret");
+  });
+
+  test("forwards wrapper termination signals only to a live MMX child", () => {
+    const forwarded: Array<NodeJS.Signals | number | undefined> = [];
+    const child = {
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill(signal?: NodeJS.Signals | number) {
+        forwarded.push(signal);
+        return true;
+      },
+    };
+
+    expect(forwardMmxTerminationSignal(child, "SIGINT", { platform: "linux" })).toBeTrue();
+    expect(forwardMmxTerminationSignal(child, "SIGTERM", { platform: "linux" })).toBeTrue();
+    expect(forwarded).toEqual(["SIGINT", "SIGTERM"]);
+
+    child.signalCode = "SIGTERM";
+    expect(forwardMmxTerminationSignal(child, "SIGINT", { platform: "linux" })).toBeFalse();
+    expect(forwarded).toEqual(["SIGINT", "SIGTERM"]);
+
+    expect(forwardMmxTerminationSignal({
+      exitCode: null,
+      signalCode: null,
+      kill() { throw new Error("already gone"); },
+    }, "SIGTERM", { platform: "linux" })).toBeFalse();
+
+    const killedTrees: number[] = [];
+    expect(forwardMmxTerminationSignal({
+      pid: 4242,
+      exitCode: null,
+      signalCode: null,
+      kill() { throw new Error("must terminate the Windows process tree"); },
+    }, "SIGTERM", {
+      platform: "win32",
+      killWindowsTree: pid => { killedTrees.push(pid); },
+    })).toBeTrue();
+    expect(killedTrees).toEqual([4242]);
+  });
+
+  test("keeps termination handlers installed while coalescing duplicate launcher signals", () => {
+    const host = new EventEmitter();
+    const events: string[] = [];
+    let now = 1_000;
+    const child = {
+      exitCode: null,
+      signalCode: null,
+      kill(signal?: NodeJS.Signals | number) {
+        events.push(`kill:${String(signal)}`);
+        return true;
+      },
+    };
+    const remove = installMmxTerminationHandlers({
+      getChild: () => child,
+      cleanup: async () => { events.push("cleanup"); },
+      host,
+      now: () => now,
+      terminationDeps: { platform: "linux" },
+    });
+
+    host.emit("SIGINT");
+    expect(events).toEqual(["kill:SIGINT", "cleanup"]);
+    expect(host.listenerCount("SIGINT")).toBe(1);
+
+    now = 1_100;
+    host.emit("SIGINT");
+    expect(events).toEqual(["kill:SIGINT", "cleanup"]);
+
+    now = 1_600;
+    host.emit("SIGTERM");
+    expect(events).toEqual(["kill:SIGINT", "cleanup", "kill:SIGTERM", "cleanup"]);
+
+    remove();
+    expect(host.listenerCount("SIGINT")).toBe(0);
+    expect(host.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  test("removes termination handlers only after asynchronous bridge cleanup settles", async () => {
+    const events: string[] = [];
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>(resolve => { releaseCleanup = resolve; });
+    const finishing = finishMmxClientCleanup(async () => {
+      events.push("cleanup:start");
+      await cleanupGate;
+      events.push("cleanup:end");
+    }, () => { events.push("handlers:remove"); });
+
+    await Promise.resolve();
+    expect(events).toEqual(["cleanup:start"]);
+    releaseCleanup();
+    await finishing;
+    expect(events).toEqual(["cleanup:start", "cleanup:end", "handlers:remove"]);
   });
 
   test("rejects a non-loopback hostname from stale runtime proxy metadata", () => {
