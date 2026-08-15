@@ -40,7 +40,7 @@ ocx start        # localhost:10100 üzerinde proxy + panel
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/"><b>Tam dokümantasyon →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <b>Türkçe</b> · 📖 <a href="https://opencodex.me/"><b>Tam dokümantasyon →</b></a>
 </p>
 
 opencodex, Codex'in Responses API'sini sağlayıcınızın desteklediği formata (streaming, araç çağrıları, reasoning jetonları, görseller) her iki yönde çeviren hafif bir yerel proxy'dir. Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama veya diğer tüm LLM'leri Codex, Claude Code, Claude Desktop ve Grok Build ile kullanın. Ayrıca Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** yönetebilir: hesap ekleyin, panelden kotaları yenileyin ve mevcut iş parçacıkları başlayan hesaba sabit kalırken yeni oturumların en az kullanılan sağlıklı hesaba otomatik yönlendirilmesini sağlayın.
