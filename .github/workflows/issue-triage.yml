@@ -258,7 +258,7 @@ jobs:
             if (strongMatch) {
               sections.push(
                 `Exact shared failure signature verified against #${strongMatch.number}. ` +
-                  'This issue will be closed automatically as a duplicate.',
+                  'This issue is eligible for automatic duplicate closure after final revalidation.',
                 '',
               );
             }
