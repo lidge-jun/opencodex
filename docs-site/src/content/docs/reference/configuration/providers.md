@@ -522,6 +522,27 @@ Model keys are exact native OpenRouter ids, without the outer opencodex provider
 `openrouter/anthropic-claude-sonnet-5` restores native `anthropic/claude-sonnet-5` before applying
 the model rule.
 
+### Discover and select providers in the dashboard
+
+For canonical OpenRouter providers (`openai-chat` plus `https://openrouter.ai/api/v1`), open
+**Providers → OpenRouter → Models → Provider routing by model**. Enter an exact OpenRouter model id,
+load its available endpoints, then choose one of three behaviors:
+
+- inherit the provider-wide `openRouterRouting` value;
+- prioritize selected endpoint tags with `order`;
+- restrict routing to selected endpoint tags with `only`.
+
+Selections preserve the exact endpoint `tag` returned by OpenRouter, including region or speed
+suffixes such as `google-vertex/us-east5` or `deepinfra/turbo`. Configured tags that disappear from a
+later discovery response remain visible and are never silently deleted.
+
+Endpoint discovery uses OpenRouter's authenticated
+`GET /api/v1/models/{author}/{slug}/endpoints` API on demand and caches successful results in memory
+for five minutes. OpenRouter may require an authorized **Management Key** for this endpoint; a normal
+inference key can continue serving model requests even when discovery returns 401/403. In that case,
+existing routing remains unchanged and manual JSON configuration is still available. opencodex never
+returns the key to the browser or includes upstream error bodies in the dashboard response.
+
 ## Static model allowlists
 
 Set `liveModels: false` to expose only `models`. If `models` is empty or omitted, the provider exposes

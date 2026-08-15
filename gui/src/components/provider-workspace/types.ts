@@ -104,6 +104,7 @@ export type ProviderUpdatePatch = {
   codexAccountMode?: "direct" | "pool";
   /** Management-only write that atomically owns the two supported xAI Grok adapter rows. */
   xaiResponsesOptIn?: boolean;
+  modelOpenRouterRouting?: Record<string, WorkspaceItem["openRouterRouting"] | null> | null;
 };
 
 export type ProviderUpdateResult = {

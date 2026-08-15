@@ -7,6 +7,7 @@ import { readSessionListCache, writeSessionListCache } from "../session-list-cac
 import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from "./use-subagent-delegation";
+import { useAgentTaskRecovery } from "./use-agent-task-recovery";
 
 type CachedSubagents = { available: string[]; chosen: string[] };
 
@@ -25,6 +26,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   /** Sync guard: state-only `busy` can miss clicks before the disabled re-render commits. */
   const saveInFlight = useRef(false);
   const delegation = useSubagentDelegation(apiBase);
+  const taskRecovery = useAgentTaskRecovery(apiBase);
   const [ultraMode, setUltraMode] = useState<UltraModeState>({ enabled: false, hintText: null, multiAgentV2Enabled: false });
   const [ultraSaving, setUltraSaving] = useState(false);
   const [ultraLoadFailed, setUltraLoadFailed] = useState(false);
@@ -228,6 +230,13 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
           onUltraModeSave: patch => { void saveUltraMode(patch); },
           ultraLoadFailed,
           onUltraModeRetry: () => { void retryUltraMode(); },
+          taskRecovery: {
+            enabled: taskRecovery.enabled,
+            saving: taskRecovery.saving,
+            loadFailed: taskRecovery.loadFailed,
+            onSave: enabled => { void taskRecovery.save(enabled); },
+            onRetry: () => { void taskRecovery.retry(); },
+          },
         }}
       />
     </>

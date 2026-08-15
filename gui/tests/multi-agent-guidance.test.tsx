@@ -70,6 +70,13 @@ function props(overrides: Partial<Props> = {}): Props {
     onUltraModeSave: () => {},
     ultraLoadFailed: false,
     onUltraModeRetry: () => {},
+    taskRecovery: {
+      enabled: false,
+      saving: false,
+      loadFailed: false,
+      onSave: enabled => { requests.push({ recovery: enabled }); },
+      onRetry: () => {},
+    },
     ...overrides,
   };
 }
@@ -102,6 +109,19 @@ test("renders independent guidance and native-default controls with editable sel
   expect(defaults.getAttribute("aria-pressed")).toBe("true");
   expect(guidance.getAttribute("aria-pressed")).toBe("false");
   expect(host.textContent).not.toContain("Guidance active");
+});
+
+test("requires explicit confirmation before enabling encrypted task recovery", async () => {
+  let confirmed = false;
+  testWindow.confirm = () => confirmed;
+  await mount(props());
+  const recovery = host.querySelector<HTMLButtonElement>(`button[aria-label="${en["sub.taskRecovery"]}"]`)!;
+
+  await act(async () => { recovery.click(); });
+  expect(requests).toEqual([]);
+  confirmed = true;
+  await act(async () => { recovery.click(); });
+  expect(requests).toEqual([{ recovery: true }]);
 });
 
 test("requires a selected model before enabling native Codex subagent defaults", async () => {

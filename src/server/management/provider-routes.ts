@@ -77,6 +77,8 @@ import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerS
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { providerServiceTierConfigError } from "./provider-capability-config";
+import { isCanonicalOpenRouterTarget } from "../../providers/openrouter-routing";
+import { listOpenRouterModelEndpoints, OpenRouterEndpointsError } from "../../providers/openrouter-endpoints";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -225,6 +227,24 @@ function applyProviderPatchFields(
       // `upstreamHttpVersionConfigError` is the shared write boundary; the assertion is
       // explicit because the incoming value is an unknown JSON scalar.
       next.upstreamHttpVersion = value as OcxProviderConfig["upstreamHttpVersion"];
+    }
+    touched = true;
+  }
+  if (Object.hasOwn(rawBody, "modelOpenRouterRouting")) {
+    const value = rawBody.modelOpenRouterRouting;
+    if (value === null) {
+      delete next.modelOpenRouterRouting;
+    } else {
+      if (!isPlainRecord(value)) return { error: "modelOpenRouterRouting must be a plain object or null" };
+      const routes = { ...(next.modelOpenRouterRouting ?? {}) };
+      for (const [modelId, routing] of Object.entries(value)) {
+        if (!modelId.trim() || modelId !== modelId.trim()) return { error: "modelOpenRouterRouting keys must be nonblank trimmed model ids" };
+        if (routing === null) delete routes[modelId];
+        else if (!isPlainRecord(routing)) return { error: `modelOpenRouterRouting.${modelId} must be a plain object or null` };
+        else routes[modelId] = structuredClone(routing) as NonNullable<OcxProviderConfig["modelOpenRouterRouting"]>[string];
+      }
+      if (Object.keys(routes).length > 0) next.modelOpenRouterRouting = routes;
+      else delete next.modelOpenRouterRouting;
     }
     touched = true;
   }
@@ -448,6 +468,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
+      openRouterRouting: p.openRouterRouting,
+      modelOpenRouterRouting: p.modelOpenRouterRouting,
       models: p.models ?? [],
       contextWindow: p.contextWindow,
       modelContextWindows: p.modelContextWindows,
@@ -462,6 +484,48 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       ...(name === "xai" ? { xaiResponsesOptInState: xaiResponsesOptInState(p) } : {}),
       discovery: p.liveModels === false ? undefined : getProviderDiscoveryStatus(name),
     })));
+  }
+
+  if (url.pathname === "/api/openrouter/model-providers" && req.method === "GET") {
+    const name = url.searchParams.get("provider")?.trim();
+    const model = url.searchParams.get("model")?.trim();
+    if (!name || !model || !isValidProviderName(name) || !hasOwnProvider(config.providers, name)) {
+      return jsonResponse({ error: "unknown provider or missing model" }, 404);
+    }
+    const provider = config.providers[name]!;
+    if (provider.adapter !== "openai-chat" || !isCanonicalOpenRouterTarget(provider.baseUrl)) {
+      return jsonResponse({ error: "provider is not canonical OpenRouter" }, 400);
+    }
+    const { resolveModelsAuthToken } = await import("../../oauth");
+    const token = await resolveModelsAuthToken(name, provider);
+    if (!token) return jsonResponse({ error: "OpenRouter API key is required", code: "openrouter_key_required" }, 409);
+    try {
+      const result = await listOpenRouterModelEndpoints(
+        name,
+        provider,
+        model,
+        token,
+        url.searchParams.get("refresh") === "1",
+      );
+      const modelRouting = provider.modelOpenRouterRouting?.[model];
+      return jsonResponse({
+        provider: name,
+        model,
+        fetchedAt: result.fetchedAt,
+        cached: result.cached,
+        routing: {
+          source: modelRouting ? "model" : provider.openRouterRouting ? "default" : "none",
+          modelOverride: modelRouting,
+          effective: modelRouting ?? provider.openRouterRouting,
+        },
+        endpoints: result.endpoints,
+      });
+    } catch (error) {
+      if (error instanceof OpenRouterEndpointsError) {
+        return jsonResponse({ error: error.message, code: `openrouter_${error.code}` }, error.status);
+      }
+      return jsonResponse({ error: "OpenRouter endpoint discovery failed", code: "openrouter_discovery_failed" }, 502);
+    }
   }
 
   if (url.pathname === LOCAL_PROVIDER_RELOAD_PATH && req.method === "POST") {

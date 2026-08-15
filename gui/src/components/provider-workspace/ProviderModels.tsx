@@ -8,6 +8,8 @@ import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { filterModels } from "../../provider-workspace/report";
 import { encodedModelIdCollides } from "../../../../src/providers/slug-codec";
+import OpenRouterModelRouting from "./OpenRouterModelRouting";
+import type { ProviderUpdatePatch } from "./types";
 
 export default function ProviderModels({
   item,
@@ -20,6 +22,7 @@ export default function ProviderModels({
   needsReauth = false,
   onRetryModels,
   onOpenAccounts,
+  onUpdateProvider,
 }: {
   item: WorkspaceItem;
   apiBase: string;
@@ -33,6 +36,7 @@ export default function ProviderModels({
   needsReauth?: boolean;
   onRetryModels?: () => void;
   onOpenAccounts?: () => void;
+  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const t = useT();
   const [query, setQuery] = useState("");
@@ -170,6 +174,9 @@ export default function ProviderModels({
           <span className="muted">{t("pws.modelsAvailable", { count: models.length })}</span>
         )}
       </div>
+      {item.adapter === "openai-chat" && item.baseUrl.replace(/\/+$/, "") === "https://openrouter.ai/api/v1" && (
+        <OpenRouterModelRouting item={item} apiBase={apiBase} availableModels={availableModels} onUpdateProvider={onUpdateProvider} />
+      )}
       {needsReauth && (
         <div className="pws-inline-error" role="status">
           <span>{t("pws.modelsNeedsReauth")}</span>

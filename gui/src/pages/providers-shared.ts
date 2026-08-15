@@ -17,6 +17,8 @@ export interface ProvidersConfig {
     note?: string;
     codexAccountMode?: "direct" | "pool";
     xaiResponsesOptInState?: boolean | "mixed";
+    openRouterRouting?: import("../provider-workspace/catalog").OpenRouterRoutingPreference;
+    modelOpenRouterRouting?: Record<string, import("../provider-workspace/catalog").OpenRouterRoutingPreference>;
   }>;
 }
 

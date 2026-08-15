@@ -293,6 +293,7 @@ export default function ProviderDetails({
             }
             onRetryModels={onRetryModels}
             onOpenAccounts={authSurface ? () => switchTab("accounts") : undefined}
+            onUpdateProvider={onUpdateProvider}
           />
         )}
         {tab === "usage" && (

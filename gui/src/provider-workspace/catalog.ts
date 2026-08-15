@@ -57,6 +57,14 @@ export interface WorkspaceProvider {
   codexAccountMode?: "direct" | "pool";
   /** Derived state of the two xAI Grok Responses model-adapter entries. */
   xaiResponsesOptInState?: boolean | "mixed";
+  openRouterRouting?: OpenRouterRoutingPreference;
+  modelOpenRouterRouting?: Record<string, OpenRouterRoutingPreference>;
+}
+
+export interface OpenRouterRoutingPreference {
+  order?: string[];
+  only?: string[];
+  allowFallbacks?: boolean;
 }
 
 /** Three-way pricing/ownership tier for a ready provider row. */
