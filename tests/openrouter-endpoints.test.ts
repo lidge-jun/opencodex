@@ -68,6 +68,41 @@ describe("OpenRouter model endpoint discovery", () => {
       fetch: async () => Response.json({ error: { message: "secret upstream detail" } }, { status: 403 }),
     } as OcxProviderConfig;
     await expect(listOpenRouterModelEndpoints("openrouter", provider, "deepseek/deepseek-r1", "test-token"))
-      .rejects.toMatchObject({ code: "management_key_required", status: 403 });
+      .rejects.toMatchObject({ code: "authorization_failed", status: 403 });
+  });
+
+  test("bounds unique discovery flights while still allowing existing flights to settle", async () => {
+    let release!: () => void;
+    let fetches = 0;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://openrouter.ai/api/v1",
+      fetch: async (input: string | URL | Request) => {
+        fetches += 1;
+        await gate;
+        const parts = new URL(String(input)).pathname.split("/");
+        return Response.json({
+          data: {
+            id: `${decodeURIComponent(parts.at(-3)!)}/${decodeURIComponent(parts.at(-2)!)}`,
+            endpoints: [],
+          },
+        });
+      },
+    } as OcxProviderConfig;
+    const active = Array.from({ length: 8 }, (_, index) => (
+      listOpenRouterModelEndpoints("openrouter", provider, `author/model-${index}`, "test-token")
+    ));
+    await Promise.resolve();
+    const joined = listOpenRouterModelEndpoints("openrouter", provider, "author/model-0", "test-token");
+
+    await expect(listOpenRouterModelEndpoints("openrouter", provider, "author/overflow", "test-token"))
+      .rejects.toMatchObject({ code: "busy", status: 429 });
+
+    release();
+    await expect(Promise.all([...active, joined])).resolves.toHaveLength(9);
+    expect(fetches).toBe(8);
+    await expect(listOpenRouterModelEndpoints("openrouter", provider, "author/after", "test-token"))
+      .resolves.toMatchObject({ cached: false, endpoints: [] });
   });
 });

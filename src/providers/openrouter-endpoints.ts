@@ -5,6 +5,7 @@ import type { OcxProviderConfig } from "../types";
 
 const ENDPOINTS_TTL_MS = 5 * 60_000;
 const MAX_CACHE_ENTRIES = 128;
+const MAX_ACTIVE_FLIGHTS = 8;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_ENDPOINTS = 512;
 const CACHE_SCOPE_KEY = randomBytes(32);
@@ -110,6 +111,9 @@ export async function listOpenRouterModelEndpoints(
   if (!refresh && cached && cached.expiresAt > now) return { fetchedAt: cached.fetchedAt, cached: true, endpoints: cached.endpoints };
   let flight = flights.get(key);
   if (!flight) {
+    if (flights.size >= MAX_ACTIVE_FLIGHTS) {
+      throw new OpenRouterEndpointsError("busy", 429, "OpenRouter endpoint discovery is busy");
+    }
     flight = (async () => {
       const requestUrl = `https://openrouter.ai/api/v1/models/${path}/endpoints`;
       const response = await providerOutboundGet(providerName, provider, requestUrl, {
@@ -120,7 +124,7 @@ export async function listOpenRouterModelEndpoints(
       if (redirect) throw new OpenRouterEndpointsError("upstream_redirect", 502, redirect);
       if (response.status === 401 || response.status === 403) {
         try { await response.body?.cancel(); } catch { /* best effort */ }
-        throw new OpenRouterEndpointsError("management_key_required", 403, "OpenRouter endpoint discovery requires an authorized Management Key");
+        throw new OpenRouterEndpointsError("authorization_failed", response.status, "OpenRouter rejected the configured API key for endpoint discovery");
       }
       if (!response.ok) {
         try { await response.body?.cancel(); } catch { /* best effort */ }

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../src/config";
 import { handleManagementAPI } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 
@@ -9,6 +10,7 @@ const savedHome = process.env.OPENCODEX_HOME;
 let tempHome: string | null = null;
 
 afterEach(() => {
+  setPersistedConfigMutationBeforeCommitForTests(null);
   if (savedHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = savedHome;
   if (tempHome) rmSync(tempHome, { recursive: true, force: true });
@@ -18,12 +20,14 @@ afterEach(() => {
 function config(recovery?: OcxConfig["agentTaskRecovery"]): OcxConfig {
   tempHome = mkdtempSync(join(tmpdir(), "ocx-agent-recovery-api-"));
   process.env.OPENCODEX_HOME = tempHome;
-  return {
+  const current = {
     port: 10100,
     defaultProvider: "openai",
     providers: {},
     ...(recovery ? { agentTaskRecovery: recovery } : {}),
   } as OcxConfig;
+  saveConfig(current);
+  return current;
 }
 
 async function request(current: OcxConfig, method: "GET" | "PUT", body?: unknown): Promise<Response> {
@@ -65,5 +69,22 @@ describe("/api/agent-task-recovery", () => {
       expect(response.status).toBe(400);
       expect(current.agentTaskRecovery).toEqual({ enabled: false, timeoutMs: 9_000 });
     }
+  });
+
+  test("keeps live recovery state unchanged when the durable mutation becomes unavailable", async () => {
+    const current = config({ enabled: false, timeoutMs: 9_000 });
+    setPersistedConfigMutationBeforeCommitForTests(() => {
+      rmSync(join(tempHome!, "config.json"), { force: true });
+    });
+
+    const response = await request(current, "PUT", { enabled: true });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "configuration update unavailable",
+      code: "config_update_unavailable",
+    });
+    expect(current.agentTaskRecovery).toEqual({ enabled: false, timeoutMs: 9_000 });
+    expect(await (await request(current, "GET")).json()).toEqual({ enabled: false });
   });
 });

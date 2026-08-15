@@ -564,9 +564,10 @@ Provider discovery for this editor is a separate, management-only path. It calls
 an exact matching model envelope and bounded endpoint rows with nonblank `tag` values, and caches the
 sanitized result in memory for five minutes under a process-keyed credential scope. Credentials and
 upstream error bodies never enter the management response. A 401/403 is surfaced as the static
-`openrouter_management_key_required` class because OpenRouter may require a Management Key even when
-the same configured inference key remains valid for completions. The dashboard writes one exact-model
-override through the normal provider PATCH path; null removes that override and restores inheritance.
+`openrouter_authorization_failed` class; discovery uses the configured OpenRouter API key. No more
+than eight distinct discovery flights may be active at once, while
+same-key callers continue joining the existing flight. The dashboard writes one exact-model override
+through the normal provider PATCH path; null removes that override and restores inheritance.
 
 ## Kimi Coding Plan prompt-cache affinity
 
