@@ -93,6 +93,19 @@ function writeAccountNamespaceConfig(
 }
 
 describe("opencodex config defaults", () => {
+  test("empty-completion retry is an explicit top-level opt-in", () => {
+    const defaults = getDefaultConfig();
+    expect(defaults.emptyCompletionRetry).toBe(false);
+    expect(validateConfigCandidate({ ...defaults, emptyCompletionRetry: true })).toMatchObject({
+      ok: true,
+      config: { emptyCompletionRetry: true },
+    });
+    expect(validateConfigCandidate({ ...defaults, emptyCompletionRetry: "true" })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("emptyCompletionRetry"),
+    });
+  });
+
   test("usage and MCP config overrides change the effective bound while defaults remain compatible", () => {
     const defaults = getDefaultConfig();
     expect(defaults.managementUsageMaxReadBytes).toBe(64 * 1024 * 1024);

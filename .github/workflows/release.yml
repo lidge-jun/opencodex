@@ -374,8 +374,10 @@ jobs:
           notes_file="$(mktemp)"
           carried_file="$(mktemp)"
           delta_file="$(mktemp)"
+          commit_fallback_file="$(mktemp)"
           : > "$carried_file"
           : > "$delta_file"
+          : > "$commit_fallback_file"
 
           # Stable releases after matching previews: aggregate every matching preview
           # changelog (oldest→newest; each preview body is incremental), then only
@@ -449,6 +451,31 @@ jobs:
             pr_notes="$(gh api "${generate_notes_api[@]}" --jq '.body')"
             # Drop generate-notes' trailing compare link; we re-append it after the commit list.
             printf '%s\n' "$pr_notes" | sed '/^\*\*Full Changelog\*\*:/d' > "$delta_file"
+
+            # generate-notes counts MERGED PULL REQUESTS in the tag range. Work that lands
+            # as direct commits on the integration branch (or via PRs based on `dev` rather
+            # than this release branch) leaves that range with nothing to aggregate, and the
+            # body collapses to the npm line plus a compare link — v2.17.0..v2.18.2 shipped
+            # exactly that, 0 of 36 commits PR-associated. Fall back to the commit log so a
+            # release can never publish an empty changelog.
+            # The renderer only keeps entries carrying a PR number, so the fallback
+            # travels in its own channel (--commit-fallback). The decision depends on
+            # THIS range's PR delta only: carried preview notes cover the pre-preview
+            # span, so gating on them too would silently drop every post-preview
+            # direct commit. The renderer decides whether to emit the channel.
+            if ! bun scripts/release-notes.ts has-meaningful "$delta_file"; then
+              commit_log_file="$(mktemp)"
+              # NUL-delimited: Git forbids NUL in commit content, so neither a crafted
+              # subject nor an author name can forge a field boundary.
+              git log -z --format='%H%x00%s%x00%an' "${notes_range_start}..${GITHUB_SHA}" > "$commit_log_file"
+              bun scripts/release-notes.ts commit-fallback "$commit_log_file" > "$commit_fallback_file"
+              if bun scripts/release-notes.ts has-meaningful "$commit_fallback_file"; then
+                echo "::notice::generate-notes returned no PR categories for ${notes_range_start}..${release_tag}; using the commit-based changelog fallback"
+              else
+                : > "$commit_fallback_file"
+                echo "::notice::No PR categories and no eligible commits in ${notes_range_start}..${release_tag}; release notes stay minimal"
+              fi
+            fi
           else
             # First release on this channel: never call generate-notes without previous_tag_name.
             # GitHub would baseline the newest repo tag, which may belong to the other channel.
@@ -476,6 +503,7 @@ jobs:
             --npm-metadata "$npm_metadata"
             --carried "$carried_file"
             --delta "$delta_file"
+            --commit-fallback "$commit_fallback_file"
             --out "$notes_file"
             --compare-to "$release_tag"
             --repository "$GITHUB_REPOSITORY"

@@ -1,12 +1,4 @@
-import { createAnthropicAdapter } from "../adapters/anthropic";
-import { createAzureAdapter } from "../adapters/azure";
-import { createCursorAdapter } from "../adapters/cursor";
-import { createGoogleAdapter } from "../adapters/google";
-import { createKiroAdapter } from "../adapters/kiro";
-import { createMimoFreeAdapter } from "../adapters/mimo-free";
-import { createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { createCommandCodeAdapter } from "../adapters/command-code";
-import { createResponsesPassthroughAdapter } from "../adapters/openai-responses";
+import { createRegisteredAdapter } from "../adapters/registry";
 import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
@@ -57,27 +49,5 @@ export function resolveWireProtocolOverride(
 
 /** Build the provider adapter for a resolved provider config. */
 export function resolveAdapter(providerConfig: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
-  switch (providerConfig.adapter) {
-    case "command-code":
-      return createCommandCodeAdapter(providerConfig);
-    case "openai-chat":
-      return createOpenAIChatAdapter(providerConfig);
-    case "anthropic":
-      return createAnthropicAdapter(providerConfig, cacheRetention);
-    case "openai-responses":
-      return createResponsesPassthroughAdapter(providerConfig);
-    case "google":
-      return createGoogleAdapter(providerConfig);
-    case "kiro":
-      return createKiroAdapter(providerConfig);
-    case "azure":
-    case "azure-openai":
-      return createAzureAdapter(providerConfig);
-    case "cursor":
-      return createCursorAdapter(providerConfig);
-    case "mimo-free":
-      return createMimoFreeAdapter(providerConfig);
-    default:
-      throw new Error(`Unknown adapter: ${providerConfig.adapter}`);
-  }
+  return createRegisteredAdapter(providerConfig, { cacheRetention });
 }

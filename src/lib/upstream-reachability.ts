@@ -23,6 +23,7 @@
  * MUST stay a leaf module: imports nothing from server.ts or adapters.
  */
 
+import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { UpstreamRetryEvidenceError } from "./upstream-retry";
 
 export const PRE_CONNECT_REACHABILITY_CODES = new Set([
@@ -68,6 +69,9 @@ export type TransportFailureKind = "timeout" | "connect_neutral" | "connect_erro
  * account-attributed behavior.
  */
 export function classifyTransportFailureKind(err: unknown): TransportFailureKind {
+  // A local pacing admission failure happened before transport classification and must
+  // remain a client-visible overload, not account or host health evidence.
+  if (err instanceof RequestPacingQueueOverloadError) throw err;
   const evidence = err instanceof UpstreamRetryEvidenceError ? err : undefined;
   const rejection = evidence ? evidence.cause : err;
   if (rejection instanceof Error && rejection.name === "TimeoutError") return "timeout";

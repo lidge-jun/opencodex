@@ -17,7 +17,7 @@ import {
 } from "../digest";
 import type { ObservationEvent } from "../events/types";
 import { assignEventId } from "../events/validate";
-import { appendLabEvent } from "../ledger/store";
+import { withLedgerMutation } from "../ledger/store";
 import { ensureLabDirs } from "../paths";
 import type {
   CaseAuthority,
@@ -285,12 +285,14 @@ export function persistConformanceResult(
   const ownsStore = !opts.artifactStore;
   const store = opts.artifactStore ?? createArtifactStore(paths.artifactsDir);
   try {
-    const { event } = observationFromConformanceResult(result, caseRecord, authority, {
-      ...opts,
-      artifactStore: store,
+    return withLedgerMutation(paths.ledgerPath, (ledger) => {
+      const { event } = observationFromConformanceResult(result, caseRecord, authority, {
+        ...opts,
+        artifactStore: store,
+      });
+      ledger.append(event);
+      return { event, ledgerPath: paths.ledgerPath };
     });
-    appendLabEvent(paths.ledgerPath, event);
-    return { event, ledgerPath: paths.ledgerPath };
   } finally {
     if (ownsStore) store.close();
   }

@@ -17,8 +17,8 @@ src/
 ├── oauth/              # OAuth providers, API-key catalog, token store/refresh
 ├── usage/              # request usage extraction, JSONL logs, summaries, totals
 ├── lib/                # runtime, process, retry, privacy, token estimate helpers
-├── web-search/         # web-search sidecar (synthetic tool, loop, executor, parser)
-├── vision/             # vision sidecar (describe + plan)
+├── web-search/         # service auxiliaire de recherche web (outil synthétique, boucle, exécuteur, analyseur)
+├── vision/             # service auxiliaire de vision (description et planification)
 ├── config.ts           # ~/.opencodex/config.json, defaults, PID, env resolution
 ├── router.ts           # model id → provider + adapter
 ├── bridge.ts           # AdapterEvent stream → Responses SSE / JSON

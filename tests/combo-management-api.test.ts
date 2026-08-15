@@ -268,6 +268,31 @@ describe("combo management API", () => {
       const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
       expect((listed.combos as Array<{ id: string }>).map(row => row.id)).toEqual(["alpha", "zeta"]);
       expect(listComboIds(config)).toEqual(["alpha", "zeta"]);
+      // Default imageInput is not written to disk — only explicit "disabled" is.
+      expect(config.combos?.zeta).not.toHaveProperty("imageInput");
+    });
+  });
+
+  test("PUT persists explicit imageInput disabled", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const response = await comboApi(config, "PUT", "/api/combos", {
+        id: "limited",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          imageInput: "disabled",
+        },
+      });
+      expect(response?.status).toBe(200);
+      expect(await responseJson(response)).toMatchObject({
+        combo: { imageInput: "disabled" },
+      });
+      expect(config.combos?.limited).toMatchObject({ imageInput: "disabled" });
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos).toEqual([expect.objectContaining({
+        id: "limited", imageInput: "disabled",
+      })]);
     });
   });
 

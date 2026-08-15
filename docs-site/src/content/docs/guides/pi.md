@@ -103,9 +103,26 @@ small-context model is never given more output than context. It is not a claim a
 model's true maximum.
 
 Two fields are deliberately absent. `cost` requires all four price fields and opencodex has no
-price data for routed models — emitting zeros would assert that every model is free. `reasoning` is
-a boolean in Pi while the catalog carries an effort ladder, and mapping one onto the other would be
-a guess.
+price data for routed models — emitting zeros would assert that every model is free.
+
+`reasoning` is the one field that used to be absent and now is not: Pi stores a boolean while the
+catalog carries an effort ladder, and mapping one onto the other used to be a guess. Since the
+catalog's ladder is the proxy's own statement about whether a model accepts reasoning parameters
+(adapters honor `reasoning_effort`), an export row with a **non-empty** ladder now emits
+`"reasoning": true`, and a row without one (or with an explicitly empty ladder) stays
+reasoning-free. Pi then offers its effort control for exactly the models opencodex will accept it
+on. The export also emits a `thinkingLevelMap` that hides every pi level with no declared target
+(`null`), so pi never offers — and never sends — an effort the ladder does not contain. One
+fallback keeps the model usable: when `ultra` is declared without `max`, pi's `max` level maps
+to `ultra` (still a ladder member).
+If you need a different mapping, hand-edit `thinkingLevelMap` afterward as documented by Pi.
+
+Treat `reasoning` as Pi-UI metadata: it is derived from the catalog ladder, not proof that the
+upstream natively supports a reasoning parameter. What the proxy actually sends for a given
+`reasoning_effort` value depends on the provider's adapter and model — it may pass the value
+through, translate it (wire aliases), clamp it to the configured ladder, emulate it, or omit it
+entirely (e.g. `noReasoningModels`). The boolean only controls whether Pi offers the control at
+all.
 
 ## Schema status
 

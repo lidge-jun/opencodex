@@ -211,6 +211,14 @@ par défaut et laisse le comportement de la cible inchangé. Les valeurs prises 
 `high`, `xhigh`, `max` et `ultra` ; omettez le champ ou réglez-le sur `null` pour laisser l'effort entièrement à
 l'appelant et la cible.
 
+## Capacité d’entrée d’images / multimodale
+
+Par défaut, une combinaison publie l’**intersection** des modalités d’entrée de ses cibles : les images ne
+sont activées que lorsque toutes les cibles les annoncent. Définissez `imageInput: "disabled"` pour forcer
+le texte seul même si toutes les cibles prennent en charge les images. Le catalogue retire alors `image`
+de `inputModalities`, et les requêtes contenant des images sont rejetées avec le code HTTP 400 avant tout
+appel de cible. La valeur `"auto"`, ou l’absence du champ, conserve l’intersection automatique.
+
 ## Tâches du sous-agent v2 chiffrées
 
 Il existe une limitation importante pour les sous-agents Codex v2 ([issue #92](https://github.com/lidge-jun/opencodex/issues/92)).
@@ -304,6 +312,7 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | `strategy` | Non | `"failover"` | `"failover"` ou `"round-robin"`. |
 | `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |
+| `imageInput` | Non | `"auto"` | `"auto"` ou `"disabled"`. `"auto"` publie les images uniquement si toutes les cibles les prennent en charge ; `"disabled"` impose le texte seul, retire les images des modalités publiées et rejette les requêtes qui en contiennent avant leur distribution. |
 | `alias` | Non | aucun | Identifiant de modèle public tronqué facultatif ; utilisez les règles d'alias ci-dessus. Une valeur vide est stockée sans alias. |
 | `nativeAlias` | Non | `false` | Autoriser explicitement un `alias` natif nu actuellement pris en charge à avoir la priorité sur le routage et le catalogue. Jamais déduit de l'alias. |
 | `displayName` | Non | aucun | Étiquette de catalogue délimitée en affichage uniquement. Obligatoire et non vide lorsque `nativeAlias` est vrai. |

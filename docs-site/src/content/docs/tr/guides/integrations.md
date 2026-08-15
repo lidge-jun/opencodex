@@ -1,10 +1,10 @@
 ---
 title: Entegrasyonlar
-description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code ve DeepSeek Harness'ı opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
+description: Kontrol panelinden OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness ve MiniMax Code'u opencodex'e bağlayın — istemci başına tek bir anahtar ve her yazmadan önce alınan bir yedek.
 ---
 
 **Entegrasyonlar** sekmesi, opencodex'in sağlayıcı bloğunu istemcinin kendi
-yapılandırma dosyasına yazar ve tekrar kaldırır. Sekiz istemci bu şekilde
+yapılandırma dosyasına yazar ve tekrar kaldırır. Dokuz istemci bu şekilde
 çalışır, her biri bir anahtarla:
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
@@ -17,6 +17,7 @@ yapılandırma dosyasına yazar ve tekrar kaldırır. Sekiz istemci bu şekilde
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | yeniden başlatmada veya `/reload` ile | geri döngü (loopback) yer tutucusu |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | yeni oturumlarda veya `/model` açtığınızda | `OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (varsayılan `~/.dsh/settings.yaml`) | YAML | çalışırken yeniden yükleme | gizli olmayan geri döngü bearer yer tutucusu |
+| MiniMax Code | `~/.minimax/config.yaml` | YAML | yeni oturumlarda veya model seçici açıldıktan sonra | geri döngü (loopback) yer tutucusu |
 
 Yönetilen DSH desteğinin en düşük uyumlu sürümü **DSH 0.1.0-rc.6**'dır. OpenCodex yalnızca
 `llm-pi-ai.providers.opencodex` bölümünü yönetir: Uygula ve Yenile bu bölümü değiştirir, Devre Dışı
@@ -24,6 +25,12 @@ Bırak yalnızca bu bölümü kaldırır, Geri Yükle ise kaydedilmiş bir anlı
 sağlayıcı değişikliklerini çalışırken yeniden yükler. Bu işlemler kullanıcının varsayılan modelini
 veya yerel `deepseek-official` sağlayıcısını değiştirmez. Yönetilen DSH entegrasyonu şu anda yalnızca
 geri döngü içindir ve asla gerçek bir kimlik bilgisi yazmaz.
+
+MiniMax Code önce `MINIMAX_DATA_DIR`, ardından `MAVIS_DATA_DIR` yolunu izler ve
+son olarak `~/.minimax` dizinine geri döner. Yönetilen blok yalnızca
+`custom_provider.opencodex` alanına sahiptir; `defaultModel` değerini, seçilen
+MiniMax kimlik bilgisi kaynağını veya kullanıcının MiniMax oturumunu değiştirmez.
+Bağladıktan sonra MCode içinde bir `custom_provider:opencodex/<provider/model>` girdisi seçin.
 
 Yollar, varsa her istemcinin kendi ortam geçersiz kılmalarını dikkate alır. OMP
 için `OMP_PROFILE`, açıkça boş olduğunda bile varlığıyla `PI_PROFILE`'a üstün
@@ -100,7 +107,7 @@ hiçbir şey sessizce değiştirilmez veya düşürülmez. **OMP** de yanındaki
 düzenlemelerden etkilenmez, ama başka bir nedenle: writer'ı yalnızca kendi
 `providers.opencodex` aralığını bayt bayt yamalar, dosyanın geri kalanı hiçbir
 zaman yeniden yazılmaz. Yorum taşıyabilen diğer biçimlerde (Hermes, OpenClaw,
-Kimi Code, Gajae Code — bütün belge olarak yazılan YAML, JSON5 ve TOML) veya
+Kimi Code, Gajae Code, MiniMax Code — bütün belge olarak yazılan YAML, JSON5 ve TOML) veya
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
@@ -124,8 +131,8 @@ değişen bir değer yazıp buna başarı demek yerine durur ve bunu söyler. Do
 adlandırıldığını ve diskte hiçbir şeyin taşınmadığını görürsünüz. Bu dosyayı
 elle düzenlemek hala çalışır; yalnızca otomatik yeniden yazmamız reddeder.
 
-**Pi, Kimi Code, Gajae Code ve yönetilen DSH entegrasyonu yalnızca geri döngü (loopback) bağlantısına karşı
-çalışır.** İlk üçünün yapılandırmasında geri döngü olmayan bir bağlantının gerektirdiği
+**Pi, Kimi Code, Gajae Code, MiniMax Code ve yönetilen DSH entegrasyonu yalnızca geri döngü (loopback) bağlantısına karşı
+çalışır.** İlk dördünün yapılandırmasında geri döngü olmayan bir bağlantının gerektirdiği
 `x-opencodex-api-key` başlığı için alan yoktur. DSH genel bir headers haritası sunar, ancak rc.6
 bu özel kabul başlığını desteklenen bir entegrasyon sözleşmesi olarak belgelememektedir; bu nedenle
 yönetilen writer tahmin yürütmek yerine kapalı biçimde reddeder. Bunun yerine bir SSH tüneli veya
@@ -157,6 +164,29 @@ ocx integration client disable --client hermes
 ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
+
+MiniMax Code için sağlayıcıyı bir kez bağlayın ve denetimli başlatıcı üzerinden çalıştırın:
+
+```bash
+ocx integration client enable --client mcode
+ocx mcode
+```
+
+Ayrı MiniMax platform CLI'si (`mmx`) bir dosya anahtarı entegrasyonu değildir.
+Metin komutları MiniMax'ın Anthropic uyumlu uç noktasını kullandığı için OpenCodex,
+kimlik bilgilerini yalıtan ve yalnızca geri döngüde çalışan bir başlatıcı sağlar:
+
+```bash
+ocx mmx text chat --model anthropic/claude-opus-5 --message "Hello"
+ocx mmx text repl --model openai/gpt-5.6-sol
+```
+
+Yalnızca `mmx text chat` ve `mmx text repl` proxy üzerinden yönlendirilir. MiniMax'a
+özgü diğer komutlar için doğrudan `mmx` çalıştırın. Başlatıcı yalnızca gizli olmayan
+geri döngü yer tutucusunu içeren geçici bir yapılandırma kullanır; `~/.mmx` OAuth veya
+API anahtarı kimlik bilgilerinizi yüklemez ve `--api-key`, `--base-url` ile `--region`
+geçersiz kılmalarını reddeder. Tam iş akışı için
+[MiniMax istemcileri](/guides/minimax/) sayfasına bakın.
 
 `--confirm-drift` asla varsayılmaz. Geri yüklediğiniz işlemden sonra dosya
 değiştiyse, komut reddeder ve size bildirir; çünkü daha yeni düzenlemelerinizin

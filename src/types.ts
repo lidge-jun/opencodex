@@ -587,6 +587,13 @@ export interface OcxCustomModel {
   contextWindow?: number;
   /** 입력 모달리티 (선택, 기본 ["text"]) */
   inputModalities?: string[];
+  /**
+   * Reasoning ladder (Codex labels) this custom row explicitly advertises. An empty array
+   * hides the effort control; an omitted key leaves the provider-derived ladder in charge.
+   */
+  reasoningEfforts?: string[];
+  /** Default effort label when `reasoningEfforts` is non-empty. */
+  defaultReasoningEffort?: string;
   /** 추가 시각 (ISO 8601) */
   addedAt?: string;
 }
@@ -623,6 +630,8 @@ export interface OcxClientIntegrationsConfig {
 
 export interface OcxConfig {
   port: number;
+  /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
+  emptyCompletionRetry?: boolean;
   /** Maximum usage-log bytes read for one management snapshot. */
   managementUsageMaxReadBytes?: number;
   providers: Record<string, OcxProviderConfig>;
@@ -645,6 +654,20 @@ export interface OcxConfig {
    * into a selector-qualified group; Codex still advertises only the first 5 visible rows.
    */
   subagentModels?: string[];
+  /**
+   * Optional full picker ordering for the Codex model catalog, independent of the
+   * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
+   * the Codex model picker for large routed catalogs (10-20+ models) that would otherwise sort
+   * arbitrarily and reshuffle on every rebuild. Values are routed `<provider>/<model>` catalog
+   * slugs (matched by exact slug or `provider/id`); native OpenAI passthrough rows and
+   * account-qualified native rows are not reordered (order native rows via `subagentModels`).
+   * Listed routed rows appear in array order; rows not listed keep their normal display order.
+   * `subagentModels`-featured rows keep their top position. When unset or empty, catalog
+   * priority is unchanged. This changes ONLY what the user sees in the picker: the spawn_agent
+   * candidate set is derived from each row's natural priority and is provably unaffected, even
+   * when every routed row is listed (see opencodex_spawn_priority / effectiveSubagentRoster).
+   */
+  modelPickerOrder?: string[];
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, opencodex rewrites the child
@@ -967,6 +990,12 @@ export interface OcxComboConfig {
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
   /**
+   * Disable image input even when every target supports it.
+   * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when
+   * the target intersection includes image).
+   */
+  imageInput?: "auto" | "disabled";
+  /**
    * Optional public model name replacing the default `combo/<id>` slug. Bare names
    * without "/" are allowed (e.g. "deepseek-v4-flash") so the combo can answer to a
    * mandated model id; exact-match requests route here before any provider resolution.
@@ -1234,12 +1263,28 @@ export interface ProviderCostOverlay {
   cacheWrite: number;
 }
 
+export interface RequestPacingRule {
+  /** Evenly spread request starts to this many requests per minute. */
+  requestsPerMinute?: number;
+  /** Minimum delay between request starts. The slower configured value wins. */
+  minIntervalMs?: number;
+}
+
+export interface ProviderRequestPacingConfig extends RequestPacingRule {
+  /** False preserves legacy behavior with no client-side waiting. */
+  enabled: boolean;
+  /** Exact upstream model-id overrides; other models inherit the provider rule. */
+  models?: Record<string, RequestPacingRule>;
+}
+
 /**
  * One configured provider entry. `authMode` (default `"key"`) decides whether same-target 429
  * retries are allowed; OAuth/forward credentials and local runtimes are never replayed.
  */
 export interface OcxProviderConfig {
   adapter: string;
+  /** Optional outbound request-start pacing shared by this provider and its model overrides. */
+  requestPacing?: ProviderRequestPacingConfig;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;
@@ -1282,8 +1327,10 @@ export interface OcxProviderConfig {
    */
   requiresAdjacentResponsesToolResults?: boolean;
   /**
-   * Whether this provider's Responses route honours the OpenAI `service_tier`
-   * parameter. Tri-state: `true` lets fast mode inject/remove the field (an unset
+   * Provider fallback for the OpenAI `service_tier` parameter. On Responses routes this
+   * is the complete wire opt-in; Chat routes additionally require `chatServiceTier` or an
+   * exact-model true declaration.
+   * Tri-state: `true` lets fast mode inject/remove the field (an unset
    * fast mode preserves a caller-supplied value); `false` strips the field and
    * never injects, because an upstream documented as not supporting the parameter
    * must not receive it; absent (`undefined`) leaves the provider unclassified —
@@ -1291,6 +1338,8 @@ export interface OcxProviderConfig {
    * An explicit config value always wins over the registry default.
    */
   supportsServiceTier?: boolean;
+  /** Exact upstream model ids that override the provider-level service-tier capability. */
+  modelSupportsServiceTier?: Record<string, boolean>;
   /**
    * Responses upstream whose native contract accepts plaintext reasoning replay
    * (DeepSeek documents reasoning items with plaintext content). When set, the
@@ -1469,6 +1518,18 @@ export interface OcxProviderConfig {
    */
   pinParallelToolCallsFalse?: boolean;
   /**
+   * Opt-in: extend the no-tool-call terminal continuation guard to this provider's
+   * `openai-chat` routed turns. The guard (originally Anthropic-only, see
+   * devlog/_fin/260706_previous-response-id-400) issues one bounded internal re-ask when a
+   * model announces work but ends the turn without emitting a tool call. Self-hosted
+   * OpenAI-compatible gateways (GLM/Kimi-family, etc.) hit the same premature-completion
+   * pattern, but the heuristic that decides a "suspicious no-tool stop" was tuned on
+   * Anthropic turns, so it stays OFF by default for the many registry providers that share
+   * the `openai-chat` adapter. Enable only for a provider whose models are known to stop
+   * mid-work; non-`openai-chat` adapters ignore this flag.
+   */
+  terminalContinuationGuard?: boolean;
+  /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown
    * fields. Default off; only enable for providers that document this parameter.
@@ -1479,8 +1540,9 @@ export interface OcxProviderConfig {
    * OpenAI-specific extension with the same hazard as `promptCacheKey` — strict backends
    * reject unknown fields, and 66 registry providers share the `openai-chat` adapter, so a
    * caller-supplied `service_tier` would otherwise turn working requests into upstream 400s.
-   * `supportsServiceTier` is the Responses-wire flag and does not apply here.
-   * Default off; only enable for providers that document this parameter on the chat wire.
+   * Exact models may opt in through `modelSupportsServiceTier` instead; provider-level
+   * `supportsServiceTier: false` remains a global denial. Default off; only enable for
+   * providers that document this parameter on the chat wire.
    */
   chatServiceTier?: boolean;
   /**

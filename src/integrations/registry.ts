@@ -20,6 +20,8 @@ import {
   hermesHomeDir,
   kimiConfigPath,
   kimiHomeDir,
+  mcodeConfigPath,
+  mcodeHomeDir,
   ompAgentDir,
   ompModelsConfigPath,
   opencodeGlobalConfigPath,
@@ -111,6 +113,11 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
     detectDir: (env = process.env, home = homedir()) => dshHomeDir(env, home),
     sourcePreservingYaml: { path: ["llm-pi-ai", "providers", "opencodex"] },
     writerLock: { suffix: ".lock" },
+  },
+  mcode: {
+    id: "mcode",
+    configPath: (env = process.env, home = homedir()) => mcodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => mcodeHomeDir(env, home),
   },
 };
 

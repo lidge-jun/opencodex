@@ -36,10 +36,10 @@ describe("mimo-free provider registry", () => {
     expect(entry?.defaultModel).toBe("mimo-auto");
   });
 
-  test("providerConfigSeed propagates keyOptional and liveModels", () => {
+  test("providerConfigSeed preserves keyOptional and disables static live discovery", () => {
     const seed = providerConfigSeed(entry!);
     expect(seed.keyOptional).toBe(true);
-    expect(seed.liveModels).toBe(true);
+    expect(seed.liveModels).toBe(false);
   });
 
   test("is included in the key-login map", () => {

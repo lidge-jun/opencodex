@@ -102,10 +102,28 @@ faisant autorité. Dans le cas contraire, les deux champs sont omis pour ce mod�
 modèle doté d’un petit contexte ne reçoive jamais davantage de sortie que de contexte. Cette valeur ne constitue pas une affirmation sur la
 limite maximale réelle d’un modèle donné.
 
-Deux champs sont volontairement absents. `cost` nécessite les quatre champs de prix et opencodex n'a pas
-données de prix pour les modèles acheminés – émettre des zéros affirmerait que chaque modèle est gratuit. `reasoning` est
-un booléen en Pi alors que le catalogue comporte une échelle d'effort, et mapper l'un sur l'autre serait
-une supposition.
+Le champ `cost` est volontairement absent. Il exige les quatre champs de prix, alors qu’OpenCodex ne possède
+aucune donnée tarifaire pour les modèles routés ; émettre des zéros reviendrait à affirmer que tous les
+modèles sont gratuits.
+
+`reasoning`, autrefois absent, est désormais émis. Pi stocke un booléen tandis que le catalogue possède une
+échelle d’effort ; cette correspondance était auparavant trop incertaine. Puisque l’échelle du catalogue
+indique maintenant si le proxy accepte les paramètres de raisonnement — les adaptateurs respectent
+`reasoning_effort` — une ligne exportée avec une échelle **non vide** reçoit `"reasoning": true`. Une ligne
+sans échelle, ou avec une échelle explicitement vide, reste dépourvue de raisonnement. Pi propose ainsi son
+contrôle de l’effort exactement pour les modèles auxquels OpenCodex permet de l’envoyer. L’export produit
+aussi un `thinkingLevelMap` qui masque avec `null` chaque niveau Pi sans cible déclarée : Pi ne propose ni
+n’envoie donc aucun effort absent de l’échelle. Un repli maintient le modèle utilisable : lorsque `ultra`
+est déclaré sans `max`, le niveau `max` de Pi est associé à `ultra`, qui appartient bien à l’échelle.
+Modifiez ensuite `thinkingLevelMap` manuellement si vous souhaitez une autre correspondance, comme le
+documente Pi.
+
+Considérez `reasoning` comme une métadonnée de l’interface Pi : elle découle de l’échelle du catalogue et ne
+prouve pas que le service en amont accepte nativement un paramètre de raisonnement. Ce que le proxy envoie
+réellement pour une valeur `reasoning_effort` dépend de l’adaptateur et du modèle du fournisseur : il peut
+transmettre la valeur, la traduire au moyen d’alias de protocole, la limiter à l’échelle configurée,
+l’émuler ou l’omettre entièrement, notamment pour `noReasoningModels`. Le booléen détermine seulement si Pi
+propose ce contrôle.
 
 ## Statut du schéma
 

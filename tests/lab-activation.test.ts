@@ -13,8 +13,13 @@ import {
   resolveCompatibilityEvidenceProvider,
   resetCompatibilityEvidenceProviderForTests,
 } from "../src/routing/compatibility/provider-slot";
+import { defaultLabAutomationPolicyV1 } from "../src/lab/automation/policy";
 import { isLabAutomationSchedulerRunning, stopLabAutomationScheduler } from "../src/lab/automation/orchestrator";
 import { runOptionalShutdownHooks, resetOptionalShutdownHooksForTests } from "../src/lib/optional-shutdown-hooks";
+import {
+  acquireServerResourceOwner,
+  resetServerResourceOwnershipForTests,
+} from "../src/lib/server-resource-ownership";
 import { hasPassiveRouteLinker, resetPassiveRouteLinkerForTests } from "../src/server/passive-route-linker";
 import type { OcxConfig } from "../src/types";
 
@@ -23,7 +28,23 @@ function scratch(): string {
   mkdirSync(join(dir, "lab"), { recursive: true });
   return dir;
 }
-const withProfile = { providers: {}, routingProfiles: { p: { candidates: [] } } } as unknown as OcxConfig;
+
+function writeEnabledAutomationConfig(dir: string): void {
+  writeFileSync(join(dir, "lab", "automation-config.json"), JSON.stringify({
+    schemaVersion: 1,
+    policy: {
+      ...defaultLabAutomationPolicyV1(),
+      enabled: true,
+    },
+    routes: { schemaVersion: 1, routes: [] },
+  }));
+}
+
+function profileConfig(): OcxConfig {
+  return { providers: {}, routingProfiles: { p: { candidates: [] } } } as unknown as OcxConfig;
+}
+
+const withProfile = profileConfig();
 const bare = { providers: {} } as unknown as OcxConfig;
 
 describe("lab activation gate", () => {
@@ -31,6 +52,7 @@ describe("lab activation gate", () => {
   // otherwise leak into the bare-install assertion below.
   beforeEach(() => {
     resetLabActivationForTests();
+    resetServerResourceOwnershipForTests();
     resetCompatibilityEvidenceProviderForTests();
     resetPassiveRouteLinkerForTests();
   });
@@ -79,6 +101,40 @@ describe("lab activation gate", () => {
     expect(isLabActivated(dir)).toBe(true);
   });
 
+  test("same-root successor keeps automation after predecessor owner release", () => {
+    const dir = scratch();
+    writeEnabledAutomationConfig(dir);
+    const firstOwner = acquireServerResourceOwner();
+    activateLab(profileConfig(), dir);
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(true);
+
+    const secondOwner = acquireServerResourceOwner();
+    activateLab(profileConfig(), dir);
+    firstOwner.release();
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(true);
+
+    secondOwner.release();
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(false);
+  });
+
+  test("same-process restart reacquires automation after its prior owner ended", () => {
+    const dir = scratch();
+    writeEnabledAutomationConfig(dir);
+    const config = profileConfig();
+
+    const firstOwner = acquireServerResourceOwner();
+    activateLab(config, dir);
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(true);
+    firstOwner.release();
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(false);
+
+    const secondOwner = acquireServerResourceOwner();
+    activateLab(config, dir);
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(true);
+    secondOwner.release();
+    expect(isLabAutomationSchedulerRunning(dir)).toBe(false);
+  });
+
   // Ordering trap: automation-only activation must not permanently satisfy a later
   // profile-driven one. Safe today only because activation is all-or-nothing; this test
   // fails the moment a registration becomes conditional on the activation reason.
@@ -100,6 +156,7 @@ describe("automation detection reads the current authority", () => {
   // otherwise leak into the bare-install assertion below.
   beforeEach(() => {
     resetLabActivationForTests();
+    resetServerResourceOwnershipForTests();
     resetCompatibilityEvidenceProviderForTests();
     resetPassiveRouteLinkerForTests();
   });
@@ -139,7 +196,11 @@ describe("automation detection reads the current authority", () => {
 });
 
 describe("failed scheduler start leaves nothing dangling", () => {
-  beforeEach(() => { resetLabActivationForTests(); resetOptionalShutdownHooksForTests(); });
+  beforeEach(() => {
+    resetLabActivationForTests();
+    resetServerResourceOwnershipForTests();
+    resetOptionalShutdownHooksForTests();
+  });
 
   // startLabAutomationScheduler registers its shutdown hook BEFORE it can throw, so a
   // failed start leaves a hook with no timer behind it. That must be harmless: no running

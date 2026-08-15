@@ -195,7 +195,7 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
     for await (const event of source) {
       if (event.type === "done") {
         terminalSeen = true;
-        const analysis = options.adapterName === "anthropic"
+        const analysis = (options.adapterName === "anthropic" || options.adapterName === "openai-chat")
           ? analyzeTerminalTurn(parsed, seen)
           : { decision: "pass" as const };
         const normalStop = event.stopReason !== "max_tokens" && event.stopReason !== "content_filter";

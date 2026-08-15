@@ -21,7 +21,7 @@ type ProviderOption = {
   adapter?: string;
   baseUrl?: string;
 };
-type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[] };
+type ModelOption = { provider: string; id: string; namespaced?: string; reasoningEfforts?: string[]; inputModalities?: string[] };
 type ProviderDto = {
   adapter: string;
   baseUrl: string;
@@ -148,6 +148,7 @@ export default function Combos({
         namespaced?: unknown;
         disabled?: unknown;
         reasoningEfforts?: unknown;
+        inputModalities?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
       const provider = model.provider.trim();
@@ -161,11 +162,18 @@ export default function Combos({
       const reasoningEfforts = Array.isArray(model.reasoningEfforts)
         ? model.reasoningEfforts.filter((effort): effort is string => typeof effort === "string")
         : undefined;
+      const inputModalities = Array.isArray(model.inputModalities)
+        ? model.inputModalities
+          .filter((modality): modality is string => typeof modality === "string")
+          .map((modality) => modality.trim())
+          .filter(Boolean)
+        : undefined;
       models.push({
         provider,
         id,
         namespaced: typeof model.namespaced === "string" ? model.namespaced : undefined,
         ...(reasoningEfforts ? { reasoningEfforts } : {}),
+        ...(inputModalities && inputModalities.length > 0 ? { inputModalities } : {}),
       });
     }
 

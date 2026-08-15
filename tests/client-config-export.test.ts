@@ -182,10 +182,56 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(JSON.stringify(piConfig())).not.toContain("cost");
   });
 
-  test("reasoning is omitted — an effort list is not Pi's boolean", () => {
+  test("reasoning is emitted only for rows with a non-empty effort ladder", () => {
+    // The shared fixture carries no ladder anywhere: every entry stays reasoning-free.
     for (const model of piConfig().providers.opencodex!.models) {
       expect(model).not.toHaveProperty("reasoning");
     }
+    const config = piConfig(ctx({
+      models: [
+        { namespaced: "a/reasoning", provider: "a", id: "reasoning", reasoningEfforts: ["low", "high"] },
+        { namespaced: "b/none", provider: "b", id: "none", reasoningEfforts: [] },
+        { namespaced: "c/plain", provider: "c", id: "plain" },
+        { namespaced: "d/off", provider: "d", id: "off", reasoningEfforts: ["none", "minimal", "low"] },
+      ],
+    }));
+    const models = config.providers.opencodex!.models;
+    expect(models.find(model => model.id === "a/reasoning")!.reasoning).toBe(true);
+    // Pi's level scale is constrained to the ladder: members map to themselves, everything
+    // else (incl. minimal, which the Codex ladder has no equivalent for) is hidden.
+    expect(models.find(model => model.id === "a/reasoning")!.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: null,
+      max: null,
+    });
+    // The none sentinel maps pi's off level to "none" (the proxy omits the parameter);
+    // minimal maps to itself.
+    expect(models.find(model => model.id === "d/off")!.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: "minimal",
+      low: "low",
+      medium: null,
+      high: null,
+      xhigh: null,
+      max: null,
+    });
+    // An ultra-only ladder has no exact pi level: pi's max maps to the only declared tier
+    // so the model's sole reasoning level is actually selectable.
+    const ultraOnly = piConfig(ctx({
+      models: [{ namespaced: "e/ultra", provider: "e", id: "ultra", reasoningEfforts: ["ultra"] }],
+    }));
+    expect(ultraOnly.providers.opencodex!.models[0]!.thinkingLevelMap).toMatchObject({
+      max: "ultra",
+      off: null,
+      minimal: null,
+    });
+    // An explicit empty ladder is the catalog's "no reasoning" statement; no boolean.
+    expect(models.find(model => model.id === "b/none")).not.toHaveProperty("reasoning");
+    expect(models.find(model => model.id === "c/plain")).not.toHaveProperty("reasoning");
   });
 
   test("contextWindow and maxTokens are omitted when the context window is unknown", () => {
@@ -468,8 +514,8 @@ describe("stable ordering (accept criterion 4)", () => {
 });
 
 describe("EXPORT_CLIENTS registry", () => {
-  test("covers exactly the eight file-toggle clients", () => {
-    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh"]);
+  test("covers exactly the nine file-toggle clients", () => {
+    expect(EXPORT_CLIENT_IDS).toEqual(["opencode", "pi", "omp", "hermes", "openclaw", "kimi", "gajae", "dsh", "mcode"]);
     for (const id of EXPORT_CLIENT_IDS) expect(isExportClientId(id)).toBe(true);
     // The exception clients keep their own surfaces and are not export clients.
     expect(isExportClientId("claude-desktop")).toBe(false);
@@ -619,6 +665,7 @@ describe("EXPORT_CLIENTS registry", () => {
     expect(EXPORT_CLIENTS.openclaw.filename).toBe("openclaw.json5");
     expect(EXPORT_CLIENTS.kimi.filename).toBe("kimi-config.toml");
     expect(EXPORT_CLIENTS.gajae.filename).toBe("gajae-models.yaml");
+    expect(EXPORT_CLIENTS.mcode.filename).toBe("mcode-config.yaml");
   });
 
   test("the opencode destination reuses the launcher's XDG resolution", () => {

@@ -86,6 +86,7 @@ export default defineConfig({
           translations: { fr: "Guides", ko: "가이드", "zh-CN": "指南", "zh-TW": "指南", ru: "Руководства", ja: "ガイド", tr: "Kılavuzlar" },
           items: [
             { label: "Providers", translations: { fr: "Fournisseurs", ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "guides/providers" },
+            { label: "Factory Droid Bridge", translations: { fr: "Pont Factory Droid", ko: "Factory Droid 브리지" }, slug: "guides/factory-droid" },
             { label: "Model Routing", translations: { fr: "Routage des modèles", ko: "모델 라우팅", "zh-CN": "模型路由", "zh-TW": "模型路由", ru: "Маршрутизация моделей", ja: "モデルルーティング", tr: "Model Yönlendirme" }, slug: "guides/model-routing" },
             { label: "Codex Integration", translations: { fr: "Intégration de Codex", ko: "Codex 통합", "zh-CN": "Codex 集成", "zh-TW": "Codex 整合", ru: "Интеграция с Codex", ja: "Codex 連携", tr: "Codex Entegrasyonu" }, slug: "guides/codex-integration" },
             { label: "Codex App Model Picker", translations: { fr: "Sélecteur de modèles de Codex App", ko: "Codex App 모델 선택기", "zh-CN": "Codex App 模型选择器", "zh-TW": "Codex App 模型選擇器", ru: "Выбор модели в Codex App", ja: "Codex App モデルピッカー", tr: "Codex App Model Seçici" }, slug: "guides/codex-app-models" },
@@ -96,6 +97,7 @@ export default defineConfig({
             { label: "opencode", translations: { fr: "opencode", ko: "opencode", "zh-CN": "opencode", "zh-TW": "opencode", ru: "opencode", ja: "opencode", tr: "opencode" }, slug: "guides/opencode" },
             { label: "Pi", translations: { fr: "Pi", ko: "Pi", "zh-CN": "Pi", "zh-TW": "Pi", ru: "Pi", ja: "Pi", tr: "Pi" }, slug: "guides/pi" },
             { label: "Integrations", translations: { fr: "Intégrations", ko: "연동", "zh-CN": "集成", "zh-TW": "整合", ru: "Интеграции", ja: "連携", tr: "Entegrasyonlar" }, slug: "guides/integrations" },
+            { label: "MiniMax clients", translations: { fr: "Clients MiniMax", ko: "MiniMax 클라이언트", "zh-CN": "MiniMax 客户端", "zh-TW": "MiniMax 客戶端", ru: "Клиенты MiniMax", ja: "MiniMax クライアント", tr: "MiniMax İstemcileri" }, slug: "guides/minimax" },
             { label: "Sidecars: Web Search & Vision", translations: { fr: "Services auxiliaires : recherche web et vision", ko: "사이드카: 웹 검색 & 비전", "zh-CN": "边车：网络搜索与视觉", "zh-TW": "邊車：網路搜尋與視覺", ru: "Сайдкары: веб-поиск и зрение", ja: "サイドカー: ウェブ検索 & ビジョン", tr: "Sidecar'lar: Web Arama ve Görme" }, slug: "guides/sidecars" },
             { label: "Image Bridge", translations: { fr: "Pont d’images", ko: "이미지 브릿지", "zh-CN": "图像桥接", "zh-TW": "圖像橋接", ru: "Image Bridge", ja: "画像ブリッジ", tr: "Image Bridge" }, slug: "guides/image-bridge" },
             { label: "Video Bridge", translations: { fr: "Pont vidéo", ko: "비디오 브릿지", "zh-CN": "视频桥接", "zh-TW": "影片橋接", ru: "Video Bridge", ja: "動画ブリッジ", tr: "Video Bridge" }, slug: "guides/video-bridge" },

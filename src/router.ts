@@ -11,8 +11,12 @@ import type { NormalizedComboConfig } from "./combos/types";
 import { hasOwnProvider, resolveEnvValue } from "./config";
 import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
-import { PROVIDER_REGISTRY, providerCodexAccountMode, providerMatchesRegistryTransport } from "./providers/registry";
+import { PROVIDER_REGISTRY, providerCodexAccountMode } from "./providers/registry";
 import { applyDirectReasoningEffortContracts } from "./providers/derive";
+import {
+  providerMatchesRegistryTransportWithStaticGuards,
+  providerSupportsLiveModelDiscovery,
+} from "./providers/static-model-discovery";
 import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
@@ -86,7 +90,7 @@ const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string
 export function knownModelIdsForProvider(provName: string, prov: OcxProviderConfig): string[] {
   const ids = new Set<string>();
   for (const id of prov.models ?? []) ids.add(id);
-  const registry = providerMatchesRegistryTransport(provName, prov)
+  const registry = providerMatchesRegistryTransportWithStaticGuards(provName, prov)
     ? PROVIDER_REGISTRY.find(entry => entry.id === provName)
     : undefined;
   for (const id of registry?.models ?? []) ids.add(id);
@@ -99,6 +103,7 @@ export function knownModelIdsForProvider(provName: string, prov: OcxProviderConf
     registry?.modelDefaultReasoningEfforts,
     registry?.modelReasoningEffortMap,
     registry?.modelMaxOutputTokens,
+    registry?.modelSupportsServiceTier,
   ]) {
     for (const id of Object.keys(map ?? {})) ids.add(id);
   }
@@ -249,20 +254,26 @@ function usableResolvedApiKey(apiKey: string | undefined): string | undefined {
 
 export function routedProviderConfig(providerName: string, provider: OcxProviderConfig): OcxProviderConfig {
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
-  if (!registryEntry || !providerMatchesRegistryTransport(providerName, provider)) {
+  if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
     return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
+  const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
+  const repairLegacyMimoFreeAuth = providerName === "mimo-free"
+    && staticModelCatalog
+    && (provider.authMode === undefined || provider.authMode === "local");
   const explicitKeyOverride = registryEntry.authKind === "oauth"
     && registryEntry.allowKeyAuthOverride === true
     && provider.authMode === "key"
     && resolvedApiKey !== undefined;
   const canonicalAuthMode = explicitKeyOverride
     ? "key"
-    : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
-      ? registryEntry.authKind
-    : provider.authMode === "forward" ? undefined : provider.authMode;
+    : repairLegacyMimoFreeAuth
+      ? "key"
+      : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
+        ? registryEntry.authKind
+        : provider.authMode === "forward" ? undefined : provider.authMode;
   const reasoningEffortMap = mergeRecord(registryEntry.reasoningEffortMap, provider.reasoningEffortMap);
   const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
   const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
@@ -283,6 +294,10 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ? mergePositiveNumberCaps(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens)
     : mergeRecordFill(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens);
   const modelMaxOutputTokens = mergeRecordFill(registryEntry.modelMaxOutputTokens, provider.modelMaxOutputTokens);
+  const modelSupportsServiceTier = mergeRecordFill(
+    registryEntry.modelSupportsServiceTier,
+    provider.modelSupportsServiceTier,
+  );
   const noVisionModels = mergeStringArray(registryEntry.noVisionModels, provider.noVisionModels);
   const noReasoningModels = mergeStringArray(registryEntry.noReasoningModels, provider.noReasoningModels);
   const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
@@ -343,6 +358,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : {}),
     authMode: canonicalAuthMode,
     apiKey: resolvedApiKey,
+    ...(staticModelCatalog ? { liveModels: false } : {}),
     // Backfill the Google wire mode + Vertex project/location from the registry when the user
     // config omits them, so a minimal `google-vertex`/`google-antigravity` entry still routes
     // through the correct branch (CCA/Vertex) instead of falling back to AI Studio.
@@ -372,6 +388,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(modelInputModalities ? { modelInputModalities } : {}),
     ...(modelMaxInputTokens ? { modelMaxInputTokens } : {}),
     ...(modelMaxOutputTokens ? { modelMaxOutputTokens } : {}),
+    ...(modelSupportsServiceTier ? { modelSupportsServiceTier } : {}),
     ...(modelReasoningEfforts ? { modelReasoningEfforts } : {}),
     ...(modelDefaultReasoningEfforts ? { modelDefaultReasoningEfforts } : {}),
     ...(reasoningEffortMap ? { reasoningEffortMap } : {}),

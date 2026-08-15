@@ -96,7 +96,8 @@ type AttemptRecoveryKind =
   | "key-429"
   | "rate-limit-429"
   | "anthropic-oauth-429"
-  | "image-413";
+  | "image-413"
+  | "empty-completion";
 
 interface LogAttempt {
   ordinal: number;
@@ -321,6 +322,7 @@ const RECOVERY_KIND_KEYS = {
   "rate-limit-429": "logs.detail.attempt.recovery.rateLimit429",
   "anthropic-oauth-429": "logs.detail.attempt.recovery.anthropicOauth429",
   "image-413": "logs.detail.attempt.recovery.image413",
+  "empty-completion": "logs.detail.attempt.recovery.emptyCompletion",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */

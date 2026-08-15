@@ -247,6 +247,8 @@ export interface ImageBridgeDeps {
   stallTimeoutSec?: number;
   /** Provider-specific fetch (e.g. xAI transport wrapper). Falls back to global fetch. */
   fetchImpl?: typeof globalThis.fetch;
+  /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
+  waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
@@ -380,6 +382,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     // expose buildRequest/fetchResponse/parseStream to the bridge, so collect their events through
     // an AdapterEventQueue and wrap them in a pseudo-response whose parseStream replays them.
     if (adapter.runTurn) {
+      await deps.waitForRequestSlot?.(signal);
       const queue = createAdapterEventQueue({
         onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
       });
@@ -457,6 +460,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    const paceThenResetHeaderDeadline = async (): Promise<void> => {
+      headerDeadline.clear();
+      await deps.waitForRequestSlot?.(signal);
+      headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+    };
     try {
       /**
        * Build and fetch one image-bridge iteration on the given adapter, under the iteration
@@ -487,6 +495,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
+            await paceThenResetHeaderDeadline();
             deps.onAttemptSend?.(recovery);
             response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
@@ -496,7 +505,8 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             });
           } else {
             response = await fetchWithResetRetry(
-              (retryRecovery) => {
+              async (retryRecovery) => {
+                await paceThenResetHeaderDeadline();
                 // Record every helper-driven send (the callback runs for the first attempt and
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.

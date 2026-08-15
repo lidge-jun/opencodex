@@ -200,8 +200,14 @@ But the model catalog and runtime request tier id use `priority`. opencodex pres
 Native OpenAI passthrough models keep fast support; routed providers are capability-gated —
 `service_tier` is stripped only when the provider declares `supportsServiceTier: false` (the registry
 classifies canonical OpenAI as `true`, DeepSeek and Volcengine Ark as `false`), while unclassified
-custom gateways keep caller-supplied values untouched and never get an injection. The fast option is
-never advertised where it cannot be honored, and custom gateways can opt in explicitly with `true`.
+custom gateways keep caller-supplied values untouched and never get an injection. A custom gateway
+can opt in globally with `supportsServiceTier: true`, or narrowly with
+`modelSupportsServiceTier: { "verified-model": true }`; an exact `false` narrows a provider
+default of `true`, while provider-level `false` remains fail-closed. The same final adapter/model
+decision controls both catalog metadata and runtime injection, so the fast option is never
+advertised where it cannot be honored. An `openai-chat` destination can authorize every otherwise
+eligible model with `chatServiceTier: true`, or authorize only exact models with
+`modelSupportsServiceTier`; Responses routes do not need that extra Chat wire authorization.
 
 ## Subagent selection
 

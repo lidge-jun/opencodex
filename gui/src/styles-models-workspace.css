@@ -367,6 +367,12 @@
   gap: var(--space-4);
 }
 
+.models-field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
 .models-field {
   display: flex;
   flex-direction: column;
@@ -380,6 +386,18 @@
 .models-modality-option {
   gap: var(--space-2);
   cursor: pointer;
+}
+
+/* Uniform checkbox rendering in the custom-model dialog: native checkbox size is
+   browser-dependent (Chrome ~13px, Safari ~16px) and can even differ between rows in
+   some renderers, so pin an explicit size for every checkbox in the modal. 13px is the
+   size Chrome renders natively here; pinning it keeps the effort-step checkboxes exactly
+   as large as the other dialog checkboxes. */
+.modal-card .models-modality-option input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: none;
 }
 
 /* Beat .row { gap: 10px } (defined later in styles.css). */

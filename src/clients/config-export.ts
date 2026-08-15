@@ -400,6 +400,23 @@ export function dshConfigPath(env: OpencodeLaunchEnv = process.env, home: string
 }
 
 /**
+ * MiniMax Code stores runtime state under `MINIMAX_DATA_DIR`, then the legacy
+ * `MAVIS_DATA_DIR`, and finally `~/.minimax`. Relative overrides are refused
+ * because a background proxy and a foreground client can have different CWDs.
+ */
+export function mcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const primary = env.MINIMAX_DATA_DIR?.trim();
+  if (primary) return absoluteClientPath(primary, home, "MINIMAX_DATA_DIR");
+  const legacy = env.MAVIS_DATA_DIR?.trim();
+  if (legacy) return absoluteClientPath(legacy, home, "MAVIS_DATA_DIR");
+  return join(home, ".minimax");
+}
+
+export function mcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(mcodeHomeDir(env, home), "config.yaml");
+}
+
+/**
  * One proxy-routed model destined for a client config. Deliberately narrower than
  * `CatalogModel` so a serializer cannot reach for a field that does not survive the
  * `/api/models` boundary.
@@ -438,7 +455,8 @@ export type ExportClientId =
   | "openclaw"
   | "kimi"
   | "gajae"
-  | "dsh";
+  | "dsh"
+  | "mcode";
 
 export interface ExportClientSpec {
   id: ExportClientId;
@@ -664,6 +682,15 @@ export interface PiModelEntry {
   input: string[];
   contextWindow?: number;
   maxTokens?: number;
+  /** Advertised when the catalog row carries a non-empty effort ladder. */
+  reasoning?: true;
+  /**
+   * Constrains pi's own level scale (minimal..max) to the declared ladder: members map to
+   * themselves, everything else is hidden (`null`). Without it pi would offer levels the
+   * ladder does not contain — harmless for provider-config ladders (the proxy clamps those
+   * at the wire) but a real 400 risk for custom-row ladders, which are advertisement-only.
+   */
+  thinkingLevelMap?: Record<string, string | null>;
 }
 
 export interface PiProviderBlock {
@@ -832,20 +859,45 @@ export interface DshGeneratedConfig {
   };
 }
 
+export interface McodeProviderBlock {
+  name: "OpenCodex";
+  kind: "custom";
+  enabled: true;
+  api: "anthropic-messages";
+  options: {
+    apiKey: string;
+    baseURL: string;
+    authMode: "api-key";
+  };
+  models: Record<string, Record<string, never>>;
+}
+
+export interface McodeGeneratedConfig {
+  custom_provider: Record<string, McodeProviderBlock>;
+}
+
 /**
  * Pi's `~/.pi/agent/models.json` shape. `models` is an ARRAY (identity lives in `id`),
  * unlike OpenCode's keyed object.
  *
- * Two fields are deliberately absent. `cost` requires all four price fields and we have
- * no price data at all, so emitting zeros would assert every routed model is free.
- * `reasoning` is a boolean in Pi while our catalog carries an effort list — mapping one
- * to the other would be a guess.
+ * Two fields were deliberately absent once. `cost` still is: it requires all four price
+ * fields and we have no price data at all, so emitting zeros would assert every routed
+ * model is free. `reasoning` used to be omitted because Pi's boolean and the catalog's
+ * effort ladder did not obviously map — but a NON-EMPTY ladder is the catalog's own
+ * statement that the model accepts reasoning parameters (adapters honor `reasoning_effort`),
+ * and an empty or absent ladder is the statement that it does not. Emitting `reasoning:
+ * true` exactly for rows with a ladder is therefore not a guess; it is what makes Pi's
+ * effort control appear for routed models at all. The export also emits a `thinkingLevelMap`
+ * that hides every pi level outside the declared ladder, so pi never offers (and sends) an
+ * effort the ladder does not contain — custom-row ladders are catalog advertisement only
+ * and get no wire clamp, so this map is what keeps pi honest for those. Users who need a
+ * different mapping can still hand-tune `thinkingLevelMap` afterwards.
  *
  * Pi's input enum IS verified: its documented model configuration accepts only
  * `text` and `image`, and a validation failure yields an EMPTY model config
  * rather than dropping the offending entry — one bad value costs every routed
- * model. The rest of this contract (omitting `cost` and `reasoning`) is still
- * ours rather than a claim about Pi's acceptance.
+ * model. The rest of this contract (omitting `cost`) is still ours rather than
+ * a claim about Pi's acceptance.
  */
 function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
@@ -862,6 +914,21 @@ function buildPiClientConfig(ctx: ExportContext): PiGeneratedConfig {
       name: exportModelLabel(model),
       input,
     };
+    if (Array.isArray(model.reasoningEfforts) && model.reasoningEfforts.length > 0) {
+      entry.reasoning = true;
+      const efforts = model.reasoningEfforts;
+      entry.thinkingLevelMap = {
+        // pi's off level maps to the declared `none` sentinel (the proxy omits the
+        // reasoning parameter for it); hidden when the ladder does not declare none.
+        off: efforts.includes("none") ? "none" : null,
+        minimal: efforts.includes("minimal") ? "minimal" : null,
+        low: efforts.includes("low") ? "low" : null,
+        medium: efforts.includes("medium") ? "medium" : null,
+        high: efforts.includes("high") ? "high" : null,
+        xhigh: efforts.includes("xhigh") ? "xhigh" : null,
+        max: efforts.includes("max") ? "max" : efforts.includes("ultra") ? "ultra" : null,
+      };
+    }
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
@@ -1116,6 +1183,32 @@ function buildDshClientConfig(ctx: ExportContext): DshGeneratedConfig {
 }
 
 /**
+ * MiniMax Code's `provider add` command persists custom providers under
+ * `custom_provider.<id>`. Do not emit `defaultModel`: connecting a client must
+ * not silently replace the user's current model selection.
+ */
+function buildMcodeClientConfig(ctx: ExportContext): McodeGeneratedConfig {
+  const models: Record<string, Record<string, never>> = {};
+  for (const model of normalizeExportModels(ctx.models)) models[model.namespaced] = {};
+  return {
+    custom_provider: {
+      [OPENCODE_PROVIDER_ID]: {
+        name: "OpenCodex",
+        kind: "custom",
+        enabled: true,
+        api: "anthropic-messages",
+        options: {
+          apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
+          baseURL: ctx.baseUrl.replace(/\/v1\/?$/, ""),
+          authMode: "api-key",
+        },
+        models,
+      },
+    },
+  };
+}
+
+/**
  * Per-client model counts, read back off the SERIALIZED document rather than
  * recomputed from the input rows: `modelsWithoutLimits` drives a GUI line about
  * the bytes the user actually receives, so a parallel reimplementation of the
@@ -1162,6 +1255,12 @@ function summarizeGajae(document: unknown): { modelCount: number; modelsWithoutL
 function summarizeDsh(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
   const models = (document as DshGeneratedConfig | undefined)?.["llm-pi-ai"]?.providers?.[OPENCODE_PROVIDER_ID]?.models ?? [];
   return { modelCount: models.length, modelsWithoutLimits: models.filter(model => model.contextWindow === undefined).length };
+}
+
+function summarizeMcode(document: unknown): { modelCount: number; modelsWithoutLimits: number } {
+  const models = Object.values((document as McodeGeneratedConfig | undefined)?.custom_provider?.[OPENCODE_PROVIDER_ID]?.models ?? {});
+  // MCode's custom-provider schema does not expose per-model context limits.
+  return { modelCount: models.length, modelsWithoutLimits: 0 };
 }
 
 /** One fragment at `path`, built from this client's own document. */
@@ -1218,6 +1317,11 @@ function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
 function buildDshContribution(ctx: ExportContext): ManagedContribution {
   const doc = buildDshClientConfig(ctx);
   return singleFragment("dsh", ["llm-pi-ai", "providers", OPENCODE_PROVIDER_ID], doc["llm-pi-ai"].providers[OPENCODE_PROVIDER_ID]);
+}
+
+function buildMcodeContribution(ctx: ExportContext): ManagedContribution {
+  const doc = buildMcodeClientConfig(ctx);
+  return singleFragment("mcode", ["custom_provider", OPENCODE_PROVIDER_ID], doc.custom_provider[OPENCODE_PROVIDER_ID]);
 }
 
 export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
@@ -1327,6 +1431,20 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     format: "yaml",
     summarize: summarizeDsh,
     buildContribution: buildDshContribution,
+    loopbackOnly: true,
+  },
+  mcode: {
+    id: "mcode",
+    filename: "mcode-config.yaml",
+    destination: env => mcodeConfigPath(env),
+    apiKeyEnv: "",
+    exportHint: "MiniMax Code reads a non-secret placeholder from config.yaml; loopback needs no key.",
+    build: buildMcodeClientConfig,
+    format: "yaml",
+    summarize: summarizeMcode,
+    buildContribution: buildMcodeContribution,
+    // MCode persists this credential and exposes no dedicated proxy-admission
+    // header field, so real keys are never serialized and remote binds refuse.
     loopbackOnly: true,
   },
 };

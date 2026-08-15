@@ -91,6 +91,14 @@ export async function listManagementModelRows(config: OcxConfig): Promise<Manage
       displayName: cm.displayName,
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
+      // Stored override, not the inherited ladder: the edit dialog must show what the user
+      // set (including an explicit empty "no reasoning" ladder), not what the provider row
+      // happens to advertise today.
+      ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
+      // The stored default rides along so a client reloading /api/models can restore the
+      // full edit state; the GUI has no default-effort control today, but dropping it here
+      // would make any future PUT-based edit lose it silently.
+      ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
     };
   });
   const publicModels = uniqueCatalogModelsForPublicList(models);

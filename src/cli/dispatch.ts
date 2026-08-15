@@ -488,6 +488,14 @@ const commandRunners: Record<string, CommandRunner> = {
     const { cmdOpencode } = await import("./opencode");
     return await cmdOpencode(deps.args.slice(1));
   },
+  mcode: async deps => {
+    const { cmdMcode } = await import("./minimax");
+    return await cmdMcode(deps.args.slice(1));
+  },
+  mmx: async deps => {
+    const { cmdMmx } = await import("./minimax");
+    return await cmdMmx(deps.args.slice(1));
+  },
   help: async () => {
     printUsage();
     return 0;

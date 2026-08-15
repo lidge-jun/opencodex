@@ -8,11 +8,11 @@ import {
   OUTCOMES,
 } from "../constants";
 import { FAILURE_CLASSIFICATIONS } from "../conformance/types";
-import { fixtureDigest, isSha256Hex, jcsStringify } from "../digest";
+import { fixtureDigest, isSha256Hex, jcsStringify, subjectIdForSubject } from "../digest";
 import type { ObservationEvent, RouteSubjectV1, TaskSubjectV1 } from "../events/types";
 import { LabValidationError } from "../events/errors";
 import { assignEventId, validateSubject } from "../events/validate";
-import { appendLabEventIfAbsent } from "../ledger/store";
+import { withLedgerMutation } from "../ledger/store";
 import { ensureLabDirs } from "../paths";
 import {
   FABRIC_EVIDENCE_LAYER,
@@ -172,6 +172,11 @@ function validateFabricVerifier(raw: Record<string, unknown>): void {
 
 /** Validate non-negative usage counters on a producer outcome. */
 function validateFabricUsage(raw: Record<string, unknown>): void {
+  for (const key of Object.keys(raw)) {
+    if (!(USAGE_KEYS as readonly string[]).includes(key)) {
+      throw new FabricTaskError(`unknown usage field ${key}`, "malformed_producer_outcome", "harness");
+    }
+  }
   for (const key of USAGE_KEYS) {
     assertNonNegativeIntegerField(raw, key);
   }
@@ -179,6 +184,11 @@ function validateFabricUsage(raw: Record<string, unknown>): void {
 
 /** Validate non-negative limit fields on a producer outcome. */
 function validateFabricLimits(raw: Record<string, unknown>): void {
+  for (const key of Object.keys(raw)) {
+    if (!(LIMIT_KEYS as readonly string[]).includes(key)) {
+      throw new FabricTaskError(`unknown limit field ${key}`, "malformed_producer_outcome", "harness");
+    }
+  }
   for (const key of LIMIT_KEYS) {
     assertNonNegativeIntegerField(raw, key);
   }
@@ -262,12 +272,18 @@ export function assertFabricOutcomeV1(raw: unknown): FabricTaskOutcomeV1 {
   } catch (error) {
     wrapValidationError(error);
   }
+  if (jcsStringify(taskSubjectObj) !== jcsStringify(taskSubject)) {
+    throw new FabricTaskError("taskSubject contains undeclared fields", "malformed_producer_outcome", "harness");
+  }
+  if (jcsStringify(routeSubjectObj) !== jcsStringify(routeSubject)) {
+    throw new FabricTaskError("routeSubject contains undeclared fields", "malformed_producer_outcome", "harness");
+  }
   if (!routeSubjectsMatch(routeSubject, taskSubject.routeSubject)) {
     throw new FabricTaskError("contradictory route subjects", "layer_subject_mismatch", "harness");
   }
 
-  assertStringField(obj, "taskClassId");
-  assertStringField(obj, "taskClassVersion");
+  const taskClassId = assertStringField(obj, "taskClassId");
+  const taskClassVersion = assertStringField(obj, "taskClassVersion");
   const subjectId = assertStringField(obj, "subjectId");
   if (!isSha256Hex(subjectId)) {
     throw new FabricTaskError("malformed producer outcome: subjectId", "malformed_producer_outcome", "harness");
@@ -277,16 +293,36 @@ export function assertFabricOutcomeV1(raw: unknown): FabricTaskOutcomeV1 {
   if (!isSha256Hex(taskFixtureDigest) || !isSha256Hex(verifierManifestDigest)) {
     throw new FabricTaskError("malformed producer outcome: digest field", "malformed_producer_outcome", "harness");
   }
-  assertStringField(obj, "fabricCompatibilityVersion");
+  const fabricCompatibilityVersion = assertStringField(obj, "fabricCompatibilityVersion");
   const sandboxProfileDigest = assertStringField(obj, "sandboxProfileDigest");
   if (!isSha256Hex(sandboxProfileDigest)) {
     throw new FabricTaskError("malformed producer outcome: sandboxProfileDigest", "malformed_producer_outcome", "harness");
   }
-  assertIntegerField(obj, "startedAt");
-  assertIntegerField(obj, "completedAt");
+  if (subjectId !== subjectIdForSubject(taskSubject)) {
+    throw new FabricTaskError("subjectId does not match taskSubject", "malformed_producer_outcome", "harness");
+  }
+  if (
+    taskClassId !== taskSubject.taskClassId
+    || taskClassVersion !== taskSubject.taskClassVersion
+    || taskFixtureDigest !== taskSubject.taskFixtureDigest
+    || verifierManifestDigest !== taskSubject.verifierManifestDigest
+    || fabricCompatibilityVersion !== taskSubject.fabricCompatibilityVersion
+    || sandboxProfileDigest !== taskSubject.sandboxProfileDigest
+  ) {
+    throw new FabricTaskError("task identity fields do not match taskSubject", "malformed_producer_outcome", "harness");
+  }
+  const startedAt = assertNonNegativeIntegerField(obj, "startedAt");
+  const completedAt = assertNonNegativeIntegerField(obj, "completedAt");
+  if (completedAt < startedAt) {
+    throw new FabricTaskError("invalid execution timestamps", "malformed_producer_outcome", "harness");
+  }
   validateFabricLimits(assertPlainObject(obj.limits, "limits"));
   validateFabricUsage(assertPlainObject(obj.usage, "usage"));
-  validateFabricVerifier(assertPlainObject(obj.verifier, "verifier"));
+  const verifier = assertPlainObject(obj.verifier, "verifier");
+  validateFabricVerifier(verifier);
+  if (verifier.manifestDigest !== verifierManifestDigest) {
+    throw new FabricTaskError("verifier manifest digest does not match outcome", "malformed_producer_outcome", "harness");
+  }
   if (!OUTCOMES.includes(obj.outcome as typeof OUTCOMES[number])) {
     throw new FabricTaskError("malformed producer outcome: outcome", "malformed_producer_outcome", "harness");
   }
@@ -323,9 +359,6 @@ export function observationFromFabricOutcome(
   }
   if (routeSubject.subjectKind !== "route") {
     throw new FabricTaskError("nested route subject required", "layer_subject_mismatch", "harness");
-  }
-  if (!Number.isInteger(outcome.startedAt) || !Number.isInteger(outcome.completedAt) || outcome.completedAt < outcome.startedAt) {
-    throw new FabricTaskError("invalid execution timestamps", "malformed_producer_outcome", "harness");
   }
 
   const paths = ensureLabDirs(opts.configDir);
@@ -430,9 +463,11 @@ function persistFabricOutcome(
   const ownsStore = !opts.artifactStore;
   const store = opts.artifactStore ?? createArtifactStore(paths.artifactsDir);
   try {
-    const { event } = observationFromFabricOutcome(outcome, { ...opts, artifactStore: store });
-    appendLabEventIfAbsent(paths.ledgerPath, event);
-    return { event, ledgerPath: paths.ledgerPath };
+    return withLedgerMutation(paths.ledgerPath, (ledger) => {
+      const { event } = observationFromFabricOutcome(outcome, { ...opts, artifactStore: store });
+      ledger.appendIfAbsent(event);
+      return { event, ledgerPath: paths.ledgerPath };
+    });
   } finally {
     if (ownsStore) store.close();
   }

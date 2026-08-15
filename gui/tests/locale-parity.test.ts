@@ -108,6 +108,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "integrations.tab.kimi",
   "integrations.tab.gajae",
   "integrations.tab.dsh",
+  "integrations.tab.mcode",
+  "api.clientConfig.clientMcode",
   "integrations.codex.title",
   // Provider proper nouns kept in English
   "provider.name.commandCodeAuth",

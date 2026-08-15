@@ -30,6 +30,7 @@ import {
 } from "../src/server";
 import { handleManagementAPI } from "../src/server/management-api";
 import { providerManagementConfigError } from "../src/server/auth-cors";
+import { providerServiceTierConfigError, withProviderServiceTierDTO } from "../src/server/management/provider-capability-config";
 import { clearModelCache, markProviderDiscoveryFailed } from "../src/codex/model-cache";
 import type { OcxConfig } from "../src/types";
 import { fakeChatGptJwt } from "./helpers/fake-chatgpt-jwt";
@@ -241,6 +242,39 @@ describe("provider management validation", () => {
     }
   });
 
+  test("service-tier validation and public projection stay in the management boundary", () => {
+    expect(providerServiceTierConfigError("relay", {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      modelSupportsServiceTier: { verified: true, blocked: false },
+    })).toBeNull();
+    expect(providerServiceTierConfigError("relay", {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      modelSupportsServiceTier: { verified: "yes" },
+    })).toContain("modelSupportsServiceTier.verified must be a boolean");
+
+    const config = {
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          apiKey: "sk-never-project",
+          modelSupportsServiceTier: { verified: true },
+        },
+      },
+    } as unknown as OcxConfig;
+    const dto = withProviderServiceTierDTO(
+      { providers: { relay: { hasApiKey: true } } },
+      config,
+    ) as { providers: { relay: Record<string, unknown> } };
+    expect(dto.providers.relay).toMatchObject({
+      hasApiKey: true,
+      modelSupportsServiceTier: { verified: true },
+    });
+    expect(JSON.stringify(dto)).not.toContain("sk-never-project");
+  });
+
   test("validates and exposes structured-output model opt-outs", () => {
     const provider = {
       adapter: "openai-chat",
@@ -438,6 +472,69 @@ describe("provider management validation", () => {
     expect(secretNameError).toContain("retryOn429.attempts is invalid");
     expect(secretNameError).not.toContain("sk-super-secret-9876");
     expect(secretNameError).toContain("[REDACTED]");
+  });
+
+  test("provider request pacing PATCH persists provider and model limits without catalog churn", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    const liveConfig: OcxConfig = {
+      port: 0,
+      hostname: "127.0.0.1",
+      defaultProvider: "nvidia",
+      providers: {
+        nvidia: {
+          adapter: "openai-chat",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: "sk-nvidia",
+        },
+      },
+    };
+    saveConfig(liveConfig);
+    let catalogRefreshes = 0;
+    const request = async (path: string, init?: RequestInit) => {
+      const req = new Request(`http://127.0.0.1${path}`, init);
+      return handleManagementAPI(req, new URL(req.url), liveConfig, {
+        createManagementConvergeCodex: catalogConvergenceFactory(() => { catalogRefreshes += 1; }),
+      });
+    };
+    const policy = {
+      enabled: true,
+      requestsPerMinute: 38,
+      minIntervalMs: 1_600,
+      models: { "deepseek-ai/deepseek-v4-flash-0731": { requestsPerMinute: 10 } },
+    };
+
+    const saved = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: policy }),
+    });
+    expect(saved?.status).toBe(200);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+    expect(loadConfig().providers.nvidia?.requestPacing).toEqual(policy);
+    expect(catalogRefreshes).toBe(0);
+
+    const providers = await request("/api/providers");
+    expect((await providers?.json()).find((row: { name: string }) => row.name === "nvidia").requestPacing).toEqual(policy);
+    const status = await request("/api/provider-request-pacing?name=nvidia");
+    expect(await status?.json()).toMatchObject({ provider: "nvidia", enabled: true, queued: 0, nextSlotInMs: 0 });
+
+    const invalid = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: { enabled: true, requestsPerMinute: -1 } }),
+    });
+    expect(invalid?.status).toBe(400);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
+
+    const timerOverflow = await request("/api/providers?name=nvidia", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestPacing: { enabled: true, requestsPerMinute: 0.001 } }),
+    });
+    expect(timerOverflow?.status).toBe(400);
+    expect(liveConfig.providers.nvidia?.requestPacing).toEqual(policy);
   });
 
   test("provider discovery status is additive and omitted before an attempt", async () => {
@@ -2515,9 +2612,11 @@ describe("provider management validation", () => {
           adapter: "openai-chat",
           baseUrl: "https://relay.example.test/v1",
           apiKey: "sk-existing",
+          allowPrivateNetwork: true,
           models: ["wide", "narrow"],
           contextWindow: 256_000,
           modelContextWindows: { narrow: 64_000 },
+          modelSupportsServiceTier: { narrow: false },
         },
       },
     };
@@ -2544,20 +2643,24 @@ describe("provider management validation", () => {
     expect(rows.find(row => row.name === "relay")).toMatchObject({
       contextWindow: 256_000,
       modelContextWindows: { narrow: 64_000 },
+      modelSupportsServiceTier: { narrow: false },
     });
 
     const updated = await request("PATCH", {
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000 },
+      modelSupportsServiceTier: { wide: true },
     });
     expect(updated?.status).toBe(200);
     expect(liveConfig.providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelSupportsServiceTier: { wide: true, narrow: false },
     });
     expect(loadConfig().providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelSupportsServiceTier: { wide: true, narrow: false },
     });
 
     for (const invalid of [
@@ -2570,24 +2673,32 @@ describe("provider management validation", () => {
       { modelContextWindows: { wide: 1e100 } },
       { modelContextWindows: { "": 100_000 } },
       { modelContextWindows: { wide: -1 } },
+      { modelSupportsServiceTier: { wide: "yes" } },
+      { modelSupportsServiceTier: { "": true } },
     ]) {
       expect((await request("PATCH", invalid))?.status).toBe(400);
     }
     expect(liveConfig.providers.relay).toMatchObject({
       contextWindow: 350_000,
       modelContextWindows: { wide: 350_000, narrow: 64_000 },
+      modelSupportsServiceTier: { wide: true, narrow: false },
     });
 
     expect((await request("PATCH", { modelContextWindows: { wide: null } }))?.status).toBe(200);
     expect(liveConfig.providers.relay.modelContextWindows).toEqual({ narrow: 64_000 });
 
+    expect((await request("PATCH", { modelSupportsServiceTier: { wide: null } }))?.status).toBe(200);
+    expect(liveConfig.providers.relay.modelSupportsServiceTier).toEqual({ narrow: false });
+
     const cleared = await request("PATCH", {
       contextWindow: null,
       modelContextWindows: null,
+      modelSupportsServiceTier: null,
     });
     expect(cleared?.status).toBe(200);
     expect(liveConfig.providers.relay.contextWindow).toBeUndefined();
     expect(liveConfig.providers.relay.modelContextWindows).toBeUndefined();
+    expect(liveConfig.providers.relay.modelSupportsServiceTier).toBeUndefined();
   });
 
   test("provider PATCH manages custom headers with merge and clear semantics", async () => {

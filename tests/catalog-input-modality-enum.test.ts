@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { ensureStrictCatalogFields } from "../src/codex/catalog/parsing";
 import { catalogHintsFromModelsApiItem } from "../src/codex/catalog/provider-fetch";
+import type { OcxConfig } from "../src/types";
 
 /**
  * Codex parses `input_modalities` as a closed enum of text | image | audio. A single out-of-enum
@@ -57,6 +58,21 @@ describe("catalog input_modalities stay inside the enum Codex accepts", () => {
  */
 describe("custom-model API rejects out-of-enum input modalities", () => {
   let persistCalls = 0;
+  // Shared fixture: the PUT/POST handlers mutate and persist the config object they
+  // receive, so seed requests and their follow-ups must see the SAME object (a fresh
+  // object per call would discard the seeded default before the follow-up asserts on it).
+  const fixtureConfig = {
+    providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://example.invalid/v1" } },
+    customModels: [] as Array<{ id: string; provider: string; modelId: string; inputModalities?: string[] }>,
+  } as unknown as OcxConfig;
+
+  beforeEach(() => {
+    // Seeded WITH modalities on purpose: a fixture without them would let the
+    // clear-path test pass against a PUT that ignored the field entirely.
+    fixtureConfig.customModels = [
+      { id: "existing-uuid", provider: "deepseek", modelId: "deepseek-v4", inputModalities: ["text", "image"] },
+    ];
+  });
 
   async function callCustomModels(
     method: "POST" | "PUT",
@@ -73,14 +89,7 @@ describe("custom-model API rejects out-of-enum input modalities", () => {
     return handleModelRoutes({
       req,
       url,
-      config: {
-        providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://example.invalid/v1" } },
-        customModels: [
-          // Seeded WITH modalities on purpose: a fixture without them would let the
-          // clear-path test pass against a PUT that ignored the field entirely.
-          { id: "existing-uuid", provider: "deepseek", modelId: "deepseek-v4", inputModalities: ["text", "image"] },
-        ],
-      } as unknown as Parameters<typeof handleModelRoutes>[0]["config"],
+      config: fixtureConfig,
       // This handler mutates and persists the config object it receives. The
       // fixture must NEVER reach the process-global OPENCODEX_HOME; that exact bug
       // replaced a real 41KB provider config with this `existing-uuid` fixture.
@@ -160,6 +169,248 @@ describe("custom-model API rejects out-of-enum input modalities", () => {
     expect(res?.status).toBe(200);
     const payload = await res!.json() as { inputModalities?: unknown };
     expect(payload.inputModalities).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+});
+
+/*
+ * The same closed-enum argument applies to the reasoning ladder: a label outside the Codex
+ * ladder (low..ultra) stored through /api/custom-models would surface in a catalog the
+ * upstream never accepts, and the GUI's effort checkboxes are only as honest as the API
+ * that validates them. Unlike modalities, an EMPTY ladder is meaningful here — it is the
+ * explicit "no reasoning" override that hides the effort control (#883) — so `[]` is
+ * stored, not cleared, and `null` is the only way a PUT restores inheritance.
+ */
+describe("custom-model API validates reasoning-effort ladders", () => {
+  let persistCalls = 0;
+
+  async function callCustomModels(
+    method: "POST" | "PUT",
+    body: unknown,
+    pathname = "/api/custom-models",
+  ): Promise<Response | null> {
+    const { handleModelRoutes } = await import("../src/server/management/model-routes");
+    const url = new URL(`http://127.0.0.1:10199${pathname}`);
+    const req = new Request(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return handleModelRoutes({
+      req,
+      url,
+      config: {
+        providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://example.invalid/v1" } },
+        customModels: [
+          // Seeded WITH a ladder on purpose: the null-clear test needs a stored value to
+          // remove, and the explicit-empty test needs to prove `[]` is NOT a clear.
+          { id: "existing-uuid", provider: "deepseek", modelId: "deepseek-v4", reasoningEfforts: ["low", "high"] },
+        ],
+      } as unknown as Parameters<typeof handleModelRoutes>[0]["config"],
+      deps: {
+        saveConfigPreservingClaudeCode: () => { persistCalls++; },
+      } as Parameters<typeof handleModelRoutes>[0]["deps"],
+      convergeCodexCatalog: async () => ({
+        status: "committed",
+        changed: false,
+        degraded: false,
+        notices: [],
+      }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    });
+  }
+
+  test("POST refuses an effort outside the Codex ladder, naming the offending value", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v5",
+      reasoningEfforts: ["low", "deep"],
+    });
+    expect(res?.status).toBe(400);
+    expect((await res!.json() as { error?: string }).error).toContain("deep");
+    expect(persistCalls).toBe(0);
+  });
+
+  test("POST refuses a non-string member instead of filtering it away", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v5",
+      reasoningEfforts: ["low", 42],
+    });
+    expect(res?.status).toBe(400);
+    expect((await res!.json() as { error?: string }).error).toContain("strings");
+    expect(persistCalls).toBe(0);
+  });
+
+  test("POST accepts a valid ladder with a member default and dedupes", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      reasoningEfforts: ["low", "high", "high"],
+      defaultReasoningEffort: "high",
+    });
+    expect(res?.status).toBe(201);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toEqual(["low", "high"]);
+    expect(payload.defaultReasoningEffort).toBe("high");
+    expect(persistCalls).toBe(1);
+  });
+
+  test("POST stores an explicit empty ladder as the no-reasoning override", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      reasoningEfforts: [],
+    });
+    expect(res?.status).toBe(201);
+    const payload = await res!.json() as { reasoningEfforts?: string[] };
+    expect(payload.reasoningEfforts).toEqual([]);
+    expect(persistCalls).toBe(1);
+  });
+
+  test("POST accepts the none/minimal sentinels, canonicalized first", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      reasoningEfforts: ["max", "none", "low", "minimal"],
+      defaultReasoningEffort: "none",
+    });
+    expect(res?.status).toBe(201);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toEqual(["none", "minimal", "low", "max"]);
+    expect(payload.defaultReasoningEffort).toBe("none");
+    expect(persistCalls).toBe(1);
+  });
+
+  test("POST refuses a default effort outside the declared ladder", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "max",
+    });
+    expect(res?.status).toBe(400);
+    expect((await res!.json() as { error?: string }).error).toContain("max");
+    expect(persistCalls).toBe(0);
+  });
+
+  test("POST refuses a default effort without any ladder", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      defaultReasoningEffort: "high",
+    });
+    expect(res?.status).toBe(400);
+    expect((await res!.json() as { error?: string }).error).toContain("reasoningEfforts");
+    expect(persistCalls).toBe(0);
+  });
+
+  test("PUT stores an explicit empty ladder instead of clearing it", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("PUT", { reasoningEfforts: [] }, "/api/custom-models/existing-uuid");
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[] };
+    expect(payload.reasoningEfforts).toEqual([]);
+    expect(persistCalls).toBe(1);
+  });
+
+  test("PUT null restores inheritance by clearing the stored ladder", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("PUT", { reasoningEfforts: null }, "/api/custom-models/existing-uuid");
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[] };
+    expect(payload.reasoningEfforts).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+
+  test("PUT clears the default when the ladder is removed", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels(
+      "PUT",
+      { reasoningEfforts: null, defaultReasoningEffort: null },
+      "/api/custom-models/existing-uuid",
+    );
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toBeUndefined();
+    expect(payload.defaultReasoningEffort).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+
+  // POST rejects a default outside the ladder; PUT must not be able to produce that state
+  // on its own. A ladder shrink/clear on a row that was created with a default (CLI) must
+  // drop the stale default — otherwise it re-applies itself onto the inherited ladder in
+  // the generated catalog (GUI toggle-off path sends only reasoningEfforts).
+  test("PUT ladder shrink drops a stored default that is no longer a member", async () => {
+    persistCalls = 0;
+    const seededRes = await callCustomModels("PUT", {
+      reasoningEfforts: ["low", "high", "max"],
+      defaultReasoningEffort: "max",
+    }, "/api/custom-models/existing-uuid");
+    expect(seededRes?.status).toBe(200);
+    const seeded = await seededRes!.json() as { defaultReasoningEffort?: string };
+    expect(seeded.defaultReasoningEffort).toBe("max");
+
+    persistCalls = 0;
+    const res = await callCustomModels("PUT", { reasoningEfforts: ["low"] }, "/api/custom-models/existing-uuid");
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toEqual(["low"]);
+    expect(payload.defaultReasoningEffort).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+
+  test("PUT null-clear drops a stored default even when the body does not mention it", async () => {
+    persistCalls = 0;
+    const seededRes = await callCustomModels("PUT", {
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "high",
+    }, "/api/custom-models/existing-uuid");
+    expect(seededRes?.status).toBe(200);
+
+    persistCalls = 0;
+    const res = await callCustomModels("PUT", { reasoningEfforts: null }, "/api/custom-models/existing-uuid");
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toBeUndefined();
+    expect(payload.defaultReasoningEffort).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+
+  test("PUT explicit empty ladder also drops a stored default", async () => {
+    persistCalls = 0;
+    const seededRes = await callCustomModels("PUT", {
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "high",
+    }, "/api/custom-models/existing-uuid");
+    expect(seededRes?.status).toBe(200);
+
+    persistCalls = 0;
+    const res = await callCustomModels("PUT", { reasoningEfforts: [] }, "/api/custom-models/existing-uuid");
+    expect(res?.status).toBe(200);
+    const payload = await res!.json() as { reasoningEfforts?: string[]; defaultReasoningEffort?: string };
+    expect(payload.reasoningEfforts).toEqual([]);
+    expect(payload.defaultReasoningEffort).toBeUndefined();
+    expect(persistCalls).toBe(1);
+  });
+
+  test("POST and PUT canonicalize the ladder into Codex order", async () => {
+    persistCalls = 0;
+    const res = await callCustomModels("POST", {
+      provider: "deepseek",
+      modelId: "deepseek-v6",
+      reasoningEfforts: ["max", "low", "high", "low"],
+    });
+    expect(res?.status).toBe(201);
+    const payload = await res!.json() as { reasoningEfforts?: string[] };
+    expect(payload.reasoningEfforts).toEqual(["low", "high", "max"]);
     expect(persistCalls).toBe(1);
   });
 });

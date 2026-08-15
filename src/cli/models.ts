@@ -5,14 +5,70 @@ import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { syncModelsToCodex } from "../codex/sync";
 import { hasOwnProvider, isValidProviderName, loadConfig, saveConfig } from "../config";
+import { canonicalizeReasoningEfforts, isDeclaredReasoningEffort } from "../reasoning-effort";
 import { routedSlug } from "../providers/slug-codec";
 import { findLiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig, OcxCustomModel } from "../types";
 
-const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio]";
+const ADD_USAGE = "Usage: ocx models add <provider> <modelId> [--display-name <name>] [--context-window <tokens>] [--modalities text,image,audio] [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra>] [--default-reasoning-effort <level>]";
 const REMOVE_USAGE = "Usage: ocx models remove <customId|provider/modelId> [--yes]";
 const LIST_CUSTOM_USAGE = "Usage: ocx models list-custom [--json]";
 const ALLOWED_MODALITIES = new Set(["text", "image", "audio"]);
+
+/**
+ * Parse and validate the reasoning flags shared by `ocx models add` (offline path).
+ * "-" means "inherit" and omits the field entirely; "" means an explicit empty ladder
+ * ("no reasoning" override, the same state the dashboard stores for the toggle-off
+ * checkbox set). Malformed CSV like `low,,high` or `,,` is rejected instead of being
+ * silently normalized. Values are canonicalized into Codex ladder order so the stored
+ * config matches what the API stores.
+ */
+export function parseReasoningArgs(
+  reasoningEffortsValue: string | undefined,
+  defaultEffortValue: string | undefined,
+): { reasoningEfforts?: string[]; defaultReasoningEffort?: string; error?: string } {
+  if (reasoningEffortsValue === undefined && defaultEffortValue === undefined) return {};
+  let reasoningEfforts: string[] | undefined;
+  if (reasoningEffortsValue !== undefined) {
+    const trimmed = reasoningEffortsValue.trim();
+    if (trimmed === "-") {
+      reasoningEfforts = undefined;
+    } else if (trimmed === "") {
+      // Explicit no-reasoning override, exactly like the API's [] / the dashboard's
+      // uncheck-all state.
+      reasoningEfforts = [];
+    } else {
+      const parts = trimmed.split(",").map(value => value.trim());
+      if (parts.some(part => part === "")) {
+        return { error: "--reasoning-efforts must be comma-separated values from none, minimal, low, medium, high, xhigh, max, ultra (\"\" for no reasoning, \"-\" to inherit)" };
+      }
+      const invalid = parts.filter(value => !isDeclaredReasoningEffort(value));
+      if (invalid.length > 0) {
+        return { error: `unsupported reasoning effort: ${invalid.join(", ")} (allowed: none, minimal, low, medium, high, xhigh, max, ultra)` };
+      }
+      reasoningEfforts = canonicalizeReasoningEfforts(parts);
+    }
+  }
+  let defaultReasoningEffort: string | undefined;
+  if (defaultEffortValue !== undefined) {
+    const trimmed = defaultEffortValue.trim();
+    if (trimmed === "-") {
+      defaultReasoningEffort = undefined;
+    } else {
+      if (!isDeclaredReasoningEffort(trimmed)) {
+        return { error: `unsupported reasoning effort: ${trimmed} (allowed: none, minimal, low, medium, high, xhigh, max, ultra)` };
+      }
+      if (!reasoningEfforts || reasoningEfforts.length === 0) {
+        return { error: "--default-reasoning-effort requires --reasoning-efforts" };
+      }
+      if (!reasoningEfforts.includes(trimmed)) {
+        return { error: `--default-reasoning-effort "${trimmed}" is not in the declared reasoning efforts` };
+      }
+      defaultReasoningEffort = trimmed;
+    }
+  }
+  return { reasoningEfforts, defaultReasoningEffort };
+}
 
 interface ModelEntry {
   provider: string;
@@ -118,6 +174,8 @@ async function handleCustomAdd(args: string[]): Promise<void> {
   const displayNameValue = consumeFlagValue(rest, "--display-name");
   const contextWindowValue = consumeFlagValue(rest, "--context-window");
   const modalitiesValue = consumeFlagValue(rest, "--modalities");
+  const reasoningEffortsValue = consumeFlagValue(rest, "--reasoning-efforts");
+  const defaultEffortValue = consumeFlagValue(rest, "--default-reasoning-effort");
   rejectUnexpectedArgs(rest, ADD_USAGE);
 
   if (!provider || !modelId) fail("provider and modelId are required", ADD_USAGE);
@@ -150,6 +208,9 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     inputModalities = [...new Set(inputModalities)];
   }
 
+  const parsed = parseReasoningArgs(reasoningEffortsValue, defaultEffortValue);
+  if (parsed.error) fail(parsed.error);
+
   const existing = config.customModels ?? [];
   const slug = routedSlug(provider, modelId);
   if (existing.some(model => routedSlug(model.provider, model.modelId) === slug)) {
@@ -163,6 +224,8 @@ async function handleCustomAdd(args: string[]): Promise<void> {
     ...(displayName ? { displayName } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
+    ...(parsed.reasoningEfforts ? { reasoningEfforts: parsed.reasoningEfforts } : {}),
+    ...(parsed.defaultReasoningEffort ? { defaultReasoningEffort: parsed.defaultReasoningEffort } : {}),
     addedAt: new Date().toISOString(),
   };
   config.customModels = [...existing, entry];
@@ -218,12 +281,14 @@ function customModelCells(model: OcxCustomModel): string[] {
     model.displayName ?? "-",
     model.contextWindow ? `${Math.round(model.contextWindow / 1000)}k` : "-",
     model.inputModalities?.join(",") ?? "-",
+    model.reasoningEfforts?.join(",") ?? "-",
+    model.defaultReasoningEffort ?? "-",
   ];
 }
 
 function printCustomModelGroup(provider: string, models: OcxCustomModel[]): void {
   const rows = models.map(customModelCells);
-  const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES"];
+  const headers = ["ID", "MODEL", "DISPLAY NAME", "CONTEXT", "MODALITIES", "EFFORTS", "DEFAULT EFFORT"];
   const widths = headers.map((header, column) => Math.max(header.length, ...rows.map(row => row[column].length)));
   const line = (cells: string[]) => cells.map((cell, column) => cell.padEnd(widths[column])).join("  ");
   console.log(`${provider}:`);

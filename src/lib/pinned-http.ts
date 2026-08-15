@@ -3,7 +3,11 @@ import https from "node:https";
 
 export type PinnedAddress = { address: string; family: number };
 
-export type PinnedHttpErrorCode = "connect_timeout";
+export type PinnedHttpErrorCode =
+  | "connect_timeout"
+  | "first_byte_timeout"
+  | "inactivity_timeout"
+  | "output_byte_limit";
 
 export class PinnedHttpError extends Error {
   override readonly name = "PinnedHttpError";
@@ -15,6 +19,11 @@ export interface PinnedHttpRequestOptions {
   maxBytes?: number;
   /** Optional deadline for establishing the TCP connection and, for HTTPS, completing TLS. */
   connectTimeoutMs?: number;
+  /** Optional deadline from connection establishment until response headers arrive. */
+  firstByteTimeoutMs?: number;
+  /** Optional maximum idle interval between response-body chunks. */
+  inactivityTimeoutMs?: number;
+  /** @deprecated Use firstByteTimeoutMs and inactivityTimeoutMs. */
   idleTimeoutMs?: number;
   rejectUnauthorized?: boolean;
   context?: string;
@@ -37,7 +46,11 @@ function pinnedHttpRequest(
   }
   const context = options?.context ?? "request";
   const connectTimeoutMs = options?.connectTimeoutMs;
-  const idleTimeoutMs = options?.idleTimeoutMs ?? 60_000;
+  const legacyIdleTimeoutMs = options?.idleTimeoutMs ?? 60_000;
+  const usesLegacyIdleTimeout = options?.firstByteTimeoutMs === undefined
+    && options?.inactivityTimeoutMs === undefined;
+  const firstByteTimeoutMs = options?.firstByteTimeoutMs ?? legacyIdleTimeoutMs;
+  const inactivityTimeoutMs = options?.inactivityTimeoutMs ?? legacyIdleTimeoutMs;
   const maxBytes = options?.maxBytes;
   const headers = new Headers(options?.headers);
   headers.set("host", parsed.host);
@@ -56,16 +69,29 @@ function pinnedHttpRequest(
     let settled = false;
     let req: ClientRequest | undefined;
     let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    let firstByteTimer: ReturnType<typeof setTimeout> | undefined;
     const clearConnectTimer = () => {
       if (connectTimer !== undefined) clearTimeout(connectTimer);
       connectTimer = undefined;
     };
+    const clearFirstByteTimer = () => {
+      if (firstByteTimer !== undefined) clearTimeout(firstByteTimer);
+      firstByteTimer = undefined;
+    };
     const fail = (error: unknown) => {
       clearConnectTimer();
+      clearFirstByteTimer();
       try { req?.destroy(); } catch { /* ignore */ }
       if (settled) return;
       settled = true;
       reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const startFirstByteTimer = () => {
+      clearFirstByteTimer();
+      firstByteTimer = setTimeout(
+        () => fail(new PinnedHttpError("first_byte_timeout", `${context} first byte timed out`)),
+        firstByteTimeoutMs,
+      );
     };
     const requestOptions: RequestOptions & { servername?: string } = {
       protocol: parsed.protocol,
@@ -101,6 +127,7 @@ function pinnedHttpRequest(
 
     const onResponse = (response: IncomingMessage) => {
       clearConnectTimer();
+      clearFirstByteTimer();
       const status = response.statusCode ?? 0;
       const responseHeaders = new Headers();
       for (const [key, value] of Object.entries(response.headers)) {
@@ -124,28 +151,35 @@ function pinnedHttpRequest(
       let received = 0;
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          response.setTimeout(idleTimeoutMs, () => {
-            const error = new Error(`${context} stalled`);
-            fail(error);
+          let bodySettled = false;
+          const failBody = (error: Error) => {
+            if (bodySettled) return;
+            bodySettled = true;
             try { controller.error(error); } catch { /* closed */ }
+            try { response.destroy(); } catch { /* ignore */ }
+            try { req?.destroy(); } catch { /* ignore */ }
+          };
+
+          response.setTimeout(inactivityTimeoutMs, () => {
+            failBody(new PinnedHttpError("inactivity_timeout", `${context} stalled`));
           });
           response.on("data", (chunk: Buffer | string) => {
+            if (bodySettled) return;
             const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
             received += buffer.byteLength;
             if (maxBytes !== undefined && received > maxBytes) {
-              const error = new Error(`${context} exceeds ${maxBytes} byte cap`);
-              fail(error);
-              try { controller.error(error); } catch { /* closed */ }
+              failBody(new PinnedHttpError("output_byte_limit", `${context} exceeds ${maxBytes} byte cap`));
               return;
             }
             try { controller.enqueue(buffer); } catch { /* closed */ }
           });
           response.on("end", () => {
+            if (bodySettled) return;
+            bodySettled = true;
             try { controller.close(); } catch { /* closed */ }
           });
           response.on("error", (error: Error) => {
-            fail(error);
-            try { controller.error(error); } catch { /* closed */ }
+            failBody(error);
           });
         },
         cancel() {
@@ -163,20 +197,40 @@ function pinnedHttpRequest(
     const onAbort = () => fail(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
     signal?.addEventListener("abort", onAbort, { once: true });
     req.on("socket", (socket) => {
-      if (!socket.connecting || connectTimeoutMs === undefined) return;
       const connectedEvent = parsed.protocol === "https:" ? "secureConnect" : "connect";
-      connectTimer = setTimeout(() => fail(new PinnedHttpError("connect_timeout", `${context} connect timed out`)), connectTimeoutMs);
-      socket.once(connectedEvent, clearConnectTimer);
-      socket.once("error", clearConnectTimer);
-      socket.once("close", clearConnectTimer);
+      if (!socket.connecting) {
+        if (!usesLegacyIdleTimeout) startFirstByteTimer();
+        return;
+      }
+      if (connectTimeoutMs !== undefined) {
+        connectTimer = setTimeout(
+          () => fail(new PinnedHttpError("connect_timeout", `${context} connect timed out`)),
+          connectTimeoutMs,
+        );
+      }
+      socket.once(connectedEvent, () => {
+        clearConnectTimer();
+        if (!usesLegacyIdleTimeout) startFirstByteTimer();
+      });
+      socket.once("error", () => {
+        clearConnectTimer();
+        clearFirstByteTimer();
+      });
+      socket.once("close", () => {
+        clearConnectTimer();
+        clearFirstByteTimer();
+      });
     });
-    req.setTimeout(idleTimeoutMs, () => fail(new Error(`${context} timed out`)));
+    if (usesLegacyIdleTimeout) {
+      req.setTimeout(legacyIdleTimeoutMs, () => fail(new Error(`${context} timed out`)));
+    }
     req.on("error", error => {
       signal?.removeEventListener("abort", onAbort);
       fail(error);
     });
     req.on("close", () => {
       clearConnectTimer();
+      clearFirstByteTimer();
       signal?.removeEventListener("abort", onAbort);
     });
     req.end(body);

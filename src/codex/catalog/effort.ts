@@ -139,6 +139,15 @@ export function applyCatalogModelMetadata(entry: RawEntry, model?: CatalogModel)
   if (typeof model.supportsReasoningSummaries === "boolean") {
     entry.supports_reasoning_summaries = model.supportsReasoningSummaries;
   }
+  if (model.supportsServiceTier === true) {
+    entry.default_service_tier = null;
+    entry.service_tiers = [{
+      id: "priority",
+      name: "Fast",
+      description: "1.5x speed, increased usage",
+    }];
+    entry.additional_speed_tiers = ["fast"];
+  }
 }
 
 export function applyReasoningLevels(
@@ -153,8 +162,9 @@ export function applyReasoningLevels(
   // (no ultra->max client conversion) and codex-rs validates it by catalog membership,
   // so a missing max rung hard-fails spawn_agent effort overrides. The wire stays honest:
   // routed adapters clamp via clampToSupportedCodexEffort and natives via
-  // nativeEffortClamp (max -> the model's real top rung).
-  if (!preserveExact && efforts.length > 0) {
+  // nativeEffortClamp (max -> the model's real top rung). A `none`-only ladder is NOT
+  // reasoning-capable, so it must not grow synthetic top rungs.
+  if (!preserveExact && efforts.length > 0 && efforts.some(effort => effort !== "none" && effort !== "minimal")) {
     const additions: string[] = [];
     if (!efforts.includes("max")) additions.push("max");
     if (!efforts.includes("ultra")) additions.push("ultra");
@@ -177,7 +187,9 @@ export function applyReasoningLevels(
   }
   entry.default_reasoning_level = defaultOverride && efforts.includes(defaultOverride)
     ? defaultOverride
-    : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high" : efforts[0];
+    : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high"
+    // Sentinels never become the implicit default when real rungs are declared.
+    : efforts.find(effort => effort !== "none" && effort !== "minimal") ?? efforts[0];
 }
 
 export function isGpt56NativeSlug(slug: string): boolean {

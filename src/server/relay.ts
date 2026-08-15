@@ -366,6 +366,7 @@ export function trackSseForRequestLog(
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let terminalReported = false;
+  let cancelled = false;
 
   const reportTerminal = (status: ResponsesTerminalStatus) => {
     if (terminalReported) return;
@@ -385,8 +386,10 @@ export function trackSseForRequestLog(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          inspector.finish();
-          if (!terminalReported) reportTerminal("incomplete");
+          if (!cancelled) {
+            inspector.finish();
+            if (!terminalReported) reportTerminal("incomplete");
+          }
           inspector.dispose();
           controller.close();
           return;
@@ -394,12 +397,19 @@ export function trackSseForRequestLog(
         inspector.feed(value);
         controller.enqueue(value);
       } catch (err) {
-        if (!terminalReported) reportTerminal("incomplete");
+        // The upstream read rejected: the 200 body died mid-flight. Client
+        // cancellation is the caller's separate 499 path, so a cancel-drained
+        // pending read (cancelled=true) must not carry the truncation marker.
+        if (!cancelled && !terminalReported && logCtx?.activeAttempt) {
+          logCtx.activeAttempt.streamAborted = true;
+        }
+        if (!cancelled && !terminalReported) reportTerminal("incomplete");
         inspector.dispose();
         try { controller.error(err); } catch { /* already torn down */ }
       }
     },
     cancel(reason) {
+      cancelled = true;
       inspector.dispose();
       onCancel();
       reader.cancel(reason).catch(() => {});
@@ -1122,6 +1132,10 @@ export function consumeForInspection(
         if (logCtx) {
           logCtx.transportPhase = "mid_stream";
           logCtx.terminalSource = "synthetic";
+          // A truncated 200 body must not meter as a success the client never
+          // received; the router's equivalent turn carries 502 + streamAborted
+          // (codex-router #139).
+          if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
         }
         onTerminal("failed", 502);
       }

@@ -417,6 +417,27 @@ describe("openai-chat credential hardening", () => {
     expect(body.service_tier).toBe("priority");
   });
 
+  test("an exact model capability authorizes only that Chat model", () => {
+    const exactOnly = provider({ modelSupportsServiceTier: { "test-model": true } });
+    const authorized = parsed();
+    authorized.options.serviceTier = "priority";
+    expect(JSON.parse(createOpenAIChatAdapter(exactOnly).buildRequest(authorized).body).service_tier)
+      .toBe("priority");
+
+    const undeclared = parsed();
+    undeclared.modelId = "other-model";
+    undeclared.options.serviceTier = "priority";
+    expect(JSON.parse(createOpenAIChatAdapter(exactOnly).buildRequest(undeclared).body))
+      .not.toHaveProperty("service_tier");
+
+    const providerDenied = provider({
+      supportsServiceTier: false,
+      modelSupportsServiceTier: { "test-model": true },
+    });
+    expect(JSON.parse(createOpenAIChatAdapter(providerDenied).buildRequest(authorized).body))
+      .not.toHaveProperty("service_tier");
+  });
+
   // `service_tier` is an OpenAI-specific extension and this adapter serves 66 registry
   // providers, several of which reject unknown body fields. Forwarding it by default would
   // turn a caller-supplied tier into an upstream 400 on those routes, so absence of the

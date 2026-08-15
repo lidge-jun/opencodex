@@ -40,6 +40,7 @@ import {
   comboDefaultEffort,
   comboFailureDecision,
   comboIdFromRawBody,
+  comboRequestHasImageInput,
   concreteComboRequestBody,
   getCombo,
   isComboTargetInCooldown,
@@ -78,7 +79,7 @@ import {
 import { buildWebSearchTool, planWebSearch, runWithWebSearch, shouldResolveOpenAiWebSearchSidecar } from "../../web-search";
 import { buildImageTool, buildVideoTool, planImageBridge, planVideoBridge, runWithImageBridge, clampImageMaxRounds, IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME } from "../../images";
 import { describeImagesInPlace, isModelTextOnly, planVisionSidecar, resolveOpenAiVisionModel, shouldResolveOpenAiVisionSidecar, stripImagesInPlace } from "../../vision";
-import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventQueue } from "../../adapters/run-turn-queue";
 import {
   applyCodexAuthContextToProvider,
   CodexAccountCooldownError,
@@ -116,6 +117,11 @@ import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } f
 import { createTranslatorBudget, isTranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { listOpenAiForwardSidecarCandidates, resolveFirstUsableOpenAiSidecar, type ResolvedOpenAiForwardSidecar } from "../../providers/openai-sidecar";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { SERVICE_TIER_ADAPTERS, serviceTierSupportForModel } from "../../providers/service-tier";
+import {
+  RequestPacingQueueOverloadError,
+  waitForProviderRequestSlot,
+} from "../../providers/request-pacing";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import { applyOpenAiVirtualModel, resolveOpenAiCompactModel } from "../../providers/openai-virtual-models";
 import { isUsageDebugEnabled } from "../../usage/debug";
@@ -150,7 +156,6 @@ import {
 import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import {
   beginRequestAttempt,
-  catalogModelSupportsServiceTier,
   finishRequestAttempt,
   inspectResponseLogJson,
   noteAttemptSend,
@@ -235,6 +240,10 @@ import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-t
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { guardTerminalEventStream } from "./terminal-guard";
+import {
+  emptyCompletionRetryEnabled,
+  guardEmptyCompletionEventStream,
+} from "./empty-completion-guard";
 
 /**
  * Adapters whose continuation state must survive Codex's store:false requests.
@@ -593,7 +602,10 @@ async function retryCodexPoolOnAlternateAccount(
       upstream.signal,
       connectMs,
       stream,
-      providerFetch(route.provider, options.codexWsRuntimeIdentity),
+      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        providerName: route.providerName,
+        modelId: route.modelId,
+      }),
       // Credential-bearing forward send: never follow a redirect into a
       // dead-host rejection after the credential was seen (#914).
       route.provider.authMode === "forward",
@@ -1078,9 +1090,17 @@ async function applyFinalRouteRequestNormalization(args: {
     logCtx.preserveResolvedModelFromRoute = true;
   }
 
-  // Fast mode override for OpenAI-routed models, only where the provider's Responses
-  // route documents `service_tier` support (capability gate below strips everywhere else).
-  if (config.fastMode !== undefined && route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === true) {
+  // Fast mode override only where the final provider/model route explicitly documents
+  // service-tier support. The same model-scoped resolver is used by catalog generation.
+  const modelServiceTierSupport = serviceTierSupportForModel(
+    route.provider,
+    route.modelId,
+    route.providerName,
+    inboundWire,
+  );
+  if (config.fastMode !== undefined
+    && SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
+    && modelServiceTierSupport === true) {
     const tier = config.fastMode ? "priority" : undefined;
     if (parsed._rawBody && typeof parsed._rawBody === "object") {
       if (tier) (parsed._rawBody as Record<string, unknown>).service_tier = tier;
@@ -1088,8 +1108,15 @@ async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.options.serviceTier = tier;
   }
-  applyServiceTierGate(route.provider, parsed._rawBody, parsed.options);
-  if (route.provider.adapter === "openai-responses" && route.provider.supportsServiceTier === false) {
+  applyServiceTierGate(
+    route.provider,
+    parsed._rawBody,
+    parsed.options,
+    route.modelId,
+    route.providerName,
+    inboundWire,
+  );
+  if (modelServiceTierSupport === false) {
     logCtx.requestedServiceTier = undefined;
     logCtx.requestedSpeedLabel = undefined;
   }
@@ -1143,10 +1170,9 @@ async function applyFinalRouteRequestNormalization(args: {
     }
   }
   recordAttemptRequestedEffort(logCtx);
-  logCtx.modelSupportsServiceTier = catalogModelSupportsServiceTier(
-    route.modelId,
-    logCtx.requestedServiceTier ?? logCtx.configuredServiceTier,
-  );
+  logCtx.modelSupportsServiceTier = SERVICE_TIER_ADAPTERS.has(route.provider.adapter)
+    ? modelServiceTierSupport
+    : undefined;
 }
 
 
@@ -1172,6 +1198,41 @@ export async function handleComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // Expand previous_response_id before image policy and child dispatch so a
+  // continuation that only references prior images still fails closed when
+  // imageInput is disabled (and so targets see the full replayed input).
+  const body = expandPreviousResponseInput(rawBody);
+  if (previousResponseReplayFailure(body)) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
+  // Missing state returns the original body without a failure marker. Reject
+  // that unresolved continuation for image-disabled combos so a target cannot
+  // resolve prior images out of band. A successful expansion yields a new
+  // object (still carrying previous_response_id) and must not be treated as
+  // unresolved — text-only stored continuations remain allowed.
+  const requestedPreviousId = typeof (rawBody as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
+    ? (rawBody as { previous_response_id: string }).previous_response_id.trim()
+    : "";
+  const unresolvedPrevious = requestedPreviousId.length > 0 && body === rawBody;
+  if (combo.imageInput === "disabled" && unresolvedPrevious) {
+    return formatErrorResponse(
+      400,
+      "previous_response_not_found",
+      "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
+    );
+  }
+  if (combo.imageInput === "disabled" && comboRequestHasImageInput(body)) {
+    return formatErrorResponse(400, "invalid_request_error", `Combo "${comboId}" does not accept image input`);
+  }
+  // Expansion already materialised prior input. Drop the id so the child
+  // handleResponses path does not expand again and double-prepend history.
+  if (body !== rawBody && body && typeof body === "object" && !Array.isArray(body)) {
+    delete (body as Record<string, unknown>).previous_response_id;
+  }
   const adoptFailedChildLog = (childLog: RequestLogContext): void => {
     // Attempts remain the complete physical history; the logical row mirrors the most recent
     // failed target so an exhausted combo still has useful top-level reasoning diagnostics.
@@ -1188,7 +1249,7 @@ export async function handleComboResponses(
   };
 
   const unreadableEncryptedAgentTask = hasUnreadableEncryptedAgentTask(
-    (rawBody as { input?: unknown } | undefined)?.input,
+    (body as { input?: unknown } | undefined)?.input,
   );
   const canDecryptUnreadableAgentTask = (target: (typeof combo.targets)[number]): boolean => {
     const provider = config.providers[target.provider];
@@ -1230,7 +1291,7 @@ export async function handleComboResponses(
     };
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
     const childBody = concreteComboRequestBody(
-      rawBody,
+      body,
       pick.target,
       comboDefaultEffort(config, comboId),
       supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
@@ -1451,8 +1512,19 @@ export function applyServiceTierGate(
   provider: OcxProviderConfig,
   rawBody: unknown,
   options: { serviceTier?: string },
+  modelId?: string,
+  providerName?: string,
+  inbound: InboundWire = "responses",
 ): void {
-  if (provider.adapter !== "openai-responses" || provider.supportsServiceTier !== false) return;
+  // A direct unit caller without a model id retains the historical tri-state behavior for
+  // adapters outside the OpenAI service-tier family. Once a model is known, resolve the final
+  // model adapter as well: an explicit override to Anthropic (or another non-OpenAI wire) must
+  // not carry a caller-supplied `service_tier` through a route that cannot forward it.
+  if (modelId === undefined && !SERVICE_TIER_ADAPTERS.has(provider.adapter)) return;
+  const support = modelId === undefined
+    ? provider.supportsServiceTier
+    : serviceTierSupportForModel(provider, modelId, providerName, inbound);
+  if (support !== false) return;
   if (rawBody && typeof rawBody === "object") {
     delete (rawBody as Record<string, unknown>).service_tier;
   }
@@ -2301,7 +2373,10 @@ async function handleResponsesInner(
             headers: request.headers,
             body: request.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity),
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }),
             route.provider.authMode === "forward")
             // Every real attempt response — including an intermediate 5xx the
             // retry wrapper replaces — proves the host was reached (#914 review).
@@ -2363,7 +2438,10 @@ async function handleResponsesInner(
               headers: request.headers,
               body: request.body,
             }, recovery), upstream.signal, connectMs, parsed.stream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity),
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
               route.provider.authMode === "forward")
               .then(res => {
                 settleObservedHostResponse();
@@ -2668,6 +2746,7 @@ async function handleResponsesInner(
             } else {
               logCtx.transportPhase = "mid_stream";
               logCtx.terminalSource = "synthetic";
+              if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
               reportNativeTerminal("failed", 502);
             }
           },
@@ -2951,6 +3030,11 @@ async function handleResponsesInner(
       && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
+    const imageProviderFetch = providerFetch(
+      route.provider,
+      options.codexWsRuntimeIdentity,
+      { providerName: route.providerName, modelId: route.modelId },
+    );
     const imgResponse = await runWithImageBridge({
       parsed, adapter,
       incomingMeta: { headers: selectedForwardHeaders, abortSignal: options.abortSignal, translatorBudget },
@@ -2967,7 +3051,8 @@ async function handleResponsesInner(
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       stallTimeoutSec: config.stallTimeoutSec,
-      fetchImpl: providerFetch(route.provider, options.codexWsRuntimeIdentity),
+      waitForRequestSlot: imageProviderFetch.waitForPacing,
+      fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       onRequestBuilt: request => recordAdapterReasoning(logCtx, request),
       ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
@@ -3096,33 +3181,87 @@ async function handleResponsesInner(
     return wsResponse;
   }
 
+  // Empty-completion guard (codex-router PR #145 port): a 200 that completes with no output
+  // text and no tool call is a failure the client cannot see — it silently records the turn as
+  // done. The guard holds pre-content adapter events, suppresses the terminal of an empty
+  // turn, retries the IDENTICAL request once, and surfaces a stated error when the retry is
+  // empty or fails. This is a top-level config opt-in; OCX_EMPTY_COMPLETION_RETRY=0 is a
+  // disable-only emergency override. Compaction turns and combo attempts keep their own
+  // machinery (the combo preflight already handles empty streams). Native Chat-to-Chat
+  // requests return from handleChatCompletions before entering Responses core, so they are
+  // intentionally outside this guard and retain their existing one-send wire behavior.
+  const emptyCompletionGuardEnabled =
+    emptyCompletionRetryEnabled(config)
+    && !options.comboAttempt
+    && !routedCompaction;
+
   if (adapter.runTurn) {
     const runTurnAbort = new AbortController();
-    linkAbortSignal(runTurnAbort, options.abortSignal);
+    const cleanupRunTurnAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
     const queue = createAdapterEventQueue({
       onBacklogExceeded: () => runTurnAbort.abort(),
     });
-    const runTurn = async (): Promise<void> => {
+    // Initial admission must settle before the streaming Response commits HTTP 200.
+    // Let the outer Responses facade preserve the local retryable-429 contract.
+    try {
+      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+    } catch (error) {
+      cleanupRunTurnAbort();
+      queue.close();
+      throw error;
+    }
+    // One attempt of the runTurn transport, against an explicit queue. The
+    // empty-completion guard re-invokes the IDENTICAL turn (same parsed request,
+    // same forwarded headers, same abort signal) through a fresh queue, so the
+    // attempt body must not capture the first queue. Each attempt consumes its
+    // own provider pacing slot (#1584): retries are paced like first attempts.
+    const runTurnAttempt = async (
+      targetQueue: AdapterEventQueue,
+      recovery?: AttemptRecoveryKind,
+      pacingSlotAcquired = false,
+    ): Promise<void> => {
       try {
-        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens);
+        if (!pacingSlotAcquired) {
+          await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+        }
+        noteAttemptSend(logCtx.activeAttempt, logCtx.usageLogInputTokens, recovery);
         await adapter.runTurn?.(
           parsed,
           { headers: selectedForwardHeaders, abortSignal: runTurnAbort.signal, translatorBudget },
-          queue.push,
+          targetQueue.push,
         );
       } catch (err) {
-        queue.push({
-          type: "error",
-          message: err instanceof Error ? err.message : String(err),
-        });
+        targetQueue.push(err instanceof RequestPacingQueueOverloadError
+          ? {
+              type: "error",
+              status: 429,
+              errorType: "rate_limit_error",
+              retryable: true,
+              message: err.message,
+            }
+          : {
+              type: "error",
+              message: err instanceof Error ? err.message : String(err),
+            });
       } finally {
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
         if (!logCtx.conversationId && parsed._cursorConversationId) {
           logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
         }
-        queue.close();
+        targetQueue.close();
       }
+    };
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true);
+    // The empty-completion retry re-runs the turn against a fresh queue: the
+    // first queue is closed once its attempt settles, and pushing into it after
+    // close is a silent no-op.
+    const runTurnRetrySource = (): AsyncIterable<AdapterEvent> => {
+      const retryQueue = createAdapterEventQueue({
+        onBacklogExceeded: () => runTurnAbort.abort(),
+      });
+      void runTurnAttempt(retryQueue, "empty-completion");
+      return retryQueue.stream();
     };
 
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
@@ -3139,8 +3278,16 @@ async function handleResponsesInner(
         }
         eventSource = preflight.stream;
       }
+      const guardedSource = emptyCompletionGuardEnabled
+        ? guardEmptyCompletionEventStream({
+            firstEvents: eventSource,
+            // Identical-turn retry: same parsed request, same headers, same
+            // signal — run the adapter transport again against a fresh queue.
+            continuation: runTurnRetrySource,
+          })
+        : eventSource;
       const sseStream = bridgeToResponsesSSE(
-        eventSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+        guardedSource, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
         () => {
           runTurnAbort.abort();
           queue.close();
@@ -3183,7 +3330,17 @@ async function handleResponsesInner(
     }
 
     await runTurn();
-    const events = await queue.collect();
+    const firstAttemptEvents = await queue.collect();
+    let events: AdapterEvent[];
+    if (emptyCompletionGuardEnabled) {
+      events = [];
+      for await (const event of guardEmptyCompletionEventStream({
+        firstEvents: (async function* () { yield* firstAttemptEvents; })(),
+        continuation: runTurnRetrySource,
+      })) events.push(event);
+    } else {
+      events = firstAttemptEvents;
+    }
     if (options.comboAttempt) {
       const firstMeaningful = events.find(event => event.type !== "heartbeat");
       if (!firstMeaningful || firstMeaningful.type === "error") {
@@ -3278,6 +3435,7 @@ async function handleResponsesInner(
   try {
     if (activeAdapter.fetchResponse) {
       noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate);
+      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
       upstreamResponse = await activeAdapter.fetchResponse(builtInitialRequest, {
         abortSignal: upstream.signal,
         timeoutMs: connectMs,
@@ -3292,7 +3450,10 @@ async function handleResponsesInner(
             headers: builtInitialRequest.headers,
             body: builtInitialRequest.body,
           }, recovery), upstream.signal, connectMs, parsed.stream,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity));
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }));
         },
         { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
       );
@@ -3367,12 +3528,17 @@ async function handleResponsesInner(
       noteAttemptSend(logCtx.activeAttempt, retryEstimate, recovery);
       try {
         try {
-          return activeAdapter.fetchResponse
-            ? await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream })
-            : await fetchWithHeaderTimeout(retryRequest.url, {
-              method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
-            }, upstream.signal, connectMs, parsed.stream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity));
+          if (activeAdapter.fetchResponse) {
+            await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
+            return await activeAdapter.fetchResponse(retryRequest, { abortSignal: upstream.signal, timeoutMs: connectMs, stream: parsed.stream });
+          }
+          return await fetchWithHeaderTimeout(retryRequest.url, {
+            method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
+          }, upstream.signal, connectMs, parsed.stream,
+            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+              providerName: route.providerName,
+              modelId: route.modelId,
+            }));
         } finally {
           retryRequest.releaseBodyObservation?.();
         }
@@ -3621,22 +3787,30 @@ async function handleResponsesInner(
 
   cancelBodyOnAbort(upstreamResponse.body, upstream.signal);
 
-  // Anthropic-only: one bounded internal continuation re-ask for clean end_turn turns that
-  // announced an edit without emitting a tool call.
-  const terminalGuardEnabled = activeAdapter.name === "anthropic" && !options.comboAttempt && !routedCompaction;
+  // One bounded internal continuation re-ask for clean end_turn turns that announced an edit
+  // without emitting a tool call. Anthropic gets this by default; openai-chat providers opt in
+  // per-provider via `terminalContinuationGuard` (the heuristic was tuned on Anthropic turns,
+  // so it stays off for the shared openai-chat adapter unless a provider enables it).
+  const terminalGuardEnabled = (activeAdapter.name === "anthropic"
+      || (activeAdapter.name === "openai-chat" && route.provider.terminalContinuationGuard === true))
+    && !options.comboAttempt && !routedCompaction;
   /**
    * One bounded internal re-ask for Anthropic end_turn-without-tool-call turns. Replays the
    * continuation on a 429 with the same-key retry budget (hoisted per request), then falls
    * back to key/account failover; a failure becomes an in-stream adapter error so the client
    * never sees a second hidden HTTP response or an unbounded retry loop.
    */
-  const fetchTerminalGuardContinuation = async function* (nextParsed: OcxParsedRequest): AsyncGenerator<AdapterEvent> {
+  const fetchTerminalGuardContinuation = async function* (
+    nextParsed: OcxParsedRequest,
+    initialRecoveryKind?: AttemptRecoveryKind,
+  ): AsyncGenerator<AdapterEvent> {
     let response: Response | undefined;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
-    let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined;
+    let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
     /**
      * Build and fetch one terminal-guard continuation. `recoveryKind` tags same-target and
-     * failover sends (`rate-limit-429`, `key-429`, `anthropic-oauth-429`, `image-413`); the
+     * failover sends (`empty-completion`, `rate-limit-429`, `key-429`,
+     * `anthropic-oauth-429`, `image-413`); the
      * adapter rebuild is deterministic for the same parsed request (tests assert byte-identical
      * replays).
      */
@@ -3677,6 +3851,7 @@ async function handleResponsesInner(
       try {
         if (activeAdapter.fetchResponse) {
           noteAttemptSend(logCtx.activeAttempt, continuationEstimate, replayKind);
+          await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
           return await activeAdapter.fetchResponse(builtContinuationRequest, {
             abortSignal: upstream.signal,
             timeoutMs: connectMs,
@@ -3696,7 +3871,10 @@ async function handleResponsesInner(
               upstream.signal,
               connectMs,
               nextParsed.stream,
-              providerFetch(route.provider, options.codexWsRuntimeIdentity),
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                providerName: route.providerName,
+                modelId: nextParsed.modelId,
+              }),
             );
           },
           { abortSignal: upstream.signal, label: safeHostLabel(builtContinuationRequest.url) },
@@ -3880,6 +4058,19 @@ async function handleResponsesInner(
     }
   };
 
+  const fetchGuardedEmptyCompletionRetry = (): AsyncIterable<AdapterEvent> => {
+    const retryEvents = fetchTerminalGuardContinuation(parsed, "empty-completion");
+    return terminalGuardEnabled
+      ? guardTerminalEventStream({
+          parsed,
+          firstEvents: retryEvents,
+          adapterName: activeAdapter.name,
+          maxAutoContinuations: 1,
+          continuation: fetchTerminalGuardContinuation,
+        })
+      : retryEvents;
+  };
+
   if (parsed.stream) {
     const initialEventStream = activeAdapter.parseStream(upstreamResponse, translatorBudget);
     const eventStream = terminalGuardEnabled
@@ -3891,9 +4082,19 @@ async function handleResponsesInner(
           continuation: fetchTerminalGuardContinuation,
         })
       : initialEventStream;
+    // The empty-completion guard sits OUTSIDE the terminal guard: a completed
+    // turn with no text and no tool call is retried with the IDENTICAL request
+    // (fetchTerminalGuardContinuation(parsed) replays the cached byte-identical
+    // request — same body, same headers, same signal).
+    const guardedEventStream = emptyCompletionGuardEnabled
+      ? guardEmptyCompletionEventStream({
+          firstEvents: eventStream,
+          continuation: fetchGuardedEmptyCompletionRetry,
+        })
+      : eventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
     const sseStream = bridgeToResponsesSSE(
-      eventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
+      guardedEventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => upstream.abort(), 2_000,
       {
         translatorBudget,
@@ -3938,17 +4139,27 @@ async function handleResponsesInner(
     let events: AdapterEvent[];
     try {
       const initialEvents = await activeAdapter.parseResponse(upstreamResponse, translatorBudget);
+      let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {
-        events = [];
+        guardedEvents = [];
         for await (const event of guardTerminalEventStream({
           parsed,
           firstEvents: (async function* () { yield* initialEvents; })(),
           adapterName: activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: fetchTerminalGuardContinuation,
+        })) guardedEvents.push(event);
+      } else {
+        guardedEvents = initialEvents;
+      }
+      if (emptyCompletionGuardEnabled) {
+        events = [];
+        for await (const event of guardEmptyCompletionEventStream({
+          firstEvents: (async function* () { yield* guardedEvents; })(),
+          continuation: fetchGuardedEmptyCompletionRetry,
         })) events.push(event);
       } else {
-        events = initialEvents;
+        events = guardedEvents;
       }
     } finally {
       cleanupUpstreamAbort();

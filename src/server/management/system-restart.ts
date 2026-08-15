@@ -35,6 +35,7 @@ import {
 import { isServiceViable } from "../../service";
 import { readRuntimePort } from "../../config";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
+import { selfLaunchArgv } from "../../lib/self-launch-argv";
 import {
   MEMORY_DRAIN_RESTART_MS,
   REPLACEMENT_READY_TIMEOUT_MS,
@@ -213,19 +214,20 @@ function spawnDetachedStart(
   port?: number,
   waitForHealthBeforeParentExit = true,
 ): Promise<void> {
-  const args = [process.argv[1], "start"];
+  const args = ["start"];
   const expectedPort = typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535
     ? Math.trunc(port)
     : undefined;
   if (expectedPort !== undefined) {
     args.push("--port", String(expectedPort));
   }
+  const launchArgs = selfLaunchArgv(args);
   return new Promise<void>((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
       const env: NodeJS.ProcessEnv = { ...process.env };
       delete env.OCX_SERVICE;
-      child = spawn(process.execPath, args, {
+      child = spawn(process.execPath, launchArgs, {
         detached: true,
         stdio: "ignore",
         windowsHide: true,

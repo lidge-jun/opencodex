@@ -74,6 +74,7 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "integrations.tab.kimi",
   "integrations.tab.gajae",
   "integrations.tab.dsh",
+  "integrations.tab.mcode",
   "integrations.codex.title",
   "codexAuth.addIdPlaceholder",
   "api.clientConfig.clientOpencode",
@@ -84,6 +85,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "api.clientConfig.clientKimi",
   "api.clientConfig.clientGajae",
   "api.clientConfig.clientDsh",
+  "api.clientConfig.clientMcode",
+  "models.reasoningEffort.minimal",
+  "models.reasoningEffort.max",
+  "pws.pacingRpmUnit",
   "claudeDesktop.family.opus",
   "claudeDesktop.family.fable",
   "claudeDesktop.family.sonnet",
@@ -180,6 +185,11 @@ describe("French auxiliary localization surfaces", () => {
     expect(DICTS.fr["lab.title"]).toBe("Laboratoire de compatibilité");
     expect(labSupplement("fr", "artifact.present")).toBe("Présent");
     expect(labSupplement("fr", "selectVerdict", { subject: "sujet-a" })).toContain("sujet-a");
+    expect(labSupplement("fr", "community.title")).toBe("Données de la communauté");
+    expect(labSupplement("fr", "community.notLocalVerdict")).toContain("verdict local");
+    expect(labSupplement("fr", "community.bundles")).toBe("Lots");
+    expect(labSupplement("fr", "community.activeRecords")).toBe("Enregistrements actifs");
+    expect(labSupplement("fr", "community.revokedRecords")).toBe("Enregistrements révoqués");
   });
 
   test("localizes specific and generic HTTP errors", () => {

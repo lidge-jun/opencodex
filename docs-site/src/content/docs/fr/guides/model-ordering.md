@@ -29,6 +29,7 @@ Les priorités sans sélecteur pertinentes sont :
 | --- | --- : | --- |
 | `subagentModels[i]` | `i` (`0` à `4`) | La carte de classement présentée dans `src/codex/catalog/sync.ts` |
 | Autres modèles acheminés | `5` | Création d'une entrée routé dans `src/codex/catalog/sync.ts` |
+| Modèles routés non mis en avant et présents dans `modelPickerOrder` | `1000 + i` | Rang d’affichage du sélecteur dans `src/codex/catalog/sync.ts` |
 | Slugs GPT natifs par défaut | `9` | Création d'entrées natives dans `src/codex/catalog/sync.ts` |
 | Modèles natifs non sélectionnés alors qu'une liste sélectionnée existe | Au moins `featured.length + 100` | Fusion du catalogue natif dans `src/codex/catalog/sync.ts` |
 
@@ -108,14 +109,36 @@ ont été déclinés en groupes qualifiés par sélecteur.
 
 ## Modification de l'ordre
 
-La méthode prise en charge pour personnaliser l’ordre des premiers modèles consiste à réorganiser `subagentModels`. La page
-**Sous-agents** du tableau de bord permet de réorganiser les identifiants natifs non qualifiés et les identifiants routés. Utilisez `ocx agent subagents set` ou modifiez la
-configuration opencodex pour définir des choix exacts de la forme `<selector>/<native-openai-model>` ; le tableau de bord ne
-répertorie pas ces choix et les omet s’il enregistre la liste. Configurez au maximum cinq identifiants. Avec des
-sélecteurs de compte, un choix natif non qualifié peut se décliner en plusieurs lignes de catalogue qualifiées par sélecteur ;
-les choix configurés et les lignes annoncées ne correspondent donc pas nécessairement un à un.
+Utilisez `subagentModels` pour choisir et ordonner les premiers modèles que Codex annonce également à
+`spawn_agent`. La page **Sous-agents** du tableau de bord peut réorganiser les identifiants natifs non
+qualifiés et les identifiants routés. Utilisez `ocx agent subagents set` ou modifiez la configuration
+OpenCodex pour définir des choix exacts de la forme `<selector>/<native-openai-model>` ; le tableau de bord
+ne les répertorie pas et les omet s’il enregistre la liste. Configurez au maximum cinq identifiants. Avec
+des sélecteurs de compte, un choix natif non qualifié peut se décliner en plusieurs lignes de catalogue
+qualifiées par sélecteur ; les choix configurés et les lignes annoncées ne correspondent donc pas
+nécessairement un à un.
 
-Il n’existe actuellement aucun paramètre général `modelOrder`, `providerOrder` ou de carte de priorité dans `OcxConfig`.
-Le champ de commande pris en charge est `subagentModels` ; `disabledModels` et celui de chaque fournisseur
-`selectedModels` sont des champs de visibilité. Modifier l’ordre des autres entrées du sélecteur nécessiterait un
-changement de comportement dans le code, et non une simple modification de configuration.
+Utilisez `modelPickerOrder` pour ordonner uniquement l’affichage des lignes routées `<provider>/<model>`
+au-delà de ce bloc mis en avant :
+
+```json
+{
+  "modelPickerOrder": [
+    "tyler/deepseek-v4-pro",
+    "jd-chat/kimi-k3",
+    "jd-chat/glm-5.2"
+  ]
+}
+```
+
+Les lignes routées indiquées apparaissent dans l’ordre configuré. Une ligne absente du tableau conserve sa
+priorité normale et reste donc devant la bande d’affichage de `modelPickerOrder` ; indiquez toutes les
+lignes routées dont vous souhaitez contrôler l’ordre relatif. Une ligne également présente dans
+`subagentModels` conserve sa priorité de mise en avant. `modelPickerOrder` ne réorganise ni les lignes
+natives non qualifiées ni celles qualifiées par un compte ; utilisez `subagentModels` pour celles-ci.
+
+`modelPickerOrder` ne modifie jamais l’ensemble des candidats de `spawn_agent`. Il change uniquement la
+priorité visible par Codex dans le sélecteur, tandis qu’OpenCodex conserve la priorité naturelle de chaque
+ligne déplacée pour la sélection des sous-agents. `disabledModels` et `selectedModels` de chaque fournisseur
+restent des champs de visibilité, pas des contrôles d’ordre. Il n’existe aucun paramètre distinct
+`modelOrder`, `providerOrder` ou de carte de priorité.

@@ -60,6 +60,7 @@ import { setIntegrationEnabled, shouldSyncCodexOnStart, shouldSyncGrokOnStart, s
 
 import { removeOwnedConfigState } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
@@ -121,11 +122,11 @@ function grokSyncFailureMessage(err: unknown): string {
 
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
 function startArgv(port?: number): string[] {
-  const args = [process.argv[1], "start"];
+  const args = ["start"];
   if (typeof port === "number" && Number.isFinite(port) && port > 0 && port <= 65535) {
     args.push("--port", String(Math.trunc(port)));
   }
-  return args;
+  return selfLaunchArgv(args);
 }
 
 async function chooseListenPort(requestedPort?: number): Promise<number> {

@@ -66,8 +66,9 @@ ID de fournisseur de clé OAuth et API actuellement acceptés lorsque le nom est
 
 Utilisez la même commande pour **réauthentifier** après `ocx status` / `ocx doctor` rapports
 réauthentification requise ou échec de l'actualisation du terminal (ou utilisez Réauthentifier dans le tableau de bord).
-Codex les comptes de pool ne sont pas un fournisseur `ocx login` public — réauthentifiez-vous via le tableau de bord Codex
-groupe de comptes (Réauthentifier) ou le flux `ocx account reauth` sans tête à la place.
+Les comptes du groupe Codex ne constituent pas un fournisseur public pour `ocx login` : réauthentifiez-vous
+plutôt depuis le groupe de comptes Codex du tableau de bord (**Réauthentifier**) ou avec le flux non
+interactif `ocx account reauth`.
 
 ```bash
 ocx login xai
@@ -118,8 +119,8 @@ Toutes les sous-commandes nécessitent que le proxy soit en cours d'exécution 
 Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur ou un identifiant inconnu, un
 proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
-les commodités sont synthétisées côté client, comme le tableau de bord : `main` est l'alias CLI du
-Codex App connectez-vous au groupe de comptes `openai`, OAuth les comptes sans e-mail apparaissent comme `Account N`,
+les commodités sont synthétisées côté client, comme dans le tableau de bord : `main` désigne la connexion
+Codex App du groupe de comptes `openai`, les comptes OAuth sans adresse e-mail apparaissent sous la forme `Account N`,
 et la colonne plan/label recouvre le plan, l'e-mail masqué, l'étiquette et la clé masquée.
 
 `--json` les lignes de compte utilisent cette forme courante (les champs facultatifs sont omis lorsqu'ils ne sont pas disponibles) :
@@ -142,8 +143,8 @@ et la colonne plan/label recouvre le plan, l'e-mail masqué, l'étiquette et la 
 
 ### `ocx account list [provider] [--json] [--all]`
 
-Sans fournisseur, répertorie le pool Codex, les comptes OAuth et les pools de clés API configurés. Les fournisseurs vides
-les fournisseurs sont ignorés à moins que `--all` soit présent. Avec un fournisseur, répertorie uniquement cette famille d’informations d’identification.
+Sans fournisseur, répertorie le groupe de comptes Codex, les comptes OAuth et les groupes de clés API configurés. Les fournisseurs vides
+sont ignorés à moins que `--all` soit présent. Avec un fournisseur, répertorie uniquement cette famille d’informations d’identification.
 La sortie destinée aux utilisateurs utilise `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` ; une ligne Codex sélectionnée manuellement porte la mention
 `selected`. `PRIORITY` est l'ordre de sélection Codex signé (`0` lorsqu'il n'est pas défini) et affiche `-` pour les lignes
 où l'ordre ne s'applique pas, comme les comptes OAuth et les clés API. Lorsqu'un compte Kiro stocké existe, la sortie indique que Kiro dispose d'un emplacement de connexion et
@@ -167,8 +168,8 @@ cet état et quitte toujours 0. `--json` renvoie :
 
 ### `ocx account use <provider> <account-or-key-id|main> [--json]`
 
-Sélectionne un compte Codex, un compte OAuth ou une clé API existant. Pour `openai`, `main` sélectionne le Codex
-App connectez-vous. Une sélection Codex Pool efface l'affinité processus-local et s'applique à la requête suivante,
+Sélectionne un compte Codex, un compte OAuth ou une clé API existant. Pour `openai`, `main` sélectionne la
+connexion Codex App. Une sélection en mode Codex Pool efface l'affinité locale du processus et s'applique à la requête suivante,
 dont un provenant d'une tâche visible existante ; le redémarrage du proxy ou l'expulsion par affinité peuvent également laisser une tâche
 non lié, tandis que les demandes en cours conservent leur compte capturé. Cela contrôle uniquement le routage du pool ;
 Le mode direct continue d’utiliser les informations d’identification principales de l’appelant. Commutation proactive basée sur l'utilisation,
@@ -188,7 +189,7 @@ faire basculer la requête vers un autre compte de pool admissible. Ces transiti
 
 ### `ocx account refresh <provider> [--json]`
 
-Pour la pool Codex, utilisez `ocx account refresh openai [--json]`. Il force l'actualisation des quotas de compte et
+Pour le groupe de comptes Codex, utilisez `ocx account refresh openai [--json]`. Cette commande force l'actualisation des quotas de compte et
 impressions disponibles weekly/monthly pourcentages et temps de réinitialisation ; les données de quota manquantes sont signalées comme
 inconnu, pas 0%. Son enveloppe JSON est `{ accounts: AccountRow[] }`, avec `quota` sur chaque Codex ligne.
 
@@ -201,9 +202,9 @@ renvoient 1 ; une sonde de quota en amont qui échoue ou expire produit plutôt 
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
-Contrôle uniquement le groupe de comptes `openai` Codex. `on` règle 80%, `off` règle 0%, `status` lit le courant
-valeur, et `threshold <n>` accepte un entier de 0 à 100. Autres fournisseurs et valeurs non valides
-exit 1. `--json` renvoie :
+Contrôle uniquement le groupe de comptes Codex `openai`. `on` règle 80 %, `off` règle 0 %, `status` lit la
+valeur actuelle et `threshold <n>` accepte un entier de 0 à 100. Les autres fournisseurs et les valeurs
+invalides entraînent le code de sortie 1. `--json` renvoie :
 
 ```text
 { provider, autoSwitchThreshold: number, enabled: boolean }

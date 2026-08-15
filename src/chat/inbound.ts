@@ -8,9 +8,21 @@
 export class ChatCompletionsRequestError extends Error {}
 
 type Rec = Record<string, unknown>;
+type ChatCompletionsRoutingBody = Rec & { model: string; messages: unknown[] };
 
 function isRec(v: unknown): v is Rec {
   return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+/** Validate only the fields needed before Chat routing, without projecting the body. */
+export function assertChatCompletionsRoutingBody(raw: unknown): asserts raw is ChatCompletionsRoutingBody {
+  if (!isRec(raw)) throw new ChatCompletionsRequestError("request body must be a JSON object");
+  if (typeof raw.model !== "string" || raw.model.length === 0) {
+    throw new ChatCompletionsRequestError("model is required");
+  }
+  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
+    throw new ChatCompletionsRequestError("messages must be a non-empty array");
+  }
 }
 
 const OUTPUT_CONFIG_EFFORTS = new Set(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -227,13 +239,7 @@ function resolveReasoningSummary(raw: Rec): string | undefined {
  * Throws ChatCompletionsRequestError (-> 400) on malformed input.
  */
 export function chatCompletionsToResponsesBody(raw: unknown): Rec {
-  if (!isRec(raw)) throw new ChatCompletionsRequestError("request body must be a JSON object");
-  if (typeof raw.model !== "string" || raw.model.length === 0) {
-    throw new ChatCompletionsRequestError("model is required");
-  }
-  if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
-    throw new ChatCompletionsRequestError("messages must be a non-empty array");
-  }
+  assertChatCompletionsRoutingBody(raw);
 
   const systemParts: string[] = [];
   const input: Rec[] = [];

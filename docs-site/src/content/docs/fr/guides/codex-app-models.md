@@ -203,9 +203,15 @@ Toutefois, le catalogue de modèles et l'identifiant du niveau employé dans la 
 charge du mode rapide ; les fournisseurs routés sont conditionnés par leurs capacités. `service_tier` n'est
 retiré que si le fournisseur déclare `supportsServiceTier: false` (le registre classe OpenAI canonique comme
 `true`, et DeepSeek ainsi que Volcengine Ark comme `false`). Les passerelles personnalisées non classées
-conservent intactes les valeurs transmises par l'appelant et ne reçoivent jamais d'injection. L'option rapide
-n'est jamais annoncée lorsqu'elle ne peut être respectée, et une passerelle personnalisée peut y adhérer
-explicitement avec `true`.
+conservent intactes les valeurs transmises par l'appelant et ne reçoivent jamais d'injection. Une passerelle
+personnalisée peut l’activer globalement avec `supportsServiceTier: true`, ou uniquement pour certains
+modèles avec `modelSupportsServiceTier: { "verified-model": true }`. Une valeur exacte `false` restreint une
+valeur globale `true`, tandis que `supportsServiceTier: false` reste fermé par défaut. La décision finale de
+l’adaptateur et du modèle régit à la fois les métadonnées du catalogue et l’injection à l’exécution ;
+l’option rapide n’est donc jamais annoncée lorsqu’elle ne peut être respectée. Une destination
+`openai-chat` peut autoriser tous les modèles autrement admissibles avec `chatServiceTier: true`, ou
+uniquement des modèles précis avec `modelSupportsServiceTier` ; les routes Responses n’ont pas besoin de
+cette autorisation supplémentaire sur le protocole Chat.
 
 ## Sélection des sous-agents
 

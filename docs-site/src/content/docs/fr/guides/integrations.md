@@ -1,10 +1,10 @@
 ---
 title: Intégrations
-description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code et DeepSeek Harness depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
+description: Connectez opencodex à OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, Gajae Code, DeepSeek Harness et MiniMax Code depuis le tableau de bord — un commutateur par client, avec une sauvegarde avant chaque écriture.
 ---
 
 L'onglet **Intégrations** écrit le bloc fournisseur d'opencodex dans le fichier de configuration du client,
-puis peut le retirer. Huit clients fonctionnent ainsi, chacun avec son propre commutateur :
+puis peut le retirer. Neuf clients fonctionnent ainsi, chacun avec son propre commutateur :
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
@@ -16,6 +16,7 @@ puis peut le retirer. Huit clients fonctionnent ainsi, chacun avec son propre co
 | Kimi Code | `~/.kimi-code/config.toml` | TOML | au redémarrage ou avec `/reload` | valeur fictive de bouclage |
 | Gajae Code | `~/.gjc/agent/models.yml` | YAML | dans les nouvelles sessions ou à l'ouverture de `/model` |`OPENCODEX_GAJAE_API_KEY` |
 | DeepSeek Harness (DSH) | `$DSH_HOME/settings.yaml` (`~/.dsh/settings.yaml` par défaut) | YAML | rechargement à chaud | jeton porteur fictif et non secret pour le bouclage |
+| MiniMax Code | `~/.minimax/config.yaml` | YAML | dans les nouvelles sessions ou après l’ouverture du sélecteur de modèles | valeur fictive de bouclage |
 
 La prise en charge gérée de DSH exige au minimum **DSH 0.1.0-rc.6**. OpenCodex ne possède que le fragment
 `llm-pi-ai.providers.opencodex` : **Appliquer** et **Actualiser** remplacent ce fragment, **Désactiver** ne
@@ -23,6 +24,11 @@ supprime que ce fragment, et **Restaurer** rétablit un instantané enregistré.
 modifications de fournisseurs. Ces opérations ne changent ni le modèle par défaut de l'utilisateur ni le
 fournisseur natif `deepseek-official`. L'intégration DSH gérée est actuellement limitée au bouclage et
 n'écrit jamais de véritable identifiant.
+
+MiniMax Code recherche d’abord `MINIMAX_DATA_DIR`, puis `MAVIS_DATA_DIR`, avant de se rabattre sur
+`~/.minimax`. Son bloc géré ne possède que `custom_provider.opencodex`. Il ne modifie ni `defaultModel`, ni
+la source d’identification MiniMax sélectionnée, ni la connexion MiniMax de l’utilisateur. Après l’avoir
+connecté, choisissez dans MCode une entrée `custom_provider:opencodex/<provider/model>`.
 
 Les chemins respectent les variables de remplacement propres à chaque client, lorsqu'elles existent. Pour
 OMP, la présence de `OMP_PROFILE` l'emporte sur `PI_PROFILE`, même si sa valeur est explicitement vide. Un
@@ -82,7 +88,7 @@ niveaux. Dans ces cas, le commutateur est verrouillé afin que rien ne soit modi
 **OMP** n'est pas affecté non plus par les modifications voisines, mais pour une autre raison : son outil
 d'écriture ne modifie, octet par octet, que sa propre plage `providers.opencodex` ; le reste du fichier
 n'est jamais réécrit. Pour les autres formats susceptibles de contenir des commentaires (Hermes, OpenClaw,
-Kimi Code et Gajae Code — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
+Kimi Code, Gajae Code et MiniMax Code — documents YAML, JSON5 et TOML réécrits en entier), ou lorsque les propres entrées
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
@@ -103,8 +109,8 @@ l'application s'arrête et le signale au lieu d'écrire une valeur modifiée en 
 réussi. Le fichier concerné est indiqué et rien n'est déplacé sur le disque. Vous pouvez toujours modifier
 ce fichier manuellement ; seule la réécriture automatique est refusée.
 
-**Pi, Kimi Code, Gajae Code et l'intégration DSH gérée fonctionnent uniquement avec une adresse de
-bouclage.** Les trois premiers n'ont aucun champ de configuration pour l'en-tête `x-opencodex-api-key`
+**Pi, Kimi Code, Gajae Code, MiniMax Code et l'intégration DSH gérée fonctionnent uniquement avec une adresse de
+bouclage.** Les quatre premiers n'ont aucun champ de configuration pour l'en-tête `x-opencodex-api-key`
 qu'exige une liaison hors bouclage. DSH possède une table d'en-têtes générique, mais rc.6 ne documente pas
 cet en-tête d'admission dédié comme contrat d'intégration pris en charge ; l'outil d'écriture géré échoue
 donc de façon fermée plutôt que d'improviser. Donnez-leur accès au bouclage par un tunnel SSH ou par un
@@ -135,6 +141,30 @@ ocx integration client disable --client hermes
 ocx integration client history --client hermes
 ocx integration client restore --op <opId> [--confirm-drift]
 ```
+
+Pour MiniMax Code, connectez une fois le fournisseur puis utilisez l’enveloppe qui vérifie la connexion :
+
+```bash
+ocx integration client enable --client mcode
+ocx mcode
+```
+
+Le CLI distinct de la plateforme MiniMax (`mmx`) n’est pas une intégration à commutateur de fichier. Ses
+commandes textuelles utilisent le point de terminaison compatible avec Anthropic de MiniMax ; OpenCodex
+fournit donc un lanceur isolant les identifiants et limité à l’adresse locale :
+
+```bash
+ocx mmx text chat --model anthropic/claude-opus-5 --message "Hello"
+ocx mmx text repl --model openai/gpt-5.6-sol
+```
+
+Seules les commandes `mmx text chat` et `mmx text repl` passent par le proxy. Utilisez directement `mmx`
+pour les commandes MiniMax natives d’image, de vidéo, de parole, de musique, de vision, de recherche, de
+quota, d’authentification, de configuration, de fichier et de mise à jour. L’enveloppe emploie une
+configuration temporaire qui ne contient qu’une valeur fictive locale et non secrète ; elle ne charge
+jamais les identifiants OAuth ou de clé d’API de `~/.mmx`, et refuse les remplacements `--api-key`,
+`--base-url` et `--region`. Consultez [Clients MiniMax](/fr/guides/minimax/) pour connaître le flux complet
+et ses limites.
 
 `--confirm-drift` n'est jamais présumé. Si le fichier a changé depuis l'opération que vous restaurez, la
 commande refuse et vous l'indique : remplacer vos modifications plus récentes relève de votre décision.

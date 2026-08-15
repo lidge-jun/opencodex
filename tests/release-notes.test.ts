@@ -2,16 +2,22 @@ import { describe, expect, test } from "bun:test";
 import {
   cleanPrTitle,
   extractChangelogPrNumbers,
+  extractCommitBulletSections,
+  mergeCommitBulletSections,
   extractPrNumbers,
   hasMeaningfulCarriedNotes,
+  isReleasePlumbingCommit,
   isPolishBaseUrlAllowed,
   joinCarriedPreviewNotes,
   matchingPreviewTag,
   matchingPreviewTags,
+  parseCommitLog,
   parseGeneratedNotes,
   parseSectionHeadings,
   parseTakeoverSourcePr,
   previousReleaseNotesTag,
+  renderCommitFallbackNotes,
+  sanitizeCommitText,
   renderReleaseNotes,
   rewriteTakeoverCredits,
   selectNewestCarriedPreviewTag,
@@ -34,6 +40,137 @@ describe("matchingPreviewTag", () => {
   test("returns null for preview versions and when no match exists", () => {
     expect(matchingPreviewTag("2.7.39-preview.1", ["v2.7.39-preview.1"])).toBeNull();
     expect(matchingPreviewTag("2.7.41", ["v2.7.40-preview.20260725"])).toBeNull();
+  });
+});
+
+describe("commit fallback: untrusted-input and carry hardening", () => {
+  const log = (s: string) => parseCommitLog(s);
+
+  test("git author display names never render as GitHub mentions", () => {
+    // %an is a free-form display name; "@Abhishek" would notify an unrelated account.
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\u0000fix(x): a fix\u0000Abhishek Sharma"));
+    expect(out).toContain("Abhishek Sharma");
+    expect(out).not.toMatch(/@Abhishek/);
+  });
+
+  test("mentions inside commit subjects are neutralized but stay readable", () => {
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1\u0000fix(x): thanks @octocat\u0000dev"));
+    expect(out).not.toMatch(/@octocat/);
+    expect(out).toContain("octocat");
+  });
+
+  test("markdown metacharacters cannot restructure the release body", () => {
+    const subject = "fix(x): drop " + String.fromCharCode(96) + "code" + String.fromCharCode(96) + " and <b>tags</b>";
+    const NUL = String.fromCharCode(0);
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + subject + NUL + "dev"));
+    // Non-vacuous: the entry must actually render.
+    expect(out).toContain("drop");
+    // Escaped, not deleted: technical text survives but cannot restructure the body.
+    expect(out).toContain("\\" + String.fromCharCode(96) + "code");
+    expect(out).toContain("\\<b\\>");
+    expect(out).not.toMatch(/(^|[^\\])<b>/);
+  });
+
+  test("sanitizeCommitText collapses newlines and strips the separator byte", () => {
+    expect(sanitizeCommitText("a\nb")).toBe("a b");
+    expect(sanitizeCommitText("a" + String.fromCharCode(31) + "b")).toBe("a b");
+  });
+
+  test("a unit separator in subject OR author cannot forge a field boundary", () => {
+    // Git accepts U+001F in both subjects and author names, so the old framing
+    // was ambiguous in both directions; NUL cannot appear in commit content.
+    const commits = log("aaaaaaaaaaaa1\u0000subject\u001fwith sep\u0000Mallory\u001fInjected");
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.subject).toBe("subject\u001fwith sep");
+    expect(commits[0]!.author).toBe("Mallory\u001fInjected");
+    expect(renderCommitFallbackNotes(commits)).not.toContain("\u001f");
+  });
+
+  test("a non-hex sha is dropped rather than rendered", () => {
+    const out = renderCommitFallbackNotes([{ sha: "not-a-sha](evil)", subject: "fix(x): y", author: "dev" }]);
+    expect(out).not.toContain("evil");
+    expect(out).toContain("- x: y");
+  });
+
+  test("conventional merge: commits are plumbing too", () => {
+    expect(isReleasePlumbingCommit("merge: bring dev into main")).toBe(true);
+    expect(isReleasePlumbingCommit("merge(dev): sync")).toBe(true);
+    const NUL = String.fromCharCode(0);
+    // Non-vacuous: an ordinary commit in the same shape does render.
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + "fix(x): real" + NUL + "dev"))).toContain("real");
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + NUL + "merge: bring dev into main" + NUL + "dev"))).toBe("");
+  });
+
+  test("preview fallback notes survive the carry into a stable release", () => {
+    // Guards the blocker: a preview body built by the fallback is "meaningful",
+    // so the workflow carries it and skips regenerating — and the PR renderer
+    // would otherwise discard every non-PR bullet, collapsing back to the stub.
+    const previewBody = "## Bug Fixes\n\n- gui: fix a thing (abc1234, Some Name)\n";
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: previewBody,
+      deltaPrNotes: "",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("## Bug Fixes");
+    expect(rendered).toContain("gui: fix a thing (abc1234, Some Name)");
+  });
+
+  test("extractCommitBulletSections keeps only PR-free bullets", () => {
+    const body = [
+      "## Bug Fixes",
+      "",
+      "- gui: commit style (abc1234, Name)",
+      "- pr style (#42)",
+      "",
+      "## Changelog",
+      "",
+      "- #42 pr style @dev",
+    ].join("\n");
+    const out = extractCommitBulletSections(body);
+    expect(out).toContain("gui: commit style");
+    expect(out).not.toContain("#42");
+    expect(out).not.toContain("Changelog");
+  });
+
+  test("carried and current fallback bullets merge under one heading per category", () => {
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: "## Bug Fixes\n\n- carried one (aaa1234, N)\n",
+      commitFallbackNotes: "## Bug Fixes\n\n- current one (bbb1234, M)\n\n## Chores\n\n- chore one (ccc1234, O)\n",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("carried one");
+    expect(rendered).toContain("current one");
+    expect(rendered).toContain("chore one");
+    expect((rendered.match(/## Bug Fixes/g) ?? [])).toHaveLength(1);
+  });
+
+  test("mergeCommitBulletSections drops duplicate bullets", () => {
+    const merged = mergeCommitBulletSections([
+      "## Bug Fixes\n\n- same (aaa1234, N)\n",
+      "## Bug Fixes\n\n- same (aaa1234, N)\n- other (bbb1234, M)\n",
+    ]);
+    expect((merged.match(/- same/g) ?? [])).toHaveLength(1);
+    expect(merged).toContain("- other");
+  });
+
+  test("carried PR sections still win over carried commit bullets", () => {
+    const previewBody = "## Bug Fixes\n\n- real pr work (#7)\n\n## Changelog\n\n- #7 real pr work @dev\n";
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: previewBody,
+      commitFallbackNotes: "## Chores\n\n- noise: should not appear (abc1234, Name)\n",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("#7");
+    expect(rendered).not.toContain("should not appear");
   });
 });
 
@@ -694,5 +831,110 @@ describe("polish validation", () => {
     const errors = validatePolishedSections(out, [653, 744, 853], ["New Features", "Bug Fixes"]);
     expect(errors).toContain("missing headings: Bug Fixes");
     expect(errors).toContain("unexpected headings: Internal");
+  });
+});
+
+describe("commit-based changelog fallback", () => {
+  const log = [
+    "aaaaaaaaaaaa1\u0000feat(gui): add a quota badge\u0000alice",
+    "bbbbbbbbbbbb2\u0000fix(codex): stop a launcher crash (#1625)\u0000bob",
+    "cccccccccccc3\u0000docs(devlog): record the release train\u0000carol",
+    "dddddddddddd4\u0000chore(ci): prune stale workflows\u0000dave",
+    "eeeeeeeeeeee5\u0000just a bare subject\u0000eve",
+    "ffffffffffff6\u0000Merge dev into main: v9.9.9 release\u0000mallory",
+    "gggggggggggg7\u0000release: v9.9.9\u0000trent",
+  ].join("\u0000");
+
+  test("parseCommitLog reads the NUL-separated git log format", () => {
+    const commits = parseCommitLog(log);
+    expect(commits).toHaveLength(7);
+    expect(commits[0]).toEqual({ sha: "aaaaaaaaaaaa1", subject: "feat(gui): add a quota badge", author: "alice" });
+  });
+
+  test("parseCommitLog ignores blank and malformed lines", () => {
+    expect(parseCommitLog("")).toEqual([]);
+    expect(parseCommitLog("\n\n")).toEqual([]);
+    // A hash with no subject carries no changelog value.
+    expect(parseCommitLog("abc123")).toEqual([]);
+  });
+
+  test("conventional prefixes map onto the release.yml categories", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    expect(out).toContain("## New Features");
+    expect(out).toContain("- gui: add a quota badge (aaaaaaaaa, alice)");
+    expect(out).toContain("## Bug Fixes");
+    expect(out).toContain("- codex: stop a launcher crash (#1625) (bbbbbbbbb, bob)");
+    expect(out).toContain("## Documentation");
+    expect(out).toContain("## Chores");
+    expect(out).toContain("## Other Changes");
+    expect(out).toContain("- just a bare subject (eeeeeeeee, eve)");
+  });
+
+  test("categories render in the canonical order", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    const order = ["## New Features", "## Bug Fixes", "## Documentation", "## Chores", "## Other Changes"]
+      .map(heading => out.indexOf(heading));
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(order.every(index => index >= 0)).toBe(true);
+  });
+
+  test("merge commits and release bumps are excluded", () => {
+    const out = renderCommitFallbackNotes(parseCommitLog(log));
+    expect(out).not.toContain("Merge dev into main");
+    expect(out).not.toContain("release: v9.9.9");
+    expect(isReleasePlumbingCommit("Merge pull request #1 from x/y")).toBe(true);
+    expect(isReleasePlumbingCommit("release: v2.20.0")).toBe(true);
+    expect(isReleasePlumbingCommit("fix(codex): a real fix")).toBe(false);
+  });
+
+  test("a range with only plumbing commits renders nothing, so the caller keeps minimal notes", () => {
+    const plumbingOnly = [
+      "ffffffffffff6\u0000Merge dev into main: v9.9.9 release\u0000mallory",
+      "gggggggggggg7\u0000release: v9.9.9\u0000trent",
+    ].join("\u0000");
+    const out = renderCommitFallbackNotes(parseCommitLog(plumbingOnly));
+    expect(out).toBe("");
+    expect(hasMeaningfulCarriedNotes(out)).toBe(false);
+  });
+
+  test("no commits at all renders nothing", () => {
+    expect(renderCommitFallbackNotes([])).toBe("");
+  });
+
+  test("real PR sections win; the commit fallback is not appended alongside them", () => {
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      deltaPrNotes: "## Bug Fixes\n\n* fix a thing by @dev in https://github.com/o/n/pull/42\n",
+      commitFallbackNotes: renderCommitFallbackNotes(parseCommitLog(log)),
+      compareFrom: "v9.9.8",
+      compareTo: "v9.9.9",
+      repository: "owner/name",
+    });
+    expect(rendered).toContain("#42");
+    expect(rendered).not.toContain("@alice");
+    expect(rendered).not.toContain("aaaaaaaaa");
+  });
+
+  test("the fallback output is meaningful, which is the workflow's switch condition", () => {
+    // The workflow calls has-meaningful on the generate-notes body; when that is
+    // empty it renders the commit fallback and checks the same predicate again.
+    const emptyGenerateNotes = "<!-- Release notes generated using configuration in .github/release.yml at v9.9.9 -->\n\n\n";
+    expect(hasMeaningfulCarriedNotes(emptyGenerateNotes)).toBe(false);
+    expect(hasMeaningfulCarriedNotes(renderCommitFallbackNotes(parseCommitLog(log)))).toBe(true);
+  });
+
+  test("fallback sections flow through the real renderer into a non-empty body", () => {
+    // The whole point: an empty generate-notes delta must still produce a body
+    // with categorized content rather than the npm line plus a compare link.
+    const rendered = renderReleaseNotes({
+      npmMetadata: "Published to npm as \`pkg@9.9.9\` with dist-tag \`latest\`.",
+      commitFallbackNotes: renderCommitFallbackNotes(parseCommitLog(log)),
+      compareFrom: "v9.9.8",
+      compareTo: "v9.9.9",
+      repository: "owner/name",
+    });
+    expect(rendered).toContain("## New Features");
+    expect(rendered).toContain("## Bug Fixes");
+    expect(rendered.length).toBeGreaterThan(400);
   });
 });

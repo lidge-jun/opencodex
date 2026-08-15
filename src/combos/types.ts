@@ -37,6 +37,8 @@ export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
   defaultEffort: OcxComboDefaultEffort | null;
+  /** Disable image input; `auto` preserves the intersection derived from all targets. */
+  imageInput: "auto" | "disabled";
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
   alias: string | null;
   /** Explicit native-family alias opt-in. */
@@ -220,6 +222,9 @@ export function comboConfigIssues(
       message: "defaultEffort must be one of: low, medium, high, xhigh, max, ultra",
     });
   }
+  if (body.imageInput !== undefined && body.imageInput !== "auto" && body.imageInput !== "disabled") {
+    issues.push({ path: ["imageInput"], message: 'imageInput must be "auto" or "disabled"' });
+  }
 
   if (body.alias !== undefined) {
     if (typeof body.alias !== "string") {
@@ -339,6 +344,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
     defaultEffort: raw.defaultEffort ?? null,
+    imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,
     displayName: displayName || null,

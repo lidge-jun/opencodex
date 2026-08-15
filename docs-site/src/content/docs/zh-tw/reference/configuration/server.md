@@ -12,6 +12,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | `port` | `number` | `10100` | 代理監聽連接埠。 |
 | `hostname?` | `string` | `"127.0.0.1"` | 綁定位址。非回送綁定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
 | `proxy?` | `string` | — | 對外 HTTP(S) 代理 URL 或 `${ENV_VAR}`。僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`；回送保留在 `NO_PROXY` 中。 |
+| `emptyCompletionRetry?` | `boolean` | `false` | 明確啟用：當 Responses 完成時沒有文字或工具呼叫，以相同請求重試一次。重試可能產生費用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不變更設定的情況下停用；combo 與 routed-compaction turn 不適用。 |
 | `stallTimeoutSec?` | `number` | `300` | 在 `response.incomplete` 前無上游資料的秒數。最小 1。 |
 | `connectTimeoutMs?` | `number` | `200000` | 每次嘗試的 DNS/TCP/TLS/final-header 截止時間；它在 body 生成前結束。 |
 | `shutdownTimeoutMs?` | `number` | `5000` | 在中止活躍回合前的優雅排空截止時間。 |
