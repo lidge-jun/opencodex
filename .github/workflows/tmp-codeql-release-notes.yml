@@ -1,0 +1,70 @@
+name: Temporary CodeQL release-note verification
+
+on:
+  push:
+    branches:
+      - agent/codeql-real-findings-20260815
+
+permissions:
+  contents: write
+
+jobs:
+  repair-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Apply validated release-note fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("scripts/release-notes.ts")
+          text = path.read_text(encoding="utf-8")
+          old = '''  const withoutComment = body
+            .replace(/\\r\\n/g, "\\n")
+            .split("\\n")
+            .filter(line => !/^<!--.*-->$/.test(line.trim()))
+            .filter(line => !/^\\*\\*Full Changelog\\*\\*:/.test(line))
+            .join("\\n");'''
+          new = '''  const withoutComment = body
+            .replace(/\\r\\n/g, "\\n")
+            .replace(/<!--[\\s\\S]*?(?:-->|$)/g, "")
+            .split("\\n")
+            .filter(line => !/^\\*\\*Full Changelog\\*\\*:/.test(line))
+            .join("\\n");'''
+          actual = text.count(old)
+          if actual != 1:
+              raise SystemExit(f"expected one release-note comment block, found {actual}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run release-note and CodeQL regressions
+        run: bun test tests/codeql-real-findings-regressions.test.ts tests/release-notes.test.ts
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Check diff
+        run: git diff --check
+
+      - name: Commit verified release-note source change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/release-notes.ts
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: ignore non-rendered release-note comments [codeql-patch-applied]"
+          git push origin HEAD:agent/codeql-real-findings-20260815
