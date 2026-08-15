@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   decodeRoutedModelId,
+  decodeRoutedModelIdOrThrow,
   encodeRoutedModelId,
   encodedModelIdCollides,
   routedSlug,
@@ -82,6 +83,11 @@ describe("slug-codec primitives", () => {
     expect(encodedModelIdCollides("openai/gpt-5.5", ["openai-gpt-5.5"])).toBe(true);
     expect(encodedModelIdCollides("a/b-c", ["a-b/c"])).toBe(true);
     expect(encodedModelIdCollides("openai/gpt-5.5", ["openai/gpt-5.5", "other"])).toBe(false);
+  });
+
+  test("decodeRoutedModelIdOrThrow decodes a single-use generator", () => {
+    function* ids() { yield "openai/gpt-5.5"; }
+    expect(decodeRoutedModelIdOrThrow("openai-gpt-5.5", ids())).toBe("openai/gpt-5.5");
   });
 
   test("slugEquals / slugsEquivalent tolerate raw and encoded mixes", () => {

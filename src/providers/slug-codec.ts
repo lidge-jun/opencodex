@@ -70,13 +70,14 @@ export function decodeRoutedModelId(requested: string, knownIds: Iterable<string
  * share the same encoded form. Write-time checks cannot cover a later live cache.
  */
 export function decodeRoutedModelIdOrThrow(requested: string, knownIds: Iterable<string>): string {
+  const ids = [...knownIds];
   const encodedRequested = encodeRoutedModelId(requested);
   const matches = new Set<string>();
-  for (const id of knownIds) {
+  for (const id of ids) {
     if (id === requested || encodeRoutedModelId(id) === encodedRequested) matches.add(id);
   }
   if (matches.size > 1) throw new Error(`ambiguous model id "${requested}"`);
-  return decodeRoutedModelId(requested, knownIds);
+  return decodeRoutedModelId(requested, ids);
 }
 
 /** Does a stored config slug name this routed model, in either raw or encoded form? */
