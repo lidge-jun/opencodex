@@ -394,6 +394,14 @@ CLI Command Code. Le catalogue, propre au compte, provient du point de terminais
 après la connexion. Les requêtes de chat utilisent la clé Bearer configurée. Créez des clés dans
 [Command Code Studio](https://commandcode.ai/studio/).
 
+**Quota Command Code.** Le tableau de bord et `ocx account refresh` sondent les fenêtres
+`/alpha/billing/credits` de Command Code (5 heures et hebdomadaire) sur l'hôte canonique
+`https://api.commandcode.ai`. Le préréglage OAuth (`command-code`) utilise le jeton porteur du compte
+enregistré ; le préréglage à clé d'API fournisseur (`commandcode`) utilise la clé active configurée. Une
+URL de base modifiée ressemblant à l'original n'est jamais sondée. Les crédits mensuels, achetés et
+gratuits restants sont affichés sous forme de fenêtre en USD lorsque Command Code signale également les
+dépenses de la période.
+
 **Découverte SambaNova Cloud.** Le préréglage lit la liste publique `/v1/models` de SambaNova Cloud depuis
 l'hôte API fixe, préserve les identifiants natifs du fournisseur et limite la découverte à 128 KiB et 128
 lignes brutes. Le catalogue n'étant pas authentifié, le parcours de connexion de la CLI signale que la clé ne

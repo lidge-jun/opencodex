@@ -1642,7 +1642,10 @@ async function fetchKimiQuota(provider: string, config: OcxProviderConfig): Prom
   return quota ? report(provider, "kimi:usages", quota) : null;
 }
 
-/** Command Code rolling window: `{ cap, used, resetAt }` off /alpha/billing/credits. */
+/**
+ * Command Code rolling window: `{ cap, used, resetAt }` off /alpha/billing/credits,
+ * normalized to a percent with an optional reset timestamp.
+ */
 function parseCommandCodeWindow(value: unknown): { percent: number; resetAt?: number } | null {
   const row = asRecord(value);
   if (!row) return null;
@@ -1690,19 +1693,32 @@ async function fetchCommandCodeSpend(
   const summary = asRecord(summaryBody?.data) ?? summaryBody;
   const used = toFiniteNumber(summary?.totalCost) ?? toFiniteNumber(summary?.totalMonthlyCredits);
   if (used === undefined || used < 0) return undefined;
-  // Missing pools default to 0; at least one must be a real remaining-credit field.
-  const parts = [credits.monthlyCredits, credits.purchasedCredits, credits.freeCredits]
-    .map(value => toFiniteNumber(value) ?? 0);
-  if (parts.every(value => value === 0)) return undefined;
-  const remaining = parts.reduce((sum, value) => sum + Math.max(0, value), 0);
+  const pools = [credits.monthlyCredits, credits.purchasedCredits, credits.freeCredits]
+    .map(value => toFiniteNumber(value))
+    .filter((value): value is number => value !== undefined);
+  // Field presence is what separates a real balance from absent data: an exhausted
+  // all-zero account still reports remaining=0, while no remaining-credit field at
+  // all means there is nothing to meter.
+  if (pools.length === 0) return undefined;
+  const remaining = pools.reduce((sum, value) => sum + Math.max(0, value ?? 0), 0);
   const limit = used + remaining;
   // Without a period start the spend query is unscoped; percent may run high on aged accounts.
   const percent = normalizePercent(limit > 0 ? (used / limit) * 100 : 0);
+  // Purchased credits roll over past the subscription period end, so an expiry is
+  // only truthful when the aggregate contains no non-expiring purchased pool.
+  const purchased = toFiniteNumber(credits.purchasedCredits) ?? 0;
   return percent === undefined
     ? undefined
-    : { used, limit, remaining, percent, ...(expiresAt !== undefined ? { expiresAt } : {}) };
+    : {
+        used,
+        limit,
+        remaining,
+        percent,
+        ...(expiresAt !== undefined && purchased <= 0 ? { expiresAt } : {}),
+      };
 }
 
+/** OAuth access token or ACTIVE Provider-API key for the Command Code quota probe. */
 async function resolveCommandCodeQuotaBearer(config: OcxProviderConfig): Promise<string | null> {
   if (config.authMode === "oauth") {
     try {

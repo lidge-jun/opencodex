@@ -95,7 +95,6 @@ describe("Command Code provider quota", () => {
         limit: 41,
         remaining: 26,
         percent: 36.585365853658534,
-        expiresAt: Date.parse("2026-09-01T00:00:00.000Z"),
       },
       updatedAt: expect.any(Number),
     });
@@ -216,10 +215,89 @@ describe("Command Code provider quota", () => {
     expect(result.reports).toEqual([]);
   });
 
+  test("does not probe quota for local Command Code auth", async () => {
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports({
+      defaultProvider: "command-code",
+      providers: {
+        "command-code": {
+          adapter: "command-code",
+          authMode: "local",
+          baseUrl: "https://api.commandcode.ai",
+        },
+      },
+    } as OcxConfig, true);
+
+    expect(fetchCalls).toBe(0);
+    expect(result.reports).toEqual([]);
+  });
+
+  test("a fully exhausted account still reports a zero-remaining credit window", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/alpha/whoami")
+        ? {}
+        : url.includes("/alpha/billing/subscriptions")
+          ? { data: { currentPeriodStart: "2026-08-01T00:00:00.000Z", currentPeriodEnd: "2026-09-01T00:00:00.000Z" } }
+          : url.includes("/alpha/usage/summary")
+            ? { totalCost: 12 }
+            : {
+              credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 },
+              windowLimits: { fiveHour: { cap: 100, used: 40 } },
+            };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota).toEqual({
+      fiveHourPercent: 40,
+      creditsUsd: {
+        used: 12,
+        limit: 12,
+        remaining: 0,
+        percent: 100,
+        expiresAt: Date.parse("2026-09-01T00:00:00.000Z"),
+      },
+      updatedAt: expect.any(Number),
+    });
+  });
+
+  test("a mixed balance with roll-over purchased credits carries no subscription expiry", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const body = url.includes("/alpha/whoami")
+        ? {}
+        : url.includes("/alpha/billing/subscriptions")
+          ? { data: { currentPeriodStart: "2026-08-01T00:00:00.000Z", currentPeriodEnd: "2026-08-31T00:00:00.000Z" } }
+          : url.includes("/alpha/usage/summary")
+            ? { totalCost: 4 }
+            : {
+              credits: { monthlyCredits: 0, purchasedCredits: 10, freeCredits: 0 },
+              windowLimits: { fiveHour: { cap: 100, used: 10 } },
+            };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const result = await fetchProviderQuotaReports(commandCodeConfig(), true);
+
+    expect(result.reports[0]?.quota?.creditsUsd).toEqual({
+      used: 4,
+      limit: 14,
+      remaining: 10,
+      percent: 28.57142857142857,
+    });
+  });
+
   test("OAuth Command Code probes the canonical API root with the stored bearer", async () => {
     await saveCredential("command-code", {
-      access: "command-code-oauth-secret",
-      refresh: "command-code-oauth-secret",
+      access: "command-code-access",
+      refresh: "command-code-access",
       expires: Date.now() + 3600_000,
     });
     const seen: Array<{ url: string; authorization?: string }> = [];
@@ -244,9 +322,9 @@ describe("Command Code provider quota", () => {
     });
     expect(seen[0]).toEqual({
       url: "https://api.commandcode.ai/alpha/whoami",
-      authorization: "Bearer command-code-oauth-secret",
+      authorization: "Bearer command-code-access",
     });
-    expect(JSON.stringify(result)).not.toContain("command-code-oauth-secret");
+    expect(JSON.stringify(result)).not.toContain("command-code-access");
   });
 
   test("does not probe quota for a noncanonical Command Code destination", async () => {
