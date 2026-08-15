@@ -210,6 +210,50 @@
   align-items: center;
 }
 
+/*
+  "Keep ChatGPT on v1" is a sub-setting of the Sub-agent surface control, not a
+  peer of it. It sits in the right-hand grid column directly under the v1/base/v2
+  chips and stays right-aligned with them, so it reads as a qualifier on the
+  selected mode instead of floating in the empty space beside Shadow Call.
+*/
+.models-v2-keep-native-row {
+  grid-column: 2;
+  justify-self: end;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  /* Pull up against the mode row's own min-height so the pair reads as one block. */
+  margin-top: calc(var(--space-1) * -1);
+}
+
+.models-v2-keep-native {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.models-v2-keep-native-label {
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sits in the same 24px gutter as the Sub-agent help button directly above it,
+   so both rows end on one right edge. */
+.models-v2-keep-native-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  color: var(--muted);
+  cursor: help;
+}
+
 /* ── Provider group header (Classic + Workspace) ─────── */
 
 .models-provider-head {
@@ -435,6 +479,17 @@
   .models-v2-mode-row {
     flex-wrap: wrap;
     justify-self: start;
+  }
+
+  .models-v2-keep-native-row {
+    grid-column: 1;
+    justify-self: start;
+    justify-content: flex-start;
+    margin-top: 0;
+  }
+
+  .models-v2-keep-native {
+    white-space: normal;
   }
 }
 

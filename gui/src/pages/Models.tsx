@@ -1326,19 +1326,21 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           </div>
         )}
         {v2 && v2.multiAgentMode === "v2" && (
-          <div className="models-v2-mode-row row" style={{ marginTop: 8 }}>
-            <span className="muted text-control">
-              {t("models.keepNativeOnV1")}{" "}
+          <div className="models-v2-keep-native-row">
+            <div className="models-v2-keep-native">
+              <span className="models-v2-keep-native-label text-caption">{t("models.keepNativeOnV1")}</span>
+              <Switch
+                on={v2.keepNativeChatGptOnV1 === true}
+                onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
+                disabled={v2Busy}
+                label={t("models.keepNativeOnV1")}
+              />
               <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
-                <span style={{ cursor: "help" }} aria-label={t("models.keepNativeOnV1Hint")}>ⓘ</span>
+                <span className="models-v2-keep-native-info" aria-label={t("models.keepNativeOnV1Hint")}>
+                  <IconInfo width={13} height={13} aria-hidden="true" />
+                </span>
               </Tooltip>
-            </span>
-            <Switch
-              on={v2.keepNativeChatGptOnV1 === true}
-              onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
-              disabled={v2Busy}
-              label={t("models.keepNativeOnV1")}
-            />
+            </div>
           </div>
         )}
       </div>
