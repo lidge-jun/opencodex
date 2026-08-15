@@ -510,6 +510,8 @@ export const zh: Record<TKey, string> = {
   "models.v2ModeDesc_v1": "所有模型 → v1 界面",
   "models.v2ModeDesc_default": "上游默认值 (sol/terra=v2, luna=v1)",
   "models.v2ModeDesc_v2": "所有模型 → v2 界面",
+  "models.keepNativeOnV1": "ChatGPT 保持 v1",
+  "models.keepNativeOnV1Hint": "ChatGPT 原生父代理会加密 v2 子任务，Grok/Claude 无法读取。若 Sol/Terra 仍需派发路由模型，请保持开启。路由父代理仍使用 v2。",
   "models.v2Help": "控制所有模型的多代理界面。\n\nv1: 经典单线程代理。所有模型使用 v1 协作界面。\nbase: 上游默认值 — sol/terra 使用 v2，luna 使用 v1，其余跟随 codex 功能标志。\nv2: 多线程代理（spawn_agent）。所有模型使用 v2 协作界面。\n\n更改在新会话中生效。",
   "models.v2DocsLink": "v1 / v2 是什么？",
   "dash.multiAgent": "子代理",

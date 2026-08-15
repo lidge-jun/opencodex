@@ -519,6 +519,8 @@ export const tr: Record<TKey, string> = {
   "models.v2ModeDesc_v1": "Tüm modeller → v1 yüzeyi",
   "models.v2ModeDesc_default": "Yukarı akış varsayılanları",
   "models.v2ModeDesc_v2": "Tüm modeller → v2 yüzeyi",
+  "models.keepNativeOnV1": "ChatGPT v1'de kalsın",
+  "models.keepNativeOnV1Hint": "ChatGPT yerel ebeveynleri v2 çocuk görevlerini şifreler; Grok ve Claude okuyamaz. Sol/Terra yönlendirilmiş modelleri spawn edecekse açık bırakın. Yönlendirilmiş ebeveynler v2'de kalır.",
   "models.v2Help": "v1 alt ajanları birincil modelle sınırlandırır; base standart ajan sınırlarını devralır; v2 tam çoklu ajan orkestrasyonunu etkinleştirir.",
   "dash.multiAgent": "Alt Ajan",
   "models.v2Conflict": "[agents] max_threads ayarlanmış — config.toml dosyasından kaldırın",

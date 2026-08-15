@@ -988,6 +988,7 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
             providerContextCap(config, OPENAI_CODEX_PROVIDER_ID),
             accountNativeSlugs,
             accountNativeSlugsBySelector,
+            config.keepNativeChatGptOnV1 === true,
           );
           return jsonResponse({
             models: applyNativeVisibility(

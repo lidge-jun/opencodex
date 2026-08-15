@@ -513,6 +513,8 @@ export const ko: Record<TKey, string> = {
   "models.v2ModeDesc_v1": "전 모델 → v1 서피스",
   "models.v2ModeDesc_default": "업스트림 기본값 (sol/terra=v2, luna=v1)",
   "models.v2ModeDesc_v2": "전 모델 → v2 서피스",
+  "models.keepNativeOnV1": "ChatGPT는 v1 유지",
+  "models.keepNativeOnV1Hint": "ChatGPT 네이티브 부모는 v2 자식 작업을 암호화해서 Grok/Claude가 읽지 못합니다. Sol/Terra가 routed 모델을 spawn해야 하면 켜 두세요. routed 부모는 v2를 유지합니다.",
   "models.v2Help": "모든 모델의 멀티에이전트 서피스를 제어합니다.\n\nv1: 단일 스레드 에이전트. 모든 모델이 v1 서피스를 사용합니다.\nbase: 업스트림 기본값 — sol/terra는 v2, luna는 v1, 나머지는 codex 플래그를 따릅니다.\nv2: 멀티 스레드 에이전트(spawn_agent). 모든 모델이 v2 서피스를 사용합니다.\n\n새 세션부터 적용됩니다.",
   "models.v2DocsLink": "v1 / v2가 뭔가요?",
   "dash.multiAgent": "서브에이전트",

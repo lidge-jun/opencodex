@@ -341,6 +341,32 @@ export function ensureStrictCatalogFields(
 
 export type MultiAgentMode = "v1" | "default" | "v2";
 
+export interface MultiAgentModeOptions {
+  /**
+   * When the catalog is in v2 mode, stamp ChatGPT-native rows as v1 instead.
+   * Routed parents get v2 (plaintext child tasks). Native Sol/Terra stay on v1
+   * so they can still spawn Grok/Claude — ChatGPT encrypts v2 NEW_TASK bodies.
+   */
+  keepNativeChatGptOnV1?: boolean;
+}
+
+/** Catalog rows that run on the ChatGPT backend (encrypt v2 child tasks). */
+export function catalogEntryIsNativeChatGpt(entry: RawEntry): boolean {
+  const slug = typeof entry.slug === "string" ? entry.slug : "";
+  if (entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND) return true;
+  if (trustedAccountBoundNativeCatalogSlug(entry)) return true;
+  const routedNativeSlug = slug.startsWith(`${OPENAI_CODEX_PROVIDER_ID}/`)
+    ? slug.slice(OPENAI_CODEX_PROVIDER_ID.length + 1)
+    : "";
+  if (
+    entry.opencodex_catalog_kind === CODEX_CUSTOM_MODEL_CATALOG_KIND
+    && entry.use_responses_lite === true
+    && isNativeOpenAiCapabilityAliasModel(routedNativeSlug)
+  ) return true;
+  if (UPSTREAM_NATIVE_ENTRIES.has(slug) || SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug)) return true;
+  return false;
+}
+
 export const ROUTED_CODEX_TOOL_MODE = "code_mode_only";
 
 export function applyRoutedCodexToolMode(entry: RawEntry): RawEntry {
@@ -358,8 +384,23 @@ export function applyRoutedCodexToolMode(entry: RawEntry): RawEntry {
  *   260730_codex_rs_upstream_v2_live_handoff/060). Upstream pins are always
  *   preserved: a genuine "v1" pin is a real capability statement and stays excluded.
  *   With the feature off the output is byte-identical to the historical behavior.
+ *
+ * `keepNativeChatGptOnV1` only applies when `mode === "v2"`. It leaves Sol/Terra
+ * (and other ChatGPT-native rows) on v1 so a native parent can still spawn a
+ * routed child. See issue #92.
  */
-export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v2FeatureEnabled = false): RawEntry[] {
+export function applyMultiAgentMode(
+  entries: RawEntry[],
+  mode: MultiAgentMode,
+  v2FeatureEnabled = false,
+  options: MultiAgentModeOptions = {},
+): RawEntry[] {
+  if (mode === "v2" && options.keepNativeChatGptOnV1 === true) {
+    for (const entry of entries) {
+      entry.multi_agent_version = catalogEntryIsNativeChatGpt(entry) ? "v1" : "v2";
+    }
+    return entries;
+  }
   if (mode === "default") {
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.

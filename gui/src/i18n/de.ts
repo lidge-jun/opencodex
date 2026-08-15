@@ -503,6 +503,8 @@ export const de: Record<TKey, string> = {
   "models.v2ModeDesc_v1": "Alle Modelle → v1-Oberfläche",
   "models.v2ModeDesc_default": "Upstream-Standard (sol/terra=v2, luna=v1)",
   "models.v2ModeDesc_v2": "Alle Modelle → v2-Oberfläche",
+  "models.keepNativeOnV1": "ChatGPT auf v1 lassen",
+  "models.keepNativeOnV1Hint": "ChatGPT-native Eltern verschlüsseln v2-Kindaufgaben — Grok und Claude können sie nicht lesen. An lassen, wenn Sol/Terra weiterhin geroutete Modelle starten sollen. Geroutete Eltern bleiben auf v2.",
   "models.v2Help": "Steuert die Multi-Agent-Oberfläche für alle Modelle.\n\nv1: Klassischer Single-Thread-Agent. Jedes Modell nutzt die v1-Collab-Oberfläche.\nbase: Upstream-Standard — sol/terra nutzen v2, luna v1, andere folgen dem Codex-Feature-Flag.\nv2: Multi-Thread-Agent mit spawn_agent. Jedes Modell nutzt die v2-Collab-Oberfläche.\n\nÄnderungen gelten für neue Sitzungen.",
   "dash.multiAgent": "Sub-Agent",
   "models.v2Conflict": "[agents] max_threads ist gesetzt — codex verweigert den Start; entferne es aus config.toml",

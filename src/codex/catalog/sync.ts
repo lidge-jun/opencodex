@@ -390,6 +390,7 @@ export interface ObservedCatalogEntryBuildInput {
   readonly suppressedBareNativeSlugs: ReadonlySet<string>;
   readonly disabledNativeAccountSlugs: ReadonlySet<string>;
   readonly multiAgentV2Enabled: boolean;
+  readonly keepNativeChatGptOnV1?: boolean;
   readonly openaiContextCap?: number;
   /** Additional native ids to clone under account selectors, without creating bare rows. */
   readonly accountNativeSlugs?: readonly string[];
@@ -412,6 +413,7 @@ export function buildCatalogEntries(
   contextCap?: number,
   accountNativeSlugs?: readonly string[],
   accountNativeSlugsBySelector?: ReadonlyMap<string, readonly string[]>,
+  keepNativeChatGptOnV1 = false,
 ): RawEntry[] {
   return buildCatalogEntriesFromObservedState({
     template,
@@ -425,6 +427,7 @@ export function buildCatalogEntries(
     suppressedBareNativeSlugs,
     disabledNativeAccountSlugs,
     multiAgentV2Enabled: isMultiAgentV2Enabled(),
+    keepNativeChatGptOnV1,
     openaiContextCap: contextCap,
     accountNativeSlugs,
     accountNativeSlugsBySelector,
@@ -445,6 +448,7 @@ export function buildCatalogEntriesFromObservedState({
   suppressedBareNativeSlugs,
   disabledNativeAccountSlugs,
   multiAgentV2Enabled,
+  keepNativeChatGptOnV1,
   openaiContextCap,
   accountNativeSlugs,
   accountNativeSlugsBySelector,
@@ -624,7 +628,9 @@ export function buildCatalogEntriesFromObservedState({
       delete entry.prefer_websockets;
     }
   }
-  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled);
+  return applyMultiAgentMode(out, multiAgentMode, multiAgentV2Enabled, {
+    keepNativeChatGptOnV1,
+  });
 }
 
 export function resetCatalogRuntimeStateForTests(): void {
@@ -733,6 +739,7 @@ export interface ObservedCatalogMergeInput {
   readonly legacyCustomModelSlugs: ReadonlySet<string>;
   readonly multiAgentMode: MultiAgentMode;
   readonly multiAgentV2Enabled: boolean;
+  readonly keepNativeChatGptOnV1?: boolean;
   readonly exactComboSlugs: ReadonlySet<string>;
   readonly hasPhysicalComboProvider: boolean;
   readonly includeNativeOpenAi: boolean;
@@ -763,6 +770,7 @@ export function mergeCatalogEntriesFromObservedState({
   legacyCustomModelSlugs,
   multiAgentMode,
   multiAgentV2Enabled,
+  keepNativeChatGptOnV1,
   exactComboSlugs,
   hasPhysicalComboProvider,
   includeNativeOpenAi,
@@ -1088,6 +1096,7 @@ export function mergeCatalogEntriesFromObservedState({
     applyNativeVisibility(mergedEntries, disabledModels, alignedAccountBoundEntries.length > 0, observedNativeSlugs),
     multiAgentMode,
     multiAgentV2Enabled,
+    { keepNativeChatGptOnV1 },
   );
   for (const entry of versionedEntries) {
     const kind = entry.opencodex_catalog_kind;
@@ -1125,6 +1134,7 @@ export function mergeCatalogEntriesForSync(
     )),
   ),
   openaiContextCap?: number,
+  keepNativeChatGptOnV1 = false,
 ): RawEntry[] {
   // Retained for source compatibility with the original helper contract. Raw provider ids must
   // not suppress same-named native rows; actual admitted combo entries own that decision now.
@@ -1154,6 +1164,7 @@ export function mergeCatalogEntriesForSync(
     legacyCustomModelSlugs,
     multiAgentMode,
     multiAgentV2Enabled: isMultiAgentV2Enabled(),
+    keepNativeChatGptOnV1,
     exactComboSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,
@@ -1477,6 +1488,7 @@ function writeRetainedCatalogSync({
       suppressedBareNativeSlugs,
       disabledNativeAccountSlugs: new Set([...disabledNativeSlugs(config)].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
+      keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
       openaiContextCap,
       accountNativeSlugs,
       accountNativeSlugsBySelector,
@@ -1497,6 +1509,7 @@ function writeRetainedCatalogSync({
     legacyCustomModelSlugs: legacyCustomModelCatalogSlugs(config),
     multiAgentMode,
     multiAgentV2Enabled,
+    keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
     exactComboSlugs,
     hasPhysicalComboProvider,
     includeNativeOpenAi,

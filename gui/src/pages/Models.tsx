@@ -304,6 +304,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
         agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
         maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
         multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+        keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
       });
     } catch {
       setV2(null); // old server / network: hide the section instead of guessing
@@ -802,6 +803,37 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
     }
   };
 
+  const setKeepNativeChatGptOnV1 = async (next: boolean) => {
+    if (!v2 || v2BusyRef.current) return;
+    if (v2.keepNativeChatGptOnV1 === next) return;
+    setV2Busy(true);
+    v2BusyRef.current = true;
+    setV2Note("");
+    setStatus("");
+    try {
+      const r = await fetch(`${apiBase}/api/v2`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepNativeChatGptOnV1: next }),
+      });
+      try {
+        const data = await readJsonOrThrow<V2Status & { warnings?: string[] }>(r, t("models.saveFailed"));
+        void loadV2();
+        setOk(true);
+        setStatus(t("models.v2Applied"));
+        setV2Note((data?.warnings ?? []).join(" "));
+      } catch (e) {
+        setOk(false);
+        setStatus(e instanceof Error ? e.message : t("models.saveFailed"));
+      }
+    } catch {
+      setOk(false); setStatus(t("models.networkError"));
+    } finally {
+      setV2Busy(false);
+      v2BusyRef.current = false;
+    }
+  };
+
   const putV2Threads = async (value: number) => {
     // Same guards as the flag toggle: single-flight + server-side idempotence
     // (setMaxConcurrentThreads no-ops on equal value), so a re-selected current
@@ -831,6 +863,7 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
           agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
           maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
           multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" ? data.multiAgentMode : "default",
+          keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
         });
         setOk(true);
         setStatus(t("models.v2ThreadsApplied"));
@@ -1290,6 +1323,22 @@ export default function Models({ apiBase, restartEpoch = 0 }: { apiBase: string;
             >
               <IconInfo width={14} height={14} aria-hidden="true" />
             </button>
+          </div>
+        )}
+        {v2 && v2.multiAgentMode === "v2" && (
+          <div className="models-v2-mode-row row" style={{ marginTop: 8 }}>
+            <span className="muted text-control">
+              {t("models.keepNativeOnV1")}{" "}
+              <Tooltip content={t("models.keepNativeOnV1Hint")} side="top" maxWidth={360}>
+                <span style={{ cursor: "help" }} aria-label={t("models.keepNativeOnV1Hint")}>ⓘ</span>
+              </Tooltip>
+            </span>
+            <Switch
+              on={v2.keepNativeChatGptOnV1 === true}
+              onClick={() => void setKeepNativeChatGptOnV1(!v2.keepNativeChatGptOnV1)}
+              disabled={v2Busy}
+              label={t("models.keepNativeOnV1")}
+            />
           </div>
         )}
       </div>

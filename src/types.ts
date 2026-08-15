@@ -825,6 +825,11 @@ export interface OcxConfig {
    * - "v2": force ALL models to v2 surface (override upstream pins)
    */
   multiAgentMode?: "v1" | "default" | "v2";
+  /**
+   * When `multiAgentMode` is `"v2"`, keep ChatGPT-native catalog rows on v1.
+   * Routed parents get v2 tools; Sol/Terra can still spawn Grok/Claude (issue #92).
+   */
+  keepNativeChatGptOnV1?: boolean;
   /** Experimental, default-off ChatGPT recovery for encrypted V2 routed tasks. */
   agentTaskRecovery?: {
     enabled?: boolean;
