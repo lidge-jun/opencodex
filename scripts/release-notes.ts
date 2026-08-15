@@ -161,8 +161,8 @@ export function stripCarriedReleaseNotes(body: string): string {
 export function isEmptyGeneratedNotes(body: string): boolean {
   const withoutComment = body
     .replace(/\r\n/g, "\n")
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
     .split("\n")
-    .filter(line => !/^<!--.*-->$/.test(line.trim()))
     .filter(line => !/^\*\*Full Changelog\*\*:/.test(line))
     .join("\n");
   return !hasNonWhitespace(withoutComment);
