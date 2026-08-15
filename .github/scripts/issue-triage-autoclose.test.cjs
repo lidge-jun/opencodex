@@ -50,6 +50,47 @@ describe("deterministic duplicate auto-close", () => {
     });
   });
 
+  it("recognizes fails as a strong failure signal", () => {
+    const signature =
+      "POST /v1/responses fails with HTTP 503 in the OpenRouter adapter after authentication.";
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2002, title: "new", body: signature },
+      candidateIssues: [{ number: 1454, title: "old", body: signature }],
+      duplicateNumbers: ["1454"],
+    });
+
+    assert.deepEqual(match, {
+      number: "1454",
+      signature: signature.toLowerCase(),
+    });
+  });
+
+  it("selects the longest shared signature across all nominated candidates", () => {
+    const shorter =
+      "POST /v1/responses returns HTTP 503 in the OpenRouter adapter during requests.";
+    const longer =
+      "POST /v1/responses returns HTTP 503 with ECONNRESET in the OpenRouter adapter during streamed requests.";
+    const currentIssue = {
+      number: 2003,
+      title: "new",
+      body: `${shorter}\n${longer}`,
+    };
+
+    const match = selectStrongDuplicateMatch({
+      currentIssue,
+      candidateIssues: [
+        { number: 1455, title: "first", body: shorter },
+        { number: 1456, title: "second", body: longer },
+      ],
+      duplicateNumbers: ["1455", "1456"],
+    });
+
+    assert.deepEqual(match, {
+      number: "1456",
+      signature: longer.toLowerCase(),
+    });
+  });
+
   it("does not auto-close an AI duplicate without an exact strong failure signature", () => {
     const match = selectStrongDuplicateMatch({
       currentIssue: {
