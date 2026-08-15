@@ -70,6 +70,9 @@ function rewriteForUpstream(
       || isPlainObject(value.format)
       || isPlainObject(value.parameters);
     if (!isDefinition) return { ...rest, type: "function" };
+    const inputDescription = value.name === "exec"
+      ? "JavaScript source for unified exec. Use await tools.exec_command(...) for shell commands and text(...) to return textual output; do not provide a bare shell command."
+      : "Raw input for this client-executed custom tool.";
     return {
       ...rest,
       type: "function",
@@ -78,7 +81,7 @@ function rewriteForUpstream(
         properties: {
           input: {
             type: "string",
-            description: "Raw input for this client-executed custom tool.",
+            description: inputDescription,
           },
         },
         required: ["input"],

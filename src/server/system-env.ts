@@ -335,7 +335,7 @@ export async function injectSystemEnv(port: number, config: OcxConfig): Promise<
     // without a token — keep it in sync with this proxy's /v1/models. Best-effort.
     try {
       const { refreshGatewayModelCacheFromProxy } = await import("../claude/gateway-cache");
-      await refreshGatewayModelCacheFromProxy(port);
+      await refreshGatewayModelCacheFromProxy(port, { admissionConfig: config });
     } catch { /* best-effort */ }
 
     // Roster agent definitions (devlog 070): same launch-time sync for plain `claude`.

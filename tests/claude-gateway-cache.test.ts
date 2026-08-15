@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeConfigDir, refreshGatewayModelCacheFromProxy, writeGatewayModelCache } from "../src/claude/gateway-cache";
@@ -62,16 +62,75 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
     const originalFetch = globalThis.fetch;
     let requestedUrl = "";
     try {
-      globalThis.fetch = (async (input: RequestInfo | URL) => {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         requestedUrl = String(input);
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-opencodex-api-key")).toBe("env-admission");
+        expect(headers.get("authorization")).toBeNull();
         return new Response(JSON.stringify({ data: [{ id: "claude-ocx-native--gpt-5.6-sol", display_name: "gpt-5.6-sol (native)" }] }), {
           headers: { "content-type": "application/json" },
         });
       }) as typeof fetch;
-      const path = await refreshGatewayModelCacheFromProxy(10100, 1000, dir);
+      const path = await refreshGatewayModelCacheFromProxy(10100, {
+        timeoutMs: 1000,
+        configDir: dir,
+        admissionConfig: {
+          apiKeys: [{ id: "configured", name: "Configured", key: "configured-admission", createdAt: "" }],
+        },
+        env: { OPENCODEX_API_AUTH_TOKEN: " env-admission " },
+      });
       expect(requestedUrl).toContain("ids=cli");
       const body = JSON.parse(readFileSync(path!, "utf8"));
       expect(body.models[0].id).toBe("claude-ocx-native--gpt-5.6-sol");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("proxy refresh falls back to a configured admission key", async () => {
+    const dir = tempDir();
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        expect(headers.get("x-opencodex-api-key")).toBe("configured-admission");
+        return new Response(JSON.stringify({ data: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      expect(await refreshGatewayModelCacheFromProxy(10100, {
+        configDir: dir,
+        admissionConfig: {
+          apiKeys: [{ id: "configured", name: "Configured", key: "configured-admission", createdAt: "" }],
+        },
+        env: {},
+      })).not.toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("proxy refresh uses the hardened service token file before a configured key", async () => {
+    const dir = tempDir();
+    const tokenFile = join(tempDir(), "service-api-token");
+    writeFileSync(tokenFile, "  service-file-admission\n", "utf8");
+    const originalFetch = globalThis.fetch;
+    let seen: string | null = null;
+    try {
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        seen = new Headers(init?.headers).get("x-opencodex-api-key");
+        return new Response(JSON.stringify({ data: [] }), {
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof fetch;
+      await refreshGatewayModelCacheFromProxy(10100, {
+        configDir: dir,
+        admissionConfig: {
+          apiKeys: [{ id: "configured", name: "Configured", key: "configured-admission", createdAt: "" }],
+        },
+        env: { OCX_API_TOKEN_FILE: tokenFile },
+      });
+      expect(seen).toBe("service-file-admission");
     } finally {
       globalThis.fetch = originalFetch;
     }

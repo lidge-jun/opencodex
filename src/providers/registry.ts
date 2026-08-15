@@ -1977,7 +1977,11 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   // 260710 GLM-5.2 context and path-specific ids: Tier-2 evidence in
   // devlog/_plan/260710_provider_hardening/002_research_cn.md.
   // 260814: glm-5.3 / glm-5.3[1m] added per docs.z.ai/devpack/latest-model, which lists them as
-  // Coding Plan ids on this same endpoint. Capabilities mirror 5.2 until Z.AI publishes tables.
+  // Coding Plan ids on this same endpoint.
+  // 260815: docs.z.ai/guides/llm/glm-5.3 now publishes the capability table (thinking, streaming,
+  // function calling, caching, structured output) and a 128K output budget, recorded here as the
+  // exact 131_072 every other source in this repo uses for that model. Coding Plan pricing stays
+  // unpublished, so no cost entry is asserted.
   {
     id: "zai", label: "Z.AI — GLM Coding Plan", baseUrl: "https://api.z.ai/api/coding/paas/v4", adapter: "openai-chat", authKind: "key",
     dashboardUrl: "https://z.ai/manage-apikey/apikey-list", defaultModel: "glm-5.3",
@@ -1988,6 +1992,8 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     modelSuffixBracketStrip: true,
     noVisionModels: ZAI_GLM_5X_MODELS,
     modelReasoningEfforts: ZAI_GLM_5X_REASONING_EFFORTS,
+    modelDefaultReasoningEfforts: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, "max"])),
+    modelMaxOutputTokens: Object.fromEntries(ZAI_GLM_53_MODELS.map(id => [id, 131_072])),
     modelSupportsReasoningSummaries: Object.fromEntries(ZAI_GLM_5X_MODELS.map(id => [id, true])),
     preserveReasoningContentModels: ZAI_GLM_5X_MODELS,
   },

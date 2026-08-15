@@ -1,0 +1,415 @@
+Skip to content
+김
+Chat history
+ChatGPT Pro
+New chat
+Library
+Projects
+Scheduled
+Plugins
+More
+Pinned
+github
+로드맵 작성 요청
+코덱스 툴 비교
+Opencodex SSH 설정 방법
+프로젝트 업데이트 완료
+GitHub 버그 태그 해결 로드맵
+Show more
+Recents
+CRM 프로젝트 평가 요청
+인사 나누기
+김
+김병준
+Pro
+github
+Today 8:32 PM
+GitHub
+ 현재 opencodex 이슈의 프로바이더 이슈랑 bug 이슈 전부 종합해서 어떻게 해결할지 로드맵 짜봐 업스트림 추적 이런건 태그 붙여놓고 다른거는 어떻게 순서대로 해결할지 웹서치 전부 빡세게 해서 ㄱㄱㄱ
+Worked for 37m 45s
+OpenCodex Provider + Bug 통합 로드맵
+1. 현재 스냅샷
+
+2026년 8월 15일 20:58 KST 동결 기준으로 열린 bug, provider, provider-compatibility 이슈를 날짜 구간별로 재집계했다. GitHub 화면의 최신 노출분만 세면 오래된 이슈가 빠지므로, 전체 기간을 나눠 합집합을 다시 계산했다.
+
+범위	건수
+열린 bug	22
+열린 provider	21
+열린 provider-compatibility	8
+provider 또는 provider-compatibility	22
+bug/provider-scope 중복	8
+최종 고유 합집합	36
+
+조사 중 #1774 openai-chat V2 schema 결함과 #1773 browser CORS 결함이 연이어 추가되어 스냅샷을 두 번 갱신했다. #1774는 제목과 재현상 명백한 결함이지만 아직 bug 라벨이 없으므로, 이를 붙이면 열린 bug 집계는 23건이 되고 전체 합집합은 36건으로 유지된다. 
+GitHub
++4
+GitHub
++4
+GitHub
++4
+
+전날 감사에서 열린 bug 28건을 기준으로 #1683, #1684를 종료하고 22개 PR을 리뷰했던 결과는 그대로 기준선으로 사용했다. 이번 결과는 그 감사를 덮어쓴 것이 아니라, 새 이슈·새 PR·dev 반영 상태를 추가한 증분 감사다. 
+
+버그 감사와 PR 검토 완료
+
+2. 실제 처리 순서
+Wave 0 — 먼저 상태 드리프트 제거
+
+#1752가 dev에 병합되면서 per-model service tier와 native Chat 경로가 이미 구현됐다. 그런데 원 이슈 #1436, #1467은 아직 열려 있다. 두 건은 새 코드를 작성할 게 아니라 다음 focused smoke 후 근거 댓글을 달고 닫는 것이 먼저다. 
+GitHub
++3
+GitHub
++3
+GitHub
++3
+
+#1467: Chat inbound → openai-chat target이 native path를 사용하고, 비호환 target은 기존 bridge를 유지하는지 확인
+
+#1436: exact provider/model capability만 service tier를 노출하고, unknown provider에는 tier를 광고하거나 주입하지 않는지 확인
+
+이 두 건을 닫으면 실제 미해결 큐는 34건으로 정리된다.
+
+Wave 1 — 병합 및 새 PR 순서
+순서	PR/이슈	조치
+1	#1755 → #1713	exact-head CI와 code-owner 승인 후 병합
+2	#1754 → #1731	diagnostics null-padding fixup과 telemetry 테스트 후 병합
+3	새 focused PR → #1773	browser CORS preflight 수정
+4	새 focused PR → #1774	openai-chat schema sanitizer 구현
+5	#1763 → #1730	공통 unified exec 수정만 병합, 이슈는 계속 열어둠
+6	#1762 → #1734	공식 Z.AI metadata 확인 후 병합
+7	#1772 → #1735	draft를 공통 opaque-metadata 보존 수정으로 확장한 뒤 병합
+보류	#1703 → #1697	현재 설계로는 병합 금지
+
+#1755는 내부 /v1/models 갱신에 전용 admission header를 보내는 1커밋 수정이고 focused test 5개가 있다. #1754도 parser 수정 방향은 맞지만, 현재 diagnostics 경로가 동일한 null padding을 여전히 invalid로 분류하는 문제가 남아 있다. #1763은 PR 설명 자체가 Camel 첫 턴의 provider-specific 문제는 해결하지 않는다고 명시하므로 #1730을 자동 종료하면 안 된다. 
+GitHub
++3
+GitHub
++3
+GitHub
++3
+
+#1773과 #1774는 현재 연결된 PR이 없다. 반면 #1703은 static configuration에서 provider를 추론해 다른 provider로 갈 가능성이 있고, maintainer도 routing·privacy 경계 때문에 hold한 상태이므로 단순 리베이스/병합 대상이 아니다. 
+GitHub
++3
+GitHub
++3
+GitHub
++3
+
+3. 바로 적용할 라벨 정규화
+이슈	제안 변경
+#1774	bug 추가
+#1767	bug 추가
+#1735	provider-compatibility 추가
+#1700	provider-compatibility, tools 추가
+#1689	provider-compatibility, needs-info 추가
+#1688	needs-info 추가
+#1713	proxy 추가
+#1527	provider, provider-compatibility, streaming 추가
+#1524	catalog 추가
+#1587, #1760	roadmap 추가
+upstream-tracking 운영 규칙
+
+확정 유지:
+
+#92 — encrypted V2 NEW_TASK
+
+#417 — Korean realtime voice
+
+#1388 — Cursor host exact-match 및 mid-turn drift
+
+#540 — WordPress.com 외부 OAuth/API 계약
+
+조건부 추가:
+
+#1668 — HTTP/2 SSE 최소 재현과 provider/runtime 외부 ticket이 생긴 뒤
+
+#1419 — Bun SIGTRAP 최소 재현과 Bun ticket이 생긴 뒤
+
+upstream-tracking에는 반드시 다음 네 항목을 댓글로 고정한다.
+
+외부 ticket
+
+마지막 확인 버전
+
+OpenCodex 내부 완화와 한계
+
+정확한 종료 조건
+
+외부 ticket 없이 “우리 쪽에서 고치기 어려움”만을 이유로 upstream 라벨을 붙이면 사실상 무기한 보관함이 된다.
+
+4. 핵심 결함별 구현 방향
+#1773 — Browser SDK CORS preflight
+
+브라우저용 OpenAI/Anthropic SDK가 X-Stainless-* 요청 헤더를 포함하지만, 현재 preflight 응답이 이를 허용하지 않아 실제 요청 전에 브라우저가 차단한다. 이 이슈는 모든 browser SDK 사용자를 막을 수 있어 새 PR 우선순위가 높다. 
+GitHub
++1
+
+수정 계약:
+
+기존 allowed-origin gate를 가장 먼저 적용
+
+Access-Control-Request-Headers를 대소문자 무관하게 parse/normalize
+
+허용된 origin에 대해서만 중앙 CORS 정책으로 requested header를 응답
+
+X-Stainless-*뿐 아니라 OpenCodex admission/provider 관련 허용 헤더를 한 곳에서 생성
+
+Vary: Origin, Access-Control-Request-Method, Access-Control-Request-Headers 추가
+
+OPTIONS에서는 auth/account-pool side effect를 만들지 않음
+
+실제 API 요청에서는 기존 인증을 그대로 요구
+
+/v1/messages, /v1/responses, /v1/chat/completions 전부 테스트
+
+Fetch 표준도 동적 origin 응답의 cache 분리를 위해 Vary: Origin 사용을 다루고 있다. origin 자체를 검증하지 않고 무조건 반사하는 수정은 피해야 한다. 
+Fetch Standard
+
+#1774 — Responses 전용 encrypted annotation 누출
+
+V2 spawn_agent의 tool schema에 있는 encrypted: true가 generic openai-chat upstream으로 그대로 전달될 때, provider가 필수 message argument를 비워 반환하는 controlled A/B 재현이 있다. provider 이름별 예외가 아니라 protocol-boundary schema sanitizer로 처리해야 한다. 
+GitHub
+
+필수 조건:
+
+schema keyword 위치의 encrypted만 제거
+
+실제 property/definition 이름이 encrypted인 경우 보존
+
+const, default, enum, examples의 literal data 보존
+
+input schema를 mutate하지 않음
+
+native Responses passthrough에서는 annotation 보존
+
+recursive stack overflow를 피하도록 bounded 또는 iterative traversal 사용
+
+nested schema, namespace/flat tool shape, required: ["message"], V2 child 생성까지 테스트
+
+#1735 — Gemini/Antigravity thought signature
+
+#1772의 특정 web-search loop 패치만으로 끝내면 다른 tool loop에서 다시 깨진다. provider-specific opaque metadata를 보존하는 공통 conversion layer로 옮겨야 한다.
+
+Google 계약에 맞춰:
+
+thought_signature를 원래 Part에 그대로 반환
+
+function_call.id와 function_response.id를 정확히 일치
+
+서명된 Part를 다른 Part와 병합하지 않음
+
+signature를 합성·재인코딩·결합하지 않음
+
+normal tool, search, parallel call, retry, continuation, history replay가 모두 같은 경로를 사용해야 한다. 
+Google AI for Developers
++1
+
+#1686 → #1687 — 인증 merge train
+
+두 이슈를 한 PR에 섞지 않는다.
+
+먼저 #1686에서 admission credential과 provider credential의 타입 및 우선순위를 분리하고, 다음 PR에서 #1687의 direct/main/pool resolver를 구현한다.
+
+고정해야 할 불변식:
+
+admission secret은 upstream으로 전달하지 않음
+
+provider key가 없다고 admission token을 upstream key로 대체하지 않음
+
+direct/main/pool × bearer/admission/provider-key matrix
+
+auth, admission, provider credential, quota 오류를 별도 typed error로 분류
+
+#1767 — Anthropic tool ID sanitizer
+
+Anthropic wire 경계에서만 deterministic sanitizer를 적용한다.
+
+내부 raw ID는 보존
+
+대응 tool_use, tool_result, synthetic filler가 같은 mapping 사용
+
+불법 문자, 최대 길이, collision, cross-provider replay 테스트
+
+Google adapter에 존재하는 유사 sanitizer를 복사하지 말고 공유 primitive로 추출
+
+#1700 — Advertised-tool authority
+
+route가 확정된 뒤 실제 upstream에 광고한 tool set을 request-local 단일 권위로 만든다. converter, validator, synthetic continuation, telemetry가 모두 이 allowlist를 사용해야 한다.
+
+미선언 apply_patch는 실행하거나 정상 호출로 처리하지 말고 설명 가능한 typed error로 fail closed한다.
+
+#1697 — Provider affinity
+
+#1703의 static-config 추론은 privacy·billing boundary를 만족하지 않는다. 올바른 순서는 다음이다.
+
+live routed session/provider 상태
+
+explicit modelMap 또는 operator selection
+
+동일 provider의 실제 enabled/catalog-compatible 후보
+
+ordered fallback의 실제 시도
+
+후보가 없으면 임의 provider를 선택하지 않고 fail closed
+
+5. Runtime·CI·메모리 순서
+#1668 HTTP/2 SSE hang
+
+first-byte timeout과 inter-chunk stall timeout을 분리한다. response byte 이전에는 alternate transport를 한 번 시도할 수 있지만, byte를 받은 뒤에는 재전송하지 않아야 한다. 그렇지 않으면 tool execution과 과금이 중복될 수 있다.
+
+#1302 Linux CI hang
+
+test-file watchdog
+
+timeout 시 active handles/listeners/process groups dump
+
+fixture teardown에서 await server.stop(true)
+
+orphan child process-group cleanup
+
+4/4 shard 반복 gate
+
+Bun 공식 문서에서 server.stop(true)는 active connection을 즉시 닫고 모든 연결이 닫힐 때 promise가 resolve된다고 명시한다. test fixture가 이를 await하도록 고정하는 것이 맞다. 
+Bun
+
+#1419 macOS SIGTRAP
+
+pinned Bun, current supported stable, canary를 동일 harness로 비교한다.
+
+수집 항목:
+
+.ips
+
+TLS/reset sequence
+
+CPU architecture
+
+bundled/system Bun 차이
+
+최소 재현
+
+“Bun 버전을 올리면 해결될 것”이라는 가정으로 닫지 않는다.
+
+#1587, #1527, #1524, #1049
+
+#1587: serialized tool bytes와 provider별 token count를 먼저 계측하고 request-local tool만 전송
+
+#1527: 정상 completion의 aborted 오분류를 먼저 별도 수정한 뒤 official Cursor와 continuation/cache request shape 비교
+
+#1524: capability를 native, text-only, unknown 3상태와 provenance로 모델링
+
+#1049: pre-substrate Codex homes의 coordinator lifecycle을 별도 아키텍처 wave로 처리
+
+6. Needs-info와 upstream 대기
+Needs-info
+
+#904: 최초 U+FFFD가 발생한 provider/client/model/raw-byte hop 필요
+
+#1689: AgentRouter direct trace, provider/model, 요청 간격, cooldown A/B 필요
+
+#1688: container/runtime, uid/gid, mounts, network isolation 정보 필요
+
+#1419: crash report와 최소 재현 필요
+
+특히 #1689을 해결한다며 non-English 사용자 prompt에 영어 문장을 자동 삽입하면 사용자 콘텐츠와 안전 의미가 달라진다. retry/pacing은 provider opt-in과 실측 증거를 기반으로 해야 한다.
+
+#1688도 uid가 0이라는 사실만으로 IS_SANDBOX=1을 설정해서는 안 된다. Anthropic 공식 문서 역시 --dangerously-skip-permissions 사용 시 dev container가 접근 가능한 데이터의 유출까지 막아주지는 않는다고 경고한다. 
+Claude
+
+Upstream 종료 조건
+
+#92: upstream 고정 버전 + OpenCodex encrypted replay 통과
+
+#417: upstream release + 동일 Korean voice replay 통과
+
+#1388: client-side exact-match/drift 수정 + OpenCodex stale-context matrix 통과
+
+#540: 공식 외부 OAuth/API 계약이 공개되고 first-party client spoofing 없이 구현 가능
+
+7. Provider 기능 로드맵
+
+기능성 이슈는 결함 merge train 뒤로 보낸다.
+
+순서	이슈	방향
+1	#1760	context-window preset/import preview, dry-run, provenance
+2	#1406	Vercel model override > provider default > unset
+3	#1267	quota classifier와 concurrency-safe round robin 분리
+4	#1091	trusted forwarder, HTTPS/loopback allowlist, OAuth token 경계
+5	#820	32 sustained/64 burst session memory harness
+6	#414	공통 search sidecar contract와 Exa 첫 구현
+7	#415	provider-native search capability matrix
+8	#201	공식 TRAE 외부 auth/API가 생길 때까지 roadmap
+9	#540	공식 WordPress.com 외부 client 계약까지 upstream
+8. 전체 36건 우선순위
+우선순위	이슈
+P0	#1773 CORS, #1774 encrypted schema, #1713 model-cache auth, #1731 null delta, #1735 thought signature, #1730 Camel exec, #1700 undeclared tool, #1697 affinity, #1686/#1687 auth, #1767 Anthropic ID, #1467/#1436 landed 검증
+P1	#1689, #1668, #1388, #1688, #1587, #1527, #1524, #1419, #1302, #1049
+P2/P3	#904, #417, #92, #1760, #1734, #1406, #1267, #1091, #820, #415, #414, #201, #540
+9. 닫기·병합 시 지켜야 할 것
+
+#1763을 병합해도 #1730은 닫지 않는다.
+
+#1703은 현재 설계로 병합하지 않는다.
+
+#1772를 web-search 전용 patch 상태로 병합하지 않는다.
+
+#1731은 parser와 diagnostics가 같은 null predicate를 쓸 때 병합한다.
+
+#1467, #1436은 코드가 들어갔다는 이유만으로 닫지 말고 focused smoke 결과를 남긴다.
+
+#1689에서 사용자 prompt를 자동 개조하지 않는다.
+
+#1688에서 uid=0을 sandbox attestation으로 사용하지 않는다.
+
+#1668, #1419에는 외부 ticket 없이 upstream 라벨을 붙이지 않는다.
+
+provider 이슈는 공식 계약 또는 redacted live golden을 종료 근거로 남긴다.
+
+10. GitHub 변경 상태
+
+이번 세션에는 인증된 GitHub mutation 경로와 gh CLI가 제공되지 않아 라벨 추가, 댓글, issue close, PR merge는 실제 적용하지 않았다.
+
+대신 다음을 포함한 안전한 운영 패키지를 만들었다.
+
+36건 전체 CSV/JSON inventory
+
+상세 merge train과 wave
+
+upstream/needs-info 댓글 템플릿
+
+기본 dry-run인 github-label-ops.sh
+
+APPLY=1을 명시해야만 동작하는 라벨 작업
+
+landed 이슈 close와 조건부 upstream 라벨에 별도 스위치 적용
+
+산출물
+
+전체 ZIP 패키지
+
+상세 ROADMAP.md
+
+36건 issue inventory CSV
+
+자동화용 JSON inventory
+
+GitHub dry-run 라벨 스크립트
+
+Upstream·needs-info 템플릿
+
+ZIP 압축 검사와 내부 manifest 검증을 통과했다.
+
+SHA-256
+08ad634fbb3799ba664b09119221d10f5bcff0772882e15de89063a328be7c04
+ROADMAP.md
+Document
+issue-inventory.csv
+Spreadsheet
+issue-inventory.json
+Code
+2 more
+Sources
+ChatGPT can make mistakes. Check important info.
+
+Pro

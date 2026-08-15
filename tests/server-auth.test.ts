@@ -522,6 +522,56 @@ describe("server local API auth", () => {
     expect(allowed).toContain("ChatGPT-Account-Id");
   });
 
+  test("CORS preflight echoes vendor SDK request headers only for an allowed origin (#1773)", async () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    saveConfig(config("127.0.0.1"));
+
+    const server = startServer(0);
+    const loopbackOrigin = `http://127.0.0.1:${server.port}`;
+    const stainless = "x-stainless-lang, x-stainless-runtime, x-stainless-retry-count";
+    try {
+      // Every browser-SDK inbound route must answer the same preflight contract; a route that
+      // omits one Stainless header blocks the real request before it is ever sent.
+      for (const path of ["/v1/messages", "/v1/responses", "/v1/chat/completions"]) {
+        const res = await fetch(new URL(path, server.url), {
+          method: "OPTIONS",
+          headers: {
+            origin: loopbackOrigin,
+            "access-control-request-method": "POST",
+            "access-control-request-headers": `content-type, ${stainless}`,
+          },
+        });
+        expect(res.status).toBe(204);
+        const allowed = (res.headers.get("access-control-allow-headers") ?? "").toLowerCase();
+        for (const header of stainless.split(",").map(h => h.trim())) {
+          expect(allowed).toContain(header);
+        }
+        // The static contract survives alongside the echoed headers, and content-type is not
+        // duplicated just because the caller also asked for it.
+        expect(allowed).toContain("x-opencodex-api-key");
+        expect(allowed.split(",").filter(h => h.trim() === "content-type")).toHaveLength(1);
+        expect(res.headers.get("vary")).toContain("Access-Control-Request-Headers");
+      }
+
+      // A rejected origin never reaches the echo: it is refused before any allow-list is built.
+      const rejected = await fetch(new URL("/v1/responses", server.url), {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://attacker.test",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "x-stainless-lang",
+        },
+      });
+      expect(rejected.status).toBe(403);
+      expect((rejected.headers.get("access-control-allow-headers") ?? "").toLowerCase())
+        .not.toContain("x-stainless-lang");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("safeConfigDTO redacts provider secrets and exposes booleans", () => {
     const unsafe = config("127.0.0.1");
     unsafe.openaiProviderTierVersion = 1;

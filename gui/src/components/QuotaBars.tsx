@@ -219,6 +219,9 @@ export default function QuotaBars({
       >
         <div className="quota-row quota-row--skeleton" aria-hidden="true">
           <span className="quota-skel quota-skel--label" />
+          <span className="quota-skel quota-skel--reset" />
+          <span className="quota-skel quota-skel--day" />
+          <span className="quota-skel quota-skel--time" />
           <span className="quota-skel quota-skel--bar" />
           <span className="quota-skel quota-skel--val" />
         </div>
@@ -276,9 +279,13 @@ function QuotaRow({ label, percent, resetAt, threshold, t, locale }: {
   const resetTitle = reset.day || reset.time
     ? `${t("codexAuth.resets")} ${reset.day} ${reset.time}`.replace(/\s+/g, " ").trim()
     : undefined;
+  const hasReset = reset.day !== "" || reset.time !== "";
   return (
     <div className={`quota-row${warn ? " quota-row--warn" : ""}${exhausted ? " quota-row--exhausted" : ""}`}>
       <span className="quota-label" title={resetTitle}>{label}</span>
+      <span className="quota-reset-label">{hasReset ? t("codexAuth.resets") : ""}</span>
+      <span className="quota-reset-day">{reset.day}</span>
+      <span className="quota-reset-time">{reset.time}</span>
       <div className="bar" title={resetTitle}><div className={`bar-fill ${color}`} style={barFillStyle(percent)} /></div>
       <span
         className={`quota-val${warn ? " quota-val--warn" : ""}`}
