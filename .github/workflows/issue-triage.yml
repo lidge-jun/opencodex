@@ -167,6 +167,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # Required to post triage results and close verified duplicate issues.
       issues: write
     steps:
       - name: Checkout trusted triage scripts
