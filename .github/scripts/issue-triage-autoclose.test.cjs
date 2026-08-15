@@ -199,14 +199,18 @@ describe("deterministic duplicate auto-close", () => {
     );
   });
 
-  it("workflow searches open and closed issues and closes only through duplicate state reason", () => {
+  it("workflow searches open and recently closed issues and closes only through duplicate state reason", () => {
     const workflow = fs.readFileSync(
       path.join(__dirname, "..", "workflows", "issue-triage.yml"),
       "utf8",
     );
 
     assert.match(workflow, /gh issue list[^\n]*--state open/);
-    assert.match(workflow, /gh issue list[^\n]*--state closed/);
+    assert.match(workflow, /closed_since="\$\(date -u -d '90 days ago' \+%Y-%m-%d\)"/);
+    assert.match(
+      workflow,
+      /gh issue list[^\n]*--state closed[^\n]*--search "closed:>=\$\{closed_since\}"/,
+    );
     assert.match(workflow, /issue-triage-autoclose\.cjs/);
     assert.match(workflow, /state_reason:\s*["']duplicate["']/);
     assert.match(
