@@ -5,9 +5,9 @@ description: Contrôlez la manière dont Codex génère et gère les sous-agents
 
 ## Que sont les sous-agents
 
-Un sous-agent est un travailleur Codex distinct que l'agent principal peut créer pour une tâche ciblée. Il a son
-son propre contexte et ses propres outils, afin que plusieurs tâches indépendantes puissent s'exécuter en parallèle. opencodex contrôle lequel
-La surface de collaboration Codex expose ces travailleurs, quels modèles Codex leur propose et comment un
+Un sous-agent est un travailleur Codex distinct que l'agent principal peut créer pour une tâche ciblée. Il possède
+son propre contexte et ses propres outils, afin que plusieurs tâches indépendantes puissent s'exécuter en parallèle. opencodex contrôle
+quelle surface de collaboration Codex expose ces travailleurs, quels modèles Codex leur propose et comment
 un modèle défaillant peut reculer. Il ne décide pas quand votre agent principal doit déléguer.
 
 ## Modes
@@ -121,9 +121,9 @@ apparaît plus tôt dans la chaîne.
 
 ## Livraison de tâches v2 cryptées
 
-Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Cela
-la charge utile peut être lue par le backend natif ChatGPT, mais pas par un fournisseur externe. C'est le
-connue [#92 limitation](https://github.com/lidge-jun/opencodex/issues/92).
+Codex peut envoyer une tâche enfant v2 native vers routé uniquement sous forme `encrypted_content` chiffrée par le backend. Cette
+charge utile peut être lue par le backend natif ChatGPT, mais pas par un fournisseur externe. C'est la
+limitation connue [#92](https://github.com/lidge-jun/opencodex/issues/92).
 
 opencodex échoue en toute sécurité au lieu de transférer une tâche vide ou illisible :
 
@@ -163,6 +163,7 @@ canoniques pour les tâches chiffrées.
 
 - **Tableau de bord** → première cellule statistique : choisissez **v1**, **base** ou **v2**.
 - **Modèles** → contrôle segmenté de la rangée supérieure : choisissez le même mode global.
+- **Modèles** → **Garder ChatGPT sur v1** : activez cette option uniquement lorsque le mode global est **v2**. Elle est ignorée en **v1** et **base**.
 - **Tableau de bord** → **Délégation de sous-agent** : définissez les conseils model/effort et l'activation explicite natif par défaut.
 - **Sous-agents** : choisissez et ordonnez la liste, puis configurez la chaîne de repli globale.
 
