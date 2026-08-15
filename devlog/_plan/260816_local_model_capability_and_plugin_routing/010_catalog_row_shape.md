@@ -32,7 +32,8 @@ said anything", so it needs a separate channel.
 
 ## Scope boundary
 
-IN: the provenance stamp in `src/codex/catalog/effort.ts`, the reader in
+IN: the provenance stamp in `src/codex/catalog/effort.ts` (sourcing both the
+CatalogModel and the jawcode generated-metadata lookup), the reader in
 `src/routing/capability.ts`, the `supportsImages` tri-state restoration in
 `src/providers/antigravity-models.ts` (added after audit round 5), and the
 focused tests including the two writer-through-normalizer regressions.
@@ -155,6 +156,85 @@ That split is the whole point of a separate provenance channel.
 found by audit. Any future path that manufactures a `CatalogModel` from defaults
 would need the same treatment; the regression test is an early warning for that
 class, not a proof that no other producer exists.
+
+### Capturing jawcode generated metadata too (round-7 B1)
+
+`applyCatalogModelMetadata()` is NOT the only writer of real capability values,
+and a stamp built from `model.*` alone silently drops a whole class of correct
+evidence. Audit round 7 found the second writer:
+
+    // src/codex/catalog/sync.ts:321-322 — order matters
+    if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
+    applyCatalogModelMetadata(e, model);
+
+`applyCatalogMetadata()` (`src/codex/catalog/parsing.ts:458`) looks the model up
+in the generated jawcode metadata and writes `context_window` /
+`input_modalities` from it. Those values are REAL assertions — they come from a
+curated metadata table, not from `ensureStrictCatalogFields`. But they never
+touch the `CatalogModel`, so a stamp reading only `model.*` cannot see them.
+
+Reviewer reproduction — a live-discovered row carrying identity only, whose
+serialized entry nonetheless has full metadata:
+
+    catalogModel: { "provider": "opencode-go", "id": "grok-4.6" }
+    serialized:   { "context_window": 500000, "input_modalities": ["text","image"] }
+
+Under the previous design the provenance block would carry identity and nothing
+else, and routing would still lose valid evidence — defeating the phase goal for
+exactly the providers that rely on generated metadata.
+
+**Amendment.** Stamp provenance AFTER both writers have run, and source each
+field from the model when it asserted one, otherwise from the metadata lookup.
+Never from the entry itself: reading `entry.context_window` back would
+reintroduce the B2 defect the moment `ensureStrictCatalogFields` has run.
+
+    // Both real-assertion writers must have run before this point:
+    //   applyCatalogMetadata()      — jawcode generated metadata (parsing.ts:458)
+    //   applyCatalogModelMetadata() — the CatalogModel's own fields
+    // Read from those two SOURCES, never from `entry`: the entry also carries
+    // ensureStrictCatalogFields' compatibility defaults, which are not evidence.
+    const meta = lookupGeneratedMetadata(model.provider, model.id);   // same lookup parsing.ts:458 uses
+    const assertedContext = (typeof model.contextWindow === "number" && model.contextWindow > 0)
+      ? model.contextWindow
+      : (typeof meta?.contextWindow === "number" && meta.contextWindow > 0 ? meta.contextWindow : undefined);
+    const assertedModalities = (Array.isArray(model.inputModalities) && model.inputModalities.length > 0)
+      ? model.inputModalities
+      : (Array.isArray(meta?.input) && meta.input.length > 0 ? meta.input : undefined);
+
+Precedence matches the existing write order: the `CatalogModel` wins where it
+asserts, generated metadata fills the rest. B extracts the lookup rather than
+duplicating it, so the two cannot drift.
+
+Context-cap note: `applyCatalogMetadata` passes the metadata context through
+`applyProviderContextCap(meta.contextWindow, contextCap)`. Provenance must apply
+the same cap, or routing would advertise a window the cap already refused. B
+confirms the cap argument reaching this point.
+
+**Required regression (writer-to-reader).** The consumer-only fixtures cannot
+catch this either:
+
+    test("provenance captures jawcode generated metadata for an identity-only model", () => {
+      // The CatalogModel carries provider/id ONLY; context and modalities come
+      // from the generated metadata table via applyCatalogMetadata.
+      const entry = buildRoutedEntry({ provider: "opencode-go", id: "grok-4.6" });
+      expect(entry.context_window).toBe(500000);
+      expect(entry.opencodex_capability_provenance.context_window).toBe(500000);
+      expect(entry.opencodex_capability_provenance.input_modalities).toEqual(["text", "image"]);
+    });
+
+    test("a model with no assertion anywhere stamps identity only", () => {
+      // Neither the CatalogModel nor generated metadata asserts anything, so the
+      // strict default still ships to Codex while provenance stays silent.
+      const entry = buildRoutedEntry({ provider: "demo", id: "unknown-model" });
+      expect(entry.context_window).toBe(128000);
+      expect(entry.opencodex_capability_provenance.context_window).toBeUndefined();
+    });
+
+**Why six rounds missed it.** Rounds 4-6 audited *producers* — code paths that
+manufacture a `CatalogModel` — and correctly found two synthesizers. This defect
+is the mirror image: a writer that supplies real values without going through a
+`CatalogModel` at all. Auditing one direction thoroughly is not the same as
+auditing the other.
 
 ### Restoring the tri-state in the Antigravity producer (round-5 B2)
 
