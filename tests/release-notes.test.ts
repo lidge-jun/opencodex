@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   cleanPrTitle,
   extractChangelogPrNumbers,
+  extractCommitBulletSections,
   extractPrNumbers,
   hasMeaningfulCarriedNotes,
   isReleasePlumbingCommit,
@@ -15,6 +16,7 @@ import {
   parseTakeoverSourcePr,
   previousReleaseNotesTag,
   renderCommitFallbackNotes,
+  sanitizeCommitText,
   renderReleaseNotes,
   rewriteTakeoverCredits,
   selectNewestCarriedPreviewTag,
@@ -37,6 +39,103 @@ describe("matchingPreviewTag", () => {
   test("returns null for preview versions and when no match exists", () => {
     expect(matchingPreviewTag("2.7.39-preview.1", ["v2.7.39-preview.1"])).toBeNull();
     expect(matchingPreviewTag("2.7.41", ["v2.7.40-preview.20260725"])).toBeNull();
+  });
+});
+
+describe("commit fallback: untrusted-input and carry hardening", () => {
+  const log = (s: string) => parseCommitLog(s);
+
+  test("git author display names never render as GitHub mentions", () => {
+    // %an is a free-form display name; "@Abhishek" would notify an unrelated account.
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1fix(x): a fixAbhishek Sharma"));
+    expect(out).toContain("Abhishek Sharma");
+    expect(out).not.toMatch(/@Abhishek/);
+  });
+
+  test("mentions inside commit subjects are neutralized but stay readable", () => {
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1fix(x): thanks @octocatdev"));
+    expect(out).not.toMatch(/@octocat/);
+    expect(out).toContain("octocat");
+  });
+
+  test("markdown metacharacters cannot restructure the release body", () => {
+    const subject = "fix(x): drop " + String.fromCharCode(96) + "code" + String.fromCharCode(96) + " and <b>tags</b>";
+    const out = renderCommitFallbackNotes(log("aaaaaaaaaaaa1" + subject + "dev"));
+    expect(out).not.toContain(String.fromCharCode(96));
+    expect(out).not.toContain("<b>");
+  });
+
+  test("sanitizeCommitText collapses newlines and strips the separator byte", () => {
+    expect(sanitizeCommitText("a\nb")).toBe("a b");
+    expect(sanitizeCommitText("a" + String.fromCharCode(31) + "b")).toBe("a b");
+  });
+
+  test("a separator byte inside a subject cannot shift the author field", () => {
+    const commits = log("aaaaaaaaaaaa1subjectwith seprealauthor");
+    expect(commits).toHaveLength(1);
+    expect(commits[0]!.author).toBe("realauthor");
+    expect(commits[0]!.subject).toContain("subject");
+    expect(commits[0]!.subject).toContain("with sep");
+  });
+
+  test("a non-hex sha is dropped rather than rendered", () => {
+    const out = renderCommitFallbackNotes([{ sha: "not-a-sha](evil)", subject: "fix(x): y", author: "dev" }]);
+    expect(out).not.toContain("evil");
+    expect(out).toContain("- x: y");
+  });
+
+  test("conventional merge: commits are plumbing too", () => {
+    expect(isReleasePlumbingCommit("merge: bring dev into main")).toBe(true);
+    expect(isReleasePlumbingCommit("merge(dev): sync")).toBe(true);
+    expect(renderCommitFallbackNotes(log("aaaaaaaaaaaa1merge: bring dev into maindev"))).toBe("");
+  });
+
+  test("preview fallback notes survive the carry into a stable release", () => {
+    // Guards the blocker: a preview body built by the fallback is "meaningful",
+    // so the workflow carries it and skips regenerating — and the PR renderer
+    // would otherwise discard every non-PR bullet, collapsing back to the stub.
+    const previewBody = "## Bug Fixes\n\n- gui: fix a thing (abc1234, Some Name)\n";
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: previewBody,
+      deltaPrNotes: "",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("## Bug Fixes");
+    expect(rendered).toContain("gui: fix a thing (abc1234, Some Name)");
+  });
+
+  test("extractCommitBulletSections keeps only PR-free bullets", () => {
+    const body = [
+      "## Bug Fixes",
+      "",
+      "- gui: commit style (abc1234, Name)",
+      "- pr style (#42)",
+      "",
+      "## Changelog",
+      "",
+      "- #42 pr style @dev",
+    ].join("\n");
+    const out = extractCommitBulletSections(body);
+    expect(out).toContain("gui: commit style");
+    expect(out).not.toContain("#42");
+    expect(out).not.toContain("Changelog");
+  });
+
+  test("carried PR sections still win over carried commit bullets", () => {
+    const previewBody = "## Bug Fixes\n\n- real pr work (#7)\n\n## Changelog\n\n- #7 real pr work @dev\n";
+    const rendered = renderReleaseNotes({
+      npmMetadata: "npm line.",
+      carriedPreviewNotes: previewBody,
+      commitFallbackNotes: "## Chores\n\n- noise: should not appear (abc1234, Name)\n",
+      compareFrom: "v1.0.0",
+      compareTo: "v1.1.0",
+      repository: "o/n",
+    });
+    expect(rendered).toContain("#7");
+    expect(rendered).not.toContain("should not appear");
   });
 });
 
@@ -727,13 +826,13 @@ describe("commit-based changelog fallback", () => {
   test("conventional prefixes map onto the release.yml categories", () => {
     const out = renderCommitFallbackNotes(parseCommitLog(log));
     expect(out).toContain("## New Features");
-    expect(out).toContain("- gui: add a quota badge (aaaaaaaaa) @alice");
+    expect(out).toContain("- gui: add a quota badge (aaaaaaaaa, alice)");
     expect(out).toContain("## Bug Fixes");
-    expect(out).toContain("- codex: stop a launcher crash (#1625) (bbbbbbbbb) @bob");
+    expect(out).toContain("- codex: stop a launcher crash (#1625) (bbbbbbbbb, bob)");
     expect(out).toContain("## Documentation");
     expect(out).toContain("## Chores");
     expect(out).toContain("## Other Changes");
-    expect(out).toContain("- just a bare subject (eeeeeeeee) @eve");
+    expect(out).toContain("- just a bare subject (eeeeeeeee, eve)");
   });
 
   test("categories render in the canonical order", () => {

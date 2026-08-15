@@ -213,8 +213,29 @@ const COMMIT_TYPE_CATEGORY: Record<string, string> = {
 export function isReleasePlumbingCommit(subject: string): boolean {
   const text = subject.trim();
   if (/^Merge\s/i.test(text)) return true;
-  if (/^release:\s/i.test(text)) return true;
+  // Real two-parent merges in this repo also use a `merge:` conventional prefix.
+  if (/^merge(?:\([^)]*\))?!?:\s/i.test(text)) return true;
+  if (/^release(?:\([^)]*\))?!?:\s/i.test(text)) return true;
   return false;
+}
+
+/**
+ * Neutralize Markdown and mention syntax from untrusted commit text before it
+ * lands in a release body. Commit subjects and author names are attacker- or
+ * accident-controlled: a bare `@name` renders as a real GitHub mention (and
+ * notifies that account), and backticks/brackets can restructure the notes.
+ */
+export function sanitizeCommitText(text: string): string {
+  return text
+    .replace(/\r?\n/g, " ")
+    // Strip the ASCII unit separator so a subject can never forge a log field.
+    .replace(/\u001f/g, " ")
+    .replace(/[`<>|]/g, "")
+    .replace(/([[\]])/g, "\\$1")
+    // `@name` -> `@\u200bname`: reads identically, never notifies.
+    .replace(/@(?=[A-Za-z0-9_-])/g, "@\u200b")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -242,14 +263,21 @@ export function renderCommitFallbackNotes(commits: ReleaseNoteCommit[]): string 
     if (isReleasePlumbingCommit(subject)) continue;
     const match = /^([a-zA-Z]+)(?:\(([^)]*)\))?!?:\s*(.+)$/.exec(subject);
     const type = match?.[1]?.toLowerCase();
-    const scope = match?.[2]?.trim();
-    const summary = (match?.[3] ?? subject).trim();
+    const scope = sanitizeCommitText(match?.[2] ?? "");
+    const summary = sanitizeCommitText(match?.[3] ?? subject);
+    if (!summary) continue;
     const category = (type && COMMIT_TYPE_CATEGORY[type]) ?? "Other Changes";
-    const shortSha = commit.sha.trim().slice(0, 9);
+    // Hex-only short hash: a crafted `sha` field can never inject markup.
+    const shortSha = /^[0-9a-f]{7,40}$/i.test(commit.sha.trim())
+      ? commit.sha.trim().slice(0, 9)
+      : "";
     const scopePrefix = scope ? `${scope}: ` : "";
-    const author = commit.author.trim();
-    const credit = author ? ` @${author}` : "";
-    const line = `- ${scopePrefix}${summary} (${shortSha})${credit}`;
+    // `%an` is a free-form Git display name, not a GitHub login, so it is
+    // rendered as plain text rather than an @mention that would notify a
+    // same-named (or non-existent) account.
+    const author = sanitizeCommitText(commit.author).replace(/^@\u200b/, "");
+    const trailer = [shortSha, author].filter(Boolean).join(", ");
+    const line = trailer ? `- ${scopePrefix}${summary} (${trailer})` : `- ${scopePrefix}${summary}`;
     const existing = buckets.get(category);
     if (existing) existing.push(line);
     else buckets.set(category, [line]);
@@ -264,14 +292,64 @@ export function renderCommitFallbackNotes(commits: ReleaseNoteCommit[]): string 
   return parts.join("\n\n").replace(/\n+$/, "") + "\n";
 }
 
-/** Parse `git log --format=%H%x1f%s%x1f%an` output into commits. */
+/**
+ * Extract commit-style category sections (bullets with no `(#N)` reference)
+ * from an already-rendered body.
+ *
+ * A preview release whose notes came from the commit fallback carries bullets
+ * like `- gui: fix a thing (abc1234, Name)`. Those are meaningful prose, so the
+ * workflow keeps them as carried notes and skips regenerating a fallback — but
+ * the PR renderer only retains entries carrying a PR number, so without this
+ * the stable release would silently collapse back to the npm-line stub.
+ */
+export function extractCommitBulletSections(body: string): string {
+  const out: string[] = [];
+  let current: { title: string; lines: string[] } | null = null;
+  const flush = (): void => {
+    if (current && current.lines.length > 0) {
+      out.push([`## ${current.title}`, "", ...current.lines].join("\n"));
+    }
+    current = null;
+  };
+  for (const rawLine of body.replace(/\r\n/g, "\n").split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("<!--")) continue;
+    if (line.startsWith("## ") || line.startsWith("### ")) {
+      flush();
+      const title = line.replace(/^#{2,3}\s+/, "").trim();
+      if (!SCAFFOLD_HEADINGS.has(title)) current = { title, lines: [] };
+      continue;
+    }
+    if (!current) continue;
+    if (!line.startsWith("- ")) continue;
+    // Anything carrying a PR reference belongs to the PR pipeline, not here.
+    if (/\(#\d+(?:\s*,\s*#\d+)*\)\s*$/.test(line)) continue;
+    if (/^-\s+#\d+\s/.test(line)) continue;
+    current.lines.push(line);
+  }
+  flush();
+  return out.join("\n\n").replace(/\n+$/, "") + (out.length > 0 ? "\n" : "");
+}
+
+/**
+ * Parse `git log --format=%H%x1f%s%x1f%an` output into commits.
+ *
+ * Fields are split from the LEFT for the hash and from the RIGHT for the
+ * author, so a subject containing the separator byte cannot shift the author
+ * field (the subject keeps the remainder). `sanitizeCommitText` strips any
+ * stray separator at render time.
+ */
 export function parseCommitLog(raw: string): ReleaseNoteCommit[] {
   const commits: ReleaseNoteCommit[] = [];
   for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
     if (!line.trim()) continue;
-    const [sha, subject, author] = line.split("\u001f");
-    if (!sha || !subject) continue;
-    commits.push({ sha, subject, author: author ?? "" });
+    const parts = line.split("\u001f");
+    if (parts.length < 2) continue;
+    const sha = parts[0]!;
+    const author = parts.length >= 3 ? parts[parts.length - 1]! : "";
+    const subject = (parts.length >= 3 ? parts.slice(1, -1).join("\u001f") : parts[1]!);
+    if (!sha.trim() || !subject.trim()) continue;
+    commits.push({ sha, subject, author });
   }
   return commits;
 }
@@ -600,8 +678,13 @@ export function renderReleaseNotes(input: {
   // Commit fallback: only when the PR pipeline produced no category content at
   // all. Its sections are already rendered, so they are appended verbatim.
   const renderedAnyPrSection = parts.length > (npmMetadata ? 1 : 0);
-  const commitFallback = (input.commitFallbackNotes ?? "").trim();
-  if (!renderedAnyPrSection && commitFallback) parts.push(commitFallback);
+  if (!renderedAnyPrSection) {
+    // Carried commit bullets first (older preview work), then this range's own.
+    const carriedCommitSections = extractCommitBulletSections(input.carriedPreviewNotes ?? "").trim();
+    const commitFallback = (input.commitFallbackNotes ?? "").trim();
+    const merged = [carriedCommitSections, commitFallback].filter(Boolean).join("\n\n");
+    if (merged) parts.push(merged);
+  }
 
   const allPrs = [...categories.values()].flat().sort((a, b) => a.number - b.number);
   const from = input.compareFrom?.trim();
