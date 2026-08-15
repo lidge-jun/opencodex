@@ -64,3 +64,64 @@ This is a transport mismatch, not a missing audit. The verbatim verdict lines,
 the blockers, and the path:line evidence are recorded in this file and in `003`,
 and the A->B attestation carries the pasted reviewer tail. Anyone re-verifying
 should read the reviewer output quoted here rather than the round status.
+## Rounds 7-8 (fresh reviewer C)
+
+| Round | Verdict | Finding |
+|-------|---------|---------|
+| 7 | FAIL, 1 High + 1 Medium | `applyCatalogMetadata` is a SECOND writer of real values that the provenance stamp could not see |
+| 8 | NEAR-PASS, 2 Medium + 1 Low | Extraction scope, missing context-cap regression, malformed table row |
+
+Round 7 is the most important finding of the whole audit after round 1's B2.
+Rounds 4-6 audited **producers** — paths that manufacture a `CatalogModel` — and
+correctly concluded there were exactly two synthesizers. Reviewer C inverted the
+lens and audited **writers** — anything that writes `context_window` or
+`input_modalities` onto an entry — and immediately found
+`applyCatalogMetadata` (`src/codex/catalog/parsing.ts:458`), which writes REAL
+values from the generated jawcode metadata table without ever touching a
+`CatalogModel`. A stamp reading `model.*` alone would have carried identity only
+for every provider that depends on that table:
+
+    catalogModel: { "provider": "opencode-go", "id": "grok-4.6" }
+    serialized:   { "context_window": 500000, "input_modalities": ["text","image"] }
+
+Auditing one direction exhaustively is not the same as auditing the other. That
+is the transferable lesson from this unit.
+
+Round 8's writer sweep then closed the question: the complete set of assignments
+is `effort.ts:126,134` (CatalogModel), `parsing.ts:466,471` (generated metadata),
+`parsing.ts:277,290` (native-only overrides), and `parsing.ts:316,326,329`
+(strict-parser defaults). No third real-value writer exists. An independent
+sweep from the main agent reproduced exactly that list.
+
+Round 8 also caught that the two new regressions omitted `contextCap`, so an
+implementation stamping an uncapped `500000` against a capped `350000` entry
+would have passed. A capped-metadata regression was added, carried through
+`candidateCapabilityEvidence` so the value is asserted end to end.
+
+## Final tally
+
+Eight rounds, three independent reviewers, 22 findings. Every one accepted and
+folded; none rebutted. Four would have shipped real defects:
+
+1. Tool support silently revoked for openai-chat and anthropic (round 1).
+2. Synthesized strict-parser defaults read as routing evidence (round 1).
+3. Two synthesizers stamped as provenance — combo and Antigravity (rounds 4-5).
+4. Real generated metadata invisible to provenance (round 7).
+
+## Verdict-capture caveat, updated
+
+The `SubagentStop` review observer requires `payload.agent_type === "explorer"`
+(`components/pabcd-state/dist/review-observer.js:32`). Two things were checked
+here:
+
+- `cxc doctor` reported the observer hook UNTRUSTED, so it could not have run at
+  all. `cxc hooks retrust` fixed that — 22 hooks now trusted.
+- Even after retrust, the rounds stayed `in_flight`. The session rollout shows
+  `SubagentStop` events firing (15 occurrences) but carries no `agent_type`
+  field, so the observer's first guard returns early.
+
+The audit itself is unaffected: the reviewers really ran, really produced
+`LAUNCH:`/`VERDICT:` lines bound to the issued launch ids, and their verbatim
+output is recorded here and in the A->B attestation. What is missing is the
+machine-recorded verdict, not the audit. This is worth reporting upstream as a
+host-surface gap in the observer's payload contract.
