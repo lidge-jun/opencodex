@@ -17,29 +17,42 @@ validation host and in CI across all three platforms.
 `origin/dev`, the local checkout, and the remote validation host all sit on
 `4b950101a1116d8bac4e479cb2dceca3bb80370e`.
 
-## The "122 failures" were a harness misuse, not a defect
+## The "122 failures" were a missing `--isolate`, not a defect
 
-An earlier run in this session invoked `bun test` directly and reported 122 failures. That
-number was an artifact of the invocation, and the same 122 appeared on the pre-session
-baseline, which is what first suggested it was not caused by any change here.
+An earlier run in this session invoked `bun test` with no flags and reported 122 failures,
+with 67 "refusing to write the real OpenCodex home" errors in the log. The same 122 appeared
+on the pre-session baseline, which is what first showed the count was not caused by any
+change here.
 
-`bun test` is not the suite's entry point. `package.json` maps `test` to
-`scripts/test.ts`, which builds an isolated environment per run: a `mkdtemp` root with
-`HOME`, `USERPROFILE`, `OPENCODEX_HOME`, and `CODEX_HOME` pointed inside it, plus
-`OCX_REAL_HOME` captured before the rewrite so the real-home write guard still knows which
-path to protect.
+**The trigger is the missing `--isolate`, not a missing sandbox.** That distinction matters,
+because the first version of this note blamed the wrapper and was wrong. `tests/preload.ts`
+is registered in `bunfig.toml` precisely so a bare `bun test` still gets a sandbox and an
+armed guard; that defense works, and it is why a bare `bun test <file>` passes.
 
-Run raw, none of that exists. Suites that persist config resolved to the operator's actual
-`~/.opencodex`, where `assertNotRealHomeUnderTest` correctly refused the write. Every one of
-the 122 failures is that refusal surfacing as a downstream assertion — empty `usageRows()`,
-a missing `admissionKind`, a 503 where a 429 was expected. The guard did exactly its job; the
-harness was simply absent.
+What `bun run test` adds is process isolation: `scripts/test.ts` spawns
+`bun test --isolate ./tests/`. Without `--isolate`, Bun shares one process across test files.
+The preload runs once per process, so one sandbox is created and all 789 files then run
+inside it — and any suite that mutates `process.env.OPENCODEX_HOME`, or restores a captured
+environment in `afterEach`, can leave a later file pointing back at the operator's real home.
+`assertNotRealHomeUnderTest` correctly refuses that write, and the refusal surfaces
+downstream as an unrelated assertion: empty `usageRows()`, a missing `admissionKind`, a 503
+where a 429 was expected.
 
-Confirmation: the same files pass in isolation and in groups (216/216 for the six heaviest),
-and the full suite under `bun run test` reports 0 failures.
+Measured on this host, same commit, same machine:
 
-**Operational note:** run `bun run test` on this repository. Raw `bun test` writes to the real
-home, is refused, and produces failures that look like product defects.
+| Invocation | Refusals | Failures |
+|-----------|----------|----------|
+| `bun test` | 67 | 122 |
+| `bun test --isolate tests` | 0 | 0 |
+| `bun run test` | 0 | 0 |
+
+The middle row is the one that isolates the variable: no wrapper and no sandbox hand-off,
+only `--isolate` plus the preload, and it is completely green. It is also the exact command
+`scripts/release.ts` runs in its preflight, so the release gate is unaffected.
+
+**Operational note:** run `bun run test`. A bare `bun test` shares one process across the
+whole suite and produces cross-file environment bleed that looks like product defects; a bare
+`bun test <file>` on one file is fine.
 
 ## Not claimed here
 
