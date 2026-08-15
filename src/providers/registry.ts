@@ -80,6 +80,11 @@ interface ProviderModelDiscoverySharedSpec {
   maxResponseBytes?: number;
   /** Optional lower raw-row ceiling; the process-wide hard ceiling still wins. */
   maxModels?: number;
+  /**
+   * If a valid extracted id starts with this prefix, strip it and re-validate the remainder.
+   * Empty/invalid remainders skip that row only.
+   */
+  stripIdPrefix?: string;
 }
 
 type ProviderModelDiscoveryLocation =
@@ -2467,6 +2472,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
     // Cloudflare Workers AI: OpenAI-compatible endpoint. The base URL contains {account_id}
     // which must be resolved by the user at setup time. Model IDs use the @cf/ prefix.
     // Live-verified 2026-07-21 against https://developers.cloudflare.com/workers-ai/models/
+    // Official search is sibling to /ai/v1 (GET .../ai/models/search?format=openrouter).
     id: "cloudflare-workers-ai", label: "Cloudflare Workers AI",
     baseUrl: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
     adapter: "openai-chat", authKind: "key", freeTier: true,
@@ -2481,6 +2487,13 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       "@cf/zai-org/glm-5.2",
       "@cf/mistralai/mistral-small-3.1-24b-instruct",
     ],
+    liveModels: true,
+    modelDiscovery: {
+      path: "../models/search",
+      query: { format: "openrouter", per_page: "1000" },
+      stripIdPrefix: "workers-ai/",
+      maxModels: 256,
+    },
     note: "Workers AI · Free tier included · Account ID required in base URL",
   },
   // FREEZE 2026-07-10: /models was auth-gated under key login. OAuth device-flow + copilot_internal

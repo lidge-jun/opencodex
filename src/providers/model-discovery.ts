@@ -99,7 +99,12 @@ export function providerModelDiscoverySpecError(spec: ProviderModelDiscoverySpec
       return "discovery path must be a query-free relative/origin path";
     }
     if (path.includes("\\")) return "discovery path must use forward slashes";
-    if (path.split("/").some(segment => segment.replace(/%2e/gi, ".") === "..")) {
+    const segments = path.split("/");
+    if (segments.some((segment, index) => {
+      const decoded = segment.replace(/%2e/gi, ".");
+      if (decoded !== "..") return false;
+      return index !== 0 || segments.filter(s => s.replace(/%2e/gi, ".") === "..").length !== 1;
+    })) {
       return "discovery path must not contain parent-directory segments";
     }
   }
@@ -351,10 +356,15 @@ export function extractProviderModelItems(
     }
     const id = (raw as { id?: unknown }).id;
     if (!isValidModelDiscoveryModelId(id)) return { ok: false, reason: "invalid_shape" };
-    const normalizedId = id;
-    const item = raw as ProviderModelsApiItem;
-    if (!providerModelMatchesDiscoveryFilter(item, discovery.spec?.filter) || seen.has(normalizedId)) continue;
-    seen.add(normalizedId);
+    const prefix = discovery.spec?.stripIdPrefix;
+    let finalId = id;
+    if (prefix && finalId.startsWith(prefix)) {
+      finalId = finalId.slice(prefix.length);
+      if (!isValidModelDiscoveryModelId(finalId)) continue;
+    }
+    const item = finalId === id ? raw as ProviderModelsApiItem : { ...(raw as ProviderModelsApiItem), id: finalId };
+    if (!providerModelMatchesDiscoveryFilter(item, discovery.spec?.filter) || seen.has(finalId)) continue;
+    seen.add(finalId);
     items.push(item);
   }
   return { ok: true, items, rawCount: data.length };

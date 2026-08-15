@@ -12,6 +12,7 @@ import {
   providerModelDiscoverySpecError,
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
+  resolveProviderModelDiscoveryUrl,
 } from "../src/providers/model-discovery";
 import {
   PROVIDER_REGISTRY,
@@ -80,6 +81,7 @@ describe("registry-owned provider model discovery", () => {
     ]) {
       expect(providerModelDiscoverySpecError({ path })).toContain("parent-directory");
     }
+    expect(providerModelDiscoverySpecError({ path: "../models/search" })).toBeNull();
     expect(providerModelDiscoverySpecError({ path: String.raw`models\..\internal` }))
       .toContain("forward slashes");
     expect(providerModelDiscoverySpecError({ path: "models/model..variant" })).toBeNull();
@@ -372,6 +374,79 @@ describe("registry-owned provider model discovery", () => {
       expect(extractProviderModelItems({ data: [{ id }] }, discovery))
         .toEqual({ ok: false, reason: "invalid_shape" });
     }
+  });
+
+  test("cloudflare-workers-ai resolves official search from the /ai/v1 base", () => {
+    const url = resolveProviderModelDiscoveryUrl(
+      "cloudflare-workers-ai",
+      {
+        adapter: "openai-chat",
+        baseUrl: "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+      },
+      "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+      "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1/models",
+    );
+    expect(url).toBe(
+      "https://api.cloudflare.com/client/v4/accounts/acct/ai/models/search?format=openrouter&per_page=1000",
+    );
+  });
+
+  test("strips workers-ai/ openrouter ids and skips empty remainders for cloudflare-workers-ai", () => {
+    const discovery = resolveProviderModelDiscovery("cloudflare-workers-ai", {
+      adapter: "openai-chat",
+      baseUrl: "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1",
+    });
+
+    const stripped = extractProviderModelItems({
+      data: [{ id: "workers-ai/@cf/openai/gpt-oss-120b" }],
+    }, discovery);
+    expect(stripped).toEqual({
+      ok: true,
+      rawCount: 1,
+      items: [{ id: "@cf/openai/gpt-oss-120b" }],
+    });
+
+    const native = extractProviderModelItems({
+      result: [{ id: "uuid", name: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }],
+    }, discovery);
+    expect(native).toEqual({ ok: false, reason: "invalid_shape" });
+
+    const mixed = extractProviderModelItems({
+      data: [
+        { id: "workers-ai/" },
+        { id: "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+      ],
+    }, discovery);
+    expect(mixed).toEqual({
+      ok: true,
+      rawCount: 2,
+      items: [{ id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }],
+    });
+  });
+
+  test("cloudflare-workers-ai registry owns openrouter search discovery", () => {
+    const workers = PROVIDER_REGISTRY.find(row => row.id === "cloudflare-workers-ai");
+    const gateway = PROVIDER_REGISTRY.find(row => row.id === "cloudflare-ai-gateway");
+    if (!workers || !gateway) throw new Error("missing cloudflare registry entries");
+
+    expect(workers.liveModels).toBe(true);
+    expect(workers.modelDiscovery).toEqual({
+      path: "../models/search",
+      query: { format: "openrouter", per_page: "1000" },
+      stripIdPrefix: "workers-ai/",
+      maxModels: 256,
+    });
+    expect(workers.models).toEqual([
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "@cf/qwen/qwq-32b",
+      "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "@cf/moonshotai/kimi-k2.7-code",
+      "@cf/zai-org/glm-5.3",
+      "@cf/zai-org/glm-5.2",
+      "@cf/mistralai/mistral-small-3.1-24b-instruct",
+    ]);
+    expect(gateway.modelDiscovery).toBeUndefined();
+    expect(gateway.liveModels).toBeUndefined();
   });
 });
 
