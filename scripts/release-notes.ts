@@ -332,13 +332,9 @@ export function extractCommitBulletSections(body: string): string {
 }
 
 /**
- * Parse `git log -z --format=%H%x00%s%x00%an` output into commits.
- *
- * Records are NUL-delimited and fields are NUL-separated. Git forbids NUL in
- * commit content, so — unlike the unit separator, which Git happily accepts in
- * both subjects and author names — no field value can forge a boundary. Every
- * record is read as exactly three fields; anything longer is a malformed record
- * and is skipped rather than silently reinterpreted.
+ * Merge several already-rendered commit-bullet bodies into one set of category
+ * sections, preserving order within a category and de-duplicating identical
+ * bullets. Concatenating the bodies directly would repeat a shared heading.
  */
 export function mergeCommitBulletSections(bodies: string[]): string {
   const buckets = new Map<string, string[]>();
@@ -376,6 +372,14 @@ export function mergeCommitBulletSections(bodies: string[]): string {
   return merged.join("\n\n").trim();
 }
 
+/**
+ * Parse `git log -z --format=%H%x00%s%x00%an` output into commits.
+ *
+ * Records and fields are NUL-separated. Git forbids NUL in commit content, so
+ * — unlike the unit separator, which Git accepts in both subjects and author
+ * names — no field value can forge a boundary. Every record is read as exactly
+ * three fields.
+ */
 export function parseCommitLog(raw: string): ReleaseNoteCommit[] {
   const commits: ReleaseNoteCommit[] = [];
   const fields = raw.split("\u0000");
