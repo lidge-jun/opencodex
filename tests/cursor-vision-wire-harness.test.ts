@@ -99,5 +99,9 @@ describe("Cursor vision wire harness", () => {
     });
     // Tool-result image promotion is out of scope in this slice: no McpImageContent on the wire.
     expect(anyMcpImageContent(viewBytes)).toBe(false);
+    // Image bytes must never be serialized into text. Scan the whole encoded frame.
+    const base64Payload = imageUrl.slice(imageUrl.indexOf(",") + 1);
+    expect(new TextDecoder().decode(viewBytes)).not.toContain(base64Payload);
+    expect(new TextDecoder().decode(viewBytes)).not.toContain("data:image/png;base64,");
   });
 });

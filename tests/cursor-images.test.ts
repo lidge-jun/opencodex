@@ -59,8 +59,12 @@ describe("Cursor image resolver", () => {
 
   test("omits data URLs above the inbound decode bomb ceiling", async () => {
     const oversized = "A".repeat(Math.ceil((MAX_CURSOR_IMAGE_DECODE_BYTES + 1) * 4 / 3));
+    const padded = oversized + "=".repeat((4 - (oversized.length % 4)) % 4);
+    const url = `data:image/png;base64,${padded}`;
+    // Pin the guard itself: the resolver soft-omits every failure reason identically.
+    expect(() => decodeCursorImageDataUrl(url)).toThrow("Image input is too large to process safely.");
     // Soft-omit: one bad URL must not abort a mixed turn.
-    const resolved = await resolveCursorImages([`data:image/png;base64,${oversized}`]);
+    const resolved = await resolveCursorImages([url]);
     expect(resolved).toEqual([]);
   });
 
@@ -202,6 +206,13 @@ describe("Cursor image resolver", () => {
       0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x02, 0x03, 0x01, 0x11, 0x00, // SOF0 2x3
     ]);
     expect(sniffCursorImageDimensions(jpegWithRst)).toEqual({ width: 2, height: 3 });
+
+    // Extended-sequential SOF1 (0xC1) shares the same dimension layout as SOF0.
+    const jpegSof1 = Uint8Array.from([
+      0xff, 0xd8,
+      0xff, 0xc1, 0x00, 0x0b, 0x08, 0x00, 0x03, 0x00, 0x02, 0x03, 0x01, 0x11, 0x00,
+    ]);
+    expect(sniffCursorImageDimensions(jpegSof1)).toEqual({ width: 2, height: 3 });
 
     const [selected] = buildSelectedImages([{
       data: png,

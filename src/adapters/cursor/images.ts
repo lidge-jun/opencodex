@@ -65,6 +65,9 @@ export const MAX_CURSOR_IMAGES = 12;
 export const CURSOR_VISION_IMAGE_OMITTED =
   "[image omitted: undecodable or unsupported type]";
 
+/** Short text-only stand-in for an image part on replayed (historical) turns. Never includes bytes. */
+export const CURSOR_VISION_IMAGE_HISTORY_MARKER = "[image attached]";
+
 export class CursorImageError extends Error {
   readonly status: number;
 
@@ -330,8 +333,8 @@ export async function prepareCursorImageForWire(
 
   try {
     throwIfImagePhaseAborted(signal);
-    // Force a full decode before accepting passthrough / encode (Anthropic-style validate).
-    await new Bun.Image(image.data).resize(1, 1).jpeg({ quality: 1 }).toBuffer();
+    // metadata() decodes; reuse it as the Anthropic-style validate pass.
+    const meta = await new Bun.Image(image.data).metadata();
 
     // Passthrough only when declared MIME matches actual JPEG magic (never PNG-as-JPEG).
     if (declaredJpeg && format === "jpeg" && image.data.byteLength <= softMax) {
@@ -339,7 +342,6 @@ export async function prepareCursorImageForWire(
     }
 
     throwIfImagePhaseAborted(signal);
-    const meta = await new Bun.Image(image.data).metadata();
     const width = typeof meta.width === "number" ? meta.width : 0;
     const height = typeof meta.height === "number" ? meta.height : 0;
     if (width > 0 && height > 0) {
@@ -486,7 +488,8 @@ export function sniffCursorImageDimensions(
         continue;
       }
       const length = (data[offset + 2]! << 8) | data[offset + 3]!;
-      if (marker === 0xc0 || marker === 0xc2) {
+      // SOFn frame headers share the dimension layout. 0xc4/0xc8/0xcc are DHT/JPG/DAC, not SOF.
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
         const height = (data[offset + 5]! << 8) | data[offset + 6]!;
         const width = (data[offset + 7]! << 8) | data[offset + 8]!;
         if (width > 0 && height > 0) return { width, height };
@@ -552,17 +555,10 @@ export async function resolveActiveCursorImages(
   signal?: AbortSignal,
 ): Promise<ResolvedCursorImage[]> {
   if (!messages?.length) return [];
-  // Tool-result continuations are out of scope in this slice: no trailing toolResult promotion.
-  if (messages.at(-1)?.role === "toolResult") return [];
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (!message) continue;
-    if (message.role === "user" || message.role === "developer") {
-      return resolveCursorImageParts(extractCursorImageParts(message.content), signal);
-    }
-  }
-  return [];
+  // Same window the prepare pass rewrote; a divergent rule would attach unprepared bytes.
+  const message = messages[cursorVisionPrepareStartIndex(messages)];
+  if (!message || (message.role !== "user" && message.role !== "developer")) return [];
+  return resolveCursorImageParts(extractCursorImageParts(message.content), signal);
 }
 
 function imageDataUrlFromPrepared(image: ResolvedCursorImage): string {

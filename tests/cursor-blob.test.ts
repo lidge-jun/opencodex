@@ -241,7 +241,7 @@ describe("Cursor blob handshake", () => {
     expect(roots.some(root => root.selectedContext !== undefined)).toBe(false);
 
     const historicalUser = nativeTurnUserMessages(bytes)[0];
-    expect(historicalUser?.text).toBe("old turn");
+    expect(historicalUser?.text).toBe("old turn\n[image attached]");
     expect(historicalUser?.mode).toBe(1);
     expect(historicalUser?.selectedContext).toBeDefined();
     expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
@@ -251,6 +251,32 @@ describe("Cursor blob handshake", () => {
     const images = activeSelectedImages(bytes);
     expect(images?.length).toBe(1);
     expect(images?.[0]?.uuid).toBe("active-img");
+  });
+
+  test("historical image-only turns replay a short text marker, not empty text", () => {
+    const bytes = encodeCursorRunRequest({
+      modelId: "composer-2.5",
+      conversationId: "c1",
+      system: [],
+      messages: [{ role: "user", content: "follow-up" }],
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "image", imageUrl: "data:image/png;base64,abc", detail: "auto" }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          model: "cursor/composer-2.5",
+          content: [{ type: "text", text: "ack" }],
+          timestamp: 2,
+        },
+        { role: "user", content: "follow-up", timestamp: 3 },
+      ],
+    });
+    const historicalUser = nativeTurnUserMessages(bytes)[0];
+    expect(historicalUser?.text).toBe("[image attached]");
+    expect(historicalUser?.selectedContext?.selectedImages.length).toBe(0);
   });
 
   test("encodeCursorRunRequest uses userMessageAction for image-only turns with selectedImages", () => {

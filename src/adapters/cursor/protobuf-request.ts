@@ -15,7 +15,7 @@ import {
   storeCursorBlob,
   type CursorBlobRequestScopeToken,
 } from "./native-exec";
-import { buildSelectedContext } from "./images";
+import { buildSelectedContext, CURSOR_VISION_IMAGE_HISTORY_MARKER } from "./images";
 import { estimateTokens } from "../../lib/token-estimate";
 import { parseDataUrl } from "../image";
 import {
@@ -347,6 +347,20 @@ function contentToText(content: OcxToolResultMessage["content"]): string {
   if (typeof content === "string") return content;
   return content
     .map(part => part.type === "text" ? part.text : `[image produced by this tool, omitted from Cursor text replay: ${part.detail ?? "auto"}]`)
+    .join("\n");
+}
+
+/** History serializer. Replayed turns are text-only; never embed image bytes. */
+function historyContentText(message: OcxMessage): string {
+  if (message.role === "toolResult" || typeof message.content === "string") return contentText(message);
+  return message.content
+    .map(part => {
+      if (part.type === "text") return part.text;
+      if (part.type === "thinking") return part.thinking;
+      if (part.type === "image") return CURSOR_VISION_IMAGE_HISTORY_MARKER;
+      return undefined;
+    })
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
     .join("\n");
 }
 
@@ -721,7 +735,7 @@ function conversationTurns(
     flush();
     current = {
       userMessage: storeCursorBlob(toBinary(UserMessageSchema, create(UserMessageSchema, {
-        text: contentText(message),
+        text: historyContentText(message),
         messageId: crypto.randomUUID(),
         selectedContext: buildSelectedContext([], requestScope),
         mode: 1,
