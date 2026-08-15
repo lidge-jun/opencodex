@@ -154,6 +154,65 @@ async function githubReleaseExists(tagName: string): Promise<boolean> {
   process.exit(1);
 }
 
+/** Order two semver strings per the semver.org rules (numeric identifiers numerically,
+ * numeric < alphanumeric prerelease, prerelease < release). Returns negative/0/positive. */
+export function compareReleaseVersions(left: string, right: string): number {
+  const parse = (value: string) => {
+    const [main, ...preParts] = value.split("-");
+    const nums = (main ?? "").split(".").map(part => Number(part));
+    return { nums, pre: preParts.length ? preParts.join("-").split(".") : null };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let i = 0; i < 3; i += 1) {
+    const delta = (a.nums[i] ?? 0) - (b.nums[i] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  if (a.pre === null && b.pre === null) return 0;
+  if (a.pre === null) return 1;
+  if (b.pre === null) return -1;
+  const len = Math.max(a.pre.length, b.pre.length);
+  for (let i = 0; i < len; i += 1) {
+    const x = a.pre[i];
+    const y = b.pre[i];
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    const xn = /^\d+$/.test(x) ? Number(x) : null;
+    const yn = /^\d+$/.test(y) ? Number(y) : null;
+    if (xn !== null && yn !== null && xn !== yn) return xn - yn;
+    if (xn !== null && yn === null) return -1;
+    if (xn === null && yn !== null) return 1;
+    if (xn === null && yn === null && x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** The proposed version must move its npm channel FORWARD: an unused-but-obsolete
+ * target (e.g. cut from a dev branch whose version line trails main) would otherwise
+ * pass the unused-version check and publish a regression over the channel tip. */
+async function assertChannelVersionMovesForward(packageName: string, version: string, channel: string): Promise<void> {
+  const result = await runQuiet(["npm", "view", packageName, "dist-tags", "--json"]);
+  if (result.exitCode !== 0) {
+    console.error(`✗ failed to read npm dist-tags for ${packageName}`);
+    if (result.stderr) console.error(result.stderr);
+    process.exit(1);
+  }
+  let distTags: Record<string, string>;
+  try {
+    distTags = JSON.parse(result.stdout) as Record<string, string>;
+  } catch {
+    console.error(`✗ npm dist-tags response for ${packageName} was not JSON`);
+    process.exit(1);
+  }
+  const current = distTags[channel];
+  if (!current) return; // channel not published yet — nothing to regress
+  if (compareReleaseVersions(version, current) <= 0) {
+    console.error(`✗ release version ${version} does not move the '${channel}' channel forward (current: ${current}).`);
+    console.error("Reconcile the version line first: dev's package.json may trail the latest release; pick a version strictly newer than the channel tip.");
+    process.exit(1);
+  }
+}
+
 async function assertUnusedReleaseVersion(packageName: string, version: string): Promise<void> {
   const releaseTag = `v${version}`;
   const [npmUsed, tagSha, releaseUsed] = await Promise.all([
@@ -298,6 +357,7 @@ if ((await capture(["git", "status", "--porcelain"])).trim()) { console.error("�
 const packageName = await readPackageName();
 console.log(`→ release metadata preflight (${packageName}@${version})`);
 await assertUnusedReleaseVersion(packageName, version);
+await assertChannelVersionMovesForward(packageName, version, tag);
 console.log("→ dependency audit");
 await runLoud(["bun", "run", "audit:high"]);
 console.log("→ typecheck");

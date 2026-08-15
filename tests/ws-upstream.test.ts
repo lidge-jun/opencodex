@@ -303,7 +303,8 @@ describe("handleResponses Codex WS relay selection", () => {
       }
     });
 
-    const response = await handleResponses(request(), forwardConfig(), { model: "", provider: "" }, {
+    const logCtx = { model: "", provider: "" };
+    const response = await handleResponses(request(), forwardConfig(), logCtx, {
       codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME,
     });
 
@@ -311,6 +312,7 @@ describe("handleResponses Codex WS relay selection", () => {
     const text = await response.text();
     expect(text).toContain("event: response.failed");
     expect(text).toContain("data: [DONE]");
+    expect(logCtx.activeAttempt?.streamAborted).toBe(true);
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 

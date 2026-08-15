@@ -117,6 +117,33 @@
 
 .pwi-settings-dirty { font-size: var(--text-caption); color: var(--amber); }
 
+.pwi-pacing-card {
+  display: flex; flex-direction: column; gap: 12px; padding: 14px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%);
+}
+.pwi-pacing-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.pwi-pacing-head h3, .pwi-pacing-card h4 { margin: 0; color: var(--text); font-size: var(--text-control); }
+.pwi-pacing-head p { margin: 4px 0 0; color: var(--muted); font-size: var(--text-caption); line-height: 1.45; }
+.pwi-pacing-toggle { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: var(--text-label); }
+.pwi-pacing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: end; }
+.pwi-pacing-grid--model { grid-template-columns: minmax(160px, 2fr) repeat(2, minmax(110px, 1fr)) auto; }
+.pwi-pacing-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pwi-pacing-status span { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-xs); color: var(--muted); font-size: var(--text-caption); }
+.pwi-pacing-status strong { display: block; overflow: hidden; color: var(--text); font-size: var(--text-label); text-overflow: ellipsis; white-space: nowrap; }
+.pwi-pacing-overrides { display: flex; flex-direction: column; gap: 6px; }
+.pwi-pacing-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 7px 8px; border-radius: var(--radius-xs); background: var(--bg); }
+.pwi-pacing-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pwi-pacing-row span { color: var(--muted); font-size: var(--text-caption); }
+
+@media (max-width: 760px) {
+  .pwi-pacing-head { flex-direction: column; }
+  .pwi-pacing-grid, .pwi-pacing-grid--model, .pwi-pacing-status { grid-template-columns: 1fr; }
+  .pwi-pacing-grid--model .btn { width: 100%; }
+  .pwi-pacing-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .pwi-pacing-row span { grid-column: 1 / -1; grid-row: 2; }
+}
+
 /* ── ProviderJsonEditor ────────────────────────────────────── */
 
 .pwi-json-panel { display: flex; flex-direction: column; gap: 8px; }

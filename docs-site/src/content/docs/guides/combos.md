@@ -211,6 +211,14 @@ default and leaves the target's own behavior unchanged. Supported values are `lo
 `high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
 the caller and target.
 
+## Image / multimodal capability
+
+By default a combo publishes the **intersection** of its targets' input modalities (image is
+enabled only when every target advertises it). Set `imageInput: "disabled"` to force text-only
+even when every target supports images — the catalog drops `image` from `inputModalities`, and
+image-bearing requests are rejected with HTTP 400 before any target is called. `"auto"` (or
+omitting the field) keeps the automatic intersection.
+
 ## Encrypted v2 sub-agent tasks
 
 There is one important limitation for Codex v2 sub-agents ([issue #92](https://github.com/lidge-jun/opencodex/issues/92)).
@@ -304,6 +312,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `strategy` | No | `"failover"` | `"failover"` or `"round-robin"`. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |
 | `displayName` | No | none | Bounded display-only catalog label. Required and non-empty when `nativeAlias` is true. |

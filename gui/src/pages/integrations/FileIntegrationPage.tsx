@@ -25,6 +25,7 @@ const SEMANTICS_KEY: Record<FileIntegrationClientId, TKey> = {
   kimi: "integrations.semantics.kimi",
   gajae: "integrations.semantics.gajae",
   dsh: "integrations.semantics.dsh",
+  mcode: "integrations.semantics.mcode",
 };
 
 const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
@@ -36,6 +37,7 @@ const TAB_LABEL_KEY: Record<FileIntegrationClientId, TKey> = {
   kimi: "integrations.tab.kimi",
   gajae: "integrations.tab.gajae",
   dsh: "integrations.tab.dsh",
+  mcode: "integrations.tab.mcode",
 };
 
 const KIND_KEY: Record<IntegrationJournalRow["kind"], TKey> = {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { hasStarPromptRun } from "../cli/star-prompt";
+import { selfLaunchArgv } from "../lib/self-launch-argv";
 import {
   type Channel,
   currentVersion,
@@ -166,9 +167,10 @@ function cacheIsStale(cache: VersionCache | null): boolean {
 export function triggerBackgroundRefreshIfStale(channel: Channel, cache: VersionCache | null): void {
   if (!cacheIsStale(cache)) return;
   try {
-    const entry = process.argv[1];
-    if (!entry || !existsSync(entry)) return;
-    const child = spawn(process.execPath, [entry, "__refresh-version", channel], {
+    const commandArgs = ["__refresh-version", channel];
+    const args = selfLaunchArgv(commandArgs);
+    if (args.length > commandArgs.length && (!args[0] || !existsSync(args[0]))) return;
+    const child = spawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,

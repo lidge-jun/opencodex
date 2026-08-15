@@ -38,6 +38,19 @@ state. `openai-apikey` uses its configured key and canonical API base URL. Missi
 within their route; neither route falls through to the other. See
 [`08_openai-provider-tiers.md`](08_openai-provider-tiers.md).
 
+### Routed service-tier capability
+
+OpenAI-compatible service-tier support is resolved only after the final provider/model wire is
+known. `supportsServiceTier` remains the provider fallback, while the exact
+`modelSupportsServiceTier` map can override it per upstream model, including an explicit `false`.
+The catalog and request path share this decision: a routed row publishes `service_tiers` only when
+the resolved adapter is capable, and the final-route normalizer applies the same gate to
+`service_tier`. `openai-responses` uses the resolved provider/model declaration directly;
+`openai-chat` accepts either its provider-wide `chatServiceTier` serializer opt-in or an exact-model
+`true` declaration. Exact `false` narrows provider defaults, and provider-level
+`supportsServiceTier: false` cannot be reopened. Capability is namespaced by the selected provider
+and model; model-name similarity and adapter type alone never opt a gateway in.
+
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.
@@ -318,6 +331,15 @@ closes the stream with `response.incomplete` / `upstream_stall_timeout` and canc
 request if no real adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset
 the watchdog.
 
+Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when a
+successful upstream completion contains neither output text nor a tool call. The default is off
+because the replay may be billable; `OCX_EMPTY_COMPLETION_RETRY=0` is a disable-only emergency
+override. Streaming and buffered HTTP adapters plus `runTurn` transports share the same guard,
+while combo attempts and routed compaction stay excluded. Pre-content reasoning is retained under
+named event-count and byte caps and emits liveness heartbeats while held. A second empty result or
+retry failure becomes typed 502 `empty_completion_retry_failed`; usage is merged across sends, and
+the Logs attempt records recovery kind `empty-completion`.
+
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's
@@ -372,6 +394,15 @@ once the server observes the client disconnect (Bun propagates it asynchronously
 1–10 s), the sleep is interrupted, the unread 429 body is released, and the request is
 cancelled with 499 before any replay; because the propagation is async, a replay may precede
 the cancel if the interval elapses first (bounded by the same `attempts` budget).
+
+Provider-level `requestPacing` is the proactive companion to `retryOn429`. It reserves outbound
+request-start slots before transport work begins, so a known RPM ceiling does not have to fail once
+before the proxy reacts. One provider-wide lane enforces the aggregate ceiling. Exact model lanes
+may add a slower interval without lowering the provider-wide interval or blocking an otherwise
+eligible sibling model. Queue wait is abort-aware and happens before the response-header timeout is
+armed. The shared fetch boundary covers HTTP and Responses WebSocket sends; explicit adapter
+`fetchResponse` and `runTurn` dispatches reserve the same lane at their call sites. Image-bridge
+iterations reserve before arming their per-attempt response-header deadline.
 
 [Decision Log]
 - 목적과 의도: Prevent Kiro progress from becoming a false final answer, reject invalid empty completion retries, and stop concurrent transient 429s from consuming independent retry budgets.
@@ -612,6 +643,29 @@ Spend arrives in `meteringEvent` as **credits, not tokens**. No captured respons
 `tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
 ignored because a credit is not a token count.
 
+## Chat Completions inbound native path
+
+`POST /v1/chat/completions` sends eligible `openai-chat` routes directly to the provider's Chat
+Completions endpoint. Route selection reads the raw Chat body and the native request keeps that body
+as its wire source; a Responses projection is constructed only after the native route is declined
+and is never converted back into Chat. Request construction remains owned by `src/adapters/openai-chat.ts`, including model
+normalization, credential and provider headers, capability-specific fields, and the canonical
+`openaiChatCompletionsUrl()` path. The passthrough builder uses an explicit Chat-field whitelist so
+messages (including `name` and separate `system`/`developer` entries), Chat token controls,
+sampling/logprob fields, caller identity/metadata, and caller stream options retain their wire
+shape. For streams, caller `stream_options` are merged with mandatory `include_usage: true`.
+`service_tier` remains gated by `chatServiceTier: true`; `parallel_tool_calls` is emitted only for
+providers opted into parallel tools (or pinned false by the existing provider opt-out contract).
+Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
+or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+
+The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
+one bounded event. EOF with an unterminated event and an event above the translator limit are typed
+upstream failures, never successful partial completions. Provider-controlled structured error
+messages are redacted before either JSON or SSE reaches the client. The native path uses the same
+request-attempt logging, reset retry, same-key 429 replay, key rotation, usage extraction, and
+request-signal cancellation contracts as routed Responses transport.
+
 ## Parallel tool calls (default-on for chat providers)
 
 The openai-chat adapter buffers ALL streamed `tool_calls` deltas (keyed by `index`, falling back to
@@ -660,6 +714,25 @@ family shared by unrelated upstreams.
 - 선택한 방식: Preserve default translation and omit it only for exact ids in `noStructuredOutputModels`.
 - 다른 대안 대신 이 방식을 선택한 이유: Global or heuristic rules regress supported providers and make custom gateway names part of the wire contract.
 - 장점, 단점 및 영향: Compatible siblings retain schema enforcement and explicitly incompatible models avoid the upstream 400; operators must classify each unsupported model they route.
+
+## MiniMax Anthropic-compatible clients
+
+The MiniMax platform CLI's text resource posts Anthropic Messages to
+`/anthropic/v1/messages`. `ocx mmx` adapts that hard-coded client path with a temporary
+loopback bridge instead of adding another server route. The bridge accepts only POSTs to the
+messages and count-tokens paths, rewrites them to the existing `/v1/messages` data plane,
+preserves the query and streaming body, strips all incoming credential headers, and pins the
+public loopback placeholder. It stops as soon as the MMX child exits, so the server's
+`AUTH_MATRIX` and authentication surface remain unchanged.
+
+`ocx mmx` exposes only the text resource because the other MMX resources use MiniMax-specific
+image, video, speech, music, vision, search, quota and file endpoints. The launcher isolates
+`~/.mmx` credentials behind a temporary config, removes ambient proxy variables so loopback
+traffic cannot be sent off-machine, owns the temporary bridge lifecycle, and refuses
+destination, region and credential overrides. It is
+loopback-only because MMX cannot carry the dedicated remote-admission header. MiniMax Code uses
+the separate reversible `custom_provider.opencodex` file integration and is likewise
+loopback-only; its generated block never changes `defaultModel`.
 
 ## Anthropic structured-output compatibility
 

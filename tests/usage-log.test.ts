@@ -113,6 +113,31 @@ describe("usage log", () => {
     expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["rate-limit-429"]);
   });
 
+  test("persists the empty-completion recovery kind on attempts", () => {
+    const entry: PersistedUsageEntry = {
+      requestId: "ocx-empty-completion-kind",
+      timestamp: 1,
+      provider: "fixture",
+      model: "fixture/model",
+      status: 200,
+      durationMs: 4,
+      usageStatus: "reported",
+      attempts: [{
+        ordinal: 1,
+        provider: "fixture",
+        model: "fixture/model",
+        adapter: "openai-chat",
+        status: 200,
+        durationMs: 4,
+        sendCount: 2,
+        recoveryKinds: ["empty-completion", "empty-completion"],
+        usageStatus: "reported",
+      }],
+    };
+    appendUsageEntry(entry);
+    expect(readUsageEntries()[0]?.attempts?.[0]?.recoveryKinds).toEqual(["empty-completion"]);
+  });
+
   /** Build one minimal persisted-usage JSONL line for the given request id. */
   const persistedLine = (requestId: string) => JSON.stringify({
     requestId,

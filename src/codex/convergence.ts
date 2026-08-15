@@ -225,6 +225,7 @@ function prepareCatalog(
   const enabled = filterCatalogVisibleModels(routedModels, config);
   const featured = config.subagentModels ?? [];
   const ordered = orderForSubagents(enabled, featured);
+  const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
     ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
@@ -255,6 +256,7 @@ function prepareCatalog(
     gptSlugs: [],
     goModels: ordered,
     featured,
+    modelPickerOrder,
     wsEnabled: websocketsEnabled(config),
     multiAgentMode,
     exactComboSlugs,

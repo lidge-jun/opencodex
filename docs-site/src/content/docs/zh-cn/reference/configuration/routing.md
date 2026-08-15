@@ -64,6 +64,7 @@ Codex Auth 页面将此 picker 行为作为选择加入项。关闭它会隐藏�
 | `strategy?` | `"failover" \| "round-robin"` | `"failover"` | 选择策略。目标顺序表示故障切换优先级；权重会影响平滑加权轮询。 |
 | `stickyLimit?` | `number` | `1` | 在单个轮询批次中保留的成功请求数。范围 1–100。 |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | 仅在调用方省略 effort 且所选目标声明了请求的档位时应用。 |
+| `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
 | `alias?` | `string` | — | 可选的公开 model id，用于替代规范化的选择器 slug。 |
 | `nativeAlias?` | `boolean` | `false` | 仅让当前受支持的裸原生 id 对该不带限定前缀的 id 优先；带账号或提供方限定的 OpenAI 路由仍是独立路由。 |
 | `displayName?` | `string` | — | 仅用于 catalog 展示的标签；native alias 必须提供非空值。 |

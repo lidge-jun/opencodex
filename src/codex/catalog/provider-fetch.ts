@@ -32,6 +32,11 @@ import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
 import { getModelMetadata, getModelMetadataCaseInsensitive, listModelMetadata, resolveMetadataProvider } from "../../generated/model-metadata";
 import { enrichProviderFromRegistry, shouldCaseFoldMetadataModelId } from "../../providers/derive";
+import {
+  captureServiceTierAdapterAuthority,
+  serviceTierSupportForModel,
+  type CapturedServiceTierAdapterAuthority,
+} from "../../providers/service-tier";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerMatchesRegistryTransport } from "../../providers/registry";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
@@ -150,6 +155,7 @@ interface CapturedProviderGather {
   readonly discovery: ResolvedProviderModelDiscovery;
   readonly policy: CatalogProviderDiscoveryPolicySnapshot;
   readonly request: CapturedModelsRequest;
+  readonly serviceTierAdapterAuthority: CapturedServiceTierAdapterAuthority;
   readonly observedAuth?: ModelsAuthResolution;
   /**
    * Configured model ids this provider must keep even when live discovery omits
@@ -401,6 +407,12 @@ function captureProviderGather(
 ): CapturedProviderGather {
   const enriched = detachedClone(withCanonicalOpenAiForwardAuthDefault(name, configured));
   enrichProviderFromRegistry(name, enriched);
+  const registryTransportMatch = providerMatchesRegistryTransport(name, enriched);
+  const serviceTierAdapterAuthority = captureServiceTierAdapterAuthority(
+    name,
+    enriched,
+    registryTransportMatch,
+  );
   const provider = recursivelyFreeze(enriched);
   const observedAuth = authResolver.kind === "observed"
     && provider.authMode !== "forward"
@@ -414,7 +426,6 @@ function captureProviderGather(
     maxResponseBytes: resolved.maxResponseBytes,
     maxModels: resolved.maxModels,
   });
-  const registryTransportMatch = providerMatchesRegistryTransport(name, provider);
   const trustedOpenAiApi = captureTrustedOpenAiApiPolicy(name, registryTransportMatch);
   const policy = detachedFrozen({
     provider: name,
@@ -438,6 +449,7 @@ function captureProviderGather(
     discovery,
     policy,
     request,
+    serviceTierAdapterAuthority,
     ...(observedAuth ? { observedAuth: Object.freeze({ ...observedAuth }) } : {}),
     ...(retainConfiguredModelIds && retainConfiguredModelIds.size > 0
       ? { retainConfiguredModelIds }
@@ -506,6 +518,7 @@ function captureGatherFlight(
         // It is the one member of a provider row that is legitimately a function,
         // so it is dropped here rather than allowed to break every encode.
         provider: omitProviderTransportExecutor(provider.provider),
+        serviceTierAdapterAuthority: provider.serviceTierAdapterAuthority,
         // Combo retention is capture-time state, not a provider-row field. Two
         // gathers that share providers but differ in combo targets must not join.
         retainConfiguredModelIds: [...(provider.retainConfiguredModelIds ?? [])].sort(),
@@ -561,6 +574,7 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     defRe: prov.modelDefaultReasoningEfforts ?? null,
     rsSum: prov.modelSupportsReasoningSummaries ?? null,
     rsDel: prov.modelReasoningSummaryDelivery ?? null,
+    serviceTier: prov.modelSupportsServiceTier ?? null,
     noVis: [...(prov.noVisionModels ?? [])].sort(),
     ptc: prov.parallelToolCalls ?? null,
     gMode: prov.googleMode ?? null,
@@ -632,8 +646,10 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
   const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
+  const supportsServiceTier = serviceTierSupportForModel(prov, model.id, name);
+  const { supportsServiceTier: _staleServiceTier, ...modelWithoutServiceTier } = model;
   const hinted = {
-    ...model,
+    ...modelWithoutServiceTier,
     ...(configuredCap !== undefined
       ? {
         contextWindow: typeof model.contextWindow === "number" && model.contextWindow > 0
@@ -652,6 +668,7 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
       : {}),
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
     ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+    ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     ...(prov.adapter === "kiro" ? { supportsVerbosity: false } : {}),
     // Default-on for openai-chat providers (explicit false opts out); other adapters
     // advertise only on explicit opt-in.
@@ -1740,6 +1757,7 @@ async function gatherRoutedModelsUncached(
   const replacedByRoutedSlug = new Map(all.map(model => [routedSlug(model.provider, model.id), model]));
   const customModels = (config.customModels ?? []).map(cm => {
     const rawProvider = config.providers[cm.provider];
+    const effectiveProvider = enrichedByName.get(cm.provider) ?? rawProvider;
     // Registry routing backfills an omitted authMode on the built-in OpenAI provider to
     // forward. Keep the catalog projection on the same contract while still failing closed
     // for every explicit non-forward mode and every non-canonical endpoint.
@@ -1762,6 +1780,9 @@ async function gatherRoutedModelsUncached(
       ? nativeDefaultReasoningEffort(cm.modelId)
       : undefined;
     const supportsReasoningSummaries = configuredReasoningSummarySupport(rawProvider, cm.modelId);
+    const supportsServiceTier = effectiveProvider
+      ? serviceTierSupportForModel(effectiveProvider, cm.modelId, cm.provider)
+      : undefined;
     const base: CatalogModel = {
       id: cm.modelId,
       provider: cm.provider,
@@ -1795,6 +1816,7 @@ async function gatherRoutedModelsUncached(
       // verbatim instead of being replaced by the replaced row's metadata.
       ...(Array.isArray(cm.reasoningEfforts) ? { reasoningEfforts: [...cm.reasoningEfforts] } : {}),
       ...(cm.defaultReasoningEffort ? { defaultReasoningEffort: cm.defaultReasoningEffort } : {}),
+      ...(typeof supportsServiceTier === "boolean" ? { supportsServiceTier } : {}),
     };
     // #962: the dedupe below drops the provider-derived row this custom row replaces. Inherit that
     // row's provider capability metadata (reasoning ladder, default effort, parallel tool calls,

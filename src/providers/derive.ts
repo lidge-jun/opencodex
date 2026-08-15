@@ -365,6 +365,17 @@ function applyReasoningSummaryDefaults(
   };
 }
 
+function applyServiceTierModelDefaults(
+  prov: OcxProviderConfig,
+  defaults: Readonly<Record<string, boolean>> | undefined,
+): void {
+  if (!defaults) return;
+  prov.modelSupportsServiceTier = {
+    ...defaults,
+    ...(prov.modelSupportsServiceTier ?? {}),
+  };
+}
+
 /**
  * Last-resort enrichment for a provider whose NAME matches no registry id.
  *
@@ -392,6 +403,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
     // which vendor endpoint is this row talking to — and is already restricted to fixed key
     // destinations, so a templated or overridable base URL cannot be claimed by it.
     enrichReasoningSummariesByDestination(prov);
+    applyServiceTierModelDefaults(prov, registryEntryForProviderDestination(prov)?.modelSupportsServiceTier);
     return;
   }
   const explicitDirectReasoning: DirectReasoningEffortOverrides = {
@@ -440,6 +452,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (prov.supportsServiceTier === undefined && entry.supportsServiceTier !== undefined) prov.supportsServiceTier = entry.supportsServiceTier;
   if (prov.preserveResponsesReasoningContent === undefined && entry.preserveResponsesReasoningContent !== undefined) prov.preserveResponsesReasoningContent = entry.preserveResponsesReasoningContent;
   applyReasoningSummaryDefaults(prov, entry.modelSupportsReasoningSummaries);
+  applyServiceTierModelDefaults(prov, entry.modelSupportsServiceTier);
   // Registry-only repair policy (#938): fill only when the runtime provider has
   // no explicit policy, and deep-clone so saved/user values never alias the
   // registry constant.

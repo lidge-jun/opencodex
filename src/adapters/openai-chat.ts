@@ -12,6 +12,7 @@ import { identifyRoutedModel } from "./identity";
 import { peekReasoningForCall } from "../responses/reasoning-replay-cache";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "./tool-catalog-nudge";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../providers/openrouter-routing";
+import { canSerializeServiceTierForChatModel } from "../providers/service-tier";
 import { openaiChatCompletionsUrl } from "./openai-chat-url";
 import {
   isTranslatorBudgetExceededError,
@@ -32,6 +33,122 @@ export function stripBracketedModelSuffix(modelId: string): string {
     if (modelId[i] === "[") suffixStart = i;
   }
   return suffixStart === -1 ? modelId : modelId.slice(0, suffixStart);
+}
+
+const CHAT_PASSTHROUGH_FIELDS = [
+  "audio",
+  "frequency_penalty",
+  "logit_bias",
+  "logprobs",
+  "max_completion_tokens",
+  "max_tokens",
+  "metadata",
+  "modalities",
+  "n",
+  "prediction",
+  "presence_penalty",
+  "reasoning_effort",
+  "response_format",
+  "seed",
+  "stop",
+  "store",
+  "temperature",
+  "tool_choice",
+  "tools",
+  "top_logprobs",
+  "top_p",
+  "user",
+  "web_search_options",
+] as const;
+
+function openAIChatTransport(provider: OcxProviderConfig): {
+  url: string;
+  headers: Record<string, string>;
+  hasCredential: boolean;
+} {
+  const hasCredential = typeof provider.apiKey === "string" && provider.apiKey.trim().length > 0;
+  if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
+    throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
+  }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
+  if (provider.headers) Object.assign(headers, provider.headers);
+  return { url: openaiChatCompletionsUrl(provider.baseUrl), headers, hasCredential };
+}
+
+/**
+ * Build a provider request from an inbound Chat Completions body without translating it
+ * through the Responses contract. This is deliberately a whitelist: Chat-only caller
+ * fields retain their exact wire representation, while provider capability gates remain
+ * centralized beside the ordinary openai-chat adapter.
+ */
+export function buildOpenAIChatPassthroughRequest(
+  provider: OcxProviderConfig,
+  rawBody: Record<string, unknown>,
+  modelId: string,
+  stream: boolean,
+): AdapterRequest {
+  const { url, headers, hasCredential } = openAIChatTransport(provider);
+
+  const body: Record<string, unknown> = {
+    model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(modelId) : modelId,
+    messages: rawBody.messages,
+    stream,
+  };
+  for (const field of CHAT_PASSTHROUGH_FIELDS) {
+    if (rawBody[field] !== undefined) body[field] = rawBody[field];
+  }
+
+  if (modelInList(provider.noTemperatureModels, modelId)) delete body.temperature;
+  if (modelInList(provider.noTopPModels, modelId)) delete body.top_p;
+  if (modelInList(provider.noPenaltyModels, modelId)) {
+    delete body.presence_penalty;
+    delete body.frequency_penalty;
+  }
+  if (modelInList(provider.noStructuredOutputModels, modelId)) delete body.response_format;
+
+  if (provider.chatServiceTier && rawBody.service_tier !== undefined) {
+    body.service_tier = rawBody.service_tier;
+  }
+  if (provider.promptCacheKey && rawBody.prompt_cache_key !== undefined) {
+    body.prompt_cache_key = rawBody.prompt_cache_key;
+  }
+  if (Array.isArray(rawBody.tools) && rawBody.tools.length > 0) {
+    if (provider.parallelToolCalls === true) {
+      body.parallel_tool_calls = rawBody.parallel_tool_calls !== false;
+    } else if (provider.parallelToolCalls === false
+        && (provider.baseUrl === "https://integrate.api.nvidia.com/v1" || provider.pinParallelToolCallsFalse === true)) {
+      body.parallel_tool_calls = false;
+    }
+  }
+  if (stream) {
+    const callerOptions = rawBody.stream_options !== null
+        && typeof rawBody.stream_options === "object"
+        && !Array.isArray(rawBody.stream_options)
+      ? rawBody.stream_options as Record<string, unknown>
+      : {};
+    body.stream_options = { ...callerOptions, include_usage: true };
+  } else if (rawBody.stream_options !== undefined) {
+    body.stream_options = rawBody.stream_options;
+  }
+
+  const bodyJson = JSON.stringify(body);
+
+  if (isDebugEnabled()) {
+    let host = "upstream";
+    try { host = new URL(url).host; } catch { /* keep fallback */ }
+    debugProviderDiagnostic("openai-chat", "passthrough-request", {
+      host,
+      model: body.model,
+      stream,
+      messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+      toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
+      hasCredential,
+      bodyBytes: new TextEncoder().encode(bodyJson).length,
+    });
+  }
+
+  return { url, method: "POST", headers, body: bodyJson };
 }
 
 // 260715 (issue #126): surface upstream error detail through the web-search sidecar loop.
@@ -1051,10 +1168,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
     formatErrorBody: formatOpenAIChatErrorBody,
 
     buildRequest(parsed: OcxParsedRequest) {
-      const hasCredential = typeof provider.apiKey === "string" && provider.apiKey.trim().length > 0;
-      if ((provider.authMode === "key" || provider.authMode === "oauth") && !provider.keyOptional && !hasCredential) {
-        throw new Error(`${provider.adapter} requires a non-empty credential (authMode: ${provider.authMode})`);
-      }
+      const { url, headers, hasCredential } = openAIChatTransport(provider);
 
       const messages = messagesToChatFormat(parsed, provider);
       const tools = toolsToChatFormatForProvider(parsed, provider);
@@ -1070,11 +1184,11 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // an explicit value here makes the Responses parser's serviceTier projection ineffective.
       //
       // Opt-in, like `prompt_cache_key` directly below: `service_tier` is an OpenAI-specific
-      // extension and 66 registry providers share this adapter, several of which reject
-      // unknown body fields. Forwarding unconditionally would turn a caller-supplied
-      // `service_tier` into an upstream 400 on those routes. `supportsServiceTier` is the
-      // Responses-wire flag (applyServiceTierGate) and deliberately does not gate this path.
-      if (provider.chatServiceTier && parsed.options.serviceTier !== undefined) {
+      // extension and 66 registry providers share this adapter. A provider-wide Chat opt-in
+      // authorizes undeclared models; an exact model declaration can authorize or deny one
+      // model. Provider-level false remains fail-closed.
+      if (canSerializeServiceTierForChatModel(provider, parsed.modelId)
+        && parsed.options.serviceTier !== undefined) {
         body.service_tier = parsed.options.serviceTier;
       }
       if (modelInList(provider.reasoningSplitModels, parsed.modelId)) body.reasoning_split = true;
@@ -1206,11 +1320,6 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
       }
       if (parsed.stream) body.stream_options = { include_usage: true };
-
-      const url = openaiChatCompletionsUrl(provider.baseUrl);
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (hasCredential) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-      if (provider.headers) Object.assign(headers, provider.headers);
 
       const bodyJson = JSON.stringify(body);
       if (isDebugEnabled()) {

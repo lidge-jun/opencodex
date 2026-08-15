@@ -16,6 +16,7 @@ import {
   comboIdFromRawBody,
   comboModelId,
   comboPublicModelId,
+  comboRequestHasImageInput,
   concreteComboRequestBody,
   coolComboTarget,
   getCombo,
@@ -212,6 +213,48 @@ describe("combo request cloning", () => {
     expect(comboIdFromRawBody({ model: "a/m1" }, config)).toBeNull();
     expect(comboIdFromRawBody({ model: 1 }, config)).toBeNull();
     expect(comboIdFromRawBody(null, config)).toBeNull();
+  });
+
+  test("comboRequestHasImageInput scans Responses input only, not tools or metadata", () => {
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,aGVsbG8=" }] }],
+    })).toBe(true);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ type: "input_image", image_url: "https://example.test/i.png" }],
+    })).toBe(true);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{
+        type: "function_call_output",
+        call_id: "call_1",
+        output: [{ type: "input_image", image_url: "https://example.test/tool.png" }],
+      }],
+    })).toBe(true);
+    // Tool schemas / metadata may legally mention the same type string without
+    // carrying image content for the model.
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: [{ role: "user", content: "text only" }],
+      tools: [{
+        type: "function",
+        name: "describe",
+        parameters: {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["input_image", "input_text"] },
+            example: { type: "input_image" },
+          },
+        },
+      }],
+      metadata: { note: { type: "input_image" } },
+    })).toBe(false);
+    expect(comboRequestHasImageInput({
+      model: "combo/free",
+      input: "plain text",
+      tools: [{ type: "function", function: { name: "x", parameters: { type: "input_image" } } }],
+    })).toBe(false);
   });
 
   test("clones the untouched body and injects an omitted combo default", () => {
@@ -589,6 +632,7 @@ describe("combo validation and normalization", () => {
       strategy: "failover",
       stickyLimit: 1,
       defaultEffort: "high",
+      imageInput: "auto",
       alias: null,
       nativeAlias: false,
       displayName: null,

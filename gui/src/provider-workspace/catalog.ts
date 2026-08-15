@@ -45,6 +45,12 @@ export interface WorkspaceProvider {
   disabled?: boolean;
   note?: string;
   allowPrivateNetwork?: boolean;
+  requestPacing?: {
+    enabled?: boolean;
+    requestsPerMinute?: number;
+    minIntervalMs?: number;
+    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number }>;
+  };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";
 }

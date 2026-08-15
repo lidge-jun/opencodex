@@ -91,6 +91,7 @@ test("an unrelated settings save does not materialize an omitted liveModels valu
 
   expect(patches).toHaveLength(1);
   expect(Object.hasOwn(patches[0]!, "liveModels")).toBe(false);
+  expect(Object.hasOwn(patches[0]!, "requestPacing")).toBe(false);
   await act(async () => { root.unmount(); });
 });
 

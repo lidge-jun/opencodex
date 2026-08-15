@@ -212,6 +212,54 @@ describe("terminal guard", () => {
     expect(actual.filter(event => event.type === "done")).toHaveLength(1);
   });
 
+  test("guards an openai-chat stream (opted-in provider) with one continuation", async () => {
+    let continuations = 0;
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => {
+        continuations += 1;
+        return (async function* () {
+          yield { type: "tool_call_start", id: "call_1", name: "exec_command" } as AdapterEvent;
+          yield { type: "tool_call_end" } as AdapterEvent;
+          yield { type: "done", usage: { inputTokens: 20, outputTokens: 3 } } as AdapterEvent;
+        })();
+      },
+      adapterName: "openai-chat",
+    })) actual.push(event);
+
+    expect(continuations).toBe(1);
+    expect(actual.some(event => event.type === "assistant_boundary")).toBe(true);
+    expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+  });
+
+  test("does not guard adapters other than anthropic/openai-chat", async () => {
+    let continuations = 0;
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => {
+        continuations += 1;
+        return (async function* () {
+          yield { type: "done" } as AdapterEvent;
+        })();
+      },
+      adapterName: "openai-responses",
+    })) actual.push(event);
+
+    expect(continuations).toBe(0);
+    expect(actual.some(event => event.type === "assistant_boundary")).toBe(false);
+    expect(actual.filter(event => event.type === "done")).toHaveLength(1);
+  });
+
   test("serializes the guarded boundary as separate assistant output items", () => {
     const response = buildResponseJSON([
       { type: "text_delta", text: "我接下来会修改。" },

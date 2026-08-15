@@ -129,9 +129,13 @@ export function deriveComboCatalogModel(
 ): CatalogModel | null {
   if (comboCatalogOmissionReason(combo, members) !== null) return null;
 
-  const inputModalities = intersectStrings(
+  const derivedInputModalities = intersectStrings(
     members.map(member => member.inputModalities ?? ["text"]),
   );
+  const inputModalities = combo.imageInput === "disabled"
+    ? derivedInputModalities.filter(modality => modality !== "image")
+    : derivedInputModalities;
+  if (inputModalities.length === 0) return null;
   // Unknown ladders (`undefined`) are wildcards for catalog derivation — same
   // boundary as the GUI picker. An explicit empty ladder still constrains.
   const advertisedLadders = members
@@ -173,6 +177,11 @@ export function deriveComboCatalogModel(
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
       : {}),
+    ...(members.every(member => member.supportsServiceTier === true)
+      ? { supportsServiceTier: true }
+      : members.some(member => member.supportsServiceTier === false)
+        ? { supportsServiceTier: false }
+        : {}),
     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
   };
 }

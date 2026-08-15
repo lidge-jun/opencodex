@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { RequestPacingQueueOverloadError } from "../src/providers/request-pacing";
 import type { OcxConfig } from "../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../src/routing/trace";
@@ -97,6 +98,21 @@ describe("policy candidate fallback", () => {
     expect(logCtx.attempts?.[0]).toMatchObject({ provider: "provider-a", model: "model-a", status: 429 });
     expect(logCtx.attempts?.[1]).toMatchObject({ provider: "provider-b", model: "model-b" });
     expect(logCtx.activeAttempt).toBe(logCtx.attempts?.[1]);
+  });
+
+  test("returns local pacing overload without switching policy candidates", async () => {
+    const trace = policyTrace();
+    const logCtx = { requestedModel: "policy/daily", routeDecision: trace, attempts: [] } as unknown as RequestLogContext;
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+      runCore: async () => {
+        calls += 1;
+        throw new RequestPacingQueueOverloadError("provider-a", "queue_full", 2);
+      },
+    });
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("2");
+    expect(calls).toBe(1);
   });
 
   test("does not switch candidates for terminal client/input failures", async () => {

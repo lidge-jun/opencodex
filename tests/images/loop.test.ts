@@ -209,6 +209,7 @@ describe("runWithImageBridge", () => {
 
   test("retryOn429 replays on the same key before on429 rotation", async () => {
     let sends = 0;
+    let pacingReservations = 0;
     let rotations = 0;
     let retrySends = 0;
     const retryingAdapter: ProviderAdapter = {
@@ -230,6 +231,7 @@ describe("runWithImageBridge", () => {
       adapter: retryingAdapter,
       plan,
       retryOn429Policy: { enabled: true, attempts: 2, intervalMs: 120, maxIntervalMs: 60_000, respectRetryAfter: false },
+      waitForRequestSlot: async () => { pacingReservations += 1; },
       on429: () => {
         rotations += 1;
         return null;
@@ -241,6 +243,7 @@ describe("runWithImageBridge", () => {
     const sse = await response.text();
     expect(sse).toContain("recovered");
     expect(sends).toBe(2);
+    expect(pacingReservations).toBe(2);
     expect(rotations).toBe(0);
     expect(retrySends).toBe(1);
     // Same-target replay reuses the ONE built request (builder runs once per target sequence).

@@ -67,6 +67,18 @@ import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, truste
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
+// Base for config.modelPickerOrder display priorities (#1649). modelPickerOrder is a DISPLAY-ONLY
+// reordering of the Codex model picker: it rewrites a row's Codex-visible `priority` but never the
+// spawn_agent candidate window. The window is derived from SPAWN_PRIORITY_FIELD (the natural
+// priority captured before the override), so display order and spawn candidates are decoupled.
+export const PICKER_ORDER_PRIORITY_BASE = 1_000;
+
+// OpenCodex-private catalog field: the spawn_agent candidate priority a row would have WITHOUT
+// modelPickerOrder. Codex ignores unknown catalog fields (same as opencodex_catalog_kind), so this
+// is invisible to Codex; effectiveSubagentRoster reads it so a display reorder cannot change which
+// rows are spawn_agent candidates. Absent on rows modelPickerOrder did not move.
+export const SPAWN_PRIORITY_FIELD = "opencodex_spawn_priority";
+
 export type SpawnAgentSurface = "v1" | "v2";
 
 export type SubagentRosterExclusionReason =
@@ -144,10 +156,17 @@ export function effectiveSubagentRoster(
     .filter(({ entry }) => entry.visibility === "list")
     .filter(({ entry }) => surface !== "v2" || isEligibleV2SubagentEntry(entry))
     .sort((left, right) => {
-      const leftPriority = typeof left.entry.priority === "number" && Number.isFinite(left.entry.priority)
-        ? left.entry.priority : Number.MAX_SAFE_INTEGER;
-      const rightPriority = typeof right.entry.priority === "number" && Number.isFinite(right.entry.priority)
-        ? right.entry.priority : Number.MAX_SAFE_INTEGER;
+      // Spawn candidates rank by the natural priority (SPAWN_PRIORITY_FIELD when present), so a
+      // modelPickerOrder display reorder (#1649) can never change candidate membership. Rows the
+      // override did not move fall back to their Codex-visible `priority`.
+      const spawnPriorityOf = (entry: RawEntry): number => {
+        const spawn = entry[SPAWN_PRIORITY_FIELD];
+        if (typeof spawn === "number" && Number.isFinite(spawn)) return spawn;
+        return typeof entry.priority === "number" && Number.isFinite(entry.priority)
+          ? entry.priority : Number.MAX_SAFE_INTEGER;
+      };
+      const leftPriority = spawnPriorityOf(left.entry);
+      const rightPriority = spawnPriorityOf(right.entry);
       return leftPriority - rightPriority || left.index - right.index;
     })
     .slice(0, MAX_SPAWN_AGENT_MODEL_OVERRIDES);
@@ -362,6 +381,8 @@ export interface ObservedCatalogEntryBuildInput {
   readonly gptSlugs: readonly string[];
   readonly goModels: readonly CatalogModel[];
   readonly featured?: readonly string[];
+  /** Optional full picker ordering (config.modelPickerOrder); orders non-featured rows. */
+  readonly modelPickerOrder?: readonly string[];
   readonly wsEnabled: boolean;
   readonly multiAgentMode: MultiAgentMode;
   readonly exactComboSlugs: ReadonlySet<string>;
@@ -416,6 +437,7 @@ export function buildCatalogEntriesFromObservedState({
   gptSlugs,
   goModels,
   featured,
+  modelPickerOrder,
   wsEnabled,
   multiAgentMode,
   exactComboSlugs,
@@ -433,6 +455,39 @@ export function buildCatalogEntriesFromObservedState({
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
   const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const priorityStride = Math.max(accountSelectors.length, 1);
+  // Optional full picker order (#1649). Independent of the 5-slot spawn_agent cap: it only
+  // rewrites the Codex-visible display `priority` of listed non-featured routed rows so a >5
+  // catalog stays put across rebuilds. Featured rows keep their existing 0..N-1 band; when
+  // modelPickerOrder is unset the helper is a no-op and every priority below is byte-identical to
+  // before. The spawn_agent candidate window is derived separately from SPAWN_PRIORITY_FIELD, so
+  // this display reorder cannot change which rows are spawn candidates.
+  const pickerOrder = Array.isArray(modelPickerOrder)
+    ? modelPickerOrder.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
+  const pickerOrderActive = pickerOrder.length > 0;
+  // The display band reuses the existing high priority tier (>= PICKER_ORDER_PRIORITY_BASE, the
+  // same 1_000+ neighborhood account rows occupy), keeping listed rows visually after the featured
+  // band. Candidate membership does not depend on this — see SPAWN_PRIORITY_FIELD.
+  /**
+   * Priority for a non-featured routed row that is explicitly LISTED in modelPickerOrder. Listed
+   * slugs sort in declared order within the high picker-order display tier
+   * (>= PICKER_ORDER_PRIORITY_BASE). This sets the Codex-visible `priority` only; the caller records
+   * the row's natural priority in SPAWN_PRIORITY_FIELD so the spawn_agent candidate window is
+   * unchanged. Returns undefined when the feature is off or the row is not listed, so those rows
+   * keep their original assignment (default 5 / account 1_000+) untouched.
+   *
+   * Scope: only the generic routed `<provider>/<model>` rows call this (see the goModels loop
+   * below). Native passthrough rows and account-qualified native rows keep their own priority
+   * logic and are intentionally not reordered here — this matches the documented contract on
+   * OcxConfig.modelPickerOrder (route native ordering through subagentModels instead).
+   */
+  const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
+    if (!pickerOrderActive) return undefined;
+    const hit = pickerOrderRank.get(slug) ?? (altSlug !== undefined ? pickerOrderRank.get(altSlug) : undefined);
+    if (hit === undefined) return undefined;
+    return PICKER_ORDER_PRIORITY_BASE + hit * priorityStride;
+  };
   const out: RawEntry[] = [];
   const nativeEntries: RawEntry[] = [];
   const collisionSkipped = resolveSlugAliasCollisions([...goModels]);
@@ -537,10 +592,23 @@ export function buildCatalogEntriesFromObservedState({
     }
     // Featured picks may be stored raw (legacy) or encoded — honor both.
     const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
+    // Natural priority: what the row would get WITHOUT modelPickerOrder. This is the value the
+    // spawn_agent candidate window is derived from (see effectiveSubagentRoster), so it must never
+    // move when modelPickerOrder reorders the picker.
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
     else if (accountSelectors.length > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
       e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
+    }
+    // #1649: modelPickerOrder is a DISPLAY-ONLY override. Record the natural priority spawn_agent
+    // must keep using, then let modelPickerOrder move only the Codex-visible `priority`. Featured
+    // rows are never overridden (their rank is authoritative for both display and spawn).
+    if (rankHit === undefined) {
+      const pickerPriority = pickerOrderPriority(slug, `${m.provider}/${m.id}`);
+      if (pickerPriority !== undefined) {
+        e[SPAWN_PRIORITY_FIELD] = typeof e.priority === "number" ? e.priority : 5;
+        e.priority = pickerPriority;
+      }
     }
     out.push(e);
   }
@@ -1324,6 +1392,7 @@ function writeRetainedCatalogSync({
   const enabledGo = filterCatalogVisibleModels(goModels, config);
   const featured = config.subagentModels ?? [];
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
+  const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
@@ -1355,6 +1424,7 @@ function writeRetainedCatalogSync({
     gptSlugs: [],
     goModels: orderedGoModels,
     featured,
+    modelPickerOrder,
     wsEnabled,
     multiAgentMode,
     exactComboSlugs,
