@@ -1,5 +1,7 @@
+import { readBoundedResponseBody } from "../lib/bounded-body";
+
 export class CodexWarmupError extends Error {
-  code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "invalid_sse" | "no_terminal" | "transport";
+  code: "http_status" | "missing_body" | "stream_failed" | "stream_incomplete" | "stream_error" | "stream_too_large" | "invalid_sse" | "no_terminal" | "transport";
   status?: number;
   /** Upstream error detail extracted from the response body (truncated to 512 chars). */
   upstreamDetail?: string;
@@ -30,12 +32,18 @@ const DEFAULT_MODEL = "gpt-5.4-mini";
 const FALLBACK_MODELS = ["gpt-5.5"];
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_ERROR_BODY_BYTES = 2048;
+const MAX_WARMUP_STREAM_BYTES = 1024 * 1024;
 
 /** Read the first MAX_ERROR_BODY_BYTES of a response body and extract an error message. */
-async function readErrorDetail(res: Response): Promise<string | undefined> {
+async function readErrorDetail(res: Response, signal: AbortSignal): Promise<string | undefined> {
   try {
-    const text = await res.text();
-    const trimmed = text.slice(0, MAX_ERROR_BODY_BYTES);
+    const body = await readBoundedResponseBody(res, {
+      signal,
+      maxBytes: MAX_ERROR_BODY_BYTES,
+      fatalUtf8: true,
+    });
+    if (!body.displaySafe) return undefined;
+    const trimmed = body.text;
     try {
       const json = JSON.parse(trimmed) as Record<string, unknown>;
       // ChatGPT backend error shape: { error: { message: "..." } } or { detail: "..." }
@@ -93,11 +101,16 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let bytesRead = 0;
 
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value.byteLength > MAX_WARMUP_STREAM_BYTES - bytesRead) {
+        throw new CodexWarmupError("stream_too_large", "Codex warmup stream exceeded the size limit");
+      }
+      bytesRead += value.byteLength;
       buffer += decoder.decode(value, { stream: true });
 
       for (;;) {
@@ -131,8 +144,10 @@ async function drainWarmupSse(body: ReadableStream<Uint8Array>): Promise<void> {
 }
 
 async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<void> {
+  let signal: AbortSignal;
   let res: Response;
   try {
+    signal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     res = await fetch(CODEX_RESPONSES_URL, {
       method: "POST",
       headers: {
@@ -147,25 +162,30 @@ async function tryWarmup(options: CodexWarmupOptions, model: string): Promise<vo
         stream: true,
         store: false,
       }),
-      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      signal,
     });
   } catch (err) {
     throw new CodexWarmupError("transport", "Codex warmup request failed", { cause: err });
   }
 
   if (!res.ok) {
-    const upstreamDetail = await readErrorDetail(res);
+    const upstreamDetail = await readErrorDetail(res, signal);
     throw new CodexWarmupError("http_status", "Codex warmup was rejected", {
       status: res.status,
       upstreamDetail,
     });
   }
-  if (!res.body) throw new CodexWarmupError("missing_body");
+  const body = res.body;
+  if (!body) throw new CodexWarmupError("missing_body");
 
   try {
-    await drainWarmupSse(res.body);
+    await drainWarmupSse(body);
   } finally {
-    await res.body?.cancel().catch(() => {});
+    try {
+      void body.cancel().catch(() => {});
+    } catch {
+      // Some custom stream implementations throw synchronously from cancel().
+    }
   }
 }
 

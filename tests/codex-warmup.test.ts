@@ -60,6 +60,41 @@ describe("codex warmup", () => {
       .rejects.toMatchObject({ name: "CodexWarmupError", code: "invalid_sse" });
   });
 
+  test("rejects an oversized unterminated SSE stream without waiting for cancellation", async () => {
+    let cancelled = false;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const chunk = new Uint8Array(256 * 1024).fill(65);
+        for (let index = 0; index < 5; index += 1) controller.enqueue(chunk);
+        closeTimer = setTimeout(() => controller.close(), 50);
+      },
+      cancel() {
+        cancelled = true;
+        if (closeTimer !== undefined) clearTimeout(closeTimer);
+        return new Promise<void>(() => {});
+      },
+    });
+    globalThis.fetch = (async () => new Response(oversizedBody, { status: 200 })) as typeof fetch;
+
+    await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c" }))
+      .rejects.toMatchObject({ name: "CodexWarmupError", code: "stream_too_large" });
+    expect(cancelled).toBe(true);
+  });
+
+  test("accepts a completed SSE stream at the exact byte limit", async () => {
+    const encoder = new TextEncoder();
+    const terminal = 'data: {"type":"response.completed"}\n\n';
+    const terminalBytes = encoder.encode(terminal).byteLength;
+    const fillerBytes = 1024 * 1024 - terminalBytes;
+    const filler = `:${"x".repeat(fillerBytes - 3)}\n\n`;
+    const stream = `${filler}${terminal}`;
+    expect(encoder.encode(stream).byteLength).toBe(1024 * 1024);
+    globalThis.fetch = (async () => sseResponse(stream)) as typeof fetch;
+
+    await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c" })).resolves.toBeUndefined();
+  });
+
   test("rejects EOF before success terminal", async () => {
     globalThis.fetch = (async () => sseResponse('event: response.created\ndata: {"type":"response.created"}\n\n')) as typeof fetch;
     await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c" }))
@@ -79,5 +114,10 @@ describe("codex warmup", () => {
       expect((err as Error).message).not.toContain("sensitive-account-id");
       expect((err as Error).message).not.toContain("revoked");
     }
+  });
+
+  test("classifies invalid timeout options as transport failures", async () => {
+    await expect(warmCodexAccount({ accessToken: "a", chatgptAccountId: "c", timeoutMs: -1 }))
+      .rejects.toMatchObject({ name: "CodexWarmupError", code: "transport" });
   });
 });

@@ -64,6 +64,40 @@ describe("codex warmup improvements", () => {
     }
   });
 
+  test("warmCodexAccount discards oversized error details and cancels without waiting", async () => {
+    const encoder = new TextEncoder();
+    const detail = JSON.stringify({ detail: "must not surface" });
+    const firstChunk = encoder.encode(`${detail}${" ".repeat(1024 - detail.length)}`);
+    const paddingChunk = encoder.encode(" ".repeat(1024));
+    let cancelled = false;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const errorBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(firstChunk);
+        controller.enqueue(paddingChunk);
+        controller.enqueue(paddingChunk);
+        closeTimer = setTimeout(() => controller.close(), 50);
+      },
+      cancel() {
+        cancelled = true;
+        if (closeTimer !== undefined) clearTimeout(closeTimer);
+        return new Promise<void>(() => {});
+      },
+    });
+    globalThis.fetch = mock(async () => new Response(errorBody, { status: 401 })) as unknown as typeof fetch;
+
+    try {
+      await warmCodexAccount({ accessToken: "access-test", chatgptAccountId: "acct-test" });
+      throw new Error("expected warmup to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CodexWarmupError);
+      expect((err as CodexWarmupError).code).toBe("http_status");
+      expect((err as CodexWarmupError).upstreamDetail).toBeUndefined();
+      expect(codexWarmupFailureReason(err)).toBe("http_status:401");
+    }
+    expect(cancelled).toBe(true);
+  });
+
   test("warmCodexAccount retries FALLBACK_MODELS when the default model returns 400", async () => {
     const parsedBodies: Record<string, unknown>[] = [];
     const fetchMock = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
