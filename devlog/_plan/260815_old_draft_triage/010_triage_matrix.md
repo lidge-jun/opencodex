@@ -1,21 +1,18 @@
 # 010 - Old-draft triage matrix (wp1 deliverable)
  
-Evidence: 4 sol/medium subagents, 2026-08-15, against origin/dev 420db6274. All 18 are drafts.
+Evidence: 4 sol/medium subagents + A-audit (GO-WITH-FIXES, 2 blockers folded), 2026-08-15, against origin/dev 420db6274. All 18 are drafts.
  
-## CLOSE (2)
+A-audit amendment: both CLOSE calls were revised to KEEP-DRAFT. #1498 is NOT superseded (current policy routing lacks allowance snapshots, reservations, settlement, pre-dispatch quota/cost evidence; assemble.ts passes neither codexAccountId nor accountRef). #1367's failure class is NOT covered (terminal repair is a narrower registry-controlled case; no custom-provider escape hatch exists on dev). Closing would discard real requirements with no preservation mechanism in scope.
  
-| PR | Reason |
-|----|--------|
-| #1498 feat(combos) economy routing | Superseded by quota/cost policy routing (src/routing/evaluator.ts) + #1702; 31 unresolved threads with P1 accounting defects; 755 commits behind |
-| #1367 feat(responses) bounded JSON fallback | Targets a retired seam (registry-only compat + terminal-repair architecture on dev); 10 unresolved blockers; 936 commits behind |
- 
-## KEEP-DRAFT (6)
+## KEEP-DRAFT (8)
  
 | PR | Gaps |
 |----|------|
+| #1498 economy combo routing | Defective as written (31 unresolved threads, conflicts, 755 behind) but its allowance/reservation/settlement semantics remain unimplemented; preserve until a scoped runtime follow-up exists |
+| #1367 bounded JSON fallback | Redesign around current registry-only compat + terminal-repair architecture; 10 unresolved blockers |
 | #1552 Command Code OAuth pool | 2565-line auth-boundary change; needs maintainer security sponsorship, real GUI screenshot, rebase |
 | #1703 claude classifier affinity | Real defect but implementation can silently cross provider privacy/billing boundaries; maintainer design hold |
-| #1645 vision chat/Google sidecars | 5 verified blockers incl. OAuth-over-HTTP loopback and missing image-boundary checks |
+| #1645 vision chat/Google sidecars | 5 verified blockers incl. OAuth-over-HTTP loopback (describe-chat.ts:25) and missing image-boundary checks |
 | #1557 least-privilege catalog endpoint | Response not projected through closed allowlist DTO; not fail-closed; unsponsored auth-cors surface |
 | #1526 reset-credit operation identity | Real idempotency gap but 5748-line auth/persistence authority; needs split or exceptional security review |
 | #1624 quota recovery policy contract | Sound but dormant no-op contract; land only with the #657 runtime slice |
@@ -24,7 +21,7 @@ Evidence: 4 sol/medium subagents, 2026-08-15, against origin/dev 420db6274. All 
  
 | PR | Repair scope |
 |----|--------------|
-| #1664 MiniMax Code/CLI | Replace detached-startup argv construction with compiled-aware launcher (src/cli/minimax.ts:261); rebase (124 behind); full gates |
+| #1664 MiniMax Code/CLI | Shared compiled-aware argv builder (Bun.isStandaloneExecutable) replacing spawn(execPath,[argv[1]]) - repo-wide launcher debt (index.ts/opencode.ts/claude.ts), not MiniMax-only; rebase (124 behind); full gates |
 | #1669 modelPickerOrder | Fail-soft string-array normalization + malformed-input regression + docs contradiction fix |
 | #1660 terminal guard openai-chat | Resolve src/types.ts conflict; add explicit-false + combo/routed-compaction exclusion tests; provider-option docs |
 | #1652 streamAborted | Cover WS finalize + relay-eager paths; fix trackSseForRequestLog cancellation race; drop unrelated fixture churn |
