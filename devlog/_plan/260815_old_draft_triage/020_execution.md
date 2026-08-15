@@ -52,5 +52,21 @@ Repairs:
  
 ## Execution log
  
-(pending)
+- KEEP-DRAFT comments posted (8): #1498 #1367 #1552 #1557 #1526 #1624 #1645 #1703.
+- Light six: repaired by sol/medium workers in /tmp/ocx-repair-*, independent repair
+  review (1 blocker folded: 2 missed launcher sites -> fixed 2f276ebe, re-verified),
+  integrated into int/260815-old-drafts, lidge gates green, landed via #1744
+  (dev merge 656376fc6); 6 source PRs closed with attribution comments.
+- Post-land regression: dev CI red on GUI gates (mcode inventory assertions, zh-TW
+  allowlist) - fixed via #1749 (84dc86610), dev CI green (cc8e5a30).
+- Heavy four: rebuilt by sol/medium workers off int/260815-old-drafts; spec audit
+  (4 blockers) folded into packets mid-flight; repair review (5 blockers) folded and
+  re-verified PASS x4. Integrated into int/260815-heavy in audit order
+  (#1521 -> #1584 -> #1569 -> #1655); 3 conflicts resolved (import union;
+  pacing slot moved inside runTurnAttempt so retries consume pacing slots).
+  Lidge suite caught a #1521 regression (post-flight registry read emptied
+  discovered models); fixed in-session via WeakMap capture (9a8f7351f).
+  Final tree 2799fba20: lidge suite 12330 pass / 0 fail. LANDING HELD pending
+  owner scope decision; status comments posted on #1521 #1584 #1569 #1655.
+- Release hardening: #1753 channel-forward version guard landed (a147da455).
  
