@@ -1219,7 +1219,7 @@ export const fr: Record<TKey, string> = {
   "pws.openrouter.loaded": "{count} endpoints de fournisseurs chargés.",
   "pws.openrouter.notReturned": "Absent de la dernière découverte",
   "pws.openrouter.saved": "Routage des fournisseurs du modèle enregistré.",
-  "pws.openrouter.cache": "Cache",
+  "pws.openrouter.cache": "Mise en cache",
   "pws.pacingAdd": "Ajouter un remplacement",
   "pws.pacingRemove": "Supprimer",
   "pws.pacingRemoveModel": "Supprimer le remplacement du cadencement des requêtes pour {model}",

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { IconArrowDown, IconArrowUp } from "../../icons";
 import { useT } from "../../i18n/shared";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
@@ -26,9 +26,11 @@ export default function OpenRouterModelRouting({
   const [selected, setSelected] = useState<string[]>(savedTags);
   const [allowFallbacks, setAllowFallbacks] = useState(saved?.allowFallbacks ?? true);
   const [endpoints, setEndpoints] = useState<Endpoint[]>([]);
+  const [discoveryComplete, setDiscoveryComplete] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const discoveryGeneration = useRef(0);
   const modelOptions = useMemo(() => [...new Set([
     ...configuredModels,
     ...(item.defaultModel ? [item.defaultModel] : []),
@@ -36,22 +38,29 @@ export default function OpenRouterModelRouting({
   ])], [availableModels, configuredModels, item.defaultModel]);
 
   const selectModel = (nextModel: string) => {
+    discoveryGeneration.current += 1;
     setModel(nextModel);
     const route = item.modelOpenRouterRouting?.[nextModel];
     setMode(route?.only ? "only" : route?.order ? "order" : "inherit");
     setSelected(route?.only ?? route?.order ?? []);
     setAllowFallbacks(route?.allowFallbacks ?? true);
     setEndpoints([]);
+    setDiscoveryComplete(false);
+    setLoading(false);
     setMessage(null);
   };
 
   const load = async (refresh = false) => {
-    if (!model.trim() || loading) return;
+    const requestedModel = model.trim();
+    if (!requestedModel || loading) return;
+    const generation = ++discoveryGeneration.current;
     setLoading(true);
+    setDiscoveryComplete(false);
     setMessage(null);
     try {
-      const response = await fetch(`${apiBase}/api/openrouter/model-providers?provider=${encodeURIComponent(item.name)}&model=${encodeURIComponent(model.trim())}${refresh ? "&refresh=1" : ""}`);
+      const response = await fetch(`${apiBase}/api/openrouter/model-providers?provider=${encodeURIComponent(item.name)}&model=${encodeURIComponent(requestedModel)}${refresh ? "&refresh=1" : ""}`);
       const data = await response.json().catch(() => ({})) as Discovery;
+      if (generation !== discoveryGeneration.current) return;
       if (!response.ok) {
         const text = data.code === "openrouter_management_key_required"
           ? t("pws.openrouter.managementKeyRequired")
@@ -61,12 +70,15 @@ export default function OpenRouterModelRouting({
         throw new Error(text);
       }
       setEndpoints(Array.isArray(data.endpoints) ? data.endpoints : []);
+      setDiscoveryComplete(true);
       setMessage({ ok: true, text: t("pws.openrouter.loaded", { count: data.endpoints?.length ?? 0 }) });
     } catch (error) {
+      if (generation !== discoveryGeneration.current) return;
       setEndpoints([]);
+      setDiscoveryComplete(false);
       setMessage({ ok: false, text: error instanceof Error ? error.message : t("pws.openrouter.loadFailed") });
     } finally {
-      setLoading(false);
+      if (generation === discoveryGeneration.current) setLoading(false);
     }
   };
 
@@ -139,9 +151,9 @@ export default function OpenRouterModelRouting({
       {mode !== "inherit" && selected.length > 0 && (
         <ol className="pwi-openrouter-selected">
           {selected.map((tag, index) => (
-            <li key={tag} className={knownTags.has(tag) ? "" : "pwi-openrouter-missing"}>
+            <li key={tag} className={discoveryComplete && !knownTags.has(tag) ? "pwi-openrouter-missing" : ""}>
               <code>{tag}</code>
-              {!knownTags.has(tag) && <span>{t("pws.openrouter.notReturned")}</span>}
+              {discoveryComplete && !knownTags.has(tag) && <span>{t("pws.openrouter.notReturned")}</span>}
               <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, -1)} disabled={index === 0} aria-label={t("sub.moveUp", { m: tag })}><IconArrowUp /></button>
               <button type="button" className="btn btn-ghost btn-icon btn-sm" onClick={() => move(index, 1)} disabled={index === selected.length - 1} aria-label={t("sub.moveDown", { m: tag })}><IconArrowDown /></button>
             </li>
