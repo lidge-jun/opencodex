@@ -2,7 +2,11 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { validateIssue } = require("./issue-quality.cjs");
+const {
+  validateIssue,
+  stripOrderedListPrefixes,
+  independentReproductionText,
+} = require("./issue-quality.cjs");
 
 function bugBody({ summary, reproduction }) {
   return [
@@ -77,6 +81,38 @@ describe("issue #1672 regression", () => {
       result.reasons.some((reason) => /reproduction.*repeat|echo/i.test(reason)),
       `Expected ordered summary-echo rejection, got: ${result.reasons.join("; ")}`,
     );
+  });
+
+  it("rejects identical multi-line ordered lists in Summary and Reproduction", () => {
+    const genericFailure =
+      "Codex sync did not complete. Fix the reported Codex config issue and retry.";
+    const repeated = ["1. Run `ocx sync`.", `2. ${genericFailure}`].join("\n");
+    const body = bugBody({
+      summary: repeated,
+      reproduction: repeated,
+    });
+
+    const result = validateIssue({
+      title: genericFailure,
+      body,
+      labels: ["bug"],
+    });
+
+    assert.equal(result.kind, "bug");
+    assert.equal(result.valid, false);
+    assert.ok(
+      result.reasons.some((reason) => /reproduction.*repeat|echo/i.test(reason)),
+      `Expected identical ordered summary-echo rejection, got: ${result.reasons.join("; ")}`,
+    );
+  });
+
+  it("preserves numeric failure evidence inside fenced and indented code blocks", () => {
+    const fenced = ["```text", "404. Not Found", "```"].join("\n");
+    const indented = "    404. Not Found";
+
+    assert.equal(stripOrderedListPrefixes(fenced), fenced);
+    assert.equal(stripOrderedListPrefixes(indented), indented);
+    assert.match(independentReproductionText("Not Found", fenced), /404\. Not Found/);
   });
 
   it("keeps the same failure text valid when Reproduction adds an actionable command", () => {
