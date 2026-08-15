@@ -32,6 +32,16 @@ function provider(authMode: "oauth" | "key"): OcxProviderConfig {
   };
 }
 
+function cliProvider(): OcxProviderConfig {
+  return {
+    adapter: "openai-chat",
+    baseUrl: XAI_GROK_CLI_BASE_URL,
+    authMode: "oauth",
+    apiKey: "oauth-token",
+    defaultModel: "grok-4.5",
+  };
+}
+
 function parsed(): OcxParsedRequest {
   return {
     modelId: "grok-4.5",
@@ -97,7 +107,7 @@ describe("xAI auth-mode transport selection", () => {
     });
   });
 
-  test("flattens nested root tool unions for xAI while other providers get a root object type", () => {
+  test("flattens nested root tool unions for the Grok CLI proxy while other providers keep a root object type", () => {
     const schema = {
       oneOf: [
         { type: "object", properties: { mode: { type: "string", enum: ["view"] } } },
@@ -105,7 +115,7 @@ describe("xAI auth-mode transport selection", () => {
       ],
       $defs: { shared: { type: "string" } },
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
@@ -119,6 +129,12 @@ describe("xAI auth-mode transport selection", () => {
       path: { type: "string" },
     });
     expect(xaiParameters.$defs).toEqual(schema.$defs);
+
+    const apiRequest = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
+    });
+    expect((JSON.parse(apiRequest.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
 
     const otherRequest = createOpenAIChatAdapter({ ...provider("key"), baseUrl: "https://example.test/v1" }).buildRequest({
       ...parsed(),
@@ -137,7 +153,7 @@ describe("xAI auth-mode transport selection", () => {
         { properties: { mode: { const: "url" } } },
       ],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
@@ -163,11 +179,31 @@ describe("xAI auth-mode transport selection", () => {
         { properties: { mode: { const: "url" }, url: { type: "string" } }, required: ["mode", "url"] },
       ],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
     expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("omits equal-required CLI unions whose property types are correlated", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { kind: { const: "email" }, value: { type: "string" } }, required: ["kind", "value"] },
+        { type: "object", properties: { kind: { const: "sms" }, value: { type: "number" } }, required: ["kind", "value"] },
+      ],
+    };
+    const cli = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "contact", description: "Contact", parameters: schema }] },
+    });
+    expect(JSON.parse(cli.body).tools).toBeUndefined();
+
+    const api = createOpenAIChatAdapter(provider("key")).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "contact", description: "Contact", parameters: schema }] },
+    });
+    expect((JSON.parse(api.body) as { tools: Array<{ function: { parameters: unknown } }> }).tools[0].function.parameters).toEqual({ ...schema, type: "object" });
   });
 
   test("resolves local $ref variants before flattening an xAI union", () => {
@@ -178,7 +214,7 @@ describe("xAI auth-mode transport selection", () => {
       },
       oneOf: [{ $ref: "#/$defs/path" }, { $ref: "#/$defs/url" }],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "automation_update", description: "Update", parameters: schema }] },
     });
@@ -201,26 +237,41 @@ describe("xAI auth-mode transport selection", () => {
       },
       oneOf: [{ $ref: "#/$defs/named" }, { type: "object", properties: { id: { type: "number" } } }],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "lookup", description: "Lookup", parameters: schema }] },
     });
     expect(JSON.parse(request.body).tools).toBeUndefined();
   });
 
-  test("keeps additionalProperties: false only when every xAI variant is closed", () => {
+  test("omits a closed CLI union whose exclusive properties cannot be flattened", () => {
     const schema = {
       oneOf: [
         { type: "object", properties: { a: { type: "string" } }, additionalProperties: false },
         { type: "object", properties: { b: { type: "string" } }, additionalProperties: false },
       ],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "closed", description: "Closed", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("keeps additionalProperties: false when every closed CLI variant shares the same properties", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { a: { const: "one" } }, additionalProperties: false },
+        { type: "object", properties: { a: { const: "two" } }, additionalProperties: false },
+      ],
+    };
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "closed", description: "Closed", parameters: schema }] },
     });
     const xaiParameters = (JSON.parse(request.body) as { tools: Array<{ function: { parameters: Record<string, unknown> } }> }).tools[0].function.parameters;
     expect(xaiParameters.additionalProperties).toBe(false);
+    expect(xaiParameters.properties).toEqual({ a: { anyOf: [{ const: "one" }, { const: "two" }] } });
   });
 
   test("omits an xAI union that would tighten additionalProperties", () => {
@@ -230,9 +281,23 @@ describe("xAI auth-mode transport selection", () => {
         { type: "object", properties: { b: { type: "string" } }, additionalProperties: false },
       ],
     };
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "mixed", description: "Mixed", parameters: schema }] },
+    });
+    expect(JSON.parse(request.body).tools).toBeUndefined();
+  });
+
+  test("omits a CLI union that would drop branch-level minProperties", () => {
+    const schema = {
+      oneOf: [
+        { type: "object", properties: { a: { type: "string" } }, minProperties: 1 },
+        { type: "object", properties: { a: { type: "string" } } },
+      ],
+    };
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
+      ...parsed(),
+      context: { messages: [], tools: [{ name: "min", description: "Min", parameters: schema }] },
     });
     expect(JSON.parse(request.body).tools).toBeUndefined();
   });
@@ -253,7 +318,7 @@ describe("xAI auth-mode transport selection", () => {
   });
 
   test("omits an xAI tool whose root schema cannot be normalized safely", () => {
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest({
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest({
       ...parsed(),
       context: { messages: [], tools: [{ name: "unsafe", description: "Unsafe", parameters: { oneOf: [{ type: "string" }] } }] },
     });
@@ -279,7 +344,7 @@ describe("xAI auth-mode transport selection", () => {
         { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
       ],
     });
-    const request = createOpenAIChatAdapter(provider("key")).buildRequest(parsedRequest);
+    const request = createOpenAIChatAdapter(cliProvider()).buildRequest(parsedRequest);
     const body = JSON.parse(request.body) as { tools: Array<{ function: { name: string; parameters: Record<string, unknown> } }> };
     const tool = body.tools.find(entry => entry.function.name === "automation_update");
 

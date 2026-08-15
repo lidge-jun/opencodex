@@ -658,11 +658,11 @@ function shouldSanitizeZenToolParameters(provider: OcxProviderConfig): boolean {
     || baseUrl === "https://opencode.ai/zen/go/v1";
 }
 
-const XAI_SCHEMA_BASE_URLS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
-
 function isXaiSchemaTarget(provider: OcxProviderConfig): boolean {
   try {
-    return XAI_SCHEMA_BASE_URLS.has(new URL(provider.baseUrl).hostname);
+    // Public api.x.ai accepts native root object unions. Only the Grok CLI proxy
+    // 400s on a root oneOf/anyOf, so flattening/omitting is scoped to that host.
+    return new URL(provider.baseUrl).hostname === "cli-chat-proxy.grok.com";
   } catch {
     return false;
   }
@@ -706,20 +706,18 @@ function stringRequiredFields(value: unknown): string[] {
     : [];
 }
 
-const XAI_UNSAFE_VARIANT_KEYS = [
-  "$ref",
-  "oneOf",
-  "anyOf",
-  "allOf",
-  "if",
-  "then",
-  "else",
-  "not",
-  "dependentRequired",
-  "dependentSchemas",
-  "patternProperties",
-  "unevaluatedProperties",
-] as const;
+/** Variant keys the merger can keep. Anything else is refused, not silently dropped. */
+const XAI_VARIANT_MERGE_KEYS = new Set([
+  "type",
+  "properties",
+  "required",
+  "additionalProperties",
+  "description",
+  "title",
+  "$comment",
+  "$defs",
+  "definitions",
+]);
 
 function decodeJsonPointerToken(token: string): string {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
@@ -791,7 +789,37 @@ function resolveXaiSchemaRefs(
 
 function xaiVariantIsConcreteObject(variant: Record<string, unknown>): boolean {
   if (variant.type !== undefined && variant.type !== "object") return false;
-  return XAI_UNSAFE_VARIANT_KEYS.every(key => !(key in variant));
+  return Object.keys(variant).every(key => XAI_VARIANT_MERGE_KEYS.has(key));
+}
+
+function variantProperties(variant: Record<string, unknown>): Record<string, unknown> {
+  return isXaiObjectSchema(variant.properties) ? variant.properties : {};
+}
+
+/**
+ * Independent per-property anyOf is lossless only when at most one property schema
+ * differs. Two or more divergent properties can be correlated (kind+value, etc.).
+ * A property present on only some closed (`additionalProperties: false`) variants
+ * cannot be added to the others without widening the accepted set.
+ */
+function xaiPropertyMergeIsLossless(
+  variants: Record<string, unknown>[],
+  additionalProperties: { ok: true; value?: unknown },
+): boolean {
+  const closed = additionalProperties.value === false;
+  const names = new Set<string>();
+  const props = variants.map(variant => {
+    const properties = variantProperties(variant);
+    for (const name of Object.keys(properties)) names.add(name);
+    return properties;
+  });
+  let schemaConflicts = 0;
+  for (const name of names) {
+    const values = props.map(property => property[name]).filter(value => value !== undefined);
+    if (values.length !== variants.length && closed) return false;
+    if (values.some(value => JSON.stringify(value) !== JSON.stringify(values[0]))) schemaConflicts += 1;
+  }
+  return schemaConflicts <= 1;
 }
 
 function xaiRequiredSetsMatch(variants: Record<string, unknown>[]): boolean {
@@ -882,10 +910,11 @@ function mergeXaiPropertySchemas(values: unknown[]): unknown {
 }
 
 /**
- * xAI rejects a function parameter schema whose root remains oneOf/anyOf, even when every branch
- * is an object. Flatten only when the merge is lossless: local $refs resolve, every variant is a
- * concrete object, required sets match, and additionalProperties does not change meaning.
- * Otherwise omit the tool rather than emit a weaker schema.
+ * The Grok CLI proxy rejects a function parameter schema whose root remains oneOf/anyOf.
+ * Flatten only when the merge is lossless: local $refs resolve, every variant is a concrete
+ * object whose keys we can preserve, required sets match, additionalProperties does not change
+ * meaning, and at most one property schema differs (so per-property anyOf cannot hide
+ * correlations). Otherwise omit the tool rather than emit a weaker schema.
  */
 function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown> | undefined {
   if (!isXaiObjectSchema(parameters)) return undefined;
@@ -899,6 +928,7 @@ function normalizeXaiToolParameters(parameters: unknown): Record<string, unknown
   if (!variants.every(xaiVariantIsConcreteObject) || !xaiRequiredSetsMatch(variants)) return undefined;
   const additionalProperties = mergeXaiAdditionalProperties(variants);
   if (!additionalProperties.ok) return undefined;
+  if (!xaiPropertyMergeIsLossless(variants, additionalProperties)) return undefined;
 
   const metadata = Object.fromEntries(Object.entries(resolved).filter(([key]) => key !== "oneOf" && key !== "anyOf" && key !== "type"));
   delete metadata.properties;
