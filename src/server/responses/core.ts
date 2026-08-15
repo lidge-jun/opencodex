@@ -1579,6 +1579,13 @@ async function handleResponsesInner(
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  // Generic Responses clients (e.g. AI-SDK apps) omit `store`, but the Codex
+  // backend rejects a native request without an explicit store:false. Default it
+  // the same way the chat-completions inbound does; never override an explicit value.
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const rawBody = body as Record<string, unknown>;
+    if (rawBody.store === undefined) rawBody.store = false;
+  }
   const comboId = !options.comboAttempt ? comboIdFromRawBody(body, config) : null;
   if (comboId && Object.hasOwn(config.combos ?? {}, comboId)) {
     options.onRequestBodyRead?.();
