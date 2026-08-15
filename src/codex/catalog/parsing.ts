@@ -455,11 +455,25 @@ export function catalogModelSupportsReasoningSummaries(modelId: string): boolean
   return values.size === 1 ? values.values().next().value : undefined;
 }
 
-export function applyCatalogMetadata(entry: RawEntry, provider: string, modelId: string, contextCap?: number): void {
+/**
+ * Resolve the generated jawcode metadata row for a provider/model pair.
+ *
+ * Exported because it is the SECOND source of real capability assertions:
+ * `applyCatalogMetadata` writes context/modalities from it without ever
+ * touching a `CatalogModel`, so the routing-evidence provenance stamp in
+ * `applyCatalogModelMetadata` has to consult the same table. Both callers share
+ * this one lookup rather than duplicating the resolve/case-fold rules, which is
+ * what keeps the serialized entry and its provenance from drifting apart.
+ */
+export function generatedModelMetadata(provider: string, modelId: string) {
   const jawcodeProvider = resolveMetadataProvider(provider);
-  if (!jawcodeProvider) return;
-  const meta = getModelMetadata(jawcodeProvider, modelId)
+  if (!jawcodeProvider) return undefined;
+  return getModelMetadata(jawcodeProvider, modelId)
     ?? (shouldCaseFoldMetadataModelId(provider) ? getModelMetadataCaseInsensitive(jawcodeProvider, modelId) : undefined);
+}
+
+export function applyCatalogMetadata(entry: RawEntry, provider: string, modelId: string, contextCap?: number): void {
+  const meta = generatedModelMetadata(provider, modelId);
   if (!meta) return;
   if (typeof meta.contextWindow === "number" && meta.contextWindow > 0) {
     const contextWindow = applyProviderContextCap(meta.contextWindow, contextCap) ?? meta.contextWindow;

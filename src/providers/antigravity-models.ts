@@ -331,7 +331,17 @@ export function parseAntigravityAvailableModels(
     out.push({
       id,
       ...(antigravityPositiveInteger(info.maxTokens) ? { contextWindow: antigravityPositiveInteger(info.maxTokens) } : {}),
-      inputModalities: info.supportsImages === true ? ["text", "image"] : ["text"],
+      // Tri-state, deliberately not a ternary: `true` asserts image support,
+      // `false` asserts against it, and ABSENT is unknown. Collapsing absent into
+      // `["text"]` let routing read it as a confident `image: false` (#1796). The
+      // strict catalog still receives its `["text"]` compatibility default
+      // downstream via ensureStrictCatalogFields; only the routing-evidence
+      // channel stays honest about what was never asserted.
+      ...(info.supportsImages === true
+        ? { inputModalities: ["text", "image"] as string[] }
+        : info.supportsImages === false
+          ? { inputModalities: ["text"] as string[] }
+          : {}),
     });
   }
   return out;
