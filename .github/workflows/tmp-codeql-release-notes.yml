@@ -29,18 +29,16 @@ jobs:
 
           path = Path("scripts/release-notes.ts")
           text = path.read_text(encoding="utf-8")
-          old = '''  const withoutComment = body
-            .replace(/\\r\\n/g, "\\n")
-            .split("\\n")
-            .filter(line => !/^<!--.*-->$/.test(line.trim()))
-            .filter(line => !/^\\*\\*Full Changelog\\*\\*:/.test(line))
-            .join("\\n");'''
-          new = '''  const withoutComment = body
-            .replace(/\\r\\n/g, "\\n")
-            .replace(/<!--[\\s\\S]*?(?:-->|$)/g, "")
-            .split("\\n")
-            .filter(line => !/^\\*\\*Full Changelog\\*\\*:/.test(line))
-            .join("\\n");'''
+          old = (
+              r'    .replace(/\r\n/g, "\n")' + "\n"
+              + r'    .split("\n")' + "\n"
+              + r'    .filter(line => !/^<!--.*-->$/.test(line.trim()))'
+          )
+          new = (
+              r'    .replace(/\r\n/g, "\n")' + "\n"
+              + r'    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")' + "\n"
+              + r'    .split("\n")'
+          )
           actual = text.count(old)
           if actual != 1:
               raise SystemExit(f"expected one release-note comment block, found {actual}")
