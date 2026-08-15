@@ -7,8 +7,10 @@
   GUI_TESTS_OK (855 pass / 0 fail, 147 files), root suite 12259 pass /
   11 skip / 0 fail (12270 tests, 781 files [457.69s]), docs-site build OK
   (323 pages).
-- Final tip 14196b208 (includes #1753): root suite + typecheck + privacy
-  re-run (see below).
+- Final tip 14196b208 (includes #1753): TSC_OK, PRIVACY_OK, root suite
+  12339 pass / 11 skip / 0 fail (12350 tests, 785 files [462.03s]).
+  First run showed the known 7-failure react-resolution artifact when the
+  gui install step is skipped; rerun with gui deps installed is clean.
 - dev CI: Cross-platform CI green on cc8e5a30 (run 31872155114).
  
 ## Anomaly found and hardened
