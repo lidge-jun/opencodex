@@ -136,6 +136,95 @@ test("ignores endpoint discovery that finishes after the selected model changes"
   expect(host.textContent).not.toContain("alpha/provider");
 });
 
+test("ignores a stale discovery body that finishes parsing after the selected model changes", async () => {
+  const body = deferred<{ endpoints: Array<{ tag: string; providerName: string }> }>();
+  globalThis.fetch = (async () => ({
+    ok: true,
+    json: () => body.promise,
+  }) as Response) as typeof fetch;
+
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "author/alpha" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/alpha", "author/beta"]}
+    /></LanguageProvider>);
+  });
+
+  const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { load.click(); await flush(); });
+  const model = host.querySelector<HTMLInputElement>('input[list^="openrouter-models-"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(model, "author/beta");
+    model.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await act(async () => {
+    body.resolve({ endpoints: [{ tag: "alpha/provider", providerName: "Alpha" }] });
+    await flush();
+  });
+
+  expect(host.textContent).not.toContain("alpha/provider");
+});
+
+test("does not show an old model save result after the selected model changes", async () => {
+  const update = deferred<{ ok: boolean }>();
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "author/alpha" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/alpha", "author/beta"]}
+      onUpdateProvider={async () => update.promise}
+    /></LanguageProvider>);
+  });
+
+  const save = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Save")!;
+  await act(async () => { save.click(); await flush(); });
+  const model = host.querySelector<HTMLInputElement>('input[list^="openrouter-models-"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(model, "author/beta");
+    model.dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+  });
+  await act(async () => { update.resolve({ ok: true }); await flush(); });
+
+  expect(host.textContent).not.toContain("Saved");
+  expect(save.disabled).toBe(false);
+});
+
+test("offers a cache-bypassing refresh after an empty successful discovery", async () => {
+  const requests: string[] = [];
+  globalThis.fetch = (async input => {
+    requests.push(String(input));
+    return Response.json({ endpoints: [] });
+  }) as typeof fetch;
+  const host = document.createElement("div");
+  document.body.append(host);
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><OpenRouterModelRouting
+      item={{ name: "openrouter", adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", defaultModel: "author/model" } as WorkspaceItem}
+      apiBase="http://localhost:10100"
+      availableModels={["author/model"]}
+    /></LanguageProvider>);
+  });
+
+  const load = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Load providers"))!;
+  await act(async () => { load.click(); await flush(); });
+  const refresh = [...host.querySelectorAll("button")].find(button => button.textContent?.trim() === "Refresh")!;
+  expect(refresh).toBeDefined();
+  await act(async () => { refresh.click(); await flush(); });
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toContain("refresh=1");
+});
+
 test("labels a configured tag as absent only after successful discovery", async () => {
   globalThis.fetch = (async () => Response.json({ endpoints: [] })) as typeof fetch;
   const host = document.createElement("div");
