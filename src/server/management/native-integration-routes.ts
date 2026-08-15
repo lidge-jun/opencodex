@@ -18,11 +18,10 @@
  * 011 (Claude Code), 012 (Grok).
  */
 import { loadConfig, readRuntimePort, saveConfigPreservingClaudeCode } from "../../config";
-import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextWindow, visibleNativeSlugs } from "../../codex/catalog";
-import { providerContextCap } from "../../providers/context-cap";
-import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
+import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits } from "../../codex/catalog";
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
 import { injectGrokConfig, stripGrokConfig, type GrokInjectModel } from "../../grok/inject";
+import { grokInjectModelsFromCatalog } from "../../grok/models";
 import { inspectGrokConfig } from "../../grok/inspect";
 import { grokConfigPath } from "../../grok/status";
 import { assertNativeTeardownOwned } from "../../integrations/native/ownership-preflight";
@@ -503,19 +502,7 @@ async function handleGrokToggle(ctx: ManagementContext): Promise<Response> {
     const fetchModels = deps.fetchAllModels ?? defaultFetchAllModels;
     let models: GrokInjectModel[];
     try {
-      const routed = filterCatalogVisibleModels(await fetchModels(config), config);
-      models = [
-        // Native slugs carry their context window: without it Grok falls back
-        // to its own 200k default and understates a 372k model.
-        ...visibleNativeSlugs(config).map(id => {
-          const contextWindow = nativeOpenAiContextWindow(id, nativeContextLimits(config));
-          return { id, ...(contextWindow !== undefined ? { contextWindow } : {}) };
-        }),
-        ...routed.map(m => ({
-          id: m.alias ?? `${m.provider}/${m.id}`,
-          ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-        })),
-      ];
+      models = grokInjectModelsFromCatalog(config, await fetchModels(config));
     } catch (error) {
       // A catalog failure must never write an empty fence (syncGrokConfig
       // guards this; the route inherits the rule). Nothing was written.
