@@ -63,6 +63,8 @@ export interface ProbeRunner {
     stderr: string;
     timedOut: boolean;
     spawnFailed: boolean;
+    /** Structured spawn failure provenance; stderr is not a safe discriminator. */
+    spawnErrorCode?: string;
   };
 }
 
@@ -84,13 +86,16 @@ export const defaultProbeRunner: ProbeRunner = (file, args) => {
     windowsHide: true,
     timeout: SERVICE_PROBE_TIMEOUT_MS,
   });
+  const spawnErrorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
+  const timedOut = spawnErrorCode === "ETIMEDOUT" || result.signal !== null;
   return {
     status: result.status,
     stdout: String(result.stdout ?? ""),
     stderr: String(result.stderr ?? ""),
-    // `signal` is SIGTERM when the timeout fired; a spawn failure sets `error`.
-    timedOut: result.signal !== null && result.error === undefined,
-    spawnFailed: result.error !== undefined,
+    // Node-compatible spawnSync reports a timeout through both `error` and SIGTERM.
+    timedOut,
+    spawnFailed: result.error !== undefined && !timedOut,
+    spawnErrorCode,
   };
 };
 
@@ -251,6 +256,41 @@ function systemdProperty(out: string, key: string): string | null {
   return null;
 }
 
+function inspectSystemdDefinition(
+  definitionPath: string,
+  registration: "present" | "absent",
+): ServiceManagerInstallation {
+  const definition = artifactPresence(definitionPath);
+  if (definition === "absent") {
+    return registration === "absent"
+      ? { kind: "absent" }
+      : unknown("systemd knows this unit but its file is missing");
+  }
+  if (definition === "unreadable") {
+    return unknown("the systemd unit path exists but could not be inspected");
+  }
+
+  let body: string;
+  try {
+    body = readFileSync(definitionPath, "utf-8");
+  } catch {
+    return unknown("the systemd unit exists but could not be read");
+  }
+
+  return {
+    kind: "present",
+    claims: [{
+      backend: "systemd",
+      definitionPath,
+      homes: {
+        codexHome: unitEnvValue(body, "CODEX_HOME"),
+        opencodexHome: unitEnvValue(body, "OPENCODEX_HOME"),
+      },
+      registration,
+    }],
+  };
+}
+
 function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): ServiceManagerInstallation {
   const definitionPath = join(deps.home, ".config", "systemd", "user", `${TASK}.service`);
 
@@ -264,8 +304,17 @@ function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): Servic
     "--user", "show", TASK,
     "-p", "LoadState", "-p", "ActiveState", "-p", "FragmentPath", "-p", "NeedDaemonReload",
   ]);
-  if (shown.spawnFailed) return { kind: "absent" };
   if (shown.timedOut) return unknown("systemctl could not be asked: timed out");
+  if (shown.spawnFailed) {
+    if (shown.spawnErrorCode === "ENOENT") {
+      // systemd-less containers are usable only when no unit definition remains.
+      return inspectSystemdDefinition(definitionPath, "absent");
+    }
+    const errorCode = shown.spawnErrorCode && /^[A-Z0-9_]{1,32}$/.test(shown.spawnErrorCode)
+      ? shown.spawnErrorCode
+      : "unknown error";
+    return unknown(`systemctl could not be spawned (${errorCode})`);
+  }
   if (shown.status !== 0) {
     // A missing unit still exits ZERO and says not-found; a non-zero status means
     // the question never reached the bus.
@@ -285,32 +334,7 @@ function inspectSystemd(deps: Required<Pick<ProbeDeps, "run" | "home">>): Servic
 
   const registration: "present" | "absent" =
     loadState === "not-found" && activeState === "inactive" && !fragmentPath ? "absent" : "present";
-
-  if (artifactPresence(definitionPath) === "absent") {
-    return registration === "absent"
-      ? { kind: "absent" }
-      : unknown("systemd knows this unit but its file is missing");
-  }
-
-  let body: string;
-  try {
-    body = readFileSync(definitionPath, "utf-8");
-  } catch (error) {
-    return unknown(`the systemd unit exists but could not be read: ${String(error)}`);
-  }
-
-  return {
-    kind: "present",
-    claims: [{
-      backend: "systemd",
-      definitionPath,
-      homes: {
-        codexHome: unitEnvValue(body, "CODEX_HOME"),
-        opencodexHome: unitEnvValue(body, "OPENCODEX_HOME"),
-      },
-      registration,
-    }],
-  };
+  return inspectSystemdDefinition(definitionPath, registration);
 }
 
 /**
