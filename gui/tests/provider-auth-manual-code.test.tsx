@@ -99,4 +99,44 @@ test("masks pasted Command Code credentials and preserves rejection feedback", a
     await new Promise(resolve => setTimeout(resolve, 0));
   });
   expect(host.querySelector('[role="status"]')?.textContent).toContain("Code submitted — finishing login…");
+
+  // Ending the flow must clear the credential and its feedback even when the
+  // provider panel remains mounted for the next Add account attempt.
+  await act(async () => {
+    root!.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={item}
+          apiBase=""
+          busy={false}
+          loginHint={null}
+          authHandlers={{
+            onLogin: () => {}, onLogout: () => {}, onReauth: () => {}, onSwitchAccount: () => {}, onRemoveAccount: () => {},
+            onAddApiKey: async () => true, onSwitchApiKey: () => {}, onRemoveApiKey: () => {}, onEditAlias: () => {},
+            onSubmitManualCode: submit,
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  expect(host.querySelector('input[type="password"]')).toBeNull();
+  await act(async () => {
+    root!.render(
+      <LanguageProvider>
+        <ProviderAuthPanel
+          item={item}
+          apiBase=""
+          busy
+          loginHint={{ provider: "command-code", url: "https://example.test/login-2" }}
+          authHandlers={{
+            onLogin: () => {}, onLogout: () => {}, onReauth: () => {}, onSwitchAccount: () => {}, onRemoveAccount: () => {},
+            onAddApiKey: async () => true, onSwitchApiKey: () => {}, onRemoveApiKey: () => {}, onEditAlias: () => {},
+            onSubmitManualCode: submit,
+          }}
+        />
+      </LanguageProvider>,
+    );
+  });
+  expect((host.querySelector('input[type="password"]') as HTMLInputElement).value).toBe("");
+  expect(host.querySelector('[role="status"]')).toBeNull();
 });

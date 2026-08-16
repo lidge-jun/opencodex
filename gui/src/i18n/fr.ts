@@ -390,6 +390,8 @@ export const fr: Record<TKey, string> = {
   "prov.accountId": "ID",
   "prov.pasteRedirect": "Coller l’URL de redirection ou le code",
   "prov.pasteRedirectHint": "Si le navigateur affiche une erreur localhost, copiez l’URL complète depuis sa barre d’adresse et collez-la ici (ou collez le code d’autorisation).",
+  "prov.pasteCommandCodePlaceholder": "Coller la clé API Command Code ou l’URL de redirection",
+  "prov.pasteCommandCodeHint": "Collez une clé API Command Code (user_… depuis ~/.commandcode/auth.json) pour l’ajouter comme autre compte, ou l’URL de redirection du navigateur.",
   "prov.pasteSubmit": "Envoyer",
   "prov.pasteSubmitting": "Envoi…",
   "prov.pasteOk": "Code envoyé — finalisation de la connexion…",

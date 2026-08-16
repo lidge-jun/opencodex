@@ -198,6 +198,21 @@ export default function ProviderAuthPanel({
   const importFileRef = useRef<HTMLInputElement>(null);
   const deviceCodeCopy = useCopyFeedback<string>();
 
+  const resetManualCode = () => {
+    setManualCode("");
+    setManualCodeMsg("");
+    setManualCodeOk(true);
+  };
+
+  // Login hints are removed when a flow ends and change when a new flow starts.
+  // Do not retain credential-bearing input or feedback across either boundary.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect, react/react-compiler
+    setManualCode("");
+    setManualCodeMsg("");
+    setManualCodeOk(true);
+  }, [item.name, loginHint?.provider, loginHint?.url, loginHint?.deviceCode]);
+
   // Soft &quota=1 enrichment lands after the local account list. Reserve stacked
   // bar height briefly so bars don't shove rows when WHAM returns.
   //
@@ -471,7 +486,7 @@ export default function ProviderAuthPanel({
                     </div>
                   )}
                   {authHandlers.onCancelLogin && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { resetManualCode(); void authHandlers.onCancelLogin?.(item.name); }}>
                       {t("common.cancel")}
                     </button>
                   )}
