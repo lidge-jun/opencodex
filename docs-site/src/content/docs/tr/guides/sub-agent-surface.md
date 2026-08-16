@@ -36,7 +36,7 @@ alanını denetler:
 - **v1**, her modele `multi_agent_version = "v1"` damgalar.
 - **base**, yukarı akış sabitlemelerini geri yükler. Sabitlenmemiş girdiler
   yerel `multi_agent_v2` özellik bayrağını takip eder.
-- **v2**, her modele `multi_agent_version = "v2"` damgalar.
+- **v2**, her modele `multi_agent_version = "v2"` damgalar; ancak **ChatGPT'yi v1'de tut** etkinken bu kural dışıdır: ChatGPT yerel satırları `"v1"` kalır, yönlendirilen ve combo satırları `"v2"` kalır.
 
 opencodex bunu hem canlı `/v1/models` kataloğuna hem de diske senkronize edilen
 kataloğa son geçiş olarak uygular. Bir mod değişikliğinin yeni oluşturulan App,

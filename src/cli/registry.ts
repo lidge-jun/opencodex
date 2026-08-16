@@ -309,12 +309,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "v2",
-    usage: "ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>",
+    usage: "ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>>",
     summary: "Toggle the Codex multi_agent_v2 feature (multi-agent surface).",
     details: [
       "status                Show flag, multi-agent mode, and thread limit.",
       "on | off              Enable/disable multi_agent_v2 (catalog resyncs).",
       "mode <v1|default|v2>  Force all models to one surface, or respect upstream pins.",
+      "keep-native-v1 <on|off>  Under mode v2, keep ChatGPT-native models on v1.",
       "threads <n>           Set max_concurrent_threads_per_session (integer >= 1).",
       "Flips preserve the active thread limit while moving between v1/v2 modes.",
     ],

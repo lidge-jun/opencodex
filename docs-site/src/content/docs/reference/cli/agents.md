@@ -17,7 +17,7 @@ surface modes, delegation, effort, and fallback behavior fit together.
 ocx agent subagents set ark/model-a,openai/gpt-5.5
 ```
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
 Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent surface mode.
 
@@ -28,7 +28,8 @@ Manage the Codex `multi_agent_v2` feature flag and the three-state multi-agent s
 | `off` | Disable the `multi_agent_v2` feature and resync the catalog. |
 | `mode v1` | Force all models to v1, disable native v2, and preserve the active thread limit. |
 | `mode default` | Respect upstream model surface pins. |
-| `mode v2` | Force all models to v2, enable native v2, and preserve the active thread limit. |
+| `mode v2` | Force models to v2, enable native v2, and preserve the active thread limit. ChatGPT-native models are exempt while `keep-native-v1` is on. |
+| `keep-native-v1 on\|off` | Under `mode v2`, keep ChatGPT-native models on v1 instead of stamping them v2. |
 | `threads <n>` | Set the active v1/v2 thread limit to an integer of at least 1. |
 | `mode-hint <text>` | Set the Proactive delegation hint (Ultra mode) for every model and effort. |
 | `mode-hint --clear` | Remove the hint so the effort-derived policy (ultra = proactive) resumes. |
