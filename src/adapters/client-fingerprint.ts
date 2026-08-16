@@ -41,23 +41,33 @@ export function claudeCodeSessionId(token: string | undefined): string {
 }
 
 // ── Antigravity IDE ──
-/** Pinned fallback Antigravity IDE language-server version (matches the bundled LS 2.5.5). */
+// Decompiled Antigravity 2.5.5 arm64 (1.107.0, language_server_macos_arm 126MB Go1.26.5, __lrodata_gopcln 37MB):
+// - gosym NewTable 126300 funcs:
+//   IDE GetUserAgentName 0x1018e9a70 sz48, CLI 0x1018ec950 sz48, Hub 0x1018ef450 sz48 (identical bytes)
+//   0x1018e9a70: adrp x27,#0x107b91000; add #0x880 -> bss override (SetUserAgentNameOverride @ override_user_agent_name 0x254cd06)
+//            ldp x2,x3,[x27]; cmp x3,#0; mov x4,#0xb; csel x1,x3,x4,ne; adrp x3,#0x102472000; add #0xc7b; csel x0,x2,x3,ne; ret
+//   fallback va 0x102472c7b fileoff 0x2472c7b len 0xb (11) => "antigravity" (616e746967726176697479)
+//   raw "antigravity-ide" @0x24c59ab va 0x1024c59ab count2 doc "**IDE**: `antigravity-ide/`" ADRP page 0x1024c5000+0x9ab exact 0 hits
+//   "antigravity/ide" count0, "aidev_client" 1 (log cloudcode-paaidev_client), windows/amd64 0
+// - x-goog-api-client: raw count1 @0x24ea019 "generationConfig.x-goog-api-clientsystemInstruction" false positive,
+//   ADRP page 0x1024ea000 0 hits, google-api-nodejs-client 0, gl-node 0, Client-Metadata 0
+// - SetHTTPHeaders: IDE 0x1018e9ca0 16 ret, Standalone 0x1018ea350 16 ret, Stubby 0x1018f01d0 16 ret,
+//   CLI 0x1018ecfc0 704 1 ADRP X-Goog-User-Project @0x1018ed1b8, Hub 0x1018ef6d0 832 cloudcode-paaidev_client + X-Goog-User-Project,
+//   no UA/x-goog-api-client ADRP (capstone 69 hits for User-Agent page 0x1024d7000 are other strings)
+// 2.0.3 x64 private ("antigravity-ide" LEA RDX,[RIP-0x284fc90]->0x367b554, -override_user_agent @0x5ecbc37) is stale.
+/** Pinned fallback Antigravity IDE language-server version (metadata only, not UA). */
 export const ANTIGRAVITY_IDE_VERSION = "2.5.5";
-const ANTIGRAVITY_IDE_CLIENT_NAME = "aidev_client";
-const ANTIGRAVITY_IDE_PLATFORM = "windows/amd64";
-/** Secondary Google API client UA the Antigravity client library reports. */
+/** Deprecated: not sent on wire (decompiled 0 hits). Kept for compat. */
 export const ANTIGRAVITY_GOOG_API_CLIENT_UA = "google-api-nodejs-client/10.3.0";
 
 /**
- * The real Antigravity IDE User-Agent, e.g.
- * `antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)`.
- *
- * Must be the IDE client family, NOT `antigravity/cli/...`: the Cloud Code Assist backend gates
- * newer agent models (e.g. `gemini-3.7-flash`) by User-Agent and answers 404 NOT_FOUND to
- * CLI-shaped UAs even with a valid OAuth token. Only `antigravity/ide/<ver>` unlocks them.
- * A `GOOGLE_ANTIGRAVITY_USER_AGENT` override (set by the caller) takes precedence upstream.
+ * Real Antigravity IDE User-Agent: literal "antigravity" (11).
+ * Decompiled 2.5.5 fallback len 0xb; override via GOOGLE_ANTIGRAVITY_USER_AGENT / PI_AI_ANTIGRAVITY_USER_AGENT
+ * (flag override_user_agent_name @0x254cd06, SetUserAgentNameOverride sets bss 0x107b91880).
  */
-export function antigravityUserAgent(version = ANTIGRAVITY_IDE_VERSION): string {
-  const [osType, arch] = ANTIGRAVITY_IDE_PLATFORM.split("/");
-  return `antigravity/ide/${version} (${ANTIGRAVITY_IDE_CLIENT_NAME}; os_type=${osType}; arch=${arch})`;
+export function antigravityUserAgent(_version?: string): string {
+  const ov = process.env.GOOGLE_ANTIGRAVITY_USER_AGENT?.trim()
+    || process.env.PI_AI_ANTIGRAVITY_USER_AGENT?.trim();
+  if (ov) return ov;
+  return "antigravity";
 }

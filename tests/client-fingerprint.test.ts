@@ -19,14 +19,13 @@ function parsed(): OcxParsedRequest {
 }
 
 describe("client fingerprint — helpers", () => {
-  test("antigravity UA has the real IDE shape, never the literal giveaway", async () => {
-    const ua = antigravityUserAgent();
-    expect(ua).toBe(`antigravity/ide/${ANTIGRAVITY_IDE_VERSION} (aidev_client; os_type=windows; arch=amd64)`);
-    expect(ua).not.toBe("antigravity");
+  test("antigravity UA is the decompiled literal, env override wins", async () => {
+    // decompiled 2.5.5 arm64 GetUserAgentName 0x1018e9a70/0x1018ec950/0x1018ef450: fallback "antigravity" len 0xb (11), override bss 0x107b91880
+    expect(antigravityUserAgent()).toBe("antigravity");
   });
 
-  test("antigravity UA honors an explicit version override", async () => {
-    expect(antigravityUserAgent("9.9.9")).toBe("antigravity/ide/9.9.9 (aidev_client; os_type=windows; arch=amd64)");
+  test("antigravity UA ignores version arg, override is env only", async () => {
+    expect(antigravityUserAgent("9.9.9")).toBe("antigravity");
   });
 
   test("GOOGLE_ANTIGRAVITY_USER_AGENT env override wins over the default UA", async () => {
@@ -43,7 +42,8 @@ describe("client fingerprint — helpers", () => {
   });
 
   test("secondary google api client UA is pinned", async () => {
-    expect(ANTIGRAVITY_GOOG_API_CLIENT_UA).toMatch(/^google-api-nodejs-client\/[\d.]+$/);
+    // deprecated: 2.5.5 decompile shows x-goog-api-client not sent (0 ADRP, raw 0, Client-Metadata 0); keep const for compat.
+    expect(ANTIGRAVITY_GOOG_API_CLIENT_UA).toBe("google-api-nodejs-client/10.3.0");
   });
 
   test("claude session id is a stable v4-shaped uuid per token", async () => {

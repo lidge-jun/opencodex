@@ -56,14 +56,10 @@ describe("antigravity CCA envelope", () => {
     expect(env.request.model).toBeUndefined();
     expect(env.request.safetySettings).toBeUndefined();
     expect(req.headers["Authorization"]).toBe("Bearer ya29.token");
-    // The exact default must not drift: Google gates models by family AND version,
-    // so any change to version/platform could silently re-lock gemini-3.7-flash.
-    expect(req.headers["User-Agent"]).toBe(
-      "antigravity/ide/2.5.5 (aidev_client; os_type=windows; arch=amd64)",
-    );
-    // The literal "antigravity" giveaway UA must no longer be sent.
-    expect(req.headers["User-Agent"]).not.toBe("antigravity");
-    // x-goog-api-client is NOT sent on runtime requests (CLIProxyAPI only uses it during onboarding).
+    // decompiled 2.5.5 arm64: GetUserAgentName 0x1018e9a70/0x1018ec950/0x1018ef450 fallback "antigravity" len 0xb
+    // (raw 0x2472c7b, ADRP 0x102472000+0xc7b). x-goog-api-client 0 ADRP (false positive @0x24ea019 generationConfig.x-goog).
+    expect(req.headers["User-Agent"]).toBe("antigravity");
+    // x-goog-api-client not sent (SetHTTPHeaders 5 funcs 16-832B IDE/Standalone/Stubby ret, CLI/Hub only X-Goog-User-Project)
     expect(req.headers["x-goog-api-client"]).toBeUndefined();
     // sessionId lives only at request.sessionId (no top-level / snake_case duplicate).
     expect(env.request.sessionId).toMatch(/^-/);
