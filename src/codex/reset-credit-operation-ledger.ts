@@ -198,6 +198,20 @@ const SELECT_ALL_MANUAL_IDS = `
     FROM main.reset_credit_manual_operation_ids
    ORDER BY operation_id
    LIMIT ${MAX_MANUAL_RESET_CREDIT_OPERATION_IDS + 1}`;
+const SELECT_BOUNDED_MANUAL_ID_COUNT = `
+  SELECT COUNT(*) AS count
+    FROM (
+      SELECT 1
+        FROM main.reset_credit_manual_operation_ids
+       LIMIT ${MAX_MANUAL_RESET_CREDIT_OPERATION_IDS + 1}
+    )`;
+const SELECT_DUPLICATE_RECOVERY_MANUAL_ID = `
+  SELECT operations.operation_id
+    FROM main.reset_credit_operations AS operations
+    JOIN main.reset_credit_manual_operation_ids AS manual_ids
+      ON manual_ids.operation_id = operations.operation_id
+   WHERE operations.operation_kind = 'recovery'
+   LIMIT 1`;
 const SELECT_MANUAL_ID = `
   SELECT operation_id, account_key, canonical_operation_id,
          terminal_code, created_at, updated_at
@@ -619,7 +633,10 @@ function ensureManualIdTable(database: Database): boolean {
   return created;
 }
 
-function initializeTable(database: Database): Readonly<{
+function initializeTable(
+  database: Database,
+  validationScope: ResetCreditOperationKind,
+): Readonly<{
   recordCount: number;
   manualIdCount: number;
 }> {
@@ -660,10 +677,21 @@ function initializeTable(database: Database): Readonly<{
     }
   }
 
-  const manualRows = database.query<ManualResetCreditOperationIdRow, []>(SELECT_ALL_MANUAL_IDS).all();
-  if (manualRows.length > MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
+  const manualIdCount = database.query<{ count: unknown }, []>(SELECT_BOUNDED_MANUAL_ID_COUNT)
+    .get()?.count;
+  if (typeof manualIdCount !== "number" || !Number.isSafeInteger(manualIdCount) || manualIdCount < 0
+    || manualIdCount > MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
     throw new Error("invalid manual reset-credit operation identity capacity");
   }
+  if (validationScope === "recovery") {
+    if (database.query<{ operation_id: unknown }, []>(SELECT_DUPLICATE_RECOVERY_MANUAL_ID).get()) {
+      throw new Error("duplicate reset-credit operation ids");
+    }
+    return Object.freeze({ recordCount: rows.length, manualIdCount });
+  }
+
+  const manualRows = database.query<ManualResetCreditOperationIdRow, []>(SELECT_ALL_MANUAL_IDS).all();
+  if (manualRows.length !== manualIdCount) throw new Error("invalid manual reset-credit operation identity state");
   const manualIds = new Map<string, ManualResetCreditOperationIdRecord>();
   for (const row of manualRows) {
     const record = parseManualIdRecord(row);
@@ -704,7 +732,7 @@ function initializeTable(database: Database): Readonly<{
       }
     }
   }
-  return Object.freeze({ recordCount: rows.length, manualIdCount: manualRows.length });
+  return Object.freeze({ recordCount: rows.length, manualIdCount });
 }
 
 function readRecord(database: Database, key: string): ResetCreditOperationRecord | undefined {
@@ -824,7 +852,7 @@ function isThenable(value: unknown): boolean {
 
 type Synchronous<T> = T extends PromiseLike<unknown> ? never : T;
 
-function withLedger<T>(operation: (
+function withLedger<T>(validationScope: ResetCreditOperationKind, operation: (
   database: Database,
   recordCount: number,
   manualIdCount: number,
@@ -838,7 +866,7 @@ function withLedger<T>(operation: (
     database.exec("PRAGMA trusted_schema = OFF; PRAGMA busy_timeout = 0; PRAGMA synchronous = FULL; BEGIN IMMEDIATE");
     transactionOpen = true;
     initializeConfigGeneration(database);
-    const counts = initializeTable(database);
+    const counts = initializeTable(database, validationScope);
     const value = operation(database, counts.recordCount, counts.manualIdCount);
     if (isThenable(value) || !database.inTransaction) {
       throw new Error("reset-credit operation ledger work escaped its synchronous transaction");
@@ -869,6 +897,8 @@ function isLedgerBusyError(error: unknown): boolean {
 function warnLedgerUnavailable(error: unknown): void {
   if (isLedgerBusyError(error)) return;
   const nested = error instanceof NestedConfigMutationError;
+  // Native SQLite and filesystem errors may contain absolute, account-bearing
+  // paths. Keep this warning categorical rather than forwarding error.message.
   console.warn(nested
     ? "[opencodex] Reset-credit operation ledger refused a nested config mutation."
     : "[opencodex] Reset-credit operation ledger is unavailable.");
@@ -906,7 +936,7 @@ export function openResetCreditOperation(
   const generationSnapshot = snapshotCodexResetCreditRecoveryGeneration(generation);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
-    return withLedger((database, recordCount) => {
+    return withLedger("recovery", (database, recordCount) => {
       const key = accountKey(generationSnapshot.accountId);
       const current = readRecord(database, key);
       if (current) {
@@ -936,6 +966,9 @@ export function openResetCreditOperation(
 
       const operationId = randomUUID();
       if (!isCodexResetCreditOperationId(operationId)) throw new Error("runtime generated invalid UUID");
+      if (operationOwner(database, operationId) !== undefined) {
+        throw new Error("duplicate reset-credit operation ids");
+      }
       const values = [
         "recovery",
         generationSnapshot.credentialGeneration,
@@ -986,7 +1019,7 @@ function updateOperation(
 ): UpdateResetCreditOperationResult {
   if (!isCodexResetCreditOperationId(operationId)) return Object.freeze({ kind: "mismatch" });
   try {
-    return withLedger(database => {
+    return withLedger(owner.operationKind, database => {
       const current = readRecord(database, owner.accountKey);
       if (!current
         || current.operationKind !== owner.operationKind
@@ -1121,7 +1154,7 @@ export function openManualResetCreditOperation(
   const owner = snapshotManualIdentity(identity);
   if (!Number.isSafeInteger(now) || now < 0) throw new TypeError("invalid reset-credit operation timestamp");
   try {
-    return withLedger((database, recordCount, manualIdCount) => {
+    return withLedger("manual", (database, recordCount, manualIdCount) => {
       reportManualHistoryCapacity(manualIdCount);
       const admitNewCallerId = () => {
         if (manualIdCount >= MAX_MANUAL_RESET_CREDIT_OPERATION_IDS) {
