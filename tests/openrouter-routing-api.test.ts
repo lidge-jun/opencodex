@@ -99,14 +99,17 @@ describe("OpenRouter model routing management API", () => {
 
   test("returns a bounded busy response when unique discovery capacity is exhausted", async () => {
     let release!: () => void;
+    let allFetchesStarted!: () => void;
     let fetches = 0;
     const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetchesStarted = new Promise<void>(resolve => { allFetchesStarted = resolve; });
     const current = config({
       adapter: "openai-chat",
       baseUrl: "https://openrouter.ai/api/v1",
       apiKey: "test-key",
       fetch: async (input: string | URL | Request) => {
         fetches += 1;
+        if (fetches === 8) allFetchesStarted();
         await gate;
         const parts = new URL(String(input)).pathname.split("/");
         return Response.json({
@@ -121,7 +124,7 @@ describe("OpenRouter model routing management API", () => {
       current,
       `/api/openrouter/model-providers?provider=openrouter&model=author%2Fmodel-${index}`,
     ));
-    for (let attempt = 0; attempt < 100 && fetches < 8; attempt += 1) await new Promise(resolve => setTimeout(resolve, 0));
+    await fetchesStarted;
     expect(fetches).toBe(8);
 
     const overflow = await management(
