@@ -546,11 +546,13 @@ export function buildSelectedContext(
 export async function resolveActiveCursorImages(
   messages: readonly OcxMessage[] | undefined,
   signal?: AbortSignal,
+  preparedImages?: readonly ResolvedCursorImage[],
 ): Promise<ResolvedCursorImage[]> {
   if (!messages?.length) return [];
   // Same window the prepare pass rewrote; a divergent rule would attach unprepared bytes.
   const message = messages[cursorVisionPrepareStartIndex(messages)];
   if (!message || (message.role !== "user" && message.role !== "developer")) return [];
+  if (preparedImages) return [...preparedImages];
   return resolveCursorImageParts(extractCursorImageParts(message.content), signal);
 }
 
@@ -566,7 +568,10 @@ export async function prepareCursorImageDataUrl(
   imageUrl: string,
   detail?: string,
   signal?: AbortSignal,
-): Promise<{ status: "ready"; imageUrl: string } | { status: "omitted"; reason: string }> {
+): Promise<
+  | { status: "ready"; imageUrl: string; image: ResolvedCursorImage }
+  | { status: "omitted"; reason: string }
+> {
   try {
     const resolved = imageUrl.toLowerCase().startsWith("data:")
       ? decodeCursorImageDataUrl(imageUrl)
@@ -592,9 +597,9 @@ export async function prepareCursorImageDataUrl(
       && outcome.image.data === resolved.data
       && outcome.image.mimeType === resolved.mimeType
     ) {
-      return { status: "ready", imageUrl };
+      return { status: "ready", imageUrl, image: outcome.image };
     }
-    return { status: "ready", imageUrl: imageDataUrlFromPrepared(outcome.image) };
+    return { status: "ready", imageUrl: imageDataUrlFromPrepared(outcome.image), image: outcome.image };
   } catch (err) {
     if (signal?.aborted || (err instanceof Error && err.name === "AbortError")) throw err;
     return { status: "omitted", reason: CURSOR_VISION_IMAGE_OMITTED };
@@ -604,10 +609,13 @@ export async function prepareCursorImageDataUrl(
 async function prepareCursorContentParts(
   content: string | readonly OcxContentPart[],
   signal?: AbortSignal,
-): Promise<string | readonly OcxContentPart[]> {
-  if (typeof content === "string" || !Array.isArray(content)) return content;
+): Promise<{ content: string | readonly OcxContentPart[]; images: ResolvedCursorImage[] }> {
+  if (typeof content === "string" || !Array.isArray(content)) {
+    return { content, images: [] };
+  }
   let changed = false;
   const next: OcxContentPart[] = [];
+  const images: ResolvedCursorImage[] = [];
   for (const part of content) {
     if (part.type === "image" && typeof part.imageUrl === "string" && part.imageUrl.length > 0) {
       throwIfImagePhaseAborted(signal);
@@ -617,13 +625,14 @@ async function prepareCursorContentParts(
         next.push({ type: "text", text: prepared.reason });
         continue;
       }
+      images.push(prepared.image);
       if (prepared.imageUrl !== part.imageUrl) changed = true;
       next.push({ ...part, imageUrl: prepared.imageUrl });
     } else {
       next.push(part);
     }
   }
-  return changed ? next : content;
+  return { content: changed ? next : content, images };
 }
 
 /**
@@ -646,11 +655,16 @@ export function cursorVisionPrepareStartIndex(messages: readonly OcxMessage[]): 
  * reference. Undecodable images become {@link CURSOR_VISION_IMAGE_OMITTED} text so
  * image-only turns stay userMessageAction.
  */
+export interface PreparedCursorRawMessages {
+  messages: readonly OcxMessage[] | undefined;
+  images: ResolvedCursorImage[];
+}
+
 export async function prepareCursorRawMessages(
   messages: readonly OcxMessage[] | undefined,
   signal?: AbortSignal,
-): Promise<readonly OcxMessage[] | undefined> {
-  if (!messages?.length) return messages;
+): Promise<PreparedCursorRawMessages> {
+  if (!messages?.length) return { messages, images: [] };
   throwIfImagePhaseAborted(signal);
   const prepareFrom = cursorVisionPrepareStartIndex(messages);
   const active = messages[prepareFrom];
@@ -663,6 +677,7 @@ export async function prepareCursorRawMessages(
   }
   let changed = false;
   const out: OcxMessage[] = [];
+  const images: ResolvedCursorImage[] = [];
   for (let i = 0; i < messages.length; i++) {
     throwIfImagePhaseAborted(signal);
     const message = messages[i]!;
@@ -670,14 +685,15 @@ export async function prepareCursorRawMessages(
       i >= prepareFrom
       && (message.role === "user" || message.role === "developer")
     ) {
-      const content = await prepareCursorContentParts(message.content, signal);
-      if (content !== message.content) {
+      const prepared = await prepareCursorContentParts(message.content, signal);
+      images.push(...prepared.images);
+      if (prepared.content !== message.content) {
         changed = true;
-        out.push({ ...message, content } as OcxMessage);
+        out.push({ ...message, content: prepared.content } as OcxMessage);
         continue;
       }
     }
     out.push(message);
   }
-  return changed ? out : messages;
+  return { messages: changed ? out : messages, images };
 }

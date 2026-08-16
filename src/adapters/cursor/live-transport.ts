@@ -572,8 +572,13 @@ class LiveCursorTransport implements CursorTransport {
     // JPEG soft-cap rewrite for active-turn data: images before encode. Rebuild text
     // messages from the prepared raw channel so omission markers replace stale
     // pre-rewrite content that activePromptText and the tool filter would otherwise see.
-    const preparedRawMessages = await prepareCursorRawMessages(request.rawMessages, signal);
-    const selectedImages = await resolveActiveCursorImages(preparedRawMessages, signal);
+    const prepared = await prepareCursorRawMessages(request.rawMessages, signal);
+    const preparedRawMessages = prepared.messages;
+    const selectedImages = await resolveActiveCursorImages(
+      preparedRawMessages,
+      signal,
+      prepared.images,
+    );
     const preparedMessages = preparedRawMessages === request.rawMessages
       ? request.messages
       : cursorRequestMessagesFromRaw(preparedRawMessages);

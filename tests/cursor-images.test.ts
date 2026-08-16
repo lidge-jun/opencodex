@@ -325,7 +325,7 @@ describe("Cursor image resolver", () => {
         timestamp: 1,
       },
     ]);
-    const user = prepared?.[0];
+    const user = prepared.messages?.[0];
     expect(user?.role).toBe("user");
     if (user?.role !== "user" || typeof user.content === "string") throw new Error("expected image parts");
     const part = user.content.find(item => item.type === "image");
@@ -348,7 +348,7 @@ describe("Cursor image resolver", () => {
         timestamp: 1,
       },
     ]);
-    const user = prepared?.[0];
+    const user = prepared.messages?.[0];
     expect(user?.role).toBe("user");
     if (user?.role !== "user" || typeof user.content === "string") throw new Error("expected parts");
     expect(user.content).toEqual([{ type: "text", text: CURSOR_VISION_IMAGE_OMITTED }]);
@@ -356,13 +356,14 @@ describe("Cursor image resolver", () => {
 
   test("cursorRequestMessagesFromRaw surfaces omission text after prepare", async () => {
     const bmpUrl = `data:image/bmp;base64,${Buffer.from([0x42, 0x4d, 0, 0]).toString("base64")}`;
-    const raw = await prepareCursorRawMessages([
+    const prepared = await prepareCursorRawMessages([
       {
         role: "user",
         content: [{ type: "image", imageUrl: bmpUrl }],
         timestamp: 1,
       },
     ]);
+    const raw = prepared.messages;
     const messages = cursorRequestMessagesFromRaw(raw);
     expect(messages).toEqual([{ role: "user", content: CURSOR_VISION_IMAGE_OMITTED }]);
     expect(activePromptText({
@@ -386,9 +387,10 @@ describe("Cursor image resolver", () => {
         timestamp: 1,
       },
     ];
-    const rawMessages = await prepareCursorRawMessages(rawIn);
+    const prepared = await prepareCursorRawMessages(rawIn);
+    const rawMessages = prepared.messages;
     const messages = cursorRequestMessagesFromRaw(rawMessages);
-    const selectedImages = await resolveActiveCursorImages(rawMessages);
+    const selectedImages = await resolveActiveCursorImages(rawMessages, undefined, prepared.images);
     expect(selectedImages).toHaveLength(1);
 
     resetCursorBlobStateForTests();
@@ -408,17 +410,40 @@ describe("Cursor image resolver", () => {
     expect(run.action.action.value.userMessage?.selectedContext?.selectedImages.length).toBe(1);
   });
 
+  test("resolveActiveCursorImages reuses prepared bytes instead of re-encoding", async () => {
+    const prepared = await prepareCursorRawMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is in this image?" },
+          { type: "image", imageUrl: PNG_DATA_URL, detail: "high" },
+        ],
+        timestamp: 1,
+      },
+    ]);
+    expect(prepared.images).toHaveLength(1);
+    const selectedImages = await resolveActiveCursorImages(
+      prepared.messages,
+      undefined,
+      prepared.images,
+    );
+    expect(selectedImages).toHaveLength(1);
+    expect(selectedImages[0]).toBe(prepared.images[0]);
+    expect(selectedImages[0]?.data).toBe(prepared.images[0]?.data);
+  });
+
   test("image-only remote soft-omit yields userMessageAction with omission text", async () => {
-    const raw = await prepareCursorRawMessages([
+    const prepared = await prepareCursorRawMessages([
       {
         role: "user",
         content: [{ type: "image", imageUrl: "https://example.com/missing.png" }],
         timestamp: 1,
       },
     ]);
+    const raw = prepared.messages;
     const messages = cursorRequestMessagesFromRaw(raw);
     expect(messages).toEqual([{ role: "user", content: CURSOR_VISION_IMAGE_OMITTED }]);
-    const selectedImages = await resolveActiveCursorImages(raw);
+    const selectedImages = await resolveActiveCursorImages(raw, undefined, prepared.images);
     expect(selectedImages).toEqual([]);
     resetCursorBlobStateForTests();
     const bytes = encodeCursorRunRequest({
@@ -436,7 +461,7 @@ describe("Cursor image resolver", () => {
   });
 
   test("remote image with valid text continues text-only", async () => {
-    const raw = await prepareCursorRawMessages([
+    const prepared = await prepareCursorRawMessages([
       {
         role: "user",
         content: [
@@ -446,11 +471,12 @@ describe("Cursor image resolver", () => {
         timestamp: 1,
       },
     ]);
+    const raw = prepared.messages;
     const messages = cursorRequestMessagesFromRaw(raw);
     expect(typeof messages[0]?.content).toBe("string");
     expect(messages[0]?.content).toContain("what color is the sky?");
     expect(messages[0]?.content).toContain(CURSOR_VISION_IMAGE_OMITTED);
-    expect(await resolveActiveCursorImages(raw)).toEqual([]);
+    expect(await resolveActiveCursorImages(raw, undefined, prepared.images)).toEqual([]);
   });
 
   test("strict base64 rejects truncated and wrong-alphabet payloads", () => {
@@ -571,12 +597,12 @@ describe("Cursor image resolver", () => {
       },
       { role: "user", content: "thanks, no image", timestamp: 3 },
     ]);
-    expect(prepared?.[0]).toEqual({
+    expect(prepared.messages?.[0]).toEqual({
       role: "user",
       content: [{ type: "image", imageUrl: oldUrl }],
       timestamp: 1,
     });
-    expect(cursorVisionPrepareStartIndex(prepared ?? [])).toBe(2);
+    expect(cursorVisionPrepareStartIndex(prepared.messages ?? [])).toBe(2);
   });
 
   test("aborted image-phase signal stops further local prepare work", async () => {
