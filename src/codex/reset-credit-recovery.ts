@@ -27,6 +27,20 @@ export type CodexResetCreditConsumeCode =
   | "nothing_to_reset"
   | "no_credit";
 
+declare const CODEX_RESERVED_OPERATION_ID_BRAND: unique symbol;
+
+/** An operation id whose durable reservation was validated by the operation ledger. */
+export type CodexReservedOperationId = string & {
+  readonly [CODEX_RESERVED_OPERATION_ID_BRAND]: true;
+};
+
+export const CODEX_RESET_CREDIT_OPERATION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function isCodexResetCreditOperationId(value: unknown): value is string {
+  return typeof value === "string" && CODEX_RESET_CREDIT_OPERATION_ID_PATTERN.test(value);
+}
+
 export type CodexResetCreditRecoveryAuthorization = Readonly<{
   enabled: boolean;
   /**
@@ -250,6 +264,8 @@ function compareGenerationOrder(
   }
   return 0;
 }
+
+export const compareCodexResetCreditRecoveryGenerationOrder = compareGenerationOrder;
 
 function authorizedResetRejection(authorization: CodexResetCreditRecoveryAuthorization): boolean {
   const hasOwn = Object.prototype.hasOwnProperty;
