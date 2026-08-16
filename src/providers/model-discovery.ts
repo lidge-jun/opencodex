@@ -349,10 +349,18 @@ export function extractModelEnvelopeRows(
  *    admitted once a same-id sibling provided it. Enrichment may change what is
  *    KNOWN about a model, never WHICH models are published.
  * 2. Only the capability keys #1797 needs are copied. A blanket "fill every
- *    absent key" made a key the untrusted `models[]` array could reach into any
- *    field the pipeline consumes.
+ *    absent key" made the untrusted `models[]` array a way into any field the
+ *    pipeline consumes.
+ *
+ *    The list deliberately EXCLUDES `supported_features` and `features`, even
+ *    though both are capability-shaped: they are the two keys real provider
+ *    filters test (`registry.ts:1591` requires `supported_features` to contain
+ *    "tools"; `registry.ts:1883` tests `features.tool_use`). Ordering already
+ *    prevents a sibling from flipping an admission verdict, but a key that is
+ *    both enrichable and filter-relevant is one refactor away from becoming a
+ *    bypass again. #1797 does not need them.
  */
-const SIBLING_ENRICHABLE_KEYS = new Set(["capabilities", "features", "supported_features", "modalities", "input_modalities"]);
+const SIBLING_ENRICHABLE_KEYS = new Set(["capabilities", "modalities", "input_modalities"]);
 
 type SiblingIndex = Map<string, Record<string, unknown> | null>;
 
