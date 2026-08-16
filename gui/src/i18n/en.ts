@@ -279,7 +279,7 @@ export const en = {
   "dash.codexRestarting": "Stopping…",
   "dash.codexRestartConfirm": "Stop Codex app-servers so they reload the model list? Any Codex turn in progress is interrupted, and Codex does not relaunch on its own — reopen it afterwards.",
   "dash.codexRestartDone": "Stopped {count} Codex app-server(s). Reopen Codex to load the current model list.",
-  "dash.codexRestartNothing": "No Codex app-server is running. The next launch reads the current model list.",
+  "dash.codexRestartNothing": "No stale Codex app-server required a restart. Nothing was stopped.",
   "dash.codexRestartUnknown": "Could not list processes, so nothing was stopped.",
   "dash.codexRestartPartial": "{count} app-server(s) did not exit. Stop them manually if the model list stays stale.",
   "dash.codexRestartFailed": "Failed to reload Codex models (HTTP {status}).",

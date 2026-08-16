@@ -147,10 +147,10 @@ describe("requestCodexRestart", () => {
 
   test("passes each response code through with a self-consistent body", async () => {
     const cases = [
-      { code: "stopped", success: true, stopped: [4242], surviving: [], failed: [] },
-      { code: "nothing_running", success: true, stopped: [], surviving: [], failed: [] },
-      { code: "enumeration_unavailable", success: true, stopped: [], surviving: [], failed: [] },
-      { code: "partially_stopped", success: false, stopped: [], surviving: [4242], failed: [] },
+      { stateBefore: "stale", code: "stopped", success: true, requested: [4242], stopped: [4242], surviving: [], failed: [] },
+      { stateBefore: "stale", code: "nothing_running", success: true, requested: [], stopped: [], surviving: [], failed: [] },
+      { stateBefore: "unknown", code: "enumeration_unavailable", success: true, requested: [], stopped: [], surviving: [], failed: [] },
+      { stateBefore: "stale", code: "partially_stopped", success: false, requested: [4242], stopped: [], surviving: [4242], failed: [] },
     ] as const;
     for (const patch of cases) {
       const outcome = await requestCodexRestart("", {
@@ -181,10 +181,24 @@ describe("requestCodexRestart", () => {
       })) as typeof fetch,
       ...formatters,
     });
+    const stoppedWithoutAccounting = await requestCodexRestart("", {
+      fetchFn: (async () => response({ ...STOPPED, stopped: [] })) as typeof fetch,
+      ...formatters,
+    });
+    const duplicatePids = await requestCodexRestart("", {
+      fetchFn: (async () => response({
+        ...STOPPED,
+        requested: [4242, 4242],
+        stopped: [4242, 4242],
+      })) as typeof fetch,
+      ...formatters,
+    });
 
     expect(successWithFailureCode).toEqual({ ok: false, message: "malformed" });
     expect(cleanCodeWithSurvivors).toEqual({ ok: false, message: "malformed" });
     expect(nothingRunningButStopped).toEqual({ ok: false, message: "malformed" });
+    expect(stoppedWithoutAccounting).toEqual({ ok: false, message: "malformed" });
+    expect(duplicatePids).toEqual({ ok: false, message: "malformed" });
   });
 
   test("a body that never finishes arriving is a timeout, not a malformed body", async () => {
@@ -219,4 +233,3 @@ describe("requestCodexRestart", () => {
     expect(outcome).toEqual({ ok: false, message: "malformed" });
   });
 });
-

@@ -20,6 +20,11 @@ export const CODEX_APP_SERVER_STATE_PATH = "/api/system/codex-app-server";
 /** Mirrors CodexAppServerCatalogState so the GUI never imports runtime code. */
 export type CodexAppServerState = "fresh" | "stale" | "not_running" | "unknown";
 
+/**
+ * `nothing_running` is retained for wire compatibility. It means no stale
+ * restart target remained, not necessarily that the process list was empty;
+ * stateBefore distinguishes fresh, not-running, and exited-before-signal cases.
+ */
 export type CodexRestartCode =
   | "stopped"
   | "nothing_running"
@@ -59,8 +64,18 @@ const RESTART_CODES: readonly string[] = [
  * let a malformed body reach UI code that renders counts and indexes lengths.
  */
 function isPidList(value: unknown): value is number[] {
-  return Array.isArray(value)
-    && value.every(entry => typeof entry === "number" && Number.isSafeInteger(entry) && entry > 0);
+  if (!Array.isArray(value)) return false;
+  if (!value.every(entry =>
+    typeof entry === "number" && Number.isSafeInteger(entry) && entry > 0
+  )) return false;
+  return new Set(value).size === value.length;
+}
+
+function isSubset(subset: ReadonlySet<number>, superset: ReadonlySet<number>): boolean {
+  for (const pid of subset) {
+    if (!superset.has(pid)) return false;
+  }
+  return true;
 }
 
 /**
@@ -89,19 +104,54 @@ export function isCodexRestartResponse(value: unknown): value is CodexRestartRes
 
   const success = view.success as boolean;
   const code = view.code as CodexRestartCode;
+  const stateBefore = view.stateBefore as CodexAppServerState;
+  const requested = view.requested as number[];
   const surviving = view.surviving as number[];
   const failed = view.failed as number[];
   const stopped = view.stopped as number[];
+  const requestedSet = new Set(requested);
+  const stoppedSet = new Set(stopped);
+  const survivingSet = new Set(surviving);
+  const failedSet = new Set(failed);
 
   // `success` and `code` must agree: only partially_stopped is an unsuccessful code.
   if (success !== (code !== "partially_stopped")) return false;
-  // A clean outcome cannot leave anything behind.
-  if (success && (surviving.length > 0 || failed.length > 0)) return false;
-  // An unsuccessful outcome must name what survived.
-  if (!success && surviving.length === 0 && failed.length === 0) return false;
-  // Nothing can be reported stopped when the service says nothing was running.
-  if ((code === "nothing_running" || code === "enumeration_unavailable") && stopped.length > 0) {
+  // The code must describe the classifier state that can produce it. A stale
+  // target may exit before signalling, so stale+nothing_running is intentional;
+  // unknown is never a clean no-op, and fresh/not-running can never be stopped.
+  if ((code === "stopped" || code === "partially_stopped") && stateBefore !== "stale") {
     return false;
+  }
+  if (code === "enumeration_unavailable" && stateBefore !== "unknown") return false;
+  if (code === "nothing_running" && stateBefore === "unknown") return false;
+
+  // Every terminal bucket is an accounting of a requested pid. A failed signal
+  // remains a survivor, while a stopped pid cannot simultaneously be live.
+  if (!isSubset(stoppedSet, requestedSet) || !isSubset(survivingSet, requestedSet)) return false;
+  if (!isSubset(failedSet, survivingSet)) return false;
+  for (const pid of stoppedSet) {
+    if (survivingSet.has(pid)) return false;
+  }
+
+  if (code === "nothing_running" || code === "enumeration_unavailable") {
+    return requested.length === 0
+      && stopped.length === 0
+      && surviving.length === 0
+      && failed.length === 0;
+  }
+
+  if (requested.length === 0) return false;
+  if (code === "stopped") {
+    return surviving.length === 0
+      && failed.length === 0
+      && stoppedSet.size === requestedSet.size;
+  }
+
+  // A partial result must account for every request as either stopped or still
+  // alive. failed is diagnostic detail for the surviving subset.
+  if (surviving.length === 0) return false;
+  for (const pid of requestedSet) {
+    if (!stoppedSet.has(pid) && !survivingSet.has(pid)) return false;
   }
   return true;
 }
@@ -117,4 +167,3 @@ export function isCodexAppServerStateResponse(
     && Number.isSafeInteger(view.runningCount)
     && view.runningCount >= 0;
 }
-

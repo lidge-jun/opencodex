@@ -269,7 +269,7 @@ export const fr: Record<TKey, string> = {
   "dash.codexRestarting": "Arrêt…",
   "dash.codexRestartConfirm": "Arrêter les serveurs d’application Codex afin qu’ils rechargent la liste des modèles ? Tout tour Codex en cours sera interrompu et Codex ne redémarrera pas automatiquement — rouvrez-le ensuite.",
   "dash.codexRestartDone": "{count} serveur(s) d’application Codex arrêté(s). Rouvrez Codex pour charger la liste actuelle des modèles.",
-  "dash.codexRestartNothing": "Aucun serveur d’application Codex n’est en cours d’exécution. Le prochain lancement lira la liste actuelle des modèles.",
+  "dash.codexRestartNothing": "Aucun serveur d’application Codex obsolète ne nécessitait de redémarrage. Aucun processus n’a été arrêté.",
   "dash.codexRestartUnknown": "Impossible de répertorier les processus ; aucun n’a donc été arrêté.",
   "dash.codexRestartPartial": "{count} serveur(s) d’application ne se sont pas arrêtés. Arrêtez-les manuellement si la liste des modèles reste obsolète.",
   "dash.codexRestartFailed": "Échec du rechargement des modèles Codex (HTTP {status}).",

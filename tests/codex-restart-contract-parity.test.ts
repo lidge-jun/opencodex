@@ -42,6 +42,27 @@ describe("every service response satisfies the shared contract guard", () => {
     expect(isCodexRestartResponse(JSON.parse(JSON.stringify(result)))).toBe(true);
   });
 
+  test("nothing_running with fresh app-servers", async () => {
+    resetCodexRestartInFlightForTests();
+    const result = await performCodexRestart({
+      syncCatalog: async () => false,
+      listenPort: () => 41999,
+      resetStateCache: () => {},
+      collectState: () => ({
+        state: "fresh",
+        processes: [{ pid: 100, startedAtMs: 20 }],
+        catalogMtimeMs: 10,
+      }),
+      listProcesses: () => [proc(100)],
+      readStartMs: () => new Map([[100, 20]]),
+      restart: () => ({ requested: [100], stopped: [100], surviving: [], failed: [] }),
+    });
+    expect(result.code).toBe("nothing_running");
+    expect(result.stateBefore).toBe("fresh");
+    expect(result.requested).toEqual([]);
+    expect(isCodexRestartResponse(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
   test("nothing_running via the exited-before-signal race", async () => {
     resetCodexRestartInFlightForTests();
     const result = await performCodexRestart({
@@ -50,6 +71,7 @@ describe("every service response satisfies the shared contract guard", () => {
       resetStateCache: () => {},
       collectState: () => ({ state: "stale", processes: [{ pid: 100, startedAtMs: 1 }], catalogMtimeMs: 10 }),
       listProcesses: () => [],
+      processIo: { isAlive: () => false },
       readStartMs: () => new Map(),
       restart: () => ({ requested: [], stopped: [], surviving: [], failed: [] }),
     });
@@ -69,6 +91,27 @@ describe("every service response satisfies the shared contract guard", () => {
       restart: () => ({ requested: [], stopped: [], surviving: [], failed: [] }),
     });
     expect(result.code).toBe("enumeration_unavailable");
+    expect(isCodexRestartResponse(JSON.parse(JSON.stringify(result)))).toBe(true);
+  });
+
+  test("an unverifiable stale target remains contract-valid and unsettled", async () => {
+    resetCodexRestartInFlightForTests();
+    const result = await performCodexRestart({
+      syncCatalog: async () => true,
+      listenPort: () => 41999,
+      resetStateCache: () => {},
+      collectState: () => ({ state: "stale", processes: [{ pid: 100, startedAtMs: 1 }], catalogMtimeMs: 10 }),
+      listProcesses: () => [proc(100)],
+      readStartMs: () => new Map([[100, null]]),
+      restart: () => ({ requested: [], stopped: [], surviving: [], failed: [] }),
+    });
+    expect(result).toMatchObject({
+      success: false,
+      stateBefore: "stale",
+      code: "partially_stopped",
+      surviving: [100],
+      failed: [100],
+    });
     expect(isCodexRestartResponse(JSON.parse(JSON.stringify(result)))).toBe(true);
   });
 
@@ -114,5 +157,60 @@ describe("every service response satisfies the shared contract guard", () => {
     expect(result.failed).toEqual([100]);
     expect(isCodexRestartResponse(JSON.parse(JSON.stringify(result)))).toBe(true);
   });
-});
 
+  test("the guard rejects impossible code and classifier-state pairs", () => {
+    const base = {
+      success: true,
+      stateBefore: "stale",
+      synced: true,
+      requested: [100],
+      stopped: [100],
+      surviving: [],
+      failed: [],
+      code: "stopped",
+    } as const;
+    const invalid = [
+      { ...base, stateBefore: "fresh" },
+      { ...base, stateBefore: "not_running", code: "partially_stopped", success: false, stopped: [], surviving: [100] },
+      { ...base, stateBefore: "stale", code: "enumeration_unavailable", stopped: [] },
+      { ...base, stateBefore: "unknown", code: "nothing_running", requested: [], stopped: [] },
+      { ...base, stopped: [] },
+      { ...base, requested: [100, 100], stopped: [100, 100] },
+      { ...base, requested: [100, 200], stopped: [100] },
+      { ...base, requested: [], stopped: [100] },
+      { ...base, code: "nothing_running", requested: [100], stopped: [] },
+      {
+        ...base,
+        success: false,
+        code: "partially_stopped",
+        stopped: [100],
+        surviving: [100],
+      },
+      {
+        ...base,
+        success: false,
+        code: "partially_stopped",
+        stopped: [],
+        surviving: [100],
+        failed: [200],
+      },
+    ];
+    for (const response of invalid) expect(isCodexRestartResponse(response)).toBe(false);
+    expect(isCodexRestartResponse({
+      ...base,
+      stateBefore: "fresh",
+      code: "nothing_running",
+      requested: [],
+      stopped: [],
+    })).toBe(true);
+    expect(isCodexRestartResponse({
+      ...base,
+      success: false,
+      code: "partially_stopped",
+      requested: [100, 200],
+      stopped: [100],
+      surviving: [200],
+      failed: [200],
+    })).toBe(true);
+  });
+});

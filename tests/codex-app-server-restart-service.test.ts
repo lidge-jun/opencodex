@@ -16,6 +16,7 @@ import {
 import type { CodexRestartServiceIo } from "../src/codex/app-server-restart-service";
 import type { CodexAppServerProcess } from "../src/codex/app-server-processes";
 import { isCodexRestartResponse } from "../src/lib/codex-restart-contract";
+import { setTrustedWindowsElevationExecutablesForTests } from "../src/lib/windows-elevation";
 
 function proc(pid: number, commandLine = `/opt/codex app-server --pid ${pid}`): CodexAppServerProcess {
   return { pid, commandLine };
@@ -29,6 +30,7 @@ function baseIo(overrides: CodexRestartServiceIo = {}): CodexRestartServiceIo {
     resetStateCache: () => {},
     collectState: () => ({ state: "not_running", processes: [], catalogMtimeMs: null }),
     listProcesses: () => [],
+    processIo: { isAlive: () => false },
     restart: () => ({ requested: [], stopped: [], surviving: [], failed: [] }),
     readStartMs: pids => new Map(pids.map(pid => [pid, 1])),
     ...overrides,
@@ -95,6 +97,55 @@ describe("performCodexRestart", () => {
     expect(result.requested).toEqual([]);
   });
 
+  test("a fresh classifier reading signals nothing", async () => {
+    let listed = false;
+    let restarted = false;
+    const result = await performCodexRestart(baseIo({
+      collectState: () => ({
+        state: "fresh",
+        processes: [{ pid: 100, startedAtMs: 20 }],
+        catalogMtimeMs: 10,
+      }),
+      listProcesses: () => {
+        listed = true;
+        return [proc(100)];
+      },
+      restart: () => {
+        restarted = true;
+        return { requested: [100], stopped: [100], surviving: [], failed: [] };
+      },
+    }));
+
+    expect(listed).toBe(false);
+    expect(restarted).toBe(false);
+    expect(result.code).toBe("nothing_running");
+    expect(result.stateBefore).toBe("fresh");
+    expect(result.requested).toEqual([]);
+  });
+
+  test("a mixed reading signals only stale app-servers, including the equality boundary", async () => {
+    let received: CodexAppServerProcess[] = [];
+    await performCodexRestart(baseIo({
+      collectState: () => ({
+        state: "stale",
+        processes: [
+          { pid: 100, startedAtMs: 5 },
+          { pid: 200, startedAtMs: 20 },
+          { pid: 300, startedAtMs: 10 },
+        ],
+        catalogMtimeMs: 10,
+      }),
+      listProcesses: () => [proc(100), proc(200), proc(300)],
+      readStartMs: () => new Map([[100, 5], [200, 20], [300, 10]]),
+      restart: targets => {
+        received = [...targets];
+        return { requested: [100, 300], stopped: [100, 300], surviving: [], failed: [] };
+      },
+    }));
+
+    expect(received.map(entry => entry.pid)).toEqual([100, 300]);
+  });
+
   test("a survivor makes the result partially_stopped and unsuccessful", async () => {
     const result = await performCodexRestart(baseIo({
       collectState: () => ({
@@ -110,6 +161,29 @@ describe("performCodexRestart", () => {
     expect(result.code).toBe("partially_stopped");
     expect(result.success).toBe(false);
     expect(result.surviving).toEqual([200]);
+  });
+
+  test("a helper stop stays unsettled while the pid is still alive", async () => {
+    const result = await performCodexRestart(baseIo({
+      collectState: () => ({
+        state: "stale",
+        processes: [{ pid: 100, startedAtMs: 1 }],
+        catalogMtimeMs: 10,
+      }),
+      listProcesses: () => [proc(100)],
+      readStartMs: () => new Map([[100, 1]]),
+      processIo: { isAlive: () => true },
+      restart: () => ({ requested: [100], stopped: [100], surviving: [], failed: [] }),
+    }));
+
+    expect(result).toMatchObject({
+      success: false,
+      code: "partially_stopped",
+      requested: [100],
+      stopped: [],
+      surviving: [100],
+      failed: [],
+    });
   });
 
   test("a target that exits between classification and signalling is not credited", async () => {
@@ -132,6 +206,34 @@ describe("performCodexRestart", () => {
     expect(result.code).toBe("nothing_running");
     expect(result.success).toBe(true);
     expect(restarted).toBe(false);
+  });
+
+  test("a failed second enumeration keeps a live stale target unsettled", async () => {
+    let restarted = false;
+    const result = await performCodexRestart(baseIo({
+      collectState: () => ({
+        state: "stale",
+        processes: [{ pid: 100, startedAtMs: 1 }],
+        catalogMtimeMs: 10,
+      }),
+      listProcesses: () => [],
+      processIo: { isAlive: () => true },
+      restart: () => {
+        restarted = true;
+        return { requested: [100], stopped: [100], surviving: [], failed: [] };
+      },
+    }));
+
+    expect(restarted).toBe(false);
+    expect(result).toMatchObject({
+      success: false,
+      stateBefore: "stale",
+      code: "partially_stopped",
+      requested: [100],
+      stopped: [],
+      surviving: [100],
+      failed: [100],
+    });
   });
 
   test("only classified pids are signalled, and they carry a real command line", async () => {
@@ -318,8 +420,14 @@ describe("identity and concurrency protection", () => {
     }));
 
     expect(restarted).toBe(false);
-    expect(result.code).toBe("nothing_running");
-    expect(result.requested).toEqual([]);
+    expect(result).toMatchObject({
+      success: false,
+      code: "partially_stopped",
+      requested: [4242],
+      stopped: [],
+      surviving: [4242],
+      failed: [4242],
+    });
   });
 
   test("a matching start time still lets the real target through", async () => {
@@ -344,7 +452,7 @@ describe("identity and concurrency protection", () => {
 
   test("an unreadable start time refuses to signal rather than guessing", async () => {
     let restarted = false;
-    await performCodexRestart(baseIo({
+    const result = await performCodexRestart(baseIo({
       collectState: () => ({
         state: "stale",
         processes: [{ pid: 4242, startedAtMs: 1_000 }],
@@ -359,6 +467,40 @@ describe("identity and concurrency protection", () => {
     }));
 
     expect(restarted).toBe(false);
+    expect(result).toMatchObject({
+      success: false,
+      code: "partially_stopped",
+      requested: [4242],
+      stopped: [],
+      surviving: [4242],
+      failed: [4242],
+    });
+  });
+
+  test("an invalid start in a stale classifier result remains unresolved", async () => {
+    let restarted = false;
+    const result = await performCodexRestart(baseIo({
+      collectState: () => ({
+        state: "stale",
+        processes: [{ pid: 4242, startedAtMs: null }],
+        catalogMtimeMs: 5_000,
+      }),
+      listProcesses: () => [proc(4242)],
+      restart: () => {
+        restarted = true;
+        return { requested: [], stopped: [], surviving: [], failed: [] };
+      },
+    }));
+
+    expect(restarted).toBe(false);
+    expect(result).toMatchObject({
+      success: false,
+      code: "partially_stopped",
+      requested: [4242],
+      stopped: [],
+      surviving: [4242],
+      failed: [4242],
+    });
   });
 
   test("unknown WITH known processes signals nothing", async () => {
@@ -485,13 +627,17 @@ describe("last-moment identity gate (through the real restart helper)", () => {
 
   test("a stable pid is signalled through the same path", async () => {
     const killed: number[] = [];
+    const startReadTimeouts: Array<number | undefined> = [];
     const result = await performCodexRestart({
       syncCatalog: async () => true,
       listenPort: () => 41999,
       resetStateCache: () => {},
       collectState: stale,
       listProcesses: () => [proc(4242)],
-      readStartMs: pids => new Map(pids.map(pid => [pid, 1_000])),
+      readStartMs: (pids, timeoutMs) => {
+        startReadTimeouts.push(timeoutMs);
+        return new Map(pids.map(pid => [pid, 1_000]));
+      },
       processIo: {
         listSnapshots: () => [{ pid: 4242, commandLine: "/opt/codex app-server --pid 4242" }],
         kill: pid => { killed.push(pid); },
@@ -501,8 +647,70 @@ describe("last-moment identity gate (through the real restart helper)", () => {
     });
 
     expect(killed).toEqual([4242]);
+    expect(startReadTimeouts).toEqual([undefined, 1_500]);
     expect(result.code).toBe("stopped");
     expect(result.success).toBe(true);
+  });
+
+  test("a live target omitted by the helper's final re-list remains unsettled", async () => {
+    const killed: number[] = [];
+    const result = await performCodexRestart({
+      syncCatalog: async () => true,
+      listenPort: () => 41999,
+      resetStateCache: () => {},
+      collectState: stale,
+      listProcesses: () => [proc(4242)],
+      readStartMs: pids => new Map(pids.map(pid => [pid, 1_000])),
+      processIo: {
+        listSnapshots: () => [],
+        kill: pid => { killed.push(pid); },
+        isAlive: () => true,
+        waitExit: () => false,
+      },
+    });
+
+    expect(killed).toEqual([]);
+    expect(result).toMatchObject({
+      success: false,
+      code: "partially_stopped",
+      requested: [4242],
+      stopped: [],
+      surviving: [4242],
+      failed: [],
+    });
+  });
+
+  test("the service identity guard preserves Windows taskkill tree cleanup", async () => {
+    const execCalls: Array<{ file: string; args: readonly string[] }> = [];
+    const signals: number[] = [];
+    setTrustedWindowsElevationExecutablesForTests({
+      taskkill: "C:\\Windows\\System32\\taskkill.exe",
+    });
+    try {
+      const result = await performCodexRestart({
+        syncCatalog: async () => true,
+        listenPort: () => 41999,
+        resetStateCache: () => {},
+        collectState: stale,
+        listProcesses: () => [proc(4242)],
+        readStartMs: pids => new Map(pids.map(pid => [pid, 1_000])),
+        processIo: {
+          platform: "win32",
+          listSnapshots: () => [proc(4242)],
+          execFile: (file, args) => { execCalls.push({ file, args }); },
+          processKill: pid => { signals.push(pid); },
+          isAlive: () => false,
+          waitExit: () => true,
+        },
+      });
+
+      expect(execCalls).toHaveLength(1);
+      expect(execCalls[0]!.args).toEqual(["/PID", "4242", "/T", "/F"]);
+      expect(signals).toEqual([]);
+      expect(result.code).toBe("stopped");
+    } finally {
+      setTrustedWindowsElevationExecutablesForTests(null);
+    }
   });
 
   test("an unreadable start time at signal time refuses the signal", async () => {

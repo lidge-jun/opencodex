@@ -30,6 +30,7 @@ import type {
   CodexAppServerStateResponse,
   CodexRestartResponse,
 } from "../lib/codex-restart-contract";
+import { isProcessAlive } from "../lib/process-control";
 import { getServerListenPort } from "../server/lifecycle";
 
 export interface CodexRestartServiceIo {
@@ -48,8 +49,13 @@ export interface CodexRestartServiceIo {
   restart?: typeof restartCodexAppServers;
   resetStateCache?: () => void;
   /** Start-time reader used to re-confirm process identity before signalling. */
-  readStartMs?: (pids: readonly number[]) => Map<number, number | null>;
+  readStartMs?: (pids: readonly number[], timeoutMs?: number) => Map<number, number | null>;
 }
+
+// The final identity read happens synchronously inside the signal loop. Keep its
+// fail-closed wait much shorter than the initial batched classification query so
+// one slow ps/CIM lookup cannot consume the full platform timeout per target.
+const FINAL_IDENTITY_READ_TIMEOUT_MS = 1_500;
 
 /**
  * Thrown by the final identity gate when a pid no longer belongs to the process
@@ -123,45 +129,80 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
     surviving: [],
     failed: [],
     // Enumeration failure reads as `unknown`, never `not_running` (#857): a failed
-    // enumeration must not be reported as "nothing was running".
+    // enumeration must not be reported as a clean no-op. `nothing_running` is the
+    // wire-compatible "no stale restart target remained" result; stateBefore
+    // distinguishes no process, an already-current process, and a later exit.
     code: before.state === "unknown" ? "enumeration_unavailable" : "nothing_running",
   });
 
-  // `unknown` is not only the empty enumeration-failure case: the classifier also
-  // returns it WITH processes when the catalog mtime or a start time is unreadable.
-  // In that state it has not established that any server predates the catalog, so
-  // signalling would kill a possibly-current app-server on a guess.
-  if (before.state === "unknown" || before.processes.length === 0) return nothingToDo();
+  // Only a stale verdict establishes that any server predates the catalog.
+  // `unknown` can include processes with unreadable timestamps, while `fresh`
+  // explicitly establishes that none should be interrupted.
+  const catalogMtimeMs = before.catalogMtimeMs;
+  if (before.state !== "stale" || catalogMtimeMs === null || before.processes.length === 0) {
+    return nothingToDo();
+  }
 
   // The classifier carries { pid, startedAtMs } and no command line, but
   // restartCodexAppServers needs the full identity so it can refuse to signal a
   // recycled pid. Re-list and intersect on pid rather than reconstructing an
   // identity we never verified.
-  const classifiedStarts = new Map(
-    before.processes.map(entry => [entry.pid, entry.startedAtMs] as const),
-  );
+  const isUsableStartMs = (value: number | null): value is number =>
+    value !== null && Number.isFinite(value) && value >= 0;
+  const classifiedStarts = new Map<number, number>();
+  const unresolved = new Set<number>();
+  for (const entry of before.processes) {
+    if (!isUsableStartMs(entry.startedAtMs)) {
+      // A stale aggregate carrying an unreadable row is inconsistent, but still
+      // not permission to forget a process that may be running the old catalog.
+      unresolved.add(entry.pid);
+    } else if (entry.startedAtMs <= catalogMtimeMs) {
+      classifiedStarts.set(entry.pid, entry.startedAtMs);
+    }
+  }
   const live = (io.listProcesses ?? listCodexAppServerProcesses)(io.processIo ?? {});
   const candidates = live.filter(process => classifiedStarts.has(process.pid));
+  const candidatePids = new Set(candidates.map(process => process.pid));
+  const isAlive = io.processIo?.isAlive ?? isProcessAlive;
+
+  // An empty second listing can mean that every stale target exited, but the
+  // default platform enumerator also fails closed to an empty list. Distinguish
+  // those cases with the existing liveness seam: a still-live classified pid
+  // whose command identity cannot be recovered must keep the outcome unsettled.
+  for (const pid of classifiedStarts.keys()) {
+    if (candidatePids.has(pid)) continue;
+    try {
+      if (isAlive(pid)) unresolved.add(pid);
+    } catch {
+      // A liveness probe failure is not proof that the stale process exited.
+      unresolved.add(pid);
+    }
+  }
 
   // A pid plus a command line is not an identity: a replacement app-server launched
   // by the same Codex install has both. Re-read start times and drop any candidate
   // whose process started after the reading we classified, so a recycled pid can
   // never receive a signal meant for the process that held it.
   const platform = io.processIo?.platform ?? process.platform;
+  const readStartMs = io.readStartMs
+    ?? ((pids: readonly number[], timeoutMs?: number) => readProcessStartMsBatch(pids, platform, timeoutMs));
   const startsNow = candidates.length > 0
-    ? (io.readStartMs ?? (pids => readProcessStartMsBatch(pids, platform)))(
-      candidates.map(process => process.pid),
-    )
+    ? readStartMs(candidates.map(process => process.pid))
     : new Map<number, number | null>();
   const targets = candidates.filter(process => {
     const classified = classifiedStarts.get(process.pid) ?? null;
     const current = startsNow.get(process.pid) ?? null;
-    // An unreadable start time on either side means we cannot prove sameness.
-    if (classified === null || current === null) return false;
-    return classified === current;
+    // An unreadable or changed start time means we cannot prove this live pid is
+    // the stale process we classified. Refuse the signal, but do not report the
+    // request as settled while that pid may still hold the old catalog.
+    if (classified === null || current === null || classified !== current) {
+      unresolved.add(process.pid);
+      return false;
+    }
+    return true;
   });
 
-  if (targets.length === 0) {
+  if (targets.length === 0 && unresolved.size === 0) {
     // Every classified process exited, or the pid now belongs to a different
     // process. Reporting "stopped" would claim credit for work this request did
     // not do.
@@ -192,32 +233,68 @@ async function runCodexRestart(io: CodexRestartServiceIo): Promise<CodexRestartR
   // costs the user the turn that is running right now.
   const guardedProcessIo: CodexAppServerProcessIo = {
     ...(io.processIo ?? {}),
-    kill: (pid, signal) => {
+    beforeSignal: (pid, signal) => {
       const classified = classifiedStarts.get(pid) ?? null;
-      const current = (io.readStartMs ?? (pids => readProcessStartMsBatch(pids, platform)))([pid])
+      const current = readStartMs([pid], FINAL_IDENTITY_READ_TIMEOUT_MS)
         .get(pid) ?? null;
-      if (classified === null || current === null || classified !== current) {
+      if (!isUsableStartMs(classified) || !isUsableStartMs(current) || classified !== current) {
         throw new CodexAppServerIdentityChanged(pid);
       }
-      const send = io.processIo?.kill ?? ((target: number, sig: NodeJS.Signals) => {
-        process.kill(target, sig);
-      });
-      send(pid, signal);
+      io.processIo?.beforeSignal?.(pid, signal);
     },
   };
 
-  const result = (io.restart ?? restartCodexAppServers)(targets, guardedProcessIo);
-  const clean = result.surviving.length === 0 && result.failed.length === 0;
+  const result = targets.length > 0
+    ? (io.restart ?? restartCodexAppServers)(targets, guardedProcessIo)
+    : { requested: [], stopped: [], surviving: [], failed: [] };
+  const stoppedSet = new Set(result.stopped);
+  const survivingSet = new Set(result.surviving);
+  const failedSet = new Set(result.failed.map(entry => entry.pid));
+  for (const pid of failedSet) survivingSet.add(pid);
+  for (const pid of unresolved) {
+    survivingSet.add(pid);
+    failedSet.add(pid);
+  }
+  const requestedSet = new Set([
+    ...targets.map(target => target.pid),
+    ...result.requested,
+    ...stoppedSet,
+    ...survivingSet,
+    ...failedSet,
+  ]);
+
+  // A helper stop can race with a still-live pid, and a custom seam or final
+  // helper re-list can omit a requested pid from every terminal bucket. Recheck
+  // every non-survivor instead of interpreting either case as a successful stop.
+  for (const pid of requestedSet) {
+    if (survivingSet.has(pid)) continue;
+    try {
+      if (isAlive(pid)) survivingSet.add(pid);
+      else if (!stoppedSet.has(pid)) stoppedSet.add(pid);
+    } catch {
+      survivingSet.add(pid);
+      failedSet.add(pid);
+    }
+  }
+  for (const pid of survivingSet) stoppedSet.delete(pid);
+
+  const ascending = (left: number, right: number) => left - right;
+  const requested = [...requestedSet].sort(ascending);
+  const stopped = [...stoppedSet].sort(ascending);
+  const surviving = [...survivingSet].sort(ascending);
+  const failed = [...failedSet].sort(ascending);
+  const clean = surviving.length === 0;
   return {
     success: clean,
     stateBefore: before.state,
     synced,
-    requested: result.requested,
-    stopped: result.stopped,
-    surviving: result.surviving,
+    requested,
+    stopped,
+    surviving,
     // Project { pid, error } down to pids: an OS error message can embed a path
-    // or the account name.
-    failed: result.failed.map(entry => entry.pid),
+    // or the account name. Identity-verification failures use the same private-
+    // data-free pid projection and remain unsettled for the GUI.
+    failed,
     code: clean ? "stopped" : "partially_stopped",
   };
 }
@@ -229,4 +306,3 @@ async function defaultSyncCatalog(port?: number): Promise<boolean> {
   const result = await syncModelsToCodex(port, undefined, null);
   return result.catalogWritten || result.cacheSynced;
 }
-

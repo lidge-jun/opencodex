@@ -271,7 +271,7 @@ export const ko: Record<TKey, string> = {
   "dash.codexRestarting": "종료하는 중…",
   "dash.codexRestartConfirm": "Codex app-server를 종료해 모델 목록을 다시 읽게 할까요? 진행 중인 Codex 작업이 끊기고, Codex가 저절로 다시 뜨지는 않으니 끝나면 직접 열어야 합니다.",
   "dash.codexRestartDone": "Codex app-server {count}개를 종료했습니다. Codex를 다시 열면 최신 모델 목록이 보입니다.",
-  "dash.codexRestartNothing": "실행 중인 Codex app-server가 없습니다. 다음 실행 때 최신 목록을 읽습니다.",
+  "dash.codexRestartNothing": "재시작이 필요한 오래된 Codex app-server가 없습니다. 아무 프로세스도 종료하지 않았습니다.",
   "dash.codexRestartUnknown": "프로세스 목록을 읽지 못해 아무것도 종료하지 않았습니다.",
   "dash.codexRestartPartial": "app-server {count}개가 종료되지 않았습니다. 모델 목록이 최신 상태로 바뀌지 않으면 직접 종료하세요.",
   "dash.codexRestartFailed": "Codex 모델 목록을 새로고침하지 못했습니다 (HTTP {status}).",

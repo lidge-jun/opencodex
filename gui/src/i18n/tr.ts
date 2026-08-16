@@ -277,7 +277,7 @@ export const tr: Record<TKey, string> = {
   "dash.codexRestarting": "Durduruluyor…",
   "dash.codexRestartConfirm": "Model listesini yeniden okumaları için Codex app-server'ları durdurulsun mu? Süren bir Codex işlemi kesilir ve Codex kendiliğinden yeniden başlamaz — sonrasında yeniden açın.",
   "dash.codexRestartDone": "{count} Codex app-server durduruldu. Güncel model listesi için Codex'i yeniden açın.",
-  "dash.codexRestartNothing": "Çalışan Codex app-server yok. Sonraki açılışta güncel model listesi okunur.",
+  "dash.codexRestartNothing": "Yeniden başlatılması gereken eski bir Codex app-server yok. Hiçbir işlem durdurulmadı.",
   "dash.codexRestartUnknown": "Süreçler listelenemedi, bu yüzden hiçbir şey durdurulmadı.",
   "dash.codexRestartPartial": "{count} app-server kapanmadı. Model listesi eski kalırsa bunları elle durdurun.",
   "dash.codexRestartFailed": "Codex model listesi yenilenemedi (HTTP {status}).",

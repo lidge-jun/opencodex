@@ -276,7 +276,7 @@ export const ja: Record<TKey, string> = {
   "dash.codexRestarting": "停止中…",
   "dash.codexRestartConfirm": "Codex app-server を停止してモデル一覧を読み直させますか? 進行中の Codex の処理は中断され、Codex は自動では再起動しないので後で開き直してください。",
   "dash.codexRestartDone": "Codex app-server を {count} 個停止しました。Codex を開き直すと最新のモデル一覧が読み込まれます。",
-  "dash.codexRestartNothing": "実行中の Codex app-server はありません。次回起動時に最新のモデル一覧を読み込みます。",
+  "dash.codexRestartNothing": "再起動が必要な古い Codex app-server はありません。何も停止していません。",
   "dash.codexRestartUnknown": "プロセスを列挙できなかったため、何も停止しませんでした。",
   "dash.codexRestartPartial": "app-server が {count} 個終了しませんでした。モデル一覧が古いままなら手動で停止してください。",
   "dash.codexRestartFailed": "Codex のモデル一覧を再読み込みできませんでした (HTTP {status})。",

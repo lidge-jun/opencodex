@@ -271,7 +271,7 @@ export const zh: Record<TKey, string> = {
   "dash.codexRestarting": "正在停止…",
   "dash.codexRestartConfirm": "停止 Codex app-server 以便重新读取模型列表？进行中的 Codex 任务会被中断，且 Codex 不会自动重启，请稍后自行重新打开。",
   "dash.codexRestartDone": "已停止 {count} 个 Codex app-server。重新打开 Codex 即可加载最新模型列表。",
-  "dash.codexRestartNothing": "没有正在运行的 Codex app-server。下次启动会读取最新模型列表。",
+  "dash.codexRestartNothing": "没有需要重启的旧 Codex app-server。未停止任何进程。",
   "dash.codexRestartUnknown": "无法枚举进程，因此没有停止任何进程。",
   "dash.codexRestartPartial": "有 {count} 个 app-server 未退出。若模型列表仍然过旧，请手动停止。",
   "dash.codexRestartFailed": "无法重新加载 Codex 模型列表 (HTTP {status})。",

@@ -162,10 +162,40 @@ test("nothing_running also counts as settled", async () => {
   expect(reloads).toBe(1);
 });
 
+test("a fresh no-op reports that no stale target was stopped", async () => {
+  let reloads = 0;
+  let message = "";
+  Object.defineProperty(globalThis, "alert", {
+    configurable: true,
+    value: (value: unknown) => { message = String(value); },
+  });
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async () => new Response(JSON.stringify(restartBody({
+      stateBefore: "fresh",
+      code: "nothing_running",
+      requested: [],
+      stopped: [],
+    })), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+
+  render(<Harness initialState="fresh" onReload={() => { reloads += 1; }} />);
+  const head = host.querySelector('[data-testid="head"]') as HTMLButtonElement;
+  await act(async () => { head.click(); });
+
+  expect(reloads).toBe(1);
+  expect(message).toBe("No stale Codex app-server required a restart. Nothing was stopped.");
+});
+
 test("an unresolved outcome does not clear the banner", async () => {
   // partially_stopped means a target is still holding the old catalog, so the
   // banner must stay and the state must not be re-read as if it were settled.
   let reloads = 0;
+  let message = "";
+  Object.defineProperty(globalThis, "alert", {
+    configurable: true,
+    value: (value: unknown) => { message = String(value); },
+  });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async () => new Response(JSON.stringify(restartBody({
@@ -173,6 +203,7 @@ test("an unresolved outcome does not clear the banner", async () => {
       code: "partially_stopped",
       stopped: [],
       surviving: [4242],
+      failed: [4242],
     })), { status: 200, headers: { "content-type": "application/json" } }),
   });
 
@@ -182,6 +213,9 @@ test("an unresolved outcome does not clear the banner", async () => {
 
   expect(reloads).toBe(0);
   expect(host.querySelector(".codex-stale-banner")).not.toBeNull();
+  expect(message).toBe(
+    "1 app-server(s) did not exit. Stop them manually if the model list stays stale.",
+  );
 });
 
 test("a declined confirm sends no request and does not refresh", async () => {

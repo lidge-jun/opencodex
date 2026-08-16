@@ -267,7 +267,7 @@ export const de: Record<TKey, string> = {
   "dash.codexRestarting": "Wird gestoppt…",
   "dash.codexRestartConfirm": "Codex-App-Server stoppen, damit sie die Modellliste neu laden? Ein laufender Codex-Vorgang wird unterbrochen, und Codex startet nicht von selbst neu — öffne es danach erneut.",
   "dash.codexRestartDone": "{count} Codex-App-Server gestoppt. Öffne Codex erneut, um die aktuelle Modellliste zu laden.",
-  "dash.codexRestartNothing": "Es läuft kein Codex-App-Server. Der nächste Start liest die aktuelle Modellliste.",
+  "dash.codexRestartNothing": "Kein veralteter Codex-App-Server musste neu gestartet werden. Es wurde nichts beendet.",
   "dash.codexRestartUnknown": "Prozesse konnten nicht aufgelistet werden, daher wurde nichts gestoppt.",
   "dash.codexRestartPartial": "{count} App-Server wurden nicht beendet. Beende sie manuell, falls die Modellliste veraltet bleibt.",
   "dash.codexRestartFailed": "Codex-Modelle konnten nicht neu geladen werden (HTTP {status}).",

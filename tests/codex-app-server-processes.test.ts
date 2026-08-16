@@ -303,7 +303,7 @@ describe("Codex app-server process matching (#476)", () => {
     );
     expect(signals).toEqual([]);
     expect(result.stopped).toEqual([]);
-    expect(result.surviving).toEqual([]);
+    expect(result.surviving).toEqual([42]);
     expect(result.failed).toEqual([]);
   });
 
@@ -323,7 +323,7 @@ describe("Codex app-server process matching (#476)", () => {
     );
     expect(signals).toEqual([]);
     expect(result.stopped).toEqual([]);
-    expect(result.surviving).toEqual([]);
+    expect(result.surviving).toEqual([42]);
     expect(result.failed).toEqual([]);
   });
 
@@ -724,16 +724,19 @@ describe("platform termination ladder", () => {
     // process.kill(SIGTERM) on Windows is already an unconditional terminate of
     // one process; /T adds the child cleanup it lacks.
     const execCalls: Array<{ file: string; args: readonly string[] }> = [];
+    const guarded: number[] = [];
     const signals: number[] = [];
     restartCodexAppServers([target], {
       platform: "win32",
       listSnapshots: snapshots,
+      beforeSignal: pid => { guarded.push(pid); },
       execFile: (file, args) => { execCalls.push({ file, args }); },
       processKill: pid => { signals.push(pid); },
       isAlive: () => false,
       waitExit: () => true,
     });
 
+    expect(guarded).toEqual([4242]);
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]!.args).toEqual(["/PID", "4242", "/T", "/F"]);
     expect(execCalls[0]!.file.toLowerCase()).toContain("taskkill");

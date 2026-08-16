@@ -8,9 +8,10 @@ export interface CodexRestartController {
   /**
    * Resolves to the response code, or null when the user declined the confirm or
    * the call failed. Callers that track staleness must treat BOTH `stopped` and
-   * `nothing_running` as "no stale app-server remains" — the second is the race
-   * where the target exited on its own, and refreshing on only the first would
-   * leave a staleness banner up after a successful outcome.
+   * `nothing_running` as "no stale app-server remains" — that includes no
+   * process, a target that exited on its own, and app-servers already newer than
+   * the catalog. Refreshing on only `stopped` would leave a staleness banner up
+   * after any of those successful outcomes.
    */
   restart: () => Promise<CodexRestartCode | null>;
 }
@@ -84,7 +85,8 @@ export function useCodexRestart(
     } else if (result.code === "enumeration_unavailable") {
       alert(t("dash.codexRestartUnknown"));
     } else {
-      alert(t("dash.codexRestartPartial", { count: String(result.surviving.length) }));
+      const unresolvedCount = new Set([...result.surviving, ...result.failed]).size;
+      alert(t("dash.codexRestartPartial", { count: String(unresolvedCount) }));
     }
 
     // Only while mounted: a settled callback typically starts a refresh fetch,
@@ -95,4 +97,3 @@ export function useCodexRestart(
 
   return { restarting, restart };
 }
-

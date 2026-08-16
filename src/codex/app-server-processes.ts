@@ -86,6 +86,13 @@ export interface CodexAppServerProcessIo {
   getuid?: () => number | undefined;
   listSnapshots?: () => ProcessSnapshot[];
   isAlive?: (pid: number) => boolean;
+  /**
+   * Last-moment fail-closed identity guard. It runs after the helper's
+   * pid+command/executable match and immediately before the platform-specific
+   * termination path, so callers can refuse a signal without replacing the
+   * trusted Windows taskkill implementation.
+   */
+  beforeSignal?: (pid: number, signal: NodeJS.Signals) => void;
   kill?: (pid: number, signal: NodeJS.Signals) => void;
   /** Windows termination seam: drives the taskkill branch without a real exec. */
   execFile?: (file: string, args: readonly string[]) => void;
@@ -541,6 +548,7 @@ export function readProcessStartMs(pid: number, platform: NodeJS.Platform = proc
 export function readProcessStartMsBatch(
   pids: readonly number[],
   platform: NodeJS.Platform = process.platform,
+  timeoutMs?: number,
 ): Map<number, number | null> {
   const out = new Map<number, number | null>();
   if (pids.length === 0) return out;
@@ -549,7 +557,7 @@ export function readProcessStartMsBatch(
       const stdout = execFileSync("/bin/ps", ["-o", "pid=,lstart=", "-p", pids.join(",")], {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: 3_000,
+        timeout: timeoutMs ?? 3_000,
       });
       const byPid = new Map<number, number>();
       for (const raw of stdout.split(/\r?\n/)) {
@@ -573,7 +581,12 @@ export function readProcessStartMsBatch(
         "-NoProfile", "-NoLogo", "-NonInteractive",
         "-Command",
         `Get-CimInstance Win32_Process -Filter "${filter}" | ForEach-Object { "$($_.ProcessId)\t$($_.CreationDate.ToUniversalTime().ToString("o"))" }`,
-      ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 5_000, windowsHide: true });
+      ], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: timeoutMs ?? 5_000,
+        windowsHide: true,
+      });
       const byPid = new Map<number, number>();
       for (const line of stdout.split(/\r?\n/)) {
         const tab = line.indexOf("\t");
@@ -773,6 +786,7 @@ export function restartCodexAppServers(
   io: CodexAppServerProcessIo = {},
 ): RestartCodexAppServersResult {
   const isAlive = io.isAlive ?? isProcessAlive;
+  const beforeSignal = io.beforeSignal;
   const kill = io.kill ?? ((pid, signal) => { defaultKillCodexAppServer(pid, signal, io); });
   const wait = io.waitExit ?? waitForExit;
   const now = io.now ?? Date.now;
@@ -794,9 +808,11 @@ export function restartCodexAppServers(
     if (!live || codexAppServerProcessIdentity(live) !== codexAppServerProcessIdentity(proc)) {
       // Original target exited (or identity changed); do not signal a replacement.
       if (!isAlive(proc.pid)) stopped.push(proc.pid);
+      else surviving.push(proc.pid);
       continue;
     }
     try {
+      beforeSignal?.(proc.pid, "SIGTERM");
       kill(proc.pid, "SIGTERM");
       signaled.push(proc);
     } catch (error) {

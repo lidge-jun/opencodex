@@ -276,7 +276,7 @@ export const ru: Record<TKey, string> = {
   "dash.codexRestarting": "Останавливается…",
   "dash.codexRestartConfirm": "Остановить app-server'ы Codex, чтобы они перечитали список моделей? Текущий ход Codex будет прерван, и Codex не перезапустится сам — откройте его заново.",
   "dash.codexRestartDone": "Остановлено app-server Codex: {count}. Откройте Codex заново, чтобы загрузить актуальный список моделей.",
-  "dash.codexRestartNothing": "Ни один app-server Codex не запущен. При следующем запуске будет прочитан актуальный список моделей.",
+  "dash.codexRestartNothing": "Устаревших app-server Codex, требующих перезапуска, нет. Ничего не было остановлено.",
   "dash.codexRestartUnknown": "Не удалось получить список процессов, поэтому ничего не остановлено.",
   "dash.codexRestartPartial": "app-server не завершились: {count}. Остановите их вручную, если список моделей остаётся устаревшим.",
   "dash.codexRestartFailed": "Не удалось обновить список моделей Codex (HTTP {status}).",
