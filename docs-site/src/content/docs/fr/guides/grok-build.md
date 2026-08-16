@@ -74,8 +74,8 @@ Les modèles routés qui possèdent une échelle configurée affichent le contr�
 dans Codex. Ceux dont la liste de niveaux est vide n’affichent aucun contrôle d’effort, conformément au comportement
 de Codex. Les entrées GPT-5.6 natives sont distinctes : elles conservent et exposent leurs échelles de raisonnement
 en amont fixes, et non les métadonnées configurées pour les modèles routés. Les niveaux Grok valides, notamment
-`none` et `minimal`, sont conservés lorsqu’ils sont annoncés.
-Seul le niveau `ultra`, propre à Codex, est omis du fichier afin que chaque option générée reste sélectionnable.
+`none` et `minimal`, sont conservés lorsqu’ils sont annoncés. Les niveaux non pris en charge ou en double,
+notamment `ultra`, propre à Codex, sont omis du fichier afin que chaque option générée reste sélectionnable.
 
 Grok Build communique avec opencodex au moyen de Chat Completions et envoie `reasoning_effort` lorsque
 l’échelle est annoncée. Dans ce cas, le traducteur Chat Completions entrant définit par défaut le champ Responses

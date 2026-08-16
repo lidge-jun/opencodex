@@ -59,7 +59,8 @@ Grok 호환 형태로 투영한 결과가 각 관리형 `[model.*]` 테이블에
 단계를 공급자 전용 필드로 매핑할 수 있습니다. 단계 목록이 비어 있는 모델은 effort
 컨트롤을 표시하지 않습니다. 네이티브 GPT-5.6 항목은 고정된 업스트림 추론 단계를
 유지합니다. 모델이 제공하는 유효한 Grok 단계는 `none`과 `minimal`을 포함해 유지됩니다.
-Codex 전용 `ultra`만 파일에서 제외되어 기록된 모든 선택지는 실행 가능합니다.
+Codex 전용 `ultra`를 포함해 지원되지 않거나 중복된 단계는 파일에서 제외되어 기록된
+모든 선택지는 실행 가능합니다.
 
 Grok Build는 Chat Completions를 통해 opencodex와 통신하고 단계 목록이 제공되면
 `reasoning_effort`를 보냅니다. 이 경우 Chat Completions 입력 변환기는 내부 Responses의
