@@ -5,6 +5,10 @@
     {
       "name": "local-i18n",
       "specifier": "./.eslint/local-i18n-plugin.ts"
+    },
+    {
+      "name": "anti-slop",
+      "specifier": "./.eslint/anti-slop/index.mjs"
     }
   ],
   "categories": {
@@ -111,6 +115,14 @@
         "typescript/prefer-as-const": "error",
         "typescript/prefer-namespace-keyword": "error",
         "typescript/triple-slash-reference": "error",
+
+        "anti-slop/no-chained-type-assertions": "warn",
+        "anti-slop/no-known-value-widening": "warn",
+        "anti-slop/no-object-parameters": "warn",
+        "anti-slop/no-reflect-apply": "error",
+        "anti-slop/no-reflect-get": "error",
+        "anti-slop/no-widen-then-assert": "warn",
+        "anti-slop/require-safety-comment-for-type-assertion": "warn",
 
         "react/exhaustive-deps": "warn",
         "react/rules-of-hooks": "error",
