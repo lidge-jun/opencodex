@@ -19,6 +19,7 @@ import {
   openResetCreditOperation,
   settleManualResetCreditOperation,
   settleResetCreditOperation,
+  type ManualResetCreditOperationIdentity,
 } from "../src/codex/reset-credit-operation-ledger";
 import {
   compareCodexResetCreditRecoveryGenerationOrder,
@@ -31,6 +32,9 @@ const GENERATION: CodexResetCreditRecoveryGeneration = {
   credentialGeneration: 4,
   exhaustionGeneration: 9,
 };
+const CHILD_READY_TIMEOUT_MS = 4_000;
+const CHILD_EXIT_TIMEOUT_MS = 2_000;
+const CONTENTION_TEST_TIMEOUT_MS = 15_000;
 
 const LEGACY_OPERATION_SCHEMA_SQL = `CREATE TABLE reset_credit_operations (
     account_key TEXT PRIMARY KEY,
@@ -107,11 +111,27 @@ function fixtureOperationId(index: number): string {
 }
 
 async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + CHILD_READY_TIMEOUT_MS;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`timed out waiting for ${path}`);
     await Bun.sleep(10);
   }
+}
+
+async function terminateChild(child: Bun.Subprocess): Promise<void> {
+  child.kill();
+  let exited = await Promise.race([
+    child.exited.then(() => true),
+    Bun.sleep(CHILD_EXIT_TIMEOUT_MS).then(() => false),
+  ]);
+  if (!exited) {
+    child.kill("SIGKILL");
+    exited = await Promise.race([
+      child.exited.then(() => true),
+      Bun.sleep(CHILD_EXIT_TIMEOUT_MS).then(() => false),
+    ]);
+  }
+  if (!exited) throw new Error("reset-credit ledger lock child did not exit");
 }
 
 function createLaxDuplicateLedger(): void {
@@ -175,6 +195,92 @@ describe("Codex reset-credit operation ledger", () => {
     expect(prepareConfigMutationDatabasePathForWrite()).toBe(databasePath());
     expect(() => withConfigMutationLockSync(() => prepareConfigMutationDatabasePathForWrite()))
       .toThrow(NestedConfigMutationError);
+  });
+
+  test("snapshots recovery generations once and rejects inherited fields", () => {
+    let credentialReads = 0;
+    const accessorGeneration = {
+      accountId: GENERATION.accountId,
+      get credentialGeneration() {
+        credentialReads += 1;
+        return credentialReads === 1 ? GENERATION.credentialGeneration : GENERATION.credentialGeneration + 1;
+      },
+      exhaustionGeneration: GENERATION.exhaustionGeneration,
+    };
+
+    const opened = openResetCreditOperation(accessorGeneration, 100);
+    expect(opened).toMatchObject({ kind: "execute", resumed: false });
+    expect(credentialReads).toBe(1);
+    if (opened.kind !== "execute") throw new Error("reservation failed");
+    expect(markResetCreditOperationAmbiguous(accessorGeneration, opened.operationId, 200))
+      .toEqual({ kind: "mismatch" });
+    expect(credentialReads).toBe(2);
+
+    const inheritedGeneration = Object.create(GENERATION) as CodexResetCreditRecoveryGeneration;
+    expect(() => openResetCreditOperation(inheritedGeneration, 300))
+      .toThrow("generation fields must be own properties");
+    expect(() => markResetCreditOperationAmbiguous(inheritedGeneration, opened.operationId, 300))
+      .toThrow("generation fields must be own properties");
+    expect(() => settleResetCreditOperation(inheritedGeneration, opened.operationId, "reset", 300))
+      .toThrow("generation fields must be own properties");
+  });
+
+  test("snapshots manual identities once and rejects inherited fields", () => {
+    const recovery = openResetCreditOperation(GENERATION, 100);
+    if (recovery.kind !== "execute") throw new Error("recovery reservation failed");
+    const callerOperationId = fixtureOperationId(0xdef);
+    let accountReads = 0;
+    let credentialReads = 0;
+    let operationReads = 0;
+    const accessorIdentity = {
+      get accountId() {
+        accountReads += 1;
+        return "pool-manual-snapshot";
+      },
+      get chatgptAccountId() {
+        credentialReads += 1;
+        return "chatgpt-manual-snapshot";
+      },
+      get operationId() {
+        operationReads += 1;
+        return operationReads <= 2 ? callerOperationId : recovery.operationId;
+      },
+    };
+
+    expect(openManualResetCreditOperation(accessorIdentity, 200)).toEqual({
+      kind: "execute",
+      operationId: callerOperationId,
+      resumed: false,
+    });
+    expect({ accountReads, credentialReads, operationReads }).toEqual({
+      accountReads: 1,
+      credentialReads: 1,
+      operationReads: 1,
+    });
+    const database = new Database(databasePath(), { readonly: true });
+    try {
+      const rows = database.query<{ operation_id: string }, []>(
+        "SELECT operation_id FROM reset_credit_operations ORDER BY operation_id",
+      ).all();
+      expect(rows.map(row => row.operation_id)).toEqual([
+        callerOperationId,
+        recovery.operationId,
+      ].sort());
+    } finally {
+      database.close();
+    }
+
+    const inheritedIdentity = Object.create({
+      accountId: "pool-manual-inherited",
+      chatgptAccountId: "chatgpt-manual-inherited",
+      operationId: fixtureOperationId(0xeee),
+    }) as ManualResetCreditOperationIdentity;
+    expect(() => openManualResetCreditOperation(inheritedIdentity, 300))
+      .toThrow("manual reset-credit identity fields must be own properties");
+    expect(() => markManualResetCreditOperationAmbiguous(inheritedIdentity, 300))
+      .toThrow("manual reset-credit identity fields must be own properties");
+    expect(() => settleManualResetCreditOperation(inheritedIdentity, "reset", 300))
+      .toThrow("manual reset-credit identity fields must be own properties");
   });
 
   test("migrates the exact prior recovery schema without changing durable state", () => {
@@ -737,23 +843,16 @@ describe("Codex reset-credit operation ledger", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
-    let childExited = false;
     try {
       await waitForPath(readyPath);
       expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-b" }))
         .toEqual({ kind: "unavailable" });
-      child.kill();
-      await child.exited;
-      childExited = true;
     } finally {
-      if (!childExited) {
-        child.kill();
-        await child.exited;
-      }
+      await terminateChild(child);
     }
     expect(openResetCreditOperation({ ...GENERATION, accountId: "pool-b" }))
       .toMatchObject({ kind: "execute", resumed: false });
-  });
+  }, CONTENTION_TEST_TIMEOUT_MS);
 
   test("never authorizes execution from inside an uncommitted config transaction", () => {
     let nested: unknown;
