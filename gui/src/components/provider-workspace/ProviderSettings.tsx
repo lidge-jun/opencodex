@@ -90,6 +90,7 @@ export default function ProviderSettings({
   const [pacingModelDelay, setPacingModelDelay] = useState("");
   const [pacingStatus, setPacingStatus] = useState<PacingStatus | null>(null);
 
+  /* oxlint-disable react/react-compiler -- intentional setState-in-effect for form reset on prop change */
   /* eslint-disable react-hooks/set-state-in-effect -- intentional form reset when saved provider fields change */
   useEffect(() => {
     setAdapter(item.adapter);
@@ -106,6 +107,7 @@ export default function ProviderSettings({
     setPacingModels({ ...(item.requestPacing?.models ?? {}) });
     setMsg(null);
     setModeMsg(null);
+    // oxlint-disable-next-line react/react-compiler -- intentional setState-in-effect for form reset
     queueMicrotask(() => setEndpointChoice(matchChoiceId(baseUrlChoices, item.baseUrl)));
   }, [item.adapter, item.baseUrl, item.defaultModel, item.authMode, item.apiKeyTransport, item.keyOptional, item.note, item.allowPrivateNetwork, savedLiveModels, item.requestPacing, baseUrlChoices]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -114,6 +116,7 @@ export default function ProviderSettings({
   // draft, so it is deliberately kept out of the form-reset effect above.
   /* eslint-disable react-hooks/set-state-in-effect -- intentional split from the form reset */
   useEffect(() => {
+    // oxlint-disable-next-line react/react-compiler -- intentional setState-in-effect for account mode sync
     setAccountMode(item.codexAccountMode ?? "pool");
   }, [item.codexAccountMode]);
   /* eslint-enable react-hooks/set-state-in-effect */

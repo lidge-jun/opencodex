@@ -165,8 +165,10 @@ export default function Combos({
       const inputModalities = Array.isArray(model.inputModalities)
         ? model.inputModalities
           .filter((modality): modality is string => typeof modality === "string")
-          .map((modality) => modality.trim())
-          .filter(Boolean)
+          .flatMap((modality) => {
+            const trimmed = modality.trim();
+            return trimmed ? [trimmed] : [];
+          })
         : undefined;
       models.push({
         provider,

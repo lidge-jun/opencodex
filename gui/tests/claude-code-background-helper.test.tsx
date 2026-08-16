@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { LanguageProvider } from "../src/i18n/provider";
 import { SmallFastModelSetting } from "../src/pages/ClaudeCode";
 import { backgroundHelperOptions } from "../src/pages/claude-code-helper-options";
-import { modelLabel } from "../src/model-display";
 
 let originalLanguageDescriptor: PropertyDescriptor | undefined;
 

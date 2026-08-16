@@ -183,7 +183,6 @@ describe("DefaultModeRequestUserInputSetting", () => {
     const secondGet = deferred<Response>();
     const put = deferred<Response>();
     let getCount = 0;
-    let putStarted = false;
     let pollCallback: (() => void) | null = null;
     const originalSetInterval = testWindow.setInterval.bind(testWindow);
     testWindow.setInterval = ((_cb: TimerHandler, _ms?: number, ..._args: unknown[]) => {
@@ -195,7 +194,6 @@ describe("DefaultModeRequestUserInputSetting", () => {
     const host = await mount((async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/codex-auth/features/default-mode-request-user-input") && init?.method === "PUT") {
-        putStarted = true;
         return put.promise;
       }
       if (url.endsWith("/api/codex-auth/features/default-mode-request-user-input")) {

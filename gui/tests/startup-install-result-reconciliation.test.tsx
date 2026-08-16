@@ -5,7 +5,6 @@ import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 import Startup from "../src/pages/Startup";
-import { writeSessionListCache } from "../src/session-list-cache";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
@@ -13,7 +12,6 @@ let testWindow: Window;
 const originalFetch = globalThis.fetch;
 
 const API_BASE = "http://localhost";
-const CACHE_KEY = `ocx.startup.page.v1:${API_BASE}`;
 
 function atRiskHealth() {
   return {
@@ -39,10 +37,6 @@ function atRiskHealth() {
     diagnosticStale: false,
     commands: { installService: "ocx service install", repairService: "ocx service repair", installShim: "ocx shim install", restoreNative: "ocx restore" },
   };
-}
-
-function protectedHealth() {
-  return { ...atRiskHealth(), status: "protected", protection: "service", serviceInstalled: true, serviceViable: true, serviceEnabled: true, serviceRunning: true, rebootSafe: true };
 }
 
 beforeEach(() => {

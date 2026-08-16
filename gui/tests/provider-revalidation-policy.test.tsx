@@ -44,7 +44,7 @@ beforeEach(() => {
   quotaCalls = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (input: string, init?: RequestInit) => {
+    value: async (input: string, _init?: RequestInit) => {
       const url = String(input);
       const ok = (body: unknown) => ({
         ok: true,

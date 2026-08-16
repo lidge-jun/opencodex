@@ -289,7 +289,7 @@ test("unmounting the subscriber that owns an in-flight request must not overwrit
     const resource = useClientResource(KEY, async () => deferredB);
     useEffect(() => {
       api.refreshB = () => resource.refresh();
-    }, [resource.refresh]);
+    }, [resource, resource.refresh]);
     return <span data-b="" />;
   }
 

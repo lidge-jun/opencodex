@@ -121,7 +121,7 @@ test("caps featured selections at five", async () => {
   // The cap lives in TWO places: the disabled attribute above (presentation) and the
   // state guard in toggle(). Force a click past the disabled attribute so a weakened
   // state guard cannot hide behind the UI check.
-  await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
+  await act(async () => { addToggle(available[5]!).dispatchEvent(new testWindow.MouseEvent("click", { bubbles: true })); });
   expect(removeButtons().length).toBe(5);
 
   // And save must never ship more than five.

@@ -9,8 +9,8 @@
     "lint": "oxlint .",
     "test": "bun test tests",
     "lint:i18n": "oxlint src/pages src/components src/App.tsx src/main.tsx src/ui.tsx src/provider-workspace-data.ts",
-    "doctor": "npx --yes react-doctor@0.9.11 --verbose --scope changed --base origin/main --no-telemetry",
-    "doctor:full": "npx --yes react-doctor@0.9.11 --verbose --scope full --no-telemetry",
+    "doctor": "npx --yes react-doctor@0.9.12 --verbose --scope changed --base origin/main --no-telemetry",
+    "doctor:full": "npx --yes react-doctor@0.9.12 --verbose --scope full --no-telemetry",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -26,7 +26,6 @@
     "@vitejs/plugin-react": "^6.0.5",
     "happy-dom": "20.11.2",
     "oxlint": "1.76.0",
-    "react-refresh": "^0.18.0",
     "typescript": "~6.0.2",
     "vite": "^8.2.1"
   },

@@ -177,7 +177,7 @@ test("a skipped apply renders the not-changed message, not success", async () =>
 test("a failed selection PUT surfaces an error and stays dirty", async () => {
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (url: string, init?: RequestInit) => {
+    value: async (url: string, _init?: RequestInit) => {
       if (String(url).endsWith("/api/grok/selection")) {
         return { ok: false, status: 500, json: async () => ({ error: "boom" }) } as unknown as Response;
       }

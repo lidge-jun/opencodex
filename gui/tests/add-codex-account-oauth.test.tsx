@@ -115,7 +115,7 @@ function Probe({
     dispatch,
     t: ((key: string) => key) as never,
   });
-  useEffect(() => oauth.bindCallbacks(onAdded, () => {}), [oauth.bindCallbacks, onAdded]);
+  useEffect(() => oauth.bindCallbacks(onAdded, () => {}), [oauth, oauth.bindCallbacks, onAdded]);
   return <div data-testid="oauth-probe" data-step={ui.step} />;
 }
 

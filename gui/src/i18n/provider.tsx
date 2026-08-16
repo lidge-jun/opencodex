@@ -25,7 +25,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     (key, vars) => interpolate(DICTS[locale][key] ?? en[key] ?? key, vars),
     [locale],
   );
-  const value = useMemo(() => ({ locale, setLocale, t }), [locale, t]);
+  const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

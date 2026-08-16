@@ -294,7 +294,7 @@ test("a cancelled superseded quota rejection cannot rewrite state or session cac
 });
 
 test("all-stale response renders coverage only without a numeric fallback", async () => {
-  const old = Date.now() - 31 * 60_000;
+  const _old = Date.now() - 31 * 60_000;
   quotaPayload = {
     reports: [{
       provider: "openai",
