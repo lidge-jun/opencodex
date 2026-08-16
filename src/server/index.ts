@@ -20,6 +20,7 @@ import {
   getConfigDir,
   websocketsEnabled,
 } from "../config";
+import { grokDefaultReasoningEffort } from "../grok/effort";
 import { reconcileOAuthProviders } from "../oauth";
 import { withCatalogWriteSerialization } from "../codex/catalog-write-serialization";
 import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
@@ -1195,10 +1196,8 @@ export function startServer(port?: number, deps: StartServerDeps = {}): Server<W
           ...(isDefault ? { default: true } : {}),
         });
         const grokEffortFields = (efforts: string[], configuredDefault?: string) => {
-          if (efforts.length === 0) return {};
-          const defaultEffort = configuredDefault && efforts.includes(configuredDefault)
-            ? configuredDefault
-            : efforts.includes("medium") ? "medium" : efforts.includes("high") ? "high" : efforts[0];
+          const defaultEffort = grokDefaultReasoningEffort(efforts, configuredDefault);
+          if (defaultEffort === undefined) return {};
           return {
             supports_reasoning_effort: true,
             reasoning_effort: defaultEffort,
