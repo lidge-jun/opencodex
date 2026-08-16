@@ -46,10 +46,59 @@ describe("deterministic duplicate auto-close", () => {
 
     assert.deepEqual(match, {
       number: "1453",
-      signature: signature.toLowerCase(),
+      signature,
     });
   });
 
+  it("does not treat a semantic version as a structured field path", () => {
+    // A release number is not a discriminator. Two unrelated reports that merely
+    // name the same version were qualifying as an exact shared signature, so the
+    // gate auto-closed issues that had nothing else in common.
+    const current =
+      "Codex sync did not complete in version 2.19.0 after updating the local provider configuration.";
+    const candidate =
+      "Codex sync did not complete in version 2.19.0 after updating the remote provider configuration.";
+
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2101, title: "new", body: current },
+      candidateIssues: [{ number: 1801, title: "old", body: candidate }],
+      duplicateNumbers: ["1801"],
+    });
+
+    assert.equal(match, null);
+  });
+
+  it("keeps case-distinct file paths distinct", () => {
+    // Normalization used to lowercase the whole line, collapsing Config.toml and
+    // config.toml into one signature. Filenames are case-bearing evidence, so an
+    // "exact" match promise has to preserve them.
+    const current =
+      "The sync command failed with OSError while reading Config.toml during provider startup.";
+    const candidate =
+      "The sync command failed with OSError while reading config.toml during provider startup.";
+
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2102, title: "new", body: current },
+      candidateIssues: [{ number: 1802, title: "old", body: candidate }],
+      duplicateNumbers: ["1802"],
+    });
+
+    assert.equal(match, null);
+  });
+
+  it("still matches a genuine structured field path", () => {
+    // The negative lookahead must not disqualify real dotted identifiers.
+    const signature =
+      "The sync command failed with OSError while reading config.providers.baseUrl during startup.";
+
+    const match = selectStrongDuplicateMatch({
+      currentIssue: { number: 2103, title: "new", body: signature },
+      candidateIssues: [{ number: 1803, title: "old", body: signature }],
+      duplicateNumbers: ["1803"],
+    });
+
+    assert.deepEqual(match, { number: "1803", signature });
+  });
   it("recognizes fails as a strong failure signal", () => {
     const signature =
       "POST /v1/responses fails with HTTP 503 in the OpenRouter adapter after authentication.";
@@ -61,7 +110,7 @@ describe("deterministic duplicate auto-close", () => {
 
     assert.deepEqual(match, {
       number: "1454",
-      signature: signature.toLowerCase(),
+      signature,
     });
   });
 
@@ -76,7 +125,7 @@ describe("deterministic duplicate auto-close", () => {
 
     assert.deepEqual(match, {
       number: "1457",
-      signature: signature.toLowerCase(),
+      signature,
     });
   });
 
@@ -102,7 +151,7 @@ describe("deterministic duplicate auto-close", () => {
 
     assert.deepEqual(match, {
       number: "1456",
-      signature: longer.toLowerCase(),
+      signature: longer,
     });
   });
 
@@ -155,7 +204,7 @@ describe("deterministic duplicate auto-close", () => {
 
     assert.deepEqual(match, {
       number: "1460",
-      signature: hyphen.toLowerCase(),
+      signature: hyphen,
     });
   });
 

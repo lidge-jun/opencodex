@@ -41,11 +41,21 @@ const SPECIFIC_FAILURE_EVIDENCE_RE = new RegExp([
   "(?:^|\\s)(?:GET|POST|PUT|PATCH|DELETE|HEAD)\\s+/[^\\s]+",
   "(?:^|[\\s(`])(?:~?/|[A-Za-z]:\\\\)[^\\s)`]+",
   "\\b[\\w.-]+\\.(?:json|toml|yaml|yml|log|conf|env|sqlite|db)\\b",
-  "\\b[\\w-]+(?:\\.[\\w-]+){2,}\\b",
+  // Structured field path (`config.providers.baseUrl`). The negative lookahead
+  // keeps purely numeric dotted tokens out: a semantic version like `2.19.0`
+  // is not a discriminator, and two unrelated reports that merely name the
+  // same release would otherwise qualify as an exact shared signature and be
+  // auto-closed as duplicates.
+  "\\b(?![\\d.]+\\b)[\\w-]+(?:\\.[\\w-]+){2,}\\b",
   "\\b[A-Za-z][A-Za-z0-9_.-]*(?:Error|Exception)\\b",
 ].join("|"), "i");
 
 function normalizeSignatureLine(raw) {
+  // Case is PRESERVED. Lowercasing collapsed `Config.toml` and `config.toml`
+  // into one signature, so two reports about different files compared equal.
+  // Filenames, paths, identifiers, and Error class names are all
+  // case-bearing discriminators; the "exact signature" promise is only true
+  // if the comparison keeps them distinct.
   return String(raw || "")
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/^\s*(?:>|[-*+]\s+|\d+[.)]\s+)/, "")
@@ -54,8 +64,7 @@ function normalizeSignatureLine(raw) {
     // and `*` because they are also meaningful technical punctuation.
     .replace(/`/g, "")
     .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    .trim();
 }
 
 function wordCount(text) {
