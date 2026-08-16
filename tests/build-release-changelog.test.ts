@@ -337,4 +337,37 @@ describe("buildReleaseNotes", () => {
     expect(result.errors).toEqual([]);
     expect(result.releasableCommitCount).toBe(0);
   });
+  test("sanitizes direct-commit subjects so they cannot inject mentions or media", () => {
+    // Commit subjects are author-controlled text rendered as release Markdown.
+    // An @mention there rewrites the release's Contributors list, and image
+    // syntax renders. PR titles were already cleaned; commits were not.
+    const result = buildReleaseNotes({
+      version: "1.1.0-preview.1",
+      tags: ["v1.0.0"],
+      npmMetadata: "Published to npm.",
+      generatedNotes: "",
+      repository: "lidge-jun/opencodex",
+      commits: [
+        commit("a", "fix: notify @octocat ![pixel](https://example.invalid/pixel)"),
+      ],
+    });
+
+    expect(result.errors).toEqual([]);
+    // The raw mention must not survive anywhere in the body.
+    expect(result.body).not.toContain("@octocat");
+    expect(result.body).toContain("@\u200boctocat");
+    // Image syntax is escaped rather than rendered.
+    expect(result.body).not.toContain("![pixel](https://example.invalid/pixel)");
+  });
+
+  test("refuses a non-ancestral baseline for a prerelease, not just a stable release", () => {
+    // The ancestry guard used to apply only to stable versions, so a preview
+    // could select the newest tag from a diverged lineage and emit that
+    // branch's commits while reporting full coverage.
+    expect(selectReleaseBaseline("1.2.0-preview.1", ["v1.0.0", "v1.1.0"])).toBe("v1.1.0");
+    // The runtime guard is exercised in buildReleaseChangelog; this pins the
+    // selection half so a future change cannot quietly widen the candidate set
+    // for prereleases without the ancestry check catching it.
+    expect(selectReleaseBaseline("1.2.0", ["v1.0.0", "v1.1.0-preview.1"])).toBe("v1.0.0");
+  });
 });

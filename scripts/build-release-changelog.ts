@@ -16,6 +16,7 @@ import {
   compareReleaseTags,
   parseGeneratedNotes,
   rewriteTakeoverCredits,
+  sanitizeCommitText,
 } from "./release-notes";
 
 export type AssociatedPullRequest = {
@@ -193,7 +194,11 @@ function renderReleaseNotes(input: {
         lines.push(`- ${cleanPrTitle(entry.title, entry.number).text} (#${entry.number})`);
       } else {
         const short = entry.sha.slice(0, 8);
-        const title = cleanPrTitle(entry.title).text;
+        // Direct-commit subjects are author-controlled text rendered as release
+        // Markdown. Without sanitizing, a subject can inject images/links and an
+        // `@mention` that rewrites the release's Contributors list. PR titles
+        // already pass through cleanPrTitle upstream; commits did not.
+        const title = sanitizeCommitText(cleanPrTitle(entry.title).text);
         lines.push(
           `- ${title} ([${short}](https://github.com/${input.repository}/commit/${entry.sha}))`,
         );
@@ -221,7 +226,7 @@ function renderReleaseNotes(input: {
   for (const commit of commits) {
     const short = commit.sha.slice(0, 8);
     changelog.push(
-      `- [${short}](https://github.com/${input.repository}/commit/${commit.sha}) ${commit.title.trim()}`,
+      `- [${short}](https://github.com/${input.repository}/commit/${commit.sha}) ${sanitizeCommitText(commit.title)}`,
     );
   }
 
@@ -436,10 +441,17 @@ async function releaseCommits(
   target: string,
 ): Promise<Array<Omit<ReleaseCommit, "pulls">>> {
   const range = baseline ? `${baseline}..${target}` : target;
+  // Merge commits are included deliberately. `--no-merges` made the
+  // "every commit is represented" invariant false: a merge whose tree carries a
+  // conflict-resolution-only change contributes real content that exists in no
+  // other commit, and dropping it hid that change from coverage validation AND
+  // from the released notes. `--first-parent` keeps the range to this branch's
+  // own history so an ordinary merge does not re-list every commit it brought
+  // in; the merge itself is then represented by exactly one entry.
   const raw = await commandText([
     "git",
     "log",
-    "--no-merges",
+    "--first-parent",
     "--reverse",
     "--format=%H%x1f%s%x1f%B%x1e",
     range,
@@ -521,11 +533,19 @@ async function main(argv: string[]): Promise<void> {
   const baseline = selectReleaseBaseline(version, tags);
   const releaseTag = version.startsWith("v") ? version : `v${version}`;
 
-  if (baseline && !isPrereleaseVersion(version)) {
+  // Ancestry is required for BOTH channels. It used to be checked only for
+  // stable releases, which let a preview pick the newest tag from a diverged
+  // lineage: `git log baseline..target` then emitted the handful of commits
+  // unique to that unrelated branch and reported "commits=0" coverage, so a
+  // preview shipped notes that omitted its own history and named someone
+  // else's. Fail closed instead — a non-ancestral baseline cannot describe a
+  // range at all, whichever channel asked for it.
+  if (baseline) {
     const ancestry = await runCommand(["git", "merge-base", "--is-ancestor", baseline, target]);
     if (ancestry.exitCode !== 0) {
+      const channel = isPrereleaseVersion(version) ? "previous release" : "previous stable";
       throw new Error(
-        `previous stable ${baseline} is not an ancestor of ${target}; refusing an ambiguous stable changelog range`,
+        `${channel} ${baseline} is not an ancestor of ${target}; refusing an ambiguous changelog range`,
       );
     }
   }
